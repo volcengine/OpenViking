@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Writable } from "node:stream";
 import test from "node:test";
 import { createOpenVikingMcpProxy } from "./mcp-proxy.mjs";
@@ -39,7 +42,7 @@ async function withServer(handler, fn) {
   }
 }
 
-function makeProxy({ url, configOverrides = {}, stdout, localToolProvider } = {}) {
+function makeProxy({ url, configOverrides = {}, stdout, localToolProvider, readConfig } = {}) {
   const out = [];
   const writable = stdout || new Writable({
     write(chunk, _encoding, callback) {
@@ -49,7 +52,7 @@ function makeProxy({ url, configOverrides = {}, stdout, localToolProvider } = {}
   });
   const proxy = createOpenVikingMcpProxy({
     stdout: writable,
-    readConfig: () => ({
+    readConfig: readConfig || (() => ({
       mcpUrl: url,
       apiKey: "test-key",
       account: "default",
@@ -62,7 +65,7 @@ function makeProxy({ url, configOverrides = {}, stdout, localToolProvider } = {}
       credentialPath: "",
       watchedPaths: [],
       ...configOverrides,
-    }),
+    })),
     loggerFactory: () => ({ log() {}, logError() {} }),
     localToolProvider,
   });
@@ -253,6 +256,51 @@ test("handles local tools without forwarding tools/call upstream", async () => {
   assert.deepEqual(await messages(), [
     jsonRpc(21, { content: [{ type: "text", text: '{"results":[]}' }] }),
   ]);
+});
+
+test("reloads changed credential files before calling a local tool", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "openviking-mcp-proxy-"));
+  const credentialPath = join(dir, "ovcli.conf");
+  writeFileSync(credentialPath, "old-key", "utf-8");
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+  let apiKey = "old-key";
+  const receivedKeys = [];
+  const readConfig = () => ({
+    mcpUrl: "http://127.0.0.1:1/mcp",
+    apiKey,
+    account: "default",
+    user: "zeus",
+    peerId: "peer-a",
+    timeoutMs: 5000,
+    debug: false,
+    debugLogPath: "",
+    credentialSource: "ovcli",
+    credentialPath,
+    watchedPaths: [credentialPath],
+  });
+  const { proxy, messages } = makeProxy({
+    readConfig,
+    localToolProvider: {
+      listTools: () => [{ name: "search_experience" }],
+      async callTool(_params, context) {
+        receivedKeys.push(context.config.apiKey);
+        return { content: [{ type: "text", text: '{"results":[]}' }] };
+      },
+    },
+  });
+
+  apiKey = "new-key";
+  writeFileSync(credentialPath, "new-key-with-different-size", "utf-8");
+  await proxy.handleMessage({
+    jsonrpc: "2.0",
+    id: 22,
+    method: "tools/call",
+    params: { name: "search_experience", arguments: { query: "换货" } },
+  });
+
+  assert.deepEqual(receivedKeys, ["new-key"]);
+  assert.equal((await messages())[0].id, 22);
 });
 
 test("reinitializes after 404 and retries the original request once", async () => {

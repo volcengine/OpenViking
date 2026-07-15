@@ -211,6 +211,7 @@ export function createOpenVikingMcpProxy({
     }
     const name = message.params?.name;
     if (!localTools().some((tool) => tool?.name === name)) return null;
+    reloadIfCredentialFilesChanged("local_tool_call");
     return localToolProvider.callTool(message.params, { config: proxyConfig });
   }
 
