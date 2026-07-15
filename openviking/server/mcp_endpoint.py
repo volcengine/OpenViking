@@ -21,7 +21,7 @@ import contextvars
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 from urllib.parse import quote
 
 from mcp.server.fastmcp import FastMCP
@@ -54,6 +54,7 @@ from openviking.server.local_input_guard import (
 from openviking.server.resource_ingest import ingest_temp_upload
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.server.upload_token_store import upload_token_store
+from openviking.utils.search_filters import SearchContextTypeInput, merge_search_filter
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     PermissionDeniedError,
@@ -222,6 +223,15 @@ mcp = FastMCP(
 # -- find / search ---------------------------------------------------------
 
 
+def _resolve_context_type_filter(
+    context_type: Optional[SearchContextTypeInput],
+) -> Optional[Dict[str, Any]]:
+    try:
+        return merge_search_filter(None, context_type=context_type)
+    except ValueError as exc:
+        raise InvalidArgumentError(str(exc)) from exc
+
+
 @mcp.tool()
 async def find(
     query: str,
@@ -229,6 +239,7 @@ async def find(
     limit: int = 10,
     min_score: float = 0.35,
     level: Optional[List[int]] = None,
+    context_type: Optional[Union[str, List[str]]] = None,
 ) -> str:
     """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score."""
     service = get_service()
@@ -238,6 +249,7 @@ async def find(
         target_uri=target_uri,
         limit=limit,
         score_threshold=min_score,
+        filter=_resolve_context_type_filter(context_type),
         level=level,
     )
     return _format_search_result(result)
@@ -251,6 +263,7 @@ async def search(
     limit: int = 10,
     min_score: float = 0.35,
     level: Optional[List[int]] = None,
+    context_type: Optional[Union[str, List[str]]] = None,
 ) -> str:
     """Deep semantic retrieval with optional session context and intent analysis. Returns ranked memories, resources, and skills with URI, abstract, and score."""
     service = get_service()
@@ -266,6 +279,7 @@ async def search(
         session=session,
         limit=limit,
         score_threshold=min_score,
+        filter=_resolve_context_type_filter(context_type),
         level=level,
     )
     return _format_search_result(result)
@@ -957,7 +971,9 @@ async def mcp_lifespan():
     """Run the MCP session manager. Call this inside the FastAPI lifespan."""
     async with mcp.session_manager.run():
         logger.info(
-            "MCP endpoint ready (13 tools: find, search, read, list, remember, add_resource, grep, glob, code_outline, code_search, code_expand, forget, health)"
+            "MCP endpoint ready (16 tools: find, search, recall, read, list, remember, "
+            "add_resource, list_watches, cancel_watch, grep, glob, forget, code_outline, "
+            "code_search, code_expand, health)"
         )
         yield
 

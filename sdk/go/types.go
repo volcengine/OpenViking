@@ -148,6 +148,8 @@ type ListOptions struct {
 	AbsLimit      int
 	ShowAllHidden bool
 	NodeLimit     int
+	SortBy        string
+	SortOrder     string
 }
 
 // TreeOptions controls Tree.
@@ -182,8 +184,9 @@ type SetTagsOptions struct {
 
 // ReindexOptions controls Reindex.
 type ReindexOptions struct {
-	Mode string
-	Wait bool
+	Mode   string
+	Wait   bool
+	DryRun bool
 }
 
 // FindOptions controls Find.

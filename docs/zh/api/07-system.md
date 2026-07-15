@@ -66,6 +66,12 @@ healthy = client.health()
 print(f"Healthy: {healthy}")
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.health());
+```
+
 **Go SDK**
 
 ```go
@@ -202,6 +208,12 @@ status = client.get_status()
 print(status)
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.getStatus());
+```
+
 **CLI**
 
 ```bash
@@ -264,6 +276,12 @@ curl -X POST http://localhost:1933/api/v1/system/consistency \
 report = client.check_consistency("viking://resources/my-project")
 print(report["ok"])
 print(report["missing_records"])
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.checkConsistency("viking://resources/"));
 ```
 
 **Go SDK**
@@ -353,6 +371,12 @@ status = client.wait_processed(timeout=60.0)
 print(f"Processing complete: {status}")
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.waitProcessed(60));
+```
+
 **Go SDK**
 
 ```go
@@ -413,8 +437,9 @@ ov system wait --timeout 60
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | uri | str | 是 | - | 要重新索引的 Viking URI |
-| mode | str | 否 | `vectors_only` | 重建模式：`vectors_only` 或 `semantic_and_vectors` |
+| mode | str | 否 | `vectors_only` | 重建模式：`vectors_only`、`semantic_and_vectors` 或 `prune_orphans` |
 | wait | bool | 否 | `true` | 是否等待任务完成 |
+| dry_run | bool | 否 | `false` | 仅适用于 `mode="prune_orphans"`；只报告 orphan 向量记录，不实际删除 |
 
 HTTP 请求体不接受未知字段。`uri` 可以使用其他 content API 支持的 OpenViking 路径变量，服务端会先解析再校验。
 
@@ -437,10 +462,13 @@ session 子树会被跳过。
 
 - `vectors_only`：基于当前仍可恢复的源数据重建向量库记录，不会重写 `.abstract.md` 和 `.overview.md`
 - `semantic_and_vectors`：先重新生成语义产物，再基于新的语义结果重建向量
+- `prune_orphans`：删除请求 URI 范围内源文件已不存在的向量库记录。设置 `dry_run=true` 时，只报告会删除多少记录，不实际删除。
 
 对于 `resource` 和 `skill`，`semantic_and_vectors` 会刷新目录/文件语义产物，包括 `.abstract.md` 和 `.overview.md`。对于 `memory`，它会重建当前已持久化 memory 子树的语义和向量，但不会回放历史记忆抽取顺序。
 
 对于 `semantic_and_vectors`，语义刷新和向量重建由 reindex executor 串行编排。语义刷新阶段不会再额外向后台 embedding queue 投递自己的向量化任务；向量由 reindex 阶段统一重建，因此 `wait=true` 表示等待 reindex 操作本身完成。
+
+对于 `prune_orphans`，源文件是否存在以当前文件系统为准。如果整个目录已经不存在，该目录下的正文文件向量和语义 sidecar 向量（例如 `.abstract.md`、`.overview.md`）会一起清理。`dry_run` 用在其他模式时会被拒绝。
 
 **Python SDK (Embedded / HTTP)**
 
@@ -462,6 +490,21 @@ result = client.reindex(
 print(result["status"])
 ```
 
+```python
+result = client.reindex(
+    uri="viking://resources",
+    mode="prune_orphans",
+    dry_run=True,
+)
+print(result["would_delete_records"])
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.reindex("viking://resources/docs/"));
+```
+
 **Go SDK**
 
 ```go
@@ -473,6 +516,18 @@ if err != nil {
     return err
 }
 fmt.Println(result["status"])
+```
+
+```go
+result, err := client.Reindex(ctx, "viking://resources", &openviking.ReindexOptions{
+    Mode: "prune_orphans",
+    Wait: true,
+    DryRun: true,
+})
+if err != nil {
+    return err
+}
+fmt.Println(result["would_delete_records"])
 ```
 
 **HTTP API**
@@ -490,8 +545,9 @@ curl -X POST http://localhost:1933/api/v1/content/reindex \
   -H "X-OpenViking-Account: default" \
   -d '{
     "uri": "viking://resources",
-    "mode": "vectors_only",
-    "wait": true
+    "mode": "prune_orphans",
+    "wait": true,
+    "dry_run": true
   }'
 ```
 
@@ -503,6 +559,10 @@ openviking reindex viking://resources --mode vectors_only
 
 ```bash
 openviking reindex viking://user/default/skills --mode semantic_and_vectors --wait false
+```
+
+```bash
+openviking reindex viking://resources --mode prune_orphans --dry-run
 ```
 
 **同步响应（`wait=true`）**
@@ -517,6 +577,8 @@ openviking reindex viking://user/default/skills --mode semantic_and_vectors --wa
     "object_type": "resource",
     "scanned_records": 120,
     "rebuilt_records": 118,
+    "deleted_records": 0,
+    "would_delete_records": 0,
     "unsupported_records": 2,
     "failed_records": 0,
     "duration_ms": 1284,
@@ -568,6 +630,8 @@ GET /api/v1/tasks?task_type=admin_reindex&resource_id=viking://resources
 | mode | 实际执行的 reindex 模式 |
 | scanned_records | 被检查的记录或语义源数量 |
 | rebuilt_records | 成功重建的向量记录数量 |
+| deleted_records | `prune_orphans` 实际删除的向量记录数量；`dry_run=true` 时为 `0` |
+| would_delete_records | `prune_orphans` dry-run 模式下将会删除的向量记录数量 |
 | unsupported_records | 因没有可用向量来源而跳过的记录数量 |
 | failed_records | 重建失败的记录数量 |
 | duration_ms | 同步执行耗时，单位毫秒 |
@@ -576,11 +640,13 @@ GET /api/v1/tasks?task_type=admin_reindex&resource_id=viking://resources
 
 **行为说明**
 
-- Reindex 是非破坏式的，采用重建/覆盖写入，不需要先 drop 向量集合。
+- `vectors_only` 和 `semantic_and_vectors` 是非破坏式的，采用重建/覆盖写入，不需要先 drop 向量集合。
+- `prune_orphans` 除非设置 `dry_run=true`，否则会删除源文件已经不存在的向量记录。
 - 对 `viking://` 发起 reindex 时，会向下分发到支持的顶层命名空间，并显式排除 `session`。
 - 命名空间级 reindex，例如 `viking://user`，会继续传播到其支持的子内容类型。
 - 如果只是 embedding 模型或向量索引需要刷新，应使用 `vectors_only`。
 - 如果语义产物本身也需要重建，再做重向量化，应使用 `semantic_and_vectors`。
+- 如果文件系统曾绕过正常 API 发生删除，向量库可能还残留已删除路径的记录，应使用 `prune_orphans`。
 - 同一个 URI 和 owner 同时只能运行一个 reindex 任务。对同一目标的并发请求会返回 conflict。
 - 对 resource 文件，文本文件在没有 summary 时可以使用文件正文；非文本文件需要已生成的 summary 或已有向量记录 fallback，否则会计为 unsupported。
 
@@ -605,7 +671,6 @@ Observer API 提供详细的组件级监控。
 - `openviking/server/routers/observer.py:observer_queue` - HTTP 路由
 - `openviking/service/debug_service.py:ObserverService.queue` - 核心实现
 - `openviking/storage/observers/queue_observer.py` - 队列观察者
-- `crates/ov_cli/src/commands/observer.rs` - CLI 命令
 
 #### 2. 接口和参数说明
 
@@ -634,6 +699,12 @@ print(client.observer.queue)
 # Embedding             0        0            10         0       10
 # Semantic              0        0            10         0       10
 # TOTAL                 0        0            20         0       20
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.queueStatus());
 ```
 
 **Go SDK**
@@ -713,6 +784,12 @@ print(client.observer.vikingdb().is_healthy)  # True
 print(client.observer.vikingdb().status)      # 状态表字符串
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.vikingDBStatus());
+```
+
 **Go SDK**
 
 ```go
@@ -787,6 +864,12 @@ print(client.observer.models)
 # vlm                    yes      ...
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.modelsStatus());
+```
+
 **Go SDK**
 
 ```go
@@ -855,11 +938,7 @@ curl -X GET http://localhost:1933/api/v1/observer/lock \
 print(client.observer.lock)
 ```
 
-**CLI**
-
-```bash
-ov observer transaction
-```
+CLI 目前没有单独的 lock observer 子命令。请使用 HTTP API 或 Python SDK 查询该组件；`ov observer system` 会在汇总状态中包含它。
 
 **响应示例**
 

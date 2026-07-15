@@ -7,6 +7,7 @@ import os
 import tempfile
 import uuid
 import zipfile
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import quote
@@ -61,6 +62,9 @@ ERROR_CODE_TO_EXCEPTION = {
     "UNKNOWN": OpenVikingError,
 }
 
+GATEWAY_MARKER_HEADER = "X-VikingBot-Gateway"
+GATEWAY_TOKEN_HEADER = "X-Gateway-Token"
+
 
 def _image_mime_type(file_name: str = "") -> str:
     mime_type, _ = mimetypes.guess_type(file_name or "")
@@ -72,6 +76,25 @@ def _image_mime_type(file_name: str = "") -> str:
 def _image_to_data_uri(data: bytes | bytearray | memoryview, file_name: str = "") -> str:
     encoded = base64.b64encode(bytes(data)).decode("ascii")
     return f"data:{_image_mime_type(file_name)};base64,{encoded}"
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    temporary = tempfile.NamedTemporaryFile(
+        mode="wb",
+        dir=path.parent,
+        prefix=f".{path.name}-",
+        suffix=".tmp",
+        delete=False,
+    )
+    temporary_path = Path(temporary.name)
+    try:
+        with temporary:
+            temporary.write(data)
+        os.replace(temporary_path, path)
+    except BaseException:
+        temporary.close()
+        temporary_path.unlink(missing_ok=True)
+        raise
 
 
 def _normalize_image_input(image: Any) -> Optional[str]:
@@ -266,6 +289,7 @@ class AsyncHTTPClient:
         self._account = config.account
         self._user_id = config.user
         self._actor_peer_id = config.actor_peer_id
+        self._gateway_token = config.gateway_token
         self._timeout = config.timeout
         self._extra_headers = config.extra_headers
         self._profile_enabled = config.profile_enabled
@@ -292,6 +316,77 @@ class AsyncHTTPClient:
             params={"profile": "1"} if self._profile_enabled else None,
         )
         self._observer = _HTTPObserver(self)
+
+    @staticmethod
+    def _has_header(headers: Dict[str, str], name: str) -> bool:
+        return any(key.lower() == name.lower() for key in headers)
+
+    @staticmethod
+    def _is_gateway_token_challenge(response: httpx.Response) -> bool:
+        return (
+            getattr(response, "status_code", None) == httpx.codes.UNAUTHORIZED
+            and getattr(response, "headers", {}).get(GATEWAY_MARKER_HEADER, "").lower() == "true"
+        )
+
+    def _has_explicit_gateway_header(self, headers: Dict[str, str]) -> bool:
+        return self._has_header(self._extra_headers, GATEWAY_TOKEN_HEADER) or self._has_header(
+            headers, GATEWAY_TOKEN_HEADER
+        )
+
+    async def _gateway_token_required(self) -> bool:
+        if self._http is None:
+            raise RuntimeError("Client is not initialized")
+        response = await self._http.get("/health")
+        return self._is_gateway_token_challenge(response)
+
+    async def _send_http_request(
+        self,
+        method: str,
+        url: str,
+        headers: Dict[str, str],
+        request_kwargs: Dict[str, Any],
+    ) -> httpx.Response:
+        if self._http is None:
+            raise RuntimeError("Client is not initialized")
+        call_kwargs = dict(request_kwargs)
+        if headers:
+            call_kwargs["headers"] = headers
+        request_method = getattr(self._http, "request", None)
+        if callable(request_method):
+            return await request_method(method, url, **call_kwargs)
+        verb_method = getattr(self._http, method.lower())
+        return await verb_method(url, **call_kwargs)
+
+    async def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        if self._http is None:
+            raise RuntimeError("Client is not initialized")
+
+        request_kwargs = dict(kwargs)
+        headers = dict(request_kwargs.pop("headers", {}) or {})
+        has_explicit_gateway_header = self._has_explicit_gateway_header(headers)
+
+        # Multipart streams cannot be replayed safely after the first request. Probe the
+        # endpoint before sending them so a Gateway token is attached only when challenged.
+        if (
+            request_kwargs.get("files") is not None
+            and self._gateway_token
+            and not has_explicit_gateway_header
+            and await self._gateway_token_required()
+        ):
+            headers[GATEWAY_TOKEN_HEADER] = self._gateway_token
+
+        response = await self._send_http_request(method, url, headers, request_kwargs)
+        if (
+            not self._is_gateway_token_challenge(response)
+            or not self._gateway_token
+            or has_explicit_gateway_header
+            or request_kwargs.get("files") is not None
+        ):
+            return response
+
+        retry_headers = dict(headers)
+        retry_headers[GATEWAY_TOKEN_HEADER] = self._gateway_token
+        return await self._send_http_request(method, url, retry_headers, request_kwargs)
 
     async def close(self) -> None:
         if self._http:
@@ -338,6 +433,16 @@ class AsyncHTTPClient:
                 continue
             compacted[key] = value
         return compacted
+
+    @staticmethod
+    def _normalize_context_type(context_type: Optional[Any]) -> Optional[Any]:
+        if context_type is None:
+            return None
+        if isinstance(context_type, list):
+            return [item.value if isinstance(item, Enum) else item for item in context_type]
+        if isinstance(context_type, Enum):
+            return context_type.value
+        return context_type
 
     def _handle_response_data(self, response: httpx.Response) -> Dict[str, Any]:
         try:
@@ -415,7 +520,8 @@ class AsyncHTTPClient:
         with open(file_path, "rb") as f:
             files = {"file": (Path(file_path).name, f, "application/octet-stream")}
             data = {"upload_mode": self._upload_mode} if self._upload_mode else None
-            response = await self._http.post(
+            response = await self._request(
+                "POST",
                 "/api/v1/resources/temp_upload",
                 files=files,
                 data=data,
@@ -492,7 +598,7 @@ class AsyncHTTPClient:
             request_data["path"] = path
 
         request_data = self._compact_request_body(request_data)
-        response = await self._http.post("/api/v1/resources", json=request_data)
+        response = await self._request("POST", "/api/v1/resources", json=request_data)
         return self._handle_response_data(response).get("result", {})
 
     async def batch_add_messages(
@@ -505,7 +611,8 @@ class AsyncHTTPClient:
         payload: Dict[str, Any] = {"messages": messages}
         if telemetry is not False:
             payload["telemetry"] = telemetry
-        response = await self._http.post(
+        response = await self._request(
+            "POST",
             f"/api/v1/sessions/{session_path}/messages/batch",
             json=payload,
         )
@@ -539,7 +646,7 @@ class AsyncHTTPClient:
                 request_data["data"] = data
         else:
             request_data["data"] = data
-        response = await self._http.post("/api/v1/skills", json=request_data)
+        response = await self._request("POST", "/api/v1/skills", json=request_data)
         return self._handle_response_data(response).get("result", {})
 
     async def list_skills(
@@ -550,7 +657,7 @@ class AsyncHTTPClient:
         params: Dict[str, Any] = {"node_limit": node_limit}
         if target_uri is not None:
             params["target_uri"] = target_uri
-        response = await self._http.get("/api/v1/skills", params=params)
+        response = await self._request("GET", "/api/v1/skills", params=params)
         return self._handle_response(response)
 
     async def find_skills(
@@ -571,7 +678,7 @@ class AsyncHTTPClient:
         }
         if target_uri is not None:
             payload["target_uri"] = target_uri
-        response = await self._http.post("/api/v1/skills/find", json=payload)
+        response = await self._request("POST", "/api/v1/skills/find", json=payload)
         return self._handle_response_data(response).get("result", {})
 
     async def validate_skill(
@@ -589,7 +696,7 @@ class AsyncHTTPClient:
             payload["skill_dir_name"] = skill_dir_name
         if target_uri is not None:
             payload["target_uri"] = target_uri
-        response = await self._http.post("/api/v1/skills/validate", json=payload)
+        response = await self._request("POST", "/api/v1/skills/validate", json=payload)
         return self._handle_response(response)
 
     async def get_skill(
@@ -611,7 +718,7 @@ class AsyncHTTPClient:
             params["level"] = level
         if target_uri is not None:
             params["target_uri"] = target_uri
-        response = await self._http.get(f"/api/v1/skills/{skill_name}", params=params)
+        response = await self._request("GET", f"/api/v1/skills/{skill_name}", params=params)
         return self._handle_response(response)
 
     async def update_skill(
@@ -649,7 +756,7 @@ class AsyncHTTPClient:
                 request_data["data"] = data
         else:
             request_data["data"] = data
-        response = await self._http.put(f"/api/v1/skills/{skill_name}", json=request_data)
+        response = await self._request("PUT", f"/api/v1/skills/{skill_name}", json=request_data)
         return self._handle_response_data(response).get("result", {})
 
     async def delete_skill(
@@ -660,7 +767,7 @@ class AsyncHTTPClient:
         params: Dict[str, Any] = {}
         if target_uri is not None:
             params["target_uri"] = target_uri
-        response = await self._http.delete(f"/api/v1/skills/{skill_name}", params=params)
+        response = await self._request("DELETE", f"/api/v1/skills/{skill_name}", params=params)
         return self._handle_response(response)
 
     async def list_watches(
@@ -671,7 +778,7 @@ class AsyncHTTPClient:
         params: Dict[str, Any] = {"active_only": active_only}
         if to_uri is not None:
             params["to_uri"] = VikingURI.normalize(to_uri)
-        response = await self._http.get("/api/v1/watches", params=params)
+        response = await self._request("GET", "/api/v1/watches", params=params)
         return self._handle_response(response)
 
     async def get_watch(
@@ -682,7 +789,7 @@ class AsyncHTTPClient:
         params = {}
         if to_uri is not None:
             params["to_uri"] = VikingURI.normalize(to_uri)
-        response = await self._http.get(f"/api/v1/watches/{task_id}", params=params)
+        response = await self._request("GET", f"/api/v1/watches/{task_id}", params=params)
         return self._handle_response(response)
 
     async def update_watch(
@@ -710,11 +817,12 @@ class AsyncHTTPClient:
             params = {}
             if to_uri is not None:
                 params["to_uri"] = VikingURI.normalize(to_uri)
-            response = await self._http.patch(
-                f"/api/v1/watches/{task_id}", params=params, json=payload
+            response = await self._request(
+                "PATCH", f"/api/v1/watches/{task_id}", params=params, json=payload
             )
         else:
-            response = await self._http.patch(
+            response = await self._request(
+                "PATCH",
                 "/api/v1/watches",
                 params={"to_uri": VikingURI.normalize(to_uri)},
                 json=payload,
@@ -730,10 +838,10 @@ class AsyncHTTPClient:
             params = {}
             if to_uri is not None:
                 params["to_uri"] = VikingURI.normalize(to_uri)
-            response = await self._http.delete(f"/api/v1/watches/{task_id}", params=params)
+            response = await self._request("DELETE", f"/api/v1/watches/{task_id}", params=params)
         else:
-            response = await self._http.delete(
-                "/api/v1/watches", params={"to_uri": VikingURI.normalize(to_uri)}
+            response = await self._request(
+                "DELETE", "/api/v1/watches", params={"to_uri": VikingURI.normalize(to_uri)}
             )
         return self._handle_response(response)
 
@@ -746,16 +854,19 @@ class AsyncHTTPClient:
             params = {}
             if to_uri is not None:
                 params["to_uri"] = VikingURI.normalize(to_uri)
-            response = await self._http.post(f"/api/v1/watches/{task_id}/trigger", params=params)
+            response = await self._request(
+                "POST", f"/api/v1/watches/{task_id}/trigger", params=params
+            )
         else:
-            response = await self._http.post(
-                "/api/v1/watches/trigger", params={"to_uri": VikingURI.normalize(to_uri)}
+            response = await self._request(
+                "POST", "/api/v1/watches/trigger", params={"to_uri": VikingURI.normalize(to_uri)}
             )
         return self._handle_response(response)
 
     async def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
         http_timeout = timeout if timeout else 600.0
-        response = await self._http.post(
+        response = await self._request(
+            "POST",
             "/api/v1/system/wait",
             json={"timeout": timeout},
             timeout=http_timeout,
@@ -771,18 +882,25 @@ class AsyncHTTPClient:
         abs_limit: int = 256,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
     ) -> List[Any]:
-        response = await self._http.get(
+        params: Dict[str, Any] = {
+            "uri": VikingURI.normalize(uri),
+            "simple": simple,
+            "recursive": recursive,
+            "output": output,
+            "abs_limit": abs_limit,
+            "show_all_hidden": show_all_hidden,
+            "node_limit": node_limit,
+        }
+        if sort_by is not None:
+            params["sort_by"] = sort_by
+            params["sort_order"] = sort_order
+        response = await self._request(
+            "GET",
             "/api/v1/fs/ls",
-            params={
-                "uri": VikingURI.normalize(uri),
-                "simple": simple,
-                "recursive": recursive,
-                "output": output,
-                "abs_limit": abs_limit,
-                "show_all_hidden": show_all_hidden,
-                "node_limit": node_limit,
-            },
+            params=params,
         )
         return self._handle_response(response)
 
@@ -794,7 +912,8 @@ class AsyncHTTPClient:
         show_all_hidden: bool = False,
         node_limit: int = 1000,
     ) -> List[Dict[str, Any]]:
-        response = await self._http.get(
+        response = await self._request(
+            "GET",
             "/api/v1/fs/tree",
             params={
                 "uri": VikingURI.normalize(uri),
@@ -807,12 +926,14 @@ class AsyncHTTPClient:
         return self._handle_response(response)
 
     async def stat(self, uri: str) -> Dict[str, Any]:
-        response = await self._http.get("/api/v1/fs/stat", params={"uri": VikingURI.normalize(uri)})
+        response = await self._request(
+            "GET", "/api/v1/fs/stat", params={"uri": VikingURI.normalize(uri)}
+        )
         return self._handle_response(response)
 
     async def attrs(self, uri: str) -> Dict[str, Any]:
-        response = await self._http.get(
-            "/api/v1/fs/attrs", params={"uri": VikingURI.normalize(uri)}
+        response = await self._request(
+            "GET", "/api/v1/fs/attrs", params={"uri": VikingURI.normalize(uri)}
         )
         return self._handle_response(response)
 
@@ -820,7 +941,7 @@ class AsyncHTTPClient:
         payload = {"uri": VikingURI.normalize(uri)}
         if description is not None:
             payload["description"] = description
-        response = await self._http.post("/api/v1/fs/mkdir", json=payload)
+        response = await self._request("POST", "/api/v1/fs/mkdir", json=payload)
         self._handle_response(response)
 
     async def rm(
@@ -833,32 +954,34 @@ class AsyncHTTPClient:
         params = {"uri": VikingURI.normalize(uri), "recursive": recursive, "wait": wait}
         if timeout is not None:
             params["timeout"] = timeout
-        response = await self._http.request("DELETE", "/api/v1/fs", params=params)
+        response = await self._request("DELETE", "/api/v1/fs", params=params)
         self._handle_response(response)
 
     async def mv(self, from_uri: str, to_uri: str) -> None:
-        response = await self._http.post(
+        response = await self._request(
+            "POST",
             "/api/v1/fs/mv",
             json={"from_uri": VikingURI.normalize(from_uri), "to_uri": VikingURI.normalize(to_uri)},
         )
         self._handle_response(response)
 
     async def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
-        response = await self._http.get(
+        response = await self._request(
+            "GET",
             "/api/v1/content/read",
             params={"uri": VikingURI.normalize(uri), "offset": offset, "limit": limit},
         )
         return self._handle_response(response)
 
     async def abstract(self, uri: str) -> str:
-        response = await self._http.get(
-            "/api/v1/content/abstract", params={"uri": VikingURI.normalize(uri)}
+        response = await self._request(
+            "GET", "/api/v1/content/abstract", params={"uri": VikingURI.normalize(uri)}
         )
         return self._handle_response(response)
 
     async def overview(self, uri: str) -> str:
-        response = await self._http.get(
-            "/api/v1/content/overview", params={"uri": VikingURI.normalize(uri)}
+        response = await self._request(
+            "GET", "/api/v1/content/overview", params={"uri": VikingURI.normalize(uri)}
         )
         return self._handle_response(response)
 
@@ -871,7 +994,8 @@ class AsyncHTTPClient:
         timeout: Optional[float] = None,
         telemetry: Any = False,
     ) -> Dict[str, Any]:
-        response = await self._http.post(
+        response = await self._request(
+            "POST",
             "/api/v1/content/write",
             json={
                 "uri": VikingURI.normalize(uri),
@@ -892,7 +1016,8 @@ class AsyncHTTPClient:
         recursive: bool = False,
         telemetry: Any = False,
     ) -> Dict[str, Any]:
-        response = await self._http.post(
+        response = await self._request(
+            "POST",
             "/api/v1/fs/attrs/set_tags",
             json={
                 "uri": VikingURI.normalize(uri),
@@ -925,12 +1050,12 @@ class AsyncHTTPClient:
             "limit": actual_limit,
             "score_threshold": score_threshold,
             "filter": filter,
-            "context_type": context_type,
+            "context_type": self._normalize_context_type(context_type),
             "tags": tags,
             "telemetry": telemetry,
         }
         payload = self._compact_request_body(payload)
-        response = await self._http.post("/api/v1/search/find", json=payload)
+        response = await self._request("POST", "/api/v1/search/find", json=payload)
         return self._handle_response_data(response).get("result", {})
 
     async def search(
@@ -958,12 +1083,12 @@ class AsyncHTTPClient:
             "limit": actual_limit,
             "score_threshold": score_threshold,
             "filter": filter,
-            "context_type": context_type,
+            "context_type": self._normalize_context_type(context_type),
             "tags": tags,
             "telemetry": telemetry,
         }
         payload = self._compact_request_body(payload)
-        response = await self._http.post("/api/v1/search/search", json=payload)
+        response = await self._request("POST", "/api/v1/search/search", json=payload)
         return self._handle_response_data(response).get("result", {})
 
     async def grep(
@@ -982,7 +1107,7 @@ class AsyncHTTPClient:
         }
         if exclude_uri is not None:
             request_json["exclude_uri"] = VikingURI.normalize(exclude_uri)
-        response = await self._http.post("/api/v1/search/grep", json=request_json)
+        response = await self._request("POST", "/api/v1/search/grep", json=request_json)
         return self._handle_response(response)
 
     async def glob(
@@ -991,7 +1116,8 @@ class AsyncHTTPClient:
         uri: str = "viking://",
         node_limit: int = 256,
     ) -> Dict[str, Any]:
-        response = await self._http.post(
+        response = await self._request(
+            "POST",
             "/api/v1/search/glob",
             json={
                 "pattern": pattern,
@@ -1002,8 +1128,8 @@ class AsyncHTTPClient:
         return self._handle_response(response)
 
     async def relations(self, uri: str) -> List[Any]:
-        response = await self._http.get(
-            "/api/v1/relations", params={"uri": VikingURI.normalize(uri)}
+        response = await self._request(
+            "GET", "/api/v1/relations", params={"uri": VikingURI.normalize(uri)}
         )
         return self._handle_response(response)
 
@@ -1012,7 +1138,8 @@ class AsyncHTTPClient:
             to_uris = VikingURI.normalize(to_uris)
         else:
             to_uris = [VikingURI.normalize(u) for u in to_uris]
-        response = await self._http.post(
+        response = await self._request(
+            "POST",
             "/api/v1/relations/link",
             json={
                 "from_uri": VikingURI.normalize(from_uri),
@@ -1023,7 +1150,7 @@ class AsyncHTTPClient:
         self._handle_response(response)
 
     async def unlink(self, from_uri: str, to_uri: str) -> None:
-        response = await self._http.request(
+        response = await self._request(
             "DELETE",
             "/api/v1/relations/link",
             json={
@@ -1046,24 +1173,25 @@ class AsyncHTTPClient:
             json_body["memory_policy"] = memory_policy
         if telemetry is not False:
             json_body["telemetry"] = telemetry
-        response = await self._http.post("/api/v1/sessions", json=json_body)
+        response = await self._request("POST", "/api/v1/sessions", json=json_body)
         return self._handle_response_data(response).get("result", {})
 
     async def list_sessions(self) -> List[Any]:
-        response = await self._http.get("/api/v1/sessions")
+        response = await self._request("GET", "/api/v1/sessions")
         return self._handle_response(response)
 
     async def get_session(self, session_id: str, *, auto_create: bool = False) -> Dict[str, Any]:
         params = {"auto_create": "true"} if auto_create else {}
         session_path = self._path_segment(session_id)
-        response = await self._http.get(f"/api/v1/sessions/{session_path}", params=params)
+        response = await self._request("GET", f"/api/v1/sessions/{session_path}", params=params)
         return self._handle_response(response)
 
     async def get_session_context(
         self, session_id: str, token_budget: int = 128_000
     ) -> Dict[str, Any]:
         session_path = self._path_segment(session_id)
-        response = await self._http.get(
+        response = await self._request(
+            "GET",
             f"/api/v1/sessions/{session_path}/context",
             params={"token_budget": token_budget},
         )
@@ -1072,16 +1200,18 @@ class AsyncHTTPClient:
     async def get_session_archive(self, session_id: str, archive_id: str) -> Dict[str, Any]:
         session_path = self._path_segment(session_id)
         archive_path = self._path_segment(archive_id)
-        response = await self._http.get(f"/api/v1/sessions/{session_path}/archives/{archive_path}")
+        response = await self._request(
+            "GET", f"/api/v1/sessions/{session_path}/archives/{archive_path}"
+        )
         return self._handle_response(response)
 
     async def delete_session(self, session_id: str) -> None:
         session_path = self._path_segment(session_id)
-        response = await self._http.delete(f"/api/v1/sessions/{session_path}")
+        response = await self._request("DELETE", f"/api/v1/sessions/{session_path}")
         self._handle_response(response)
 
     async def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
-        response = await self._http.get(f"/api/v1/tasks/{task_id}")
+        response = await self._request("GET", f"/api/v1/tasks/{task_id}")
         if response.status_code == 404:
             return None
         return self._handle_response(response)
@@ -1100,7 +1230,7 @@ class AsyncHTTPClient:
             params["status"] = status
         if resource_id is not None:
             params["resource_id"] = resource_id
-        response = await self._http.get("/api/v1/tasks", params=params)
+        response = await self._request("GET", "/api/v1/tasks", params=params)
         return self._handle_response(response)
 
     async def commit_session(
@@ -1111,7 +1241,8 @@ class AsyncHTTPClient:
         keep_recent_count: int = 0,
     ) -> Dict[str, Any]:
         session_path = self._path_segment(session_id)
-        response = await self._http.post(
+        response = await self._request(
+            "POST",
             f"/api/v1/sessions/{session_path}/commit",
             json={"keep_recent_count": keep_recent_count, "telemetry": telemetry},
         )
@@ -1141,7 +1272,9 @@ class AsyncHTTPClient:
         if telemetry is not False:
             payload["telemetry"] = telemetry
         session_path = self._path_segment(session_id)
-        response = await self._http.post(f"/api/v1/sessions/{session_path}/messages", json=payload)
+        response = await self._request(
+            "POST", f"/api/v1/sessions/{session_path}/messages", json=payload
+        )
         return self._handle_response_data(response).get("result", {})
 
     async def export_ovpack(
@@ -1158,14 +1291,14 @@ class AsyncHTTPClient:
         elif not str(to_path).endswith(".ovpack"):
             to_path = Path(str(to_path) + ".ovpack")
         to_path.parent.mkdir(parents=True, exist_ok=True)
-        response = await self._http.post(
+        response = await self._request(
+            "POST",
             "/api/v1/pack/export",
             json={"uri": uri, "include_vectors": include_vectors},
         )
         if not response.is_success:
             self._handle_response(response)
-        with open(to_path, "wb") as f:
-            f.write(response.content)
+        _atomic_write_bytes(to_path, response.content)
         return str(to_path)
 
     async def backup_ovpack(self, to: str, include_vectors: bool = False) -> str:
@@ -1175,13 +1308,12 @@ class AsyncHTTPClient:
         elif not str(to_path).endswith(".ovpack"):
             to_path = Path(str(to_path) + ".ovpack")
         to_path.parent.mkdir(parents=True, exist_ok=True)
-        response = await self._http.post(
-            "/api/v1/pack/backup", json={"include_vectors": include_vectors}
+        response = await self._request(
+            "POST", "/api/v1/pack/backup", json={"include_vectors": include_vectors}
         )
         if not response.is_success:
             self._handle_response(response)
-        with open(to_path, "wb") as f:
-            f.write(response.content)
+        _atomic_write_bytes(to_path, response.content)
         return str(to_path)
 
     async def import_ovpack(
@@ -1202,7 +1334,7 @@ class AsyncHTTPClient:
         if not file_path_obj.is_file():
             raise ValueError(f"Path {file_path} is not a file")
         request_data["temp_file_id"] = await self._upload_temp_file(file_path)
-        response = await self._http.post("/api/v1/pack/import", json=request_data)
+        response = await self._request("POST", "/api/v1/pack/import", json=request_data)
         result = self._handle_response(response)
         return result.get("uri", "")
 
@@ -1223,12 +1355,13 @@ class AsyncHTTPClient:
         if not file_path_obj.is_file():
             raise ValueError(f"Path {file_path} is not a file")
         request_data["temp_file_id"] = await self._upload_temp_file(file_path)
-        response = await self._http.post("/api/v1/pack/restore", json=request_data)
+        response = await self._request("POST", "/api/v1/pack/restore", json=request_data)
         result = self._handle_response(response)
         return result.get("uri", "")
 
     async def check_consistency(self, uri: str) -> Dict[str, Any]:
-        response = await self._http.post(
+        response = await self._request(
+            "POST",
             "/api/v1/system/consistency",
             json={"uri": VikingURI.normalize(uri)},
         )
@@ -1236,7 +1369,7 @@ class AsyncHTTPClient:
 
     async def health(self) -> bool:
         try:
-            response = await self._http.get("/health")
+            response = await self._request("GET", "/health")
             data = response.json()
             return data.get("status") == "ok"
         except Exception:
@@ -1247,27 +1380,29 @@ class AsyncHTTPClient:
         uri: str,
         mode: str = "vectors_only",
         wait: bool = True,
+        dry_run: bool = False,
     ) -> Dict[str, Any]:
-        response = await self._http.post(
+        response = await self._request(
+            "POST",
             "/api/v1/content/reindex",
-            json={"uri": uri, "mode": mode, "wait": wait},
+            json={"uri": uri, "mode": mode, "wait": wait, "dry_run": dry_run},
         )
         return self._handle_response(response)
 
     async def _get_queue_status(self) -> Dict[str, Any]:
-        response = await self._http.get("/api/v1/observer/queue")
+        response = await self._request("GET", "/api/v1/observer/queue")
         return self._handle_response(response)
 
     async def _get_vikingdb_status(self) -> Dict[str, Any]:
-        response = await self._http.get("/api/v1/observer/vikingdb")
+        response = await self._request("GET", "/api/v1/observer/vikingdb")
         return self._handle_response(response)
 
     async def _get_models_status(self) -> Dict[str, Any]:
-        response = await self._http.get("/api/v1/observer/models")
+        response = await self._request("GET", "/api/v1/observer/models")
         return self._handle_response(response)
 
     async def _get_system_status(self) -> Dict[str, Any]:
-        response = await self._http.get("/api/v1/observer/system")
+        response = await self._request("GET", "/api/v1/observer/system")
         return self._handle_response(response)
 
     async def admin_create_account(
@@ -1282,18 +1417,19 @@ class AsyncHTTPClient:
             payload["seed"] = seed
         if user_config is not None:
             payload["user_config"] = user_config
-        response = await self._http.post(
+        response = await self._request(
+            "POST",
             "/api/v1/admin/accounts",
             json=payload,
         )
         return self._handle_response(response)
 
     async def admin_list_accounts(self) -> List[Any]:
-        response = await self._http.get("/api/v1/admin/accounts")
+        response = await self._request("GET", "/api/v1/admin/accounts")
         return self._handle_response(response)
 
     async def admin_delete_account(self, account_id: str) -> Dict[str, Any]:
-        response = await self._http.delete(f"/api/v1/admin/accounts/{account_id}")
+        response = await self._request("DELETE", f"/api/v1/admin/accounts/{account_id}")
         return self._handle_response(response)
 
     async def admin_register_user(
@@ -1309,22 +1445,26 @@ class AsyncHTTPClient:
             payload["seed"] = seed
         if user_config is not None:
             payload["user_config"] = user_config
-        response = await self._http.post(
+        response = await self._request(
+            "POST",
             f"/api/v1/admin/accounts/{account_id}/users",
             json=payload,
         )
         return self._handle_response(response)
 
     async def admin_list_users(self, account_id: str) -> List[Any]:
-        response = await self._http.get(f"/api/v1/admin/accounts/{account_id}/users")
+        response = await self._request("GET", f"/api/v1/admin/accounts/{account_id}/users")
         return self._handle_response(response)
 
     async def admin_remove_user(self, account_id: str, user_id: str) -> Dict[str, Any]:
-        response = await self._http.delete(f"/api/v1/admin/accounts/{account_id}/users/{user_id}")
+        response = await self._request(
+            "DELETE", f"/api/v1/admin/accounts/{account_id}/users/{user_id}"
+        )
         return self._handle_response(response)
 
     async def admin_set_role(self, account_id: str, user_id: str, role: str) -> Dict[str, Any]:
-        response = await self._http.put(
+        response = await self._request(
+            "PUT",
             f"/api/v1/admin/accounts/{account_id}/users/{user_id}/role",
             json={"role": role},
         )
@@ -1336,14 +1476,15 @@ class AsyncHTTPClient:
         payload: Dict[str, Any] = {}
         if seed is not None:
             payload["seed"] = seed
-        response = await self._http.post(
+        response = await self._request(
+            "POST",
             f"/api/v1/admin/accounts/{account_id}/users/{user_id}/key",
             json=payload,
         )
         return self._handle_response(response)
 
     async def admin_migrate(self, cleanup: bool = False) -> Dict[str, Any]:
-        response = await self._http.post("/api/v1/admin/migrate", json={"cleanup": cleanup})
+        response = await self._request("POST", "/api/v1/admin/migrate", json={"cleanup": cleanup})
         return self._handle_response(response)
 
     def get_status(self) -> Dict[str, Any]:
@@ -1377,7 +1518,7 @@ class AsyncHTTPClient:
             body["author_name"] = author_name
         if author_email is not None:
             body["author_email"] = author_email
-        response = await self._http.post("/api/v1/snapshot/commit", json=body)
+        response = await self._request("POST", "/api/v1/snapshot/commit", json=body)
         return self._handle_response(response)
 
     async def git_restore(
@@ -1405,7 +1546,7 @@ class AsyncHTTPClient:
             body["author_name"] = author_name
         if author_email is not None:
             body["author_email"] = author_email
-        response = await self._http.post("/api/v1/snapshot/restore", json=body)
+        response = await self._request("POST", "/api/v1/snapshot/restore", json=body)
         return self._handle_response(response)
 
     async def git_show(
@@ -1418,7 +1559,7 @@ class AsyncHTTPClient:
         params: Dict[str, Any] = {"target_ref": target_ref}
         if path is not None:
             params["path"] = path
-        response = await self._http.get("/api/v1/snapshot/show", params=params)
+        response = await self._request("GET", "/api/v1/snapshot/show", params=params)
 
         if path is None:
             return self._handle_response(response)
@@ -1441,7 +1582,8 @@ class AsyncHTTPClient:
         limit: int = 20,
     ) -> List[Dict[str, Any]]:
         """Walk commit history newest-first."""
-        response = await self._http.get(
+        response = await self._request(
+            "GET",
             "/api/v1/snapshot/log",
             params={"branch": branch, "limit": limit},
         )
@@ -1449,13 +1591,14 @@ class AsyncHTTPClient:
 
     async def git_get_ignore(self) -> str:
         """Return the account ``.ovgitignore`` content (empty string if absent)."""
-        response = await self._http.get("/api/v1/snapshot/ignore")
+        response = await self._request("GET", "/api/v1/snapshot/ignore")
         result = self._handle_response(response)
         return result if isinstance(result, str) else ""
 
     async def git_set_ignore(self, *, content: str) -> None:
         """Write the account ``.ovgitignore`` control file."""
-        response = await self._http.put(
+        response = await self._request(
+            "PUT",
             "/api/v1/snapshot/ignore",
             json={"content": content},
         )
@@ -1463,7 +1606,7 @@ class AsyncHTTPClient:
 
     async def git_delete_ignore(self) -> None:
         """Delete the account ``.ovgitignore`` control file (missing is success)."""
-        response = await self._http.delete("/api/v1/snapshot/ignore")
+        response = await self._request("DELETE", "/api/v1/snapshot/ignore")
         self._handle_response(response)
 
     @property
@@ -1723,6 +1866,8 @@ class SyncHTTPClient:
         abs_limit: int = 256,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
     ) -> List[Any]:
         return run_async(
             self._async_client.ls(
@@ -1733,6 +1878,8 @@ class SyncHTTPClient:
                 abs_limit=abs_limit,
                 show_all_hidden=show_all_hidden,
                 node_limit=node_limit,
+                sort_by=sort_by,
+                sort_order=sort_order,
             )
         )
 
@@ -2067,8 +2214,9 @@ class SyncHTTPClient:
         uri: str,
         mode: str = "vectors_only",
         wait: bool = True,
+        dry_run: bool = False,
     ) -> Dict[str, Any]:
-        return run_async(self._async_client.reindex(uri=uri, mode=mode, wait=wait))
+        return run_async(self._async_client.reindex(uri=uri, mode=mode, wait=wait, dry_run=dry_run))
 
     def admin_create_account(
         self,

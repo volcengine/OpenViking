@@ -8,6 +8,7 @@ Provides ovpack export/import and backup/restore operations.
 
 from typing import Optional
 
+from openviking.core.namespace import canonicalize_uri
 from openviking.core.uri_validation import validate_viking_uri
 from openviking.server.identity import RequestContext
 from openviking.storage.ovpack.operations import backup_ovpack as local_backup_ovpack
@@ -60,7 +61,7 @@ class PackService:
             Exported file path
         """
         viking_fs = self._ensure_initialized()
-        uri = validate_viking_uri(uri)
+        uri = canonicalize_uri(validate_viking_uri(uri), ctx)
         return await local_export_ovpack(
             viking_fs,
             uri,
@@ -105,7 +106,7 @@ class PackService:
             Imported root resource URI
         """
         viking_fs = self._ensure_initialized()
-        parent = validate_viking_uri(parent, field_name="parent")
+        parent = canonicalize_uri(validate_viking_uri(parent, field_name="parent"), ctx)
         return await local_import_ovpack(
             viking_fs,
             file_path,

@@ -92,6 +92,8 @@ class FSService:
         show_all_hidden: bool = False,
         node_limit: int = 1000,
         level_limit: int = 3,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
     ) -> List[Any]:
         """List directory contents.
 
@@ -103,6 +105,8 @@ class FSService:
             abs_limit: int = 256 if output == "agent" else ignore
             show_all_hidden: bool = False (list all hidden files, like -a)
             node_limit: int = 1000 (maximum number of nodes to list)
+            sort_by: Optional sort field for non-recursive listings
+            sort_order: Sort direction, "asc" or "desc"
         """
         viking_fs = self._ensure_initialized()
         uri = validate_viking_uri(uri)
@@ -125,6 +129,8 @@ class FSService:
                     output="original",
                     show_all_hidden=show_all_hidden,
                     node_limit=node_limit,
+                    sort_by=sort_by,
+                    sort_order=sort_order,
                 )
             return [e.get("uri", "") for e in entries]
 
@@ -146,6 +152,8 @@ class FSService:
                 abs_limit=abs_limit,
                 show_all_hidden=show_all_hidden,
                 node_limit=node_limit,
+                sort_by=sort_by,
+                sort_order=sort_order,
             )
         return entries
 

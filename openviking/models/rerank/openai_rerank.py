@@ -101,13 +101,13 @@ class OpenAIRerankClient(RerankBase):
 
             if len(results) != len(documents):
                 logger.warning(
-                    "[OpenAIRerankClient] Unexpected rerank result length: expected=%s actual=%s",
+                    "[OpenAIRerankClient] Sparse rerank results: expected=%s actual=%s",
                     len(documents),
                     len(results),
                 )
-                return None
 
-            # Results may not be in original order — sort by index
+            # Results may be sparse or out of order. Missing documents keep a
+            # zero score while returned scores map back to their input indexes.
             scores = [0.0] * len(documents)
             for item in results:
                 idx = item.get("index")

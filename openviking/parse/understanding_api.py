@@ -25,6 +25,11 @@ import httpx
 
 from openviking.parse.base import NodeType, ParseResult, ResourceNode
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.parse.parsers.media.constants import (
+    AUDIO_EXTENSIONS,
+    IMAGE_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+)
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.utils.zip_safe import safe_extract_zip
 from openviking_cli.utils.logger import get_logger
@@ -59,9 +64,9 @@ class UnderstandingAPI(BaseParser):
         if not self._api_key:
             raise ValueError("parser_api.api_key is required for UnderstandingAPI")
 
-        self._video_exts = {"mp4", "mov", "avi", "flv", "mkv", "wmv", "webm"}
-        self._audio_exts = {"mp3", "wav", "m4a", "flac", "aac", "ogg"}
-        self._image_exts = {"jpg", "jpeg", "png", "webp", "gif", "bmp"}
+        self._video_exts = {e.lstrip(".") for e in VIDEO_EXTENSIONS}
+        self._audio_exts = {e.lstrip(".") for e in AUDIO_EXTENSIONS}
+        self._image_exts = {e.lstrip(".") for e in IMAGE_EXTENSIONS}
 
     @property
     def supported_extensions(self) -> List[str]:

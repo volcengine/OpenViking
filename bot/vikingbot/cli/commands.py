@@ -14,9 +14,10 @@ from typing import Any, Optional
 import typer
 from loguru import logger
 from prompt_toolkit import PromptSession
-from prompt_toolkit.formatted_text import HTML
+from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.patch_stdout import patch_stdout
+from prompt_toolkit.styles import Style as PromptStyle
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.table import Table
@@ -71,6 +72,13 @@ app = typer.Typer(
 
 console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
+_CHAT_PROMPT_MESSAGE = FormattedText([("class:user-label", "You: ")])
+_CHAT_PROMPT_STYLE = PromptStyle.from_dict(
+    {
+        "": "fg:ansidefault",
+        "user-label": "bold fg:ansicyan",
+    }
+)
 
 
 def _warn_deprecated_memory_user(memory_user: list[str] | None) -> None:
@@ -98,9 +106,7 @@ def _redirect_openviking_logs_to_stderr() -> None:
         # If it already has handlers, swap any stdout StreamHandlers to stderr.
         if not root_logger.handlers:
             handler = logging.StreamHandler(sys.stderr)
-            formatter = logging.Formatter(
-                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-            )
+            formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
             handler.setFormatter(formatter)
             root_logger.addHandler(handler)
             root_logger.propagate = False
@@ -175,6 +181,19 @@ def _get_gateway_token(config) -> str:
     if gateway is None:
         return ""
     return getattr(gateway, "token", "") or ""
+
+
+def _gateway_startup_mode(config, host: str) -> str:
+    ov_server = getattr(config, "ov_server", None)
+    server_url = str(getattr(ov_server, "server_url", "") or "").strip()
+    source_getter = getattr(ov_server, "get_config_source", None)
+    source = source_getter() if callable(source_getter) else getattr(ov_server, "_source", "none")
+    source = str(source or "none").strip().lower()
+    if server_url:
+        if source == "explicit":
+            return "openviking_explicit"
+        return "openviking_inherited"
+    return "standalone_public" if requires_gateway_token(host, "") else "standalone_local"
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +294,8 @@ async def _read_interactive_input_async() -> str:
     try:
         with patch_stdout():
             return await _PROMPT_SESSION.prompt_async(
-                HTML("<b fg='ansiblack'>You:</b> "),
+                _CHAT_PROMPT_MESSAGE,
+                style=_CHAT_PROMPT_STYLE,
             )
     except EOFError as exc:
         raise KeyboardInterrupt from exc
@@ -386,9 +406,10 @@ def gateway(
     bus = MessageBus()
     path = Path(config_path).expanduser() if config_path is not None else None
     config = ensure_config(path)
-    validate_openviking_auth(config)
     effective_host = host if host is not None else config.gateway.host
     effective_port = port if port is not None else config.gateway.port
+    config.gateway.host = effective_host
+    config.gateway.port = effective_port
     gateway_token = _get_gateway_token(config)
     if requires_gateway_token(effective_host, gateway_token):
         print(
@@ -397,8 +418,8 @@ def gateway(
             file=sys.stderr,
         )
         sys.exit(1)
-    config.gateway.host = effective_host
-    config.gateway.port = effective_port
+    validate_openviking_auth(config)
+    console.print(f"[green]✓[/green] Gateway mode: {_gateway_startup_mode(config, effective_host)}")
     _abort_if_port_in_use(effective_port, "vikingbot gateway")
     _init_bot_data(config)
     session_manager = SessionManager(config.bot_data_path)

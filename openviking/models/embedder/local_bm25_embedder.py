@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 
 import xxhash
 
-from openviking.models.embedder.base import EmbedResult, EmbedderBase, SparseEmbedderBase
+from openviking.models.embedder.base import EmbedderBase, EmbedResult, SparseEmbedderBase
 
 logger = logging.getLogger(__name__)
 

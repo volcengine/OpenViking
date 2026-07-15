@@ -1,0 +1,125 @@
+name: Controlplane MCP Release
+
+# Publishes mcp-server-openviking-controlplane (MCP server + ov-cp CLI for the
+# OpenViking control plane) to PyPI. The source lives in an external repo
+# (volcengine/mcp-server, subdirectory server/mcp_server_openviking_controlplane);
+# this workflow checks it out at an explicit ref so every publish is traceable.
+# Cadence is slow, so manual dispatch only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_repo:
+        description: "Source repo (owner/name)"
+        required: true
+        default: "volcengine/mcp-server"
+        type: string
+      source_ref:
+        description: "Source ref to build (tag / branch / commit SHA)"
+        required: true
+        default: "main"
+        type: string
+      target:
+        description: "Publish target"
+        required: true
+        type: choice
+        default: "testpypi"
+        options:
+          - testpypi
+          - pypi
+          - both
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build mcp-server-openviking-controlplane
+    runs-on: ubuntu-24.04
+    outputs:
+      pkg_version: ${{ steps.version.outputs.pkg_version }}
+    steps:
+      - name: Checkout source repo
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ inputs.source_repo }}
+          ref: ${{ inputs.source_ref }}
+
+      - name: Record provenance
+        run: |
+          echo "Building from ${{ inputs.source_repo }}@$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Build distributions
+        working-directory: server/mcp_server_openviking_controlplane
+        run: uv build
+
+      - name: Resolve package version
+        id: version
+        working-directory: server/mcp_server_openviking_controlplane
+        run: |
+          PKG_VERSION=$(ls dist/*.whl | head -n 1 | xargs basename | cut -d- -f2)
+          echo "pkg_version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved package version: $PKG_VERSION" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v7
+        with:
+          name: controlplane-mcp-distributions
+          path: server/mcp_server_openviking_controlplane/dist/*
+
+  publish-testpypi:
+    name: Publish to TestPyPI
+    needs: [build]
+    if: inputs.target == 'testpypi' || inputs.target == 'both'
+    runs-on: ubuntu-24.04
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/mcp-server-openviking-controlplane
+    permissions:
+      id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v8
+        with:
+          name: controlplane-mcp-distributions
+          path: dist/
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+          verbose: true
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [build]
+    if: inputs.target == 'pypi' || inputs.target == 'both'
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+      url: https://pypi.org/p/mcp-server-openviking-controlplane
+    permissions:
+      id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v8
+        with:
+          name: controlplane-mcp-distributions
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+          verbose: true

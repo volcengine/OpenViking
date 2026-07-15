@@ -243,7 +243,7 @@ Both plugins share the same core design (informed by each other):
 |---------------------|----------------------------------------|----------------------------------------|
 | Architecture        | Hook scripts (.mjs) + MCP delegation   | Native TypeScript extension            |
 | Recall timing       | Synchronous (UserPromptSubmit hook)     | Synchronous (context event)            |
-| Tool delivery       | OV server's MCP endpoint (9 tools)      | pi.registerTool() (7 tools)            |
+| Tool delivery       | OV server's MCP endpoint (16 tools)     | pi.registerTool() (7 tools)            |
 | Write path          | Detached worker (async)                 | Async promise (pi's event loop)        |
 | Installation        | `claude plugin install` + setup script  | Copy directory → auto-discovered       |
 | Memory index        | None (flashlight search model)          | Built (map model — model sees what OV knows) |

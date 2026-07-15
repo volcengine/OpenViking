@@ -89,8 +89,9 @@ pub async fn handle_add_resource(
         ctx.config.effective_actor_peer_id(),
         effective_timeout,
         ctx.profile.unwrap_or(ctx.config.profile),
-        ctx.config.extra_headers.clone(),
-    );
+        ctx.config.effective_extra_headers(),
+    )
+    .with_gateway_token(ctx.config.effective_gateway_token());
     commands::resources::add_resource(
         &client,
         &path,
@@ -1245,9 +1246,24 @@ pub async fn handle_set_tags(
     .await
 }
 
-pub async fn handle_reindex(uri: String, mode: String, wait: bool, ctx: CliContext) -> Result<()> {
+pub async fn handle_reindex(
+    uri: String,
+    mode: String,
+    wait: bool,
+    dry_run: bool,
+    ctx: CliContext,
+) -> Result<()> {
     let client = ctx.get_client();
-    commands::content::reindex(&client, &uri, &mode, wait, ctx.output_format, ctx.compact).await
+    commands::content::reindex(
+        &client,
+        &uri,
+        &mode,
+        wait,
+        dry_run,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
 }
 
 pub async fn handle_get(uri: String, local_path: String, ctx: CliContext) -> Result<()> {

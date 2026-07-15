@@ -96,14 +96,28 @@ void test_basic_workflow() {
     SPDLOG_ERROR("Filter layout registration failed");
     exit(1);
   }
-  FilterResult filter_res = engine.evaluate_filter(
-      R"({"op":"must","field":"uri","conds":["/docs"],"para":"-d=-1"})");
+  const std::string uri_filter =
+      R"({"op":"must","field":"uri","conds":["/docs"],"para":"-d=-1"})";
+  FilterResult filter_res = engine.evaluate_filter(uri_filter);
   if (filter_res.eligible_count != 1 || filter_res.bitset_words.size() != 1 ||
-      filter_res.bitset_words[0] != 4U) {
+      filter_res.bitset_words[0] != 4U || filter_res.native_filter_token != 0) {
     SPDLOG_ERROR(
         "Filter projection failed: count={}, words={}, first_word={}",
         filter_res.eligible_count, filter_res.bitset_words.size(),
         filter_res.bitset_words.empty() ? 0 : filter_res.bitset_words[0]);
+    exit(1);
+  }
+
+  FilterResult cached_filter_res = engine.evaluate_filter(uri_filter, 10);
+  if (cached_filter_res.native_filter_token == 0) {
+    SPDLOG_ERROR("Native filter token was not retained");
+    exit(1);
+  }
+  auto token_search_res = engine.search_with_filter_token(
+      search_req, cached_filter_res.native_filter_token);
+  if (!token_search_res || token_search_res->result_num != 1 ||
+      token_search_res->labels[0] != 1001) {
+    SPDLOG_ERROR("Search with native filter token failed");
     exit(1);
   }
 
@@ -116,6 +130,12 @@ void test_basic_workflow() {
   ret = engine.delete_data(del_reqs);
   if (ret != 0) {
     SPDLOG_ERROR("Delete data failed");
+    exit(1);
+  }
+  auto stale_token_result = engine.search_with_filter_token(
+      search_req, cached_filter_res.native_filter_token);
+  if (stale_token_result.has_value()) {
+    SPDLOG_ERROR("Native filter token survived a mutation");
     exit(1);
   }
 

@@ -726,6 +726,8 @@ class HTTPAccessor(DataAccessor):
                 return URLType.DOWNLOAD_VIDEO, ".avi"
         if sample.startswith(b"ID3") or sample.startswith(b"\xff\xfb"):
             return URLType.DOWNLOAD_AUDIO, ".mp3"
+        if sample.startswith(b"\x0b\x77"):
+            return URLType.DOWNLOAD_AUDIO, ".ac3"
         if len(sample) >= 12 and sample[4:8] == b"ftyp":
             brand = sample[8:12].lower()
             if brand in {b"qt  ", b"moov"}:

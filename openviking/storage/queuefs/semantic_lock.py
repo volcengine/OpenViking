@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.transaction import (
@@ -46,7 +46,9 @@ class SemanticLockScope:
         lock_handoff: Optional[LockHandoffRef],
         *,
         caller_lock: LockLease = NO_LOCK,
+        fallback_path_factory: Optional[Callable[[], str]] = None,
     ) -> "SemanticLockScope":
+        """Resolve a live lock, lazily deriving a path for stale legacy handoffs."""
         if lock_handoff and caller_lock.active:
             raise ValueError("semantic lock must come from either message or caller, not both")
         if caller_lock is not NO_LOCK and not caller_lock.active:
@@ -59,6 +61,8 @@ class SemanticLockScope:
                 return cls(await OwnedLockLease.from_handoff(lock_handoff, manager=manager))
             except LockAcquisitionError as exc:
                 tree_paths = _tree_paths_from_handoff(lock_handoff.lock_paths)
+                if not tree_paths and fallback_path_factory:
+                    tree_paths = [fallback_path_factory()]
                 if not tree_paths:
                     raise
 

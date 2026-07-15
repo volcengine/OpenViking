@@ -77,7 +77,8 @@ jobs:
       - name: Build marketplace archive
         if: steps.tos_config.outputs.configured == 'true'
         run: |
-          # Slim archive with just the memory plugins + marketplace manifests.
+          # Slim archive with the memory integrations and marketplace manifests
+          # required by clients that support native marketplace installation.
           # The shared installer registers the unzipped directory as a local
           # marketplace for both Claude Code and Codex (GitHub-free path).
           STAGE=/tmp/memory-plugin-marketplace
@@ -85,8 +86,44 @@ jobs:
           mkdir -p "${STAGE}"
           cp -R examples/.claude-plugin examples/.agents \
             examples/claude-code-memory-plugin examples/codex-memory-plugin \
+            examples/cursor-memory-plugin examples/trae-memory-hooks \
             examples/opencode-plugin examples/pi-coding-agent-extension \
             examples/memory-plugin-shared "${STAGE}/"
+          for required in \
+            cursor-memory-plugin/.cursor-plugin/plugin.json \
+            cursor-memory-plugin/hooks/hooks.json \
+            cursor-memory-plugin/.mcp.json \
+            cursor-memory-plugin/openviking.integration.json \
+            cursor-memory-plugin/scripts/cursor-hook.mjs \
+            cursor-memory-plugin/scripts/session-start.mjs \
+            cursor-memory-plugin/scripts/auto-recall.mjs \
+            cursor-memory-plugin/scripts/auto-capture.mjs \
+            cursor-memory-plugin/scripts/pre-compact.mjs \
+            cursor-memory-plugin/scripts/session-end.mjs \
+            cursor-memory-plugin/scripts/cursor-transcript.mjs \
+            cursor-memory-plugin/scripts/uri-guard.mjs \
+            cursor-memory-plugin/servers/mcp-proxy.mjs \
+            cursor-memory-plugin/rules/openviking-memory.mdc \
+            cursor-memory-plugin/skills/openviking-memory/SKILL.md \
+            trae-memory-hooks/hooks/hooks.json \
+            trae-memory-hooks/.mcp.json \
+            trae-memory-hooks/openviking.integration.json \
+            trae-memory-hooks/scripts/trae-hook.mjs \
+            trae-memory-hooks/scripts/session-start.mjs \
+            trae-memory-hooks/scripts/auto-recall.mjs \
+            trae-memory-hooks/scripts/auto-capture.mjs \
+            trae-memory-hooks/scripts/trae-turns.mjs \
+            trae-memory-hooks/scripts/uri-guard.mjs \
+            trae-memory-hooks/servers/mcp-proxy.mjs \
+            memory-plugin-shared/lib/agent-hook-runtime.mjs \
+            memory-plugin-shared/lib/agent-uri-guard.mjs \
+            memory-plugin-shared/lib/uri-guard.mjs \
+            memory-plugin-shared/lib/mcp-proxy-core.mjs; do
+            test -f "${STAGE}/${required}" || {
+              echo "::error::Marketplace archive is missing ${required}"
+              exit 1
+            }
+          done
           (cd /tmp && zip -rq "memory-plugin-marketplace-${RELEASE_TAG}.zip" memory-plugin-marketplace)
 
       - name: Build marketplace git repo (dumb HTTP)
@@ -211,6 +248,12 @@ jobs:
             echo "## Uploaded to TOS (${RELEASE_TAG})"
             echo ""
             printf '%s' "${UPLOADED_KEYS}"
+            echo "- The Cursor plugin bundle (with managed command-install fallback) and TRAE/TRAE CN native Hook + MCP bundles are included in \`memory-plugin-marketplace.zip\`."
+            if [ "${UPDATE_LATEST}" = "true" ]; then
+              echo "- Stable installer updated: \`memory-plugin-shared/install.sh\`."
+            else
+              echo "- Stable installer unchanged (\`update_latest=false\`)."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Report skipped TOS upload

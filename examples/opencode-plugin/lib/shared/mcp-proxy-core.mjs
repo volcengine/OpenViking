@@ -201,11 +201,14 @@ export function createOpenVikingMcpProxy({
     return true;
   }
 
-  function headersForRequest(includeSession = true, message = null) {
+  function headersForRequest(includeSession = true) {
     const headers = {
       "Content-Type": "application/json",
       "Accept": "application/json, text/event-stream",
-      "MCP-Protocol-Version": message?.params?.protocolVersion || protocolVersion,
+      // Always the proxy's current version (default, then server-negotiated) —
+      // never the client's un-negotiated ask, which strict upstreams reject
+      // with HTTP 400 before initialize negotiation can run.
+      "MCP-Protocol-Version": protocolVersion,
     };
     if (includeSession && sessionId) headers["Mcp-Session-Id"] = sessionId;
     if (proxyConfig.apiKey) headers.Authorization = `Bearer ${proxyConfig.apiKey}`;
@@ -265,7 +268,7 @@ export function createOpenVikingMcpProxy({
     try {
       const res = await fetchImpl(proxyConfig.mcpUrl, {
         method: "POST",
-        headers: headersForRequest(includeSession, message),
+        headers: headersForRequest(includeSession),
         body: JSON.stringify(message),
         signal: controller.signal,
       });
@@ -273,6 +276,10 @@ export function createOpenVikingMcpProxy({
       const messages = parseHttpBody(res.headers.get("content-type"), text);
       const nextSessionId = res.headers.get("mcp-session-id");
       if (nextSessionId) sessionId = nextSessionId;
+      if (message?.method === "initialize" && res.ok) {
+        const negotiated = messages.find((m) => typeof m?.result?.protocolVersion === "string")?.result.protocolVersion;
+        if (negotiated) protocolVersion = negotiated;
+      }
       if (!res.ok) {
         throw new HttpStatusError(res.status, res.statusText, text, messages);
       }
@@ -366,7 +373,7 @@ export function createOpenVikingMcpProxy({
     const expectsResponse = isRequest(message);
     if (message.method === "initialize") {
       initializeRequest = cloneMessage(message);
-      protocolVersion = message.params?.protocolVersion || protocolVersion || DEFAULT_PROTOCOL_VERSION;
+      protocolVersion = DEFAULT_PROTOCOL_VERSION;
       sessionId = "";
     }
     if (message.method === "notifications/initialized") {

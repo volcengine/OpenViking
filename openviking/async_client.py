@@ -19,6 +19,9 @@ from openviking_cli.client.base import BaseClient
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 
+if TYPE_CHECKING:
+    from openviking.snapshot_namespace import AsyncSnapshotNamespace
+
 logger = get_logger(__name__)
 
 
@@ -272,6 +275,7 @@ class AsyncOpenViking:
         uri: str,
         mode: str = "vectors_only",
         wait: bool = True,
+        dry_run: bool = False,
     ) -> Dict[str, Any]:
         """Reindex semantic/vector artifacts for a URI."""
         await self._ensure_initialized()
@@ -279,6 +283,7 @@ class AsyncOpenViking:
             uri=uri,
             mode=mode,
             wait=wait,
+            dry_run=dry_run,
         )
 
     # ============= Resource methods =============
@@ -352,6 +357,7 @@ class AsyncOpenViking:
         """
         if getattr(self, "_snapshot", None) is None:
             from openviking.snapshot_namespace import AsyncSnapshotNamespace
+
             self._snapshot = AsyncSnapshotNamespace(self)
         return self._snapshot
 
@@ -668,6 +674,9 @@ class AsyncOpenViking:
             uri: Viking URI
             simple: Return only relative path list (bool, default: False)
             recursive: List all subdirectories recursively (bool, default: False)
+            node_limit: Maximum number of entries to return (int, default: 1000)
+            sort_by: Optional sort field, "name" or "mtime"
+            sort_order: Sort direction, "asc" or "desc"
         """
         await self._ensure_initialized()
         recursive = kwargs.get("recursive", False)
@@ -675,6 +684,9 @@ class AsyncOpenViking:
         output = kwargs.get("output", "original")
         abs_limit = kwargs.get("abs_limit", 256)
         show_all_hidden = kwargs.get("show_all_hidden", True)
+        node_limit = kwargs.get("node_limit", 1000)
+        sort_by = kwargs.get("sort_by")
+        sort_order = kwargs.get("sort_order", "asc")
         return await self._client.ls(
             uri,
             recursive=recursive,
@@ -682,6 +694,9 @@ class AsyncOpenViking:
             output=output,
             abs_limit=abs_limit,
             show_all_hidden=show_all_hidden,
+            node_limit=node_limit,
+            sort_by=sort_by,
+            sort_order=sort_order,
         )
 
     async def rm(

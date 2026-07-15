@@ -38,6 +38,29 @@ def test_service_record_contains_tenant_and_filter_fields():
     }
 
 
+def test_auto_background_backend_enables_coalescing_rebuild(tmp_path):
+    config = benchmark.make_config(
+        "auto_cuvs_background",
+        project_path=tmp_path,
+        collection_name="background",
+        dimension=128,
+        filter_cache_size=16,
+        auto_rebuild_debounce_ms=25,
+    )
+
+    assert config.backend == "local"
+    assert config.cuvs.auto_enable is True
+    assert config.cuvs.auto_background_rebuild is True
+    assert config.cuvs.auto_rebuild_debounce_ms == 25
+
+
+def test_validate_args_accepts_auto_background_backend():
+    parser = benchmark.build_parser()
+    args = parser.parse_args(["--backends", "auto_cuvs_background"])
+
+    assert benchmark.validate_args(parser, args) == ["auto_cuvs_background"]
+
+
 @pytest.mark.asyncio
 async def test_run_request_set_reports_concurrent_successes():
     class FakeManager:

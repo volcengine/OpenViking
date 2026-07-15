@@ -21,7 +21,7 @@ Example workflow:
        - meta: audio metadata and timestamps
     6. Return ParseResult
 
-Supported formats: MP3, WAV, OGG, FLAC, AAC, M4A
+Supported formats: MP3, WAV, OGG, FLAC, AAC, M4A, OPUS, AC3
 """
 
 import asyncio
@@ -117,6 +117,7 @@ class AudioParser(BaseParser):
             ".aac": [b"\xff\xf1", b"\xff\xf9"],
             ".m4a": [b"\x00\x00\x00", b"ftypM4A", b"ftypisom"],
             ".opus": [b"OggS"],
+            ".ac3": [b"\x0b\x77"],
         }
 
         # Check magic bytes

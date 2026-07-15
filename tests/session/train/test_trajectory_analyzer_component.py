@@ -127,7 +127,8 @@ async def test_trajectory_rollout_analyzer_extracts_and_persists_trajectory(monk
         request_context=SimpleNamespace(
             user=SimpleNamespace(account_id="default", user_id="u"),
             account_id="default",
-        )
+        ),
+        source_archive_uri="viking://user/u/sessions/s1/history/archive_001",
     )
 
     analysis = await analyzer.analyze(_rollout(), context)
@@ -137,12 +138,19 @@ async def test_trajectory_rollout_analyzer_extracts_and_persists_trajectory(monk
     assert created_loop._transaction_handle is None
     provider = created_loop.kwargs["context_provider"]
     assert provider._transaction_handle is None
-    assert [schema.memory_type for schema in provider.get_memory_schemas(context.request_context)] == [
-        "trajectories"
-    ]
+    assert [
+        schema.memory_type for schema in provider.get_memory_schemas(context.request_context)
+    ] == ["trajectories"]
     assert len(fs.writes) == 1
     assert fs.writes[0][0] == "viking://user/u/memories/trajectories/task_20260607120000.md"
     assert '"case_name": "case"' in fs.writes[0][1]
+    assert (
+        '"source_archive_uri": "viking://user/u/sessions/s1/history/archive_001"' in fs.writes[0][1]
+    )
+    assert '"source_session_id"' not in fs.writes[0][1]
+    assert '"source_messages_uri"' not in fs.writes[0][1]
+    assert '"source_task_id"' not in fs.writes[0][1]
+    assert '"source_trace_id"' not in fs.writes[0][1]
     assert len(analysis.trajectories) == 1
     traj = analysis.trajectories[0]
     assert traj.name == "task"

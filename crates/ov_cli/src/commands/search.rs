@@ -85,7 +85,11 @@ impl SearchRenderContext {
     }
 }
 
-pub(super) fn output_skills_list_results(result: &Value, output_format: OutputFormat, compact: bool) {
+pub(super) fn output_skills_list_results(
+    result: &Value,
+    output_format: OutputFormat,
+    compact: bool,
+) {
     let context = SearchRenderContext::skills_list();
     if let Some(rendered) =
         render_search_output_for_table_with_context(result, output_format, Some(context))
@@ -432,9 +436,7 @@ fn render_search_result_card(
         }
     }
 
-    if split_name_and_description
-        && render_skill_name_and_description(object, text_width, lines)
-    {
+    if split_name_and_description && render_skill_name_and_description(object, text_width, lines) {
         return;
     }
 
@@ -488,10 +490,7 @@ fn render_skill_name_and_description(
         let label = theme::heading("description:").bold().to_string();
         let wrapped = wrap_display_text(description, text_width, SEARCH_MAX_ABSTRACT_LINES);
         if let Some((first, rest)) = wrapped.split_first() {
-            lines.push(format!(
-                "{SEARCH_INDENT}{label} {}",
-                theme::body(first)
-            ));
+            lines.push(format!("{SEARCH_INDENT}{label} {}", theme::body(first)));
             for line in rest {
                 lines.push(format!("{SEARCH_INDENT}{}", theme::body(line)));
             }

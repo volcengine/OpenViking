@@ -2,7 +2,7 @@ import types
 
 import pytest
 
-from openviking.core.context import Context
+from openviking.core.context import Context, ResourceContentType
 from openviking.utils import embedding_utils
 
 
@@ -62,6 +62,31 @@ class DummyReq:
     def __init__(self):
         self.user = DummyUser()
         self.account_id = "default"
+
+
+@pytest.mark.parametrize("extension", [".ogg", ".m4a", ".opus", ".ac3"])
+def test_get_resource_content_type_recognizes_supported_audio_extensions(extension):
+    assert (
+        embedding_utils.get_resource_content_type(f"recording{extension}")
+        == ResourceContentType.AUDIO
+    )
+
+
+@pytest.mark.parametrize("extension", [".mkv", ".webm"])
+def test_get_resource_content_type_recognizes_supported_video_extensions(extension):
+    assert (
+        embedding_utils.get_resource_content_type(f"recording{extension}")
+        == ResourceContentType.VIDEO
+    )
+
+
+def test_get_resource_content_type_media_extensions_are_case_insensitive():
+    assert embedding_utils.get_resource_content_type("RECORDING.OPUS") == ResourceContentType.AUDIO
+    assert embedding_utils.get_resource_content_type("RECORDING.WEBM") == ResourceContentType.VIDEO
+
+
+def test_get_resource_content_type_keeps_ts_as_text():
+    assert embedding_utils.get_resource_content_type("source.ts") == ResourceContentType.TEXT
 
 
 @pytest.mark.asyncio
@@ -312,6 +337,36 @@ async def test_vectorize_image_file_enqueues_summary_and_image(monkeypatch):
     assert msg.message[1]["type"] == "image_url"
     assert msg.message[1]["image_url"]["url"].startswith("data:image/png;base64,")
     assert msg.context_data["content"] == "a cat on a sofa"
+
+
+@pytest.mark.asyncio
+async def test_vectorize_svg_file_uses_summary_and_indexes_markup(monkeypatch):
+    queue = DummyQueue()
+    svg_content = '<svg xmlns="http://www.w3.org/2000/svg"><text>queue flow</text></svg>'
+    fs = DummyFS(svg_content)
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="summary_first", max_input_tokens=1000)
+        ),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/diagram.svg",
+        summary_dict={"name": "diagram.svg", "summary": "queue processing diagram"},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+    )
+
+    assert len(queue.items) == 1
+    msg = queue.items[0]
+    assert msg.message == "queue processing diagram"
+    assert msg.context_data["content"] == svg_content
+    assert fs.read_file_calls == 1
+    assert fs.read_file_bytes_calls == 0
 
 
 @pytest.mark.asyncio

@@ -34,7 +34,7 @@ from pydantic import AnyHttpUrl, BaseModel, Field
 
 from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext
-from openviking.server.oauth.provider import OpenVikingOAuthProvider
+from openviking.server.oauth.provider import MCP_SCOPE, OpenVikingOAuthProvider
 from openviking.server.oauth.storage import OAuthStore
 from openviking_cli.exceptions import (
     InvalidArgumentError,
@@ -237,7 +237,7 @@ async def oauth_protected_resource(request: Request) -> JSONResponse:
     metadata = ProtectedResourceMetadata(
         resource=AnyHttpUrl(resource),
         authorization_servers=[AnyHttpUrl(issuer)],
-        scopes_supported=["mcp"],
+        scopes_supported=[MCP_SCOPE],
         bearer_methods_supported=["header"],
         resource_name="OpenViking MCP",
     )

@@ -609,10 +609,21 @@ def create_app(
             app.state.oauth_store = _route_store
             app.state.oauth_provider = _route_provider
 
+            from openviking.server.oauth.provider import MCP_SCOPE
+
             sdk_routes = create_auth_routes(
                 provider=_route_provider,
                 issuer_url=AnyHttpUrl(_route_issuer),
-                client_registration_options=ClientRegistrationOptions(enabled=True),
+                # default_scopes covers clients whose DCR omits `scope`
+                # (ChatGPT does): without it they register scope-less and then
+                # fail /authorize with invalid_scope when they request the
+                # "mcp" scope advertised in the PRM document. valid_scopes is
+                # deliberately NOT set — the SDK would 400 any DCR that carries
+                # a scope outside the list, and clients like Claude register
+                # with their own scope strings.
+                client_registration_options=ClientRegistrationOptions(
+                    enabled=True, default_scopes=[MCP_SCOPE]
+                ),
                 revocation_options=RevocationOptions(enabled=True),
             )
             app.routes.extend(sdk_routes)

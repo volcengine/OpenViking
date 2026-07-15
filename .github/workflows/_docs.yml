@@ -24,8 +24,12 @@ jobs:
         run: npm ci
         working-directory: docs
 
-      - name: Test docs search
-        run: npm run test:search
+      - name: Test docs theme
+        run: npm run test:theme
+        working-directory: docs
+
+      - name: Check API reference
+        run: npm run check:api
         working-directory: docs
 
       - name: Build docs

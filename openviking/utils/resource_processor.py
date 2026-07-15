@@ -17,13 +17,13 @@ from openviking.parse.tree_builder import TreeBuilder
 from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
 from openviking.storage.errors import LockAcquisitionError
+from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
 from openviking.storage.transaction import (
     LOCK_TIMEOUT_DEFAULT,
     NO_LOCK,
     LockLease,
     OwnedLockLease,
 )
-from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.embedding_utils import index_resource
@@ -430,6 +430,7 @@ class ResourceProcessor:
 
         viking_fs = get_viking_fs()
         lock_manager = get_lock_manager()
+        last_busy_error: Optional[ResourceBusyError] = None
 
         for attempt in range(max_attempts + 1):
             root_uri = candidate_uri if attempt == 0 else f"{candidate_uri}_{attempt}"
@@ -442,8 +443,18 @@ class ResourceProcessor:
                     lock_manager, dst_path, uri=root_uri, timeout=0.0
                 )
                 return root_uri, resource_lock
-            except ResourceBusyError:
+            except ResourceBusyError as exc:
+                last_busy_error = exc
                 continue
+
+        if last_busy_error is not None:
+            raise ResourceBusyError(
+                f"All auto-named candidates are temporarily busy for {candidate_uri} "
+                f"after checking {max_attempts + 1} candidates",
+                uri=candidate_uri,
+                conflict_type="auto_name_reservation_busy",
+                retryable=True,
+            ) from last_busy_error
 
         raise FileExistsError(
             f"Cannot resolve unique name for {candidate_uri} after {max_attempts} attempts"

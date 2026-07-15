@@ -142,20 +142,38 @@ async def upload_directory(
     local_dir: Path,
     viking_uri_base: str,
     viking_fs: Any,
-    ignore_dirs: Optional[Set[str]] = None,
+    ignore_dirs: Optional[Union[Set[str], List[str], str]] = None,
     ignore_extensions: Optional[Set[str]] = None,
     max_file_size: int = 10 * 1024 * 1024,
+    include: Optional[str] = None,
+    exclude: Optional[str] = None,
 ) -> Tuple[int, List[str]]:
     """Upload an entire directory recursively and return uploaded count with warnings.
 
     Optimized: collects all files in one pass, pre-creates directories upfront,
     then uploads all files concurrently (up to _UPLOAD_CONCURRENCY at a time).
     """
-    effective_ignore_dirs = ignore_dirs if ignore_dirs is not None else IGNORE_DIRS
     effective_ignore_extensions = (
         ignore_extensions if ignore_extensions is not None else IGNORE_EXTENSIONS
     )
     gitignore_matcher = GitignoreMatcher(local_dir)
+    # Keep repository uploads aligned with DirectoryParser's public filtering
+    # contract without duplicating its path/glob semantics.
+    from openviking.parse.directory_scan import (
+        _matches_exclude,
+        _matches_include,
+        _parse_patterns,
+        _should_skip_directory,
+    )
+
+    if isinstance(ignore_dirs, str):
+        parsed_ignore_dirs: Optional[Set[str]] = set(_parse_patterns(ignore_dirs)) or None
+    elif ignore_dirs:
+        parsed_ignore_dirs = {str(item) for item in ignore_dirs}
+    else:
+        parsed_ignore_dirs = None
+    include_patterns = _parse_patterns(include)
+    exclude_patterns = _parse_patterns(exclude)
 
     warnings: List[str] = []
 
@@ -171,7 +189,11 @@ async def upload_directory(
         kept = []
         for d in dirs:
             sub_dir_path = dir_path / d
-            should_skip = should_skip_directory(d, ignore_dirs=effective_ignore_dirs)
+            should_skip, _ = _should_skip_directory(
+                sub_dir_path,
+                local_dir,
+                parsed_ignore_dirs,
+            )
             if should_skip:
                 continue
 
@@ -196,6 +218,14 @@ async def upload_directory(
                 continue
 
             rel_path_str = str(file_path.relative_to(local_dir)).replace(os.sep, "/")
+            if include_patterns and not _matches_include(file_name, include_patterns):
+                continue
+            if exclude_patterns and _matches_exclude(
+                rel_path_str,
+                file_name,
+                exclude_patterns,
+            ):
+                continue
             try:
                 target_uri = safe_join_viking_uri(viking_uri_base, rel_path_str)
             except ValueError as exc:

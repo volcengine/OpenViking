@@ -37,12 +37,20 @@ Phase 1 有意把范围控制得比较小：
 |------|------|------|--------|------|
 | uri | str | 是 | - | Viking URI（必须是目录） |
 
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
 abstract = client.abstract("viking://resources/docs/")
 print(f"Abstract: {abstract}")
 # Output: "Documentation for the project API, covering authentication, endpoints..."
+```
+
+**TypeScript SDK**
+
+```typescript
+const abstract = await client.abstract("viking://resources/docs/");
+console.log(abstract);
 ```
 
 **Go SDK**
@@ -72,6 +80,7 @@ curl -X GET "http://localhost:1933/api/v1/content/abstract?uri=viking://resource
 openviking abstract viking://resources/docs/
 ```
 
+
 **响应**
 
 ```json
@@ -94,11 +103,19 @@ openviking abstract viking://resources/docs/
 |------|------|------|--------|------|
 | uri | str | 是 | - | Viking URI（必须是目录） |
 
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
 overview = client.overview("viking://resources/docs/")
 print(f"Overview:\n{overview}")
+```
+
+**TypeScript SDK**
+
+```typescript
+const overview = await client.overview("viking://resources/docs/");
+console.log(overview);
 ```
 
 **Go SDK**
@@ -127,6 +144,7 @@ curl -X GET "http://localhost:1933/api/v1/content/overview?uri=viking://resource
 ```bash
 openviking overview viking://resources/docs/
 ```
+
 
 **响应**
 
@@ -158,11 +176,19 @@ openviking overview viking://resources/docs/
 - `read()` 只接受文件 URI。传入已存在的目录 URI 时返回 `INVALID_ARGUMENT`（`400`），而不是 `NOT_FOUND`。该错误会携带结构化的 `details` 字段——`details.expected` 为 `"file"`，`details.actual` 为 `"directory"`，`details.resource` 为出错的 URI（HTTP 路径上会带上）——客户端据此即可以编程方式判断"文件 vs 目录"不匹配（例如回退到 `list`），而无需对错误消息做字符串匹配。
 - 公开 URI 参数接受 `resources` 和 `user` 作用域。访问 session 文件时，使用 `viking://user/{user_id}/sessions/{session_id}`，也可以使用向后兼容的 `viking://session/{session_id}` 别名。`temp`、`queue` 等内部作用域会返回 `INVALID_URI`。
 
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
 content = client.read("viking://resources/docs/api.md")
 print(f"Content:\n{content}")
+```
+
+**TypeScript SDK**
+
+```typescript
+const content = await client.read("viking://resources/docs/api.md", 0, -1);
+console.log(content);
 ```
 
 **Go SDK**
@@ -191,6 +217,7 @@ curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://resources/do
 ```bash
 openviking read viking://resources/docs/api.md
 ```
+
 
 **响应**
 
@@ -226,6 +253,7 @@ openviking read viking://resources/docs/api.md
 - 文件内容会在 API 返回前完成更新；`wait` 只控制是否等待语义/向量刷新完成。
 - 公共 API 已不再接受 `regenerate_semantics` 或 `revectorize`；写入后一定会自动刷新相关语义与向量。
 
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
@@ -236,6 +264,12 @@ result = client.write(
     wait=True,
 )
 print(result["root_uri"])
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.write("viking://resources/docs/new.md", "# New document\n", { wait: true });
 ```
 
 **Go SDK**
@@ -282,6 +316,7 @@ openviking write viking://resources/docs/api.md \
   --wait
 ```
 
+
 **响应**
 
 ```json
@@ -325,11 +360,13 @@ openviking write viking://resources/docs/api.md \
 | uri | str | 是 | - | Viking URI |
 | simple | bool | 否 | False | 仅返回相对路径 |
 | recursive | bool | 否 | False | 递归列出所有子目录 |
-| output | str | 否 | `agent` | 输出格式：`agent` 或 `original` |
+| output | str | 否 | HTTP：`agent`；SDK：`original` | 输出格式：`agent` 或 `original` |
 | abs_limit | int | 否 | 256 | `agent` 输出中的摘要长度限制 |
 | show_all_hidden | bool | 否 | False | 像 `-a` 一样包含隐藏文件 |
 | node_limit | int | 否 | 1000 | 最大返回节点数 |
 | limit | int | 否 | None | `node_limit` 的别名 |
+| sort_by | str | 否 | None | 在应用 `node_limit` 前，分别按 `name` 或 `mtime` 排序目录组和文件组；目录仍优先 |
+| sort_order | str | 否 | `asc` | 排序方向：`asc` 或 `desc` |
 
 **条目结构**
 
@@ -345,13 +382,26 @@ openviking write viking://resources/docs/api.md \
 }
 ```
 
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
-entries = client.ls("viking://resources/")
+entries = client.ls(
+    "viking://resources/",
+    node_limit=200,
+    sort_by="mtime",
+    sort_order="desc",
+)
 for entry in entries:
     type_str = "dir" if entry['isDir'] else "file"
     print(f"{entry['name']} - {type_str}")
+```
+
+**TypeScript SDK**
+
+```typescript
+const entries = await client.list("viking://resources/docs/", { simple: true });
+console.log(entries);
 ```
 
 **Go SDK**
@@ -392,6 +442,7 @@ curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&recursiv
 openviking ls viking://resources/ [--simple] [--recursive]
 ```
 
+
 **响应**
 
 ```json
@@ -422,11 +473,12 @@ openviking ls viking://resources/ [--simple] [--recursive]
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | uri | str | 是 | - | Viking URI |
-| output | str | 否 | `agent` | 输出格式：`agent` 或 `original` |
-| abs_limit | int | 否 | 256 | `agent` 输出中的摘要长度限制 |
+| output | str | 否 | HTTP：`agent`；SDK：`original` | 输出格式：`agent` 或 `original` |
+| abs_limit | int | 否 | HTTP：256；SDK：128 | `agent` 输出中的摘要长度限制 |
 | show_all_hidden | bool | 否 | False | 像 `-a` 一样包含隐藏文件 |
 | node_limit | int | 否 | 1000 | 最大返回节点数 |
 | level_limit | int | 否 | 3 | 最大目录遍历深度 |
+
 
 **Python SDK (Embedded / HTTP)**
 
@@ -435,6 +487,13 @@ entries = client.tree("viking://resources/")
 for entry in entries:
     type_str = "dir" if entry['isDir'] else "file"
     print(f"{entry['rel_path']} - {type_str}")
+```
+
+**TypeScript SDK**
+
+```typescript
+const tree = await client.tree("viking://resources/docs/", { nodeLimit: 100 });
+console.log(tree);
 ```
 
 **Go SDK**
@@ -465,6 +524,7 @@ curl -X GET "http://localhost:1933/api/v1/fs/tree?uri=viking://resources/" \
 ```bash
 openviking tree viking://resources/my-project/
 ```
+
 
 **响应**
 
@@ -503,6 +563,7 @@ openviking tree viking://resources/my-project/
 |------|------|------|--------|------|
 | uri | str | 是 | - | Viking URI |
 
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
@@ -514,6 +575,13 @@ print(f"Is directory: {info['isDir']}")
 dir_info = client.stat("viking://resources/docs")
 if dir_info.get('isDir'):
     print(f"Item count: {dir_info.get('count')}")
+```
+
+**TypeScript SDK**
+
+```typescript
+const metadata = await client.stat("viking://resources/docs/api.md");
+console.log(metadata);
 ```
 
 **Go SDK**
@@ -543,6 +611,7 @@ curl -X GET "http://localhost:1933/api/v1/fs/stat?uri=viking://resources/docs/ap
 openviking stat viking://resources/my-project/docs/api.md
 openviking stat viking://resources/my-project/docs
 ```
+
 
 **响应（文件）**
 
@@ -597,11 +666,19 @@ openviking stat viking://resources/my-project/docs
 |------|------|------|--------|------|
 | uri | str | 是 | - | Viking URI |
 
+
 **Python SDK (HTTP)**
 
 ```python
 attrs = client.attrs("viking://resources/docs/api.md")
 print(attrs["attrs"]["tags"])
+```
+
+**TypeScript SDK**
+
+```typescript
+const attributes = await client.attrs("viking://resources/docs/api.md");
+console.log(attributes);
 ```
 
 **Go SDK**
@@ -643,6 +720,7 @@ openviking attrs set-tags viking://resources/docs --tags team=search --mode appe
 ```
 
 目录目标会更新目录语义记录；`recursive=true` 还会更新已有子文件和子目录语义记录。
+
 
 **响应（Resource）**
 
@@ -695,11 +773,18 @@ openviking attrs set-tags viking://resources/docs --tags team=search --mode appe
 | uri | str | 是 | - | 新目录的 Viking URI |
 | description | str | 否 | `null` | 目录初始说明。传入后会写入 `.abstract.md`，并进入目录 L0 向量化队列。 |
 
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
 client.mkdir("viking://resources/new-project/")
 client.mkdir("viking://resources/new-project/", description="接口文档目录")
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.mkdir("viking://resources/docs/guides/", "Project guides");
 ```
 
 **Go SDK**
@@ -733,6 +818,7 @@ openviking mkdir viking://resources/new-project/
 openviking mkdir viking://resources/new-project/ --description "接口文档目录"
 ```
 
+
 **响应**
 
 ```json
@@ -761,6 +847,7 @@ URI 格式非法、scheme 不支持或使用非公开作用域时返回 `INVALID
 | uri | str | 是 | - | 要删除的 Viking URI |
 | recursive | bool | 否 | False | 递归删除目录 |
 
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
@@ -768,9 +855,13 @@ URI 格式非法、scheme 不支持或使用非公开作用域时返回 `INVALID
 client.rm("viking://resources/docs/old.md")
 
 # 递归删除目录
-result = client.rm("viking://resources/old-project/", recursive=True)
-if 'estimated_deleted_count' in result:
-    print(f"Deleted {result['estimated_deleted_count']} items")
+client.rm("viking://resources/old-project/", recursive=True)
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.remove("viking://resources/docs/old.md", { wait: true });
 ```
 
 **Go SDK**
@@ -805,6 +896,7 @@ curl -X DELETE "http://localhost:1933/api/v1/fs?uri=viking://resources/old-proje
 ```bash
 openviking rm viking://resources/old.md [--recursive]
 ```
+
 
 **响应（单个文件）**
 
@@ -848,6 +940,7 @@ openviking rm viking://resources/old.md [--recursive]
 | from_uri | str | 是 | - | 源 Viking URI |
 | to_uri | str | 是 | - | 目标 Viking URI |
 
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
@@ -855,6 +948,15 @@ client.mv(
     "viking://resources/old-name/",
     "viking://resources/new-name/"
 )
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.move(
+  "viking://resources/docs/old.md",
+  "viking://resources/docs/new.md",
+);
 ```
 
 **Go SDK**
@@ -887,6 +989,7 @@ curl -X POST http://localhost:1933/api/v1/fs/mv \
 openviking mv viking://resources/old-name/ viking://resources/new-name/
 ```
 
+
 **响应**
 
 ```json
@@ -917,6 +1020,7 @@ openviking mv viking://resources/old-name/ viking://resources/new-name/
 | node_limit | int | 否 | 256 | 最大返回节点数。省略时默认使用 256；如需更多结果，请显式传入更大的整数 |
 | level_limit | int | 否 | Python SDK: 5；HTTP API / CLI / Go SDK: 10 | 最大目录遍历深度。Go SDK 当前使用 HTTP API 默认值。 |
 
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
@@ -931,6 +1035,13 @@ print(f"Found {results['count']} matches")
 for match in results['matches']:
     print(f"  {match['uri']}:{match['line']}")
     print(f"    {match['content']}")
+```
+
+**TypeScript SDK**
+
+```typescript
+const matches = await client.grep("viking://resources/docs/", "authentication");
+console.log(matches);
 ```
 
 **Go SDK**
@@ -970,6 +1081,7 @@ curl -X POST http://localhost:1933/api/v1/search/grep \
 openviking grep "authentication" --uri viking://resources/ [--ignore-case]
 ```
 
+
 **响应**
 
 ```json
@@ -1003,6 +1115,7 @@ openviking grep "authentication" --uri viking://resources/ [--ignore-case]
 | uri | str | 否 | "viking://" | 起始 URI |
 | node_limit | int | 否 | 256 | 最大返回匹配数。省略时默认使用 256；如需更多结果，请显式传入更大的整数 |
 
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
@@ -1015,6 +1128,13 @@ for uri in results['matches']:
 # 查找所有 Python 文件
 results = client.glob("**/*.py", "viking://resources/")
 print(f"Found {results['count']} Python files")
+```
+
+**TypeScript SDK**
+
+```typescript
+const matches = await client.glob("**/*.md", "viking://resources/docs/");
+console.log(matches);
 ```
 
 **Go SDK**
@@ -1051,6 +1171,7 @@ curl -X POST http://localhost:1933/api/v1/search/glob \
 openviking glob "**/*.md" [--uri viking://resources/]
 ```
 
+
 **响应**
 
 ```json
@@ -1081,6 +1202,7 @@ openviking glob "**/*.md" [--uri viking://resources/]
 | to_uris | str 或 List[str] | 是 | - | 目标 URI |
 | reason | str | 否 | "" | 关联原因 |
 
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
@@ -1100,6 +1222,19 @@ client.link(
     ],
     reason="Related documentation"
 )
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.link(
+  "viking://resources/docs/api/",
+  [
+    "viking://resources/docs/auth/",
+    "viking://resources/docs/errors/",
+  ],
+  "Related documentation",
+);
 ```
 
 **HTTP API**
@@ -1136,6 +1271,7 @@ curl -X POST http://localhost:1933/api/v1/relations/link \
 openviking link viking://resources/docs/auth/ viking://resources/docs/security/ --reason "Security best practices"
 ```
 
+
 **响应**
 
 ```json
@@ -1161,6 +1297,7 @@ openviking link viking://resources/docs/auth/ viking://resources/docs/security/ 
 |------|------|------|--------|------|
 | uri | str | 是 | - | Viking URI |
 
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
@@ -1168,6 +1305,13 @@ relations = client.relations("viking://resources/docs/auth/")
 for rel in relations:
     print(f"Related: {rel['uri']}")
     print(f"  Reason: {rel['reason']}")
+```
+
+**TypeScript SDK**
+
+```typescript
+const relations = await client.relations("viking://resources/docs/auth/");
+console.log(relations);
 ```
 
 **HTTP API**
@@ -1186,6 +1330,7 @@ curl -X GET "http://localhost:1933/api/v1/relations?uri=viking://resources/docs/
 ```bash
 openviking relations viking://resources/docs/auth/
 ```
+
 
 **响应**
 
@@ -1213,6 +1358,7 @@ openviking relations viking://resources/docs/auth/
 | from_uri | str | 是 | - | 源 URI |
 | to_uri | str | 是 | - | 要取消关联的目标 URI |
 
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
@@ -1220,6 +1366,15 @@ client.unlink(
     "viking://resources/docs/auth/",
     "viking://resources/docs/security/"
 )
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.unlink(
+  "viking://resources/docs/auth/",
+  "viking://resources/docs/security/",
+);
 ```
 
 **HTTP API**
@@ -1244,6 +1399,7 @@ curl -X DELETE http://localhost:1933/api/v1/relations/link \
 openviking unlink viking://resources/docs/auth/ viking://resources/docs/security/
 ```
 
+
 **响应**
 
 ```json
@@ -1265,7 +1421,7 @@ openviking unlink viking://resources/docs/auth/ viking://resources/docs/security
 
 #### 1. API 实现介绍
 
-将指定 URI 下的所有资源打包成 `.ovpack` 格式文件，用于备份或迁移。需要 ROOT 或 ADMIN 权限。
+将指定 URI 下的所有资源打包成 `.ovpack` 格式文件，用于备份或迁移。ROOT、ADMIN 和 USER 角色均可使用，仍受常规 URI 访问控制约束。
 
 **处理流程**：
 1. 验证用户权限
@@ -1297,9 +1453,10 @@ openviking unlink viking://resources/docs/auth/ viking://resources/docs/security
 | uri | string | 是 | - | 要导出的 Viking URI |
 | include_vectors | boolean | 否 | false | 导出纯 dense 向量快照；底层 index type 为 hybrid 时会拒绝 |
 
-**权限要求**：ROOT 或 ADMIN
+**权限要求**：ROOT、ADMIN 或 USER
 
 #### 3. 使用示例
+
 
 **HTTP API**
 
@@ -1331,6 +1488,17 @@ client.initialize()
 # 注意：导出功能主要通过 CLI 使用
 ```
 
+**TypeScript SDK**
+
+```typescript
+const outputPath = await client.exportOVPack(
+  "viking://resources/docs/",
+  "./exports/docs.ovpack",
+  true,
+);
+console.log(outputPath);
+```
+
 **Go SDK**
 
 ```go
@@ -1356,6 +1524,7 @@ ov export viking://resources/my-project/ ./exports/my-project.ovpack
 ov export viking://resources/my-project/ ./exports/my-project.ovpack --include-vectors
 ```
 
+
 **响应示例**
 
 此接口直接返回文件流（`Content-Type: application/zip`），不返回 JSON 包装体。
@@ -1368,7 +1537,7 @@ ov export viking://resources/my-project/ ./exports/my-project.ovpack --include-v
 
 #### 1. API 实现介绍
 
-将 `.ovpack` 文件导入到指定位置，用于恢复或迁移数据。需要 ROOT 或 ADMIN 权限。
+将 `.ovpack` 文件导入到指定位置，用于恢复或迁移数据。ROOT、ADMIN 和 USER 角色均可使用，仍受常规 URI 访问控制约束。
 
 **处理流程**：
 1. 验证用户权限
@@ -1393,7 +1562,7 @@ ov export viking://resources/my-project/ ./exports/my-project.ovpack --include-v
 | on_conflict | string | 否 | fail | 冲突策略：`fail`、`overwrite` 或 `skip` |
 | vector_mode | string | 否 | auto | 向量处理方式：`auto`、`recompute` 或 `require` |
 
-**权限要求**：ROOT 或 ADMIN
+**权限要求**：ROOT、ADMIN 或 USER
 
 **行为说明**：
 - API 已不再接受 `vectorize` 或 `force`。
@@ -1411,6 +1580,7 @@ ov export viking://resources/my-project/ ./exports/my-project.ovpack --include-v
 - OVPack 不额外设置导入包大小、文件数量或目录深度上限；实际可处理规模由 ZIP、存储后端和运行环境决定。
 
 #### 3. 使用示例
+
 
 **HTTP API**
 
@@ -1452,6 +1622,20 @@ client.initialize()
 # 注意：导入功能主要通过 CLI 使用
 ```
 
+**TypeScript SDK**
+
+```typescript
+const uri = await client.importOVPack(
+  "./exports/docs.ovpack",
+  "viking://resources/",
+  {
+    onConflict: "overwrite",
+    vectorMode: "auto",
+  },
+);
+console.log(uri);
+```
+
 **Go SDK**
 
 ```go
@@ -1482,6 +1666,7 @@ ov import ./exports/my-project.ovpack viking://resources/imported/ --on-conflict
 # 要求恢复兼容 dense 向量快照
 ov import ./exports/my-project.ovpack viking://resources/imported/ --vector-mode require
 ```
+
 
 **响应示例**
 

@@ -1,7 +1,7 @@
 import pytest
 
 from openviking.core.directories import PRESET_DIRECTORIES, DirectoryInitializer
-from openviking.core.namespace import canonical_user_root
+from openviking.core.namespace import canonical_user_root, may_include_hidden_actor_peers
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -27,6 +27,8 @@ class _FakeVikingFS:
         return self.contexts[uri]["abstract"]
 
     async def write_context(self, uri, abstract, overview, is_leaf, ctx):
+        if ctx.actor_peer_id and may_include_hidden_actor_peers(uri, ctx):
+            raise PermissionError(f"actor peer cannot mutate {uri}")
         self.contexts[uri] = {
             "abstract": abstract,
             "overview": overview,
@@ -55,4 +57,27 @@ async def test_initialize_user_directories_creates_root_and_first_level_only():
     second_count = await initializer.initialize_user_directories(ctx)
 
     assert second_count == 0
+    assert set(viking_fs.contexts) == expected_uris
+
+
+@pytest.mark.asyncio
+async def test_initialize_user_directories_ignores_actor_peer_view_for_preset_structure():
+    vikingdb = _FakeVikingDB()
+    viking_fs = _FakeVikingFS()
+    initializer = DirectoryInitializer(vikingdb, viking_fs=viking_fs)
+    ctx = RequestContext(
+        user=UserIdentifier("acme", "support-bot"),
+        role=Role.USER,
+        actor_peer_id="customer-a",
+        legacy_agent_id="customer-a",
+    )
+
+    count = await initializer.initialize_user_directories(ctx)
+
+    user_root = canonical_user_root(ctx)
+    expected_uris = {
+        user_root,
+        *(f"{user_root}/{child.path}" for child in PRESET_DIRECTORIES["user"].children),
+    }
+    assert count == len(expected_uris)
     assert set(viking_fs.contexts) == expected_uris

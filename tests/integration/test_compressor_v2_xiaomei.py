@@ -13,6 +13,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 import openviking as ov
+
 try:
     from openviking_live_auth import API_KEY_HELP, resolve_api_key
 except ModuleNotFoundError:  # pytest/package import path
@@ -25,6 +26,7 @@ DEFAULT_URL = "http://localhost:1934"
 PANEL_WIDTH = 78
 DEFAULT_API_KEY = None
 DEFAULT_SESSION_ID = "xiaomei-demo"
+ASSISTANT_PEER_ID = "xiaomei-demo-assistant"
 
 
 console = Console()
@@ -134,6 +136,7 @@ def run_ingest(client: ov.SyncHTTPClient, session_id: str, wait_seconds: float):
             role="assistant",
             parts=[{"type": "text", "text": turn["assistant"]}],
             created_at=session_time_str,
+            peer_id=ASSISTANT_PEER_ID,
         )
 
     console.print()
