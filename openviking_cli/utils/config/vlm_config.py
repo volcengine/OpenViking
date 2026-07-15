@@ -3,7 +3,7 @@
 import importlib
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 
 def _load_codex_auth_module():
@@ -93,7 +93,12 @@ class VLMConfig(BaseModel):
     thinking: bool = Field(default=False, description="Enable thinking mode for VolcEngine models")
 
     max_concurrent: int = Field(
-        default=64, description="Maximum number of concurrent LLM calls for semantic processing"
+        default=64,
+        gt=0,
+        description=(
+            "Maximum number of concurrent async VLM calls across semantic processing, "
+            "session memory extraction, and other callers in this configured runtime"
+        ),
     )
 
     api_version: Optional[str] = Field(
@@ -130,7 +135,8 @@ class VLMConfig(BaseModel):
         default=50, description="Number of backup requests after which to attempt failback"
     )
 
-    _vlm_instance: Optional[Any] = None
+    _vlm_instance: Optional[Any] = PrivateAttr(default=None)
+    _async_concurrency_budget: Optional[Any] = PrivateAttr(default=None)
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid"}
 
@@ -508,13 +514,27 @@ class VLMConfig(BaseModel):
     def get_vlm_instance(self) -> Any:
         """Get VLM instance with multi-credential failover support."""
         if self._vlm_instance is None:
-            from openviking.models.vlm import FailoverVLM, MultiCredentialVLM, VLMFactory
+            from openviking.models.vlm import (
+                FailoverVLM,
+                MultiCredentialVLM,
+                VLMAsyncConcurrencyBudget,
+                VLMBase,
+                VLMFactory,
+            )
+
+            if self._async_concurrency_budget is None:
+                self._async_concurrency_budget = VLMAsyncConcurrencyBudget(self.max_concurrent)
+
+            def bind_budget(config_dict: Dict[str, Any]) -> Dict[str, Any]:
+                config_dict["max_concurrent"] = self.max_concurrent
+                config_dict["_async_concurrency_budget"] = self._async_concurrency_budget
+                return config_dict
 
             if self.credentials:
                 # Build VLM instances for each credential
                 vlm_instances = []
                 for cred in self.credentials:
-                    config_dict = self._build_vlm_config_dict_for_credential(cred)
+                    config_dict = bind_budget(self._build_vlm_config_dict_for_credential(cred))
                     vlm_instances.append(VLMFactory.create(config_dict))
 
                 if len(vlm_instances) == 1:
@@ -528,15 +548,19 @@ class VLMConfig(BaseModel):
                     )
             else:
                 # Legacy mode: single VLM with optional backup
-                config_dict = self._build_vlm_config_dict()
+                config_dict = bind_budget(self._build_vlm_config_dict())
                 primary = VLMFactory.create(config_dict)
 
                 if self.backup is not None and self.backup._has_any_config():
-                    backup_config_dict = self.backup._build_vlm_config_dict()
+                    backup_config_dict = bind_budget(self.backup._build_vlm_config_dict())
                     backup = VLMFactory.create(backup_config_dict)
                     self._vlm_instance = FailoverVLM(primary, backup)
                 else:
                     self._vlm_instance = primary
+
+            if isinstance(self._vlm_instance, VLMBase):
+                self._vlm_instance._async_concurrency_budget = self._async_concurrency_budget
+                self._vlm_instance.max_concurrent = self.max_concurrent
 
         return self._vlm_instance
 
@@ -549,6 +573,7 @@ class VLMConfig(BaseModel):
             "timeout": self.timeout,
             "provider": credential.provider,
             "thinking": self.thinking,
+            "max_concurrent": self.max_concurrent,
             "max_tokens": self.max_tokens,
             "stream": credential.stream if credential.stream is not None else self.stream,
             "api_version": credential.api_version,
@@ -583,6 +608,7 @@ class VLMConfig(BaseModel):
             "timeout": self.timeout,
             "provider": name,
             "thinking": self.thinking,
+            "max_concurrent": self.max_concurrent,
             "max_tokens": self.max_tokens,
             "stream": stream,
             "api_version": self.api_version,

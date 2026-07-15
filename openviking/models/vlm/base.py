@@ -2,12 +2,17 @@
 # SPDX-License-Identifier: AGPL-3.0
 """VLM base interface and abstract classes"""
 
+import asyncio
 import logging
 import re
+import time
+import weakref
 from abc import ABC, abstractmethod
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from threading import Lock
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, TypeVar, Union
 
 from openviking.utils.exceptions import AllCredentialsFailedError
 from openviking.utils.model_retry import (
@@ -21,6 +26,89 @@ from .token_usage import TokenUsageTracker
 
 _THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>")
 logger = get_logger(__name__)
+T = TypeVar("T")
+
+
+@dataclass
+class _VLMConcurrencyState:
+    semaphore: asyncio.Semaphore
+    waiting: int = 0
+    in_flight: int = 0
+
+
+class VLMAsyncConcurrencyBudget:
+    """One async VLM request budget shared by a configured runtime.
+
+    ``asyncio.Semaphore`` objects are bound to an event loop once they have
+    waiters, so a budget owns one semaphore per loop. Provider instances from
+    the same :class:`VLMConfig` receive the same budget object; independently
+    constructed configs receive different objects and therefore do not
+    serialize one another.
+    """
+
+    def __init__(self, limit: int):
+        self.limit = int(limit)
+        if self.limit <= 0:
+            raise ValueError("VLM async concurrency limit must be positive")
+        self._states: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, _VLMConcurrencyState] = (
+            weakref.WeakKeyDictionary()
+        )
+        self._lock = Lock()
+
+    def _get_state(self) -> _VLMConcurrencyState:
+        loop = asyncio.get_running_loop()
+        with self._lock:
+            state = self._states.get(loop)
+            if state is None:
+                state = _VLMConcurrencyState(asyncio.Semaphore(self.limit))
+                self._states[loop] = state
+            return state
+
+    @asynccontextmanager
+    async def slot(self) -> AsyncIterator[None]:
+        state = self._get_state()
+        wait_started = time.monotonic()
+        state.waiting += 1
+        acquired = False
+        try:
+            acquired = await state.semaphore.acquire()
+        finally:
+            state.waiting -= 1
+
+        wait_elapsed = time.monotonic() - wait_started
+        state.in_flight += 1
+        try:
+            try:
+                from openviking.telemetry import get_current_telemetry
+
+                telemetry = get_current_telemetry()
+                telemetry.set("vlm.async.max_concurrent", self.limit)
+                telemetry.set("vlm.async.wait_ms", round(wait_elapsed * 1000, 3))
+                telemetry.set("vlm.async.in_flight", state.in_flight)
+            except Exception as exc:
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug("VLM concurrency telemetry failed: %s", exc)
+            yield
+        finally:
+            state.in_flight -= 1
+            if acquired:
+                state.semaphore.release()
+
+    def snapshot(self) -> Dict[str, int]:
+        """Return public-safe counters for the current event loop."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return {"limit": self.limit, "waiting": 0, "in_flight": 0}
+        with self._lock:
+            state = self._states.get(loop)
+        if state is None:
+            return {"limit": self.limit, "waiting": 0, "in_flight": 0}
+        return {
+            "limit": self.limit,
+            "waiting": state.waiting,
+            "in_flight": state.in_flight,
+        }
 
 
 @dataclass
@@ -73,6 +161,13 @@ class VLMBase(ABC):
         self.extra_request_body = dict(config.get("extra_request_body") or {})
         self.stream = config.get("stream", False)
         self.thinking = config.get("thinking", False)
+        budget = config.get("_async_concurrency_budget")
+        if budget is None:
+            budget = VLMAsyncConcurrencyBudget(config.get("max_concurrent", 64))
+        if not isinstance(budget, VLMAsyncConcurrencyBudget):
+            raise TypeError("_async_concurrency_budget must be a VLMAsyncConcurrencyBudget")
+        self._async_concurrency_budget = budget
+        self.max_concurrent = budget.limit
 
         # Token usage tracking
         self._token_tracker = TokenUsageTracker()
@@ -180,6 +275,15 @@ class VLMBase(ABC):
     def is_available(self) -> bool:
         """Check if available"""
         return self.api_key is not None or self.api_base is not None
+
+    @property
+    def async_concurrency_budget(self) -> VLMAsyncConcurrencyBudget:
+        return self._async_concurrency_budget
+
+    async def _run_with_async_concurrency(self, call: Callable[[], Awaitable[T]]) -> T:
+        """Run one complete provider attempt/retry lifecycle under the shared budget."""
+        async with self._async_concurrency_budget.slot():
+            return await call()
 
     # Token usage tracking methods
     def update_token_usage(

@@ -12,6 +12,7 @@ from .base import (
     AllCredentialsFailedError,
     FailoverVLM,
     MultiCredentialVLM,
+    VLMAsyncConcurrencyBudget,
     VLMBase,
     VLMFactory,
 )
@@ -19,6 +20,7 @@ from .registry import get_all_provider_names, is_valid_provider
 
 __all__ = [
     "VLMBase",
+    "VLMAsyncConcurrencyBudget",
     "VLMFactory",
     "FailoverVLM",
     "MultiCredentialVLM",
