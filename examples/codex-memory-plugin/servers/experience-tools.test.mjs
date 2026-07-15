@@ -45,6 +45,16 @@ test("search_experience searches only the current user's Experience directory", 
               score: 0.91,
               abstract: "回复简洁。",
             },
+            {
+              uri: "viking://user/test/memories/experiences/.abstract.md",
+              score: 0.95,
+              abstract: "Experience 目录摘要。",
+            },
+            {
+              uri: "viking://user/test/memories/experiences/.overview.md",
+              score: 0.94,
+              abstract: "Experience 目录概览。",
+            },
           ],
           resources: [],
           skills: [],
@@ -129,4 +139,72 @@ test("read_experience rejects non-Experience URIs without an HTTP request", asyn
   assert.equal(callCount, 0);
   assert.equal(result.isError, true);
   assert.match(result.content[0].text, /Experience URI/);
+});
+
+test("read_experience rejects internal Experience sidecars", async () => {
+  let callCount = 0;
+  const provider = createExperienceToolProvider({
+    fetchImpl: async () => {
+      callCount += 1;
+      return new Response();
+    },
+  });
+
+  for (const name of [".abstract.md", ".overview.md", ".relations.json"]) {
+    const result = await provider.callTool(
+      {
+        name: "read_experience",
+        arguments: { uri: `viking://user/test/memories/experiences/${name}` },
+      },
+      { config },
+    );
+    assert.equal(result.isError, true);
+  }
+  assert.equal(callCount, 0);
+});
+
+test("read_experience accepts other dot-prefixed Experience files", async () => {
+  let callCount = 0;
+  const uri = "viking://user/test/memories/experiences/.custom-experience.md";
+  const provider = createExperienceToolProvider({
+    fetchImpl: async () => {
+      callCount += 1;
+      return new Response(JSON.stringify({ result: "content" }), { status: 200 });
+    },
+  });
+
+  const result = await provider.callTool(
+    { name: "read_experience", arguments: { uri } },
+    { config },
+  );
+
+  assert.equal(result.isError, undefined);
+  assert.equal(callCount, 1);
+});
+
+test("Experience HTTP requests inherit the configured timeout signal", async () => {
+  const calls = [];
+  const uri = "viking://user/test/memories/experiences/无订单号换货处理.md";
+  const provider = createExperienceToolProvider({
+    fetchImpl: async (url, options) => {
+      calls.push({ url: String(url), options });
+      if (String(url).includes("/search/find")) {
+        return new Response(JSON.stringify({ result: { memories: [] } }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ result: "content" }), { status: 200 });
+    },
+  });
+  const timeoutConfig = { ...config, timeoutMs: 1234 };
+
+  await provider.callTool(
+    { name: "search_experience", arguments: { query: "换货" } },
+    { config: timeoutConfig },
+  );
+  await provider.callTool(
+    { name: "read_experience", arguments: { uri } },
+    { config: timeoutConfig },
+  );
+
+  assert.equal(calls.length, 2);
+  for (const call of calls) assert.ok(call.options.signal instanceof AbortSignal);
 });

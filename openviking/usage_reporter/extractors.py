@@ -13,6 +13,8 @@ from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
 
 from .models import UsageContext, UsageEvent, utc_now_iso
 
+_EXPERIENCE_SIDECAR_FILENAMES = {".abstract.md", ".overview.md", ".relations.json"}
+
 
 class UsageExtractor(Protocol):
     name: str
@@ -39,7 +41,13 @@ def _load_mapping(value: Any) -> dict[str, Any]:
 
 def _is_experience_uri(uri: str, context: UsageContext) -> bool:
     prefix = f"viking://user/{context.user_id}/memories/experiences/"
-    return uri.startswith(prefix) and bool(uri.removeprefix(prefix).strip("/"))
+    if not uri.startswith(prefix):
+        return False
+    relative = uri.removeprefix(prefix).strip("/")
+    segments = [segment for segment in relative.split("/") if segment]
+    if not segments or any(segment in {".", ".."} for segment in segments):
+        return False
+    return segments[-1] not in _EXPERIENCE_SIDECAR_FILENAMES
 
 
 def _event_time(message: Message) -> str:
@@ -66,6 +74,17 @@ class MemoryUsageExtractor:
         context: UsageContext,
     ) -> list[UsageEvent]:
         events: list[UsageEvent] = []
+        tool_inputs: dict[tuple[str, str], dict[str, Any]] = {}
+        for message in messages:
+            for part in message.parts:
+                if (
+                    isinstance(part, ToolPart)
+                    and part.tool_id
+                    and isinstance(part.tool_input, dict)
+                    and part.tool_input
+                ):
+                    tool_inputs[(part.tool_id, part.tool_name)] = part.tool_input
+
         for message in messages:
             for part in message.parts:
                 if not isinstance(part, ToolPart):
@@ -85,6 +104,7 @@ class MemoryUsageExtractor:
                         part,
                         context=context,
                         message=message,
+                        fallback_input=tool_inputs.get((part.tool_id, part.tool_name), {}),
                     )
                     if event is not None:
                         events.append(event)
@@ -126,8 +146,11 @@ class MemoryUsageExtractor:
         *,
         context: UsageContext,
         message: Message,
+        fallback_input: dict[str, Any],
     ) -> UsageEvent | None:
         tool_input = part.tool_input if isinstance(part.tool_input, dict) else {}
+        if not tool_input:
+            tool_input = fallback_input
         output = _load_mapping(part.tool_output)
         uri = str(tool_input.get("uri") or output.get("uri") or "").strip()
         if not uri or not _is_experience_uri(uri, context):

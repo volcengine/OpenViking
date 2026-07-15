@@ -46,20 +46,24 @@ class UsageReporter:
         event_list = list(events)
         if not event_list or not self.sinks:
             return
-        for sink in self.sinks:
-            try:
-                await asyncio.wait_for(
-                    sink.write(events=event_list),
-                    timeout=self.sink_timeout_seconds,
-                )
-            except TimeoutError:
-                logger.warning(
-                    "Usage sink timed out after %.1fs: %s",
-                    self.sink_timeout_seconds,
-                    type(sink).__name__,
-                )
-            except Exception:
-                logger.exception("Usage sink failed: %s", type(sink).__name__)
+        await asyncio.gather(
+            *(self._report_to_sink(sink=sink, events=event_list) for sink in self.sinks)
+        )
+
+    async def _report_to_sink(self, *, sink: UsageSink, events: list[UsageEvent]) -> None:
+        try:
+            await asyncio.wait_for(
+                sink.write(events=events),
+                timeout=self.sink_timeout_seconds,
+            )
+        except TimeoutError:
+            logger.warning(
+                "Usage sink timed out after %.1fs: %s",
+                self.sink_timeout_seconds,
+                type(sink).__name__,
+            )
+        except Exception:
+            logger.exception("Usage sink failed: %s", type(sink).__name__)
 
     async def extract_and_report(self, *, messages, context: UsageContext) -> list[UsageEvent]:
         events = await self.extract(messages=messages, context=context)

@@ -1,6 +1,8 @@
 const EXPERIENCE_TARGET_URI = "viking://user/memories/experiences/";
 const DEFAULT_LIMIT = 5;
 const MAX_LIMIT = 20;
+const DEFAULT_TIMEOUT_MS = 15000;
+const EXPERIENCE_SIDECAR_FILENAMES = new Set([".abstract.md", ".overview.md", ".relations.json"]);
 
 const EXPERIENCE_TOOL_DEFINITIONS = [
   {
@@ -79,8 +81,17 @@ function experiencePrefix(user) {
 function isExperienceUri(uri, user) {
   const value = String(uri || "").trim();
   const prefix = experiencePrefix(user);
-  if (prefix) return value.startsWith(prefix) && value.slice(prefix.length).replace(/\/+$/, "").length > 0;
-  return /^viking:\/\/user\/[^/]+\/memories\/experiences\/.+[^/]$/.test(value);
+  const relative = prefix
+    ? (value.startsWith(prefix) ? value.slice(prefix.length) : "")
+    : value.match(/^viking:\/\/user\/[^/]+\/memories\/experiences\/(.+)$/)?.[1] || "";
+  const segments = relative.split("/").filter(Boolean);
+  const basename = segments.at(-1) || "";
+  return Boolean(
+    relative
+    && segments.length > 0
+    && segments.every((segment) => segment !== "." && segment !== "..")
+    && !EXPERIENCE_SIDECAR_FILENAMES.has(basename),
+  );
 }
 
 function titleFromUri(uri) {
@@ -96,6 +107,12 @@ function titleFromUri(uri) {
 function clampLimit(value) {
   const parsed = Number.isFinite(Number(value)) ? Math.trunc(Number(value)) : DEFAULT_LIMIT;
   return Math.max(1, Math.min(MAX_LIMIT, parsed));
+}
+
+function requestSignal(config) {
+  const configured = Number(config?.timeoutMs);
+  const timeoutMs = Math.max(1000, Number.isFinite(configured) ? configured : DEFAULT_TIMEOUT_MS);
+  return AbortSignal.timeout(timeoutMs);
 }
 
 async function readJsonResponse(response) {
@@ -120,6 +137,7 @@ async function searchExperience(args, config, fetchImpl) {
     const response = await fetchImpl(`${normalizedBaseUrl(config)}/api/v1/search/find`, {
       method: "POST",
       headers: requestHeaders(config, true),
+      signal: requestSignal(config),
       body: JSON.stringify({
         query,
         target_uri: EXPERIENCE_TARGET_URI,
@@ -152,6 +170,7 @@ async function readExperience(args, config, fetchImpl) {
     const response = await fetchImpl(url, {
       method: "GET",
       headers: requestHeaders(config),
+      signal: requestSignal(config),
     });
     const payload = await readJsonResponse(response);
     return result({ uri, content: String(payload?.result || "") });

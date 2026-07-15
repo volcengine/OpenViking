@@ -99,3 +99,33 @@ async def test_close_calls_optional_sink_close():
     await reporter.close()
 
     assert closed == [True]
+
+
+async def test_sinks_are_reported_concurrently():
+    started = set()
+    both_started = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingSink:
+        def __init__(self, name):
+            self.name = name
+
+        async def write(self, *, events):
+            del events
+            started.add(self.name)
+            if len(started) == 2:
+                both_started.set()
+            await release.wait()
+
+    reporter = UsageReporter(
+        sinks=[BlockingSink("first"), BlockingSink("second")],
+        sink_timeout_seconds=0.5,
+    )
+    task = asyncio.create_task(reporter.report(events=[_event()]))
+    try:
+        await asyncio.wait_for(both_started.wait(), timeout=0.1)
+    finally:
+        release.set()
+        await task
+
+    assert started == {"first", "second"}

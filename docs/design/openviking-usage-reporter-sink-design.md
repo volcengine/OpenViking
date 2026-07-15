@@ -104,13 +104,14 @@ class UsageSink:
 配置示例：
 
 ```yaml
-usage_reporter:
-  enabled: true
-  sinks:
-    - type: custom
-      class_path: example_usage.custom_sink.CustomUsageSink
-      config:
-        endpoint: https://usage.example.com/events
+server:
+  usage_reporter:
+    enabled: true
+    sinks:
+      - type: custom
+        class_path: example_usage.custom_sink.CustomUsageSink
+        config:
+          endpoint: https://usage.example.com/events
 ```
 
 OpenViking 用 `importlib` 动态加载：
@@ -133,20 +134,22 @@ def load_class(class_path: str):
 默认关闭：
 
 ```yaml
-usage_reporter:
-  enabled: false
+server:
+  usage_reporter:
+    enabled: false
 ```
 
 自定义 Sink：
 
 ```yaml
-usage_reporter:
-  enabled: true
-  sinks:
-    - type: custom
-      class_path: example_usage.custom_sink.CustomUsageSink
-      config:
-        endpoint: https://usage.example.com/events
+server:
+  usage_reporter:
+    enabled: true
+    sinks:
+      - type: custom
+        class_path: example_usage.custom_sink.CustomUsageSink
+        config:
+          endpoint: https://usage.example.com/events
 ```
 
 ## 8. 对 OpenViking 的侵入

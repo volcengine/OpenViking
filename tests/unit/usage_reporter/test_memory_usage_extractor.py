@@ -164,3 +164,74 @@ async def test_memory_usage_extractor_ignores_other_users_experience_uris():
     events = await MemoryUsageExtractor().extract(messages=messages, context=_context())
 
     assert [event.resource_uri for event in events] == [own_uri]
+
+
+@pytest.mark.asyncio
+async def test_memory_usage_extractor_ignores_internal_experience_sidecars():
+    custom_uri = "viking://user/test/memories/experiences/.custom-experience.md"
+    messages = [
+        Message(
+            id="msg-1",
+            role="user",
+            parts=[
+                ToolPart(
+                    tool_id="call-search",
+                    tool_name="search_experience",
+                    tool_status="completed",
+                    tool_output={
+                        "results": [
+                            {"uri": "viking://user/test/memories/experiences/.abstract.md"},
+                            {"uri": "viking://user/test/memories/experiences/.overview.md"},
+                            {"uri": custom_uri},
+                        ]
+                    },
+                ),
+                ToolPart(
+                    tool_id="call-read",
+                    tool_name="read_experience",
+                    tool_status="completed",
+                    tool_input={"uri": "viking://user/test/memories/experiences/.abstract.md"},
+                ),
+            ],
+        )
+    ]
+
+    events = await MemoryUsageExtractor().extract(messages=messages, context=_context())
+
+    assert [event.resource_uri for event in events] == [custom_uri]
+
+
+@pytest.mark.asyncio
+async def test_memory_usage_extractor_correlates_read_input_by_tool_id():
+    experience_uri = "viking://user/test/memories/experiences/long.md"
+    messages = [
+        Message(
+            id="msg-call",
+            role="assistant",
+            parts=[
+                ToolPart(
+                    tool_id="call-read",
+                    tool_name="read_experience",
+                    tool_status="running",
+                    tool_input={"uri": experience_uri},
+                )
+            ],
+        ),
+        Message(
+            id="msg-result",
+            role="user",
+            parts=[
+                ToolPart(
+                    tool_id="call-read",
+                    tool_name="read_experience",
+                    tool_status="completed",
+                    tool_output='{"uri":"truncated',
+                )
+            ],
+        ),
+    ]
+
+    events = await MemoryUsageExtractor().extract(messages=messages, context=_context())
+
+    assert [event.event_type for event in events] == ["memory.injected"]
+    assert events[0].resource_uri == experience_uri
