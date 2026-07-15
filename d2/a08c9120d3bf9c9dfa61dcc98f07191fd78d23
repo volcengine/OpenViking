@@ -1,0 +1,67 @@
+examples/openclaw-plugin/auto-recall.ts
+  s_c664270dff20fb::t_b189dab09a565b 316,328,335,373,488
+examples/openclaw-plugin/context-engine.ts
+  s_c664270dff20fb::t_47bbbc947102cf 243-248,266,294-295,368,396,416-417
+examples/openclaw-plugin/index.ts
+  s_0f10d69d7b14b5::t_ddd3c78f3f25e0 44,212,216,334,389
+examples/openclaw-plugin/plugin/openviking-command-definitions.ts
+  s_c664270dff20fb::t_c840fdf0bfcaa6 9,221,238,255
+examples/openclaw-plugin/plugin/openviking-context-engine-registration.ts
+  s_c664270dff20fb::t_c4cfb48b1abc90 29-34,60,94
+examples/openclaw-plugin/plugin/openviking-memory-tools.ts
+  s_c664270dff20fb::t_0d7b9a8065758b 5-8,24,38,53,114-119,124,126,130,228,264,284
+examples/openclaw-plugin/plugin/openviking-query-runtime.ts
+  s_c664270dff20fb::t_7055a045111c1a 448
+examples/openclaw-plugin/plugin/openviking-recall-trace-runtime.ts
+  s_a86fa0c74f0533::t_7d95b1a551f66d 29,252,256,302
+examples/openclaw-plugin/plugin/openviking-session-routing-runtime.ts
+  s_c664270dff20fb::t_b3097acd80e1b5 5-7,16-17,28,32,37,39,73-94,115,120-126,140
+examples/openclaw-plugin/routing/identity-routing.ts
+  s_c664270dff20fb::t_0a5ffb1210b27d 18-54
+examples/openclaw-plugin/services/context-lifecycle-service.ts
+  s_c664270dff20fb::t_a779bbe9737a7c 6-12,24-29,42-43,91,129-130,151,156,188-211,223,387-388,407-414,417,478,549-557,569,622-631,863,952-960,985,987-992,997,1017,1043,1092-1093,1122-1129,1134,1154,1230
+examples/openclaw-plugin/services/context-message-adapter.ts
+  s_0f10d69d7b14b5::t_514125fd6127d7 2,12
+examples/openclaw-plugin/tests/ut/context-engine-afterTurn.test.ts
+  s_c664270dff20fb::t_231a8afa82090c 224-229,234-237,242-246
+examples/openclaw-plugin/tests/ut/context-engine-modules.test.ts
+  s_c664270dff20fb::t_345349408bc7e8 319
+examples/openclaw-plugin/tests/ut/identity-routing.test.ts
+  s_c664270dff20fb::t_165174c4756c4c 7-8,11,60-104
+examples/openclaw-plugin/tests/ut/tools.test.ts
+  s_c664270dff20fb::t_2bcca495ced21d 476
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "d2a08c9120d3bf9c9dfa61dcc98f07191fd78d23",
+  "prompts": {},
+  "sessions": {
+    "s_0f10d69d7b14b5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f63e7-7591-76c1-a53c-08c54534ed09",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    },
+    "s_a86fa0c74f0533": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f63e3-e31f-79f3-9a97-a825b06ce534",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    },
+    "s_c664270dff20fb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f645f-c8c4-7181-a874-9504876fbded",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

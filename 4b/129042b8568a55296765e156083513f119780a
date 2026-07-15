@@ -1,0 +1,40 @@
+openviking/service/core.py
+  s_c86b7b6e74d699::t_f846b9721bc357 9,32,428-435,459-463
+openviking/service/task_tracker.py
+  s_c86b7b6e74d699::t_ef99321d0399ce 249,254,261-272
+openviking/session/session.py
+  s_c86b7b6e74d699::t_8af7473cf58195 48,1093,1099,1111-1112,1235,1237-1249,1254,1260,1266-1334,1669,1704
+openviking/storage/queuefs/__init__.py
+  s_c86b7b6e74d699::t_18950066a67b30 12,28
+openviking/storage/queuefs/queue_manager.py
+  s_c86b7b6e74d699::t_b6d39e505ae478 73,160
+openviking/storage/queuefs/session_commit_msg.py
+  s_c86b7b6e74d699::t_b0cbe848b4ac0a 1-21
+openviking/storage/queuefs/session_commit_processor.py
+  s_c86b7b6e74d699::t_e4c7cb1f5d0da9 1-84
+tests/unit/session/test_session_commit_resume.py
+  s_c86b7b6e74d699::t_c5e179b9a867c2 1-86
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "4b129042b8568a55296765e156083513f119780a",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_c86b7b6e74d699": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6083-8eb1-7b22-8ff9-942500662834",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
