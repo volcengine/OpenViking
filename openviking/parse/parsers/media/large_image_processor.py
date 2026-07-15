@@ -5,7 +5,7 @@ Large image processing utilities for OpenViking.
 
 This module provides functionality to:
 1. Detect large images (>10MB or any dimension >4096px)
-2. Create low-resolution previews (<=1MB)
+2. Split into tiles (<=1MB, <=2048px each)
 3. Split images into grid tiles with overlap
 4. Generate grid overlay images with tile labels
 """
