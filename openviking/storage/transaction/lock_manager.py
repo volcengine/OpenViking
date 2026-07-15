@@ -1,16 +1,14 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""LockManager — global singleton managing lock lifecycle and redo recovery."""
+"""LockManager — global singleton managing path-lock lifecycle."""
 
 import asyncio
-import json
 import time
 from typing import Any, Dict, List, Optional, Protocol
 
-from openviking.pyagfs import AGFSSyncClientProtocol, AsyncAGFSClient
+from openviking.pyagfs import AGFSSyncClientProtocol
 from openviking.storage.transaction.lock_handle import LockHandle
 from openviking.storage.transaction.path_lock import PathLockEngine
-from openviking.storage.transaction.redo_log import RedoLog
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -40,26 +38,12 @@ class LockManager:
         agfs: AGFSSyncClientProtocol,
         lock_timeout: float = 0.0,
         lock_expire: float = 300.0,
-        redo_recovery_enabled: bool = True,
     ):
-        self._agfs = agfs
-        self._async_agfs = AsyncAGFSClient(agfs)
         self._path_lock = PathLockEngine(agfs, lock_expire=lock_expire)
         self._lock_timeout = lock_timeout
-        self._redo_recovery_enabled = redo_recovery_enabled
-        self._redo_log = RedoLog(agfs)
         self._handles: Dict[str, LockHandle] = {}
         self._cleanup_task: Optional[asyncio.Task] = None
-        self._redo_task: Optional[asyncio.Task] = None
         self._running = False
-
-    @property
-    def redo_log(self) -> RedoLog:
-        return self._redo_log
-
-    @property
-    def redo_recovery_enabled(self) -> bool:
-        return self._redo_recovery_enabled
 
     def _resolve_timeout(self, timeout: Any) -> Optional[float]:
         return self._lock_timeout if timeout is LOCK_TIMEOUT_DEFAULT else timeout
@@ -84,24 +68,13 @@ class LockManager:
         return active_handles
 
     async def start(self) -> None:
-        """Start background cleanup and redo recovery."""
+        """Start background cleanup."""
         self._running = True
         self._cleanup_task = asyncio.create_task(self._stale_cleanup_loop())
-        if self._redo_recovery_enabled:
-            self._redo_task = asyncio.create_task(self._recover_pending_redo())
-        else:
-            logger.info("Redo recovery disabled by config; skipping pending redo recovery")
 
     async def stop(self) -> None:
         """Stop cleanup and release all active locks."""
         self._running = False
-        if self._redo_task:
-            self._redo_task.cancel()
-            try:
-                await self._redo_task
-            except asyncio.CancelledError:
-                pass
-            self._redo_task = None
         if self._cleanup_task:
             self._cleanup_task.cancel()
             try:
@@ -438,124 +411,6 @@ class LockManager:
             return None
         return handle
 
-    # ------------------------------------------------------------------
-    # Redo recovery (session_memory only)
-    # ------------------------------------------------------------------
-
-    async def _recover_pending_redo(self) -> None:
-        pending_ids = await self._redo_log.list_pending_async()
-        for task_id in pending_ids:
-            logger.info(f"Recovering pending redo task: {task_id}")
-            try:
-                info = await self._redo_log.read_async(task_id)
-                if info:
-                    await self._redo_session_memory(info)
-                await self._redo_log.mark_done_async(task_id)
-            except Exception as e:
-                logger.error(f"Redo recovery failed for {task_id}: {e}", exc_info=True)
-
-    async def _redo_session_memory(self, info: Dict[str, Any]) -> None:
-        """Re-extract memories from archive.
-
-        Lets exceptions from _enqueue_semantic propagate so the caller
-        can decide whether to mark the redo task as done.
-        """
-        from openviking.message import Message
-        from openviking.server.identity import RequestContext, Role
-        from openviking.storage.viking_fs import get_viking_fs
-        from openviking_cli.session.user_id import UserIdentifier
-
-        archive_uri = info.get("archive_uri")
-        session_uri = info.get("session_uri")
-        account_id = info.get("account_id", "default")
-        user_id = info.get("user_id", "default")
-        role_str = info.get("role", "root")
-
-        if not archive_uri or not session_uri:
-            raise ValueError("Cannot redo session_memory: missing archive_uri or session_uri")
-
-        # 1. Build request context (needed for path conversion below)
-        user = UserIdentifier(account_id=account_id, user_id=user_id)
-        ctx = RequestContext(user=user, role=Role(role_str))
-
-        # 2. Read archived messages
-        messages_uri = f"{archive_uri}/messages.jsonl"
-        viking_fs = get_viking_fs()
-        agfs_path = viking_fs._uri_to_path(messages_uri, ctx=ctx)
-        messages = []
-        try:
-            content = await self._async_agfs.cat(agfs_path)
-            if isinstance(content, bytes):
-                content = content.decode("utf-8")
-            for line in content.strip().split("\n"):
-                if line.strip():
-                    try:
-                        messages.append(Message.from_dict(json.loads(line)))
-                    except Exception:
-                        pass
-        except Exception as e:
-            logger.warning(f"Cannot read archive for redo: {agfs_path}: {e}")
-
-        # 3. Re-extract memories (best-effort, only if archive was readable)
-        if messages:
-            session_id = session_uri.rstrip("/").rsplit("/", 1)[-1]
-            try:
-                from openviking.session import create_session_compressor
-
-                compressor = create_session_compressor(vikingdb=None)
-                memories = await asyncio.wait_for(
-                    compressor.extract_long_term_memories(
-                        messages=messages,
-                        user=user,
-                        session_id=session_id,
-                        ctx=ctx,
-                    ),
-                    timeout=60.0,
-                )
-                # extract_long_term_memories may return either a list[Context]
-                # (v2) or a {"contexts": [...], "session_skills": [...]} dict (v3).
-                if isinstance(memories, dict):
-                    memories = memories.get("contexts", [])
-                logger.info(f"Redo: extracted {len(memories)} memories from {archive_uri}")
-            except Exception as e:
-                logger.warning(f"Redo: memory extraction failed ({e}), falling back to queue")
-
-        # 4. Always enqueue semantic processing as fallback
-        await self._enqueue_semantic(
-            uri=session_uri,
-            context_type="memory",
-            account_id=account_id,
-            user_id=user_id,
-            peer_id=user_id,
-            role=role_str,
-        )
-
-    async def _enqueue_semantic(self, **params: Any) -> None:
-        from openviking.storage.queuefs import get_queue_manager
-        from openviking.storage.queuefs.semantic_msg import SemanticMsg
-        from openviking.storage.queuefs.semantic_queue import SemanticQueue
-
-        queue_manager = get_queue_manager()
-        if queue_manager is None:
-            logger.debug("No queue manager available, skipping enqueue_semantic")
-            return
-
-        uri = params.get("uri")
-        if not uri:
-            return
-
-        msg = SemanticMsg(
-            uri=uri,
-            context_type=params.get("context_type", "resource"),
-            account_id=params.get("account_id", "default"),
-            user_id=params.get("user_id", "default"),
-            peer_id=params.get("peer_id", "default"),
-            role=params.get("role", "root"),
-        )
-        semantic_queue: SemanticQueue = queue_manager.get_queue(queue_manager.SEMANTIC)  # type: ignore[assignment]
-        await semantic_queue.enqueue(msg)
-
-
 # ---------------------------------------------------------------------------
 # Module-level singleton
 # ---------------------------------------------------------------------------
@@ -567,14 +422,12 @@ def init_lock_manager(
     agfs: AGFSSyncClientProtocol,
     lock_timeout: float = 0.0,
     lock_expire: float = 300.0,
-    redo_recovery_enabled: bool = True,
 ) -> LockManager:
     global _lock_manager
     _lock_manager = LockManager(
         agfs=agfs,
         lock_timeout=lock_timeout,
         lock_expire=lock_expire,
-        redo_recovery_enabled=redo_recovery_enabled,
     )
     return _lock_manager
 

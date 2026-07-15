@@ -29,11 +29,12 @@ class TransactionConfig(BaseModel):
         ),
     )
 
+    # TODO: Remove this compatibility field in the next major release.
     redo_recovery_enabled: bool = Field(
         default=True,
         description=(
-            "Enable session commit phase-2 crash-recovery redo. "
-            "When false, pending redo markers are not written and startup redo recovery is skipped."
+            "Deprecated compatibility option with no effect. "
+            "Session commit recovery now uses persistent QueueFS tasks."
         ),
     )
 

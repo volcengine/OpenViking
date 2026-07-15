@@ -604,7 +604,7 @@ async def _run_policy_optimization_pipeline_real_config_llm_e2e_writes_updated_e
         }
     )
     reset_lock_manager()
-    init_lock_manager(fs.agfs, redo_recovery_enabled=False)
+    init_lock_manager(fs.agfs)
     request_context = SimpleNamespace(
         user=SimpleNamespace(account_id="default", user_id="u"),
         account_id="default",
@@ -726,7 +726,7 @@ async def test_experience_gradient_estimator_real_config_llm_generates_gradient(
         }
     )
     reset_lock_manager()
-    init_lock_manager(fs.agfs, redo_recovery_enabled=False)
+    init_lock_manager(fs.agfs)
     request_context = SimpleNamespace(
         user=SimpleNamespace(account_id="default", user_id="u"),
         account_id="default",
