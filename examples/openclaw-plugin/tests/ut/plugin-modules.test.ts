@@ -550,7 +550,7 @@ describe("plugin module seams", () => {
     const deps = {
       registerTool,
       getClient: async () => ({ readToolResult }),
-      resolvePluginSessionRouting: () => ({ agentId: "agent-main", actorPeerId: "agent-main", ovSessionId: "ov-session-1" }),
+      resolvePluginSessionRouting: () => ({ agentId: "agent-main", ovSessionId: "ov-session-1" }),
       isBypassedSession: () => false,
       makeBypassedToolResult: (toolName: string) => ({ content: [{ type: "text" as const, text: `bypassed ${toolName}` }], details: { toolName } }),
       logger: { warn: vi.fn() },
@@ -573,7 +573,6 @@ describe("plugin module seams", () => {
       "ov-session-1",
       "tr_1",
       { offset: 0, limit: 20_000, includeMetadata: true },
-      "agent-main",
     );
     expect(result.content[0].text).toBe("full tool result");
     expect(result.details).toMatchObject({ action: "read", tool_result_id: "tr_1" });
@@ -603,7 +602,6 @@ describe("plugin module seams", () => {
       resolveAgentId: () => "agent-main",
       resolvePluginSessionRouting: () => ({
         agentId: "agent-main",
-        actorPeerId: "agent-main",
         sessionId: "session-1",
         ovSessionId: "ov-session-1",
       }),
@@ -630,7 +628,6 @@ describe("plugin module seams", () => {
     expect(grepSessionArchives).toHaveBeenCalledWith("ov-session-1", "command", {
       archiveId: undefined,
       caseInsensitive: true,
-      actorPeerId: "agent-main",
     });
     expect(searchResult.content[0].text).toContain("Found 1 match(es)");
     expect(searchResult.content[0].text).toContain("important command output");
@@ -645,7 +642,7 @@ describe("plugin module seams", () => {
     const expandTool = expandFactory({ sessionId: "session-1" });
     const result = await expandTool.execute("call-2", { archiveId: "archive_001" });
 
-    expect(getSessionArchive).toHaveBeenCalledWith("ov-session-1", "archive_001", "agent-main");
+    expect(getSessionArchive).toHaveBeenCalledWith("ov-session-1", "archive_001");
     expect(result.content[0].text).toContain("## archive_001");
     expect(result.content[0].text).toContain("user: hello");
     expect(result.details).toMatchObject({
@@ -839,7 +836,7 @@ describe("plugin module seams", () => {
       "memory-store-temp",
       "user",
       [{ type: "text", text: "remember this" }],
-      "ou_01_abc",
+      undefined,
       undefined,
       "ou_01_abc",
     );
@@ -855,20 +852,11 @@ describe("plugin module seams", () => {
     expect(rejected.details).toMatchObject({ action: "rejected", uri: "viking://resources/r1" });
     expect(deleteUri).not.toHaveBeenCalled();
 
-    const peerMemoryUri = "viking://user/default/peers/ou_01_abc/memories/m1";
-    const deleted = await forgetTool.execute("call-3", { uri: peerMemoryUri });
-    expect(deleteUri).toHaveBeenCalledWith(peerMemoryUri, "ou_01_abc");
-    expect(deleted.content[0].text).toBe(`Forgotten: ${peerMemoryUri}`);
-    expect(deleted.details).toMatchObject({ action: "deleted", uri: peerMemoryUri });
-
-    deleteUri.mockClear();
-    find.mockResolvedValueOnce({
-      memories: [{ uri: peerMemoryUri, level: 2, score: 0.95, abstract: "remember this" }],
-      total: 1,
-    });
-    const deletedByQuery = await forgetTool.execute("call-4", { query: "remember this" });
-    expect(deleteUri).toHaveBeenCalledWith(peerMemoryUri, "ou_01_abc");
-    expect(deletedByQuery.details).toMatchObject({ action: "deleted", uri: peerMemoryUri });
+    const memoryUri = "viking://user/default/memories/m1";
+    const deleted = await forgetTool.execute("call-3", { uri: memoryUri });
+    expect(deleteUri).toHaveBeenCalledWith(memoryUri, "ou_01_abc");
+    expect(deleted.content[0].text).toBe(`Forgotten: ${memoryUri}`);
+    expect(deleted.details).toMatchObject({ action: "deleted", uri: memoryUri });
   });
 
   it("registers recall trace tool through a dedicated plugin module", async () => {

@@ -46,10 +46,14 @@ export function resolveOpenVikingActorPeerId(params: {
   personPeerId?: string;
   assistantPeerId?: string;
 }): string | undefined {
-  return resolveOpenVikingMessagePeerId({
+  const actorPeerId = resolveOpenVikingMessagePeerId({
     ...params,
     role: params.peerRole === "person" ? "user" : "assistant",
   });
+  if (params.peerRole === "person" && !actorPeerId) {
+    throw new Error("openviking: peer_role=person requires a sender identity");
+  }
+  return actorPeerId;
 }
 
 export type SessionAgentResolveBranch =

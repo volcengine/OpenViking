@@ -5,7 +5,6 @@ export type OpenVikingToolResultToolContext = {
   sessionId?: string;
   agentId?: string;
   senderId?: string;
-  requesterSenderId?: string;
 };
 
 export type OpenVikingToolResultSession = {
@@ -13,7 +12,6 @@ export type OpenVikingToolResultSession = {
   sessionKey?: string;
   ovSessionId?: string;
   agentId: string;
-  actorPeerId?: string;
 };
 
 export type OpenVikingToolResultToolDefinition = {
@@ -29,7 +27,6 @@ export type OpenVikingToolResultClient = {
     sessionId: string,
     toolResultId: string,
     options: { offset: number; limit: number; includeMetadata: boolean },
-    agentId?: string,
   ) => Promise<{
     content: string;
     offset: number;
@@ -44,7 +41,6 @@ export type OpenVikingToolResultClient = {
     toolResultId: string,
     query: string,
     options: { limit: number; contextChars: number },
-    agentId?: string,
   ) => Promise<{
     tool_result_id: string;
     matches?: Array<{ offset: number; snippet: string }>;
@@ -52,7 +48,6 @@ export type OpenVikingToolResultClient = {
   listToolResults: (
     sessionId: string,
     options: { toolName?: string; limit: number },
-    agentId?: string,
   ) => Promise<{
     tool_results?: Array<{
       storage_uri?: string;
@@ -182,7 +177,6 @@ export function registerOpenVikingToolResultTools({
             session.ovSessionId,
             parsed.toolResultId,
             { offset, limit, includeMetadata: true },
-            session.actorPeerId,
           );
           const returnedChars = result.content.length;
           const nextOffset = result.offset + returnedChars;
@@ -283,7 +277,6 @@ export function registerOpenVikingToolResultTools({
             parsed.toolResultId,
             query,
             { limit, contextChars },
-            session.actorPeerId,
           );
           const matches = result.matches ?? [];
           const text = matches.length
@@ -356,7 +349,6 @@ export function registerOpenVikingToolResultTools({
           const result = await client.listToolResults(
             session.ovSessionId,
             { toolName, limit },
-            session.actorPeerId,
           );
           const items = result.tool_results ?? [];
           const text = items.length

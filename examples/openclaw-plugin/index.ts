@@ -209,7 +209,6 @@ const contextEnginePlugin = {
     const {
       rememberSessionAgentId,
       resolveAgentId,
-      resolveActorPeerId,
       resolvePluginSessionRouting,
       toQueryConfigContext,
     } = createOpenVikingSessionRoutingRuntime({
@@ -386,7 +385,6 @@ const contextEnginePlugin = {
       logger: api.logger,
       getClient,
       resolveAgentId,
-      resolveActorPeerId,
       rememberSessionAgentId,
       queryConfigStore,
       traceRecorder,

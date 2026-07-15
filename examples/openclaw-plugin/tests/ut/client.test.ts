@@ -40,10 +40,6 @@ describe("isMemoryUri", () => {
     expect(isMemoryUri("viking://user/alice/agent/work/memories/item-1")).toBe(true);
   });
 
-  it("returns true for canonical peer memory URI", () => {
-    expect(isMemoryUri("viking://user/alice/peers/bob/memories/item-1")).toBe(true);
-  });
-
   it("returns true for valid agent memory URI", () => {
     expect(isMemoryUri("viking://user/memories/xyz")).toBe(true);
   });
@@ -353,24 +349,6 @@ describe("OpenVikingClient resource and skill import", () => {
 });
 
 describe("OpenVikingClient tenant headers (advanced accountId / userId overrides)", () => {
-  it("routes tool-result and archive requests by the explicit actor peer", async () => {
-    const transport = vi.fn().mockResolvedValue(okResponse({}));
-    const client = new OpenVikingClient(
-      "http://127.0.0.1:1933", "", "default-agent", 5000,
-      "", "", undefined, false, true, { transport },
-    );
-
-    await client.readToolResult("session-1", "tool-1", undefined, "person-1");
-    await client.searchToolResult("session-1", "tool-1", "needle", undefined, "person-1");
-    await client.listToolResults("session-1", undefined, "person-1");
-    await client.grepSessionArchives("session-1", "needle", { actorPeerId: "person-1" });
-
-    expect(transport).toHaveBeenCalledTimes(4);
-    for (const [, init] of transport.mock.calls as Array<[string, RequestInit]>) {
-      expect(new Headers(init.headers).get("X-OpenViking-Actor-Peer")).toBe("person-1");
-    }
-  });
-
   it.each([
     ["prefix", "prefix_main"],
     ["", "main"],

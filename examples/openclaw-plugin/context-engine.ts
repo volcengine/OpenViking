@@ -240,12 +240,6 @@ export function createMemoryOpenVikingContextEngine(params: {
   getClient: () => Promise<OpenVikingClient>;
   /** Extra args help match hook-populated routing when OpenClaw provides sessionKey / OV session id. */
   resolveAgentId: (sessionId: string, sessionKey?: string, ovSessionId?: string) => string;
-  resolveActorPeerId?: (
-    sessionId?: string,
-    sessionKey?: string,
-    ovSessionId?: string,
-    senderId?: string,
-  ) => string | undefined;
   rememberSessionAgentId?: (ctx: {
     agentId?: string;
     sessionId?: string;
@@ -263,7 +257,6 @@ export function createMemoryOpenVikingContextEngine(params: {
     logger,
     getClient,
     resolveAgentId,
-    resolveActorPeerId,
     rememberSessionAgentId,
     queryConfigStore,
     traceRecorder,
@@ -362,7 +355,6 @@ export function createMemoryOpenVikingContextEngine(params: {
         getClient,
         logger,
         resolveAgentId,
-        resolveActorPeerId,
         rememberSessionAgentId,
         isBypassedSession,
         queryConfigStore,
@@ -390,7 +382,6 @@ export function createMemoryOpenVikingContextEngine(params: {
         getClient,
         logger,
         resolveAgentId,
-        resolveActorPeerId,
         rememberSessionAgentId,
         isBypassedSession,
         diag,
@@ -410,8 +401,6 @@ export function createMemoryOpenVikingContextEngine(params: {
         getClient,
         logger,
         resolveAgentId,
-        resolveActorPeerId,
-        peerRole: cfg.peer_role,
         isBypassedSession,
         diag,
       });

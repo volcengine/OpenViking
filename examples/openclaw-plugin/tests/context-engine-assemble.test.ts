@@ -114,8 +114,7 @@ describe("context-engine assemble()", () => {
       tokenBudget: 4096,
     });
 
-    expect(resolveAgentId).toHaveBeenCalledWith("session-1", undefined, "session-1");
-    expect(client.getSessionContext).toHaveBeenCalledWith("session-1", 4096, "agent:session-1");
+    expect(client.getSessionContext).toHaveBeenCalledWith("session-1", 4096);
     expect(result.estimatedTokens).toBe(
       roughEstimate(result.messages) + systemPromptTokens(result.systemPromptAddition),
     );

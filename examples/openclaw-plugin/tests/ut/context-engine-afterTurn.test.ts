@@ -221,61 +221,20 @@ describe("context-engine afterTurn()", () => {
     );
   });
 
-  it.each([
-    ["assistant", "test-agent", undefined, "test-agent"],
-    ["person", "telegram_12345", "telegram_12345", undefined],
-    ["none", undefined, undefined, undefined],
-  ] as const)("routes peer ids for peer_role=%s", async (peerRole, actorPeerId, userPeerId, assistantPeerId) => {
-    const { engine, client } = makeEngine({ cfgOverrides: { peer_role: peerRole } });
+  it("does not attribute user messages to the sender in assistant mode", async () => {
+    const { engine, client } = makeEngine();
 
     await engine.afterTurn!({
       sessionId: "s1",
       sessionFile: "",
-      messages: [
-        { role: "user", content: "hello world" },
-        { role: "assistant", content: "hi there" },
-      ],
+      messages: [{ role: "user", content: "hello world" }],
       prePromptMessageCount: 0,
       runtimeContext: { senderId: "telegram:12345" },
     });
 
-    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
-    expect(client.addSessionMessage.mock.calls[0][3]).toBe(actorPeerId);
-    expect(client.addSessionMessage.mock.calls[0][5]).toBe(userPeerId);
-    expect(client.addSessionMessage.mock.calls[1][3]).toBe(actorPeerId);
-    expect(client.addSessionMessage.mock.calls[1][5]).toBe(assistantPeerId);
-  });
-
-  it("commits a multi-sender person session without a single peer actor", async () => {
-    const { engine, client } = makeEngine({
-      commitTokenThresholdRatio: 0.01,
-      cfgOverrides: { peer_role: "person" },
-    });
-    client.getSession
-      .mockResolvedValueOnce({ pending_tokens: 0 })
-      .mockResolvedValueOnce({ pending_tokens: 5000 });
-
-    await engine.afterTurn!({
-      sessionId: "group-session",
-      sessionFile: "",
-      messages: [{ role: "user", content: "message from Alice" }],
-      prePromptMessageCount: 0,
-      runtimeContext: { senderId: "alice" },
-    });
-    await engine.afterTurn!({
-      sessionId: "group-session",
-      sessionFile: "",
-      messages: [{ role: "user", content: "message from Bob" }],
-      prePromptMessageCount: 0,
-      runtimeContext: { senderId: "bob" },
-    });
-
-    expect(client.addSessionMessage.mock.calls.map((call) => call[5])).toEqual(["alice", "bob"]);
-    expect(client.commitSession).toHaveBeenCalledOnce();
-    expect(client.commitSession).toHaveBeenCalledWith("group-session", {
-      wait: false,
-      keepRecentCount: 10,
-    });
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
+    expect(client.addSessionMessage.mock.calls[0][3]).toBeUndefined();
+    expect(client.addSessionMessage.mock.calls[0][5]).toBeUndefined();
   });
 
   it("sanitizes <relevant-memories> from user content but not from assistant", async () => {
@@ -478,7 +437,7 @@ describe("context-engine afterTurn()", () => {
     expect(assistantParts.map(p => p.text).join(" ")).toContain("export const x = 1");
   });
 
-  it("passes agentId to addSessionMessage", async () => {
+  it("does not pass actor peer to addSessionMessage", async () => {
     const { engine, client } = makeEngine();
 
     await engine.afterTurn!({
@@ -489,8 +448,7 @@ describe("context-engine afterTurn()", () => {
     });
 
     expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
-    const agentId = client.addSessionMessage.mock.calls[0][3] as string;
-    expect(agentId).toBe("test-agent");
+    expect(client.addSessionMessage.mock.calls[0][3]).toBeUndefined();
   });
 
   it("checks pending tokens after addSessionMessage", async () => {

@@ -36,7 +36,6 @@ export function createOpenVikingSessionRoutingRuntime(options: {
 }) {
   const peerRole = options.peerRole ?? "assistant";
   const sessionAgentResolver = createSessionAgentResolver(options.peerPrefix);
-  const sessionPersonPeerIds = new Map<string, string>();
 
   const rememberSessionAgentId = (ctx: SessionAgentLookup) => {
     sessionAgentResolver.remember(ctx);
@@ -70,32 +69,6 @@ export function createOpenVikingSessionRoutingRuntime(options: {
     return result.resolved;
   };
 
-  const resolveActorPeerId = (
-    sessionId?: string,
-    sessionKey?: string,
-    ovSessionId?: string,
-    senderId?: string,
-  ): string | undefined => {
-    const aliases = [sessionId, sessionKey, ovSessionId]
-      .map((value) => value?.trim())
-      .filter((value): value is string => Boolean(value));
-    const personPeerId = sanitizeOpenVikingPeerId(senderId);
-    if (personPeerId) {
-      for (const alias of aliases) {
-        sessionPersonPeerIds.set(alias, personPeerId);
-      }
-    }
-    const actorPeerId = resolveOpenVikingActorPeerId({
-      peerRole,
-      personPeerId: personPeerId ?? aliases.map((alias) => sessionPersonPeerIds.get(alias)).find(Boolean),
-      assistantPeerId: resolveAgentId(sessionId, sessionKey, ovSessionId),
-    });
-    if (peerRole === "person" && !actorPeerId) {
-      throw new Error("openviking: peer_role=person requires a sender identity");
-    }
-    return actorPeerId;
-  };
-
   const resolvePluginSessionRouting = (ctx?: SessionAgentLookup): PluginSessionRouting => {
     const sessionId = typeof ctx?.sessionId === "string" ? ctx.sessionId.trim() : "";
     const sessionKey = typeof ctx?.sessionKey === "string" ? ctx.sessionKey.trim() : "";
@@ -122,12 +95,11 @@ export function createOpenVikingSessionRoutingRuntime(options: {
       sessionKey: session.sessionKey,
       ovSessionId: session.ovSessionId,
       agentId,
-      actorPeerId: resolveActorPeerId(
-        session.sessionId,
-        session.sessionKey,
-        session.ovSessionId,
-        ctx?.requesterSenderId ?? ctx?.senderId,
-      ),
+      actorPeerId: resolveOpenVikingActorPeerId({
+        peerRole,
+        personPeerId: sanitizeOpenVikingPeerId(ctx?.requesterSenderId ?? ctx?.senderId),
+        assistantPeerId: agentId,
+      }),
     };
   };
 
@@ -141,7 +113,6 @@ export function createOpenVikingSessionRoutingRuntime(options: {
   return {
     rememberSessionAgentId,
     resolveAgentId,
-    resolveActorPeerId,
     resolvePluginSessionRouting,
     toQueryConfigContext,
   };

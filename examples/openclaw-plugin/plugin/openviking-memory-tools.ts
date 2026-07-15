@@ -121,7 +121,7 @@ export function registerOpenVikingMemoryTools(deps: OpenVikingMemoryToolsDeps): 
             sessionId,
             role,
             [{ type: "text", text }],
-            session.actorPeerId,
+            undefined,
             undefined,
             peerId,
           );

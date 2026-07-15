@@ -527,7 +527,6 @@ export class OpenVikingClient {
     sessionId: string,
     toolResultId: string,
     options?: { offset?: number; limit?: number; includeMetadata?: boolean },
-    actorPeerId?: string,
   ): Promise<ToolResultReadResult> {
     const params = new URLSearchParams();
     if (options?.offset !== undefined) params.set("offset", String(options.offset));
@@ -539,8 +538,6 @@ export class OpenVikingClient {
     return this.request<ToolResultReadResult>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/tool-results/${encodeURIComponent(toolResultId)}${query ? `?${query}` : ""}`,
       {},
-      undefined,
-      actorPeerId,
     );
   }
 
@@ -549,7 +546,6 @@ export class OpenVikingClient {
     toolResultId: string,
     queryText: string,
     options?: { limit?: number; contextChars?: number },
-    actorPeerId?: string,
   ): Promise<ToolResultSearchResult> {
     const params = new URLSearchParams({ q: queryText });
     if (options?.limit !== undefined) params.set("limit", String(options.limit));
@@ -559,15 +555,12 @@ export class OpenVikingClient {
     return this.request<ToolResultSearchResult>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/tool-results/${encodeURIComponent(toolResultId)}/search?${params.toString()}`,
       {},
-      undefined,
-      actorPeerId,
     );
   }
 
   async listToolResults(
     sessionId: string,
     options?: { toolName?: string; limit?: number },
-    actorPeerId?: string,
   ): Promise<ToolResultListResult> {
     const params = new URLSearchParams();
     if (options?.toolName) params.set("tool_name", options.toolName);
@@ -576,8 +569,6 @@ export class OpenVikingClient {
     return this.request<ToolResultListResult>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/tool-results${query ? `?${query}` : ""}`,
       {},
-      undefined,
-      actorPeerId,
     );
   }
 
@@ -845,7 +836,6 @@ export class OpenVikingClient {
        * preserves the pre-v2 "archive everything" behavior.
       */
       keepRecentCount?: number;
-      /** Omit for aggregate commits; extraction is constrained by archived message peer_ids. */
       agentId?: string;
     },
   ): Promise<CommitSessionResult> {
@@ -946,7 +936,6 @@ export class OpenVikingClient {
       caseInsensitive?: boolean;
       nodeLimit?: number;
       levelLimit?: number;
-      actorPeerId?: string;
     } = {},
   ): Promise<{
     matches: Array<{ line: number; uri: string; content: string }>;
@@ -968,8 +957,6 @@ export class OpenVikingClient {
           ...(options.levelLimit !== undefined ? { level_limit: options.levelLimit } : {}),
         }),
       },
-      undefined,
-      options.actorPeerId,
     );
   }
 

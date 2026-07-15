@@ -126,7 +126,7 @@ describe("context-engine lifecycle service seam", () => {
       agentId: "runtime-agent",
       ovSessionId,
     });
-    expect(client.getSessionContext).toHaveBeenCalledWith(ovSessionId, 4096, "agent_main");
+    expect(client.getSessionContext).toHaveBeenCalledWith(ovSessionId, 4096);
     expect(buildAssembledContext).not.toHaveBeenCalled();
     expect(result).toEqual({ messages, estimatedTokens: 42 });
     expect(diag).toHaveBeenCalledWith("assemble_result", ovSessionId, expect.objectContaining({
@@ -212,7 +212,7 @@ describe("context-engine lifecycle service seam", () => {
     });
 
     const ovSessionId = openClawSessionToOvStorageId("plain-session", "agent:main:main");
-    expect(client.getSessionContext).toHaveBeenNthCalledWith(1, ovSessionId, 4096, "agent_main");
+    expect(client.getSessionContext).toHaveBeenNthCalledWith(1, ovSessionId, 4096);
     expect(client.commitSession).toHaveBeenCalledWith(ovSessionId, {
       wait: true,
       keepRecentCount: 0,
@@ -308,11 +308,11 @@ describe("context-engine lifecycle service seam", () => {
       ovSessionId,
       "user",
       [{ type: "text", text: "hello world" }],
-      "agent_main",
+      undefined,
       "2026-04-01T10:01:00.000Z",
       undefined,
     );
-    expect(client.getSession).toHaveBeenCalledWith(ovSessionId, "agent_main");
+    expect(client.getSession).toHaveBeenCalledWith(ovSessionId);
     expect(client.commitSession).toHaveBeenCalledWith(ovSessionId, {
       wait: false,
       keepRecentCount: 7,
