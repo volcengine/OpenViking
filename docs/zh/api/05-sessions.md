@@ -31,6 +31,7 @@ Session API 按认证用户作用域访问会话，并返回 canonical user sess
 
 **代码入口**：
 - `openviking/session/session.py:Session.__init__()` - Session 核心类
+- `openviking/session/auto_commit_policy.py:AutoCommitPolicy` - 自动 commit 策略的默认值与校验
 - `openviking/server/routers/sessions.py:create_session()` - HTTP 路由
 - `openviking_cli/client/base.py:BaseClient.create_session()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:new_session()` - CLI 命令
@@ -43,6 +44,19 @@ Session API 按认证用户作用域访问会话，并返回 canonical user sess
 |------|------|------|--------|------|
 | session_id | str | 否 | None | 会话 ID。如果为 None，则创建一个自动生成 ID 的新会话 |
 | memory_policy | object | 否 | None | 会话默认的记忆抽取策略。可选的 `self` 和 `peer` 开关控制写入目标；可选的 `working_memory.enabled=false` 跳过 archive summary；可选的顶层 `memory_types` 将抽取限制为指定的 enabled memory schema。未传或为 `null` 时允许所有 enabled memory schema。非法结构或未知 memory type 会以 `InvalidArgumentError` 拒绝。 |
+| config | object | 否 | None | 可选的 session 配置。目前支持 `auto_commit_policy` 对象（见下表）。传入的字段会被校验并 clamp 到取值范围，然后合并到默认值之上；最终生效的策略会在响应的 `result.config` 中返回，并持久化到 session meta。 |
+
+`config.auto_commit_policy` 字段（均为可选；未传字段回退到默认值，默认值同样适用于所有已存在的 session）：
+
+| 字段 | 类型 | 默认值 | 上限 | 说明 |
+|------|------|--------|------|------|
+| `pending_token_threshold` | int | 1000 | 50000 | 当未提交的 pending token 超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
+| `message_count_threshold` | int | 50 | 500 | 当未提交的 live message 数量超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
+| `idle_timeout_seconds` | int | 86400 | 604800 | 有未提交内容的 session 在空闲这么多秒后，进入服务端 idle scheduler 的处理范围。idle 触发的 commit 会归档全部积压消息，并忽略 `keep_recent_count`。 |
+| `keep_recent_count` | int | 2 | 500 | 阈值触发的自动 commit 后保留（不归档）的最近 live message 数量。idle 超时触发的 commit 会忽略该值并归档所有消息。 |
+| `min_commit_interval_seconds` | int | 60 | 604800 | 两次自动 commit 之间的最小间隔秒数（节流）。 |
+
+所有字段最小值为 `0`，会被 clamp 到 `[0, 上限]`。未知字段会以 `InvalidArgumentError` 拒绝。
 
 #### 3. 使用示例
 
@@ -63,6 +77,22 @@ curl -X POST http://localhost:1933/api/v1/sessions \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{"session_id": "my-custom-session-id"}'
+
+# 创建带自定义自动 commit 策略的新会话
+curl -X POST http://localhost:1933/api/v1/sessions \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "config": {
+      "auto_commit_policy": {
+        "pending_token_threshold": 8000,
+        "message_count_threshold": 40,
+        "idle_timeout_seconds": 600,
+        "keep_recent_count": 10,
+        "min_commit_interval_seconds": 60
+      }
+    }
+  }'
 ```
 
 **Python SDK**
@@ -80,6 +110,20 @@ print(f"Session ID: {result['session_id']}")
 # 创建指定 ID 的新会话
 result = await client.create_session(session_id="my-custom-session-id")
 print(f"Session ID: {result['session_id']}")
+
+# 创建带自定义自动 commit 策略的新会话
+result = await client.create_session(
+    config={
+        "auto_commit_policy": {
+            "pending_token_threshold": 8000,
+            "message_count_threshold": 40,
+            "idle_timeout_seconds": 600,
+            "keep_recent_count": 10,
+            "min_commit_interval_seconds": 60,
+        }
+    }
+)
+print(result["config"]["auto_commit_policy"])
 ```
 
 **TypeScript SDK**
@@ -118,6 +162,15 @@ ov session new
     "user": {
       "account_id": "default",
       "user_id": "alice"
+    },
+    "config": {
+      "auto_commit_policy": {
+        "pending_token_threshold": 1000,
+        "message_count_threshold": 50,
+        "idle_timeout_seconds": 86400,
+        "keep_recent_count": 2,
+        "min_commit_interval_seconds": 60
+      }
     }
   },
   "time": 0.1
@@ -227,6 +280,7 @@ ov session list
 - `commit_count`: 成功提交的次数
 - `memories_extracted`: 各类记忆的提取数量统计
 - `last_commit_at`: 最后一次提交的时间
+- `config`: 填充默认值后的生效 session 配置，包含 `auto_commit_policy` 对象
 
 **代码入口**：
 - `openviking/session/session.py:Session.load()` - 会话加载
@@ -343,7 +397,116 @@ ov session get a1b2c3d4
       "account_id": "default",
       "user_id": "alice"
     },
-    "pending_tokens": 450
+    "pending_tokens": 450,
+    "config": {
+      "auto_commit_policy": {
+        "pending_token_threshold": 1000,
+        "message_count_threshold": 50,
+        "idle_timeout_seconds": 86400,
+        "keep_recent_count": 2,
+        "min_commit_interval_seconds": 60
+      }
+    }
+  }
+}
+```
+
+---
+
+### update_session()
+
+#### 1. API 实现介绍
+
+以局部（merge）语义更新 session 的配置。只有请求体中出现的字段会被覆盖，未出现的字段保持原值。目前唯一可配置的部分是 `auto_commit_policy`，它通过默认值适用于所有 session（包括已存在的 session）。
+
+**代码入口**：
+- `openviking/server/routers/sessions.py:update_session()` - HTTP 路由
+- `openviking/service/session_service.py:SessionService.update_session_config()` - 合并并持久化
+- `openviking/session/auto_commit_policy.py:AutoCommitPolicy` - 策略默认值与校验
+- `openviking_cli/client/base.py:BaseClient.update_session()` - Python SDK
+- `crates/ov_cli/src/commands/session.rs:set_auto_commit_policy()` - CLI 命令
+
+#### 2. 接口和参数说明
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| session_id | str | 是 | - | 会话 ID |
+| config | object | 是 | - | session 配置补丁。传入 `auto_commit_policy` 及其任意子集字段；只有传入的字段会被覆盖。 |
+
+`auto_commit_policy` 的字段、默认值和取值范围与 [`create_session()`](#create_session) 相同。传入的值会被校验并 clamp 到 `[0, 上限]`，未知字段会以 `InvalidArgumentError` 拒绝。
+
+#### 3. 使用示例
+
+**HTTP API**
+
+```http
+PATCH /api/v1/sessions/{session_id}
+```
+
+```bash
+# 只更新需要修改的字段，其余字段保持原值
+curl -X PATCH http://localhost:1933/api/v1/sessions/a1b2c3d4 \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "config": {
+      "auto_commit_policy": {
+        "pending_token_threshold": 8000,
+        "message_count_threshold": 40
+      }
+    }
+  }'
+```
+
+**Python SDK**
+
+```python
+import openviking as ov
+
+client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
+
+result = await client.update_session(
+    "a1b2c3d4",
+    config={
+        "auto_commit_policy": {
+            "pending_token_threshold": 8000,
+            "message_count_threshold": 40,
+        }
+    },
+)
+print(result["config"]["auto_commit_policy"])
+```
+
+**CLI**
+
+```bash
+# 至少需要一个 flag；只有传入的字段会被修改
+ov session auto-commit-policy set a1b2c3d4 \
+  --pending-tokens 8000 \
+  --message-count 40 \
+  --idle-timeout 600 \
+  --keep-recent 10 \
+  --min-interval 60
+```
+
+**响应示例**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "session_id": "a1b2c3d4",
+    "config": {
+      "auto_commit_policy": {
+        "pending_token_threshold": 8000,
+        "message_count_threshold": 40,
+        "idle_timeout_seconds": 86400,
+        "keep_recent_count": 2,
+        "min_commit_interval_seconds": 60
+      }
+    }
   }
 }
 ```
@@ -693,31 +856,12 @@ ov session delete a1b2c3d4
 | content | str | 条件必填 | - | 消息文本内容（HTTP API 简单模式，与 parts 二选一） |
 | created_at | str | 否 | None | 可选的 ISO 8601 时间戳，会原样保存到消息中 |
 | peer_id | str | 否 | None | 可选的稳定交互对象 ID |
-| auto_commit_policy | object | 否 | None | 可选的 session 级自动 commit 策略。传入后会持久化到 session meta，并用于后续服务端自动触发 |
 
 > **注意**：HTTP API 支持两种模式：
 > 1. **简单模式**：使用 `content` 字符串（向后兼容）
 > 2. **Parts 模式**：使用 `parts` 数组（完整 Part 支持）
 >
 > 如果同时提供 `content` 和 `parts`，`parts` 优先。
-
-`auto_commit_policy` 字段：
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `enabled` | bool | 是 | 是否启用该 session 的自动 commit。设为 `false` 时会关闭该 session 的自动触发 |
-| `token_threshold` | int | 否 | token 阈值。消息写入后若 `pending_tokens` 达到该值，会尝试立即触发自动 commit |
-| `idle_timeout_seconds` | int | 否 | idle 超时时间，单位秒。配置后该 session 会进入服务端 idle 调度范围 |
-| `keep_recent_count` | int | 否 | commit 后保留最近多少条 live message，不参与归档删除。修改后会同步更新 session meta，并触发 `pending_tokens` 重建 |
-
-补充说明：
-
-- `auto_commit_policy` 是 session 级配置，不是单条 message 级配置。
-- 一旦写入，后续服务端自动触发以 session meta 中的持久化值为准。
-- `token_threshold` 会在消息写入后立即参与判断，不依赖 idle scheduler。
-- `idle_timeout_seconds` 是否生效，还取决于服务端全局配置 `server.session_auto_commit.idle_enabled` 是否开启。
-- 当 idle scheduler 开启后，服务端会通过固定周期扫描 session `.meta.json` 来判断哪些 session 到达 idle 触发条件。
-- `auto_commit_last_error` 只记录自动触发和 phase-1 commit 调度阶段的错误。phase-2 extraction 失败会体现在后台 task 和 `.failed.json`，不会写入该字段。
 
 **Part 类型（Python SDK）**
 
@@ -888,13 +1032,10 @@ ov session add-message a1b2c3d4 --role user --content "How do I authenticate use
 |------|------|------|--------|------|
 | session_id | str | 是 | - | 会话 ID |
 | messages | List[AddMessageRequest] | 是 | - | 消息列表，每条消息格式与 `add_message()` 相同，最多 100 条 |
-| auto_commit_policy | object | 否 | None | 可选的 session 级自动 commit 策略。只允许在 batch 顶层传一次 |
 | telemetry | bool | 否 | False | 是否附加操作遥测数据 |
 
 > **注意**：
 > 1. 每条消息支持 `content`（简单模式）和 `parts`（Parts 模式），超过 100 条需分批调用。
-> 2. `auto_commit_policy` 只允许出现在 batch 顶层。
-> 3. `messages[*].auto_commit_policy` 不允许，服务端会直接拒绝请求。
 
 #### 3. 使用示例
 

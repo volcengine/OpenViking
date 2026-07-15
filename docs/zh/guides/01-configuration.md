@@ -1097,7 +1097,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `idle_enabled` | bool | 是否启用服务端 idle timeout 自动 commit 调度器。关闭后，不会启动 idle scheduler；但 token threshold 的即时触发仍然生效 | `false` |
+| `idle_enabled` | bool | 是否启用服务端 idle timeout 自动 commit 调度器。关闭后，不会启动 idle scheduler；但 token / message-count 的即时触发仍然生效 | `false` |
 | `check_interval_seconds` | float | idle scheduler 的检查周期，单位秒，必须大于 `0` | `60.0` |
 | `scan_batch_size` | int | 每个 idle 扫描批次最多并发读取的 session meta 文件数量，必须大于 `0` | `16` |
 | `scan_batch_pause_seconds` | float | idle 扫描批次之间的可选暂停时间，单位秒，用于降低大量 session 扫描时的存储压力 | `0.0` |
@@ -1105,13 +1105,27 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 说明：
 
 - `server.session_auto_commit` 是服务端全局配置，不是单个 session 的业务 policy。
-- session 级别的自动触发参数通过消息写入接口中的 `auto_commit_policy` 设置，并持久化到 session meta。
+- session 级别的自动触发参数通过 session 级 `auto_commit_policy` 设置（见下表）。它在创建 session 时通过 `POST /api/v1/sessions` 的 `config` 对象设置，之后可通过 `PATCH /api/v1/sessions/{session_id}` 编辑，并通过 `GET /api/v1/sessions/{session_id}` 查看。该 policy 通过默认值适用于所有 session（包括已存在的 session），没有单 session 的开关。
 - `idle_enabled=false` 时：
   - 不会启动 `SessionAutoCommitScheduler`
 - `idle_enabled=true` 时：
   - `SessionAutoCommitScheduler` 会按固定周期扫描 AGFS `/local/{account}/user/{user}/sessions` 下的 session `.meta.json`
   - 不会做单独的启动恢复扫描，idle 检查只发生在周期扫描时
-- token threshold 自动触发不依赖 scheduler，所以不受这个开关影响。
+- token 和 message-count 自动触发在消息写入后内联执行，不依赖 scheduler，也不受这个开关影响。
+
+###### 单 session 自动 commit 策略
+
+每个 session 都带有 `auto_commit_policy`。未传的字段会回退到下方推荐默认值，该默认值同样适用于所有已存在的 session。取值会被 clamp 到 `[0, 上限]`，未知字段会以 `InvalidArgumentError` 拒绝。设置和查看方式见 [Sessions API](../api/05-sessions.md#create_session)。
+
+| 字段 | 类型 | 默认值 | 上限 | 说明 |
+|------|------|--------|------|------|
+| `pending_token_threshold` | int | 1000 | 50000 | 当未提交的 pending token 超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
+| `message_count_threshold` | int | 50 | 500 | 当未提交的 live message 数量超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
+| `idle_timeout_seconds` | int | 86400 | 604800 | 有未提交内容的 session 在空闲这么多秒后，进入服务端 idle scheduler 的处理范围。idle 触发的 commit 会归档全部积压消息，并忽略 `keep_recent_count`。 |
+| `keep_recent_count` | int | 2 | 500 | 阈值触发的自动 commit 后保留（不归档）的最近 live message 数量。idle 超时触发的 commit 会忽略该值并归档所有消息。 |
+| `min_commit_interval_seconds` | int | 60 | 604800 | 两次自动 commit 之间的最小间隔秒数（节流）。 |
+
+代码入口：`openviking/session/auto_commit_policy.py:AutoCommitPolicy`。
 
 
 ##### S3 后端配置

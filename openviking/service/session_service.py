@@ -16,13 +16,16 @@ from openviking.server.identity import RequestContext
 from openviking.service.session_auto_commit import (
     compute_next_check_at,
     get_idle_timeout_seconds,
+    get_keep_recent_count,
+    get_message_count_threshold,
+    get_min_commit_interval_seconds,
     get_token_threshold,
     has_uncommitted_content,
     is_next_check_due,
-    should_enable_auto_commit,
 )
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
+from openviking.session.auto_commit_policy import AutoCommitPolicy
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.storage import VikingDBManager
@@ -157,6 +160,7 @@ class SessionService:
         ctx: RequestContext,
         session_id: Optional[str] = None,
         memory_policy: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Optional[Dict[str, Any]] = None,
     ) -> Session:
         """Create a session and persist its root path.
 
@@ -165,6 +169,8 @@ class SessionService:
             session_id: Optional session ID. If provided, creates a session with the given ID.
                        If None, creates a new session with auto-generated ID.
             memory_policy: Optional default extraction policy for future commits.
+            auto_commit_policy: Optional automatic-commit policy overrides. Missing
+                fields fall back to the recommended defaults.
 
         Raises:
             AlreadyExistsError: If a session with the given ID already exists
@@ -182,6 +188,8 @@ class SessionService:
                     set(MemoryTypeRegistry().list_names(include_disabled=False))
                 )
                 session.meta.memory_policy = policy.to_dict()
+            resolved_auto_commit = AutoCommitPolicy.from_dict(auto_commit_policy)
+            session.meta.auto_commit_policy = resolved_auto_commit.to_dict()
             await session.ensure_exists()
             self._record_lifecycle_metric("create", "ok")
             return session
@@ -371,31 +379,37 @@ class SessionService:
         self._record_lifecycle_metric("extract", "ok")
         return memories
 
-    async def persist_auto_commit_policy_and_schedule(
-        self,
-        session: Session,
-        *,
-        auto_commit_policy: Any,
-        policy_provided: bool,
-    ) -> None:
-        """Persist message-time auto-commit policy/meta updates."""
-        if policy_provided:
-            session.meta.auto_commit_policy = auto_commit_policy
-            next_keep_recent_count = 0
-            if isinstance(auto_commit_policy, dict):
-                try:
-                    next_keep_recent_count = max(
-                        0,
-                        int(auto_commit_policy.get("keep_recent_count", 0) or 0),
-                    )
-                except (TypeError, ValueError):
-                    next_keep_recent_count = 0
-            current_keep_recent_count = max(0, int(session.meta.keep_recent_count or 0))
-            session.meta.keep_recent_count = next_keep_recent_count
-            if current_keep_recent_count != next_keep_recent_count:
-                session._rebuild_pending_tokens()
+    async def touch_last_message_at(self, session: Session) -> None:
+        """Record the latest message time for idle-timeout accounting."""
         session.meta.last_message_at = get_current_timestamp()
         await session._save_meta()
+
+    async def update_session_config(
+        self,
+        session: Session,
+        config_patch: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Merge a session config patch (PATCH semantics) and persist it.
+
+        Only keys present in ``config_patch`` are overwritten. Currently the
+        only configurable section is ``auto_commit_policy``.
+        """
+        config_patch = config_patch or {}
+        if "auto_commit_policy" in config_patch:
+            current = AutoCommitPolicy.from_dict(session.meta.auto_commit_policy)
+            merged = current.merge(config_patch.get("auto_commit_policy"))
+            session.meta.auto_commit_policy = merged.to_dict()
+        await session._save_meta()
+        return self.effective_session_config(session)
+
+    @staticmethod
+    def effective_session_config(session: Session) -> Dict[str, Any]:
+        """Return the resolved session config (defaults filled) for GET responses."""
+        return {
+            "auto_commit_policy": AutoCommitPolicy.from_dict(
+                session.meta.auto_commit_policy
+            ).to_dict(),
+        }
 
     async def maybe_schedule_auto_commit(
         self,
@@ -445,11 +459,22 @@ class SessionService:
             if not self._should_run_auto_commit(session, policy, reason):
                 return
 
-            keep_recent_count = int((policy or {}).get("keep_recent_count", 0) or 0)
-            result = await session.commit_async(keep_recent_count=keep_recent_count)
+            # Idle timeout commits the full backlog and must not persist a
+            # keep_recent_count of 0, which would otherwise wipe the stored
+            # preference. Message-write triggers reserve the configured tail.
+            if reason == "idle_timeout":
+                result = await session.commit_async(
+                    keep_recent_count=0,
+                    persist_keep_recent_count=False,
+                )
+            else:
+                result = await session.commit_async(
+                    keep_recent_count=get_keep_recent_count(policy),
+                )
             if result.get("archived"):
                 session.meta.auto_commit_last_error = ""
                 session.meta.auto_commit_last_error_at = ""
+                session.meta.last_auto_commit_at = get_current_timestamp()
             await session._save_meta()
         except Exception as exc:
             logger.warning("Automatic session commit failed for %s: %s", session_id, exc)
@@ -470,20 +495,47 @@ class SessionService:
     def _has_uncommitted_content(session: Session) -> bool:
         return has_uncommitted_content(session.meta.to_dict())
 
+    def _within_min_commit_interval(self, session: Session, policy: Any) -> bool:
+        """Return True when the throttle window has not yet elapsed."""
+        interval = get_min_commit_interval_seconds(policy)
+        if interval <= 0:
+            return False
+        last_auto_commit_at = session.meta.last_auto_commit_at
+        if not last_auto_commit_at:
+            return False
+        try:
+            last_dt = datetime.fromisoformat(last_auto_commit_at)
+        except (TypeError, ValueError):
+            return False
+        now = datetime.now()
+        if last_dt.tzinfo is not None:
+            if now.tzinfo is None:
+                now = datetime.fromtimestamp(now.timestamp(), tz=last_dt.tzinfo)
+            else:
+                now = now.astimezone(last_dt.tzinfo)
+        elif now.tzinfo is not None:
+            now = now.replace(tzinfo=None)
+        return (now - last_dt).total_seconds() < interval
+
     def _should_run_auto_commit(self, session: Session, policy: Any, reason: str) -> bool:
         """Validate the current session state still satisfies the trigger reason."""
-        if not should_enable_auto_commit(policy):
-            return False
-
-        if reason == "token_threshold":
-            threshold = get_token_threshold(policy)
-            if threshold is None:
+        if reason == "message_write":
+            if not self._has_uncommitted_content(session):
+                return False
+            if self._within_min_commit_interval(session, policy):
                 return False
             try:
                 pending_tokens = int(session.meta.pending_tokens or 0)
+                message_count = int(session.meta.message_count or 0)
             except (TypeError, ValueError):
                 return False
-            return pending_tokens >= threshold
+            token_threshold = get_token_threshold(policy)
+            if token_threshold is not None and pending_tokens > token_threshold:
+                return True
+            message_threshold = get_message_count_threshold(policy)
+            if message_threshold is not None and message_count > message_threshold:
+                return True
+            return False
 
         if reason == "idle_timeout":
             if not self._session_auto_commit_config.idle_enabled:

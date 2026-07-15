@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 from openviking.pyagfs import AsyncAGFSClient
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
+from openviking.session.auto_commit_policy import AutoCommitPolicy
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 
@@ -266,34 +267,32 @@ class SessionAutoCommitScheduler:
             yield batch
 
 
-def should_enable_auto_commit(policy: Optional[Dict[str, Any]]) -> bool:
-    return bool(isinstance(policy, dict) and policy.get("enabled") is True)
+def resolve_policy(policy: Optional[Dict[str, Any]]) -> AutoCommitPolicy:
+    """Resolve a stored policy dict into an effective policy (defaults filled)."""
+    return AutoCommitPolicy.from_dict(policy if isinstance(policy, dict) else None)
 
 
 def get_idle_timeout_seconds(policy: Optional[Dict[str, Any]]) -> Optional[int]:
-    if not isinstance(policy, dict):
-        return None
-    value = policy.get("idle_timeout_seconds")
-    if value is None:
-        return None
-    try:
-        seconds = int(value)
-    except (TypeError, ValueError):
-        return None
+    seconds = resolve_policy(policy).idle_timeout_seconds
     return seconds if seconds > 0 else None
 
 
 def get_token_threshold(policy: Optional[Dict[str, Any]]) -> Optional[int]:
-    if not isinstance(policy, dict):
-        return None
-    value = policy.get("token_threshold")
-    if value is None:
-        return None
-    try:
-        threshold = int(value)
-    except (TypeError, ValueError):
-        return None
+    threshold = resolve_policy(policy).pending_token_threshold
     return threshold if threshold > 0 else None
+
+
+def get_message_count_threshold(policy: Optional[Dict[str, Any]]) -> Optional[int]:
+    threshold = resolve_policy(policy).message_count_threshold
+    return threshold if threshold > 0 else None
+
+
+def get_min_commit_interval_seconds(policy: Optional[Dict[str, Any]]) -> int:
+    return max(0, resolve_policy(policy).min_commit_interval_seconds)
+
+
+def get_keep_recent_count(policy: Optional[Dict[str, Any]]) -> int:
+    return max(0, resolve_policy(policy).keep_recent_count)
 
 
 def compute_next_check_at(last_message_at: str, idle_timeout_seconds: int) -> Optional[str]:
@@ -333,11 +332,10 @@ def has_uncommitted_content(meta: Dict[str, Any]) -> bool:
 
 
 def _is_idle_policy_due(meta: Dict[str, Any], now: datetime) -> bool:
-    policy = meta.get("auto_commit_policy")
-    if not should_enable_auto_commit(policy):
-        return False
-    idle_timeout = get_idle_timeout_seconds(policy)
+    idle_timeout = get_idle_timeout_seconds(meta.get("auto_commit_policy"))
     if idle_timeout is None:
+        return False
+    if not has_uncommitted_content(meta):
         return False
     next_check_at = compute_next_check_at(meta.get("last_message_at", ""), idle_timeout)
     if not next_check_at:

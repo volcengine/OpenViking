@@ -74,12 +74,36 @@ PartRequest = TextPartRequest | ContextPartRequest | ToolPartRequest
 
 
 class AutoCommitPolicyRequest(BaseModel):
-    """Session-level server-side auto-commit policy."""
+    """Session-level auto-commit policy overrides.
 
-    enabled: bool
-    token_threshold: Optional[int] = Field(default=None, gt=0)
-    idle_timeout_seconds: Optional[int] = Field(default=None, gt=0)
-    keep_recent_count: int = Field(default=0, ge=0)
+    All fields are optional so the same model works for create (defaults fill
+    the rest) and PATCH (only provided fields are merged). Numeric bounds are
+    intentionally not enforced here: ``AutoCommitPolicy`` clamps every value
+    into ``[0, max]`` so clamping stays defined in a single place and applies
+    equally to the HTTP, SDK, and CLI entrypoints.
+    """
+
+    pending_token_threshold: Optional[int] = None
+    message_count_threshold: Optional[int] = None
+    idle_timeout_seconds: Optional[int] = None
+    keep_recent_count: Optional[int] = None
+    min_commit_interval_seconds: Optional[int] = None
+
+    model_config = {"extra": "forbid"}
+
+
+class SessionConfigRequest(BaseModel):
+    """Session config container."""
+
+    auto_commit_policy: Optional[AutoCommitPolicyRequest] = None
+
+    model_config = {"extra": "forbid"}
+
+
+class UpdateSessionConfigRequest(BaseModel):
+    """Request model for PATCH /sessions/{id} config updates."""
+
+    config: SessionConfigRequest
 
     model_config = {"extra": "forbid"}
 
@@ -100,7 +124,6 @@ class AddMessageRequest(BaseModel):
     agent_uri: Optional[str] = None
     content: Optional[str] = None
     parts: Optional[List[Dict[str, Any]]] = None
-    auto_commit_policy: Optional[AutoCommitPolicyRequest] = None
     created_at: Optional[str] = None
     telemetry: TelemetryRequest = False
 
@@ -120,24 +143,7 @@ class BatchAddMessageRequest(BaseModel):
     """Request model for adding multiple messages in a single request."""
 
     messages: List[AddMessageRequest] = Field(..., max_length=100)
-    auto_commit_policy: Optional[AutoCommitPolicyRequest] = None
     telemetry: TelemetryRequest = False
-
-    @model_validator(mode="before")
-    @classmethod
-    def reject_per_message_auto_commit_policy(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        messages = data.get("messages")
-        if not isinstance(messages, list):
-            return data
-        for message in messages:
-            if isinstance(message, dict) and "auto_commit_policy" in message:
-                raise ValueError(
-                    "Per-message auto_commit_policy is not allowed in batch requests; "
-                    "use the top-level auto_commit_policy field instead"
-                )
-        return data
 
 
 class UsedRequest(BaseModel):
@@ -152,6 +158,7 @@ class CreateSessionRequest(BaseModel):
 
     session_id: Optional[str] = None
     memory_policy: Optional[Dict[str, Any]] = None
+    config: Optional[SessionConfigRequest] = None
     telemetry: TelemetryRequest = False
 
 
@@ -222,17 +229,25 @@ async def create_session(
     """
     service = get_service()
 
+    auto_commit_policy_payload: Optional[Dict[str, Any]] = None
+    if request.config is not None and request.config.auto_commit_policy is not None:
+        auto_commit_policy_payload = request.config.auto_commit_policy.model_dump(
+            exclude_none=True
+        )
+
     async def _create() -> dict[str, Any]:
         await service.initialize_user_directories(_ctx)
         session = await service.sessions.create(
             _ctx,
             request.session_id,
             memory_policy=request.memory_policy,
+            auto_commit_policy=auto_commit_policy_payload,
         )
         return {
             "session_id": session.session_id,
             "uri": session.uri,
             "user": session.user.to_dict(),
+            "config": service.sessions.effective_session_config(session),
         }
 
     execution = await run_operation(
@@ -271,7 +286,43 @@ async def get_session(
     result["uri"] = session.uri
     result["user"] = session.user.to_dict()
     result["pending_tokens"] = int(session.meta.pending_tokens or 0)
+    result["config"] = service.sessions.effective_session_config(session)
     return Response(status="ok", result=result)
+
+
+@router.patch("/{session_id}")
+async def update_session(
+    request: UpdateSessionConfigRequest,
+    session_id: str = Path(..., description="Session ID"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Update a session's config (partial update / merge semantics).
+
+    Only fields present in the request body are changed; omitted fields keep
+    their current values.
+    """
+    from openviking_cli.exceptions import NotFoundError
+
+    service = get_service()
+    try:
+        session = await service.sessions.get(session_id, _ctx, auto_create=False)
+    except NotFoundError:
+        return error_response("NOT_FOUND", f"Session {session_id} not found")
+
+    config_patch: Dict[str, Any] = {}
+    if "auto_commit_policy" in request.config.model_fields_set:
+        if request.config.auto_commit_policy is None:
+            config_patch["auto_commit_policy"] = {}
+        else:
+            config_patch["auto_commit_policy"] = (
+                request.config.auto_commit_policy.model_dump(exclude_none=True)
+            )
+
+    config = await service.sessions.update_session_config(session, config_patch)
+    return Response(
+        status="ok",
+        result={"session_id": session_id, "config": config},
+    )
 
 
 @router.get("/{session_id}/tool-results")
@@ -476,12 +527,6 @@ async def add_message(
     async def _add() -> dict[str, Any]:
         session = await service.sessions.get(session_id, _ctx, auto_create=True)
         parts = _resolve_message_parts(request)
-        policy_payload = (
-            request.auto_commit_policy.model_dump()
-            if request.auto_commit_policy is not None
-            else None
-        )
-        policy_provided = "auto_commit_policy" in request.model_fields_set
 
         session.add_messages(
             [
@@ -493,15 +538,11 @@ async def add_message(
                 }
             ]
         )
-        await service.sessions.persist_auto_commit_policy_and_schedule(
-            session,
-            auto_commit_policy=policy_payload,
-            policy_provided=policy_provided,
-        )
+        await service.sessions.touch_last_message_at(session)
         await service.sessions.maybe_schedule_auto_commit(
             session_id,
             _ctx,
-            reason_hint="token_threshold",
+            reason_hint="message_write",
         )
         return {
             "session_id": session_id,
@@ -532,12 +573,6 @@ async def batch_add_messages(
     async def _batch_add() -> dict[str, Any]:
         session = await service.sessions.get(session_id, _ctx, auto_create=True)
         specs = []
-        policy_payload = (
-            request.auto_commit_policy.model_dump()
-            if request.auto_commit_policy is not None
-            else None
-        )
-        policy_provided = "auto_commit_policy" in request.model_fields_set
         for msg_request in request.messages:
             parts = _resolve_message_parts(msg_request)
             specs.append(
@@ -549,15 +584,11 @@ async def batch_add_messages(
                 }
             )
         msgs = session.add_messages(specs)
-        await service.sessions.persist_auto_commit_policy_and_schedule(
-            session,
-            auto_commit_policy=policy_payload,
-            policy_provided=policy_provided,
-        )
+        await service.sessions.touch_last_message_at(session)
         await service.sessions.maybe_schedule_auto_commit(
             session_id,
             _ctx,
-            reason_hint="token_threshold",
+            reason_hint="message_write",
         )
         return {
             "session_id": session_id,

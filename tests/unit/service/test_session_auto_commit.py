@@ -137,12 +137,14 @@ class _FakeSessionMeta:
         message_count: int = 0,
         keep_recent_count: int = 0,
         last_message_at: str = "",
+        last_auto_commit_at: str = "",
     ) -> None:
         self.auto_commit_policy = auto_commit_policy
         self.pending_tokens = pending_tokens
         self.message_count = message_count
         self.keep_recent_count = keep_recent_count
         self.last_message_at = last_message_at
+        self.last_auto_commit_at = last_auto_commit_at
         self.auto_commit_last_error = ""
         self.auto_commit_last_error_at = ""
 
@@ -153,17 +155,20 @@ class _FakeSessionMeta:
             "message_count": self.message_count,
             "keep_recent_count": self.keep_recent_count,
             "last_message_at": self.last_message_at,
+            "last_auto_commit_at": self.last_auto_commit_at,
         }
 
 
 class _FakeAutoCommitSession:
     def __init__(self, meta: _FakeSessionMeta) -> None:
         self.meta = meta
-        self.commit_calls: list[int] = []
+        self.commit_calls: list[tuple[int, bool]] = []
         self.save_calls = 0
 
-    async def commit_async(self, *, keep_recent_count: int = 0):
-        self.commit_calls.append(keep_recent_count)
+    async def commit_async(
+        self, *, keep_recent_count: int = 0, persist_keep_recent_count: bool = True
+    ):
+        self.commit_calls.append((keep_recent_count, persist_keep_recent_count))
         return {"archived": True}
 
     async def _save_meta(self):
@@ -203,7 +208,6 @@ def _meta(
     *,
     account_id: str = "acct_a",
     user_id: str = "user_b",
-    enabled: bool = True,
     idle_timeout_seconds: int | None = 60,
     pending_tokens: int = 1,
     message_count: int = 1,
@@ -212,7 +216,7 @@ def _meta(
 ) -> dict:
     if last_message_at is None:
         last_message_at = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
-    policy = {"enabled": enabled, "keep_recent_count": keep_recent_count}
+    policy: dict = {"keep_recent_count": keep_recent_count}
     if idle_timeout_seconds is not None:
         policy["idle_timeout_seconds"] = idle_timeout_seconds
     return {
@@ -235,9 +239,10 @@ async def test_run_auto_commit_rechecks_token_threshold_before_committing(monkey
     session = _FakeAutoCommitSession(
         _FakeSessionMeta(
             auto_commit_policy={
-                "enabled": True,
-                "token_threshold": 100,
+                "pending_token_threshold": 100,
+                "message_count_threshold": 50,
                 "keep_recent_count": 0,
+                "min_commit_interval_seconds": 0,
             },
             pending_tokens=10,
             message_count=1,
@@ -245,10 +250,34 @@ async def test_run_auto_commit_rechecks_token_threshold_before_committing(monkey
     )
     service = _session_service_for_auto_commit_test(monkeypatch, session)
 
-    await service.run_auto_commit("session_a", _auto_commit_ctx(), reason="token_threshold")
+    await service.run_auto_commit("session_a", _auto_commit_ctx(), reason="message_write")
 
     assert session.commit_calls == []
     assert session.save_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_run_auto_commit_commits_when_token_threshold_exceeded(monkeypatch):
+    session = _FakeAutoCommitSession(
+        _FakeSessionMeta(
+            auto_commit_policy={
+                "pending_token_threshold": 100,
+                "message_count_threshold": 500,
+                "keep_recent_count": 3,
+                "min_commit_interval_seconds": 0,
+            },
+            pending_tokens=101,
+            message_count=5,
+        )
+    )
+    service = _session_service_for_auto_commit_test(monkeypatch, session)
+
+    await service.run_auto_commit("session_a", _auto_commit_ctx(), reason="message_write")
+
+    # message_write reserves the configured keep_recent tail and persists it.
+    assert session.commit_calls == [(3, True)]
+    assert session.save_calls == 1
+    assert session.meta.last_auto_commit_at != ""
 
 
 @pytest.mark.asyncio
@@ -256,7 +285,6 @@ async def test_run_auto_commit_rechecks_idle_timeout_before_committing(monkeypat
     session = _FakeAutoCommitSession(
         _FakeSessionMeta(
             auto_commit_policy={
-                "enabled": True,
                 "idle_timeout_seconds": 300,
                 "keep_recent_count": 0,
             },
@@ -271,6 +299,28 @@ async def test_run_auto_commit_rechecks_idle_timeout_before_committing(monkeypat
 
     assert session.commit_calls == []
     assert session.save_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_run_auto_commit_idle_commits_full_backlog_without_persisting_keep_recent(monkeypatch):
+    session = _FakeAutoCommitSession(
+        _FakeSessionMeta(
+            auto_commit_policy={
+                "idle_timeout_seconds": 60,
+                "keep_recent_count": 5,
+            },
+            pending_tokens=10,
+            message_count=8,
+            last_message_at=(datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),
+        )
+    )
+    service = _session_service_for_auto_commit_test(monkeypatch, session)
+
+    await service.run_auto_commit("session_a", _auto_commit_ctx(), reason="idle_timeout")
+
+    # Idle commits the full backlog and must not overwrite the stored keep pref.
+    assert session.commit_calls == [(0, False)]
+    assert session.save_calls == 1
 
 
 @pytest.mark.asyncio
@@ -304,18 +354,18 @@ async def test_scheduler_scans_agfs_paths_directly_without_account_user_indices(
         "/local/acct_a/user/user_b/sessions/session_due/.meta.json",
         "/local/acct_a/user/user_b/sessions/session_skip/.meta.json",
     ]
+    # session_skip has no uncommitted content and is filtered at scan time.
     assert service.calls == [
         ("session_due", "idle_timeout", "user_b"),
-        ("session_skip", "idle_timeout", "user_b"),
     ]
 
 
 @pytest.mark.asyncio
-async def test_scheduler_defers_uncommitted_content_check_to_session_service_for_stale_meta():
+async def test_scheduler_skips_sessions_without_uncommitted_content():
     service = _FakeSessionService(
-        [_session_entry("session_with_stale_meta")],
+        [_session_entry("session_empty")],
         {
-            "/local/acct_a/user/user_b/sessions/session_with_stale_meta/.meta.json": _meta(
+            "/local/acct_a/user/user_b/sessions/session_empty/.meta.json": _meta(
                 pending_tokens=0,
                 message_count=0,
             ),
@@ -329,7 +379,31 @@ async def test_scheduler_defers_uncommitted_content_check_to_session_service_for
 
     await scheduler._scan_once()
 
-    assert service.calls == [("session_with_stale_meta", "idle_timeout", "user_b")]
+    assert service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_scheduler_skips_sessions_still_within_keep_recent_window():
+    service = _FakeSessionService(
+        [_session_entry("session_within_keep")],
+        {
+            "/local/acct_a/user/user_b/sessions/session_within_keep/.meta.json": _meta(
+                pending_tokens=0,
+                message_count=2,
+                keep_recent_count=2,
+            ),
+        },
+    )
+    scheduler = SessionAutoCommitScheduler(
+        service,
+        SimpleNamespace(idle_enabled=True, check_interval_seconds=60.0),
+        check_interval=60.0,
+    )
+
+    await scheduler._scan_once()
+
+    # All live messages are inside the keep window: nothing to commit.
+    assert service.calls == []
 
 
 @pytest.mark.asyncio

@@ -19,7 +19,7 @@ from openviking.message import Message, Part
 from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext, Role
-from openviking.service.session_auto_commit import should_enable_auto_commit
+from openviking.session.auto_commit_policy import AutoCommitPolicy
 from openviking.session.memory.constants import EXECUTION_MEMORY_TYPES
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.session.tool_result_store import (
@@ -278,6 +278,7 @@ class SessionMeta:
     last_message_at: str = ""
     auto_commit_last_error: str = ""
     auto_commit_last_error_at: str = ""
+    last_auto_commit_at: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         data = {
@@ -301,6 +302,7 @@ class SessionMeta:
             "last_message_at": self.last_message_at,
             "auto_commit_last_error": self.auto_commit_last_error,
             "auto_commit_last_error_at": self.auto_commit_last_error_at,
+            "last_auto_commit_at": self.last_auto_commit_at,
         }
         if self.total_message_count is not None:
             data["total_message_count"] = self.total_message_count
@@ -348,6 +350,7 @@ class SessionMeta:
             last_message_at=data.get("last_message_at", ""),
             auto_commit_last_error=data.get("auto_commit_last_error", ""),
             auto_commit_last_error_at=data.get("auto_commit_last_error_at", ""),
+            last_auto_commit_at=data.get("last_auto_commit_at", ""),
         )
 
 
@@ -468,6 +471,14 @@ class Session:
                 int(self._meta.total_message_count or 0),
                 self._meta.commit_count + len(self._messages),
             )
+        # Auto-commit policy applies to every session as a baseline config, so
+        # backfill legacy sessions with the recommended defaults. The policy's
+        # keep_recent_count is a commit-time reservation only; it is applied when
+        # an automatic commit fires and is intentionally NOT mirrored onto
+        # meta.keep_recent_count (which tracks the plugin's pending-token window).
+        self._meta.auto_commit_policy = AutoCommitPolicy.from_dict(
+            self._meta.auto_commit_policy
+        ).to_dict()
         # WM v2: always rebuild pending_tokens from current messages so the
         # counter stays consistent across restarts and is also backfilled for
         # legacy sessions whose .meta.json predates these fields. O(n) once,
@@ -928,7 +939,7 @@ class Session:
 
         self._append_messages_to_jsonl_batch(
             messages,
-            use_session_lock=should_enable_auto_commit(self._meta.auto_commit_policy),
+            use_session_lock=True,
         )
 
         self._meta.message_count = len(self._messages)
@@ -1085,6 +1096,7 @@ class Session:
         keep_recent_count: int = 0,
         *,
         memory_policy: Optional[Dict[str, Any]] = None,
+        persist_keep_recent_count: bool = True,
     ) -> Dict[str, Any]:
         """Archive immediately and enqueue restart-safe Phase 2 processing.
 
@@ -1100,6 +1112,10 @@ class Session:
                 behavior of archiving everything. The plugin's afterTurn path
                 typically passes its configured value (default 10); the compact
                 path passes ``0``.
+            persist_keep_recent_count: When ``True`` (default), ``keep_recent_count``
+                is remembered in meta for subsequent add_message() accounting. The
+                idle full-commit path passes ``False`` with ``keep_recent_count=0``
+                so a one-off full archive does not wipe the stored keep preference.
 
         Returns a task_id for tracking Phase 2 progress.
         """
@@ -1110,6 +1126,11 @@ class Session:
 
         trace_id = tracer.get_trace_id()
         keep_recent_count = max(0, int(keep_recent_count or 0))
+        stored_keep_recent_count = (
+            keep_recent_count
+            if persist_keep_recent_count
+            else max(0, int(self._meta.keep_recent_count or 0))
+        )
         effective_policy = MemoryPolicy.from_dict(
             memory_policy if memory_policy is not None else self._meta.memory_policy
         )
@@ -1125,7 +1146,7 @@ class Session:
         # unnecessary filesystem lock acquisition).
         if not self._messages:
             self._meta.pending_tokens = 0
-            self._meta.keep_recent_count = keep_recent_count
+            self._meta.keep_recent_count = stored_keep_recent_count
             await self._save_meta()
             get_current_telemetry().set("memory.extracted", 0)
             return {
@@ -1149,7 +1170,7 @@ class Session:
             # callers both passed the pre-check but only the first should archive.
             if not self._messages:
                 self._meta.pending_tokens = 0
-                self._meta.keep_recent_count = keep_recent_count
+                self._meta.keep_recent_count = stored_keep_recent_count
                 await self._save_meta()
                 get_current_telemetry().set("memory.extracted", 0)
                 return {
@@ -1169,7 +1190,7 @@ class Session:
             total = len(self._messages)
             if keep_recent_count > 0 and total <= keep_recent_count:
                 self._meta.pending_tokens = 0
-                self._meta.keep_recent_count = keep_recent_count
+                self._meta.keep_recent_count = stored_keep_recent_count
                 self._meta.message_count = total
                 await self._save_meta()
                 get_current_telemetry().set("memory.extracted", 0)
@@ -1218,7 +1239,7 @@ class Session:
         # because anything that was pending has been archived.
         self._meta.message_count = len(self._messages)
         self._meta.pending_tokens = 0
-        self._meta.keep_recent_count = keep_recent_count
+        self._meta.keep_recent_count = stored_keep_recent_count
         self._meta.commit_count = max(
             self._meta.commit_count,
             self._compression.compression_index,

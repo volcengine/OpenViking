@@ -1127,7 +1127,7 @@ Legacy compatibility example:
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `idle_enabled` | bool | Enables the server-side idle-timeout auto-commit scheduler. When disabled, the idle scheduler is not started. Token-threshold immediate triggering still works | `false` |
+| `idle_enabled` | bool | Enables the server-side idle-timeout auto-commit scheduler. When disabled, the idle scheduler is not started. Token- and message-count immediate triggering still works | `false` |
 | `check_interval_seconds` | float | Poll interval for the idle scheduler in seconds. Must be greater than `0` | `60.0` |
 | `scan_batch_size` | int | Maximum number of session meta files read concurrently in each idle scan batch. Must be greater than `0` | `16` |
 | `scan_batch_pause_seconds` | float | Optional pause between idle scan batches, in seconds. Use this to reduce storage pressure during large scans | `0.0` |
@@ -1135,13 +1135,27 @@ Legacy compatibility example:
 Notes:
 
 - `server.session_auto_commit` is a server-wide control surface, not a per-session business policy.
-- Per-session auto-commit behavior is configured through `auto_commit_policy` on message write APIs and persisted into session metadata.
+- Per-session auto-commit behavior is configured through the session-level `auto_commit_policy` (see the table below). It is set when creating a session (`POST /api/v1/sessions` with a `config` object), edited later via `PATCH /api/v1/sessions/{session_id}`, and viewed via `GET /api/v1/sessions/{session_id}`. The policy applies to every session, including existing ones, through defaults; there is no per-session on/off switch.
 - When `idle_enabled=false`:
   - `SessionAutoCommitScheduler` is not started
 - When `idle_enabled=true`:
   - `SessionAutoCommitScheduler` wakes up periodically and scans session `.meta.json` files under AGFS `/local/{account}/user/{user}/sessions`
   - It does not perform a dedicated startup recovery sweep; idle detection happens only on periodic scans
-- Token-threshold auto commit does not depend on the scheduler and is unaffected by this switch.
+- Token- and message-count auto commit run inline after message writes, do not depend on the scheduler, and are unaffected by this switch.
+
+###### Per-session Auto Commit Policy
+
+Each session carries an `auto_commit_policy`. Any field you omit falls back to the recommended default below, which also applies to every existing session. Values are clamped into `[0, max]`, and unknown keys are rejected with `InvalidArgumentError`. See [Sessions API](../api/05-sessions.md#create_session) for how to set and view it.
+
+| Field | Type | Default | Max | Description |
+|-------|------|---------|-----|-------------|
+| `pending_token_threshold` | int | 1000 | 50000 | When uncommitted pending tokens exceed this value (strictly greater-than), an auto commit is triggered after a message write. |
+| `message_count_threshold` | int | 50 | 500 | When the uncommitted live message count exceeds this value (strictly greater-than), an auto commit is triggered after a message write. |
+| `idle_timeout_seconds` | int | 86400 | 604800 | After this many idle seconds, a session with uncommitted content becomes eligible for the server-side idle scheduler. Idle-timeout commits archive the full backlog and ignore `keep_recent_count`. |
+| `keep_recent_count` | int | 2 | 500 | Number of recent live messages to keep (not archived) on a threshold-triggered auto commit. Idle-timeout commits ignore this and commit everything. |
+| `min_commit_interval_seconds` | int | 60 | 604800 | Minimum seconds between two automatic commits (throttle). |
+
+Code entry: `openviking/session/auto_commit_policy.py:AutoCommitPolicy`.
 
 
 ##### S3 Backend Configuration

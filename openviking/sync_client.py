@@ -56,18 +56,22 @@ class SyncOpenViking:
         session_id: Optional[str] = None,
         telemetry: TelemetryRequest = False,
         memory_policy: Optional[Dict[str, Any]] = None,
+        config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a new session.
 
         Args:
             session_id: Optional session ID. If provided, creates a session with the given ID.
                        If None, creates a new session with auto-generated ID.
+            memory_policy: Optional default extraction policy for future commits.
+            config: Optional session config, e.g. ``{"auto_commit_policy": {...}}``.
         """
         return run_async(
             self._async_client.create_session(
                 session_id,
                 telemetry=telemetry,
                 memory_policy=memory_policy,
+                config=config,
             )
         )
 
@@ -78,6 +82,10 @@ class SyncOpenViking:
     def get_session(self, session_id: str, *, auto_create: bool = False) -> Dict[str, Any]:
         """Get session details."""
         return run_async(self._async_client.get_session(session_id, auto_create=auto_create))
+
+    def update_session(self, session_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Update a session's config (partial merge)."""
+        return run_async(self._async_client.update_session(session_id, config=config))
 
     def get_session_context(self, session_id: str, token_budget: int = 128_000) -> Dict[str, Any]:
         """Get assembled session context."""
@@ -102,8 +110,6 @@ class SyncOpenViking:
         created_at: str | None = None,
         peer_id: str | None = None,
         telemetry: TelemetryRequest = False,
-        *,
-        auto_commit_policy: dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -125,7 +131,6 @@ class SyncOpenViking:
                 parts=parts,
                 created_at=created_at,
                 peer_id=peer_id,
-                auto_commit_policy=auto_commit_policy,
                 telemetry=telemetry,
             )
         )
@@ -135,15 +140,12 @@ class SyncOpenViking:
         session_id: str,
         messages: list[dict],
         telemetry: TelemetryRequest = False,
-        *,
-        auto_commit_policy: dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         """Add multiple messages to a session in a single request."""
         return run_async(
             self._async_client.batch_add_messages(
                 session_id,
                 messages,
-                auto_commit_policy=auto_commit_policy,
                 telemetry=telemetry,
             )
         )

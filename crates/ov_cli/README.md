@@ -154,9 +154,11 @@ Run `ov --help` and `ov <command> --help` for the exact command surface of your 
 - `session new` - Create a session.
 - `session list` - List sessions.
 - `session get` - Get session details.
+- `session delete` - Delete a session.
 - `session get-session-context` - Get merged session context.
 - `session add-message` / `session add-messages` - Add messages to a session.
 - `session commit` - Archive messages and extract memories.
+- `session auto-commit-policy set` - Update a session's auto commit policy.
 - `add-memory` - Create a session, add messages, and commit in one shot. Experimental.
 
 ### Interactive
@@ -270,8 +272,10 @@ ov glob "**/*.md" --uri viking://resources
 # Session workflow
 SESSION=$(ov -o json session new | jq -r '.result.session_id')
 ov session add-message --session-id "$SESSION" --role user --content "Hello"
-ov session add-message --session-id "$SESSION" --role user --content "remember this" \
-  --auto-commit-enabled true --token-threshold 512 --idle-timeout-seconds 60 --keep-recent-count 2
+ov session add-message --session-id "$SESSION" --role user --content "remember this"
+# Tune the session auto commit policy (partial merge)
+ov session auto-commit-policy set "$SESSION" \
+  --pending-tokens 8000 --message-count 40 --idle-timeout 600 --keep-recent 10 --min-interval 60
 ov session commit --session-id "$SESSION"
 
 # Watch task management
