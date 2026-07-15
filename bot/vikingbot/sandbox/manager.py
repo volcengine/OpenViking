@@ -1,6 +1,7 @@
 """Sandbox manager for creating and managing sandbox instances."""
 
 import asyncio
+import contextlib
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -13,7 +14,18 @@ from vikingbot.config.schema import SandboxConfig, SessionKey, Config
 
 
 class SandboxManager:
-    """Manager for creating and managing sandbox instances."""
+    """Manager for creating and managing sandbox instances.
+
+    Thread-safety model
+    -------------------
+    All public methods are async and must be called from the same event-loop
+    thread (asyncio single-threaded).  ``_creation_lock`` serialises creation
+    for the same workspace key so that concurrent ``get_sandbox()`` callers
+    never leak a duplicate backend.  The lock is **not** held during the
+    cached-hit fast path, and it is **never** acquired by ``cleanup_session``
+    or ``cleanup_all``, so there is no deadlock risk with eviction / timer
+    tasks that tear down idle sandboxes.
+    """
 
     COPY_BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "IDENTITY.md"]
 
@@ -29,10 +41,22 @@ class SandboxManager:
         self._backend_cls = backend_cls
 
     async def get_sandbox(self, session_key: SessionKey) -> SandboxBackend:
+        """Return an existing sandbox for *session_key*, creating one if necessary.
+
+        Creation is serialised per-manager via ``_creation_lock`` so that
+        concurrent callers for the same workspace cannot race and leak an
+        orphaned backend.
+        """
         return await self._get_or_create_sandbox(session_key)
 
     async def _get_or_create_sandbox(self, session_key: SessionKey) -> SandboxBackend:
-        """Get or create session-specific sandbox."""
+        """Get or create session-specific sandbox.
+
+        Uses a double-checked locking pattern: if the workspace is already
+        cached the fast path returns immediately without touching the lock.
+        Inside the lock the cache is re-checked so only the first caller
+        performs the (potentially expensive) creation.
+        """
         workspace_id = self.to_workspace_id(session_key)
         if workspace_id in self._sandboxes:
             return self._sandboxes[workspace_id]
@@ -42,14 +66,25 @@ class SandboxManager:
         return self._sandboxes[workspace_id]
 
     async def _create_sandbox(self, workspace_id: str) -> SandboxBackend:
-        """Create new sandbox instance."""
+        """Create a new sandbox backend instance and start it.
+
+        If the creating task is cancelled during startup the backend is
+        stopped (best-effort) before the cancellation propagates, so the
+        next creation attempt starts from a clean state.
+        """
         workspace = self.workspace / workspace_id
         instance = self._backend_cls(self.config.sandbox, workspace_id, workspace)
         try:
             await instance.start()
-        except Exception as e:
+        except asyncio.CancelledError:
+            # Best-effort stop so a partially-started backend (e.g. a Docker
+            # container that was created but not fully initialised) is torn
+            # down before the cancellation propagates to the caller.
+            with contextlib.suppress(Exception):
+                await instance.stop()
+            raise
+        except Exception:
             import traceback
-
             traceback.print_exc()
         if not workspace.exists():
             await self._copy_bootstrap_files(workspace)
@@ -92,7 +127,12 @@ class SandboxManager:
                 shutil.copytree(item, dst_skill, dirs_exist_ok=True)
 
     async def cleanup_session(self, session_key: SessionKey) -> None:
-        """Clean up sandbox for a session."""
+        """Clean up sandbox for a session.
+
+        Does **not** acquire ``_creation_lock`` so it cannot deadlock with
+        ``get_sandbox``.  The lock is only needed for creation serialisation;
+        eviction / teardown is safe to interleave.
+        """
         workspace_id = self.to_workspace_id(session_key)
         if workspace_id in self._sandboxes:
             await self._sandboxes[workspace_id].stop()
