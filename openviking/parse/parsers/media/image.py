@@ -20,7 +20,12 @@ from PIL import Image
 from openviking.parse.base import NodeType, ParseResult, ResourceNode
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.media.constants import IMAGE_EXTENSIONS
+from openviking.parse.parsers.media.large_image_processor import (
+    LargeImageResult,
+    process_large_image,
+)
 from openviking.parse.parsers.media.naming import resolve_media_names
+from openviking.parse.parsers.media.utils import _convert_svg_to_png
 from openviking.prompts import render_prompt
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.utils.config import get_openviking_config
@@ -77,7 +82,12 @@ class ImageParser(BaseParser):
 
     async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
         """
-        Parse image file - only copy original file and extract basic metadata, no content understanding.
+        Parse image file:
+        - For large images (>10MB or any dimension >4096px):
+          - Create low-res preview (<=1MB) as the "original"
+          - Split into tiles (<=1MB, <=1024px each)
+          - Generate grid overlay image
+        - For small images: just save as-is with metadata
 
         Args:
             source: Image file path
@@ -87,8 +97,8 @@ class ImageParser(BaseParser):
             ParseResult with image content
 
         Raises:
-            FileNotFoundError: If source file does not exist
-            IOError: If image processing fails
+            FileNotFoundError: If source file doesn't exist
+            ValueError: If image processing fails
         """
         # Convert to Path object
         file_path = Path(source) if isinstance(source, str) else source
@@ -98,35 +108,41 @@ class ImageParser(BaseParser):
         viking_fs = get_viking_fs()
         temp_uri = viking_fs.create_temp_uri()
 
-        # Phase 1: Generate temporary files
-        image_bytes = file_path.read_bytes()
-        ext = file_path.suffix
+        # Load image (SVG is converted to PNG first since PIL doesn't support it)
+        try:
+            file_bytes = file_path.read_bytes()
+            if file_path.suffix.lower() == ".svg" or file_bytes[:4] == b"<svg" or (file_bytes[:5] == b"<?xml" and b"<svg" in file_bytes[:100]):
+                png_bytes = _convert_svg_to_png(file_bytes)
+                if png_bytes is None:
+                    raise ValueError(
+                        f"SVG files require cairosvg. Install it: pip install cairosvg"
+                    )
+                img = Image.open(io.BytesIO(png_bytes))
+                img.verify()
+                img.close()
+                img = Image.open(io.BytesIO(png_bytes))
+            else:
+                img = Image.open(file_path)
+                img.verify()  # Verify that it's a valid image
+                img.close()  # Close and reopen to reset after verify()
+                img = Image.open(file_path)
+            width, height = img.size
+            format_str = img.format or file_path.suffix[1:].upper() if file_path.suffix else "JPEG"
+        except Exception as e:
+            raise ValueError(f"Invalid image file: {file_path}. Error: {e}") from e
 
-        # Resolve the resource name from the caller's resource_name / source_name
-        # (falling back to the temp file name) so the filename, URI and title
-        # reflect the real upload, not the internal temp id — see resolve_media_names.
-        display_stem, stem, original_filename = resolve_media_names(file_path, ext, **kwargs)
-        # Root directory name: filename stem + _ + extension (without dot)
-        ext_no_dot = ext[1:] if ext else ""
+        # Resolve names
+        display_stem, stem, original_filename = resolve_media_names(file_path, file_path.suffix, **kwargs)
+        ext_no_dot = file_path.suffix[1:] if file_path.suffix else "jpg"
         root_dir_name = VikingURI.sanitize_segment(f"{stem}_{ext_no_dot}")
         root_dir_uri = f"{temp_uri}/{root_dir_name}"
         await viking_fs.mkdir(root_dir_uri, exist_ok=True)
 
-        # 1.1 Save original image with original filename (sanitized)
-        await viking_fs.write_file_bytes(f"{root_dir_uri}/{original_filename}", image_bytes)
+        # Process the image (check if large)
+        large_image_result = process_large_image(file_path, img, filename_prefix=stem, config=self.config)
+        img.close()
 
-        # 1.2 Validate and extract image metadata
-        try:
-            img = Image.open(file_path)
-            img.verify()  # Verify that it's a valid image
-            img.close()  # Close and reopen to reset after verify()
-            img = Image.open(file_path)
-            width, height = img.size
-            format_str = img.format or ext[1:].upper()
-        except Exception as e:
-            raise ValueError(f"Invalid image file: {file_path}. Error: {e}") from e
-
-        # Create ResourceNode - metadata only, no content understanding yet
+        # Create root node with metadata
         root_node = ResourceNode(
             type=NodeType.ROOT,
             title=display_stem,
@@ -142,8 +158,56 @@ class ImageParser(BaseParser):
                 "source_title": display_stem,
                 "semantic_name": display_stem,
                 "original_filename": original_filename,
+                "is_large_image": large_image_result.needs_processing,
             },
         )
+
+        if large_image_result.needs_processing:
+            # Large image processing mode: save preview, grid, tiles
+            logger.info(f"Processing large image {original_filename}: {width}x{height}")
+
+            # Save low-res preview (original is too large to store)
+            await viking_fs.write_file_bytes(
+                f"{root_dir_uri}/{large_image_result.preview_filename}",
+                large_image_result.preview_bytes
+            )
+            root_node.meta["preview_filename"] = large_image_result.preview_filename
+
+            # Save grid overlay
+            if large_image_result.grid_overlay_bytes:
+                grid_filename = large_image_result.grid_overlay_filename or f"{stem}_grid.jpg"
+                await viking_fs.write_file_bytes(
+                    f"{root_dir_uri}/{grid_filename}",
+                    large_image_result.grid_overlay_bytes
+                )
+                root_node.meta["grid_overlay"] = grid_filename
+
+            # Create tiles directory
+            if large_image_result.tiles:
+                tiles_dir_name = "tiles"
+                tiles_dir_uri = f"{root_dir_uri}/{tiles_dir_name}"
+                await viking_fs.mkdir(tiles_dir_uri, exist_ok=True)
+
+                # Save all tiles
+                for tile in large_image_result.tiles:
+                    if tile.bytes_data:
+                        await viking_fs.write_file_bytes(
+                            f"{tiles_dir_uri}/{tile.filename}",
+                            tile.bytes_data
+                        )
+
+                # Update metadata
+                root_node.meta["tiles_dir"] = tiles_dir_name
+                root_node.meta["num_tiles"] = len(large_image_result.tiles)
+                root_node.meta["grid_rows"] = large_image_result.total_rows
+                root_node.meta["grid_cols"] = large_image_result.total_cols
+                root_node.meta["original_width"] = width
+                root_node.meta["original_height"] = height
+
+        else:
+            # Small image: save original as-is
+            image_bytes = file_path.read_bytes()
+            await viking_fs.write_file_bytes(f"{root_dir_uri}/{original_filename}", image_bytes)
 
         # Phase 3: Build directory structure (handled by TreeBuilder)
         return ParseResult(
@@ -152,7 +216,11 @@ class ImageParser(BaseParser):
             temp_dir_path=temp_uri,
             source_format="image",
             parser_name="ImageParser",
-            meta={"content_type": "image", "format": format_str.lower()},
+            meta={
+                "content_type": "image",
+                "format": format_str.lower(),
+                "is_large_image": large_image_result.needs_processing,
+            },
         )
 
     async def _vlm_describe(self, image_bytes: bytes, model: Optional[str]) -> str:

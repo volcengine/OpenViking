@@ -227,7 +227,12 @@
             "enable_vlm": true,
             "ocr_lang": "eng",
             "vlm_model": "gpt-4-vision",
-            "max_dimension": 2048,
+            "preview_max_dimension": 2048,
+            "max_file_size_mb": 10.0,
+            "max_tile_size_mb": 1.0,
+            "max_tile_dimension_px": 2048,
+            "tile_overlap_px": 2,
+            "large_image_threshold_dimension": 4096
         },
         "audio": {
             "enable_transcription": true,
