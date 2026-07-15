@@ -1,0 +1,34 @@
+openviking/storage/transaction/__init__.py
+  s_c86b7b6e74d699::t_3c63ba29f12df5 6
+openviking/storage/transaction/lock_manager.py
+  s_c86b7b6e74d699::t_2e3b9821fa2e5b 3,9,71
+openviking_cli/utils/config/transaction_config.py
+  s_c86b7b6e74d699::t_6b9f1f025538c7 32,36-37
+tests/session/train/test_policy_optimization_real_llm_e2e.py
+  s_c86b7b6e74d699::t_24d95ee4b212d9 607,729
+tests/session/train/test_train_framework.py
+  s_c86b7b6e74d699::t_1e17932ecb94c8 43
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "fa794bf081bdde0c006cc77e97feb25d28cf88b2",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_c86b7b6e74d699": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6083-8eb1-7b22-8ff9-942500662834",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

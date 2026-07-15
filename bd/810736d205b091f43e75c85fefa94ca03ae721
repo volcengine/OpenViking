@@ -1,0 +1,29 @@
+openviking/service/resource_service.py
+  h_76fa89855b2583 668-670,1165-1167,1205-1214,1225-1226,1250-1251,1258-1267
+  s_8e067e6341973d::t_b3701d8961ee41 1215
+tests/service/test_resource_service_connector.py
+  s_8e067e6341973d::t_bd8905030bb6b6 226-293
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "bd810736d205b091f43e75c85fefa94ca03ae721",
+  "prompts": {},
+  "humans": {
+    "h_76fa89855b2583": {
+      "author": "ziheng.li <ziheng.li@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_8e067e6341973d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f649c-c08a-7182-9ef0-e95731dca739",
+        "model": "unknown"
+      },
+      "human_author": "ziheng.li <ziheng.li@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
