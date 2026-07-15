@@ -1,0 +1,21 @@
+tests/session/memory/test_resource_overview_metadata.py
+  s_502f174854034d::t_d395cc0d3842c6 1-37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "261985649f291155208545e42674a11eb39306cd",
+  "prompts": {},
+  "sessions": {
+    "s_502f174854034d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6483-d77e-7ee0-be66-bd7f11806837",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
