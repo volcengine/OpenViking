@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-from pydantic import BaseModel, Field
+from typing import Self
+
+from pydantic import BaseModel, Field, model_validator
 
 
 class TransactionConfig(BaseModel):
@@ -29,6 +31,24 @@ class TransactionConfig(BaseModel):
         ),
     )
 
+    lock_poll_interval: float = Field(
+        default=0.2,
+        gt=0.0,
+        description=(
+            "Initial interval (seconds) between path-lock probes while waiting. "
+            "The interval backs off exponentially up to lock_poll_max_interval."
+        ),
+    )
+
+    lock_poll_max_interval: float = Field(
+        default=1.0,
+        gt=0.0,
+        description=(
+            "Maximum interval (seconds) between path-lock probes while waiting. "
+            "Increase this value to reduce storage and executor churn under contention."
+        ),
+    )
+
     redo_recovery_enabled: bool = Field(
         default=True,
         description=(
@@ -36,5 +56,11 @@ class TransactionConfig(BaseModel):
             "When false, pending redo markers are not written and startup redo recovery is skipped."
         ),
     )
+
+    @model_validator(mode="after")
+    def validate_lock_poll_intervals(self) -> Self:
+        if self.lock_poll_max_interval < self.lock_poll_interval:
+            raise ValueError("lock_poll_max_interval must be >= lock_poll_interval")
+        return self
 
     model_config = {"extra": "forbid"}

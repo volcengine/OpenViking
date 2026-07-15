@@ -261,6 +261,48 @@ def test_openviking_config_transaction_redo_recovery_enabled_can_be_disabled(mon
     OpenVikingConfigSingleton.reset_instance()
 
 
+def test_openviking_config_lock_wait_defaults_and_overrides(monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    default_config = OpenVikingConfig.from_dict({})
+    assert default_config.storage.transaction.lock_poll_interval == 0.2
+    assert default_config.storage.transaction.lock_poll_max_interval == 1.0
+    assert default_config.memory.v2_lock_retry_interval_seconds == 3.0
+    assert default_config.memory.v2_lock_max_retries == 100
+
+    custom_config = OpenVikingConfig.from_dict(
+        {
+            "storage": {
+                "transaction": {
+                    "lock_poll_interval": 0.5,
+                    "lock_poll_max_interval": 2.0,
+                }
+            }
+        }
+    )
+    assert custom_config.storage.transaction.lock_poll_interval == 0.5
+    assert custom_config.storage.transaction.lock_poll_max_interval == 2.0
+
+    with pytest.raises(ValueError, match="lock_poll_max_interval"):
+        OpenVikingConfig.from_dict(
+            {
+                "storage": {
+                    "transaction": {
+                        "lock_poll_interval": 2.0,
+                        "lock_poll_max_interval": 1.0,
+                    }
+                }
+            }
+        )
+
+    OpenVikingConfigSingleton.reset_instance()
+
+
 @pytest.mark.parametrize("field_name", ["hotness_alpha", "score_propagation_alpha"])
 def test_openviking_config_retrieval_alpha_validates_range(monkeypatch, field_name):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")

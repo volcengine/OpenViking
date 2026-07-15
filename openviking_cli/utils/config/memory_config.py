@@ -21,7 +21,7 @@ class MemoryConfig(BaseModel):
         description="Custom memory templates directory. If set, templates from this directory will be loaded in addition to built-in templates",
     )
     v2_lock_retry_interval_seconds: float = Field(
-        default=0.2,
+        default=3.0,
         ge=0.0,
         description=(
             "Retry interval (seconds) when SessionCompressorV2 fails to acquire memory subtree "
@@ -29,11 +29,11 @@ class MemoryConfig(BaseModel):
         ),
     )
     v2_lock_max_retries: int = Field(
-        default=0,
+        default=100,
         ge=0,
         description=(
-            "Maximum retries for SessionCompressorV2 memory lock acquisition. "
-            "0 means unlimited retries."
+            "Maximum SessionCompressorV2 memory lock acquisition attempts after each "
+            "bounded path-lock wait. 0 opts into unlimited retries."
         ),
     )
     experimental_memory_switch: bool = Field(

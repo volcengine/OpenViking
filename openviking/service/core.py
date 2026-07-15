@@ -180,6 +180,8 @@ class OpenVikingService:
             agfs=self._agfs_client,
             lock_timeout=tx_cfg.lock_timeout,
             lock_expire=tx_cfg.lock_expire,
+            lock_poll_interval=tx_cfg.lock_poll_interval,
+            lock_poll_max_interval=tx_cfg.lock_poll_max_interval,
             redo_recovery_enabled=tx_cfg.redo_recovery_enabled,
         )
         set_task_tracker(config.build_task_tracker(self._agfs_client))

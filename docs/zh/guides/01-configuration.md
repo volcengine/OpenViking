@@ -1333,6 +1333,8 @@ openviking-server --config /path/to/ov.conf
 | `extraction_enabled` | session commit 时是否执行长期记忆抽取。 | `true` |
 | `session_skill_extraction_enabled` | session commit 时是否同时抽取可复用 skill 到当前用户的 skill 目录。 | `false` |
 | `link_enabled` | 记忆抽取是否写入和解析 memory links。 | `false` |
+| `v2_lock_retry_interval_seconds` | 两次有界 memory 锁获取之间的等待时间（秒）。 | `3.0` |
+| `v2_lock_max_retries` | memory 锁获取的最大有界尝试次数；`0` 表示显式启用无限重试。 | `100` |
 
 ### ovcli.conf
 
@@ -1547,7 +1549,9 @@ openviking add-resource ./docs --exclude "*.tmp"
   "storage": {
     "transaction": {
       "lock_timeout": 5.0,
-      "lock_expire": 300.0
+      "lock_expire": 300.0,
+      "lock_poll_interval": 0.2,
+      "lock_poll_max_interval": 1.0
     }
   }
 }
@@ -1557,6 +1561,8 @@ openviking add-resource ./docs --exclude "*.tmp"
 |------|------|------|--------|
 | `lock_timeout` | float | 获取路径锁的等待超时（秒）。`0` = 立即失败（默认）；`> 0` = 最多等待此时间后抛出 `LockAcquisitionError` | `0.0` |
 | `lock_expire` | float | 锁失活阈值（秒）。超过此时间未被 refresh 的锁会被视为陈旧锁并回收 | `300.0` |
+| `lock_poll_interval` | float | 路径锁轮询的初始间隔；发生竞争后从该值开始指数退避 | `0.2` |
+| `lock_poll_max_interval` | float | 路径锁轮询的最大间隔；必须大于等于 `lock_poll_interval` | `1.0` |
 
 路径锁机制的详细说明见 [路径锁与崩溃恢复](../concepts/09-transaction.md)。
 
