@@ -318,6 +318,824 @@ async def test_agent_loop_makes_final_no_tool_call_when_iteration_limit_reached(
 
 
 @pytest.mark.asyncio
+async def test_agent_loop_returns_content_after_memory_commit_side_effect_only(
+    temp_dir: Path, monkeypatch
+):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    class _OVConfig:
+        exp_write_tools = []
+
+    class _LoadedConfig:
+        ov_server = _OVConfig()
+
+    monkeypatch.setattr(loop_module, "load_config", lambda: _LoadedConfig())
+
+    useful_answer = "### Implementation Location\nThe answer is already complete."
+
+    class _MemoryCommitProvider(LLMProvider):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        async def chat(self, messages, tools=None, **kwargs):
+            self.calls.append(
+                {
+                    "messages": [dict(message) for message in messages],
+                    "tools": tools,
+                }
+            )
+            if len(self.calls) > 1:
+                assert tools == []
+                return LLMResponse(
+                    content=useful_answer,
+                    usage={"prompt_tokens": 6, "completion_tokens": 4, "total_tokens": 10},
+                )
+            return LLMResponse(
+                content=useful_answer,
+                tool_calls=[
+                    ToolCallRequest(
+                        id="call-memory-1",
+                        name="openviking_memory_commit",
+                        arguments={
+                            "messages": [
+                                {"role": "user", "content": "repo-QA question"},
+                                {"role": "assistant", "content": useful_answer},
+                            ]
+                        },
+                        tokens=5,
+                    )
+                ],
+                usage={"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14},
+            )
+
+        def get_default_model(self) -> str:
+            return "fake-model"
+
+    class _ToolRegistry:
+        def __init__(self):
+            self.execute_calls = []
+
+        def get_definitions(self, **kwargs):
+            return [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "openviking_memory_commit",
+                        "description": "Commit memory",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ]
+
+        async def execute(self, tool_name, arguments, **kwargs):
+            self.execute_calls.append((tool_name, arguments, kwargs))
+            return '{"status": "success", "task_status": "running"}'
+
+    provider = _MemoryCommitProvider()
+    tools = _ToolRegistry()
+    bus = MessageBus()
+    config = Config(storage_workspace=str(temp_dir))
+    loop = AgentLoop(
+        bus=bus,
+        provider=provider,
+        workspace=temp_dir / "workspace",
+        config=config,
+    )
+    loop.tools = tools
+
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="memory-side-effect")
+    final_content, _reasoning, tools_used, token_usage, iteration = await loop._run_agent_loop(
+        messages=[{"role": "user", "content": "repo-QA question"}],
+        session_key=session_key,
+        sender_id="user-1",
+        publish_events=False,
+    )
+
+    assert final_content == useful_answer
+    assert iteration == 2
+    assert len(provider.calls) == 2
+    assert provider.calls[1]["messages"][-1]["content"].startswith(
+        "Side-effect tools have completed."
+    )
+    assert not any(message.get("role") == "tool" for message in provider.calls[1]["messages"])
+    assert provider.calls[1]["tools"] == []
+    assert len(tools.execute_calls) == 1
+    assert tools.execute_calls[0][:2] == (
+        "openviking_memory_commit",
+        {
+            "messages": [
+                {"role": "user", "content": "repo-QA question"},
+                {"role": "assistant", "content": useful_answer},
+            ]
+        },
+    )
+    assert [tool["tool_name"] for tool in tools_used] == ["openviking_memory_commit"]
+    assert token_usage == {"prompt_tokens": 16, "completion_tokens": 8, "total_tokens": 24}
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_suppresses_memory_commit_outbound_tool_events(
+    temp_dir: Path, monkeypatch
+):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    class _OVConfig:
+        exp_write_tools = []
+
+    class _LoadedConfig:
+        ov_server = _OVConfig()
+
+    monkeypatch.setattr(loop_module, "load_config", lambda: _LoadedConfig())
+
+    class _MemoryCommitProvider(LLMProvider):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        async def chat(self, messages, tools=None, **kwargs):
+            self.calls.append([dict(message) for message in messages])
+            if len(self.calls) > 1:
+                return LLMResponse(
+                    content="final answer",
+                    usage={"prompt_tokens": 6, "completion_tokens": 3, "total_tokens": 9},
+                )
+            return LLMResponse(
+                content="draft answer",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="call-memory-1",
+                        name="openviking_memory_commit",
+                        arguments={"messages": [{"role": "user", "content": "question"}]},
+                        tokens=5,
+                    )
+                ],
+                usage={"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14},
+            )
+
+        def get_default_model(self) -> str:
+            return "fake-model"
+
+    class _ToolRegistry:
+        def get_definitions(self, **kwargs):
+            return [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "openviking_memory_commit",
+                        "description": "Commit memory",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ]
+
+        async def execute(self, tool_name, arguments, **kwargs):
+            return '{"status": "success", "task_status": "running"}'
+
+    bus = MessageBus()
+    config = Config(storage_workspace=str(temp_dir))
+    loop = AgentLoop(
+        bus=bus,
+        provider=_MemoryCommitProvider(),
+        workspace=temp_dir / "workspace",
+        config=config,
+    )
+    loop.tools = _ToolRegistry()
+
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="memory-events")
+    final_content, _reasoning, tools_used, _token_usage, _iteration = await loop._run_agent_loop(
+        messages=[{"role": "user", "content": "question"}],
+        session_key=session_key,
+        sender_id="user-1",
+        publish_events=True,
+    )
+
+    assert final_content == "final answer"
+    assert [tool["tool_name"] for tool in tools_used] == ["openviking_memory_commit"]
+
+    events = []
+    while bus.outbound_size:
+        events.append(await bus.consume_outbound())
+
+    assert not any(
+        event.event_type in {OutboundEventType.TOOL_CALL, OutboundEventType.TOOL_RESULT}
+        and "openviking_memory_commit" in event.content
+        for event in events
+    )
+    assert not any(
+        event.event_type == OutboundEventType.TOOL_RESULT
+        and "task_status" in event.content
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_requests_final_answer_after_empty_memory_commit_only(
+    temp_dir: Path, monkeypatch
+):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    class _OVConfig:
+        exp_write_tools = []
+
+    class _LoadedConfig:
+        ov_server = _OVConfig()
+
+    monkeypatch.setattr(loop_module, "load_config", lambda: _LoadedConfig())
+
+    class _EmptyMemoryCommitProvider(LLMProvider):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        async def chat(self, messages, tools=None, **kwargs):
+            self.calls.append(
+                {
+                    "messages": [dict(message) for message in messages],
+                    "tools": tools,
+                }
+            )
+            if len(self.calls) == 1:
+                return LLMResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCallRequest(
+                            id="call-memory-1",
+                            name="openviking_memory_commit",
+                            arguments={"messages": []},
+                            tokens=5,
+                        )
+                    ],
+                    usage={"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+                )
+            return LLMResponse(
+                content="final answer without memory status",
+                usage={"prompt_tokens": 8, "completion_tokens": 5, "total_tokens": 13},
+            )
+
+        def get_default_model(self) -> str:
+            return "fake-model"
+
+    class _ToolRegistry:
+        def get_definitions(self, **kwargs):
+            return [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "openviking_memory_commit",
+                        "description": "Commit memory",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ]
+
+        async def execute(self, tool_name, arguments, **kwargs):
+            return '{"status": "success", "task_status": "running"}'
+
+    provider = _EmptyMemoryCommitProvider()
+    bus = MessageBus()
+    config = Config(storage_workspace=str(temp_dir))
+    loop = AgentLoop(
+        bus=bus,
+        provider=provider,
+        workspace=temp_dir / "workspace",
+        config=config,
+    )
+    loop.tools = _ToolRegistry()
+
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="empty-memory")
+    final_content, _reasoning, tools_used, token_usage, iteration = await loop._run_agent_loop(
+        messages=[{"role": "user", "content": "question"}],
+        session_key=session_key,
+        sender_id="user-1",
+        publish_events=False,
+    )
+
+    assert final_content == "final answer without memory status"
+    assert iteration == 2
+    second_call_messages = provider.calls[1]["messages"]
+    assert second_call_messages[-1] == {
+        "role": "user",
+        "content": (
+            "Side-effect tools have completed. Do not call more tools. "
+            "Answer the user's original request directly using only the conversation above. "
+            "If your previous assistant message already answered the request, return that "
+            "answer without mentioning side-effect tool status."
+        ),
+    }
+    assert provider.calls[1]["tools"] == []
+    assert not any(message.get("role") == "tool" for message in second_call_messages)
+    assert [tool["tool_name"] for tool in tools_used] == ["openviking_memory_commit"]
+    assert token_usage == {"prompt_tokens": 18, "completion_tokens": 7, "total_tokens": 25}
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_records_failed_memory_commit_without_exposing_result(
+    temp_dir: Path, monkeypatch
+):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    class _OVConfig:
+        exp_write_tools = []
+
+    class _LoadedConfig:
+        ov_server = _OVConfig()
+
+    monkeypatch.setattr(loop_module, "load_config", lambda: _LoadedConfig())
+
+    class _FailedMemoryCommitProvider(LLMProvider):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        async def chat(self, messages, tools=None, **kwargs):
+            self.calls.append(
+                {
+                    "messages": [dict(message) for message in messages],
+                    "tools": tools,
+                }
+            )
+            if len(self.calls) > 1:
+                assert tools == []
+                return LLMResponse(
+                    content="useful answer should still be returned",
+                    usage={"prompt_tokens": 8, "completion_tokens": 5, "total_tokens": 13},
+                )
+            return LLMResponse(
+                content="Saving this answer to memory.",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="call-memory-1",
+                        name="openviking_memory_commit",
+                        arguments={"messages": []},
+                        tokens=5,
+                    )
+                ],
+                usage={"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14},
+            )
+
+        def get_default_model(self) -> str:
+            return "fake-model"
+
+    class _ToolRegistry:
+        def get_definitions(self, **kwargs):
+            return [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "openviking_memory_commit",
+                        "description": "Commit memory",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ]
+
+        async def execute(self, tool_name, arguments, **kwargs):
+            return '{"status": "failed", "error": "memory service unavailable"}'
+
+    provider = _FailedMemoryCommitProvider()
+    bus = MessageBus()
+    config = Config(storage_workspace=str(temp_dir))
+    loop = AgentLoop(
+        bus=bus,
+        provider=provider,
+        workspace=temp_dir / "workspace",
+        config=config,
+    )
+    loop.tools = _ToolRegistry()
+
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="failed-memory")
+    final_content, _reasoning, tools_used, token_usage, iteration = await loop._run_agent_loop(
+        messages=[{"role": "user", "content": "question"}],
+        session_key=session_key,
+        sender_id="user-1",
+        publish_events=False,
+    )
+
+    assert final_content == "useful answer should still be returned"
+    assert iteration == 2
+    assert len(provider.calls) == 2
+    assert provider.calls[1]["tools"] == []
+    assert "do not claim that side effect succeeded" in provider.calls[1]["messages"][-1][
+        "content"
+    ]
+    assert not any(message.get("role") == "tool" for message in provider.calls[1]["messages"])
+    assert len(tools_used) == 1
+    assert tools_used[0]["tool_name"] == "openviking_memory_commit"
+    assert tools_used[0]["args"] == '{"messages": []}'
+    assert tools_used[0]["result"] == (
+        '{"status": "failed", "error": "memory service unavailable"}'
+    )
+    assert tools_used[0]["execute_success"] is False
+    assert tools_used[0]["input_token"] == 5
+    assert token_usage == {"prompt_tokens": 18, "completion_tokens": 9, "total_tokens": 27}
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_hides_memory_commit_result_when_mixed_with_information_tool(
+    temp_dir: Path, monkeypatch
+):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    class _OVConfig:
+        exp_write_tools = []
+
+    class _LoadedConfig:
+        ov_server = _OVConfig()
+
+    monkeypatch.setattr(loop_module, "load_config", lambda: _LoadedConfig())
+
+    class _MixedToolProvider(LLMProvider):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        async def chat(self, messages, tools=None, **kwargs):
+            self.calls.append(
+                {
+                    "messages": [dict(message) for message in messages],
+                    "tools": tools,
+                }
+            )
+            if len(self.calls) == 1:
+                return LLMResponse(
+                    content="I will look up one detail and remember this exchange.",
+                    tool_calls=[
+                        ToolCallRequest(
+                            id="call-memory-1",
+                            name="openviking_memory_commit",
+                            arguments={"messages": [{"role": "user", "content": "question"}]},
+                            tokens=5,
+                        ),
+                        ToolCallRequest(
+                            id="call-lookup-1",
+                            name="lookup_fact",
+                            arguments={"query": "current facts"},
+                            tokens=3,
+                        ),
+                    ],
+                    usage={"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14},
+                )
+            return LLMResponse(
+                content="final answer from lookup",
+                usage={"prompt_tokens": 7, "completion_tokens": 5, "total_tokens": 12},
+            )
+
+        def get_default_model(self) -> str:
+            return "fake-model"
+
+    class _ToolRegistry:
+        def __init__(self):
+            self.execute_calls = []
+            self.definition_calls = []
+
+        def get_definitions(self, **kwargs):
+            self.definition_calls.append(kwargs)
+            disabled_tools = set(kwargs.get("disabled_tools") or [])
+            definitions = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "openviking_memory_commit",
+                        "description": "Commit memory",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "lookup_fact",
+                        "description": "Lookup fact",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                },
+            ]
+            return [
+                definition
+                for definition in definitions
+                if definition["function"]["name"] not in disabled_tools
+            ]
+
+        async def execute(self, tool_name, arguments, **kwargs):
+            self.execute_calls.append((tool_name, arguments, kwargs))
+            if tool_name == "openviking_memory_commit":
+                return '{"status": "success", "task_status": "running"}'
+            return "tool result: useful context"
+
+    provider = _MixedToolProvider()
+    tools = _ToolRegistry()
+    bus = MessageBus()
+    config = Config(storage_workspace=str(temp_dir))
+    loop = AgentLoop(
+        bus=bus,
+        provider=provider,
+        workspace=temp_dir / "workspace",
+        config=config,
+    )
+    loop.tools = tools
+
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="memory-mixed")
+    final_content, _reasoning, tools_used, token_usage, iteration = await loop._run_agent_loop(
+        messages=[{"role": "user", "content": "question"}],
+        session_key=session_key,
+        sender_id="user-1",
+        publish_events=False,
+    )
+
+    assert final_content == "final answer from lookup"
+    assert iteration == 2
+    assert [call[0] for call in tools.execute_calls] == [
+        "openviking_memory_commit",
+        "lookup_fact",
+    ]
+    assert [tool["tool_name"] for tool in tools_used] == [
+        "openviking_memory_commit",
+        "lookup_fact",
+    ]
+    second_call_messages = provider.calls[1]["messages"]
+    assert second_call_messages[-1] == {
+        "role": "user",
+        "content": "Reflect on the results and decide next steps.",
+    }
+    assert any(
+        message.get("role") == "tool"
+        and message.get("name") == "lookup_fact"
+        and message.get("content") == "tool result: useful context"
+        for message in second_call_messages
+    )
+    assert not any(
+        message.get("role") == "tool" and message.get("name") == "openviking_memory_commit"
+        for message in second_call_messages
+    )
+    assistant_tool_calls = [
+        tool_call["function"]["name"]
+        for message in second_call_messages
+        for tool_call in message.get("tool_calls", [])
+    ]
+    assert assistant_tool_calls == ["lookup_fact"]
+    assert "openviking_memory_commit" in tools.definition_calls[1]["disabled_tools"]
+    second_call_tool_names = [
+        tool["function"]["name"] for tool in provider.calls[1]["tools"]
+    ]
+    assert second_call_tool_names == ["lookup_fact"]
+    assert token_usage == {"prompt_tokens": 17, "completion_tokens": 9, "total_tokens": 26}
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_guides_mixed_reflection_after_failed_memory_commit(
+    temp_dir: Path, monkeypatch
+):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    class _OVConfig:
+        exp_write_tools = []
+
+    class _LoadedConfig:
+        ov_server = _OVConfig()
+
+    monkeypatch.setattr(loop_module, "load_config", lambda: _LoadedConfig())
+
+    class _MixedFailureProvider(LLMProvider):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        async def chat(self, messages, tools=None, **kwargs):
+            self.calls.append(
+                {
+                    "messages": [dict(message) for message in messages],
+                    "tools": tools,
+                }
+            )
+            if len(self.calls) == 1:
+                return LLMResponse(
+                    content="I will look up one detail and remember this exchange.",
+                    tool_calls=[
+                        ToolCallRequest(
+                            id="call-memory-1",
+                            name="openviking_memory_commit",
+                            arguments={"messages": [{"role": "user", "content": "question"}]},
+                            tokens=5,
+                        ),
+                        ToolCallRequest(
+                            id="call-lookup-1",
+                            name="lookup_fact",
+                            arguments={"query": "current facts"},
+                            tokens=3,
+                        ),
+                    ],
+                    usage={"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14},
+                )
+            return LLMResponse(
+                content="final answer from lookup; memory was not saved",
+                usage={"prompt_tokens": 7, "completion_tokens": 6, "total_tokens": 13},
+            )
+
+        def get_default_model(self) -> str:
+            return "fake-model"
+
+    class _ToolRegistry:
+        def __init__(self):
+            self.execute_calls = []
+            self.definition_calls = []
+
+        def get_definitions(self, **kwargs):
+            self.definition_calls.append(kwargs)
+            disabled_tools = set(kwargs.get("disabled_tools") or [])
+            definitions = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "openviking_memory_commit",
+                        "description": "Commit memory",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "lookup_fact",
+                        "description": "Lookup fact",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                },
+            ]
+            return [
+                definition
+                for definition in definitions
+                if definition["function"]["name"] not in disabled_tools
+            ]
+
+        async def execute(self, tool_name, arguments, **kwargs):
+            self.execute_calls.append((tool_name, arguments, kwargs))
+            if tool_name == "openviking_memory_commit":
+                return '{"status": "failed"}'
+            return "tool result: useful context"
+
+    provider = _MixedFailureProvider()
+    tools = _ToolRegistry()
+    bus = MessageBus()
+    config = Config(storage_workspace=str(temp_dir))
+    loop = AgentLoop(
+        bus=bus,
+        provider=provider,
+        workspace=temp_dir / "workspace",
+        config=config,
+    )
+    loop.tools = tools
+
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="memory-mixed-failed")
+    final_content, _reasoning, tools_used, token_usage, iteration = await loop._run_agent_loop(
+        messages=[{"role": "user", "content": "question"}],
+        session_key=session_key,
+        sender_id="user-1",
+        publish_events=False,
+    )
+
+    assert final_content == "final answer from lookup; memory was not saved"
+    assert iteration == 2
+    assert [call[0] for call in tools.execute_calls] == [
+        "openviking_memory_commit",
+        "lookup_fact",
+    ]
+    assert tools_used[0]["execute_success"] is False
+    second_call_messages = provider.calls[1]["messages"]
+    assert "do not claim that side effect succeeded" in second_call_messages[-1]["content"]
+    assert not any(
+        message.get("role") == "tool" and message.get("name") == "openviking_memory_commit"
+        for message in second_call_messages
+    )
+    assert "openviking_memory_commit" in tools.definition_calls[1]["disabled_tools"]
+    second_call_tool_names = [
+        tool["function"]["name"] for tool in provider.calls[1]["tools"]
+    ]
+    assert second_call_tool_names == ["lookup_fact"]
+    assert token_usage == {"prompt_tokens": 17, "completion_tokens": 10, "total_tokens": 27}
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_preserves_stop_tool_behavior_with_hidden_memory_commit(
+    temp_dir: Path, monkeypatch
+):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    class _OVConfig:
+        exp_write_tools = []
+
+    class _LoadedConfig:
+        ov_server = _OVConfig()
+
+    monkeypatch.setattr(loop_module, "load_config", lambda: _LoadedConfig())
+
+    class _StopToolProvider(LLMProvider):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        async def chat(self, messages, tools=None, **kwargs):
+            self.calls.append([dict(message) for message in messages])
+            return LLMResponse(
+                content="Forwarded to the user simulator.",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="call-stop-1",
+                        name="finish_session",
+                        arguments={"reason": "done"},
+                        tokens=2,
+                    ),
+                    ToolCallRequest(
+                        id="call-memory-1",
+                        name="openviking_memory_commit",
+                        arguments={"messages": []},
+                        tokens=5,
+                    ),
+                ],
+                usage={"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14},
+            )
+
+        def get_default_model(self) -> str:
+            return "fake-model"
+
+    class _ToolRegistry:
+        def __init__(self):
+            self.execute_calls = []
+
+        def get_definitions(self, **kwargs):
+            return [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "finish_session",
+                        "description": "Stop",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "openviking_memory_commit",
+                        "description": "Commit memory",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                },
+            ]
+
+        async def execute(self, tool_name, arguments, **kwargs):
+            self.execute_calls.append((tool_name, arguments, kwargs))
+            if tool_name == "openviking_memory_commit":
+                return '{"status": "success", "task_status": "running"}'
+            return "finished"
+
+    provider = _StopToolProvider()
+    tools = _ToolRegistry()
+    bus = MessageBus()
+    config = Config(storage_workspace=str(temp_dir))
+    loop = AgentLoop(
+        bus=bus,
+        provider=provider,
+        workspace=temp_dir / "workspace",
+        config=config,
+    )
+    loop.tools = tools
+
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="memory-stop")
+    final_content, _reasoning, tools_used, token_usage, iteration = await loop._run_agent_loop(
+        messages=[{"role": "user", "content": "question"}],
+        session_key=session_key,
+        sender_id="user-1",
+        publish_events=False,
+        stop_tool_names=["finish_session"],
+    )
+
+    assert final_content == ""
+    assert iteration == 1
+    assert len(provider.calls) == 1
+    assert [call[0] for call in tools.execute_calls] == [
+        "finish_session",
+        "openviking_memory_commit",
+    ]
+    assert [tool["tool_name"] for tool in tools_used] == [
+        "finish_session",
+        "openviking_memory_commit",
+    ]
+    assert token_usage == {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14}
+
+
+@pytest.mark.asyncio
 async def test_agent_loop_evaluates_previous_response_outcome_before_new_user_turn(
     temp_dir: Path, monkeypatch
 ):

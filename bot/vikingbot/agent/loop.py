@@ -49,8 +49,38 @@ if TYPE_CHECKING:
 def _is_tool_result_success(result: Any) -> bool:
     if result is None or isinstance(result, Exception):
         return False
+    parsed_result = result if isinstance(result, dict) else None
+    if isinstance(result, str):
+        try:
+            maybe_json = json.loads(result)
+        except json.JSONDecodeError:
+            maybe_json = None
+        if isinstance(maybe_json, dict):
+            parsed_result = maybe_json
+
+    if isinstance(parsed_result, dict):
+        for key in ("success", "ok"):
+            if parsed_result.get(key) is False:
+                return False
+        for key in ("status", "task_status", "state"):
+            value = parsed_result.get(key)
+            if isinstance(value, str) and value.lower() in {
+                "error",
+                "errored",
+                "fail",
+                "failed",
+                "failure",
+            }:
+                return False
+        if parsed_result.get("error"):
+            return False
+
     text = str(result).lstrip()
     return bool(text) and not text.startswith("Error:")
+
+
+# Side-effect tool results are traced locally but should not steer the next LLM turn.
+_SIDE_EFFECT_TOOL_NAMES = {"openviking_memory_commit"}
 
 
 @dataclass(slots=True)
@@ -868,6 +898,10 @@ class AgentLoop:
         }
         write_exp_injected = False
         stop_tools = set(stop_tool_names or [])
+        executed_side_effect_tools: set[str] = set()
+        stop_tool_completed = False
+        force_no_tools_once = False
+        side_effect_finalization_fallback_content: str | None = None
 
         def accumulate_token_usage(response: Any) -> None:
             if not response.usage:
@@ -889,10 +923,18 @@ class AgentLoop:
                     )
                 )
 
-            tool_definitions = self.tools.get_definitions(
-                ov_tools_enable=ov_tools_enable,
-                disabled_tools=disabled_tools,
-            )
+            handling_side_effect_finalization = force_no_tools_once
+            if force_no_tools_once:
+                tool_definitions = []
+                force_no_tools_once = False
+            else:
+                effective_disabled_tools = list(
+                    dict.fromkeys([*(disabled_tools or []), *executed_side_effect_tools])
+                )
+                tool_definitions = self.tools.get_definitions(
+                    ov_tools_enable=ov_tools_enable,
+                    disabled_tools=effective_disabled_tools,
+                )
             response, _streamed_content, streamed_reasoning = await self._chat_with_stream_events(
                 messages=messages,
                 tools=tool_definitions,
@@ -909,6 +951,15 @@ class AgentLoop:
                         event_type=OutboundEventType.REASONING,
                     )
                 )
+
+            if handling_side_effect_finalization and response.has_tool_calls:
+                logger.warning(
+                    "[SIDE_EFFECT_TOOL]: provider returned tool calls during side-effect "
+                    "finalization; ignoring tool calls"
+                )
+                final_content = response.content or side_effect_finalization_fallback_content
+                final_reasoning_content = response.reasoning_content
+                break
 
             if response.has_tool_calls:
                 # Inject experience memory before write-related tool calls (once per session)
@@ -950,7 +1001,12 @@ class AgentLoop:
                             logger.warning(f"[WRITE_EXP]: failed to load experience: {_e}")
 
                 final_reasoning_content = response.reasoning_content
-                args_list = [tc.arguments for tc in response.tool_calls]
+                visible_tool_calls = [
+                    tc for tc in response.tool_calls if tc.name not in _SIDE_EFFECT_TOOL_NAMES
+                ]
+                visible_tool_call_ids = {tc.id for tc in visible_tool_calls}
+                hidden_side_effect_results = []
+                args_list = [tc.arguments for tc in visible_tool_calls]
                 tool_call_dicts = [
                     {
                         "id": tc.id,
@@ -960,14 +1016,15 @@ class AgentLoop:
                             "arguments": json.dumps(args),
                         },
                     }
-                    for tc, args in zip(response.tool_calls, args_list, strict=False)
+                    for tc, args in zip(visible_tool_calls, args_list, strict=False)
                 ]
-                messages = self.context.add_assistant_message(
-                    messages,
-                    response.content,
-                    tool_call_dicts,
-                    reasoning_content=response.reasoning_content,
-                )
+                if tool_call_dicts or response.content or response.reasoning_content:
+                    messages = self.context.add_assistant_message(
+                        messages,
+                        response.content,
+                        tool_call_dicts or None,
+                        reasoning_content=response.reasoning_content,
+                    )
 
                 # Stage 2: Execute all tools in parallel
                 async def execute_single_tool(idx: int, tool_call):
@@ -995,6 +1052,8 @@ class AgentLoop:
                 ]
                 if publish_events:
                     for tool_call in response.tool_calls:
+                        if tool_call.name in _SIDE_EFFECT_TOOL_NAMES:
+                            continue
                         args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                         await self.bus.publish_outbound(
                             OutboundMessage(
@@ -1012,7 +1071,7 @@ class AgentLoop:
                     logger.info(f"[TOOL_CALL]: {tool_call.name}({args_str[:200]})")
                     logger.info(f"[RESULT]: {str(result)[:600]}")
 
-                    if publish_events:
+                    if publish_events and tool_call.id in visible_tool_call_ids:
                         await self.bus.publish_outbound(
                             OutboundMessage(
                                 session_key=session_key,
@@ -1020,9 +1079,12 @@ class AgentLoop:
                                 event_type=OutboundEventType.TOOL_RESULT,
                             )
                         )
-                    messages = self.context.add_tool_result(
-                        messages, tool_call.id, tool_call.name, result
-                    )
+                    if tool_call.id in visible_tool_call_ids:
+                        messages = self.context.add_tool_result(
+                            messages, tool_call.id, tool_call.name, result
+                        )
+                    else:
+                        hidden_side_effect_results.append((tool_call, result))
 
                     tool_used_dict = {
                         "tool_call_id": tool_call.id,
@@ -1047,15 +1109,61 @@ class AgentLoop:
                         }
                     )
 
+                executed_side_effect_tool_names = [
+                    tool_call.name for tool_call, _result in hidden_side_effect_results
+                ]
+                failed_side_effects = [
+                    tool_call.name
+                    for tool_call, result in hidden_side_effect_results
+                    if not _is_tool_result_success(result)
+                ]
+                if failed_side_effects:
+                    logger.warning(
+                        "[SIDE_EFFECT_TOOL]: hidden side-effect tool failed: "
+                        f"{', '.join(failed_side_effects)}"
+                    )
+                executed_side_effect_tools.update(executed_side_effect_tool_names)
+
                 if any(
                     tool_call.name in stop_tools for _idx, tool_call, _result, _duration in results
                 ):
+                    stop_tool_completed = True
                     final_content = ""
                     break
 
-                messages.append(
-                    {"role": "user", "content": "Reflect on the results and decide next steps."}
-                )
+                if not visible_tool_call_ids:
+                    final_prompt = (
+                        "Side-effect tools have completed. Do not call more tools. "
+                        "Answer the user's original request directly using only the "
+                        "conversation above. If your previous assistant message already "
+                        "answered the request, return that answer without mentioning "
+                        "side-effect tool status."
+                    )
+                    if failed_side_effects:
+                        final_prompt += (
+                            " A side-effect tool failed; do not claim that side effect "
+                            "succeeded. If the user's request specifically depended on "
+                            "that side effect, say it could not be completed."
+                        )
+                    if isinstance(response.content, str) and response.content.strip():
+                        side_effect_finalization_fallback_content = response.content
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": final_prompt,
+                        }
+                    )
+                    force_no_tools_once = True
+                    continue
+
+                reflection_prompt = "Reflect on the results and decide next steps."
+                if failed_side_effects:
+                    reflection_prompt += (
+                        " A side-effect tool failed; do not claim that side effect "
+                        "succeeded. If the user's request specifically depended on "
+                        "that side effect, say it could not be completed."
+                    )
+                messages.append({"role": "user", "content": reflection_prompt})
             else:
                 text = (response.content or "").strip()
                 routed = False
@@ -1115,7 +1223,7 @@ class AgentLoop:
                     continue
                 break
 
-        if final_content == "" and tools_used and tools_used[-1].get("tool_name") in stop_tools:
+        if stop_tool_completed:
             pass
         elif final_content is None or (
             isinstance(final_content, str) and not final_content.strip()
@@ -1156,7 +1264,16 @@ class AgentLoop:
                         )
                     )
 
-        if final_content is None or (isinstance(final_content, str) and not final_content.strip()):
+        if (
+            not stop_tool_completed
+            and side_effect_finalization_fallback_content
+            and (final_content is None or (isinstance(final_content, str) and not final_content.strip()))
+        ):
+            final_content = side_effect_finalization_fallback_content
+
+        if not stop_tool_completed and (
+            final_content is None or (isinstance(final_content, str) and not final_content.strip())
+        ):
             if iteration >= self.max_iterations:
                 final_content = (
                     "I reached the tool-use limit before completing every step, and the "
