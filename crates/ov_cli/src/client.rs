@@ -5,6 +5,7 @@ use std::path::Path;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
+use crate::base_client::request_error;
 pub use crate::base_client::{BaseClient, FileUploader, TimeoutConfig};
 
 use crate::error::{Error, Result};
@@ -396,7 +397,7 @@ impl HttpClient {
             let bytes = response
                 .bytes()
                 .await
-                .map_err(|e| Error::Network(format!("Failed to read error response: {}", e)))?;
+                .map_err(|e| request_error("Failed to read error response", e))?;
 
             let error_msg = match serde_json::from_slice::<serde_json::Value>(&bytes) {
                 Ok(json) => json
@@ -423,7 +424,7 @@ impl HttpClient {
             .bytes()
             .await
             .map(|b| b.to_vec())
-            .map_err(|e| Error::Network(format!("Failed to read response bytes: {}", e)))
+            .map_err(|e| request_error("Failed to read response bytes", e))
     }
 
     // ============ Filesystem Methods ============
@@ -1164,7 +1165,7 @@ impl HttpClient {
             let bytes = response
                 .bytes()
                 .await
-                .map_err(|e| Error::Network(format!("Failed to read error response: {}", e)))?;
+                .map_err(|e| request_error("Failed to read error response", e))?;
 
             let error_msg = match serde_json::from_slice::<serde_json::Value>(&bytes) {
                 Ok(json) => json
@@ -1190,7 +1191,7 @@ impl HttpClient {
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| Error::Network(format!("Failed to read response bytes: {}", e)))?;
+            .map_err(|e| request_error("Failed to read response bytes", e))?;
 
         let to_path = Path::new(to);
         let final_path = if to_path.is_dir() {
@@ -1684,7 +1685,7 @@ impl HttpClient {
             let bytes = response
                 .bytes()
                 .await
-                .map_err(|e| Error::Network(format!("Failed to read blob bytes: {}", e)))?
+                .map_err(|e| request_error("Failed to read blob bytes", e))?
                 .to_vec();
             return Ok(SnapshotShowResult::Blob { oid, size, bytes });
         }
@@ -1692,7 +1693,7 @@ impl HttpClient {
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| Error::Network(format!("Failed to read response body: {}", e)))?;
+            .map_err(|e| request_error("Failed to read response body", e))?;
         let json: Value = match serde_json::from_slice(&bytes) {
             Ok(v) => v,
             Err(e) => {
@@ -1728,6 +1729,7 @@ impl HttpClient {
 mod tests {
     use super::{BaseClient, HttpClient, TimeoutConfig};
     use crate::base_client::api_error_from_envelope;
+    use crate::error::Error;
     use reqwest::StatusCode;
     use serde_json::json;
     use std::collections::HashMap;
@@ -1955,6 +1957,56 @@ mod tests {
         assert_gateway_token_retry(&requests);
     }
 
+    #[tokio::test]
+    async fn file_download_body_timeout_is_a_processing_failure() {
+        let base_url = spawn_stalled_response_body_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 0.02, false, None);
+
+        let error = client
+            .get_bytes("viking://resources/file.bin")
+            .await
+            .expect_err("stalled response body should time out");
+
+        assert!(matches!(error, Error::Timeout(_)));
+    }
+
+    #[tokio::test]
+    async fn pack_download_body_timeout_is_a_processing_failure() {
+        let base_url = spawn_stalled_response_body_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 0.02, false, None);
+        let output = tempfile::tempdir().expect("tempdir should be created");
+
+        let error = client
+            .export_ovpack(
+                "viking://resources",
+                output
+                    .path()
+                    .to_str()
+                    .expect("tempdir path should be valid"),
+                false,
+            )
+            .await
+            .expect_err("stalled response body should time out");
+
+        assert!(matches!(error, Error::Timeout(_)));
+    }
+
+    #[tokio::test]
+    async fn snapshot_blob_body_timeout_is_a_processing_failure() {
+        let base_url = spawn_stalled_response_body_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 0.02, false, None);
+
+        let error = match client
+            .snapshot_show("HEAD", Some("viking://resources/file.bin"))
+            .await
+        {
+            Ok(_) => panic!("stalled response body should time out"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(error, Error::Timeout(_)));
+    }
+
     fn assert_gateway_token_retry(requests: &[String]) {
         assert_eq!(requests.len(), 2);
         assert!(!requests[0].to_ascii_lowercase().contains("x-gateway-token"));
@@ -2102,6 +2154,26 @@ mod tests {
         });
 
         (format!("http://{addr}"), request_rx)
+    }
+
+    async fn spawn_stalled_response_body_server() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let addr = listener.local_addr().expect("test server should have addr");
+
+        tokio::spawn(async move {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let mut buffer = vec![0; 4096];
+            let _ = stream.read(&mut buffer).await;
+            let response = "HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\ncontent-length: 1024\r\nconnection: close\r\n\r\n";
+            let _ = stream.write_all(response.as_bytes()).await;
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        });
+
+        format!("http://{addr}")
     }
 
     async fn spawn_gateway_challenge_server() -> (String, oneshot::Receiver<Vec<String>>) {

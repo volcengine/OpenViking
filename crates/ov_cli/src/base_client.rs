@@ -16,9 +16,13 @@ use crate::error::{Error, Result};
 const GATEWAY_MARKER_HEADER: &str = "X-VikingBot-Gateway";
 const GATEWAY_TOKEN_HEADER: &str = "X-Gateway-Token";
 
-fn request_error(error_context: &str, error: reqwest::Error) -> Error {
+fn is_processing_timeout(is_timeout: bool, is_connect: bool) -> bool {
+    is_timeout && !is_connect
+}
+
+pub(crate) fn request_error(error_context: &str, error: reqwest::Error) -> Error {
     let message = format!("{}: {}", error_context, error);
-    if error.is_timeout() {
+    if is_processing_timeout(error.is_timeout(), error.is_connect()) {
         Error::Timeout(message)
     } else {
         Error::Network(message)
@@ -745,6 +749,16 @@ mod tests {
 
         assert!(matches!(error, Error::Timeout(_)));
         server.abort();
+    }
+
+    #[test]
+    fn connect_stage_timeout_remains_a_connection_failure() {
+        assert!(!is_processing_timeout(true, true));
+    }
+
+    #[test]
+    fn established_connection_timeout_is_a_processing_failure() {
+        assert!(is_processing_timeout(true, false));
     }
 }
 

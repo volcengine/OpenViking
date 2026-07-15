@@ -524,6 +524,7 @@ fn looks_like_path_lock_contention(message: &str) -> bool {
 fn looks_like_resource_busy(message: &str) -> bool {
     let lowered = message.to_ascii_lowercase();
     lowered.contains("resource is busy")
+        || lowered.contains("resource is being processed")
         || lowered.contains("resource_busy")
         || (lowered.contains("conflict") && lowered.contains("busy"))
 }
@@ -1654,6 +1655,29 @@ Usage: ov config [OPTIONS] [COMMAND]
             "[CONFLICT] Resource is busy: viking://resources/project/file.md",
             409,
         );
+        let report = report_for_runtime_error("ov add-resource file.md", &error);
+        let rendered = strip_ansi(&render_report(&report, false));
+
+        assert!(rendered.contains("Resource Busy"));
+        assert!(rendered.contains("retry with backoff"));
+        assert!(!rendered.contains("Connection Error"));
+    }
+
+    #[test]
+    fn path_busy_envelope_suggests_retry_with_backoff() {
+        let envelope = serde_json::json!({
+            "error": {
+                "code": "CONFLICT",
+                "message": "Resource is being processed: viking://resources/project/file.md",
+                "details": {
+                    "conflict_type": "path_busy",
+                    "retryable": true
+                }
+            }
+        });
+        let message =
+            crate::base_client::api_error_from_envelope(&envelope, reqwest::StatusCode::CONFLICT);
+        let error = Error::api_with_status(message, 409);
         let report = report_for_runtime_error("ov add-resource file.md", &error);
         let rendered = strip_ansi(&render_report(&report, false));
 
