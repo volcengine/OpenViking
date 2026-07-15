@@ -92,15 +92,6 @@ def isolate_service_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest_asyncio.fixture
-async def watch_manager() -> AsyncGenerator[WatchManager, None]:
-    """Create WatchManager instance without VikingFS for testing."""
-    manager = WatchManager(viking_fs=None)
-    await manager.initialize()
-    yield manager
-    await manager.clear_all_tasks()
-
-
-@pytest_asyncio.fixture
 async def resource_service(watch_manager: WatchManager) -> AsyncGenerator[ResourceService, None]:
     """Create ResourceService instance with watch support."""
     scheduler = MagicMock()
@@ -346,9 +337,9 @@ class TestWatchTaskConflict:
         self, resource_service: ResourceService, request_context: RequestContext
     ):
         """A rejected watch request must not leave behind a user-invisible task."""
-        from openviking.service.task_tracker import get_task_tracker, reset_task_tracker
+        from openviking.service.task_tracker import get_task_tracker, set_task_tracker
 
-        reset_task_tracker()
+        set_task_tracker(None)
         to_uri = "viking://resources/conflict_no_task"
 
         await resource_service.add_resource(

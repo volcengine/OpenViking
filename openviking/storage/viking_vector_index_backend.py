@@ -136,9 +136,6 @@ class _SingleAccountBackend:
             self._meta_data_cache = coll.get_meta_data() or {}
         return self._meta_data_cache
 
-    def _refresh_meta_data(self, coll: Collection) -> None:
-        self._meta_data_cache = coll.get_meta_data() or {}
-
     def _filter_known_fields(self, data: Dict[str, Any]) -> Dict[str, Any]:
         try:
             coll = self._get_collection()

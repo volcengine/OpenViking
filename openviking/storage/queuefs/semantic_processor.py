@@ -1027,19 +1027,6 @@ class SemanticProcessor(DequeueHandlerBase):
         except Exception as e:
             logger.error(f"[SyncDiff] Failed to rewrite image URIs for {target_uri}: {e}")
 
-    async def _collect_children_abstracts(
-        self, children_uris: List[str], ctx: Optional[RequestContext] = None
-    ) -> List[Dict[str, str]]:
-        """Collect .abstract.md from subdirectories."""
-        viking_fs = get_viking_fs()
-        results = []
-
-        for child_uri in children_uris:
-            abstract = await viking_fs.abstract(child_uri, ctx=ctx)
-            dir_name = child_uri.split("/")[-1]
-            results.append({"name": dir_name, "abstract": abstract})
-        return results
-
     async def _generate_text_summary(
         self,
         file_path: str,

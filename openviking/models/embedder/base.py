@@ -804,11 +804,6 @@ class FailoverEmbedder(EmbedderBase):
         return first.get_dimension()
 
     @property
-    def active_credential_index(self) -> int:
-        """Get the index of the currently active credential."""
-        return self._switcher.get_active_index()
-
-    @property
     def active_credential_id(self) -> str:
         """Get the ID of the currently active credential."""
         idx = self._switcher.get_active_index()

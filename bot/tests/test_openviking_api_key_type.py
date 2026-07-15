@@ -881,20 +881,6 @@ def test_validate_openviking_auth_allows_trusted_root(monkeypatch, capsys):
     assert captured.err == ""
 
 
-def test_warn_openviking_auth_config_uses_complete_validation(monkeypatch):
-    config = SimpleNamespace(ov_server=SimpleNamespace(server_url="http://ov.local"))
-    called = []
-    monkeypatch.setattr(
-        config_loader_module,
-        "validate_openviking_auth",
-        lambda value: called.append(value),
-    )
-
-    config_loader_module.warn_openviking_auth_config(config)
-
-    assert called == [config]
-
-
 def test_memory_user_cli_option_warns_at_runtime(capsys):
     commands_module._warn_deprecated_memory_user(["legacy-user"])
 

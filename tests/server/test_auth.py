@@ -25,7 +25,6 @@ from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import (
     TaskTracker,
     get_task_tracker,
-    reset_task_tracker,
     set_task_tracker,
 )
 from openviking_cli.exceptions import InvalidArgumentError, OpenVikingError, PermissionDeniedError
@@ -411,19 +410,19 @@ async def test_admin_sync_route_rejects_user_key(auth_client: httpx.AsyncClient,
 
 async def test_task_endpoints_require_auth():
     """Task endpoints must reject unauthenticated callers before lookup/filtering."""
-    reset_task_tracker()
+    set_task_tracker(None)
     app = _build_task_http_test_app(identity=None)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         for url in ("/api/v1/tasks", "/api/v1/tasks/nonexistent-id"):
             resp = await client.get(url)
             assert resp.status_code == 401
-    reset_task_tracker()
+    set_task_tracker(None)
 
 
 async def test_task_endpoints_are_user_scoped():
     """Authenticated callers must not see another user's background tasks."""
-    reset_task_tracker()
+    set_task_tracker(None)
     _set_fake_task_tracker()
     account_id = _uid()
     tracker = get_task_tracker()
@@ -470,7 +469,7 @@ async def test_task_endpoints_are_user_scoped():
         assert bob_list.status_code == 200
         assert {task["task_id"] for task in bob_list.json()["result"]} == {bob_task.task_id}
 
-    reset_task_tracker()
+    set_task_tracker(None)
 
 
 # ---- Role-based access tests ----

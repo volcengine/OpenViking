@@ -564,10 +564,3 @@ class OpenVikingService:
         if not self._directory_initializer:
             return 0
         return await self._directory_initializer.initialize_user_directories(ctx)
-
-    async def initialize_agent_directories(self, ctx: RequestContext) -> int:
-        """Initialize current user's current-agent directory tree."""
-        self._ensure_initialized()
-        if not self._directory_initializer:
-            return 0
-        return await self._directory_initializer.initialize_agent_directories(ctx)

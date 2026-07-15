@@ -4,7 +4,6 @@ import asyncio
 import io
 import json
 import re
-import tempfile
 import threading
 import time
 from collections import OrderedDict
@@ -37,8 +36,6 @@ from vikingbot.config.schema import BotMode, FeishuChannelConfig
 try:
     import lark_oapi as lark
     from lark_oapi.api.contact.v3 import (
-        BatchGetIdUserRequest,
-        BatchGetIdUserRequestBody,
         GetUserRequest,
     )
     from lark_oapi.api.im.v1 import (
@@ -64,8 +61,6 @@ except ImportError:
     GetImageRequest = None
     GetUserRequest = None
     GetChatMembersRequest = None
-    BatchGetIdUserRequest = None
-    BatchGetIdUserRequestBody = None
 
 # Message type display mapping
 MSG_TYPE_MAP = {
@@ -115,7 +110,6 @@ class FeishuChannel(BaseChannel):
         self._token_expire_time: float = 0
         self._chat_mode_cache: dict[str, str] = {}  # 缓存群类型：group(普通群)/thread(话题群)
         self._user_name_cache: OrderedDict[str, str] = OrderedDict()  # LRU缓存用户ID到姓名的映射
-        self._bot_name_cache: dict[str, str] = {}  # 缓存机器人open_id到名称的映射
         self._chat_member_cache: OrderedDict[str, dict[str, Any]] = (
             OrderedDict()
         )  # chat_id -> {members, expires_at, last_error_at}
@@ -265,16 +259,6 @@ class FeishuChannel(BaseChannel):
 
         # Read the image bytes from the response file
         return response.file.read()
-
-    async def _save_image_to_temp(self, image_bytes: bytes) -> str:
-        """
-        Save image bytes to a temporary file and return the path.
-        """
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-            f.write(image_bytes)
-            temp_path = f.name
-
-        return temp_path
 
     async def _get_chat_mode(self, chat_id: str) -> str:
         """获取群类型：group(普通群)/thread(话题群)"""
@@ -534,69 +518,6 @@ class FeishuChannel(BaseChannel):
                     el["content"] = el["content"].replace(f"\x00CODE{i}\x00", cb)
 
         return elements or [{"tag": "markdown", "content": content}]
-
-    async def _process_content_with_images(
-        self, content: str, receive_id_type: str, chat_id: str
-    ) -> list[dict]:
-        """
-        Process content, extract and upload Markdown images, return card elements.
-
-        Returns: list of card elements (markdown + img elements)
-        """
-        # Extract images from Markdown
-        images = []
-        markdown_pattern = r"!\[([^\]]*)\]\((send://[^)\s]+\.(png|jpeg|jpg|gif|bmp|webp))\)"
-        # Find all images and upload them
-        for m in re.finditer(markdown_pattern, content):
-            alt_text = m.group(1) or ""
-            img_url = m.group(2)
-            try:
-                is_content, result = await self._parse_data_uri(img_url)
-
-                if not is_content and isinstance(result, bytes):
-                    # It's an image - upload
-                    image_key = await self._upload_image_to_feishu(result)
-                    images.append({"alt": alt_text, "img_key": image_key})
-            except Exception as e:
-                logger.exception(f"Failed to upload Markdown image {img_url[:100]}: {e}")
-        content = re.sub(markdown_pattern, "", content)
-
-        # Pattern: ![alt](url)
-        send_pattern = r"(send://[^)\s]+\.(png|jpeg|jpg|gif|bmp|webp))\)?"
-        # Find all images and upload them
-        for m in re.finditer(send_pattern, content):
-            img_url = m.group(1) or ""
-            try:
-                is_content, result = await self._parse_data_uri(img_url)
-
-                if not is_content and isinstance(result, bytes):
-                    # It's an image - upload
-                    image_key = await self._upload_image_to_feishu(result)
-                    images.append({"img_key": image_key})
-            except Exception as e:
-                logger.exception(f"Failed to upload Markdown image {img_url[:100]}: {e}")
-
-        # Remove all ![alt](url) from content
-        content_no_images = re.sub(send_pattern, "", content)
-
-        elements = []
-        if content_no_images.strip():
-            elements = self._build_card_elements(content_no_images)
-
-        # Add image elements
-        for img in images:
-            elements.append(
-                {
-                    "tag": "img",
-                    "img_key": img["img_key"],
-                    "alt": {"tag": "plain_text", "content": ""},
-                }
-            )
-
-        if not elements:
-            elements = [{"tag": "markdown", "content": content_no_images}]
-
-        return elements
 
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through Feishu."""
@@ -1021,92 +942,6 @@ class FeishuChannel(BaseChannel):
                 return member_name
 
         return None
-
-    async def _get_bot_name(self, open_id: str) -> str | None:
-        """
-        Get bot name by open_id.
-        First tries to get from cache, then uses config bot_name or "Bot".
-        Returns bot name if found, None otherwise.
-        """
-        # Check cache first
-        if open_id in self._bot_name_cache:
-            return self._bot_name_cache[open_id]
-
-        # Use config bot_name if available, otherwise "Bot"
-        bot_name = self.config.bot_name or "Bot"
-        self._bot_name_cache[open_id] = bot_name
-        return bot_name
-
-    async def _batch_get_user_names(
-        self, open_ids: list[str], chat_id: str | None = None
-    ) -> dict[str, str]:
-        """
-        Get user names from Feishu API by open_ids (fetches individually with LRU cache).
-        Returns a dict mapping open_id to user name.
-        """
-        if not open_ids:
-            return {}
-
-        result = {}
-        missing_ids = []
-        for open_id in open_ids:
-            cached_name = self._get_cached_user_name(open_id)
-            if cached_name:
-                result[open_id] = cached_name
-            else:
-                missing_ids.append(open_id)
-
-        if not missing_ids:
-            return result
-
-        try:
-            for open_id in missing_ids:
-                try:
-                    name = await self._get_user_name(open_id, chat_id=chat_id)
-                    if name:
-                        result[open_id] = name
-                except Exception as e:
-                    logger.warning(f"Failed to get user name for {open_id}: {e}")
-        except Exception as e:
-            logger.warning(f"Failed to get user names: {e}")
-
-        return result
-
-    async def _process_group_message_content(
-        self, content: str, sender_id: str, chat_id: str | None = None
-    ) -> tuple[str, str]:
-        """
-        Process group message content:
-        1. Get sender name and prepend to content
-        2. Replace @open_id mentions with @name mentions
-
-        Returns:
-            tuple of (processed_content, sender_name)
-        """
-        mentioned_open_ids = OPEN_ID_MENTION_PATTERN.findall(content)
-        mentioned_open_ids = [mid[1:] for mid in mentioned_open_ids] if mentioned_open_ids else []
-
-        all_ids_to_fetch = list({sender_id} | set(mentioned_open_ids))
-        user_name_map = await self._batch_get_user_names(all_ids_to_fetch, chat_id=chat_id)
-
-        processed_content = content
-        if mentioned_open_ids:
-            for open_id in mentioned_open_ids:
-                name = user_name_map.get(open_id)
-                if not name:
-                    # If user name not found, try to get bot name
-                    name = await self._get_bot_name(open_id)
-                if name:
-                    processed_content = processed_content.replace(f"@{open_id}", f"@{name}")
-
-        sender_name = user_name_map.get(sender_id, "")
-        if not sender_name:
-            # If sender name not found, try to get bot name
-            sender_name = await self._get_bot_name(sender_id) or ""
-        if sender_name:
-            processed_content = f"[{sender_name}]: {processed_content}"
-
-        return processed_content, sender_name
 
     async def _on_message(self, data: "P2ImMessageReceiveV1") -> None:
         """Handle incoming message from Feishu."""

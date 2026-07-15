@@ -97,12 +97,6 @@ def set_task_tracker(tracker: "TaskTracker") -> None:
         _instance = tracker
 
 
-def reset_task_tracker() -> None:
-    """Reset singleton (for testing)."""
-    global _instance
-    _instance = None
-
-
 # ── Sanitization ──
 
 _SENSITIVE_PATTERNS = re.compile(
