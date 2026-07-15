@@ -27,7 +27,7 @@ class CustomUsageSink:
     def __init__(self, path):
         self.path = path
 
-    async def write(self, *, events, context):
+    async def write(self, *, events):
         with open(self.path, "a", encoding="utf-8") as f:
             for event in events:
                 f.write(json.dumps(event.to_dict(), ensure_ascii=False) + "\\n")
@@ -59,21 +59,24 @@ class CustomUsageSink:
     )
     event = UsageEvent(
         event_type="memory.injected",
-        memory_uri="viking://user/default/memories/experiences/a.md",
-        memory_type="experience",
+        resource_uri="viking://user/test/memories/experiences/a.md",
+        resource_type="experience",
         account_id="new",
         user_id="test",
         session_id="session-1",
-        archive_uri=context.archive_uri,
         task_id="task-1",
         occurred_at="2026-07-09T12:00:00Z",
+        evidence={"archive_uri": context.archive_uri},
     )
 
-    await reporter.report(events=[event], context=context)
+    await reporter.report(events=[event])
 
     payload = json.loads(output_path.read_text(encoding="utf-8").splitlines()[0])
     assert payload["event_type"] == "memory.injected"
-    assert payload["memory_uri"] == "viking://user/default/memories/experiences/a.md"
+    assert payload["resource_uri"] == "viking://user/test/memories/experiences/a.md"
+    assert payload["resource_type"] == "experience"
+    assert "memory_uri" not in payload
+    assert "source" not in payload
 
 
 async def test_app_reuses_and_closes_usage_reporter(monkeypatch):

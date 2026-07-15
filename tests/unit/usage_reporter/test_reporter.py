@@ -20,14 +20,14 @@ def _event() -> UsageEvent:
     context = _context()
     return UsageEvent(
         event_type="memory.injected",
-        memory_uri="viking://user/test/memories/experiences/a.md",
-        memory_type="experience",
+        resource_uri="viking://user/test/memories/experiences/a.md",
+        resource_type="experience",
         account_id=context.account_id,
         user_id=context.user_id,
         session_id=context.session_id,
-        archive_uri=context.archive_uri,
         task_id=context.task_id,
         occurred_at="2026-07-10T12:00:00Z",
+        evidence={"archive_uri": context.archive_uri},
     )
 
 
@@ -47,17 +47,17 @@ async def test_sink_failure_does_not_stop_later_sinks():
     writes = []
 
     class FailingSink:
-        async def write(self, *, events, context):
+        async def write(self, *, events):
             raise RuntimeError("sink failed")
 
     class RecordingSink:
-        async def write(self, *, events, context):
+        async def write(self, *, events):
             writes.extend(events)
 
     event = _event()
     reporter = UsageReporter(sinks=[FailingSink(), RecordingSink()])
 
-    await reporter.report(events=[event], context=_context())
+    await reporter.report(events=[event])
 
     assert writes == [event]
 
@@ -66,11 +66,11 @@ async def test_sink_timeout_does_not_stop_later_sinks():
     writes = []
 
     class HangingSink:
-        async def write(self, *, events, context):
+        async def write(self, *, events):
             await asyncio.sleep(1)
 
     class RecordingSink:
-        async def write(self, *, events, context):
+        async def write(self, *, events):
             writes.extend(events)
 
     event = _event()
@@ -79,7 +79,7 @@ async def test_sink_timeout_does_not_stop_later_sinks():
         sink_timeout_seconds=0.01,
     )
 
-    await reporter.report(events=[event], context=_context())
+    await reporter.report(events=[event])
 
     assert writes == [event]
 
@@ -88,7 +88,7 @@ async def test_close_calls_optional_sink_close():
     closed = []
 
     class ClosableSink:
-        async def write(self, *, events, context):
+        async def write(self, *, events):
             return None
 
         async def close(self):

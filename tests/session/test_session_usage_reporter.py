@@ -25,7 +25,7 @@ async def test_commit_reports_memory_usage_events_to_sink(session):
     reported_events = []
 
     class RecordingSink:
-        async def write(self, *, events, context):
+        async def write(self, *, events):
             reported_events.extend(events)
 
     experience_uri = "viking://user/default/memories/experiences/no-order-exchange.md"
@@ -59,7 +59,8 @@ async def test_commit_reports_memory_usage_events_to_sink(session):
     assert "usage_events_reported" not in task["result"]
     assert len(reported_events) == 1
     assert reported_events[0].event_type == "memory.injected"
-    assert reported_events[0].memory_uri == experience_uri
+    assert reported_events[0].resource_uri == experience_uri
+    assert reported_events[0].resource_type == "experience"
     assert reported_events[0].session_id == session.session_id
-    assert reported_events[0].archive_uri == result["archive_uri"]
+    assert reported_events[0].evidence["archive_uri"] == result["archive_uri"]
     assert reported_events[0].task_id == result["task_id"]

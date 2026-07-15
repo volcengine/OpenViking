@@ -25,16 +25,14 @@ class UsageContext:
 @dataclass(frozen=True)
 class UsageEvent:
     event_type: str
-    memory_uri: str
-    memory_type: str
+    resource_uri: str
+    resource_type: str
     account_id: str
     user_id: str
     session_id: str
-    archive_uri: str
     occurred_at: str
     schema_version: str = "v1"
     task_id: Optional[str] = None
-    source: Dict[str, Any] = field(default_factory=dict)
     evidence: Dict[str, Any] = field(default_factory=dict)
     attributes: Dict[str, Any] = field(default_factory=dict)
 

@@ -66,8 +66,8 @@ class MemoryUsageExtractor:
         context: UsageContext,
     ) -> list[UsageEvent]:
         events: list[UsageEvent] = []
-        for message_index, message in enumerate(messages):
-            for part_index, part in enumerate(message.parts):
+        for message in messages:
+            for part in message.parts:
                 if not isinstance(part, ToolPart):
                     continue
                 if part.tool_status != "completed":
@@ -78,8 +78,6 @@ class MemoryUsageExtractor:
                             part,
                             context=context,
                             message=message,
-                            message_index=message_index,
-                            part_index=part_index,
                         )
                     )
                 elif part.tool_name == "read_experience":
@@ -87,8 +85,6 @@ class MemoryUsageExtractor:
                         part,
                         context=context,
                         message=message,
-                        message_index=message_index,
-                        part_index=part_index,
                     )
                     if event is not None:
                         events.append(event)
@@ -100,8 +96,6 @@ class MemoryUsageExtractor:
         *,
         context: UsageContext,
         message: Message,
-        message_index: int,
-        part_index: int,
     ) -> Iterable[UsageEvent]:
         output = _load_mapping(part.tool_output)
         results = output.get("results", [])
@@ -118,12 +112,10 @@ class MemoryUsageExtractor:
             events.append(
                 self._build_event(
                     event_type="memory.recalled",
-                    memory_uri=uri,
+                    resource_uri=uri,
                     part=part,
                     context=context,
                     message=message,
-                    message_index=message_index,
-                    part_index=part_index,
                 )
             )
         return events
@@ -134,8 +126,6 @@ class MemoryUsageExtractor:
         *,
         context: UsageContext,
         message: Message,
-        message_index: int,
-        part_index: int,
     ) -> UsageEvent | None:
         tool_input = part.tool_input if isinstance(part.tool_input, dict) else {}
         output = _load_mapping(part.tool_output)
@@ -144,40 +134,34 @@ class MemoryUsageExtractor:
             return None
         return self._build_event(
             event_type="memory.injected",
-            memory_uri=uri,
+            resource_uri=uri,
             part=part,
             context=context,
             message=message,
-            message_index=message_index,
-            part_index=part_index,
         )
 
     def _build_event(
         self,
         *,
         event_type: str,
-        memory_uri: str,
+        resource_uri: str,
         part: ToolPart,
         context: UsageContext,
         message: Message,
-        message_index: int,
-        part_index: int,
     ) -> UsageEvent:
         return UsageEvent(
             event_type=event_type,
-            memory_uri=memory_uri,
-            memory_type="experience",
+            resource_uri=resource_uri,
+            resource_type="experience",
             account_id=context.account_id,
             user_id=context.user_id,
             session_id=context.session_id,
-            archive_uri=context.archive_uri,
             task_id=context.task_id,
             occurred_at=_event_time(message),
-            source={"tool_name": part.tool_name, "tool_status": part.tool_status},
             evidence={
-                "message_index": message_index,
+                "archive_uri": context.archive_uri,
                 "message_id": message.id,
-                "part_index": part_index,
                 "tool_call_id": part.tool_id,
+                "tool_name": part.tool_name,
             },
         )

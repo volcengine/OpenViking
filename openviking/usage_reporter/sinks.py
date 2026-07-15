@@ -6,8 +6,8 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from .models import UsageContext, UsageEvent
+from .models import UsageEvent
 
 
 class UsageSink(Protocol):
-    async def write(self, *, events: list[UsageEvent], context: UsageContext) -> None: ...
+    async def write(self, *, events: list[UsageEvent]) -> None: ...

@@ -42,7 +42,6 @@ class UsageReporter:
         self,
         *,
         events: Iterable[UsageEvent],
-        context: UsageContext,
     ) -> None:
         event_list = list(events)
         if not event_list or not self.sinks:
@@ -50,7 +49,7 @@ class UsageReporter:
         for sink in self.sinks:
             try:
                 await asyncio.wait_for(
-                    sink.write(events=event_list, context=context),
+                    sink.write(events=event_list),
                     timeout=self.sink_timeout_seconds,
                 )
             except TimeoutError:
@@ -64,7 +63,7 @@ class UsageReporter:
 
     async def extract_and_report(self, *, messages, context: UsageContext) -> list[UsageEvent]:
         events = await self.extract(messages=messages, context=context)
-        await self.report(events=events, context=context)
+        await self.report(events=events)
         return events
 
     async def close(self) -> None:

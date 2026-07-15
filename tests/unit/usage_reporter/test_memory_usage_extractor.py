@@ -68,16 +68,15 @@ async def test_memory_usage_extractor_emits_recall_and_injection_events():
     events = await MemoryUsageExtractor().extract(messages=messages, context=_context())
 
     assert [event.event_type for event in events] == ["memory.recalled", "memory.injected"]
-    assert [event.memory_uri for event in events] == [experience_uri, experience_uri]
-    assert events[0].source["tool_name"] == "search_experience"
+    assert [event.resource_uri for event in events] == [experience_uri, experience_uri]
+    assert [event.resource_type for event in events] == ["experience", "experience"]
     assert events[0].evidence == {
-        "message_index": 0,
+        "archive_uri": _context().archive_uri,
         "message_id": "msg-1",
-        "part_index": 1,
         "tool_call_id": "call-search",
+        "tool_name": "search_experience",
     }
-    assert events[1].source["tool_name"] == "read_experience"
-    assert events[1].evidence["part_index"] == 0
+    assert events[1].evidence["tool_name"] == "read_experience"
 
 
 @pytest.mark.asyncio
@@ -164,4 +163,4 @@ async def test_memory_usage_extractor_ignores_other_users_experience_uris():
 
     events = await MemoryUsageExtractor().extract(messages=messages, context=_context())
 
-    assert [event.memory_uri for event in events] == [own_uri]
+    assert [event.resource_uri for event in events] == [own_uri]
