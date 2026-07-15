@@ -19,6 +19,32 @@ def _is_comment_line(line: str) -> bool:
     return line.startswith("#")
 
 
+def _strip_trailing_spaces(pattern: str) -> str:
+    """Strip unescaped trailing spaces, mirroring git's ``trim_trailing_spaces``.
+
+    A backslash escapes the character that follows it, so ``foo\\ `` keeps its
+    trailing space (it names a file called ``foo ``) while ``foo  `` is
+    trimmed to ``foo``.  A plain ``str.rstrip(" ")`` would also eat escaped
+    spaces and leave a dangling backslash, which pathspec rejects.
+    """
+    last_space = None
+    i = 0
+    length = len(pattern)
+    while i < length:
+        char = pattern[i]
+        if char == " ":
+            if last_space is None:
+                last_space = i
+        else:
+            if char == "\\":
+                i += 1  # the next character is escaped, never a trailing space
+                if i >= length:
+                    return pattern  # lone trailing backslash: nothing to trim
+            last_space = None
+        i += 1
+    return pattern if last_space is None else pattern[:last_space]
+
+
 def _transform_gitignore_line(line: str, base_rel: str) -> str:
     """Transform a gitignore pattern line from a nested .gitignore to root-relative.
 
@@ -31,7 +57,11 @@ def _transform_gitignore_line(line: str, base_rel: str) -> str:
       before the anchoring decision, then re-appended afterward.
       (Without this, ``build/`` would look like a path with a separator and be
       incorrectly anchored.)
+    * Trailing spaces are ignored unless escaped with a backslash.
     * Negation prefix ``!`` is preserved through the transform.
+    * Degenerate patterns that match nothing in git (``/``, ``//``,
+      ``build///`` -- i.e. an empty body or an empty trailing path segment)
+      are transformed to the empty string, which pathspec treats as a no-op.
 
     Parameters
     ----------
@@ -61,14 +91,18 @@ def _transform_gitignore_line(line: str, base_rel: str) -> str:
 
     # Strip trailing whitespace per gitignore spec: trailing spaces are ignored
     # unless escaped with a backslash.
-    scoped = pattern.rstrip(" ")
+    scoped = _strip_trailing_spaces(pattern)
     if not scoped:
         return ""  # whitespace-only line -> empty (no-op) pattern
 
     is_dir_only = scoped.endswith("/")
-    # Strip the directory-only marker (and any duplicate trailing slashes)
-    # before deciding anchoring, then re-append a single slash afterward.
-    body = scoped.rstrip("/") if is_dir_only else scoped
+    # Strip the single directory-only marker before deciding anchoring, then
+    # re-append it afterward.  Git strips exactly one trailing slash; if the
+    # body still ends with '/' (e.g. "build///") the pattern has an empty
+    # trailing segment and matches nothing in git, so emit a no-op.
+    body = scoped[:-1] if is_dir_only else scoped
+    if is_dir_only and (not body or body.endswith("/")):
+        return ""  # "/", "//", "build///", ... match nothing in git
 
     if body.startswith("/"):
         # Leading '/' anchors the pattern to base_rel.
