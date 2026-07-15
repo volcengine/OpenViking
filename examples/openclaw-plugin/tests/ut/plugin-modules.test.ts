@@ -845,7 +845,6 @@ describe("plugin module seams", () => {
     );
     expect(commitSession).toHaveBeenCalledWith("memory-store-temp", {
       wait: true,
-      agentId: "ou_01_abc",
       keepRecentCount: 0,
     });
     expect(stored.details).toMatchObject({ action: "stored", memoriesCount: 2, usedTempSession: true });
@@ -856,10 +855,20 @@ describe("plugin module seams", () => {
     expect(rejected.details).toMatchObject({ action: "rejected", uri: "viking://resources/r1" });
     expect(deleteUri).not.toHaveBeenCalled();
 
-    const deleted = await forgetTool.execute("call-3", { uri: "viking://user/default/memories/m1" });
-    expect(deleteUri).toHaveBeenCalledWith("viking://user/default/memories/m1", "ou_01_abc");
-    expect(deleted.content[0].text).toBe("Forgotten: viking://user/default/memories/m1");
-    expect(deleted.details).toMatchObject({ action: "deleted", uri: "viking://user/default/memories/m1" });
+    const peerMemoryUri = "viking://user/default/peers/ou_01_abc/memories/m1";
+    const deleted = await forgetTool.execute("call-3", { uri: peerMemoryUri });
+    expect(deleteUri).toHaveBeenCalledWith(peerMemoryUri, "ou_01_abc");
+    expect(deleted.content[0].text).toBe(`Forgotten: ${peerMemoryUri}`);
+    expect(deleted.details).toMatchObject({ action: "deleted", uri: peerMemoryUri });
+
+    deleteUri.mockClear();
+    find.mockResolvedValueOnce({
+      memories: [{ uri: peerMemoryUri, level: 2, score: 0.95, abstract: "remember this" }],
+      total: 1,
+    });
+    const deletedByQuery = await forgetTool.execute("call-4", { query: "remember this" });
+    expect(deleteUri).toHaveBeenCalledWith(peerMemoryUri, "ou_01_abc");
+    expect(deletedByQuery.details).toMatchObject({ action: "deleted", uri: peerMemoryUri });
   });
 
   it("registers recall trace tool through a dedicated plugin module", async () => {

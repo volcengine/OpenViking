@@ -290,9 +290,6 @@ export function createMemoryOpenVikingContextEngine(params: {
       getClient,
       logger,
       rememberSessionAgentId,
-      resolveAgentId,
-      resolveActorPeerId,
-      peerRole: cfg.peer_role,
       isBypassedSession,
     });
   }

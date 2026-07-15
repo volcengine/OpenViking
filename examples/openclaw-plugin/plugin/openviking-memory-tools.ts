@@ -127,7 +127,6 @@ export function registerOpenVikingMemoryTools(deps: OpenVikingMemoryToolsDeps): 
           );
           const commitResult = await client.commitSession(sessionId, {
             wait: true,
-            agentId: session.actorPeerId,
             keepRecentCount: 0,
           });
           const memoriesCount = totalCommitMemories(commitResult);

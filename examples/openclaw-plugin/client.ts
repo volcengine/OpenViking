@@ -845,6 +845,7 @@ export class OpenVikingClient {
        * preserves the pre-v2 "archive everything" behavior.
       */
       keepRecentCount?: number;
+      /** Omit for aggregate commits; extraction is constrained by archived message peer_ids. */
       agentId?: string;
     },
   ): Promise<CommitSessionResult> {

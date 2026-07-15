@@ -498,6 +498,18 @@ describe("Tool: memory_store (behavioral)", () => {
     expect(body).not.toHaveProperty("role_id");
   });
 
+  it("fails closed in person mode when tool context has no sender", async () => {
+    const openVikingTransport = vi.fn(async () => okResponse("unexpected"));
+    const { factoryTools, api } = setupPlugin(undefined, { peer_role: "person" });
+    (api as any).openVikingTransport = openVikingTransport;
+    contextEnginePlugin.register(api as any);
+    const read = factoryTools.get("ov_read")!({ sessionId: "session-without-sender" });
+
+    await expect(read.execute("tc-person-no-sender", { uri: "viking://resources/doc" }))
+      .rejects.toThrow("peer_role=person requires a sender identity");
+    expect(openVikingTransport).not.toHaveBeenCalled();
+  });
+
   it("uses a temporary session by default instead of the current tool session", async () => {
     const openVikingTransport = vi.fn(async (url: string) => {
       if (url.endsWith("/api/v1/system/status")) {

@@ -246,6 +246,38 @@ describe("context-engine afterTurn()", () => {
     expect(client.addSessionMessage.mock.calls[1][5]).toBe(assistantPeerId);
   });
 
+  it("commits a multi-sender person session without a single peer actor", async () => {
+    const { engine, client } = makeEngine({
+      commitTokenThresholdRatio: 0.01,
+      cfgOverrides: { peer_role: "person" },
+    });
+    client.getSession
+      .mockResolvedValueOnce({ pending_tokens: 0 })
+      .mockResolvedValueOnce({ pending_tokens: 5000 });
+
+    await engine.afterTurn!({
+      sessionId: "group-session",
+      sessionFile: "",
+      messages: [{ role: "user", content: "message from Alice" }],
+      prePromptMessageCount: 0,
+      runtimeContext: { senderId: "alice" },
+    });
+    await engine.afterTurn!({
+      sessionId: "group-session",
+      sessionFile: "",
+      messages: [{ role: "user", content: "message from Bob" }],
+      prePromptMessageCount: 0,
+      runtimeContext: { senderId: "bob" },
+    });
+
+    expect(client.addSessionMessage.mock.calls.map((call) => call[5])).toEqual(["alice", "bob"]);
+    expect(client.commitSession).toHaveBeenCalledOnce();
+    expect(client.commitSession).toHaveBeenCalledWith("group-session", {
+      wait: false,
+      keepRecentCount: 10,
+    });
+  });
+
   it("sanitizes <relevant-memories> from user content but not from assistant", async () => {
     const { engine, client } = makeEngine();
 

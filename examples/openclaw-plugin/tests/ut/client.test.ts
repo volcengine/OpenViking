@@ -40,6 +40,10 @@ describe("isMemoryUri", () => {
     expect(isMemoryUri("viking://user/alice/agent/work/memories/item-1")).toBe(true);
   });
 
+  it("returns true for canonical peer memory URI", () => {
+    expect(isMemoryUri("viking://user/alice/peers/bob/memories/item-1")).toBe(true);
+  });
+
   it("returns true for valid agent memory URI", () => {
     expect(isMemoryUri("viking://user/memories/xyz")).toBe(true);
   });

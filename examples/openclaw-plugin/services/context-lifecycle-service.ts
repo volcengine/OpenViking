@@ -38,9 +38,6 @@ export type CommitOpenVikingSessionParams = {
   sessionKey?: string;
   getClient: () => Promise<Pick<OpenVikingClient, "commitSession">>;
   logger: ContextEngineLifecycleLogger;
-  resolveAgentId: (sessionId: string, sessionKey?: string, ovSessionId?: string) => string;
-  resolveActorPeerId?: ResolveActorPeerId;
-  peerRole?: OpenVikingPeerRole;
   rememberSessionAgentId?: (ctx: {
     agentId?: string;
     sessionId?: string;
@@ -383,9 +380,6 @@ export async function commitOpenVikingSession({
   sessionKey,
   getClient,
   logger,
-  resolveAgentId,
-  resolveActorPeerId,
-  peerRole = "assistant",
   rememberSessionAgentId,
   isBypassedSession,
 }: CommitOpenVikingSessionParams): Promise<boolean> {
@@ -403,18 +397,8 @@ export async function commitOpenVikingSession({
       sessionKey,
       ovSessionId: ovId,
     });
-    const agentId = resolveAgentId(sessionId, sessionKey, ovId);
-    const actorPeerId = resolveLifecycleActorPeerId({
-      resolver: resolveActorPeerId,
-      peerRole,
-      sessionId,
-      sessionKey,
-      ovSessionId: ovId,
-      agentId,
-    });
     const commitResult = await client.commitSession(ovId, {
       wait: true,
-      agentId: actorPeerId,
       keepRecentCount: 0,
     });
     const memCount = totalExtractedMemories(commitResult.memories_extracted);
@@ -1014,7 +998,6 @@ export async function afterTurnOpenVikingSession({
 
     const commitResult = await client.commitSession(ovSessionId, {
       wait: false,
-      agentId: actorPeerId,
       keepRecentCount: cfg.commitKeepRecentCount,
     });
     logger.info(
@@ -1040,7 +1023,7 @@ export async function afterTurnOpenVikingSession({
         `openviking: Phase2 memory extraction runs asynchronously on the server (task_id=${commitResult.task_id}). ` +
           "memories_extracted appears only after that task completes — not in this immediate response.",
       );
-      void pollPhase2ExtractionOutcome(client, commitResult.task_id, actorPeerId, logger, ovSessionId);
+      void pollPhase2ExtractionOutcome(client, commitResult.task_id, undefined, logger, ovSessionId);
     }
   } catch (err) {
     logger.warn?.(`openviking: afterTurn failed: ${String(err)}`);
@@ -1151,7 +1134,6 @@ export async function compactOpenVikingSession({
     );
     const commitResult = await client.commitSession(ovSessionId, {
       wait: true,
-      agentId: actorPeerId,
       keepRecentCount: 0,
     });
     const memCount = totalExtractedMemories(commitResult.memories_extracted);

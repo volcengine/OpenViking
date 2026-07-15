@@ -85,11 +85,15 @@ export function createOpenVikingSessionRoutingRuntime(options: {
         sessionPersonPeerIds.set(alias, personPeerId);
       }
     }
-    return resolveOpenVikingActorPeerId({
+    const actorPeerId = resolveOpenVikingActorPeerId({
       peerRole,
       personPeerId: personPeerId ?? aliases.map((alias) => sessionPersonPeerIds.get(alias)).find(Boolean),
       assistantPeerId: resolveAgentId(sessionId, sessionKey, ovSessionId),
     });
+    if (peerRole === "person" && !actorPeerId) {
+      throw new Error("openviking: peer_role=person requires a sender identity");
+    }
+    return actorPeerId;
   };
 
   const resolvePluginSessionRouting = (ctx?: SessionAgentLookup): PluginSessionRouting => {

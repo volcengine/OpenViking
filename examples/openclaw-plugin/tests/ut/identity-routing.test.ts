@@ -102,4 +102,16 @@ describe("identity routing registry", () => {
     expect(runtime.resolvePluginSessionRouting({ sessionId: "session-1" }).actorPeerId)
       .toBe("ou_123_tenant");
   });
+
+  it("fails closed in person mode when no sender can be resolved", () => {
+    const runtime = createOpenVikingSessionRoutingRuntime({
+      peerRole: "person",
+      peerPrefix: "Agent",
+      logFindRequests: false,
+      logger: { info: () => undefined },
+    });
+
+    expect(() => runtime.resolvePluginSessionRouting({ sessionId: "session-without-sender" }))
+      .toThrow("peer_role=person requires a sender identity");
+  });
 });
