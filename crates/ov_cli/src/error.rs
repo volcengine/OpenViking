@@ -14,6 +14,9 @@ pub enum Error {
     #[error("Network error: {0}")]
     Network(String),
 
+    #[error("Request timeout: {0}")]
+    Timeout(String),
+
     #[error("API error: {message}")]
     Api {
         message: String,

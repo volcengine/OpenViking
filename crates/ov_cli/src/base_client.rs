@@ -16,6 +16,15 @@ use crate::error::{Error, Result};
 const GATEWAY_MARKER_HEADER: &str = "X-VikingBot-Gateway";
 const GATEWAY_TOKEN_HEADER: &str = "X-Gateway-Token";
 
+fn request_error(error_context: &str, error: reqwest::Error) -> Error {
+    let message = format!("{}: {}", error_context, error);
+    if error.is_timeout() {
+        Error::Timeout(message)
+    } else {
+        Error::Network(message)
+    }
+}
+
 fn parse_ignore_dirs(ignore_dirs: Option<&str>) -> Vec<String> {
     ignore_dirs
         .map(|s| {
@@ -280,7 +289,7 @@ impl BaseClient {
         let response = request
             .send()
             .await
-            .map_err(|e| Error::Network(format!("{}: {}", error_context, e)))?;
+            .map_err(|e| request_error(error_context, e))?;
         if !Self::is_gateway_token_challenge(&response) {
             return Ok(response);
         }
@@ -295,7 +304,7 @@ impl BaseClient {
             .header(GATEWAY_TOKEN_HEADER, gateway_token)
             .send()
             .await
-            .map_err(|e| Error::Network(format!("{}: {}", error_context, e)))
+            .map_err(|e| request_error(error_context, e))
     }
 
     async fn headers_for_uncloneable_request(&self) -> Result<reqwest::header::HeaderMap> {
@@ -310,7 +319,7 @@ impl BaseClient {
             .headers(headers.clone())
             .send()
             .await
-            .map_err(|e| Error::Network(format!("Gateway detection request failed: {}", e)))?;
+            .map_err(|e| request_error("Gateway detection request failed", e))?;
         if Self::is_gateway_token_challenge(&response) {
             if let Ok(value) = reqwest::header::HeaderValue::from_str(gateway_token) {
                 headers.insert(GATEWAY_TOKEN_HEADER, value);
@@ -333,7 +342,7 @@ impl BaseClient {
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| Error::Network(format!("Failed to read response body: {}", e)))?;
+            .map_err(|e| request_error("Failed to read response body", e))?;
 
         let json: Value = match serde_json::from_slice(&bytes) {
             Ok(json) => json,
@@ -559,6 +568,8 @@ impl BaseClient {
 mod tests {
     use super::*;
     use serde_json::json;
+    use tokio::io::AsyncReadExt;
+    use tokio::net::TcpListener;
 
     #[test]
     fn unwrap_success_envelope_preserves_profile_for_value_results() {
@@ -704,6 +715,36 @@ mod tests {
             .expect("path should be utf-8");
 
         assert_eq!(entry, "scripts/check_bounding_boxes.py");
+    }
+
+    #[tokio::test]
+    async fn request_timeout_is_not_classified_as_connection_failure() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buffer = [0_u8; 1024];
+            let _ = stream.read(&mut buffer).await;
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        });
+
+        let client = BaseClient::new(
+            format!("http://{address}"),
+            None,
+            None,
+            None,
+            None,
+            0.02,
+            false,
+            None,
+        );
+        let error = client
+            .get::<Value>("/slow", &[])
+            .await
+            .expect_err("request should time out before the server responds");
+
+        assert!(matches!(error, Error::Timeout(_)));
+        server.abort();
     }
 }
 
@@ -904,7 +945,7 @@ impl<'a> FileUploader<'a> {
             .multipart(form)
             .send()
             .await
-            .map_err(|e| Error::Network(format!("File upload failed: {}", e)))?;
+            .map_err(|e| request_error("File upload failed", e))?;
 
         let result: Value = self.client.handle_response(response).await?;
         result
@@ -972,7 +1013,7 @@ impl<'a> FileUploader<'a> {
             .multipart(form)
             .send()
             .await
-            .map_err(|e| Error::Network(format!("File upload failed: {}", e)))?;
+            .map_err(|e| request_error("File upload failed", e))?;
 
         pb.finish_with_message("Upload complete");
 

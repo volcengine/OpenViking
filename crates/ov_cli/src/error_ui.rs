@@ -245,6 +245,54 @@ pub(crate) fn report_for_runtime_error(command: impl Into<String>, error: &Error
             ErrorAction::new("ov health", copy(language, "Run a quick server health check", "快速检查服务器健康状态")),
             ErrorAction::new("ov config switch", copy(language, "Switch to another config", "切换到其他配置")),
         ]),
+        Error::Timeout(message) => processing_timeout_report(command, message, language),
+        Error::Api { message, .. } if looks_like_processing_timeout(message) => {
+            processing_timeout_report(command, message, language)
+        }
+        Error::Api { message, .. } if looks_like_path_lock_contention(message) => {
+            ErrorReport::new(
+                copy(language, "Path Lock Contention", "目录锁冲突"),
+                copy(
+                    language,
+                    "Another operation is holding a lock on this path. Wait for it to finish, then retry.",
+                    "另一个操作正在占用该路径的锁。请等待其完成后重试。",
+                ),
+            )
+            .with_command(command)
+            .with_detail(message)
+            .with_actions(vec![
+                ErrorAction::new(
+                    "ov status --verbose",
+                    copy(language, "Inspect active and stale locks", "检查活跃锁和过期锁"),
+                ),
+                ErrorAction::new(
+                    "ov observer queue",
+                    copy(language, "Inspect processing queues", "检查处理队列"),
+                ),
+            ])
+        }
+        Error::Api { message, .. } if looks_like_resource_busy(message) => {
+            ErrorReport::new(
+                copy(language, "Resource Busy", "资源忙"),
+                copy(
+                    language,
+                    "A concurrent operation is already using this resource. Wait briefly and retry with backoff.",
+                    "并发操作正在使用该资源。请稍候并采用退避策略重试。",
+                ),
+            )
+            .with_command(command)
+            .with_detail(message)
+            .with_actions(vec![
+                ErrorAction::new(
+                    "ov status --verbose",
+                    copy(language, "Inspect in-flight operations", "检查正在进行的操作"),
+                ),
+                ErrorAction::new(
+                    "ov observer queue",
+                    copy(language, "Inspect processing queues", "检查处理队列"),
+                ),
+            ])
+        }
         Error::Api { message, .. } if looks_like_gateway_dev_boundary_error(message) => {
             ErrorReport::new(
                 copy(language, "Gateway Safety Check", "Gateway 安全校验失败"),
@@ -431,6 +479,53 @@ pub(crate) fn report_for_runtime_error(command: impl Into<String>, error: &Error
         Error::AlreadyReported => ErrorReport::new(copy(language, "Command Error", "命令错误"), copy(language, "The command failed.", "命令执行失败。"))
             .with_command(command),
     }
+}
+
+fn processing_timeout_report(command: String, message: &str, language: Language) -> ErrorReport {
+    ErrorReport::new(
+        copy(language, "Processing Timeout", "处理超时"),
+        copy(
+            language,
+            "OpenViking did not finish the operation before the timeout. The server may still be healthy but busy.",
+            "OpenViking 未能在超时前完成操作。服务器可能仍然健康，但当前较忙。",
+        ),
+    )
+    .with_command(command)
+    .with_detail(message)
+    .with_actions(vec![
+        ErrorAction::new(
+            "ov observer queue",
+            copy(language, "Inspect processing queues", "检查处理队列"),
+        ),
+        ErrorAction::new(
+            "ov status --verbose",
+            copy(language, "Inspect locks and in-flight work", "检查锁和正在进行的任务"),
+        ),
+        ErrorAction::new(
+            "ov health",
+            copy(language, "Confirm that the server is reachable", "确认服务器仍可访问"),
+        ),
+    ])
+}
+
+fn looks_like_processing_timeout(message: &str) -> bool {
+    let lowered = message.to_ascii_lowercase();
+    lowered.contains("deadline_exceeded")
+        || lowered.contains("processing timed out")
+        || lowered.contains("queue processing timed out")
+}
+
+fn looks_like_path_lock_contention(message: &str) -> bool {
+    let lowered = message.to_ascii_lowercase();
+    (lowered.contains("path_lock") || lowered.contains("path lock"))
+        && (lowered.contains("timeout") || lowered.contains("timed out"))
+}
+
+fn looks_like_resource_busy(message: &str) -> bool {
+    let lowered = message.to_ascii_lowercase();
+    lowered.contains("resource is busy")
+        || lowered.contains("resource_busy")
+        || (lowered.contains("conflict") && lowered.contains("busy"))
 }
 
 fn trusted_identity_field_names(
@@ -1509,6 +1604,62 @@ Usage: ov config [OPTIONS] [COMMAND]
         assert!(rendered.contains("ov config validate"));
         assert!(rendered.contains("ov health"));
         assert!(rendered.contains("ov config switch"));
+    }
+
+    #[test]
+    fn request_timeout_suggests_queue_and_lock_observation() {
+        let error = Error::Timeout("HTTP request failed: operation timed out".to_string());
+        let report = report_for_runtime_error("ov add-resource file.md", &error);
+        let rendered = strip_ansi(&render_report(&report, false));
+
+        assert!(rendered.contains("Processing Timeout"));
+        assert!(rendered.contains("server may still be healthy but busy"));
+        assert!(rendered.contains("ov observer queue"));
+        assert!(rendered.contains("ov status --verbose"));
+        assert!(!rendered.contains("ov config switch"));
+    }
+
+    #[test]
+    fn deadline_exceeded_api_error_is_not_rendered_as_connection_failure() {
+        let error = Error::api_with_status(
+            "[DEADLINE_EXCEEDED] Queue processing timed out after 30.0s",
+            504,
+        );
+        let report = report_for_runtime_error("ov add-resource file.md", &error);
+        let rendered = strip_ansi(&render_report(&report, false));
+
+        assert!(rendered.contains("Processing Timeout"));
+        assert!(rendered.contains("ov observer queue"));
+        assert!(!rendered.contains("Connection Error"));
+        assert!(!rendered.contains("ov config validate"));
+    }
+
+    #[test]
+    fn path_lock_timeout_suggests_lock_observation() {
+        let error = Error::api_with_status(
+            "[INTERNAL] path_lock timeout on /local/default/user/memories/tools",
+            500,
+        );
+        let report = report_for_runtime_error("ov rm viking://resources/project", &error);
+        let rendered = strip_ansi(&render_report(&report, false));
+
+        assert!(rendered.contains("Path Lock Contention"));
+        assert!(rendered.contains("ov status --verbose"));
+        assert!(!rendered.contains("Connection Error"));
+    }
+
+    #[test]
+    fn resource_busy_suggests_retry_with_backoff() {
+        let error = Error::api_with_status(
+            "[CONFLICT] Resource is busy: viking://resources/project/file.md",
+            409,
+        );
+        let report = report_for_runtime_error("ov add-resource file.md", &error);
+        let rendered = strip_ansi(&render_report(&report, false));
+
+        assert!(rendered.contains("Resource Busy"));
+        assert!(rendered.contains("retry with backoff"));
+        assert!(!rendered.contains("Connection Error"));
     }
 
     #[test]
