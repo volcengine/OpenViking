@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -391,6 +392,30 @@ class _SingleAccountBackend:
         except Exception as e:
             logger.error("Error deleting by filter: %s", e)
             return 0
+
+    async def delete_deterministic_uris(self, account_id: str, uris: List[str]) -> int:
+        """Delete local records by their tenant-scoped deterministic ids.
+
+        This bypasses the query path, which cannot recover an id from a legacy
+        candidate whose JSON fields were truncated.  The caller must provide
+        the account bound to this backend so arbitrary cross-tenant ids cannot
+        be passed through this repair path.
+        """
+        if self._mode != "local":
+            return 0
+        if not self._bound_account_id or self._bound_account_id != account_id:
+            raise ValueError("deterministic URI deletion requires the bound account")
+
+        ids: list[str] = []
+        for uri in uris:
+            seeds = (uri, f"{uri}/.abstract.md", f"{uri}/.overview.md")
+            for seed_uri in seeds:
+                record_id = hashlib.md5(f"{account_id}:{seed_uri}".encode("utf-8")).hexdigest()
+                if record_id not in ids:
+                    ids.append(record_id)
+        if not ids:
+            return 0
+        return await self._async_adapter.call("delete", ids=ids)
 
     async def exists(self, id: str) -> bool:
         try:
@@ -1198,15 +1223,22 @@ class VikingVectorIndexBackend:
         return await root_backend.delete_by_filter(Eq("account_id", account_id))
 
     async def delete_uris(self, ctx: RequestContext, uris: List[str]) -> None:
+        backend = self._get_backend_for_context(ctx)
+        canonical_uris: list[str] = []
         for uri in uris:
             canonical_uri = canonicalize_uri(uri, ctx)
+            canonical_uris.append(canonical_uri)
             conds: List[FilterExpr] = [
                 Eq("account_id", ctx.account_id),
                 Or([Eq("uri", canonical_uri), In("uri", [f"{canonical_uri}/"])]),
             ]
-
-            backend = self._get_backend_for_context(ctx)
             await backend.delete_by_filter(And(conds))
+
+        # Local legacy records with truncated JSON fields are skipped by the
+        # filter query before it can recover their ids.  Record ids are
+        # deterministic from account + URI + semantic layer, so delete those
+        # exact tenant-scoped ids as an idempotent repair pass.
+        await backend.delete_deterministic_uris(ctx.account_id, canonical_uris)
 
     async def update_uri_mapping(
         self,
