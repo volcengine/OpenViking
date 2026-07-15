@@ -286,7 +286,8 @@ def split_image_into_tiles(
     cols: int,
     filename_prefix: str = "tile",
     ext: str = ".jpg",
-    config: Optional[ImageConfig] = None
+    config: Optional[ImageConfig] = None,
+    original_format: str = "JPEG",
 ) -> List[TileInfo]:
     """
     Split an image into grid tiles.
@@ -298,12 +299,16 @@ def split_image_into_tiles(
         filename_prefix: Prefix for tile filenames
         ext: File extension for tiles
         config: Optional ImageConfig for custom thresholds
+        original_format: Original image format ("PNG" or "JPEG")
 
     Returns:
         List of TileInfo objects
     """
     width, height = img.size
     positions = calculate_tile_positions(width, height, rows, cols, config)
+
+    is_png = original_format.upper() == "PNG"
+    save_format = "PNG" if is_png else "JPEG"
 
     tiles = []
     tile_idx = 0
@@ -312,11 +317,13 @@ def split_image_into_tiles(
             x1, y1, x2, y2 = positions[tile_idx]
             tile_img = img.crop((x1, y1, x2, y2))
 
-            # Convert to RGB if needed
-            if tile_img.mode in ("RGBA", "P"):
+            # Convert to RGB if needed (skip for PNG to preserve alpha)
+            if not is_png and tile_img.mode in ("RGBA", "P"):
                 tile_img = tile_img.convert("RGB")
 
-            tile_bytes = save_image_to_bytes(tile_img, format="JPEG", quality=TILE_QUALITY)
+            tile_bytes = save_image_to_bytes(
+                tile_img, format=save_format, quality=TILE_QUALITY
+            )
 
             filename = f"{filename_prefix}_{row+1}_{col+1}{ext}"
 
@@ -343,6 +350,7 @@ def create_grid_overlay(
     rows: int,
     cols: int,
     label_prefix: str = "",
+    ext: str = ".jpg",
     config: Optional[ImageConfig] = None
 ) -> bytes:
     """
@@ -355,6 +363,7 @@ def create_grid_overlay(
         rows: Number of grid rows
         cols: Number of grid columns
         label_prefix: Prefix for labels (e.g., "3_5_")
+        ext: Tile file extension for labels (e.g., ".jpg", ".png")
         config: Optional ImageConfig for custom thresholds
 
     Returns:
@@ -401,8 +410,8 @@ def create_grid_overlay(
             # Draw rectangle around tile
             draw.rectangle([sx1, sy1, sx2, sy2], outline=grid_color, width=line_width)
 
-            # Calculate label (use .jpg to match tile file extension)
-            label = f"./tiles/{label_prefix}_{row+1}_{col+1}.jpg"
+            # Calculate label (use ext to match tile file extension)
+            label = f"./tiles/{label_prefix}_{row+1}_{col+1}{ext}"
 
             # Try to find a suitable font
             font = ImageFont.load_default()
@@ -496,6 +505,10 @@ def process_large_image(
         label_prefix = f"{rows}_{cols}"
         logger.info(f"Grid dimensions: {rows} rows x {cols} cols")
 
+        # Determine tile format: preserve PNG, default to JPEG for others
+        is_png = format_str.upper() == "PNG"
+        tile_ext = ".png" if is_png else ".jpg"
+
         # Create low-res preview
         preview_bytes = create_low_res_preview(img, max_tile_size_mb, config)
 
@@ -503,14 +516,16 @@ def process_large_image(
         tiles = split_image_into_tiles(
             img, rows, cols,
             filename_prefix=f"{filename_prefix}_{label_prefix}",
-            ext=".jpg",
-            config=config
+            ext=tile_ext,
+            config=config,
+            original_format=format_str,
         )
 
         # Create grid overlay (use full tile prefix so labels match tile filenames)
         grid_overlay_bytes = create_grid_overlay(
             img, rows, cols,
             label_prefix=f"{filename_prefix}_{label_prefix}",
+            ext=tile_ext,
             config=config
         )
 
