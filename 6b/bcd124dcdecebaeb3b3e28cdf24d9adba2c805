@@ -1,0 +1,62 @@
+openviking/server/local_input_guard.py
+  s_d01d8763e4b7db::t_51aeccb0400098 15-17,25-39,42,64-65
+tests/server/test_mcp_endpoint.py
+  s_b51e49b00ff870::t_e340bc4d17971c 275-311
+openviking/server/mcp_endpoint.py
+  s_e278f1f9675706::t_d6b43c1dd54f7c 47,153-154,158-159,200
+openviking/server/identity.py
+  s_d01d8763e4b7db::t_5ac511d0d0e618 108-110
+openviking/connector/client.py
+  s_e278f1f9675706::t_9edfd402e35046 1-111
+openviking/service/resource_service.py
+  s_b51e49b00ff870::t_29bf852208fad4 19-21,60,665-684,1152-1490
+tests/service/test_resource_service_connector.py
+  s_6b836f618f2de3::t_8eb8d0c1fa4d2c 1-402
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "6bbcd124dcdecebaeb3b3e28cdf24d9adba2c805",
+  "prompts": {},
+  "humans": {
+    "h_76fa89855b2583": {
+      "author": "ziheng.li <ziheng.li@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_6b836f618f2de3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f61f4-aca5-7782-ab6b-0960b04dd0d1",
+        "model": "unknown"
+      },
+      "human_author": "ziheng.li <ziheng.li@bytedance.com>"
+    },
+    "s_b51e49b00ff870": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f61b5-51ab-7c62-9877-62086d6c5d8e",
+        "model": "unknown"
+      },
+      "human_author": "ziheng.li <ziheng.li@bytedance.com>"
+    },
+    "s_d01d8763e4b7db": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5efb-aa63-7051-845b-9c29b41936b2",
+        "model": "unknown"
+      },
+      "human_author": "ziheng.li <ziheng.li@bytedance.com>"
+    },
+    "s_e278f1f9675706": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6151-2ba8-77c2-b2b7-4e75dda7d3d2",
+        "model": "unknown"
+      },
+      "human_author": "ziheng.li <ziheng.li@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
