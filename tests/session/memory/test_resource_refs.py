@@ -124,3 +124,43 @@ def test_unlink_resource_references_removes_bare_uri_but_keeps_sentence():
     assert changed is True
     assert mf.content == "用户保存了越前龙马照片。"
     assert "resource_refs" not in mf.extra_fields
+
+
+def test_unlink_resource_references_leaves_wiki_links_untouched_by_default():
+    resource_uri = "viking://resources/docs/.overview.md"
+    entity_uri = "viking://user/alice/memories/entities/openviking.md"
+    link = {
+        "from_uri": resource_uri,
+        "to_uri": entity_uri,
+        "link_type": "related_to",
+        "match_text": "OpenViking",
+    }
+    mf = MemoryFile(content="# OpenViking", links=[link], backlinks=[link])
+
+    changed = unlink_resource_references_from_memory(mf, resource_uri)
+
+    assert changed is False
+    assert mf.links == [link]
+    assert mf.backlinks == [link]
+
+
+def test_unlink_resource_references_removes_wiki_links_only_when_requested():
+    resource_uri = "viking://resources/docs/.overview.md"
+    entity_uri = "viking://user/alice/memories/entities/openviking.md"
+    link = {
+        "from_uri": resource_uri,
+        "to_uri": entity_uri,
+        "link_type": "related_to",
+        "match_text": "OpenViking",
+    }
+    mf = MemoryFile(content="# OpenViking", links=[link], backlinks=[link])
+
+    changed = unlink_resource_references_from_memory(
+        mf,
+        resource_uri,
+        unlink_wiki_links=True,
+    )
+
+    assert changed is True
+    assert mf.links == []
+    assert mf.backlinks == []

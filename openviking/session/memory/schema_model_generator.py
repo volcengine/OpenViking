@@ -291,7 +291,7 @@ class SchemaModelGenerator:
                 Field(
                     default_factory=list,
                     description=(
-                        "Links between memory pages. Follow the link rules above. "
+                        "Links between pages. Follow the link rules above. "
                         "Use page_ids for `f` and `t`. Use `weight` from 0 to 1 to rank competing links."
                     ),
                 ),

@@ -107,6 +107,7 @@ def unlink_resource_references_from_memory(
     resource_uri: str,
     *,
     recursive: bool = False,
+    unlink_wiki_links: bool = False,
 ) -> bool:
     """Remove stale resource link targets while preserving visible memory text."""
     before_content = mf.content
@@ -127,7 +128,29 @@ def unlink_resource_references_from_memory(
     else:
         mf.extra_fields.pop("resource_refs", None)
 
-    return before_content != mf.content or before_refs != refs
+    changed = before_content != mf.content or before_refs != refs
+    if not unlink_wiki_links:
+        return changed
+
+    before_links = list(mf.links or [])
+    before_backlinks = list(mf.backlinks or [])
+
+    def keep_link(link: Dict[str, Any]) -> bool:
+        return not (
+            resource_ref_matches(link.get("from_uri"), resource_uri, recursive=recursive)
+            or resource_ref_matches(link.get("to_uri"), resource_uri, recursive=recursive)
+        )
+
+    mf.links = [link for link in before_links if not isinstance(link, dict) or keep_link(link)]
+    mf.backlinks = [
+        link for link in before_backlinks if not isinstance(link, dict) or keep_link(link)
+    ]
+
+    return (
+        changed
+        or before_links != mf.links
+        or before_backlinks != mf.backlinks
+    )
 
 
 def unlink_resource_references_from_content(

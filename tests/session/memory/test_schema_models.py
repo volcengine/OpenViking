@@ -83,7 +83,6 @@ class TestSchemaModelGenerator:
         """Create a registry with real schemas."""
         return create_default_registry()
 
-
     def test_peer_enabled_false_omits_peer_id_field(self):
         memory_type = MemoryTypeSchema(
             memory_type="cases",
@@ -184,7 +183,6 @@ class TestSchemaModelGenerator:
         # Check business fields
         assert "field1" in model.model_fields
         assert "field2" in model.model_fields
-
 
     def test_page_id_field_is_emitted_before_mutable_content(self, registry_with_sample):
         """page_id should appear before mutable fields so the model anchors target page first."""
@@ -295,7 +293,7 @@ class TestSchemaModelGenerator:
 
         links_field = model.model_fields["links"]
         assert links_field.description == (
-            "Links between memory pages. Follow the link rules above. "
+            "Links between pages. Follow the link rules above. "
             "Use page_ids for `f` and `t`. Use `weight` from 0 to 1 to rank competing links."
         )
 
@@ -426,6 +424,7 @@ class TestWikiLink:
 
         assert link_type_schema["type"] == "string"
         assert "enum" not in link_type_schema
+
 
 class TestIntegration:
     """Integration tests for the complete schema system."""

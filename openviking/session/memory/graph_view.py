@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """
 Memory graph generator — builds a self-contained D3.js force-directed HTML graph
-from all links stored in MEMORY_FIELDS across one or more memory spaces.
+from links stored in MEMORY_FIELDS across memory and resource Wiki spaces.
 
 Usage:
     graph = MemoryGraph(viking_fs)
@@ -14,7 +14,9 @@ import hashlib
 import json
 from typing import Any, Dict, List
 
+from openviking.core.namespace import context_type_for_uri
 from openviking.server.identity import RequestContext
+from openviking.session.memory.merge_op.link_merge import wiki_links_enabled
 from openviking.session.memory.utils.link_renderer import LinkRenderer
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage.viking_fs import get_viking_fs
@@ -34,6 +36,7 @@ TYPE_COLORS = {
     "tools": "#e67e22",
     "experiences": "#fd79a8",
     "trajectories": "#6c5ce7",
+    "resource": "#f1c40f",
 }
 
 
@@ -45,7 +48,7 @@ def _color_for_link_type(link_type: str) -> str:
 
 
 class MemoryGraph:
-    """Generate an Obsidian-style force-directed graph of memory links."""
+    """Generate an Obsidian-style force-directed graph of memory and Wiki links."""
 
     def __init__(self, viking_fs=None):
         self._viking_fs = viking_fs
@@ -89,22 +92,38 @@ class MemoryGraph:
 
         nodes: Dict[str, Dict[str, Any]] = {}
         edges: List[Dict[str, Any]] = []
+        wiki_enabled = wiki_links_enabled()
 
         for space_uri in space_uris:
+            try:
+                resource_wiki_space = wiki_enabled and context_type_for_uri(space_uri) == "resource"
+            except (TypeError, ValueError):
+                resource_wiki_space = False
             entries = await viking_fs.tree(
                 space_uri,
                 node_limit=1000000,
                 level_limit=None,
                 ctx=ctx,
             )
-            md_uris = [
-                entry["uri"]
-                for entry in entries
-                if not entry.get("isDir")
-                and entry.get("rel_path", "").endswith(".md")
-                and not entry.get("rel_path", "").endswith("/.overview.md")
-                and not entry.get("rel_path", "").endswith("/.abstract.md")
-            ]
+            if resource_wiki_space:
+                md_uris = [
+                    entry["uri"]
+                    for entry in entries
+                    if not entry.get("isDir")
+                    and (
+                        entry.get("rel_path", "") == ".overview.md"
+                        or entry.get("rel_path", "").endswith("/.overview.md")
+                    )
+                ]
+            else:
+                md_uris = [
+                    entry["uri"]
+                    for entry in entries
+                    if not entry.get("isDir")
+                    and entry.get("rel_path", "").endswith(".md")
+                    and not entry.get("rel_path", "").endswith("/.overview.md")
+                    and not entry.get("rel_path", "").endswith("/.abstract.md")
+                ]
 
             logger.info(f"[build_graph] Found {len(md_uris)} memory files under {space_uri}")
 
@@ -118,10 +137,19 @@ class MemoryGraph:
                     logger.error(f"Failed to read/parse {uri}: {e}")
                     raise
 
-                inferred_memory_type = self._infer_memory_type(uri, mf.memory_type or "")
+                if resource_wiki_space and not mf.links:
+                    continue
+
+                inferred_memory_type = (
+                    "resource"
+                    if resource_wiki_space
+                    else self._infer_memory_type(uri, mf.memory_type or "")
+                )
                 category = mf.extra_fields.get("category", "")
                 name = mf.extra_fields.get("name", "")
                 label = name if name else uri.split("/")[-1].replace(".md", "")
+                if resource_wiki_space and not name:
+                    label = uri.rstrip("/").rsplit("/", 2)[-2]
 
                 rendered_content = LinkRenderer.render_links(mf.content or "", uri, mf.links)
 

@@ -196,3 +196,52 @@ async def test_collect_graph_data_drops_edges_to_unloaded_external_nodes():
 
     assert [node["uri"] for node in nodes] == [child_uri]
     assert edges == []
+
+
+@pytest.mark.asyncio
+async def test_collect_graph_data_includes_linked_resource_overview(monkeypatch):
+    resource_root = "viking://resources/docs"
+    overview_uri = f"{resource_root}/.overview.md"
+    memory_root = "viking://user/alice/memories"
+    entity_uri = f"{memory_root}/entities/projects/openviking.md"
+    overview_content = f"""# OpenViking
+
+OpenViking is a memory system.
+
+<!-- MEMORY_FIELDS
+{{"links": [{{"from_uri": "{overview_uri}", "to_uri": "{entity_uri}", "link_type": "related_to", "match_text": "OpenViking"}}]}}
+-->"""
+    entity_content = """# OpenViking
+
+<!-- MEMORY_FIELDS
+{"memory_type": "entities"}
+-->"""
+    mock_fs = MagicMock()
+    mock_fs.tree = AsyncMock(
+        side_effect=[
+            [_file_entry(overview_uri, ".overview.md")],
+            [_file_entry(entity_uri, "entities/projects/openviking.md")],
+        ]
+    )
+    mock_fs.read_file = AsyncMock(side_effect=[overview_content, entity_content])
+    monkeypatch.setattr(
+        "openviking.session.memory.graph_view.wiki_links_enabled",
+        lambda: True,
+    )
+
+    graph = MemoryGraph(viking_fs=mock_fs)
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+    nodes, edges = await graph._collect_graph_data([resource_root, memory_root], ctx)
+
+    resource_node = next(node for node in nodes if node["uri"] == overview_uri)
+    assert resource_node["memory_type"] == "resource"
+    assert resource_node["label"] == "docs"
+    assert edges == [
+        {
+            "source": overview_uri,
+            "target": entity_uri,
+            "link_type": "related_to",
+            "weight": 1.0,
+            "description": "",
+        }
+    ]

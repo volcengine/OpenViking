@@ -1114,17 +1114,54 @@ class MemoryUpdater:
         if not viking_fs:
             return
         from openviking.core.namespace import context_type_for_uri
+        from openviking.session.memory.merge_op.link_merge import wiki_links_enabled
 
         upserted_uris = set(result.written_uris + result.edited_uris)
+        if not wiki_links_enabled():
+            non_memory_endpoints = {
+                uri
+                for link in resolved_links
+                for uri in (link.from_uri, link.to_uri)
+                if context_type_for_uri(uri) != "memory"
+            }
+            skip = upserted_uris | (deleted_uris or set()) | non_memory_endpoints
+            await write_stored_links(resolved_links, ctx, viking_fs, skip_uris=skip)
+            return
+
+        from openviking.session.memory.merge_op.link_merge import is_allowed_wiki_link
+
+        writable_resource_sources = {
+            link.from_uri
+            for link in resolved_links
+            if context_type_for_uri(link.from_uri) == "resource"
+            and is_allowed_wiki_link(
+                link.from_uri,
+                link.to_uri,
+                link.link_type,
+                ctx=ctx,
+            )
+        }
+        resource_wiki_endpoints = {
+            uri
+            for link in resolved_links
+            if link.from_uri in writable_resource_sources
+            for uri in (link.from_uri, link.to_uri)
+        }
         non_memory_endpoints = {
             uri
             for link in resolved_links
             for uri in (link.from_uri, link.to_uri)
             if context_type_for_uri(uri) != "memory"
-        }
+        } - writable_resource_sources
         skip = upserted_uris | (deleted_uris or set()) | non_memory_endpoints
-        await write_stored_links(resolved_links, ctx, viking_fs, skip_uris=skip)
-
+        updated_uris = await write_stored_links(resolved_links, ctx, viking_fs, skip_uris=skip)
+        for uri in updated_uris:
+            if (
+                uri in resource_wiki_endpoints
+                and uri not in result.written_uris
+                and uri not in result.edited_uris
+            ):
+                result.add_edited(uri)
 
     async def _inherit_deleted_link_relations(
         self,

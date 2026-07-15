@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for resource-memory linking service."""
 
+import json
 import re
 from types import SimpleNamespace
 
 import pytest
 
+from openviking.message.part import ContextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_memory_link_service import (
     _RESOURCE_REASON_SESSION_ID,
@@ -350,6 +352,241 @@ async def test_on_resource_added_routes_peer_resource_uri_to_peer(request_contex
 
 
 @pytest.mark.asyncio
+async def test_resource_wiki_is_a_noop_when_links_are_disabled(request_context, monkeypatch):
+    fs = _FakeVikingFS({"viking://user/alice/resources/docs/.overview.md": "# OpenViking"})
+    session_service = _FakeSessionService()
+    service = ResourceMemoryLinkService(viking_fs=fs, session_service=session_service)
+    monkeypatch.setattr(
+        "openviking.service.resource_memory_link_service.wiki_links_enabled",
+        lambda: False,
+    )
+
+    result = await service.on_resource_wiki_added(
+        ctx=request_context,
+        resource_uri="viking://user/alice/resources/docs",
+    )
+
+    assert result == {"status": "skipped", "reason": "link_disabled"}
+    assert fs.read_calls == []
+    assert session_service.got == []
+    assert session_service.committed == []
+
+
+@pytest.mark.asyncio
+async def test_resource_wiki_commits_entities_only_and_cleans_old_backlinks(
+    request_context, monkeypatch
+):
+    resource_uri = "viking://resources/docs"
+    overview_uri = f"{resource_uri}/.overview.md"
+    entity_uri = "viking://user/alice/memories/entities/projects/openviking.md"
+    other_entity_uri = "viking://user/bob/memories/entities/projects/other.md"
+    old_link = {
+        "from_uri": overview_uri,
+        "to_uri": entity_uri,
+        "link_type": "related_to",
+        "match_text": "OpenViking",
+    }
+    other_user_link = {
+        "from_uri": overview_uri,
+        "to_uri": other_entity_uri,
+        "link_type": "related_to",
+        "match_text": "OtherWiki",
+    }
+    fs = _FakeVikingFS(
+        {
+            overview_uri: MemoryFileUtils.write(
+                MemoryFile(
+                    uri=overview_uri,
+                    content=(
+                        "# OpenViking\nOpenViking is a memory system.\n"
+                        "OtherWiki belongs to another user."
+                    ),
+                    links=[old_link, other_user_link],
+                )
+            ),
+            f"{resource_uri}/.abstract.md": "OpenViking 记忆系统",
+            entity_uri: MemoryFileUtils.write(
+                MemoryFile(
+                    uri=entity_uri,
+                    content="# OpenViking",
+                    memory_type="entities",
+                    backlinks=[old_link],
+                )
+            ),
+        }
+    )
+    session_service = _FakeSessionService()
+    service = ResourceMemoryLinkService(viking_fs=fs, session_service=session_service)
+    monkeypatch.setattr(
+        "openviking.service.resource_memory_link_service.wiki_links_enabled",
+        lambda: True,
+    )
+
+    result = await service.on_resource_wiki_added(
+        ctx=request_context,
+        resource_uri=resource_uri,
+    )
+
+    assert result["status"] == "success"
+    assert result["overview_uri"] == overview_uri
+    assert result["stale_links_removed"] == 1
+    assert result["stale_backlinks_removed"] == 1
+    assert session_service.session.meta.memory_policy == {
+        "self": {"enabled": True},
+        "peer": {"enabled": False},
+        "memory_types": ["entities"],
+        "working_memory": {"enabled": False},
+    }
+    parts = session_service.session.messages[0]["parts"]
+    assert parts[0].text == (
+        "## Resource Wiki Extraction\n"
+        "Extract durable memories from the provided source and link its source page "
+        "to related pages when meaningful."
+    )
+    assert ".overview.md" not in parts[0].text
+    assert "entity" not in parts[0].text.lower()
+    assert isinstance(parts[1], ContextPart)
+    assert parts[1].uri == overview_uri
+    entity = MemoryFileUtils.read(fs.store[entity_uri], uri=entity_uri)
+    overview = MemoryFileUtils.read(fs.store[overview_uri], uri=overview_uri)
+    assert overview.links == [other_user_link]
+    assert "[OpenViking]" not in overview.content
+    assert "[OtherWiki]" in overview.content
+    assert entity.backlinks == []
+
+
+@pytest.mark.asyncio
+async def test_resource_wiki_links_every_entity_changed_by_its_commit(request_context, monkeypatch):
+    resource_uri = "viking://resources/星尘计划"
+    overview_uri = f"{resource_uri}/.overview.md"
+    memory_diff_uri = "viking://user/alice/sessions/wiki/history/archive_001/memory_diff.json"
+    project_uri = "viking://user/alice/memories/entities/project/星尘计划.md"
+    organization_uri = "viking://user/alice/memories/entities/organization/天穹财团.md"
+    technology_uri = "viking://user/alice/memories/entities/technology/星晶.md"
+    event_uri = "viking://user/alice/memories/events/2141.md"
+    other_user_entity_uri = "viking://user/bob/memories/entities/project/其他项目.md"
+    model_link = {
+        "from_uri": overview_uri,
+        "to_uri": project_uri,
+        "link_type": "related_to",
+        "weight": 0.8,
+        "match_text": "星尘计划",
+        "description": "",
+        "created_at": "2026-07-15T00:00:00+00:00",
+    }
+    fs = _FakeVikingFS(
+        {
+            overview_uri: MemoryFileUtils.write(
+                MemoryFile(
+                    uri=overview_uri,
+                    content="# 星尘计划\n星尘计划由天穹财团发起。",
+                )
+            ),
+            project_uri: MemoryFileUtils.write(
+                MemoryFile(uri=project_uri, content="# 星尘计划", memory_type="entities")
+            ),
+            organization_uri: MemoryFileUtils.write(
+                MemoryFile(uri=organization_uri, content="# 天穹财团", memory_type="entities")
+            ),
+            technology_uri: MemoryFileUtils.write(
+                MemoryFile(uri=technology_uri, content="# 星晶", memory_type="entities")
+            ),
+            event_uri: MemoryFileUtils.write(
+                MemoryFile(uri=event_uri, content="# 2141", memory_type="events")
+            ),
+            other_user_entity_uri: MemoryFileUtils.write(
+                MemoryFile(
+                    uri=other_user_entity_uri,
+                    content="# 其他项目",
+                    memory_type="entities",
+                )
+            ),
+            memory_diff_uri: json.dumps(
+                {
+                    "operations": {
+                        "adds": [
+                            {"uri": project_uri, "memory_type": "entities"},
+                            {"uri": organization_uri, "memory_type": "entities"},
+                            {"uri": technology_uri, "memory_type": "entities"},
+                            {"uri": event_uri, "memory_type": "events"},
+                            {"uri": other_user_entity_uri, "memory_type": "entities"},
+                        ],
+                        "updates": [{"uri": project_uri, "memory_type": "entities"}],
+                        "deletes": [],
+                    }
+                },
+                ensure_ascii=False,
+            ),
+        }
+    )
+    service = ResourceMemoryLinkService(viking_fs=fs, session_service=_FakeSessionService())
+    monkeypatch.setattr(
+        "openviking.service.resource_memory_link_service.wiki_links_enabled",
+        lambda: True,
+    )
+
+    captured_abstracts = []
+
+    async def fake_commit_memory_message(**kwargs):
+        captured_abstracts.append(kwargs["parts"][1].abstract)
+        overview = MemoryFileUtils.read(fs.store[overview_uri], uri=overview_uri)
+        overview.links = [model_link]
+        await fs.write_file(overview_uri, MemoryFileUtils.write(overview))
+        project = MemoryFileUtils.read(fs.store[project_uri], uri=project_uri)
+        project.backlinks = [model_link]
+        await fs.write_file(project_uri, MemoryFileUtils.write(project))
+        return {
+            "status": "success",
+            "commit_task": {"result": {"memory_diff_uri": memory_diff_uri}},
+        }
+
+    monkeypatch.setattr(service, "_commit_memory_message", fake_commit_memory_message)
+
+    result = await service.on_resource_wiki_added(
+        ctx=request_context,
+        resource_uri=resource_uri,
+    )
+
+    assert result["status"] == "success"
+    assert captured_abstracts == ["# 星尘计划\n星尘计划由天穹财团发起。"]
+    overview = MemoryFileUtils.read(fs.store[overview_uri], uri=overview_uri)
+    links_by_target = {link["to_uri"]: link for link in overview.links}
+    assert set(links_by_target) == {project_uri, organization_uri, technology_uri}
+    assert links_by_target[project_uri]["match_text"] == "星尘计划"
+    assert links_by_target[organization_uri]["match_text"] == "天穹财团"
+    assert links_by_target[technology_uri]["match_text"] is None
+    assert len([link for link in overview.links if link["to_uri"] == project_uri]) == 1
+    assert "[星尘计划]" in overview.content
+    assert "[天穹财团]" in overview.content
+    assert len(MemoryFileUtils.read(fs.store[project_uri], uri=project_uri).backlinks) == 1
+    assert (
+        len(MemoryFileUtils.read(fs.store[organization_uri], uri=organization_uri).backlinks) == 1
+    )
+    assert len(MemoryFileUtils.read(fs.store[technology_uri], uri=technology_uri).backlinks) == 1
+
+
+@pytest.mark.asyncio
+async def test_resource_wiki_skips_non_resource_scope(request_context, monkeypatch):
+    fs = _FakeVikingFS({})
+    service = ResourceMemoryLinkService(
+        viking_fs=fs,
+        session_service=_FakeSessionService(),
+    )
+    monkeypatch.setattr(
+        "openviking.service.resource_memory_link_service.wiki_links_enabled",
+        lambda: True,
+    )
+
+    result = await service.on_resource_wiki_added(
+        ctx=request_context,
+        resource_uri="viking://user/alice/memories/entities",
+    )
+
+    assert result == {"status": "skipped", "reason": "unsupported_resource_scope"}
+    assert fs.read_calls == []
+
+
+@pytest.mark.asyncio
 async def test_on_resource_deleted_bridges_through_fixed_session(request_context):
     resource_uri = "viking://resources/images/2026/06/11/yueqian_jpeg"
     memory_uri = "viking://user/alice/memories/entities/photos.md"
@@ -506,6 +743,108 @@ async def test_find_referencing_memories_uses_grep_candidates_without_tree_scan(
     ]
     assert viking_fs.read_calls == [memory_uri]
     assert viking_fs.tree_calls == []
+
+
+@pytest.mark.asyncio
+async def test_resource_reference_scan_includes_wiki_links_only_when_requested(request_context):
+    overview_uri = "viking://resources/docs/.overview.md"
+    entity_uri = "viking://user/alice/memories/entities/openviking.md"
+    link = {
+        "from_uri": overview_uri,
+        "to_uri": entity_uri,
+        "link_type": "related_to",
+        "match_text": "OpenViking",
+    }
+    raw = MemoryFileUtils.write(
+        MemoryFile(uri=entity_uri, content="# OpenViking", backlinks=[link])
+    )
+    service = ResourceMemoryLinkService(viking_fs=_FakeVikingFS({entity_uri: raw}))
+
+    legacy_matches = await service._find_referencing_memories(
+        ctx=request_context,
+        resource_uri=overview_uri,
+        recursive=False,
+    )
+    wiki_matches = await service._find_referencing_memories(
+        ctx=request_context,
+        resource_uri=overview_uri,
+        recursive=False,
+        include_wiki_links=True,
+    )
+
+    assert legacy_matches == []
+    assert [match.memory_uri for match in wiki_matches] == [entity_uri]
+
+
+@pytest.mark.asyncio
+async def test_resource_delete_ignores_wiki_links_when_links_are_disabled(
+    request_context, monkeypatch
+):
+    overview_uri = "viking://resources/docs/.overview.md"
+    entity_uri = "viking://user/alice/memories/entities/openviking.md"
+    link = {
+        "from_uri": overview_uri,
+        "to_uri": entity_uri,
+        "link_type": "related_to",
+        "match_text": "OpenViking",
+    }
+    raw = MemoryFileUtils.write(
+        MemoryFile(uri=entity_uri, content="# OpenViking", backlinks=[link])
+    )
+    fs = _FakeVikingFS({entity_uri: raw})
+    session_service = _FakeSessionService()
+    service = ResourceMemoryLinkService(viking_fs=fs, session_service=session_service)
+    monkeypatch.setattr(
+        "openviking.service.resource_memory_link_service.wiki_links_enabled",
+        lambda: False,
+    )
+
+    result = await service.before_resource_delete(
+        ctx=request_context,
+        resource_uri=overview_uri,
+    )
+
+    assert result == {"status": "no_references", "memory_uris": []}
+    assert fs.store[entity_uri] == raw
+    assert session_service.got == []
+    assert session_service.committed == []
+
+
+@pytest.mark.asyncio
+async def test_resource_delete_cleans_wiki_links_when_links_are_enabled(
+    request_context, monkeypatch
+):
+    overview_uri = "viking://resources/docs/.overview.md"
+    entity_uri = "viking://user/alice/memories/entities/openviking.md"
+    link = {
+        "from_uri": overview_uri,
+        "to_uri": entity_uri,
+        "link_type": "related_to",
+        "match_text": "OpenViking",
+    }
+    fs = _FakeVikingFS(
+        {
+            entity_uri: MemoryFileUtils.write(
+                MemoryFile(uri=entity_uri, content="# OpenViking", backlinks=[link])
+            )
+        }
+    )
+    session_service = _FakeSessionService()
+    service = ResourceMemoryLinkService(viking_fs=fs, session_service=session_service)
+    monkeypatch.setattr(
+        "openviking.service.resource_memory_link_service.wiki_links_enabled",
+        lambda: True,
+    )
+
+    result = await service.before_resource_delete(
+        ctx=request_context,
+        resource_uri=overview_uri,
+    )
+
+    assert result["status"] == "success"
+    assert result["memory_uris"] == [entity_uri]
+    assert MemoryFileUtils.read(fs.store[entity_uri], uri=entity_uri).backlinks == []
+    assert len(session_service.committed) == 1
 
 
 @pytest.mark.asyncio

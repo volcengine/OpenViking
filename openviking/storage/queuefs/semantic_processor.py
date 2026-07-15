@@ -1167,11 +1167,11 @@ class SemanticProcessor(DequeueHandlerBase):
     def _replace_index_references(
         self, generated_content: str, file_index_map: Dict[int, str]
     ) -> str:
-        def replace_index(match):
-            idx = int(match.group(1))
-            return file_index_map.get(idx, match.group(0))
-
-        return re.sub(r"\[(\d+)\]", replace_index, generated_content)
+        content = generated_content
+        for idx, file_name in file_index_map.items():
+            pattern = rf"\[{idx}\](?:[ \t]*{re.escape(file_name)})?"
+            content = re.sub(pattern, lambda _match, name=file_name: name, content)
+        return content
 
     def _truncate_generated_text(self, text: str, max_chars: int) -> str:
         if max_chars <= 0 or len(text) <= max_chars:
@@ -1256,6 +1256,17 @@ class SemanticProcessor(DequeueHandlerBase):
 
         if not overview_content or not overview_content.strip():
             return summaries
+
+        if "<!-- MEMORY_FIELDS" in overview_content:
+            from openviking.session.memory.merge_op.link_merge import wiki_links_enabled
+
+            if wiki_links_enabled():
+                from openviking.session.memory.utils.link_renderer import LinkRenderer
+                from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+
+                overview_content = LinkRenderer.strip_all_links(
+                    MemoryFileUtils.read(overview_content).content
+                )
 
         lines = overview_content.split("\n")
         current_file = None

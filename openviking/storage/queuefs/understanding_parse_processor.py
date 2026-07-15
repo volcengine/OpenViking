@@ -13,6 +13,7 @@ from openviking.observability.context import (
 )
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import get_task_tracker
+from openviking.session.memory.merge_op.link_merge import wiki_links_enabled
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.understanding_parse_msg import UnderstandingParseMsg
 from openviking.telemetry import bind_telemetry, bind_telemetry_stage, resolve_telemetry
@@ -27,6 +28,28 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
         self._resource_processor = resource_processor
         self._resource_memory_link_service = resource_memory_link_service
         self._background_tasks: set[asyncio.Task] = set()
+
+    async def _link_resource_wiki(
+        self,
+        *,
+        ctx: RequestContext,
+        result: Dict[str, Any],
+    ) -> None:
+        if not self._resource_memory_link_service:
+            return
+        root_uri = result.get("root_uri")
+        if not root_uri:
+            return
+        try:
+            link_result = await self._resource_memory_link_service.on_resource_wiki_added(
+                ctx=ctx,
+                resource_uri=root_uri,
+                timeout=None,
+            )
+            result["wiki_linking"] = link_result
+        except Exception as exc:
+            logger.warning("[UnderstandingParse] Failed to build resource Wiki: %s", exc)
+            result.setdefault("warnings", []).append(f"Resource Wiki linking failed: {exc}")
 
     async def _monitor_queue_then_link_memory(
         self,
@@ -77,6 +100,12 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                             exc,
                         )
                         result.setdefault("warnings", []).append(f"Memory linking failed: {exc}")
+
+            if wiki_links_enabled():
+                await self._link_resource_wiki(
+                    ctx=ctx,
+                    result=result,
+                )
 
             await task_tracker.complete(
                 task_id,
@@ -309,6 +338,12 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                             result.setdefault("warnings", []).append(
                                 f"Memory linking failed: {exc}"
                             )
+
+                if wiki_links_enabled():
+                    await self._link_resource_wiki(
+                        ctx=ctx,
+                        result=result,
+                    )
 
                 await task_tracker.complete(
                     msg.task_id,

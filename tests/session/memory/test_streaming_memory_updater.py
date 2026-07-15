@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from openviking.message import Message, TextPart
+from openviking.message import ContextPart, Message, TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import (
     MemoryField,
@@ -22,6 +22,9 @@ from openviking.session.memory.dataclass import (
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult
 from openviking.session.memory.merge_op.base import FieldType, MergeOp, SearchReplaceBlock, StrPatch
+from openviking.session.memory.session_extract_context_provider import (
+    RESOURCE_WIKI_EXTRACTION_HEADER,
+)
 from openviking.session.memory.streaming_memory_updater import (
     MemoryMergeGroupKey,
     MemoryUpdateRequest,
@@ -30,7 +33,9 @@ from openviking.session.memory.streaming_memory_updater import (
     StreamingMemoryUpdateResult,
     classify_memory_merge_mode,
     enforce_merge_group_peer_id,
+    filter_valid_links,
     merge_one_memory_type_operations,
+    merge_output_language_from_messages,
     operation_to_patch,
     render_operation_after_file_content,
     split_request_by_merge_group,
@@ -383,6 +388,147 @@ async def test_streaming_memory_updater_fast_path_filters_links(monkeypatch):
     assert len(result.operations.resolved_links) == 1
     assert result.operations.resolved_links[0].to_uri.endswith("/events/existing.md")
     assert result.apply_result.written_uris == [op1.uris[0]]
+
+
+@pytest.mark.asyncio
+async def test_streaming_memory_updater_applies_link_only_resource_wiki_request(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.wiki_links_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.merge_op.link_merge.wiki_links_enabled",
+        lambda: True,
+    )
+    overview_uri = "viking://resources/docs/.overview.md"
+    entity_uri = "viking://user/u/memories/entities/projects/openviking.md"
+    fs = InMemoryVikingFS(
+        {
+            overview_uri: "# OpenViking\nOpenViking is a memory system.",
+            entity_uri: MemoryFileUtils.write(
+                MemoryFile(
+                    uri=entity_uri,
+                    content="# OpenViking",
+                    memory_type="entities",
+                )
+            ),
+        }
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.get_viking_fs",
+        lambda: fs,
+    )
+    updater = StreamingMemoryUpdater(
+        registry=_registry(),
+        config=StreamingMemoryUpdaterConfig(
+            max_operations_per_update=8,
+            max_wait_seconds=0.01,
+            timer_check_interval_seconds=0.01,
+        ),
+    )
+    link = StoredLink(
+        from_uri=overview_uri,
+        to_uri=entity_uri,
+        match_text="OpenViking",
+    )
+
+    result = await updater.submit(
+        MemoryUpdateRequest(
+            operations=ResolvedOperations(
+                upsert_operations=[],
+                delete_file_contents=[],
+                errors=[],
+                resolved_links=[link],
+            ),
+            messages=[Message(id="m1", role="user", parts=[TextPart("resource Wiki")])],
+            ctx=_ctx(),
+        )
+    )
+
+    overview = MemoryFileUtils.read(fs.files[overview_uri], uri=overview_uri)
+    entity = MemoryFileUtils.read(fs.files[entity_uri], uri=entity_uri)
+    assert result.metadata["flush_reason"] == "link_only"
+    assert len(result.operations.resolved_links) == 1
+    assert overview.links[0]["to_uri"] == entity_uri
+    assert entity.backlinks[0]["from_uri"] == overview_uri
+    assert set(result.apply_result.edited_uris) == {overview_uri, entity_uri}
+
+
+@pytest.mark.asyncio
+async def test_streaming_link_only_path_is_bypassed_when_links_disabled(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.wiki_links_enabled",
+        lambda: False,
+    )
+    updater = StreamingMemoryUpdater(
+        registry=_registry(),
+        config=StreamingMemoryUpdaterConfig(
+            max_operations_per_update=8,
+            max_wait_seconds=0.01,
+            timer_check_interval_seconds=0.01,
+        ),
+    )
+    request = MemoryUpdateRequest(
+        operations=ResolvedOperations(
+            upsert_operations=[],
+            delete_file_contents=[],
+            errors=[],
+            resolved_links=[
+                StoredLink(
+                    from_uri="viking://resources/docs/.overview.md",
+                    to_uri="viking://user/u/memories/entities/openviking.md",
+                    match_text="OpenViking",
+                )
+            ],
+        ),
+        messages=[],
+        ctx=_ctx(),
+    )
+    apply_post_group_links = AsyncMock(
+        side_effect=AssertionError("link-only apply must be bypassed")
+    )
+    monkeypatch.setattr(
+        StreamingMemoryUpdater,
+        "_apply_post_group_links",
+        apply_post_group_links,
+    )
+
+    append_request, merge_request = updater._split_append_only_request(request)
+    result = await updater._submit_grouped_merge_request(request)
+
+    assert append_request is None
+    assert merge_request is None
+    assert result is None
+    apply_post_group_links.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_streaming_link_filter_bypasses_wiki_checks_when_disabled(monkeypatch):
+    source_uri = "viking://user/u/memories/entities/source.md"
+    target_uri = "viking://user/u/memories/profile.md"
+    fs = InMemoryVikingFS({source_uri: "source", target_uri: "target"})
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.get_viking_fs",
+        lambda: fs,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.wiki_links_enabled",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.is_allowed_wiki_link",
+        lambda *args, **kwargs: pytest.fail("wiki validation must be bypassed"),
+    )
+    link = StoredLink(from_uri=source_uri, to_uri=target_uri, match_text="source")
+
+    result = await filter_valid_links(
+        [link],
+        upsert_operations=[],
+        delete_file_contents=[],
+        ctx=_ctx(),
+    )
+
+    assert result == [link]
 
 
 @pytest.mark.asyncio
@@ -1050,3 +1196,27 @@ async def test_patch_merge_uses_original_messages_for_output_language(monkeypatc
     )
 
     assert captured_languages == ["zh-CN"]
+
+
+def test_patch_merge_resource_wiki_language_comes_from_source_abstract():
+    language = merge_output_language_from_messages(
+        [
+            Message(
+                id="m1",
+                role="user",
+                parts=[
+                    TextPart(
+                        f"{RESOURCE_WIKI_EXTRACTION_HEADER}\n"
+                        "Extract durable memories from the provided source."
+                    ),
+                    ContextPart(
+                        uri="viking://resources/星尘计划/.overview.md",
+                        context_type="resource",
+                        abstract="星尘计划是天穹财团发起的科研项目。",
+                    ),
+                ],
+            )
+        ]
+    )
+
+    assert language == "zh-CN"

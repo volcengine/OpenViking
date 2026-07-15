@@ -111,12 +111,12 @@ class WikiLink(BaseModel):
     ] = Field(
         ...,
         description=(
-            "A single WORD from the original conversation to be linkified. "
+            "A single WORD from the page referenced by `f` to be linkified. "
             "This field must always be included in link output. "
-            "Use a single exact word from the original conversation whenever possible; "
+            "Use a single exact word from that page whenever possible; "
             "only use null when no valid single-word anchor exists. "
             "Rules: (1) must be a single word only (NOT a phrase or multi-word text); "
-            "(2) must exist verbatim in the original conversation messages; "
+            "(2) must exist verbatim in the page referenced by `f`; "
             "(3) pick the most specific/identifying word"
         ),
     )
@@ -130,7 +130,7 @@ class StoredLink(BaseModel):
     to_uri: str
     link_type: str = LINK_TYPE_DEFAULT
     weight: float = 0.5
-    match_text: Optional[str] = None  # single word, must exist verbatim in conversation
+    match_text: Optional[str] = None  # single exact word from the source page
     description: str = ""
     created_at: str = ""
 

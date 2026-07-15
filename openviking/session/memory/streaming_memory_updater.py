@@ -41,6 +41,10 @@ from openviking.session.memory.memory_updater import (
     write_stored_links,
 )
 from openviking.session.memory.merge_op import MergeOpFactory
+from openviking.session.memory.merge_op.link_merge import (
+    is_allowed_wiki_link,
+    wiki_links_enabled,
+)
 from openviking.session.memory.patch_merge_context_provider import (
     PatchMergeContextProvider,
     PatchMergePatch,
@@ -218,7 +222,25 @@ class StreamingMemoryUpdater:
     ) -> StreamingMemoryUpdateResult | None:
         grouped_requests = split_request_by_merge_group(request)
         if not grouped_requests:
-            return None
+            if (
+                request.operations.errors
+                or not request.operations.resolved_links
+                or not wiki_links_enabled()
+            ):
+                return None
+            link_operations = request.operations.model_copy(deep=True)
+            link_operations.resolved_links = []
+            result = StreamingMemoryUpdateResult(
+                operations=link_operations,
+                apply_result=MemoryUpdateResult(),
+                request_count=1,
+                metadata={
+                    "flush_reason": "link_only",
+                    "operation_count": 0,
+                },
+            )
+            await self._apply_post_group_links(request, result)
+            return result
         submissions = [
             (await self._get_group_batcher(group_key)).submit(group_request)
             for group_key, group_request in grouped_requests
@@ -329,7 +351,12 @@ class StreamingMemoryUpdater:
             )
 
         merge_request = None
-        if merge_ops or operations.delete_file_contents or operations.errors:
+        if (
+            merge_ops
+            or operations.delete_file_contents
+            or operations.errors
+            or (merge_links and wiki_links_enabled())
+        ):
             merge_request = clone_memory_update_request(
                 request,
                 operations=ResolvedOperations(
@@ -1410,8 +1437,21 @@ async def filter_valid_links(
 
     valid_links: list[StoredLink] = []
     dropped = 0
+    validate_wiki_links = wiki_links_enabled()
     for link in merge_link_lists(links):
-        if await _endpoint_exists(link.from_uri) and await _endpoint_exists(link.to_uri):
+        if (
+            (
+                not validate_wiki_links
+                or is_allowed_wiki_link(
+                    link.from_uri,
+                    link.to_uri,
+                    link.link_type,
+                    ctx=ctx,
+                )
+            )
+            and await _endpoint_exists(link.from_uri)
+            and await _endpoint_exists(link.to_uri)
+        ):
             valid_links.append(link)
         else:
             dropped += 1
@@ -1570,14 +1610,23 @@ def _scope_operations_to_submitter(
         ResolvedOperations(upsert_operations=upserts, delete_file_contents=deletes, errors=[])
     )
     request_uris = set(scope.request_uris)
+    resolved_links = list(getattr(operations, "resolved_links", []) or [])
+    allow_request_only_links = bool(
+        not kept_uris and resolved_links and request_uris and wiki_links_enabled()
+    )
     return ResolvedOperations(
         upsert_operations=upserts,
         delete_file_contents=deletes,
         errors=list(getattr(operations, "errors", []) or []),
         resolved_links=[
             link
-            for link in list(getattr(operations, "resolved_links", []) or [])
-            if _link_matches_scoped_uris(link, scoped_uris=kept_uris, request_uris=request_uris)
+            for link in resolved_links
+            if _link_matches_scoped_uris(
+                link,
+                scoped_uris=kept_uris,
+                request_uris=request_uris,
+                allow_request_only=allow_request_only_links,
+            )
         ],
         delete_replacements={
             str(deleted_uri): str(replacement_uri)
@@ -1661,7 +1710,12 @@ def _source_extraction_ids_from_fields(fields: dict[str, Any]) -> set[str]:
 
 
 def _request_uri_set(request: MemoryUpdateRequest) -> set[str]:
-    return _operation_uri_set(getattr(request, "operations", None))
+    operations = getattr(request, "operations", None)
+    uris = _operation_uri_set(operations)
+    links = list(getattr(operations, "resolved_links", []) or []) if operations else []
+    if links and wiki_links_enabled():
+        uris.update(_link_endpoint_uri_set(links))
+    return uris
 
 
 def _operation_uri_set(operations: ResolvedOperations | None) -> set[str]:
@@ -1698,8 +1752,9 @@ def _link_matches_scoped_uris(
     *,
     scoped_uris: set[str],
     request_uris: set[str],
+    allow_request_only: bool = False,
 ) -> bool:
-    if not scoped_uris:
+    if not scoped_uris and not allow_request_only:
         return False
     from_uri = str(getattr(link, "from_uri", "") or "")
     to_uri = str(getattr(link, "to_uri", "") or "")

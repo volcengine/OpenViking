@@ -76,6 +76,53 @@ class TestResolveOperations:
         assert operation.memory_fields["content"] == "new content"
         isolation_handler.calculate_memory_uris.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_non_memory_page_id_mutations_are_guarded_only_when_links_enabled(self):
+        schema = MemoryTypeSchema(
+            memory_type="entities",
+            description="entity memory",
+            directory="viking://user/{{ user_space }}/memories/entities",
+            filename_template="{{ name }}.md",
+            fields=[
+                MemoryField(name="name", field_type=FieldType.STRING, merge_op=MergeOp.REPLACE),
+                MemoryField(name="content", field_type=FieldType.STRING, merge_op=MergeOp.PATCH),
+            ],
+        )
+        overview_uri = "viking://resources/docs/.overview.md"
+        overview = MemoryFile(uri=overview_uri, content="# OpenViking")
+        page_id_map = PageIdMap()
+        page_id = page_id_map.get_page_id(overview_uri)
+
+        async def resolve(link_enabled):
+            context_provider = Mock()
+            context_provider.get_memory_schemas.return_value = [schema]
+            context_provider.read_file_contents = {overview_uri: overview}
+            isolation_handler = Mock()
+            isolation_handler.get_read_scope.return_value = None
+            isolation_handler.fill_identity_fields.side_effect = lambda item, **_: item
+            loop = ExtractLoop(
+                vlm=Mock(model="test-model"),
+                viking_fs=Mock(),
+                context_provider=context_provider,
+                isolation_handler=isolation_handler,
+            )
+            loop._link_enabled = link_enabled
+            loop._extract_context = SimpleNamespace(page_id_map=page_id_map)
+            return await loop.resolve_operations(
+                AttrDict(
+                    entities=[{"name": "OpenViking", "content": "updated", "page_id": page_id}],
+                    delete_ids=[{"delete_page_id": page_id, "replacement_page_id": None}],
+                )
+            )
+
+        guarded, _ = await resolve(True)
+        legacy, _ = await resolve(False)
+
+        assert guarded.upsert_operations == []
+        assert guarded.delete_file_contents == []
+        assert legacy.upsert_operations[0].uris == [overview_uri]
+        assert legacy.delete_file_contents == [overview]
+
     def test_unresolved_page_ids_logs_at_info(self):
         loop = ExtractLoop(vlm=Mock(model="test-model"), viking_fs=Mock(), context_provider=Mock())
         loop._extract_context = Mock()
@@ -103,6 +150,27 @@ class TestResolveOperations:
             "from_uri=viking://user/user_sample_0/memories/trajectories/a.md, to_uri=None, "
             "op_page_map_keys=[]"
         )
+
+    def test_link_resolution_bypasses_wiki_validation_when_links_disabled(self):
+        source_uri = "viking://user/alice/memories/entities/source.md"
+        target_uri = "viking://user/alice/memories/profile.md"
+        page_id_map = PageIdMap()
+        source_page_id = page_id_map.get_page_id(source_uri)
+        target_page_id = page_id_map.get_page_id(target_uri)
+        loop = ExtractLoop(vlm=Mock(model="test-model"), viking_fs=Mock(), context_provider=Mock())
+        loop._link_enabled = False
+        loop._extract_context = SimpleNamespace(page_id_map=page_id_map)
+
+        with patch(
+            "openviking.session.memory.extract_loop.is_allowed_wiki_link",
+            side_effect=AssertionError("wiki validation must be bypassed"),
+        ):
+            resolved = loop._resolve_links(
+                [WikiLink(f=source_page_id, t=target_page_id, match_text="source")],
+                upsert_operations=[],
+            )
+
+        assert [(link.from_uri, link.to_uri) for link in resolved] == [(source_uri, target_uri)]
 
 
 class TestResolveLinksMultiUri:
@@ -228,6 +296,10 @@ class TestPageIdInstruction:
         assert "For new items, assign a unique page_id >= 100." in system_content
         assert "When editing an existing item, reuse its existing page_id." in system_content
         assert "Link fields" not in system_content
+        assert "## Resource Wiki Extraction" not in system_content
+        assert ".overview.md" not in system_content
+        assert "Entity pages" not in system_content
+        assert "match_text" not in system_content
 
     @pytest.mark.asyncio
     async def test_run_includes_link_page_id_rule_when_links_enabled(self):
@@ -296,7 +368,10 @@ class TestPageIdInstruction:
         assert "## Link Rules" in system_content
         assert "Link fields `f` and `t` must reference these page_id values." in system_content
         assert "each visible line is prefixed with `line_number<TAB>`" in system_content
-        assert "Only create links when the relationship is meaningful" in system_content
+        assert "meaningful and clear from the provided context" in system_content
+        assert ".overview.md" not in system_content
+        assert "Entity pages" not in system_content
+        assert "non-entity memories" not in system_content
 
 
 class TestFinalOperationsHydration:

@@ -1,10 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+from types import SimpleNamespace
+
 import pytest
 
 from openviking.session.memory.merge_op.link_merge import (
     _dedup_key,
+    is_allowed_wiki_link,
     merge_links,
 )
 
@@ -19,6 +22,63 @@ class TestDedupKey:
         link1 = {"from_uri": "a", "to_uri": "b", "match_text": "foo"}
         link2 = {"from_uri": "a", "to_uri": "b", "match_text": "bar"}
         assert _dedup_key(link1) != _dedup_key(link2)
+
+
+class TestWikiLinkDirection:
+    overview = "viking://user/alice/resources/docs/.overview.md"
+    entity = "viking://user/alice/memories/entities/projects/openviking.md"
+    other_entity = "viking://user/alice/memories/entities/people/alice.md"
+    profile = "viking://user/alice/memories/profile.md"
+    preference = "viking://user/alice/memories/preferences/editor.md"
+
+    @pytest.mark.parametrize(
+        ("from_uri", "to_uri", "allowed"),
+        [
+            (overview, entity, True),
+            (entity, overview, False),
+            ("viking://user/alice/resources/docs/page.md", entity, False),
+            ("viking://resources/docs/.overview.md", entity, False),
+            (profile, entity, True),
+            (entity, profile, False),
+            (entity, other_entity, True),
+            (
+                entity,
+                "viking://user/alice/peers/bob/memories/entities/people/bob.md",
+                False,
+            ),
+            (profile, preference, True),
+        ],
+    )
+    def test_direction_matrix(self, from_uri, to_uri, allowed):
+        assert is_allowed_wiki_link(from_uri, to_uri) is allowed
+
+    def test_legacy_memory_resource_reference_is_preserved(self):
+        assert is_allowed_wiki_link(
+            self.entity,
+            "viking://resources/id_card.pdf",
+            "references_resource",
+        )
+
+    def test_global_resource_targets_request_users_entities(self):
+        overview = "viking://resources/docs/.overview.md"
+        alice_ctx = SimpleNamespace(
+            user=SimpleNamespace(user_id="alice"),
+            actor_peer_id=None,
+        )
+        bob_ctx = SimpleNamespace(
+            user=SimpleNamespace(user_id="bob"),
+            actor_peer_id=None,
+        )
+        peer_ctx = SimpleNamespace(
+            user=SimpleNamespace(user_id="alice"),
+            actor_peer_id="bob",
+        )
+        peer_entity = "viking://user/alice/peers/bob/memories/entities/openviking.md"
+
+        assert is_allowed_wiki_link(overview, self.entity, ctx=alice_ctx)
+        assert not is_allowed_wiki_link(overview, self.entity, ctx=bob_ctx)
+        assert is_allowed_wiki_link(overview, peer_entity, ctx=peer_ctx)
+        assert not is_allowed_wiki_link(overview, self.entity, ctx=peer_ctx)
 
 
 class TestMergeLinks:

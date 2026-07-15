@@ -12,6 +12,7 @@ class LinkRenderer:
     # across renderers; `render_links` therefore percent-encodes spaces in generated
     # targets so they round-trip cleanly. We accept both forms when matching.
     _RELATIVE_LINK_RE = re.compile(r"\[(?P<text>[^\]]+)\]\((?P<target>[^)]+)\)")
+    _ATX_HEADING_RE = re.compile(r"(?m)^[ \t]{0,3}#{1,6}[ \t]+.*$")
     _MEMORY_FIELDS_RE = re.compile(r"(\n\n<!--\s*MEMORY_FIELDS\s*\n)", re.DOTALL)
     _CJK_RE = re.compile(r"[㐀-䶿一-鿿豈-﫿]")
     _ASCII_WORD_CHAR_RE = re.compile(r"[A-Za-z0-9_]")
@@ -25,39 +26,58 @@ class LinkRenderer:
         return bool(char and LinkRenderer._ASCII_WORD_CHAR_RE.fullmatch(char))
 
     @staticmethod
-    def _find_match_span(content: str, match_text: str) -> Optional[tuple[int, int]]:
+    def _match_spans(content: str, match_text: str) -> List[tuple[int, int]]:
         escaped = re.escape(match_text)
-        # Character spans already covered by an existing [text](target) link. A match
-        # inside one is already linked, so wrapping it again would produce a broken
-        # nested link like "[[Frank](..) Ocean](..)"; skip those candidates.
-        linked_spans = [
-            (m.start(), m.end()) for m in LinkRenderer._RELATIVE_LINK_RE.finditer(content)
-        ]
-
-        def _inside_existing_link(start: int, end: int) -> bool:
-            return any(ls <= start and end <= le for ls, le in linked_spans)
-
         if LinkRenderer._contains_cjk(match_text):
-            for match in re.finditer(escaped, content):
-                start, end = match.start(), match.end()
-                if _inside_existing_link(start, end):
-                    continue
-                return start, end
-            return None
+            return [(match.start(), match.end()) for match in re.finditer(escaped, content)]
 
         pattern = re.compile(escaped, re.IGNORECASE)
+        spans = []
         for match in pattern.finditer(content):
             start, end = match.start(), match.end()
-            if _inside_existing_link(start, end):
-                continue
             left_char = content[start - 1] if start > 0 else ""
             right_char = content[end] if end < len(content) else ""
             if LinkRenderer._is_ascii_word_char(left_char) or LinkRenderer._is_ascii_word_char(
                 right_char
             ):
                 continue
+            spans.append((start, end))
+        return spans
+
+    @staticmethod
+    def _find_match_span(
+        content: str, match_text: str, excluded_spans: List[tuple[int, int]]
+    ) -> Optional[tuple[int, int]]:
+        for start, end in LinkRenderer._match_spans(content, match_text):
+            if any(
+                start < excluded_end and end > excluded_start
+                for excluded_start, excluded_end in excluded_spans
+            ):
+                continue
             return start, end
         return None
+
+    @staticmethod
+    def _render_target(source_uri: str, to_uri: str) -> str:
+        relative = LinkRenderer.relative_path(source_uri, to_uri)
+        return (relative if relative is not None else to_uri).replace(" ", "%20")
+
+    @staticmethod
+    def _strip_managed_links(content: str, source_uri: str, links: List[Dict]) -> str:
+        """Remove links previously rendered from the same StoredLink metadata."""
+        managed = {
+            (
+                str(link["match_text"]).casefold(),
+                LinkRenderer._render_target(source_uri, link["to_uri"]),
+            )
+            for link in links
+        }
+
+        def _strip(match: re.Match) -> str:
+            key = (match.group("text").casefold(), match.group("target").replace(" ", "%20"))
+            return match.group("text") if key in managed else match.group(0)
+
+        return LinkRenderer._RELATIVE_LINK_RE.sub(_strip, content)
 
     @staticmethod
     def render_links(content: str, source_uri: str, links: List[Dict]) -> str:
@@ -68,40 +88,61 @@ class LinkRenderer:
             source_uri: The viking:// URI of the file being written.
             links: List of link dicts (from links + backlinks in MEMORY_FIELDS).
         """
-        eligible = [l for l in links if l.get("match_text")]
+        eligible = [
+            link for link in links if link.get("match_text") and link.get("to_uri") != source_uri
+        ]
         if not eligible:
             return content
 
-        eligible.sort(key=lambda l: l.get("weight", 0), reverse=True)
+        # Rebuild only links managed by this metadata so repeated file writes are
+        # idempotent and old duplicate renderings collapse back to one link.
+        content = LinkRenderer._strip_managed_links(content, source_uri, eligible)
+        eligible.sort(key=lambda link: (-len(str(link["match_text"])), -link.get("weight", 0)))
+
+        existing_link_matches = list(LinkRenderer._RELATIVE_LINK_RE.finditer(content))
+        excluded_spans = [(match.start(), match.end()) for match in existing_link_matches]
+        excluded_spans.extend(
+            (match.start(), match.end()) for match in LinkRenderer._ATX_HEADING_RE.finditer(content)
+        )
+
+        # An anchor already covered by a hand-authored Markdown link is visible;
+        # do not add the same anchor again elsewhere on the page.
+        claimed = {
+            str(link["match_text"]).casefold()
+            for link in eligible
+            if any(
+                LinkRenderer._match_spans(match.group("text"), str(link["match_text"]))
+                for match in existing_link_matches
+            )
+        }
 
         replacements: List[tuple] = []  # (start, end, replacement_text)
         for link in eligible:
-            match_text = link["match_text"]
-            to_uri = link["to_uri"]
-
-            if to_uri == source_uri:
+            match_text = str(link["match_text"])
+            match_key = match_text.casefold()
+            if match_key in claimed:
                 continue
 
-            rel = LinkRenderer.relative_path(source_uri, to_uri)
-            link_target = rel if rel is not None else to_uri
-
-            match_span = LinkRenderer._find_match_span(content, match_text)
+            to_uri = link["to_uri"]
+            longer_anchor_spans = [
+                span
+                for other in eligible
+                if len(str(other["match_text"])) > len(match_text)
+                for span in LinkRenderer._match_spans(content, str(other["match_text"]))
+            ]
+            match_span = LinkRenderer._find_match_span(
+                content,
+                match_text,
+                excluded_spans + longer_anchor_spans,
+            )
             if not match_span:
                 continue
 
             start, end = match_span
-            # Skip if overlaps with an existing replacement
-            if any(not (end <= rs or start >= re_) for rs, re_, _ in replacements):
-                continue
-
-            # Percent-encode spaces in the rendered target so the link is portable
-            # across markdown renderers (e.g. `[Frank](entities/frank ocean.md)`
-            # would otherwise be ambiguous). We accept the literal-space form when
-            # matching existing links, but always emit the encoded form when
-            # generating new ones.
-            encoded_target = link_target.replace(" ", "%20")
-            rendered = f"[{content[start:end]}]({encoded_target})"
+            rendered = f"[{content[start:end]}]({LinkRenderer._render_target(source_uri, to_uri)})"
             replacements.append((start, end, rendered))
+            excluded_spans.append((start, end))
+            claimed.add(match_key)
 
         # Apply in reverse order to preserve indices
         result = list(content)

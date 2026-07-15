@@ -60,6 +60,16 @@ def test_index_references_are_replaced_inside_markdown_overview(monkeypatch):
     assert replaced == "# README\n\nUse README.md to get started."
 
 
+def test_index_replacement_does_not_duplicate_an_existing_file_name(monkeypatch):
+    _patch_semantic_limits(monkeypatch)
+    processor = SemanticProcessor()
+    generated = "→ Read the project background → [1] README.md\n\n### [1] README.md"
+
+    replaced = processor._replace_index_references(generated, {1: "README.md"})
+
+    assert replaced == "→ Read the project background → README.md\n\n### README.md"
+
+
 def test_abstract_truncation_prefers_complete_sentence(monkeypatch):
     _patch_semantic_limits(monkeypatch, abstract_max_chars=80)
     processor = SemanticProcessor()
@@ -92,9 +102,7 @@ def test_overview_truncation_prefers_complete_sentence(monkeypatch):
     _patch_semantic_limits(monkeypatch, overview_max_chars=45)
     processor = SemanticProcessor()
     overview = (
-        "# README\n\n"
-        "This is a complete sentence. "
-        "This second sentence would be cut in the middle."
+        "# README\n\nThis is a complete sentence. This second sentence would be cut in the middle."
     )
 
     overview, abstract = processor._enforce_size_limits(overview, "abstract")
@@ -106,12 +114,7 @@ def test_overview_truncation_prefers_complete_sentence(monkeypatch):
 def test_overview_truncation_keeps_last_complete_sentence_within_limit(monkeypatch):
     _patch_semantic_limits(monkeypatch, overview_max_chars=57)
     processor = SemanticProcessor()
-    overview = (
-        "# README\n\n"
-        "First sentence. "
-        "Second sentence. "
-        "Third sentence should be omitted."
-    )
+    overview = "# README\n\nFirst sentence. Second sentence. Third sentence should be omitted."
 
     overview, abstract = processor._enforce_size_limits(overview, "abstract")
 

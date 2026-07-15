@@ -371,7 +371,7 @@ class TestRenderLinks:
         )
         assert result == content
 
-    def test_use_later_unlinked_match_when_first_match_is_already_linked(self):
+    def test_existing_link_claims_match_without_linking_later_occurrence(self):
         content = "[Frank Ocean](../../../../entities/personal/frank.md) performed. Frank stayed."
         links = [
             {
@@ -386,10 +386,79 @@ class TestRenderLinks:
             "viking://user/Calvin/memories/profile.md",
             links,
         )
-        assert (
-            result == "[Frank Ocean](../../../../entities/personal/frank.md) performed. "
-            "[Frank](entities/personal/frank.md) stayed."
+        assert result == content
+
+    def test_render_is_idempotent_and_links_only_first_occurrence(self):
+        content = "星尘计划的核心产品。所属项目：星尘计划。"
+        links = [
+            {
+                "from_uri": "viking://user/jiajie/memories/entities/幽能引擎.md",
+                "to_uri": "viking://user/jiajie/memories/entities/星尘计划.md",
+                "weight": 1.0,
+                "match_text": "星尘计划",
+            }
+        ]
+
+        first = LinkRenderer.render_links(content, links[0]["from_uri"], links)
+        second = LinkRenderer.render_links(first, links[0]["from_uri"], links)
+
+        assert first == "[星尘计划](星尘计划.md)的核心产品。所属项目：星尘计划。"
+        assert second == first
+
+    def test_existing_managed_duplicates_collapse_to_one_link(self):
+        content = "[星尘计划](星尘计划.md)的核心产品。所属项目：[星尘计划](星尘计划.md)。"
+        links = [
+            {
+                "from_uri": "viking://user/jiajie/memories/entities/幽能引擎.md",
+                "to_uri": "viking://user/jiajie/memories/entities/星尘计划.md",
+                "weight": 1.0,
+                "match_text": "星尘计划",
+            }
+        ]
+
+        result = LinkRenderer.render_links(content, links[0]["from_uri"], links)
+
+        assert result == "[星尘计划](星尘计划.md)的核心产品。所属项目：星尘计划。"
+
+    def test_headings_are_not_linkified(self):
+        content = "# [星尘计划](星尘计划.md)档案\n\n## 星尘计划\n\n正文介绍星尘计划。"
+        links = [
+            {
+                "from_uri": "viking://user/jiajie/memories/entities/星尘计划档案.md",
+                "to_uri": "viking://user/jiajie/memories/entities/星尘计划.md",
+                "weight": 1.0,
+                "match_text": "星尘计划",
+            }
+        ]
+
+        result = LinkRenderer.render_links(content, links[0]["from_uri"], links)
+
+        assert result == "# 星尘计划档案\n\n## 星尘计划\n\n正文介绍[星尘计划](星尘计划.md)。"
+
+    def test_longer_anchor_wins_and_shorter_anchor_only_links_standalone_text(self):
+        content = "# 星尘计划档案\n\n星尘计划档案介绍星尘计划。"
+        source_uri = "viking://user/jiajie/memories/entities/概览.md"
+        links = [
+            {
+                "from_uri": source_uri,
+                "to_uri": "viking://user/jiajie/memories/entities/星尘计划.md",
+                "weight": 1.0,
+                "match_text": "星尘计划",
+            },
+            {
+                "from_uri": source_uri,
+                "to_uri": "viking://user/jiajie/memories/entities/星尘计划档案.md",
+                "weight": 1.0,
+                "match_text": "星尘计划档案",
+            },
+        ]
+
+        result = LinkRenderer.render_links(content, source_uri, links)
+
+        assert result == (
+            "# 星尘计划档案\n\n[星尘计划档案](星尘计划档案.md)介绍[星尘计划](星尘计划.md)。"
         )
+        assert "[星尘计划](星尘计划.md)档案" not in result
 
 
 class TestStripLinks:
@@ -551,7 +620,7 @@ class TestRoundTrip:
 
         assert memory_file.plain_content() == "Worked with Frank Ocean."
 
-    def test_memory_file_utils_write_keeps_plain_text_body_and_preserves_links_metadata(self):
+    def test_memory_file_utils_write_renders_body_link_and_preserves_links_metadata(self):
         memory_file = MemoryFile(
             uri="viking://user/Caroline/memories/profile.md",
             content="她喜欢角色扮演游戏，也喜欢开放世界游戏。",
@@ -568,8 +637,7 @@ class TestRoundTrip:
 
         written = MemoryFileUtils.write(memory_file)
 
-        assert "她喜欢角色扮演游戏，也喜欢开放世界游戏。" in written
-        assert "她喜欢[角色扮演游戏](entities/games/rpg.md)，也喜欢开放世界游戏。" not in written
+        assert "她喜欢[角色扮演游戏](entities/games/rpg.md)，也喜欢开放世界游戏。" in written
         assert '"match_text": "角色扮演游戏"' in written
 
     def test_repeated_memory_file_utils_write_does_not_persist_nested_links(self):
@@ -591,9 +659,10 @@ class TestRoundTrip:
         reparsed = MemoryFileUtils.read(first_write, uri=memory_file.uri)
         second_write = MemoryFileUtils.write(reparsed)
 
-        assert "[Gina](events/2023/02/08/Gina与Jon的日常交流.md)" not in first_write
+        rendered_link = "[Gina](events/2023/02/08/Gina与Jon的日常交流.md)"
+        assert first_write.count(rendered_link) == 1
+        assert second_write.count(rendered_link) == 1
         assert (
             "[[Gina](events/2023/02/08/Gina与Jon的日常交流.md)](events/2023/02/08/Gina与Jon的日常交流.md)"
             not in second_write
         )
-        assert "Gina" in second_write

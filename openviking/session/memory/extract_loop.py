@@ -11,6 +11,7 @@ import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from openviking.core.namespace import context_type_for_uri
 from openviking.models.vlm.base import ToolCall, VLMBase
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import (
@@ -22,6 +23,7 @@ from openviking.session.memory.dataclass import (
 )
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.merge_op import MergeOp
+from openviking.session.memory.merge_op.link_merge import is_allowed_wiki_link
 from openviking.session.memory.schema_model_generator import SchemaModelGenerator
 from openviking.session.memory.tools import (
     MEMORY_TOOLS_REGISTRY,
@@ -141,6 +143,7 @@ class ExtractLoop:
         self._disable_tools_for_iteration = False
 
         self._tool_ctx = None
+        self._link_enabled = False
 
     async def run(self) -> Tuple[Optional[Any], List[Dict[str, Any]]]:
         """
@@ -217,7 +220,7 @@ class ExtractLoop:
             link_rules = """
 ## Link Rules
 - Link fields `f` and `t` must reference these page_id values.
-- Only create links when the relationship is meaningful and clear from the conversation. Do NOT force links between unrelated items.
+- Only create links when the relationship is meaningful and clear from the provided context. Do NOT force links between unrelated items.
 """
         messages.append(
             {
@@ -415,6 +418,12 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 if page_id is not None and page_id_map is not None:
                     resolved_uri = page_id_map.resolve(page_id)
                     if resolved_uri:
+                        if self._link_enabled and context_type_for_uri(resolved_uri) != "memory":
+                            tracer.info(
+                                "Skipping memory upsert for non-memory page_id: "
+                                f"page_id={page_id}, uri={resolved_uri}"
+                            )
+                            continue
                         resolved_op.uris = [resolved_uri]
                         old_content = self.context_provider.read_file_contents.get(resolved_uri)
                         if old_content is not None:
@@ -451,6 +460,12 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 continue
             delete_uri = page_id_map.resolve(delete_id.delete_page_id)
             if not delete_uri:
+                continue
+            if self._link_enabled and context_type_for_uri(delete_uri) != "memory":
+                tracer.info(
+                    "Skipping memory delete for non-memory page_id: "
+                    f"page_id={delete_id.delete_page_id}, uri={delete_uri}"
+                )
                 continue
             old_content = self.context_provider.read_file_contents.get(delete_uri)
             if not old_content:
@@ -618,6 +633,11 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 continue
 
             for from_uri, to_uri in self._pair_link_uris(from_uris, to_uris):
+                if self._link_enabled and not is_allowed_wiki_link(from_uri, to_uri, ctx=self.ctx):
+                    tracer.info(
+                        f"Skipping disallowed wiki link: from_uri={from_uri}, to_uri={to_uri}"
+                    )
+                    continue
                 link_key = (
                     from_uri,
                     to_uri,

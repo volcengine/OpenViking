@@ -1827,6 +1827,13 @@ class ReindexExecutor:
 
     @staticmethod
     def _parse_overview_md(content: str) -> dict[str, str]:
+        if "<!-- MEMORY_FIELDS" in (content or ""):
+            from openviking.session.memory.merge_op.link_merge import wiki_links_enabled
+
+            if wiki_links_enabled():
+                from openviking.session.memory.utils.link_renderer import LinkRenderer
+
+                content = LinkRenderer.strip_all_links(MemoryFileUtils.read(content).content)
         parsed: dict[str, str] = {}
         current_name: Optional[str] = None
         current_lines: list[str] = []

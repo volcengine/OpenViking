@@ -1,14 +1,11 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Link resource addition reasons to user memories.
-
-This module keeps resource files immutable: all traceability lives in memory
-files' MEMORY_FIELDS metadata.
-"""
+"""Link resource additions and resource Wiki overviews to user memories."""
 
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -22,10 +19,18 @@ from openviking.core.namespace import (
     uri_parts,
 )
 from openviking.core.peer_id import normalize_peer_id
-from openviking.message.part import TextPart
+from openviking.message.part import ContextPart, TextPart
 from openviking.server.identity import RequestContext
-from openviking.session.memory.dataclass import MemoryFile
-from openviking.session.memory.memory_updater import MemoryUpdateResult
+from openviking.session.memory.dataclass import MemoryFile, StoredLink
+from openviking.session.memory.memory_updater import MemoryUpdateResult, write_stored_links
+from openviking.session.memory.merge_op.link_merge import (
+    is_allowed_wiki_link,
+    wiki_links_enabled,
+)
+from openviking.session.memory.session_extract_context_provider import (
+    RESOURCE_WIKI_EXTRACTION_HEADER,
+)
+from openviking.session.memory.utils.link_renderer import LinkRenderer
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.resource_refs import (
     content_references_resource,
@@ -46,6 +51,7 @@ logger = get_logger(__name__)
 _RESOURCE_REASON_SESSION_ID = "__openviking_resource_reason__"
 _RESOURCE_REASON_MEMORY_TYPES = ["entities", "events", "preferences"]
 _RESOURCE_DELETION_MEMORY_TYPES = ["entities", "preferences"]
+_RESOURCE_WIKI_MEMORY_TYPES = ["entities"]
 _RESOURCE_REASON_COMMIT_TIMEOUT_SECONDS = 1800.0
 _RESOURCE_ABSTRACT_MAX_CHARS = 200
 _ABSTRACT_NOT_READY_MARKERS = (
@@ -82,6 +88,15 @@ def _resource_deletion_memory_policy(target_peer_id: Optional[str] = None) -> Di
     )
 
 
+def _resource_wiki_memory_policy(target_peer_id: Optional[str] = None) -> Dict[str, Any]:
+    policy = _resource_memory_policy(
+        memory_types=_RESOURCE_WIKI_MEMORY_TYPES,
+        target_peer_id=target_peer_id,
+    )
+    policy["working_memory"] = {"enabled": False}
+    return policy
+
+
 def _resource_reason_peer_id(ctx: RequestContext, resource_uri: str) -> Optional[str]:
     actor_peer_id = normalize_peer_id(ctx.actor_peer_id)
     if actor_peer_id:
@@ -115,7 +130,7 @@ class _MemoryRefMatch:
 
 
 class ResourceMemoryLinkService:
-    """Create and clean memory references for resources added with a reason."""
+    """Create and clean memory/Wiki references for imported resources."""
 
     def __init__(
         self,
@@ -215,6 +230,162 @@ class ResourceMemoryLinkService:
             "commit_task": task_result,
         }
 
+    async def on_resource_wiki_added(
+        self,
+        *,
+        ctx: RequestContext,
+        resource_uri: str,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Extract request-scoped entity Wiki pages from a resource overview."""
+        if not wiki_links_enabled():
+            return {"status": "skipped", "reason": "link_disabled"}
+        if not resource_uri:
+            return {"status": "skipped", "reason": "empty_resource_uri"}
+        if not self._session_service:
+            return {"status": "skipped", "reason": "session_service_unavailable"}
+
+        try:
+            canonical_resource_uri = canonicalize_uri(resource_uri, ctx).rstrip("/")
+        except (NamespaceShapeError, ValueError):
+            return {"status": "skipped", "reason": "invalid_resource_uri"}
+        parts = uri_parts(canonical_resource_uri)
+        if (
+            not parts
+            or parts[0] not in {"resources", "user"}
+            or context_type_for_uri(canonical_resource_uri) != "resource"
+        ):
+            return {"status": "skipped", "reason": "unsupported_resource_scope"}
+
+        overview_uri = f"{canonical_resource_uri}/.overview.md"
+        try:
+            overview_raw = await self._get_viking_fs().read_file(overview_uri, ctx=ctx)
+        except Exception:
+            return {"status": "skipped", "reason": "overview_unavailable"}
+
+        overview = MemoryFileUtils.read(overview_raw, uri=overview_uri)
+        kept_links = [
+            link
+            for link in overview.links
+            if not is_allowed_wiki_link(
+                str(link.get("from_uri", "")),
+                str(link.get("to_uri", "")),
+                str(link.get("link_type", "")),
+                ctx=ctx,
+            )
+        ]
+        stale_links_removed = len(overview.links) - len(kept_links)
+        if stale_links_removed:
+            overview.content = LinkRenderer.strip_all_links(overview.content)
+            overview.links = kept_links
+            await self._get_viking_fs().write_file(
+                overview_uri,
+                MemoryFileUtils.write(overview),
+                ctx=ctx,
+            )
+
+        removed_backlinks = await self._remove_stale_resource_wiki_backlinks(
+            ctx=ctx,
+            overview_uri=overview_uri,
+        )
+        created_at = datetime.now(timezone.utc).isoformat()
+        resource_abstract = overview.content[:_RESOURCE_ABSTRACT_MAX_CHARS]
+        target_peer_id = _resource_reason_peer_id(ctx, canonical_resource_uri)
+        result = await self._commit_memory_message(
+            ctx=ctx,
+            parts=[
+                TextPart(text=self._build_resource_wiki_message()),
+                ContextPart(
+                    uri=overview_uri,
+                    context_type="resource",
+                    abstract=resource_abstract,
+                ),
+            ],
+            created_at=created_at,
+            memory_policy=_resource_wiki_memory_policy(target_peer_id),
+            target_peer_id=target_peer_id,
+            timeout=timeout,
+        )
+        await self._link_resource_overview_to_extracted_entities(
+            ctx=ctx,
+            overview_uri=overview_uri,
+            commit_result=result,
+        )
+        result["overview_uri"] = overview_uri
+        result["stale_links_removed"] = stale_links_removed
+        result["stale_backlinks_removed"] = removed_backlinks
+        return result
+
+    async def _link_resource_overview_to_extracted_entities(
+        self,
+        *,
+        ctx: RequestContext,
+        overview_uri: str,
+        commit_result: Dict[str, Any],
+    ) -> None:
+        """Ensure the source overview links to every entity changed by this extraction."""
+        if not wiki_links_enabled():
+            return
+
+        task_result = (commit_result.get("commit_task") or {}).get("result") or {}
+        memory_diff_uri = task_result.get("memory_diff_uri")
+        if not memory_diff_uri:
+            return
+
+        viking_fs = self._get_viking_fs()
+        try:
+            raw_diff = await viking_fs.read_file(memory_diff_uri, ctx=ctx)
+            memory_diff = json.loads(raw_diff) if isinstance(raw_diff, str) else raw_diff
+            overview_raw = await viking_fs.read_file(overview_uri, ctx=ctx)
+        except Exception as exc:
+            logger.warning("Failed to read resource Wiki extraction result: %s", exc)
+            return
+        if not isinstance(memory_diff, dict):
+            return
+
+        operations = memory_diff.get("operations") or {}
+        if not isinstance(operations, dict):
+            return
+        entity_uris = list(
+            dict.fromkeys(
+                str(item.get("uri"))
+                for operation in ("adds", "updates")
+                for item in operations.get(operation, [])
+                if isinstance(item, dict)
+                and item.get("memory_type") == "entities"
+                and item.get("uri")
+                and is_allowed_wiki_link(overview_uri, str(item.get("uri")), ctx=ctx)
+            )
+        )
+        if not entity_uris:
+            return
+
+        overview = MemoryFileUtils.read(overview_raw, uri=overview_uri)
+        linked_targets = {
+            str(link.get("to_uri"))
+            for link in overview.links
+            if str(link.get("from_uri")) == overview_uri
+        }
+        plain_content = LinkRenderer.strip_all_links(overview.content)
+        created_at = datetime.now(timezone.utc).isoformat()
+        links = []
+        for entity_uri in entity_uris:
+            if entity_uri in linked_targets:
+                continue
+            entity_name = entity_uri.rsplit("/", 1)[-1].removesuffix(".md")
+            links.append(
+                StoredLink(
+                    from_uri=overview_uri,
+                    to_uri=entity_uri,
+                    link_type="related_to",
+                    weight=1.0,
+                    match_text=entity_name if entity_name in plain_content else None,
+                    created_at=created_at,
+                )
+            )
+        if links:
+            await write_stored_links(links, ctx, viking_fs)
+
     async def on_resource_deleted(
         self,
         *,
@@ -281,6 +452,50 @@ class ResourceMemoryLinkService:
             "commit_task": task_result,
         }
 
+    async def _commit_memory_message(
+        self,
+        *,
+        ctx: RequestContext,
+        parts: Sequence[Any],
+        created_at: str,
+        memory_policy: Dict[str, Any],
+        target_peer_id: Optional[str],
+        timeout: Optional[float],
+    ) -> Dict[str, Any]:
+        session_id = _RESOURCE_REASON_SESSION_ID
+        async with self._reason_session_lock:
+            session = await self._session_service.get(session_id, ctx, auto_create=True)
+            session.meta.memory_policy = memory_policy
+            message_spec: Dict[str, Any] = {
+                "role": "user",
+                "parts": list(parts),
+                "created_at": created_at,
+            }
+            if target_peer_id:
+                message_spec["peer_id"] = target_peer_id
+            session.add_messages([message_spec])
+            commit_result = await self._session_service.commit_async(
+                session_id,
+                ctx,
+                keep_recent_count=0,
+            )
+
+        task_id = commit_result.get("task_id")
+        task_result = None
+        if task_id:
+            task_result = await self._wait_for_commit_task(
+                task_id=str(task_id),
+                ctx=ctx,
+                timeout=timeout,
+            )
+        return {
+            "status": "success",
+            "session_id": session_id,
+            "commit_task_id": task_id,
+            "archive_uri": commit_result.get("archive_uri"),
+            "commit_task": task_result,
+        }
+
     @staticmethod
     def _build_resource_addition_message(
         *,
@@ -297,6 +512,14 @@ class ResourceMemoryLinkService:
             f"Added at: {added_at or 'N/A'}\n"
             f"Resource abstract: {resource_abstract or 'N/A'}\n"
             f"User reason: {reason}"
+        )
+
+    @staticmethod
+    def _build_resource_wiki_message() -> str:
+        return (
+            f"{RESOURCE_WIKI_EXTRACTION_HEADER}\n"
+            "Extract durable memories from the provided source and link its source page "
+            "to related pages when meaningful."
         )
 
     @staticmethod
@@ -363,10 +586,12 @@ class ResourceMemoryLinkService:
         if context_type_for_uri(resource_uri) != "resource":
             return {"status": "skipped", "reason": "not_resource"}
 
+        include_wiki_links = wiki_links_enabled()
         matches = await self._find_referencing_memories(
             ctx=ctx,
             resource_uri=resource_uri,
             recursive=recursive,
+            include_wiki_links=include_wiki_links,
         )
         if not matches:
             return {"status": "no_references", "memory_uris": []}
@@ -387,6 +612,7 @@ class ResourceMemoryLinkService:
             ctx=ctx,
             resource_uri=resource_uri,
             recursive=recursive,
+            include_wiki_links=include_wiki_links,
         )
 
         cleaned: List[str] = []
@@ -402,6 +628,7 @@ class ResourceMemoryLinkService:
                     memory_file=first.memory_file,
                     resource_uri=resource_uri,
                     recursive=recursive,
+                    unlink_wiki_links=include_wiki_links,
                 )
                 cleaned.extend(cleanup_result.written_uris + cleanup_result.edited_uris)
                 deleted.extend(cleanup_result.deleted_uris)
@@ -412,6 +639,7 @@ class ResourceMemoryLinkService:
                     resource_uri,
                     ctx,
                     recursive=recursive,
+                    check_wiki_links=include_wiki_links,
                 )
             except NotFoundError:
                 deleted.append(memory_uri)
@@ -437,6 +665,7 @@ class ResourceMemoryLinkService:
         memory_file: MemoryFile,
         resource_uri: str,
         recursive: bool = False,
+        unlink_wiki_links: bool = False,
     ) -> MemoryUpdateResult:
         viking_fs = self._get_viking_fs()
         current = memory_file
@@ -452,6 +681,7 @@ class ResourceMemoryLinkService:
             current,
             resource_uri,
             recursive=recursive,
+            unlink_wiki_links=unlink_wiki_links,
         )
         result = MemoryUpdateResult()
         if not changed:
@@ -467,6 +697,7 @@ class ResourceMemoryLinkService:
         ctx: RequestContext,
         resource_uri: str,
         recursive: bool,
+        include_wiki_links: bool = False,
     ) -> List[_MemoryRefMatch]:
         candidate_uris = await self._grep_candidate_memory_uris(
             ctx=ctx,
@@ -483,7 +714,34 @@ class ResourceMemoryLinkService:
             ctx=ctx,
             resource_uri=resource_uri,
             recursive=recursive,
+            include_wiki_links=include_wiki_links,
         )
+
+    async def _remove_stale_resource_wiki_backlinks(
+        self,
+        *,
+        ctx: RequestContext,
+        overview_uri: str,
+    ) -> int:
+        matches = await self._find_referencing_memories(
+            ctx=ctx,
+            resource_uri=overview_uri,
+            recursive=False,
+            include_wiki_links=True,
+        )
+        removed = 0
+        for memory_uri, memory_matches in self._group_matches_by_memory(matches).items():
+            result = await self._unlink_memory_reference(
+                ctx=ctx,
+                memory_uri=memory_uri,
+                memory_file=memory_matches[0].memory_file,
+                resource_uri=overview_uri,
+                recursive=False,
+                unlink_wiki_links=True,
+            )
+            if result.edited_uris or result.deleted_uris:
+                removed += 1
+        return removed
 
     async def _grep_candidate_memory_uris(
         self,
@@ -534,6 +792,7 @@ class ResourceMemoryLinkService:
         ctx: RequestContext,
         resource_uri: str,
         recursive: bool,
+        include_wiki_links: bool = False,
     ) -> List[_MemoryRefMatch]:
         viking_fs = self._get_viking_fs()
         matches: List[_MemoryRefMatch] = []
@@ -559,6 +818,28 @@ class ResourceMemoryLinkService:
                     matched = True
             if matched:
                 continue
+
+            if include_wiki_links:
+                for link in list(mf.links or []) + list(mf.backlinks or []):
+                    if not isinstance(link, dict):
+                        continue
+                    if self._resource_ref_matches(
+                        link.get("from_uri"), resource_uri, recursive
+                    ) or self._resource_ref_matches(link.get("to_uri"), resource_uri, recursive):
+                        matches.append(
+                            _MemoryRefMatch(
+                                uri,
+                                mf,
+                                {
+                                    "resource_uri": resource_uri,
+                                    "source": "wiki_link",
+                                },
+                            )
+                        )
+                        matched = True
+                        break
+                if matched:
+                    continue
 
             if content_references_resource(
                 mf.content,
@@ -653,6 +934,7 @@ class ResourceMemoryLinkService:
         ctx: RequestContext,
         *,
         recursive: bool = True,
+        check_wiki_links: bool = False,
     ) -> None:
         try:
             raw = await self._get_viking_fs().read_file(memory_uri, ctx=ctx)
@@ -668,6 +950,14 @@ class ResourceMemoryLinkService:
                 recursive=recursive,
             ):
                 raise RuntimeError(f"memory still contains resource ref: {memory_uri}")
+        if check_wiki_links:
+            for link in list(mf.links or []) + list(mf.backlinks or []):
+                if not isinstance(link, dict):
+                    continue
+                if self._resource_ref_matches(
+                    link.get("from_uri"), resource_uri, recursive
+                ) or self._resource_ref_matches(link.get("to_uri"), resource_uri, recursive):
+                    raise RuntimeError(f"memory still contains resource Wiki link: {memory_uri}")
 
     @staticmethod
     def _coerce_resource_refs(value: Any) -> List[Dict[str, Any]]:

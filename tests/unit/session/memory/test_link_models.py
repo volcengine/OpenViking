@@ -1,11 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-import pytest
-
 from openviking.session.memory.dataclass import (
     LinkType,
-    MemoryTypeSchema,
     ResolvedOperation,
     ResolvedOperations,
     StoredLink,
@@ -53,15 +50,28 @@ class TestWikiLink:
         assert link.weight == 1.0
 
     def test_weight_defaults_to_mid_value_when_invalid(self):
-        link = WikiLink.model_validate({"f": 1, "t": 2, "weight": "not-a-number", "match_text": None})
+        link = WikiLink.model_validate(
+            {"f": 1, "t": 2, "weight": "not-a-number", "match_text": None}
+        )
         assert link.weight == 0.5
 
     def test_json_schema_requires_match_text_field(self):
         schema = WikiLink.model_json_schema()
 
         assert "match_text" in schema["required"]
-        assert any(option.get("type") == "string" for option in schema["properties"]["match_text"]["anyOf"])
-        assert any(option.get("type") == "null" for option in schema["properties"]["match_text"]["anyOf"])
+        assert any(
+            option.get("type") == "string" for option in schema["properties"]["match_text"]["anyOf"]
+        )
+        assert any(
+            option.get("type") == "null" for option in schema["properties"]["match_text"]["anyOf"]
+        )
+
+    def test_match_text_schema_keeps_single_word_source_page_contract(self):
+        description = WikiLink.model_json_schema()["properties"]["match_text"]["description"]
+
+        assert "single exact word" in description
+        assert "page referenced by `f`" in description
+        assert "NOT a phrase or multi-word text" in description
 
     def test_weight_schema_mentions_ranking_priority(self):
         schema = WikiLink.model_json_schema()

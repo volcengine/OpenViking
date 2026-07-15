@@ -10,7 +10,8 @@ import os
 import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from openviking.message.part import TextPart, ToolPart
+from openviking.core.namespace import context_type_for_uri
+from openviking.message.part import ContextPart, TextPart
 from openviking.prompts.manager import PromptManager
 from openviking.server.identity import RequestContext, ToolContext
 from openviking.session.memory.core import ExtractContextProvider
@@ -51,6 +52,7 @@ _PREFETCH_SEARCH_TOOL_FIELD_MAX_CHARS = 500
 _RESOURCE_REASON_LANGUAGE_RE = re.compile(
     r"(?im)^\s*(?:User reason|用户说明|用户原因|用户理由)[:：]\s*(.+?)\s*$"
 )
+RESOURCE_WIKI_EXTRACTION_HEADER = "## Resource Wiki Extraction"
 
 
 class SessionExtractContextProvider(ExtractContextProvider):
@@ -145,6 +147,21 @@ class SessionExtractContextProvider(ExtractContextProvider):
             strip_language_detection_noise,
         )
 
+        resource_wiki_abstracts = [
+            part.abstract.strip()
+            for message in self.messages or []
+            for part in getattr(message, "parts", []) or []
+            if self._is_resource_wiki_context(part) and part.abstract.strip()
+        ]
+        has_resource_wiki_header = any(
+            isinstance(part, TextPart)
+            and (part.text or "").lstrip().startswith(RESOURCE_WIKI_EXTRACTION_HEADER)
+            for message in self.messages or []
+            for part in getattr(message, "parts", []) or []
+        )
+        if has_resource_wiki_header and resource_wiki_abstracts:
+            return resolve_output_language("\n".join(resource_wiki_abstracts))
+
         user_text_parts = []
         all_text_parts = []
         for message in self.messages or []:
@@ -186,6 +203,38 @@ class SessionExtractContextProvider(ExtractContextProvider):
                 if text and contains_resource_uri(text):
                     return True
         return False
+
+    def _resource_wiki_overview_uris(self) -> List[str]:
+        if not self._link_enabled:
+            return []
+        has_internal_header = any(
+            isinstance(part, TextPart)
+            and (part.text or "").lstrip().startswith(RESOURCE_WIKI_EXTRACTION_HEADER)
+            for message in self.messages or []
+            for part in getattr(message, "parts", []) or []
+        )
+        if not has_internal_header:
+            return []
+        return list(
+            dict.fromkeys(
+                part.uri.rstrip("/")
+                for message in self.messages or []
+                for part in getattr(message, "parts", []) or []
+                if self._is_resource_wiki_context(part)
+            )
+        )
+
+    @staticmethod
+    def _is_resource_wiki_context(part: Any) -> bool:
+        if not isinstance(part, ContextPart) or part.context_type != "resource":
+            return False
+        uri = (part.uri or "").rstrip("/")
+        if not uri.endswith("/.overview.md"):
+            return False
+        try:
+            return context_type_for_uri(uri) == "resource"
+        except (TypeError, ValueError):
+            return False
 
     def instruction(self) -> str:
         output_language = self._output_language
@@ -531,6 +580,14 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                     read_files.add(file_uri)
 
         call_id_seq = 0
+        if self._link_enabled:
+            for overview_uri in self._resource_wiki_overview_uris():
+                call_id_seq = await self._append_structured_read_result(
+                    messages=pre_fetch_messages,
+                    call_id=call_id_seq,
+                    file_uri=overview_uri,
+                )
+
         # Step 2: Execute search for each ls directory (instead of ls)
 
         # 首先读取所有 .overview.md 文件（截断以避免窗口过大）

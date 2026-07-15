@@ -115,6 +115,104 @@ class TestMemoryUpdater:
         assert unsplit_context.messages[0] is messages[0]
         assert unsplit_context.chunk_meta == {}
 
+    @pytest.mark.asyncio
+    async def test_v2_updater_writes_resource_overview_to_entity_link(self, monkeypatch):
+        monkeypatch.setattr(
+            "openviking.session.memory.merge_op.link_merge.wiki_links_enabled",
+            lambda: True,
+        )
+        overview_uri = "viking://resources/docs/.overview.md"
+        entity_uri = "viking://user/alice/memories/entities/projects/openviking.md"
+        files = {
+            overview_uri: "# OpenViking\nOpenViking is a memory system.",
+            entity_uri: MemoryFileUtils.write(
+                MemoryFile(
+                    uri=entity_uri,
+                    content="# OpenViking",
+                    memory_type="entities",
+                )
+            ),
+        }
+        mock_viking_fs = MagicMock()
+        mock_viking_fs.read_file = AsyncMock(side_effect=lambda uri, ctx=None: files[uri])
+
+        async def write_file(uri, content, ctx=None):
+            files[uri] = content
+
+        mock_viking_fs.write_file = AsyncMock(side_effect=write_file)
+        updater = MemoryUpdater(registry=MagicMock())
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+        updater._vectorize_memories = AsyncMock()
+        updater.generate_overview = AsyncMock()
+        operations = ResolvedOperations(
+            upsert_operations=[],
+            delete_file_contents=[],
+            errors=[],
+            resolved_links=[
+                StoredLink(
+                    from_uri=overview_uri,
+                    to_uri=entity_uri,
+                    match_text="OpenViking",
+                )
+            ],
+        )
+
+        ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+        result = await updater.apply_operations(operations, ctx=ctx)
+
+        overview = MemoryFileUtils.read(files[overview_uri], uri=overview_uri)
+        entity = MemoryFileUtils.read(files[entity_uri], uri=entity_uri)
+        assert overview.links[0]["to_uri"] == entity_uri
+        assert entity.backlinks[0]["from_uri"] == overview_uri
+        assert set(result.edited_uris) == {overview_uri, entity_uri}
+
+    @pytest.mark.asyncio
+    async def test_v2_updater_bypasses_wiki_checks_when_links_are_disabled(self, monkeypatch):
+        monkeypatch.setattr(
+            "openviking.session.memory.merge_op.link_merge.wiki_links_enabled",
+            lambda: False,
+        )
+        monkeypatch.setattr(
+            "openviking.session.memory.merge_op.link_merge.is_allowed_wiki_link",
+            lambda *args, **kwargs: pytest.fail("wiki validation must be bypassed"),
+        )
+        resource_uri = "viking://resources/docs/page.md"
+        entity_uri = "viking://user/alice/memories/entities/projects/openviking.md"
+        files = {
+            resource_uri: "# Source",
+            entity_uri: MemoryFileUtils.write(
+                MemoryFile(uri=entity_uri, content="# OpenViking", memory_type="entities")
+            ),
+        }
+        mock_viking_fs = MagicMock()
+        mock_viking_fs.read_file = AsyncMock(side_effect=lambda uri, ctx=None: files[uri])
+
+        async def write_file(uri, content, ctx=None):
+            files[uri] = content
+
+        mock_viking_fs.write_file = AsyncMock(side_effect=write_file)
+        updater = MemoryUpdater(registry=MagicMock())
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+        updater._vectorize_memories = AsyncMock()
+        updater.generate_overview = AsyncMock()
+        operations = ResolvedOperations(
+            upsert_operations=[],
+            delete_file_contents=[],
+            errors=[],
+            resolved_links=[
+                StoredLink(from_uri=resource_uri, to_uri=entity_uri, match_text="Source")
+            ],
+        )
+
+        await updater.apply_operations(
+            operations,
+            ctx=RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER),
+        )
+
+        entity = MemoryFileUtils.read(files[entity_uri], uri=entity_uri)
+        assert files[resource_uri] == "# Source"
+        assert entity.backlinks[0]["from_uri"] == resource_uri
+
     def test_extract_context_resource_event_content_hides_add_resource_fields(self):
         resource_uri = "viking://resources/images/2026/06/12/yueqian_jpeg"
         extract_context = ExtractContext(

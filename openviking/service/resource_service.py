@@ -33,6 +33,7 @@ from openviking.server.user_config import (
     effective_resource_add_target,
     effective_skill_add_target,
 )
+from openviking.session.memory.merge_op.link_merge import wiki_links_enabled
 from openviking.storage import VikingDBManager
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.transaction import NO_LOCK, LockLease
@@ -941,6 +942,12 @@ class ResourceService:
                     source_name=kwargs.get("source_name"),
                     timeout=timeout,
                 )
+                if wiki_links_enabled():
+                    await self._link_resource_wiki(
+                        result=result,
+                        ctx=ctx,
+                        timeout=timeout,
+                    )
             if not wait:
                 from openviking.service.task_tracker import get_task_tracker
 
@@ -1029,6 +1036,29 @@ class ResourceService:
             logger.warning("[ResourceService] Failed to link resource reason memory: %s", exc)
             result.setdefault("warnings", []).append(f"Memory linking failed: {exc}")
 
+    async def _link_resource_wiki(
+        self,
+        *,
+        result: Dict[str, Any],
+        ctx: RequestContext,
+        timeout: Optional[float] = None,
+    ) -> None:
+        if not self._resource_memory_link_service:
+            return
+        root_uri = result.get("root_uri")
+        if not root_uri:
+            return
+        try:
+            link_result = await self._resource_memory_link_service.on_resource_wiki_added(
+                ctx=ctx,
+                resource_uri=root_uri,
+                timeout=timeout,
+            )
+            result["wiki_linking"] = link_result
+        except Exception as exc:
+            logger.warning("[ResourceService] Failed to build resource Wiki: %s", exc)
+            result.setdefault("warnings", []).append(f"Resource Wiki linking failed: {exc}")
+
     async def _monitor_resource_queue_then_link_memory(
         self,
         task_id: str,
@@ -1071,6 +1101,12 @@ class ResourceService:
                 source_name=source_name,
                 timeout=timeout,
             )
+            if wiki_links_enabled():
+                await self._link_resource_wiki(
+                    result=result,
+                    ctx=ctx,
+                    timeout=timeout,
+                )
             await task_tracker.complete(
                 task_id,
                 result,

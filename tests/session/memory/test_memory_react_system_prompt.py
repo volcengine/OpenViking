@@ -4,8 +4,14 @@
 Test that provider instruction correctly instructs LLM.
 """
 
-from openviking.message import ImagePart, Message, TextPart, ToolPart
-from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+from openviking.message import ContextPart, ImagePart, Message, TextPart, ToolPart
+from openviking.session.memory.session_extract_context_provider import (
+    RESOURCE_WIKI_EXTRACTION_HEADER,
+    SessionExtractContextProvider,
+)
 from openviking.session.memory.vision_message_normalizer import IMAGE_DESCRIPTION_PROMPT
 
 
@@ -84,6 +90,88 @@ class TestProviderInstruction:
         assert (
             "system-generated `## Resource Deletion` block's `Affected memory URIs`" in instruction
         )
+
+    async def test_resource_wiki_context_prefetches_overview_only_when_links_enabled(
+        self, monkeypatch
+    ):
+        overview_uri = "viking://resources/docs/.overview.md"
+        monkeypatch.setattr(
+            "openviking.session.memory.session_extract_context_provider.get_openviking_config",
+            lambda: SimpleNamespace(
+                memory=SimpleNamespace(
+                    eager_prefetch=False,
+                    prefetch_search_topn=5,
+                    link_enabled=True,
+                )
+            ),
+        )
+        provider = SessionExtractContextProvider(
+            messages=[
+                Message(
+                    id="m1",
+                    role="user",
+                    parts=[
+                        TextPart(RESOURCE_WIKI_EXTRACTION_HEADER),
+                        ContextPart(uri=overview_uri, context_type="resource"),
+                    ],
+                )
+            ],
+            isolation_handler=MagicMock(
+                get_read_scope=MagicMock(return_value=SimpleNamespace(user_ids=[], peer_ids=[]))
+            ),
+        )
+        provider._get_registry = MagicMock(
+            return_value=MagicMock(list_all=MagicMock(return_value=[]))
+        )
+        provider._append_structured_read_result = AsyncMock(return_value=1)
+
+        await provider.prefetch()
+
+        provider._append_structured_read_result.assert_awaited_once()
+        assert provider._append_structured_read_result.call_args.kwargs["call_id"] == 0
+        assert provider._append_structured_read_result.call_args.kwargs["file_uri"] == overview_uri
+        assert RESOURCE_WIKI_EXTRACTION_HEADER not in provider.instruction()
+        assert "Extract durable, named entities" not in provider.instruction()
+
+    async def test_resource_wiki_context_is_ignored_when_links_disabled(self, monkeypatch):
+        overview_uri = "viking://resources/docs/.overview.md"
+        monkeypatch.setattr(
+            "openviking.session.memory.session_extract_context_provider.get_openviking_config",
+            lambda: SimpleNamespace(
+                memory=SimpleNamespace(
+                    eager_prefetch=False,
+                    prefetch_search_topn=5,
+                    link_enabled=False,
+                )
+            ),
+        )
+        provider = SessionExtractContextProvider(
+            messages=[
+                Message(
+                    id="m1",
+                    role="user",
+                    parts=[
+                        TextPart(RESOURCE_WIKI_EXTRACTION_HEADER),
+                        ContextPart(uri=overview_uri, context_type="resource"),
+                    ],
+                )
+            ],
+            isolation_handler=MagicMock(
+                get_read_scope=MagicMock(return_value=SimpleNamespace(user_ids=[], peer_ids=[]))
+            ),
+        )
+        provider._get_registry = MagicMock(
+            return_value=MagicMock(list_all=MagicMock(return_value=[]))
+        )
+        provider._resource_wiki_overview_uris = MagicMock(
+            side_effect=AssertionError("resource Wiki prefetch must be bypassed")
+        )
+
+        await provider.prefetch()
+
+        provider._resource_wiki_overview_uris.assert_not_called()
+        assert RESOURCE_WIKI_EXTRACTION_HEADER not in provider.instruction()
+        assert "Extract durable, named entities" not in provider.instruction()
 
 
 class TestSessionConversationToolFiltering:
@@ -232,7 +320,48 @@ class TestSessionConversationToolFiltering:
 
         assert provider._detect_language() == "zh-CN"
 
+    def test_resource_wiki_language_comes_from_source_abstract(self):
+        provider = SessionExtractContextProvider(
+            messages=[
+                Message(
+                    id="m1",
+                    role="user",
+                    parts=[
+                        TextPart(
+                            f"{RESOURCE_WIKI_EXTRACTION_HEADER}\n"
+                            "Extract durable memories from the provided source."
+                        ),
+                        ContextPart(
+                            uri="viking://resources/星尘计划/.overview.md",
+                            context_type="resource",
+                            abstract="星尘计划是天穹财团发起的科研项目。",
+                        ),
+                    ],
+                )
+            ]
+        )
 
+        assert provider.get_output_language() == "zh-CN"
+
+    def test_context_abstract_does_not_override_normal_user_language(self):
+        provider = SessionExtractContextProvider(
+            messages=[
+                Message(
+                    id="m1",
+                    role="user",
+                    parts=[
+                        TextPart("Keep this memory in English."),
+                        ContextPart(
+                            uri="viking://resources/星尘计划/.overview.md",
+                            context_type="resource",
+                            abstract="这是一份中文资源摘要。",
+                        ),
+                    ],
+                )
+            ]
+        )
+
+        assert provider.get_output_language() == "en"
 
     async def test_prepare_extraction_messages_replaces_image_part_with_vlm_description(self):
         class FakeVisionVLM:
@@ -340,6 +469,7 @@ class TestSessionConversationToolFiltering:
         assert len(messages) == 1
         assert any(isinstance(part, ImagePart) for part in messages[0].parts)
         assert provider.messages is not messages
+
 
 def test_session_provider_empty_messages_still_uses_environment_fallback(monkeypatch):
     monkeypatch.setenv("TZ", "Asia/Shanghai")
