@@ -167,7 +167,13 @@ class CronService:
         )
 
     def stop(self) -> None:
-        """Stop the cron service."""
+        """Stop the cron service.
+
+        Safe to call while a tick is executing: cancelling the timer
+        task delivers CancelledError to the in-flight _on_timer, which
+        resets _executing and skips re-arming (``_running`` is already
+        False by then, so no new timer task can be created).
+        """
         self._running = False
         self._executing = False
         if self._timer_task:
@@ -198,8 +204,8 @@ class CronService:
         Does nothing when a tick is currently executing jobs
         (_executing is True), because cancelling the timer task would
         interrupt the in-flight job execution.  The executing tick
-        re-arms the timer in its own finally block once all jobs
-        have completed.
+        re-arms the timer itself once all jobs have completed (unless
+        the tick was cancelled, e.g. by stop()).
         """
         if self._executing:
             return
@@ -225,8 +231,11 @@ class CronService:
 
         Sets _executing = True so that external callers (add_job,
         remove_job, enable_job, etc.) do not cancel the timer task
-        while we are still executing.  Re-arms the timer in the
-        ``finally`` block once all due jobs have been processed.
+        while we are still executing.  Re-arms the timer once all due
+        jobs have been processed -- also on job errors, but not when
+        the tick itself is cancelled (service stop or event-loop
+        shutdown), where scheduling a new timer task would leak a
+        pending task.
         """
         if not self._store:
             return
@@ -242,13 +251,20 @@ class CronService:
         ]
 
         self._executing = True
+        rearm = True
         try:
             for job in due_jobs:
                 await self._execute_job(job)
             self._save_store()
+        except asyncio.CancelledError:
+            # The tick task itself was cancelled (stop() or event-loop
+            # shutdown): propagate without scheduling a new timer task.
+            rearm = False
+            raise
         finally:
             self._executing = False
-            self._arm_timer()
+            if rearm:
+                self._arm_timer()
 
     async def _execute_job(self, job: CronJob) -> None:
         """Execute a single job."""
