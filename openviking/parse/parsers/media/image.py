@@ -85,7 +85,7 @@ class ImageParser(BaseParser):
         Parse image file:
         - For large images (>10MB or any dimension >4096px):
           - Create low-res preview (<=1MB) as the "original"
-          - Split into tiles (<=1MB, <=2048px each)
+          - Split into tiles (<=2048px each)
           - Generate grid overlay image
         - For small images: just save as-is with metadata
 

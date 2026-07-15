@@ -302,7 +302,6 @@ class ImageConfig(ParserConfig):
         vlm_model: VLM model to use (e.g., "gpt-4-vision")
         preview_max_dimension: Maximum dimension for preview resizing (resize if larger)
         max_file_size_mb: Maximum file size before triggering large image processing
-        max_tile_size_mb: Maximum size for individual tiles
         max_tile_dimension_px: Maximum dimension for individual tiles
         tile_overlap_px: Number of pixels to overlap between tiles
         large_image_threshold_dimension: Dimension threshold for large image detection
@@ -315,7 +314,6 @@ class ImageConfig(ParserConfig):
     preview_max_dimension: int = 2048
     # Large image processing settings
     max_file_size_mb: float = 10.0  # 10 MB
-    max_tile_size_mb: float = 1.0  # 1 MB
     max_tile_dimension_px: int = 2048  # 2048 pixels
     tile_overlap_px: int = 2  # 2 pixels
     large_image_threshold_dimension: int = 4096  # 4096 pixels
@@ -335,8 +333,6 @@ class ImageConfig(ParserConfig):
             raise ValueError("preview_max_dimension must be positive")
         if self.max_file_size_mb <= 0:
             raise ValueError("max_file_size_mb must be positive")
-        if self.max_tile_size_mb <= 0:
-            raise ValueError("max_tile_size_mb must be positive")
         if self.max_tile_dimension_px <= 0:
             raise ValueError("max_tile_dimension_px must be positive")
         if self.tile_overlap_px < 0:

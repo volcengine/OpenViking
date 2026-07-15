@@ -5,7 +5,7 @@ Large image processing utilities for OpenViking.
 
 This module provides functionality to:
 1. Detect large images (>10MB or any dimension >4096px)
-2. Split into tiles (<=1MB, <=2048px each)
+2. Split into tiles (<=2048px each)
 3. Split images into grid tiles with overlap
 4. Generate grid overlay images with tile labels
 """
@@ -33,13 +33,11 @@ MAX_FILE_SIZE_MB = 10.0  # 10 MB
 LARGE_IMAGE_THRESHOLD_DIMENSION = 4096  # 4096 pixels
 
 # Target limits for individual tiles
-MAX_TILE_SIZE_MB = 1.0  # 1 MB
 MAX_TILE_DIMENSION_PX = 2048  # 2048 pixels
 TILE_OVERLAP_PX = 2  # 2 pixels of overlap on each side
 
 # Quality settings for JPEG compression
 PREVIEW_QUALITY_START = 85
-MIN_PREVIEW_QUALITY = 20
 TILE_QUALITY = 90
 
 # Preview dimension fallback (when no config provides preview_max_dimension)
@@ -92,11 +90,6 @@ def save_image_to_bytes(img: Image.Image, format: str = "JPEG", quality: int = 9
     return buf.getvalue()
 
 
-def get_bytes_size_mb(data: bytes) -> float:
-    """Get size of bytes in megabytes."""
-    return len(data) / (1024 * 1024)
-
-
 def needs_large_image_processing(
     file_path: Path,
     width: int,
@@ -124,15 +117,15 @@ def needs_large_image_processing(
 
 def create_low_res_preview(
     img: Image.Image,
-    target_size_mb: float = MAX_TILE_SIZE_MB,
     config: Optional[ImageConfig] = None
 ) -> bytes:
     """
-    Create a low-resolution preview of an image that's under target size.
+    Create a low-resolution preview of an image.
+
+    Resizes to preview_max_dimension and encodes as JPEG at a fixed quality.
 
     Args:
         img: Original PIL Image
-        target_size_mb: Target maximum file size in MB
         config: Optional ImageConfig for custom thresholds
 
     Returns:
@@ -148,7 +141,7 @@ def create_low_res_preview(
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
 
-    # Start with reducing dimensions first
+    # Resize if larger than max dimension
     if original_width > max_dimension_px or original_height > max_dimension_px:
         ratio = min(max_dimension_px / original_width, max_dimension_px / original_height)
         new_width = int(original_width * ratio)
@@ -156,32 +149,7 @@ def create_low_res_preview(
         img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
         logger.debug(f"Resized preview to {new_width}x{new_height}")
 
-    # Adjust quality to meet size constraint
-    quality = PREVIEW_QUALITY_START
-    img_bytes = None
-    while quality >= MIN_PREVIEW_QUALITY:
-        img_bytes = save_image_to_bytes(img, format="JPEG", quality=quality)
-        if get_bytes_size_mb(img_bytes) <= target_size_mb:
-            logger.debug(f"Preview created at quality {quality}, size {get_bytes_size_mb(img_bytes):.2f}MB")
-            return img_bytes
-        quality -= 5
-
-    # If even lowest quality is too big, resize more aggressively
-    current_width, current_height = img.size
-    scale_factor = 0.7
-    while (img_bytes is None or get_bytes_size_mb(img_bytes) > target_size_mb) and scale_factor > 0.3:
-        new_width = int(current_width * scale_factor)
-        new_height = int(current_height * scale_factor)
-        img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-        img_bytes = save_image_to_bytes(img, format="JPEG", quality=MIN_PREVIEW_QUALITY)
-        scale_factor -= 0.1
-        logger.debug(f"Further resized to {new_width}x{new_height}")
-
-    # Ensure we always return something
-    if img_bytes is None:
-        img_bytes = save_image_to_bytes(img, format="JPEG", quality=MIN_PREVIEW_QUALITY)
-
-    return img_bytes
+    return save_image_to_bytes(img, format="JPEG", quality=PREVIEW_QUALITY_START)
 
 
 def calculate_grid_dimensions(
@@ -266,47 +234,6 @@ def calculate_tile_positions(
     return tiles
 
 
-def _encode_tile_with_size_limit(
-    tile_img: Image.Image,
-    save_format: str,
-    max_tile_size_mb: float,
-) -> bytes:
-    """Encode a tile, re-compressing or resizing if it exceeds max_tile_size_mb."""
-    tile_bytes = save_image_to_bytes(tile_img, format=save_format, quality=TILE_QUALITY)
-
-    if get_bytes_size_mb(tile_bytes) <= max_tile_size_mb:
-        return tile_bytes
-
-    if save_format == "PNG":
-        # PNG size is content-driven; fall back to JPEG for size-constrained tiles
-        rgb_img = tile_img
-        if rgb_img.mode in ("RGBA", "P"):
-            rgb_img = rgb_img.convert("RGB")
-        return _encode_tile_with_size_limit(rgb_img, "JPEG", max_tile_size_mb)
-
-    # JPEG: reduce quality stepwise
-    quality = TILE_QUALITY - 5
-    while quality >= 10:
-        tile_bytes = save_image_to_bytes(tile_img, format="JPEG", quality=quality)
-        if get_bytes_size_mb(tile_bytes) <= max_tile_size_mb:
-            return tile_bytes
-        quality -= 5
-
-    # Resize as last resort
-    w, h = tile_img.size
-    scale = 0.8
-    while scale > 0.3:
-        new_w = int(w * scale)
-        new_h = int(h * scale)
-        resized = tile_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-        tile_bytes = save_image_to_bytes(resized, format="JPEG", quality=MIN_PREVIEW_QUALITY)
-        if get_bytes_size_mb(tile_bytes) <= max_tile_size_mb:
-            return tile_bytes
-        scale -= 0.1
-
-    return tile_bytes
-
-
 def split_image_into_tiles(
     img: Image.Image,
     rows: int,
@@ -315,7 +242,6 @@ def split_image_into_tiles(
     ext: str = ".jpg",
     config: Optional[ImageConfig] = None,
     original_format: str = "JPEG",
-    max_tile_size_mb: float = MAX_TILE_SIZE_MB,
 ) -> List[TileInfo]:
     """
     Split an image into grid tiles.
@@ -328,7 +254,6 @@ def split_image_into_tiles(
         ext: File extension for tiles
         config: Optional ImageConfig for custom thresholds
         original_format: Original image format ("PNG" or "JPEG")
-        max_tile_size_mb: Maximum tile size in MB; tiles exceeding this are re-compressed
 
     Returns:
         List of TileInfo objects
@@ -350,8 +275,8 @@ def split_image_into_tiles(
             if not is_png and tile_img.mode in ("RGBA", "P"):
                 tile_img = tile_img.convert("RGB")
 
-            tile_bytes = _encode_tile_with_size_limit(
-                tile_img, save_format, max_tile_size_mb
+            tile_bytes = save_image_to_bytes(
+                tile_img, format=save_format, quality=TILE_QUALITY
             )
 
             filename = f"{filename_prefix}_{row+1}_{col+1}{ext}"
@@ -502,7 +427,6 @@ def process_large_image(
     """
     # Use config values or defaults
     max_file_size_mb = config.max_file_size_mb if config else MAX_FILE_SIZE_MB
-    max_tile_size_mb = config.max_tile_size_mb if config else MAX_TILE_SIZE_MB
 
     # Load image if not provided
     own_img = False
@@ -535,7 +459,7 @@ def process_large_image(
         tile_ext = ".png" if is_png else ".jpg"
 
         # Create low-res preview
-        preview_bytes = create_low_res_preview(img, max_tile_size_mb, config)
+        preview_bytes = create_low_res_preview(img, config)
 
         # Split into tiles
         tiles = split_image_into_tiles(
@@ -544,7 +468,6 @@ def process_large_image(
             ext=tile_ext,
             config=config,
             original_format=format_str,
-            max_tile_size_mb=max_tile_size_mb,
         )
 
         # Create grid overlay (use full tile prefix so labels match tile filenames)
