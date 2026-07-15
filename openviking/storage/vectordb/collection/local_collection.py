@@ -52,6 +52,7 @@ from openviking_cli.utils.logger import default_logger as logger
 
 # Use imported constants, no longer defined here
 AUTO_ID_KEY = SpecialFields.AUTO_ID.value
+SECURITY_CONTEXT_FIELDS = ("account_id", "context_type", "owner_space", "uri")
 
 
 def get_or_create_local_collection(
@@ -232,6 +233,39 @@ class LocalCollection(ICollection):
 
     def list_indexes(self) -> List[str]:
         return self.indexes.list_names()
+
+    def _security_context(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        return {field: data.get(field) for field in SECURITY_CONTEXT_FIELDS if field in data}
+
+    def _security_context_changed(
+        self, existing_data: Dict[str, Any], new_data: Dict[str, Any]
+    ) -> bool:
+        for field in SECURITY_CONTEXT_FIELDS:
+            if field not in existing_data or field not in new_data:
+                continue
+            if existing_data.get(field) != new_data.get(field):
+                return True
+        return False
+
+    def _guard_security_context_rebind(self, labels: List[int], data_list: List[Dict[str, Any]]):
+        if not self.store_mgr:
+            raise RuntimeError("Store manager is not initialized")
+
+        existing_list = self.store_mgr.fetch_cands_data(labels)
+        for label, existing, data in zip(labels, existing_list, data_list):
+            if not existing or not existing.fields:
+                continue
+            try:
+                existing_data = json.loads(existing.fields)
+            except (TypeError, json.JSONDecodeError):
+                logger.warning("Existing candidate fields for label %s are invalid", label)
+                continue
+            if self._security_context_changed(existing_data, data):
+                raise ValueError(
+                    "Refusing to rebind existing primary key to a different security context: "
+                    f"label={label}, existing={self._security_context(existing_data)}, "
+                    f"new={self._security_context(data)}"
+                )
 
     def search_by_vector(
         self,
@@ -546,6 +580,7 @@ class LocalCollection(ICollection):
         pk = self.meta.primary_key
         vk = self.meta.vector_key
         svk = self.meta.sparse_vector_key
+        labels: List[int] = []
         for i, data in enumerate(data_list):
             if AUTO_ID_KEY in data:
                 label = data[AUTO_ID_KEY]
@@ -555,6 +590,7 @@ class LocalCollection(ICollection):
                 label = generate_auto_id()
                 data[AUTO_ID_KEY] = label
 
+            labels.append(label)
             cands_list[i].label = label
             cands_list[i].vector = data.pop(vk, None)
             if svk:
@@ -567,6 +603,8 @@ class LocalCollection(ICollection):
 
         if not self.store_mgr:
             raise RuntimeError("Store manager is not initialized")
+        if pk != AUTO_ID_KEY:
+            self._guard_security_context_rebind(labels, data_list)
         need_record_delta = True if self.indexes.count() > 0 else False
         delta_list = self.store_mgr.add_cands_data(cands_list, ttl, need_record_delta)
 
