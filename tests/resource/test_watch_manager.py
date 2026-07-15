@@ -4,7 +4,7 @@
 
 import asyncio
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock
@@ -154,7 +154,7 @@ class TestWatchTask:
 
     def test_from_dict(self):
         """Test creating task from dictionary."""
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         data = {
             "task_id": "test-id",
             "path": "/test/path",
@@ -178,6 +178,22 @@ class TestWatchTask:
         assert task.is_active is False
         assert task.created_at == now
         assert task.last_execution_time == now
+
+    def test_from_dict_normalizes_timezone_variants(self):
+        """Persisted aware and legacy naive timestamps become UTC-aware."""
+        data = {
+            "task_id": "timezone-task",
+            "path": "/test/path",
+            "created_at": "2026-07-15T12:00:00+08:00",
+            "last_execution_time": "2026-07-15T12:00:00",
+            "next_execution_time": "2026-07-15T13:00:00+08:00",
+        }
+
+        task = WatchTask.from_dict(data)
+
+        assert task.created_at == datetime(2026, 7, 15, 4, tzinfo=timezone.utc)
+        assert task.last_execution_time.tzinfo is not None
+        assert task.next_execution_time == datetime(2026, 7, 15, 5, tzinfo=timezone.utc)
 
     def test_calculate_next_execution_time(self):
         """Test calculating next execution time."""
@@ -675,6 +691,38 @@ class TestWatchManager:
 
 class TestWatchManagerPersistence:
     """Tests for WatchManager persistence."""
+
+    @pytest.mark.asyncio
+    async def test_persistence_normalizes_legacy_timestamps(
+        self, mock_viking_fs: MockVikingFS
+    ):
+        """Loading legacy timestamps rewrites the task storage canonically."""
+        data = {
+            "tasks": [
+                {
+                    "task_id": "legacy-timezone-task",
+                    "path": "/test/path",
+                    "watch_interval": 15.0,
+                    "created_at": "2026-07-15T12:00:00+08:00",
+                    "last_execution_time": "2026-07-15T12:00:00",
+                    "next_execution_time": "2026-07-15T12:15:00+08:00",
+                    "is_active": True,
+                }
+            ]
+        }
+        await mock_viking_fs.write_file(WatchManager.STORAGE_URI, json.dumps(data))
+
+        manager = WatchManager(viking_fs=mock_viking_fs)
+        await manager.initialize()
+
+        task = await manager.get_task("legacy-timezone-task")
+        assert task is not None
+        assert task.created_at == datetime(2026, 7, 15, 4, tzinfo=timezone.utc)
+
+        saved = json.loads(await mock_viking_fs.read_file(WatchManager.STORAGE_URI))
+        saved_task = saved["tasks"][0]
+        assert saved_task["created_at"].endswith("+00:00")
+        assert saved_task["next_execution_time"].endswith("+00:00")
 
     @pytest.mark.asyncio
     async def test_persistence_save_and_load(

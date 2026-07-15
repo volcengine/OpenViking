@@ -7,7 +7,7 @@ Provides scheduled task execution for watch tasks.
 """
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Set
 
 from openviking.resource.feishu_watch_auth import (
@@ -167,7 +167,7 @@ class WatchScheduler:
                 if self._watch_manager:
                     next_time = await self._watch_manager.get_next_execution_time()
                     if next_time is not None:
-                        now = datetime.now()
+                        now = datetime.now(timezone.utc)
                         sleep_seconds = min(
                             self._check_interval,
                             max(0.0, (next_time - now).total_seconds()),
