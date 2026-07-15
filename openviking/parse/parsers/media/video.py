@@ -30,6 +30,7 @@ from typing import List, Optional, Union
 from openviking.parse.base import NodeType, ParseResult, ResourceNode
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.media.constants import VIDEO_EXTENSIONS
+from openviking.parse.parsers.media.detection import is_mpeg_transport_stream_bytes
 from openviking.parse.parsers.media.naming import resolve_media_names
 from openviking_cli.utils.config.parser_config import VideoConfig
 
@@ -118,6 +119,8 @@ class VideoParser(BaseParser):
             if len(video_bytes) >= len(magic) and video_bytes.startswith(magic):
                 valid = True
                 break
+        if ext_lower == ".ts":
+            valid = is_mpeg_transport_stream_bytes(video_bytes)
 
         if not valid:
             raise ValueError(

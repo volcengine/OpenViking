@@ -66,6 +66,16 @@ def get_media_type(source_path: Optional[str], source_format: Optional[str]) -> 
     if source_format:
         if source_format in ["image", "audio", "video"]:
             return source_format
+        if source_format in {
+            "code",
+            "directory",
+            "documentation",
+            "markdown",
+            "repository",
+            "text",
+            "typescript",
+        }:
+            return None
 
     if source_path:
         ext = Path(source_path).suffix.lower()

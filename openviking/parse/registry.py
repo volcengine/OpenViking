@@ -202,6 +202,19 @@ class ParserRegistry:
         ext = path.suffix.lower()
         parser_name = self._extension_map.get(ext)
 
+        # ``.ts`` is shared by TypeScript and MPEG transport streams. Keep the
+        # video extension registered, but only select VideoParser when the file
+        # contents carry the MPEG-TS packet signature. TypeScript source uses
+        # the text parser so standalone and directory imports do not enter the
+        # media pipeline.
+        if ext == ".ts" and parser_name == "video":
+            from openviking.parse.parsers.media.detection import (
+                is_mpeg_transport_stream_file,
+            )
+
+            if not is_mpeg_transport_stream_file(path):
+                return self._parsers.get("text")
+
         if parser_name:
             return self._parsers.get(parser_name)
 
