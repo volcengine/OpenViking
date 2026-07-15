@@ -45,6 +45,7 @@ from openviking_cli.utils.config import get_openviking_config
 if TYPE_CHECKING:
     from openviking.session.compressor_v2 import SessionCompressorV2 as SessionCompressor
     from openviking.storage import VikingDBManager
+    from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
     from openviking.storage.viking_fs import VikingFS
 
 logger = get_logger(__name__)
@@ -1089,14 +1090,13 @@ class Session:
         *,
         memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Async commit session: archive immediately, extract memories in background.
+        """Archive immediately and enqueue restart-safe Phase 2 processing.
 
         Phase 1 (Archive prep, path-lock protected): Split messages into
         archive/retain parts, write the retained tail back to messages.jsonl,
         then persist the archive. Uses a distributed filesystem lock
         so this works across workers and processes.
-        Phase 2 (Memory extraction): Always runs in background via
-        asyncio.create_task().
+        Phase 2 (Memory extraction): Runs through the persistent QueueFS queue.
 
         Args:
             keep_recent_count: Number of most-recent messages to keep in the
@@ -1108,6 +1108,8 @@ class Session:
         Returns a task_id for tracking Phase 2 progress.
         """
         from openviking.service.task_tracker import get_task_tracker
+        from openviking.storage.queuefs import QueueManager, get_queue_manager
+        from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
         from openviking.storage.transaction import LockContext, get_lock_manager
 
         trace_id = tracer.get_trace_id()
@@ -1230,38 +1232,105 @@ class Session:
             f"history/archive_{self._compression.compression_index:03d}/"
         )
 
-        # Snapshot mutable state for Phase 2
+        # Snapshot mutable state for Phase 2.
         usage_snapshot = self._usage_records.copy()
+        task_id = str(uuid4())
+        queue_msg = SessionCommitMsg(
+            task_id=task_id,
+            session_id=self.session_id,
+            session_uri=self._session_uri,
+            archive_uri=archive_uri,
+            user=self.ctx.user.to_dict(),
+            actor_peer_id=self.ctx.actor_peer_id,
+            memory_policy=effective_memory_policy,
+            usage_uris=list(dict.fromkeys(u.uri for u in usage_snapshot if u.uri)),
+        )
+        await get_queue_manager().enqueue(QueueManager.SESSION_COMMIT, queue_msg.to_dict())
+        await get_task_tracker().create(
+            "session_commit",
+            resource_id=self.session_id,
+            account_id=self.ctx.account_id,
+            user_id=self.ctx.user.user_id,
+            task_id=task_id,
+        )
 
-        # Create TaskRecord for tracking Phase 2
+        return {
+            "session_id": self.session_id,
+            "status": "accepted",
+            "task_id": task_id,
+            "archive_uri": archive_uri,
+            "archived": True,
+            "trace_id": trace_id,
+        }
+
+    async def resume_queued_commit(self, msg: "SessionCommitMsg") -> None:
+        """Run one durable Phase 2 job from its archived messages."""
+        from openviking.service.task_tracker import get_task_tracker
+
         tracker = get_task_tracker()
         task = await tracker.create(
             "session_commit",
             resource_id=self.session_id,
             account_id=self.ctx.account_id,
             user_id=self.ctx.user.user_id,
+            task_id=msg.task_id,
         )
 
-        asyncio.create_task(
-            self._run_memory_extraction(
-                task_id=task.task_id,
-                archive_uri=archive_uri,
-                messages=messages_to_archive,
-                usage_records=usage_snapshot,
-                first_message_id=messages_to_archive[0].id if messages_to_archive else "",
-                last_message_id=messages_to_archive[-1].id if messages_to_archive else "",
-                memory_policy=effective_memory_policy,
+        try:
+            await self._viking_fs.read_file(f"{msg.archive_uri}/.done", ctx=self.ctx)
+        except Exception:
+            pass
+        else:
+            if task.status.value == "completed":
+                return
+            await tracker.complete(
+                msg.task_id,
+                {"session_id": self.session_id, "archive_uri": msg.archive_uri},
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
             )
-        )
+            return
 
-        return {
-            "session_id": self.session_id,
-            "status": "accepted",
-            "task_id": task.task_id,
-            "archive_uri": archive_uri,
-            "archived": True,
-            "trace_id": trace_id,
-        }
+        try:
+            failed = json.loads(
+                await self._viking_fs.read_file(f"{msg.archive_uri}/.failed.json", ctx=self.ctx)
+            )
+        except Exception:
+            pass
+        else:
+            await tracker.fail(
+                msg.task_id,
+                str(failed.get("error") or "session commit failed"),
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
+            )
+            return
+
+        archive_messages = await self._read_archive_messages(msg.archive_uri)
+        if not archive_messages:
+            error = "session commit archive has no messages"
+            await self._write_failed_marker(
+                msg.archive_uri,
+                stage="archive_read",
+                error=error,
+            )
+            await tracker.fail(
+                msg.task_id,
+                error,
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
+            )
+            return
+
+        await self._run_memory_extraction(
+            task_id=msg.task_id,
+            archive_uri=msg.archive_uri,
+            messages=archive_messages,
+            usage_records=[Usage(uri=uri, type="context") for uri in msg.usage_uris],
+            first_message_id=archive_messages[0].id,
+            last_message_id=archive_messages[-1].id,
+            memory_policy=msg.memory_policy,
+        )
 
     @tracer("session.commit.phase2", ignore_result=True, ignore_args=True)
     async def _run_memory_extraction(
@@ -1275,10 +1344,7 @@ class Session:
         memory_policy: Optional[Dict[str, Any]],
     ) -> None:
         """Phase 2: Extract memories, write relations, enqueue — runs in background."""
-        import uuid
-
         from openviking.service.task_tracker import get_task_tracker
-        from openviking.storage.transaction import get_lock_manager
         from openviking.telemetry import OperationTelemetry, bind_telemetry
         from openviking.telemetry.registry import register_telemetry, unregister_telemetry
 
@@ -1291,10 +1357,6 @@ class Session:
         memory_diff_uri: Optional[str] = None
         telemetry = OperationTelemetry(operation="session_commit_phase2", enabled=True)
         archive_index = self._archive_index_from_uri(archive_uri)
-        redo_task_id: Optional[str] = None
-        lock_manager = get_lock_manager()
-        redo_enabled = lock_manager.redo_recovery_enabled
-        redo_log = lock_manager.redo_log
 
         try:
             await self._wait_for_previous_archive_done(archive_index)
@@ -1308,20 +1370,6 @@ class Session:
             register_telemetry(telemetry)
             try:
                 with bind_telemetry(telemetry):
-                    # redo-log protection
-                    if redo_enabled:
-                        redo_task_id = str(uuid.uuid4())
-                        await redo_log.write_pending_async(
-                            redo_task_id,
-                            {
-                                "archive_uri": archive_uri,
-                                "session_uri": self._session_uri,
-                                "account_id": self.ctx.account_id,
-                                "user_id": self.ctx.user.user_id,
-                                "role": str(self.ctx.role),
-                            },
-                        )
-
                     ov_config = get_openviking_config()
                     effective_policy = MemoryPolicy.from_dict(memory_policy)
                     working_memory_enabled = effective_policy.working_memory_enabled
@@ -1575,9 +1623,6 @@ class Session:
                             except Exception as e:
                                 logger.warning(f"Failed to create relation to {usage.uri}: {e}")
 
-                    if redo_enabled and redo_task_id:
-                        await redo_log.mark_done_async(redo_task_id)
-
                     # Update active_count (using snapshot, not self._usage_records)
                     if self._vikingdb_manager:
                         uris = [u.uri for u in usage_records if u.uri]
@@ -1621,9 +1666,7 @@ class Session:
                 telemetry_snapshot=snapshot,
             )
 
-            # Write .done file last — signals that all state is finalized. We
-            # only reach here when every Phase 2 step succeeded; any failure
-            # would have raised above and marked the archive .failed.json.
+            # Write .done last so a recovered queue item can skip completed work.
             await self._write_done_file(archive_uri, first_message_id, last_message_id)
 
             result_payload = {
@@ -1658,28 +1701,9 @@ class Session:
                 user_id=self.ctx.user.user_id,
             )
             logger.info(f"Session {self.session_id} memory extraction completed")
-        except asyncio.CancelledError as e:
-            if redo_enabled and redo_task_id:
-                await redo_log.mark_done_async(redo_task_id)
-            try:
-                await self._write_failed_marker(
-                    archive_uri,
-                    stage="memory_extraction",
-                    error=f"cancelled: {e}",
-                )
-            except Exception:
-                logger.debug("Failed to write cancelled marker for session %s", self.session_id)
-            await tracker.fail(
-                task_id,
-                f"cancelled: {e}",
-                account_id=self.ctx.account_id,
-                user_id=self.ctx.user.user_id,
-            )
-            logger.warning("Memory extraction cancelled for session %s", self.session_id)
+        except asyncio.CancelledError:
             raise
         except Exception as e:
-            if redo_enabled and redo_task_id:
-                await redo_log.mark_done_async(redo_task_id)
             await self._write_failed_marker(
                 archive_uri,
                 stage="memory_extraction",

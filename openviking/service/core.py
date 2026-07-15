@@ -6,6 +6,7 @@ OpenViking Service Core.
 Main service class that composes all sub-services and manages infrastructure lifecycle.
 """
 
+import asyncio
 import os
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -28,6 +29,7 @@ from openviking.storage import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
 from openviking.storage.index_consistency import check_index_consistency
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
+from openviking.storage.queuefs.session_commit_processor import SessionCommitProcessor
 from openviking.storage.queuefs.understanding_parse_processor import UnderstandingParseProcessor
 from openviking.storage.transaction import LockManager, init_lock_manager
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
@@ -423,6 +425,14 @@ class OpenVikingService:
                 dequeue_handler=external_parse_processor,
                 allow_create=True,
             )
+            self._queue_manager.get_queue(
+                self._queue_manager.SESSION_COMMIT,
+                dequeue_handler=SessionCommitProcessor(
+                    self._session_service,
+                    asyncio.get_running_loop(),
+                ),
+                allow_create=True,
+            )
             self._queue_manager.start()
             logger.info("QueueManager workers started")
 
@@ -446,17 +456,17 @@ class OpenVikingService:
             self._watch_scheduler = None
             logger.info("WatchScheduler stopped")
 
+        if self._queue_manager:
+            await asyncio.to_thread(self._queue_manager.stop)
+            self._queue_manager = None
+            logger.info("Queue manager stopped")
+
         if self._lock_manager:
             await self._lock_manager.stop()
             self._lock_manager = None
 
         if self._vikingdb_manager:
             self._vikingdb_manager.mark_closing()
-
-        if self._queue_manager:
-            self._queue_manager.stop()
-            self._queue_manager = None
-            logger.info("Queue manager stopped")
 
         if self._vikingdb_manager:
             await self._vikingdb_manager.close()
