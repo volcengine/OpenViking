@@ -1,8 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-from typing import Self
-
 from pydantic import BaseModel, Field, model_validator
+from typing_extensions import Self
 
 
 class TransactionConfig(BaseModel):
