@@ -179,6 +179,32 @@ class _SingleAccountBackend:
 
         return result
 
+    def _prepare_upsert_payloads(self, data_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Prepare a batch in one worker-thread handoff."""
+        return [self._prepare_upsert_payload(data) for data in data_list]
+
+    def _bind_upsert_payload(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Copy a record, enforce its bound account, and apply write defaults."""
+        payload = dict(data)
+        if self._bound_account_id:
+            account_id = payload.get("account_id")
+            if account_id and account_id != self._bound_account_id:
+                raise PermissionError(
+                    "record account_id does not match the request context account_id"
+                )
+            payload["account_id"] = self._bound_account_id
+
+        context_type = payload.get("context_type")
+        if context_type and context_type not in VikingVectorIndexBackend.ALLOWED_CONTEXT_TYPES:
+            raise ValueError(
+                f"Invalid context_type: {context_type}. "
+                f"Must be one of {sorted(VikingVectorIndexBackend.ALLOWED_CONTEXT_TYPES)}"
+            )
+
+        if not payload.get("id"):
+            payload["id"] = str(uuid.uuid4())
+        return payload
+
     @staticmethod
     def _is_not_found_error(exc: Exception) -> bool:
         message = str(exc).lower()
@@ -265,27 +291,11 @@ class _SingleAccountBackend:
     # =========================================================================
 
     async def upsert(self, data: Dict[str, Any], partial_update: bool = False) -> str:
-        payload = dict(data)
-        logger.debug(
-            f"[_SingleAccountBackend.upsert] Input data.account_id={payload.get('account_id')}, bound_account_id={self._bound_account_id}"
-        )
-        if self._bound_account_id and not payload.get("account_id"):
-            payload["account_id"] = self._bound_account_id
-        logger.debug(
-            f"[_SingleAccountBackend.upsert] Final payload.account_id={payload.get('account_id')}"
-        )
-
-        context_type = payload.get("context_type")
-        if context_type and context_type not in VikingVectorIndexBackend.ALLOWED_CONTEXT_TYPES:
-            logger.warning(
-                "Invalid context_type: %s. Must be one of %s",
-                context_type,
-                sorted(VikingVectorIndexBackend.ALLOWED_CONTEXT_TYPES),
-            )
+        try:
+            payload = self._bind_upsert_payload(data)
+        except (PermissionError, ValueError) as exc:
+            logger.warning("Rejecting upsert: %s", exc)
             return ""
-
-        if not payload.get("id"):
-            payload["id"] = str(uuid.uuid4())
 
         if partial_update:
             try:
@@ -308,6 +318,43 @@ class _SingleAccountBackend:
         payload = await self._async_adapter.run(self._prepare_upsert_payload, payload)
         ids = await self._async_adapter.call("upsert", payload)
         return ids[0] if ids else ""
+
+    async def upsert_many(self, data_list: List[Dict[str, Any]]) -> List[str]:
+        """Bulk full-record upsert through one adapter call.
+
+        The batch is validated before the adapter is invoked. Partial-update
+        semantics intentionally remain on :meth:`upsert`, where each existing
+        record is read and merged independently. Returned IDs preserve input
+        order; invalid batches raise before the adapter is invoked.
+        """
+        if not data_list:
+            return []
+
+        payloads: List[Dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for index, data in enumerate(data_list):
+            try:
+                payload = self._bind_upsert_payload(data)
+            except PermissionError as exc:
+                raise PermissionError(f"record at index {index}: {exc}") from exc
+            except ValueError as exc:
+                raise ValueError(f"record at index {index}: {exc}") from exc
+            record_id = str(payload["id"])
+            if record_id in seen_ids:
+                raise ValueError(f"duplicate record id at index {index}")
+            seen_ids.add(record_id)
+            payloads.append(payload)
+
+        payloads = await self._async_adapter.run(self._prepare_upsert_payloads, payloads)
+        ids = await self._async_adapter.call("upsert", payloads)
+        normalized_ids = [str(item) for item in (ids or []) if item is not None]
+        expected_ids = [str(payload["id"]) for payload in payloads]
+        if normalized_ids != expected_ids:
+            raise RuntimeError(
+                "bulk upsert adapter returned IDs that do not match the input count and order "
+                f"(expected {len(expected_ids)}, got {len(normalized_ids)})"
+            )
+        return normalized_ids
 
     async def update(self, data: Dict[str, Any]) -> UpdateResult:
         """Strict update path. The target record must already exist."""
@@ -776,15 +823,47 @@ class VikingVectorIndexBackend:
         fields before issuing the final upsert.
         """
         logger.debug(
-            f"[VikingVectorIndexBackend.upsert] Called with ctx.account_id={ctx.account_id}, partial_update={partial_update}, data={data}"
+            "[VikingVectorIndexBackend.upsert] Called with ctx.account_id=%s, "
+            "partial_update=%s, data=%s",
+            ctx.account_id,
+            partial_update,
+            data,
         )
         backend = self._get_backend_for_context(ctx)
         logger.debug(
-            f"[VikingVectorIndexBackend.upsert] Using backend for account_id={ctx.account_id}"
+            "[VikingVectorIndexBackend.upsert] Using backend for account_id=%s",
+            ctx.account_id,
         )
         result = await backend.upsert(data, partial_update=partial_update)
         logger.debug(
-            f"[VikingVectorIndexBackend.upsert] Completed with partial_update={partial_update}, result={result}"
+            "[VikingVectorIndexBackend.upsert] Completed with partial_update=%s, result=%s",
+            partial_update,
+            result,
+        )
+        return result
+
+    async def upsert_many(
+        self, data_list: List[Dict[str, Any]], *, ctx: RequestContext
+    ) -> List[str]:
+        """Bulk full-record upsert.
+
+        All records are validated for the bound account before one adapter
+        invocation is made. Adapters may split that invocation into multiple
+        data-plane requests, so this API does not guarantee transaction
+        atomicity. Use :meth:`upsert` with ``partial_update=True`` when omitted
+        fields must be preserved from existing records.
+        """
+        logger.debug(
+            "[VikingVectorIndexBackend.upsert_many] Called with ctx.account_id=%s, count=%s",
+            ctx.account_id,
+            len(data_list),
+        )
+        backend = self._get_backend_for_context(ctx)
+        result = await backend.upsert_many(data_list)
+        logger.debug(
+            "[VikingVectorIndexBackend.upsert_many] Completed with count=%s, result_count=%s",
+            len(data_list),
+            len(result),
         )
         return result
 
