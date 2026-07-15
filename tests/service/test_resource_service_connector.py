@@ -223,6 +223,74 @@ def test_connector_only_route_rejects_disabled_or_unsupported_requests(
         service._should_use_connector("tos://bucket/prefix")
 
 
+@pytest.mark.parametrize(
+    ("path", "target"),
+    [
+        (
+            "https://example.com/manual.pdf",
+            {"to": "viking://resources/manual.pdf"},
+        ),
+        (
+            "http://example.com/manual.pdf",
+            {"parent": "viking://user/alice/resources/manuals"},
+        ),
+        (
+            "git://example.com/repository.git",
+            {"parent": "viking://user/alice/peers/bob/resources/manuals"},
+        ),
+    ],
+)
+def test_shared_connector_sources_fall_back_for_unsupported_targets(
+    connector_config,
+    service,
+    path,
+    target,
+):
+    connector_config.allowed_add_types = ["https", "http", "git"]
+
+    assert service._should_use_connector(path, **target) is False
+
+
+@pytest.mark.parametrize(
+    "parent",
+    ["viking://resources/manuals", "resources/manuals"],
+)
+def test_connector_route_accepts_public_parent(connector_config, ctx, service, parent):
+    connector_config.allowed_add_types = ["https"]
+
+    assert (
+        service._should_use_connector(
+            "https://example.com/manual.pdf",
+            ctx=ctx,
+            parent=parent,
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_add_resource_falls_back_for_shared_source_with_exact_to(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+):
+    connector_config.allowed_add_types = ["https"]
+    monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: True)
+    service._add_resource_via_connector = AsyncMock()
+    service.enqueue_git_add_resource = AsyncMock(return_value={"root_uri": "standard-pipeline"})
+
+    result = await service.add_resource(
+        path="https://example.com/manual.pdf",
+        ctx=ctx,
+        to="viking://resources/manual.pdf",
+    )
+
+    assert result == {"root_uri": "standard-pipeline"}
+    service._add_resource_via_connector.assert_not_awaited()
+    service.enqueue_git_add_resource.assert_awaited_once()
+
+
 @pytest.mark.asyncio
 async def test_connector_import_without_target_keeps_resource_id_unset(
     monkeypatch,
@@ -239,7 +307,6 @@ async def test_connector_import_without_target_keeps_resource_id_unset(
     result = await service._add_resource_via_connector(
         path="tos://bucket/prefix",
         ctx=ctx,
-        to=None,
         parent=None,
     )
 

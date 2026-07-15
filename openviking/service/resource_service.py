@@ -665,6 +665,9 @@ class ResourceService:
 
         if self._should_use_connector(
             path,
+            ctx=ctx,
+            to=to,
+            parent=parent,
             wait=wait,
             reason=reason,
             instruction=instruction,
@@ -677,7 +680,6 @@ class ResourceService:
             return await self._add_resource_via_connector(
                 path=path,
                 ctx=ctx,
-                to=to,
                 parent=parent,
                 **kwargs,
             )
@@ -1160,6 +1162,9 @@ class ResourceService:
         self,
         path: str,
         *,
+        ctx: Optional[RequestContext] = None,
+        to: Optional[str] = None,
+        parent: Optional[str] = None,
         wait: bool = False,
         reason: str = "",
         instruction: str = "",
@@ -1197,6 +1202,17 @@ class ResourceService:
                 )
             return False
 
+        if ctx is not None and (to or parent):
+            target = ContentTargetSpec.from_fields(
+                ctx=ctx,
+                kind="resource",
+                to=to,
+                parent=parent,
+                create_parent=bool((kwargs or {}).get("create_parent", False)),
+            )
+            to = target.to
+            parent = target.parent
+
         unsupported = self._unsupported_connector_params(
             wait=wait,
             reason=reason,
@@ -1206,6 +1222,8 @@ class ResourceService:
             watch_interval=watch_interval,
             connector_args=connector_args or {},
             kwargs=kwargs or {},
+            to=to,
+            parent=parent,
         )
         if not unsupported:
             return True
@@ -1229,12 +1247,24 @@ class ResourceService:
         watch_interval: float,
         connector_args: Dict[str, Any],
         kwargs: Dict[str, Any],
+        to: Optional[str] = None,
+        parent: Optional[str] = None,
     ) -> List[str]:
         """add_resource params the Connector delegation cannot honor.
 
         Returns an empty list when the request is fully supported.
         """
         unsupported: List[str] = []
+        if to:
+            unsupported.append(
+                "exact 'to' targets (Connector imports require a parent destination)"
+            )
+        if (
+            parent
+            and parent != "viking://resources"
+            and not parent.startswith("viking://resources/")
+        ):
+            unsupported.append("parent outside the public resources root (viking://resources/...)")
         if watch_interval > 0:
             unsupported.append("watch_interval>0 (Connector imports cannot be watched yet)")
         if wait:
@@ -1294,7 +1324,6 @@ class ResourceService:
         self,
         path: str,
         ctx: RequestContext,
-        to: Optional[str],
         parent: Optional[str],
         **kwargs: Any,
     ) -> Dict[str, Any]:
@@ -1309,15 +1338,9 @@ class ResourceService:
         target = ContentTargetSpec.from_fields(
             ctx=ctx,
             kind="resource",
-            to=to,
             parent=parent,
             create_parent=bool(kwargs.get("create_parent", False)),
         )
-        if target.to:
-            raise InvalidArgumentError(
-                "Connector imports cannot honor exact 'to' targets; use 'parent' "
-                "to select the destination directory."
-            )
         task_resource_id = target.parent or None
         path_prefix = self._connector_path_prefix(task_resource_id)
 
