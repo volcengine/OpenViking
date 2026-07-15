@@ -1,0 +1,47 @@
+examples/openclaw-plugin/client.ts
+  s_c664270dff20fb::t_c42b1f716222b1 848
+examples/openclaw-plugin/plugin/openviking-session-routing-runtime.ts
+  s_a138734bec311c::t_552d1c10a8a810 88,93-96
+examples/openclaw-plugin/routing/memory-uri.ts
+  s_a138734bec311c::t_49747de596cfd1 3
+examples/openclaw-plugin/services/context-lifecycle-service.ts
+  s_c664270dff20fb::t_0624a51d553a78 1026
+examples/openclaw-plugin/tests/ut/client.test.ts
+  s_c664270dff20fb::t_09dcba53a34634 43-46
+examples/openclaw-plugin/tests/ut/context-engine-afterTurn.test.ts
+  s_c664270dff20fb::t_06b25e04c96fdb 249-280
+examples/openclaw-plugin/tests/ut/context-engine-compact.test.ts
+  s_c664270dff20fb::t_42de19c9c72715 118,396,405-407
+examples/openclaw-plugin/tests/ut/identity-routing.test.ts
+  s_c664270dff20fb::t_41fd8273cad832 105-116
+examples/openclaw-plugin/tests/ut/plugin-modules.test.ts
+  s_c664270dff20fb::t_a23bd8a5e827a3 858-871
+examples/openclaw-plugin/tests/ut/tools.test.ts
+  s_c664270dff20fb::t_668474db59d101 501-512
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "34d43da5eb273b9405e2bcbf4af2e2873866f991",
+  "prompts": {},
+  "sessions": {
+    "s_a138734bec311c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f64db-a570-7f83-bf32-ce121c1f8dd7",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    },
+    "s_c664270dff20fb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f645f-c8c4-7181-a874-9504876fbded",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
