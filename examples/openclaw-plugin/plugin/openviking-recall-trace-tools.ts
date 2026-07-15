@@ -11,6 +11,7 @@ export type OpenVikingRecallTraceToolContext = {
   sessionId?: string;
   agentId?: string;
   senderId?: string;
+  requesterSenderId?: string;
 };
 
 export type OpenVikingRecallTraceSession = {
@@ -18,6 +19,7 @@ export type OpenVikingRecallTraceSession = {
   sessionKey?: string;
   ovSessionId?: string;
   agentId: string;
+  actorPeerId?: string;
 };
 
 export type RecallTraceToolInput = {

@@ -82,7 +82,7 @@ describe("plugin module seams", () => {
     const queryRecallTraces = vi.fn().mockResolvedValue({ entries: [{ traceId: "trace-1" }], lookupLayer: "memory", warnings: [] });
     const formatRecallTraceText = vi.fn().mockReturnValue("trace text");
     const deps = {
-      resolvePluginSessionRouting: () => ({ agentId: "agent-main", sessionId: "session-1", ovSessionId: "ov-session-1" }),
+      resolvePluginSessionRouting: () => ({ agentId: "agent-main", actorPeerId: "agent-main", sessionId: "session-1", ovSessionId: "ov-session-1" }),
       isBypassedSession: () => false,
       makeBypassedToolResult: (toolName: string) => ({ content: [{ type: "text" as const, text: `bypassed ${toolName}` }], details: { toolName } }),
       parseAddResourceCommandArgs: vi.fn().mockReturnValue({ source: "https://example.com/doc", wait: true }),
@@ -118,6 +118,7 @@ describe("plugin module seams", () => {
     await commands[2]!.handler({ args: "docs --uri viking://resources --limit 3" });
     expect(searchOpenViking).toHaveBeenCalledWith({ query: "docs", uri: "viking://resources", limit: 3 }, "agent-main", {
       agentId: "agent-main",
+      actorPeerId: "agent-main",
       sessionId: "session-1",
       ovSessionId: "ov-session-1",
     });
@@ -131,6 +132,7 @@ describe("plugin module seams", () => {
     });
     expect(queryRecallTraces).toHaveBeenCalledWith(expect.objectContaining({ source: "ov_search", limit: 5, includeContent: false }), {
       agentId: "agent-main",
+      actorPeerId: "agent-main",
       sessionId: "session-1",
       ovSessionId: "ov-session-1",
     });
@@ -200,7 +202,7 @@ describe("plugin module seams", () => {
     const read = vi.fn().mockResolvedValue("0123456789abcdefghijklmnopqrstuvwxyz");
     const runtime = createOpenVikingRecallTraceRuntime({
       getClient: async () => ({ read }),
-      resolvePluginSessionRouting: () => ({ agentId: "agent-main", sessionId: "session-1", sessionKey: "session-key-1", ovSessionId: "ov-session-1" }),
+      resolvePluginSessionRouting: () => ({ agentId: "agent-main", actorPeerId: "agent-main", sessionId: "session-1", sessionKey: "session-key-1", ovSessionId: "ov-session-1" }),
       traceRecorder,
       registerRecallTraceRoutes: vi.fn().mockReturnValue(true),
       normalizeResourceTypes: (value) => Array.isArray(value) ? value : [String(value)],
@@ -548,7 +550,7 @@ describe("plugin module seams", () => {
     const deps = {
       registerTool,
       getClient: async () => ({ readToolResult }),
-      resolvePluginSessionRouting: () => ({ agentId: "agent-main", ovSessionId: "ov-session-1" }),
+      resolvePluginSessionRouting: () => ({ agentId: "agent-main", actorPeerId: "agent-main", ovSessionId: "ov-session-1" }),
       isBypassedSession: () => false,
       makeBypassedToolResult: (toolName: string) => ({ content: [{ type: "text" as const, text: `bypassed ${toolName}` }], details: { toolName } }),
       logger: { warn: vi.fn() },
@@ -601,6 +603,7 @@ describe("plugin module seams", () => {
       resolveAgentId: () => "agent-main",
       resolvePluginSessionRouting: () => ({
         agentId: "agent-main",
+        actorPeerId: "agent-main",
         sessionId: "session-1",
         ovSessionId: "ov-session-1",
       }),
@@ -627,7 +630,7 @@ describe("plugin module seams", () => {
     expect(grepSessionArchives).toHaveBeenCalledWith("ov-session-1", "command", {
       archiveId: undefined,
       caseInsensitive: true,
-      agentId: "agent-main",
+      actorPeerId: "agent-main",
     });
     expect(searchResult.content[0].text).toContain("Found 1 match(es)");
     expect(searchResult.content[0].text).toContain("important command output");
@@ -661,7 +664,7 @@ describe("plugin module seams", () => {
     const deps = {
       registerTool,
       getClient: async () => ({ addResource, addSkill }),
-      resolvePluginSessionRouting: () => ({ agentId: "agent-main" }),
+      resolvePluginSessionRouting: () => ({ agentId: "agent-main", actorPeerId: "agent-main" }),
       isBypassedSession: () => false,
       makeBypassedToolResult: (toolName: string) => ({ content: [{ type: "text" as const, text: `bypassed ${toolName}` }], details: { toolName } }),
       enableAddResourceTool: true,
@@ -708,7 +711,7 @@ describe("plugin module seams", () => {
     registerOpenVikingImportTools({
       registerTool,
       getClient: async () => ({ addResource: vi.fn(), addSkill: vi.fn() }),
-      resolvePluginSessionRouting: () => ({ agentId: "agent-main" }),
+      resolvePluginSessionRouting: () => ({ agentId: "agent-main", actorPeerId: "agent-main" }),
       isBypassedSession: () => false,
       makeBypassedToolResult: (toolName: string) => ({ content: [{ type: "text" as const, text: `bypassed ${toolName}` }], details: { toolName } }),
       enableAddResourceTool: false,
@@ -743,6 +746,7 @@ describe("plugin module seams", () => {
       listOpenVikingDirectory,
       resolvePluginSessionRouting: () => ({
         agentId: "agent-main",
+        actorPeerId: "agent-main",
         sessionId: "session-1",
         ovSessionId: "ov-session-1",
       }),
@@ -762,6 +766,7 @@ describe("plugin module seams", () => {
       limit: 3,
     }, "agent-main", {
       agentId: "agent-main",
+      actorPeerId: "agent-main",
       sessionId: "session-1",
       ovSessionId: "ov-session-1",
     });
@@ -814,9 +819,8 @@ describe("plugin module seams", () => {
       getClient: async () => ({ addSessionMessage, commitSession, deleteUri, find }),
       normalizeSessionId: (sessionId: string) => `normalized:${sessionId}`,
       createTempSessionId: () => "memory-store-temp",
-      extractSenderId: () => "ou_01@abc",
-      toRoleId: (senderId?: string) => senderId?.replace(/[^a-zA-Z0-9_-]/g, "_"),
-      resolvePluginSessionRouting: () => ({ agentId: "agent-main" }),
+      peerRole: "person" as const,
+      resolvePluginSessionRouting: () => ({ agentId: "agent-main", actorPeerId: "ou_01_abc" }),
       isBypassedSession: () => false,
       makeBypassedToolResult: (toolName: string) => ({ content: [{ type: "text" as const, text: `bypassed ${toolName}` }], details: { toolName } }),
       defaultTargetUri: "viking://user/default",
@@ -835,13 +839,13 @@ describe("plugin module seams", () => {
       "memory-store-temp",
       "user",
       [{ type: "text", text: "remember this" }],
-      "agent-main",
+      "ou_01_abc",
       undefined,
       "ou_01_abc",
     );
     expect(commitSession).toHaveBeenCalledWith("memory-store-temp", {
       wait: true,
-      agentId: "agent-main",
+      agentId: "ou_01_abc",
       keepRecentCount: 0,
     });
     expect(stored.details).toMatchObject({ action: "stored", memoriesCount: 2, usedTempSession: true });
@@ -853,7 +857,7 @@ describe("plugin module seams", () => {
     expect(deleteUri).not.toHaveBeenCalled();
 
     const deleted = await forgetTool.execute("call-3", { uri: "viking://user/default/memories/m1" });
-    expect(deleteUri).toHaveBeenCalledWith("viking://user/default/memories/m1", "agent-main");
+    expect(deleteUri).toHaveBeenCalledWith("viking://user/default/memories/m1", "ou_01_abc");
     expect(deleted.content[0].text).toBe("Forgotten: viking://user/default/memories/m1");
     expect(deleted.details).toMatchObject({ action: "deleted", uri: "viking://user/default/memories/m1" });
   });
@@ -873,6 +877,7 @@ describe("plugin module seams", () => {
       formatRecallTraceText,
       resolvePluginSessionRouting: () => ({
         agentId: "agent-main",
+        actorPeerId: "agent-main",
         sessionId: "session-1",
         ovSessionId: "ov-session-1",
       }),
@@ -889,6 +894,7 @@ describe("plugin module seams", () => {
 
     expect(queryRecallTraces).toHaveBeenCalledWith({ source: "ov_search", limit: 5 }, {
       agentId: "agent-main",
+      actorPeerId: "agent-main",
       sessionId: "session-1",
       ovSessionId: "ov-session-1",
     });
@@ -935,6 +941,7 @@ describe("plugin module seams", () => {
       toQueryConfigContext: (session) => ({ agentId: session.agentId, sessionId: session.sessionId, sessionKey: session.sessionKey, ovSessionId: session.ovSessionId }),
       resolvePluginSessionRouting: () => ({
         agentId: "agent-main",
+        actorPeerId: "agent-main",
         sessionId: "session-1",
         sessionKey: "agent:agent-main:session-1",
         ovSessionId: "ov-session-1",

@@ -3,7 +3,13 @@ import { DEFAULT_PHASE2_POLL_TIMEOUT_MS, type OpenVikingClient, type OVMessage }
 import type { EffectiveQueryConfig } from "../query-config.js";
 import { buildAutoRecallContext, prepareRecallQuery } from "../auto-recall.js";
 import { toJsonLog } from "../memory-ranking.js";
-import { openClawSessionToOvStorageId } from "../routing/identity-routing.js";
+import {
+  openClawSessionToOvStorageId,
+  resolveOpenVikingActorPeerId,
+  resolveOpenVikingMessagePeerId,
+  sanitizeOpenVikingPeerId,
+  type OpenVikingPeerRole,
+} from "../routing/identity-routing.js";
 import { extractNewTurnMessages } from "../text-utils.js";
 import { estimateAgentMessageTokens, estimateTextTokens } from "../token-estimator.js";
 import {
@@ -15,6 +21,12 @@ import {
 } from "./context-message-adapter.js";
 
 type ExtractedTurnMessage = ReturnType<typeof extractNewTurnMessages>["messages"][number];
+type ResolveActorPeerId = (
+  sessionId?: string,
+  sessionKey?: string,
+  ovSessionId?: string,
+  senderId?: string,
+) => string | undefined;
 
 export type ContextEngineLifecycleLogger = {
   info: (msg: string) => void;
@@ -27,6 +39,8 @@ export type CommitOpenVikingSessionParams = {
   getClient: () => Promise<Pick<OpenVikingClient, "commitSession">>;
   logger: ContextEngineLifecycleLogger;
   resolveAgentId: (sessionId: string, sessionKey?: string, ovSessionId?: string) => string;
+  resolveActorPeerId?: ResolveActorPeerId;
+  peerRole?: OpenVikingPeerRole;
   rememberSessionAgentId?: (ctx: {
     agentId?: string;
     sessionId?: string;
@@ -74,6 +88,7 @@ export type AssembleOpenVikingSessionParams = {
   getClient: () => Promise<OpenVikingClient>;
   logger: ContextEngineLifecycleLogger;
   resolveAgentId: (sessionId: string, sessionKey?: string, ovSessionId?: string) => string;
+  resolveActorPeerId?: ResolveActorPeerId;
   rememberSessionAgentId?: (ctx: {
     agentId?: string;
     sessionId?: string;
@@ -111,6 +126,8 @@ export type CompactOpenVikingSessionParams = {
   getClient: () => Promise<CompactClient>;
   logger: ContextEngineLifecycleLogger;
   resolveAgentId: (sessionId: string, sessionKey?: string, ovSessionId?: string) => string;
+  resolveActorPeerId?: ResolveActorPeerId;
+  peerRole?: OpenVikingPeerRole;
   isBypassedSession: (params: { sessionId?: string; sessionKey?: string }) => boolean;
   diag: (stage: string, sessionId: string, data: Record<string, unknown>) => void;
 };
@@ -131,10 +148,12 @@ export type AfterTurnOpenVikingSessionParams = {
     commitTokenThresholdRatio: number;
     commitKeepRecentCount: number;
     logFindRequests: boolean;
+    peer_role?: OpenVikingPeerRole;
   };
   getClient: () => Promise<AfterTurnClient>;
   logger: ContextEngineLifecycleLogger;
   resolveAgentId: (sessionId: string, sessionKey?: string, ovSessionId?: string) => string;
+  resolveActorPeerId?: ResolveActorPeerId;
   rememberSessionAgentId?: (ctx: {
     agentId?: string;
     sessionId?: string;
@@ -166,6 +185,30 @@ const RESERVED_RATIO = 0.15;
 const PHASE2_POLL_INTERVAL_MS = 800;
 const PHASE2_POLL_MAX_MS = DEFAULT_PHASE2_POLL_TIMEOUT_MS;
 
+function resolveLifecycleActorPeerId(params: {
+  resolver?: ResolveActorPeerId;
+  peerRole: OpenVikingPeerRole;
+  sessionId?: string;
+  sessionKey?: string;
+  ovSessionId?: string;
+  senderId?: string;
+  agentId: string;
+}): string | undefined {
+  if (params.resolver) {
+    return params.resolver(
+      params.sessionId,
+      params.sessionKey,
+      params.ovSessionId,
+      params.senderId,
+    );
+  }
+  return resolveOpenVikingActorPeerId({
+    peerRole: params.peerRole,
+    personPeerId: sanitizeOpenVikingPeerId(params.senderId),
+    assistantPeerId: params.agentId,
+  });
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -177,7 +220,7 @@ function sleep(ms: number): Promise<void> {
 async function pollPhase2ExtractionOutcome(
   client: AfterTurnClient,
   taskId: string,
-  agentId: string,
+  agentId: string | undefined,
   logger: ContextEngineLifecycleLogger,
   sessionLabel: string,
 ): Promise<void> {
@@ -341,6 +384,8 @@ export async function commitOpenVikingSession({
   getClient,
   logger,
   resolveAgentId,
+  resolveActorPeerId,
+  peerRole = "assistant",
   rememberSessionAgentId,
   isBypassedSession,
 }: CommitOpenVikingSessionParams): Promise<boolean> {
@@ -359,9 +404,17 @@ export async function commitOpenVikingSession({
       ovSessionId: ovId,
     });
     const agentId = resolveAgentId(sessionId, sessionKey, ovId);
+    const actorPeerId = resolveLifecycleActorPeerId({
+      resolver: resolveActorPeerId,
+      peerRole,
+      sessionId,
+      sessionKey,
+      ovSessionId: ovId,
+      agentId,
+    });
     const commitResult = await client.commitSession(ovId, {
       wait: true,
-      agentId,
+      agentId: actorPeerId,
       keepRecentCount: 0,
     });
     const memCount = totalExtractedMemories(commitResult.memories_extracted);
@@ -422,6 +475,7 @@ export async function assembleOpenVikingSession({
   getClient,
   logger,
   resolveAgentId,
+  resolveActorPeerId,
   rememberSessionAgentId,
   isBypassedSession,
   queryConfigStore,
@@ -492,6 +546,15 @@ export async function assembleOpenVikingSession({
       const client = await getClient();
       const routingRef = sessionId ?? sessionKey ?? ovSessionId;
       const agentId = resolveAgentId(routingRef, sessionKey, ovSessionId);
+      const actorPeerId = resolveLifecycleActorPeerId({
+        resolver: resolveActorPeerId,
+        peerRole: cfg.peer_role ?? "assistant",
+        sessionId,
+        sessionKey,
+        ovSessionId,
+        senderId: sender.senderId,
+        agentId,
+      });
       const queryConfig = await queryConfigStore?.getEffective({
         agentId,
         sessionId,
@@ -503,6 +566,7 @@ export async function assembleOpenVikingSession({
         queryConfig,
         client,
         agentId,
+        actorPeerId,
         queryText: recallQuery.query,
         logger,
         verbose: (message) => logger.info(message),
@@ -555,7 +619,16 @@ export async function assembleOpenVikingSession({
     const client = await getClient();
     const routingRef = sessionId ?? sessionKey ?? ovSessionId;
     const agentId = resolveAgentId(routingRef, sessionKey, ovSessionId);
-    const ctx = await client.getSessionContext(ovSessionId, tokenBudget, agentId);
+    const actorPeerId = resolveLifecycleActorPeerId({
+      resolver: resolveActorPeerId,
+      peerRole: cfg.peer_role ?? "assistant",
+      sessionId,
+      sessionKey,
+      ovSessionId,
+      senderId: sender.senderId,
+      agentId,
+    });
+    const ctx = await client.getSessionContext(ovSessionId, tokenBudget, actorPeerId);
 
     const preAbstracts = ctx?.pre_archive_abstracts ?? [];
     const hasArchives = !!ctx?.latest_archive_overview || preAbstracts.length > 0;
@@ -787,6 +860,7 @@ export async function afterTurnOpenVikingSession({
   getClient,
   logger,
   resolveAgentId,
+  resolveActorPeerId,
   rememberSessionAgentId,
   isBypassedSession,
   diag,
@@ -875,6 +949,15 @@ export async function afterTurnOpenVikingSession({
     const client = await getClient();
     const createdAt = pickLatestCreatedAt(turnMessages);
     const senderRoleId = toRoleId(sender.senderId);
+    const actorPeerId = resolveLifecycleActorPeerId({
+      resolver: resolveActorPeerId,
+      peerRole: cfg.peer_role ?? "assistant",
+      sessionId,
+      sessionKey,
+      ovSessionId,
+      senderId: senderRoleId,
+      agentId,
+    });
     for (const msg of extractedMessages) {
       const ovParts = msg.parts.map((part) => {
         if (part.type === "text") {
@@ -899,14 +982,19 @@ export async function afterTurnOpenVikingSession({
           ovSessionId,
           msg.role,
           ovParts,
-          agentId,
+          actorPeerId,
           createdAt,
-          msg.role === "user" ? senderRoleId : undefined,
+          resolveOpenVikingMessagePeerId({
+            peerRole: cfg.peer_role ?? "assistant",
+            role: msg.role,
+            personPeerId: senderRoleId,
+            assistantPeerId: agentId,
+          }),
         );
       }
     }
 
-    const session = await client.getSession(ovSessionId, agentId);
+    const session = await client.getSession(ovSessionId, actorPeerId);
     const pendingTokens = session.pending_tokens ?? 0;
 
     const commitTokenThreshold = Math.floor(tokenBudget * cfg.commitTokenThresholdRatio);
@@ -926,7 +1014,7 @@ export async function afterTurnOpenVikingSession({
 
     const commitResult = await client.commitSession(ovSessionId, {
       wait: false,
-      agentId,
+      agentId: actorPeerId,
       keepRecentCount: cfg.commitKeepRecentCount,
     });
     logger.info(
@@ -952,7 +1040,7 @@ export async function afterTurnOpenVikingSession({
         `openviking: Phase2 memory extraction runs asynchronously on the server (task_id=${commitResult.task_id}). ` +
           "memories_extracted appears only after that task completes — not in this immediate response.",
       );
-      void pollPhase2ExtractionOutcome(client, commitResult.task_id, agentId, logger, ovSessionId);
+      void pollPhase2ExtractionOutcome(client, commitResult.task_id, actorPeerId, logger, ovSessionId);
     }
   } catch (err) {
     logger.warn?.(`openviking: afterTurn failed: ${String(err)}`);
@@ -1001,6 +1089,8 @@ export async function compactOpenVikingSession({
   getClient,
   logger,
   resolveAgentId,
+  resolveActorPeerId,
+  peerRole = "assistant",
   isBypassedSession,
   diag,
 }: CompactOpenVikingSessionParams): Promise<CompactOpenVikingSessionResult> {
@@ -1029,11 +1119,19 @@ export async function compactOpenVikingSession({
 
   const client = await getClient();
   const agentId = resolveAgentId(sessionId, sessionKey, ovSessionId);
+  const actorPeerId = resolveLifecycleActorPeerId({
+    resolver: resolveActorPeerId,
+    peerRole,
+    sessionId,
+    sessionKey,
+    ovSessionId,
+    agentId,
+  });
   const tokensBeforeOriginal = validTokenCount(currentTokenCount);
   let preCommitEstimatedTokens: number | undefined;
   if (typeof tokensBeforeOriginal !== "number") {
     try {
-      const preCtx = await client.getSessionContext(ovSessionId, tokenBudget, agentId);
+      const preCtx = await client.getSessionContext(ovSessionId, tokenBudget, actorPeerId);
       if (typeof preCtx.estimatedTokens === "number" && Number.isFinite(preCtx.estimatedTokens)) {
         preCommitEstimatedTokens = preCtx.estimatedTokens;
       }
@@ -1053,7 +1151,7 @@ export async function compactOpenVikingSession({
     );
     const commitResult = await client.commitSession(ovSessionId, {
       wait: true,
-      agentId,
+      agentId: actorPeerId,
       keepRecentCount: 0,
     });
     const memCount = totalExtractedMemories(commitResult.memories_extracted);
@@ -1129,7 +1227,7 @@ export async function compactOpenVikingSession({
     let contextFetchError: string | undefined;
 
     try {
-      const ctx = await client.getSessionContext(ovSessionId, tokenBudget, agentId);
+      const ctx = await client.getSessionContext(ovSessionId, tokenBudget, actorPeerId);
       logger.info(
         `openviking: compact getSessionContext raw result for ${ovSessionId}: ` +
           JSON.stringify(ctx, null, 2),

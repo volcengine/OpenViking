@@ -41,7 +41,7 @@ import {
 import type { CommandDefinition } from "./plugin/command-registration.js";
 
 import type { HttpTransport } from "./adapters/http-transport.js";
-import { formatMessageFaithful, toRoleId } from "./services/context-message-adapter.js";
+import { formatMessageFaithful } from "./services/context-message-adapter.js";
 import {
   clampScore,
   postProcessMemories,
@@ -209,9 +209,11 @@ const contextEnginePlugin = {
     const {
       rememberSessionAgentId,
       resolveAgentId,
+      resolveActorPeerId,
       resolvePluginSessionRouting,
       toQueryConfigContext,
     } = createOpenVikingSessionRoutingRuntime({
+      peerRole: cfg.peer_role,
       peerPrefix: cfg.peer_prefix,
       logFindRequests: cfg.logFindRequests,
       logger: api.logger,
@@ -329,8 +331,7 @@ const contextEnginePlugin = {
       getClient,
       normalizeSessionId: openClawSessionRefToOvStorageId,
       createTempSessionId: createMemoryStoreTempSessionId,
-      extractSenderId: extractToolSenderId,
-      toRoleId,
+      peerRole: cfg.peer_role,
       resolvePluginSessionRouting,
       isBypassedSession,
       makeBypassedToolResult,
@@ -385,6 +386,7 @@ const contextEnginePlugin = {
       logger: api.logger,
       getClient,
       resolveAgentId,
+      resolveActorPeerId,
       rememberSessionAgentId,
       queryConfigStore,
       traceRecorder,

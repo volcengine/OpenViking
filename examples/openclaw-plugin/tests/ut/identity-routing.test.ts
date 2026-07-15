@@ -4,8 +4,11 @@ import {
   createSessionAgentResolver,
   openClawSessionRefToOvStorageId,
   openClawSessionToOvStorageId,
+  resolveOpenVikingActorPeerId,
+  resolveOpenVikingMessagePeerId,
   sanitizeOpenVikingAgentIdHeader,
 } from "../../routing/identity-routing.js";
+import { createOpenVikingSessionRoutingRuntime } from "../../plugin/openviking-session-routing-runtime.js";
 
 describe("identity routing registry", () => {
   it("keeps OpenClaw session to OpenViking storage id behavior byte-compatible", () => {
@@ -53,5 +56,50 @@ describe("identity routing registry", () => {
       resolved: "prefix_worker",
       branch: "session_resolved",
     });
+  });
+
+  it("applies peer_role to message attribution and actor routing", () => {
+    expect(resolveOpenVikingMessagePeerId({
+      peerRole: "assistant",
+      role: "user",
+      personPeerId: "ou_123",
+      assistantPeerId: "Agent_Rag",
+    })).toBeUndefined();
+    expect(resolveOpenVikingMessagePeerId({
+      peerRole: "assistant",
+      role: "assistant",
+      personPeerId: "ou_123",
+      assistantPeerId: "Agent_Rag",
+    })).toBe("Agent_Rag");
+    expect(resolveOpenVikingActorPeerId({
+      peerRole: "person",
+      personPeerId: "ou_123",
+      assistantPeerId: "Agent_Rag",
+    })).toBe("ou_123");
+    expect(resolveOpenVikingActorPeerId({
+      peerRole: "none",
+      personPeerId: "ou_123",
+      assistantPeerId: "Agent_Rag",
+    })).toBeUndefined();
+  });
+
+  it("keeps the person actor bound to later operations in the same session", () => {
+    const runtime = createOpenVikingSessionRoutingRuntime({
+      peerRole: "person",
+      peerPrefix: "Agent",
+      logFindRequests: false,
+      logger: { info: () => undefined },
+    });
+
+    expect(runtime.resolvePluginSessionRouting({
+      sessionId: "session-1",
+      agentId: "Rag",
+      requesterSenderId: "ou_123@tenant",
+    })).toMatchObject({
+      agentId: "Agent_Rag",
+      actorPeerId: "ou_123_tenant",
+    });
+    expect(runtime.resolvePluginSessionRouting({ sessionId: "session-1" }).actorPeerId)
+      .toBe("ou_123_tenant");
   });
 });

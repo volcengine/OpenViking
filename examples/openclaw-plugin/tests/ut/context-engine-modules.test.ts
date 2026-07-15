@@ -316,7 +316,7 @@ describe("context-engine lifecycle service seam", () => {
       [{ type: "text", text: "hello world" }],
       "agent_main",
       "2026-04-01T10:01:00.000Z",
-      "telegram_123",
+      undefined,
     );
     expect(client.getSession).toHaveBeenCalledWith(ovSessionId, "agent_main");
     expect(client.commitSession).toHaveBeenCalledWith(ovSessionId, {

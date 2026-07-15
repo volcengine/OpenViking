@@ -15,6 +15,43 @@ export type SessionAgentLookup = {
   ovSessionId?: string;
 };
 
+export type OpenVikingPeerRole = "none" | "assistant" | "person";
+
+export function sanitizeOpenVikingPeerId(raw?: string): string | undefined {
+  const normalized = raw
+    ?.trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .replace(/_+/g, "_");
+  return normalized || undefined;
+}
+
+export function resolveOpenVikingMessagePeerId(params: {
+  peerRole: OpenVikingPeerRole;
+  role?: string;
+  personPeerId?: string;
+  assistantPeerId?: string;
+}): string | undefined {
+  if (params.peerRole === "person" && params.role === "user") {
+    return params.personPeerId;
+  }
+  if (params.peerRole === "assistant" && params.role === "assistant") {
+    return params.assistantPeerId;
+  }
+  return undefined;
+}
+
+export function resolveOpenVikingActorPeerId(params: {
+  peerRole: OpenVikingPeerRole;
+  personPeerId?: string;
+  assistantPeerId?: string;
+}): string | undefined {
+  return resolveOpenVikingMessagePeerId({
+    ...params,
+    role: params.peerRole === "person" ? "user" : "assistant",
+  });
+}
+
 export type SessionAgentResolveBranch =
   | "session_resolved"
   | "config_only_fallback"

@@ -221,19 +221,29 @@ describe("context-engine afterTurn()", () => {
     );
   });
 
-  it("passes sanitized senderId as role_id", async () => {
-    const { engine, client } = makeEngine();
+  it.each([
+    ["assistant", "test-agent", undefined, "test-agent"],
+    ["person", "telegram_12345", "telegram_12345", undefined],
+    ["none", undefined, undefined, undefined],
+  ] as const)("routes peer ids for peer_role=%s", async (peerRole, actorPeerId, userPeerId, assistantPeerId) => {
+    const { engine, client } = makeEngine({ cfgOverrides: { peer_role: peerRole } });
 
     await engine.afterTurn!({
       sessionId: "s1",
       sessionFile: "",
-      messages: [{ role: "user", content: "hello world" }],
+      messages: [
+        { role: "user", content: "hello world" },
+        { role: "assistant", content: "hi there" },
+      ],
       prePromptMessageCount: 0,
       runtimeContext: { senderId: "telegram:12345" },
     });
 
-    expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
-    expect(client.addSessionMessage.mock.calls[0][5]).toBe("telegram_12345");
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
+    expect(client.addSessionMessage.mock.calls[0][3]).toBe(actorPeerId);
+    expect(client.addSessionMessage.mock.calls[0][5]).toBe(userPeerId);
+    expect(client.addSessionMessage.mock.calls[1][3]).toBe(actorPeerId);
+    expect(client.addSessionMessage.mock.calls[1][5]).toBe(assistantPeerId);
   });
 
   it("sanitizes <relevant-memories> from user content but not from assistant", async () => {

@@ -26,6 +26,12 @@ export type OpenVikingContextEngineCreateParams<
   logger: TLogger;
   getClient: () => Promise<TClient>;
   resolveAgentId: (sessionId: string, sessionKey?: string, ovSessionId?: string) => string;
+  resolveActorPeerId?: (
+    sessionId?: string,
+    sessionKey?: string,
+    ovSessionId?: string,
+    senderId?: string,
+  ) => string | undefined;
   rememberSessionAgentId: (ctx: {
     agentId?: string;
     sessionId?: string;
@@ -51,6 +57,7 @@ export type OpenVikingContextEngineRegistrationDeps<
   logger: TLogger;
   getClient: () => Promise<TClient>;
   resolveAgentId: (sessionId: string, sessionKey?: string, ovSessionId?: string) => string;
+  resolveActorPeerId?: OpenVikingContextEngineCreateParams["resolveActorPeerId"];
   rememberSessionAgentId: OpenVikingContextEngineCreateParams["rememberSessionAgentId"];
   queryConfigStore: TQueryConfigStore;
   traceRecorder: TTraceRecorder;
@@ -84,6 +91,7 @@ export function registerOpenVikingContextEngine<
       logger: deps.logger,
       getClient: deps.getClient,
       resolveAgentId: deps.resolveAgentId,
+      resolveActorPeerId: deps.resolveActorPeerId,
       rememberSessionAgentId: deps.rememberSessionAgentId,
       queryConfigStore: deps.queryConfigStore,
       traceRecorder: deps.traceRecorder,
