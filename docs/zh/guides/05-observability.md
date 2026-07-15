@@ -222,6 +222,149 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 
 - [操作级 Telemetry 参考](07-operation-telemetry.md)
 
+## 产生本地 Trace 并提交排查
+
+如果一次问题无法只靠响应里的 `telemetry.summary` 判断，可以让 OpenViking 把 OpenTelemetry trace 写到本地 JSONL 文件。用户把 JSONL 文件和有问题的 `trace_id` 提交给管理员/支持人员，由管理员上传到排查环境并继续分析。这个方式适合离线客户环境、无法直连 OTLP 后端的环境，或者需要把复现过程打包给支持人员分析的场景。
+
+### 1. 开启本地 trace 文件
+
+在运行 OpenViking Server 的机器上，编辑 `~/.openviking/ov.conf`（或你启动时通过 `--config` 指定的配置文件），加入或调整：
+
+```json
+{
+  "server": {
+    "observability": {
+      "traces": {
+        "enabled": true,
+        "protocol": "local",
+        "service_name": "openviking-server",
+        "local_path": "~/.openviking/logs/traces.jsonl",
+        "local_rotation_mb": 40,
+        "local_backup_count": 2
+      }
+    }
+  }
+}
+```
+
+改完后需要**重启 OpenViking Server**。默认文件路径是：
+
+```text
+~/.openviking/logs/traces.jsonl
+```
+
+当文件达到 `local_rotation_mb` 后会轮转，例如：
+
+```text
+~/.openviking/logs/traces.jsonl.2
+~/.openviking/logs/traces.jsonl.1
+~/.openviking/logs/traces.jsonl
+```
+
+### 2. 复现问题并确认 trace 已产生
+
+启动服务后，执行能复现问题的操作，例如一次 `find`、资源导入、`session commit` 或 agent 调用。操作完成后等待几秒，或优雅停止服务以便 batch exporter 刷盘，然后检查文件：
+
+```bash
+ls -lh ~/.openviking/logs/traces.jsonl*
+tail -n 3 ~/.openviking/logs/traces.jsonl
+```
+
+如果没有文件或文件为空，优先检查：
+
+- Server 是否已重启并加载了新的 `ov.conf`
+- `server.observability.traces.enabled` 是否为 `true`
+- `server.observability.traces.protocol` 是否为 `"local"`
+- 当前进程是否有权限写入 `~/.openviking/logs`
+
+### 3. 提交 trace 文件给管理员
+
+这一步通常由**用户提交材料，管理员/支持人员上传并排查**：
+
+1. 用户不要直接上传到排查环境，只需要把本地 JSONL 文件交给管理员/支持人员。
+2. 如果已经知道有问题的 `trace_id`，请和 JSONL 一起提交。
+3. 如果不确定具体 `trace_id`，请至少提供复现时间段、操作步骤和相关请求/错误日志，方便管理员从文件中定位。
+
+建议提交当前文件和轮转文件：
+
+```text
+~/.openviking/logs/traces.jsonl
+~/.openviking/logs/traces.jsonl.1
+~/.openviking/logs/traces.jsonl.2
+```
+
+也可以先打包后再提交：
+
+```bash
+cd ~/.openviking/logs
+tar czf /tmp/openviking-traces.tgz traces.jsonl*
+```
+
+提交给管理员/支持人员的信息建议包括：
+
+- `traces.jsonl*` 文件或打包后的 `openviking-traces.tgz`
+- 有问题的 `trace_id`（如果已知）
+- 复现问题的时间段和操作步骤
+- OpenViking 版本/commit、启动命令、关键配置（去掉密钥和 token）
+- 相关错误日志或请求 id（如果有）
+
+#### 管理员上传参考
+
+管理员在有 OpenViking 源码、且能访问远端 OTLP 排查环境的机器上，从仓库根目录运行：
+
+```bash
+python tests/upload_offline_trace.py \
+  --file /path/to/traces.jsonl
+```
+
+上传脚本会读取当前环境的 `ov.conf` 作为**上传目标配置**，因此该配置里的 trace exporter 必须是远端 OTLP，例如：
+
+```json
+{
+  "server": {
+    "observability": {
+      "traces": {
+        "enabled": true,
+        "protocol": "grpc",
+        "tls": {
+          "insecure": true
+        },
+        "endpoint": "otel-collector:4317",
+        "service_name": "openviking-server",
+        "headers": {}
+      }
+    }
+  }
+}
+```
+
+如果当前 `ov.conf` 不是上传目标配置，请准备一个单独的上传配置，并通过 `--config` 指定：
+
+```bash
+python tests/upload_offline_trace.py \
+  --file /path/to/traces.jsonl \
+  --config /path/to/upload-ov.conf
+```
+
+默认会按从旧到新的顺序一并上传轮转文件（例如 `traces.jsonl.2`、`traces.jsonl.1`、`traces.jsonl`）。如果只想上传当前文件：
+
+```bash
+python tests/upload_offline_trace.py \
+  --file /path/to/traces.jsonl \
+  --no-include-rotated
+```
+
+上传成功后，脚本会打印本次上传的 trace id 列表；管理员可结合用户提交的 `trace_id` 或复现时间段继续排查：
+
+```text
+Uploaded:
+  batches: 12
+  spans: 345
+  trace_ids: 3
+    0123456789abcdef0123456789abcdef
+    ...
+```
+
 ## 用 `/metrics` 做时序观测
 
 `/metrics` 是 OpenViking 面向 Prometheus 抓取模型提供的时序指标端点，适合回答这类问题：

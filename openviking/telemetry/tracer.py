@@ -6,7 +6,10 @@ import functools
 import inspect
 import json
 import logging
+import os
+import threading
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 from loguru import logger
@@ -18,8 +21,15 @@ try:
     from opentelemetry.propagate import extract, inject
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import Status, StatusCode, TracerProvider
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, SpanExportResult
     from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+
+    try:
+        from google.protobuf.json_format import MessageToDict
+        from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
+    except ImportError:
+        MessageToDict = None
+        encode_spans = None
 
     try:
         from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
@@ -40,6 +50,8 @@ except ImportError:
     Status = None
     StatusCode = None
     BatchSpanProcessor = None
+    SpanExporter = None
+    SpanExportResult = None
     OTLPGrpcSpanExporter = None
     OTLPHttpSpanExporter = None
     TraceContextTextMapPropagator = None
@@ -47,6 +59,8 @@ except ImportError:
     extract = None
     inject = None
     Resource = None
+    MessageToDict = None
+    encode_spans = None
 
 
 # Global tracer instance
@@ -57,6 +71,110 @@ _trace_id_filter_added: bool = False
 
 def _log_trace_internal_failure(message: str) -> None:
     logger.debug(message, exc_info=True)
+
+
+_SpanExporterBase = SpanExporter if SpanExporter is not None else object
+
+
+class LocalJsonlSpanExporter(_SpanExporterBase):
+    """OpenTelemetry span exporter that writes OTLP JSON batches to a local JSONL file.
+
+    Each exported batch is encoded as one JSON line using the protobuf JSON
+    representation of ``ExportTraceServiceRequest``. The file is rotated by
+    size and is intended for offline support/debug upload.
+    """
+
+    def __init__(
+        self,
+        path: str,
+        *,
+        rotation_mb: int = 40,
+        backup_count: int = 2,
+    ) -> None:
+        if (
+            SpanExporter is None
+            or SpanExportResult is None
+            or MessageToDict is None
+            or encode_spans is None
+        ):
+            raise ImportError("OpenTelemetry trace exporter dependencies are not available")
+        super().__init__()
+        self._path = Path(os.path.expandvars(os.path.expanduser(path)))
+        self._max_bytes = int(rotation_mb) * 1024 * 1024
+        self._backup_count = int(backup_count)
+        self._lock = threading.RLock()
+        self._shutdown = False
+
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        # Validate writability during initialization so configuration errors
+        # are surfaced once and tracing can fail open.
+        with self._path.open("a", encoding="utf-8"):
+            pass
+
+    def export(self, spans: Any) -> Any:
+        if self._shutdown:
+            return SpanExportResult.FAILURE
+        if not spans:
+            return SpanExportResult.SUCCESS
+
+        try:
+            request = encode_spans(spans)
+            payload = MessageToDict(
+                request,
+                preserving_proto_field_name=False,
+                always_print_fields_with_no_presence=False,
+            )
+            line = json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
+            encoded_size = len(line.encode("utf-8"))
+            with self._lock:
+                self._rotate_if_needed(encoded_size)
+                with self._path.open("a", encoding="utf-8") as fp:
+                    fp.write(line)
+            return SpanExportResult.SUCCESS
+        except Exception:
+            _log_trace_internal_failure("[TRACER] failed to export local JSONL spans")
+            return SpanExportResult.FAILURE
+
+    def shutdown(self, *args: Any, **kwargs: Any) -> None:
+        self._shutdown = True
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return True
+
+    def _rotate_if_needed(self, incoming_bytes: int) -> None:
+        if self._max_bytes <= 0 or not self._path.exists():
+            return
+        try:
+            if self._path.stat().st_size + incoming_bytes <= self._max_bytes:
+                return
+        except OSError:
+            return
+
+        if self._backup_count <= 0:
+            try:
+                self._path.unlink()
+            except FileNotFoundError:
+                pass
+            return
+
+        for index in range(self._backup_count, 0, -1):
+            src = self._path.with_name(f"{self._path.name}.{index}")
+            if index == self._backup_count:
+                try:
+                    src.unlink()
+                except FileNotFoundError:
+                    pass
+                continue
+            dst = self._path.with_name(f"{self._path.name}.{index + 1}")
+            try:
+                src.replace(dst)
+            except FileNotFoundError:
+                pass
+
+        try:
+            self._path.replace(self._path.with_name(f"{self._path.name}.1"))
+        except FileNotFoundError:
+            pass
 
 
 class TraceIdLoggingFilter(logging.Filter):
@@ -150,7 +268,7 @@ def init_tracer_from_server_config(server_config: Any) -> Any:
             logger.info("[TRACER] disabled in server.observability.traces")
             return None
 
-        if not trace_cfg.endpoint:
+        if trace_cfg.protocol.lower() != "local" and not trace_cfg.endpoint:
             logger.warning("[TRACER] server.observability.traces.endpoint not configured")
             return None
 
@@ -161,6 +279,9 @@ def init_tracer_from_server_config(server_config: Any) -> Any:
             insecure=trace_cfg.tls.insecure,
             headers=trace_cfg.headers,
             enabled=trace_cfg.enabled,
+            local_path=trace_cfg.local_path,
+            local_rotation_mb=trace_cfg.local_rotation_mb,
+            local_backup_count=trace_cfg.local_backup_count,
         )
     except Exception as e:
         logger.warning(f"[TRACER] init from server config failed: {e}")
@@ -187,6 +308,9 @@ def init_tracer(
     insecure: bool = False,
     headers: Optional[dict[str, str]] = None,
     enabled: bool = True,
+    local_path: str = "~/.openviking/logs/traces.jsonl",
+    local_rotation_mb: int = 40,
+    local_backup_count: int = 2,
 ) -> Any:
     """Initialize the OpenTelemetry tracer.
 
@@ -197,6 +321,9 @@ def init_tracer(
         insecure: For OTLP/gRPC only. When True, use plaintext instead of TLS.
         headers: Additional OTLP exporter headers for vendor-specific auth.
         enabled: Whether to enable tracing
+        local_path: JSONL file path when protocol is "local".
+        local_rotation_mb: Maximum size in MB before rotating local JSONL file.
+        local_backup_count: Number of rotated local JSONL files to keep.
 
     Returns:
         The initialized tracer, or None if initialization failed
@@ -246,6 +373,12 @@ def init_tracer(
             trace_exporter = OTLPHttpSpanExporter(
                 endpoint=endpoint,
                 headers=normalized_headers,
+            )
+        elif protocol == "local":
+            trace_exporter = LocalJsonlSpanExporter(
+                local_path,
+                rotation_mb=local_rotation_mb,
+                backup_count=local_backup_count,
             )
         else:
             raise ValueError(f"Unsupported trace protocol: {protocol}")
