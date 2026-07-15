@@ -8,7 +8,6 @@ directory, which causes silent failures in AGFS and VectorDB.
 
 import atexit
 import os
-import signal
 import sys
 
 from openviking_cli.utils import get_logger
@@ -69,6 +68,20 @@ def _is_pid_alive(pid: int) -> bool:
     return True
 
 
+def release_data_dir_lock(lock_path: str, *, pid: int | None = None) -> None:
+    """Release a data-directory lock when it is still owned by *pid*.
+
+    The ownership check keeps a delayed cleanup callback from removing a lock
+    that a replacement process has already acquired.
+    """
+    owner_pid = os.getpid() if pid is None else pid
+    try:
+        if os.path.isfile(lock_path) and _read_pid_file(lock_path) == owner_pid:
+            os.remove(lock_path)
+    except OSError:
+        pass
+
+
 def acquire_data_dir_lock(data_dir: str) -> str:
     """Acquire an advisory PID lock on *data_dir*.
 
@@ -105,21 +118,9 @@ def acquire_data_dir_lock(data_dir: str) -> str:
 
     # Schedule cleanup on exit.
     def _cleanup(*_args: object) -> None:
-        try:
-            if os.path.isfile(lock_path):
-                stored = _read_pid_file(lock_path)
-                if stored == my_pid:
-                    os.remove(lock_path)
-        except OSError:
-            pass
+        release_data_dir_lock(lock_path, pid=my_pid)
 
     atexit.register(_cleanup)
-    # Also try to clean up on SIGTERM (graceful shutdown).
-    try:
-        signal.signal(signal.SIGTERM, lambda sig, frame: (_cleanup(), sys.exit(0)))
-    except (OSError, ValueError):
-        # signal.signal() can fail in non-main threads.
-        pass
 
     logger.debug("Acquired data directory lock: %s (PID %d)", lock_path, my_pid)
     return lock_path

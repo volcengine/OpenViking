@@ -15,6 +15,7 @@ from openviking.utils.process_lock import (
     _is_pid_alive,
     _read_pid_file,
     acquire_data_dir_lock,
+    release_data_dir_lock,
 )
 
 
@@ -258,6 +259,33 @@ class TestAcquireDataDirLockEdgeCases:
         # Just verify it doesn't crash
         lock_path = acquire_data_dir_lock(str(tmp_path))
         assert lock_path.endswith(LOCK_FILENAME)
+
+
+class TestReleaseDataDirLock:
+    """Test explicit process-lock release used by service shutdown."""
+
+    def test_release_removes_owned_lock(self, tmp_path: Path):
+        lock_path = acquire_data_dir_lock(str(tmp_path))
+
+        release_data_dir_lock(lock_path)
+
+        assert not (tmp_path / LOCK_FILENAME).exists()
+
+    def test_release_preserves_replacement_owner(self, tmp_path: Path):
+        lock_path = acquire_data_dir_lock(str(tmp_path))
+        (tmp_path / LOCK_FILENAME).write_text("999999")
+
+        release_data_dir_lock(lock_path)
+
+        assert (tmp_path / LOCK_FILENAME).read_text() == "999999"
+
+    def test_release_is_idempotent(self, tmp_path: Path):
+        lock_path = acquire_data_dir_lock(str(tmp_path))
+
+        release_data_dir_lock(lock_path)
+        release_data_dir_lock(lock_path)
+
+        assert not (tmp_path / LOCK_FILENAME).exists()
 
 
 class TestProcessLockIntegration:
