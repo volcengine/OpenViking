@@ -62,7 +62,7 @@ class ImageParser(BaseParser):
         4. Create ResourceNode with image metadata and descriptions
         5. Return ParseResult
 
-    Supported formats: PNG, JPG, JPEG, GIF, BMP, WEBP, SVG
+    Supported formats: PNG, JPG, JPEG, GIF, BMP, WEBP, SVG, TIFF, ICO, DIB, ICNS, SGI, JP2
     """
 
     def __init__(self, config: Optional[ImageConfig] = None, **kwargs):
