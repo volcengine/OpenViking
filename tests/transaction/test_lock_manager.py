@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for LockManager."""
 
-import asyncio
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
@@ -101,32 +100,3 @@ class TestLockManagerBasic:
 
         assert ok is True
         lm._path_lock.acquire_tree.assert_awaited_once_with("/local/test", handle, timeout=None)
-
-    async def test_recover_pending_redo_preserves_cancelled_error(self, lm):
-        lm._redo_log = MagicMock()
-        lm._redo_log.list_pending_async = AsyncMock(return_value=["redo-task"])
-        lm._redo_log.read_async = AsyncMock(return_value={"archive_uri": "a", "session_uri": "b"})
-        lm._redo_log.mark_done_async = AsyncMock()
-        lm._redo_session_memory = AsyncMock(side_effect=asyncio.CancelledError("shutdown"))
-
-        with pytest.raises(asyncio.CancelledError):
-            await lm._recover_pending_redo()
-
-        lm._redo_log.mark_done_async.assert_not_awaited()
-
-    async def test_start_skips_redo_recovery_when_disabled(self, client):
-        lm_disabled = LockManager(
-            agfs=client._client.service._agfs_client,
-            lock_timeout=1.0,
-            lock_expire=1.0,
-            redo_recovery_enabled=False,
-        )
-        lm_disabled._recover_pending_redo = AsyncMock()
-
-        await lm_disabled.start()
-        await asyncio.sleep(0)
-
-        assert lm_disabled._redo_task is None
-        lm_disabled._recover_pending_redo.assert_not_called()
-
-        await lm_disabled.stop()

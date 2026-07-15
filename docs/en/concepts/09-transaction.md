@@ -1,6 +1,6 @@
 # Path Locks and Crash Recovery
 
-OpenViking uses two simple primitives — **path locks** and **redo log** — to protect the consistency of core write operations (`rm`, `mv`, `add_resource`, `session.commit`), ensuring that VikingFS, VectorDB, and QueueManager remain consistent even when failures occur.
+OpenViking uses **path locks** to protect the consistency of core write operations (`rm`, `mv`, `add_resource`, `session.commit`) and persistent **QueueFS** tasks to recover asynchronous processing.
 
 ## Design Philosophy
 
@@ -13,7 +13,7 @@ OpenViking is a context database where FS is the source of truth and VectorDB is
 1. **Write-exclusive**: Path locks ensure only one write operation can operate on a path at a time
 2. **On by default**: All data operations automatically acquire locks; no extra configuration needed
 3. **Lock as protection**: LockContext acquires locks on entry, releases on exit — no undo/journal/commit semantics
-4. **Only session_memory needs crash recovery**: RedoLog re-executes memory extraction after a process crash
+4. **Persistent async tasks**: `session.commit` Phase 2 is stored in SQLite QueueFS and resumes after restart
 5. **Queue operations run outside locks**: SemanticQueue/EmbeddingQueue enqueue operations are idempotent and retriable
 
 ## Architecture
@@ -57,7 +57,6 @@ class LockHandle:
 **LockManager** is a global singleton managing lock lifecycle:
 - Creates/releases LockHandles
 - Background cleanup of leaked locks (in-process safety net)
-- Executes RedoLog recovery on startup
 
 **LockContext** is an async context manager encapsulating the lock/unlock lifecycle:
 
@@ -70,15 +69,15 @@ async with LockContext(get_lock_manager(), [path], lock_mode="exact") as handle:
 # Lock automatically released on exit (including exceptions)
 ```
 
-### Component 2: RedoLog (Crash Recovery)
+### Component 2: QueueFS (Crash Recovery)
 
-Used only for the memory extraction phase of `session.commit`. Writes a marker before the operation, deletes it after success, and scans for leftover markers on startup to redo.
+`session.commit` Phase 2 is stored as a task in SQLite QueueFS. The worker acknowledges the task after successful processing. If the process exits, unacknowledged tasks remain in the queue and are consumed again after restart.
 
 ```
-/local/_system/redo/{task_id}/redo.json
+SessionCommitMsg -> SQLite QueueFS -> SessionCommitProcessor
 ```
 
-Memory extraction is idempotent — re-extracting from the same archive produces the same result.
+Recovery has at-least-once semantics: a task may run again, while archive `.done` and `.failed.json` files mark terminal states.
 
 ## Consistency Issues and Solutions
 
@@ -204,34 +203,33 @@ hold separate ExactPathLocks for the two source files. Refreshing `preferences/.
 
 | Problem | Solution |
 |---------|----------|
-| Messages cleared but archive not written -> conversation data lost | Phase 1 without lock (incomplete archive has no side effects) + Phase 2 with RedoLog |
+| Process exits during Phase 2 and the archive never gets `.done` | Archive under a path lock in Phase 1, then persist Phase 2 in SQLite QueueFS for restart recovery |
 
 LLM calls have unpredictable latency (5s~60s+) and cannot be inside a lock-holding operation. The design splits into two phases:
 
 ```
-Phase 1 — Archive (no lock):
-  1. Generate archive summary (LLM)
-  2. Write archive (history/archive_N/messages.jsonl + summaries)
-  3. Clear messages.jsonl
-  4. Clear in-memory message list
+Phase 1 — Archive (path-lock protected):
+  1. Write messages to history/archive_N/messages.jsonl
+  2. Write the retained message tail back to session/messages.jsonl
+  3. Update session metadata
+  4. Enqueue SessionCommitMsg in SQLite QueueFS
 
-Phase 2 — Memory extraction + write (RedoLog):
-  1. Write redo marker (archive_uri, session_uri, user identity)
-  2. Extract memories from archived messages (LLM)
-  3. Write current message state
-  4. Write relations
-  5. Directly enqueue SemanticQueue
-  6. Delete redo marker
+Phase 2 — Memory extraction + write (QueueFS worker):
+  1. Reload messages from the archive
+  2. Generate the working-memory summary and extract long-term/execution memories (LLM)
+  3. Write relations and update active_count
+  4. Merge session metadata
+  5. Write `.done` last, then acknowledge the QueueFS task
 ```
 
 **Crash recovery analysis**:
 
 | Failure moment | State | Recovery action |
 |------------|-------|----------------|
-| During Phase 1 archive write | No marker | Incomplete archive; next commit scans history/ for index, unaffected |
-| Phase 1 archive complete but messages not cleared | No marker | Archive complete + messages still present = redundant but safe |
-| During Phase 2 memory extraction/write | Redo marker exists | On startup: redo extraction + write + enqueue from archive |
-| Phase 2 complete | Redo marker deleted | No recovery needed |
+| Phase 1 archive write fails | Not enqueued | Restore in-memory messages, return an error, and do not start Phase 2 |
+| Phase 1 enqueued, worker has not processed it | Unacknowledged QueueFS task exists | Worker pulls the task and runs Phase 2 |
+| During Phase 2 memory extraction/write | QueueFS task is unacknowledged | Re-run Phase 2 from the archive after service restart |
+| Phase 2 wrote `.done` | QueueFS task can be acknowledged | A duplicate delivery reads `.done` and completes immediately |
 
 ## LockContext
 
@@ -369,11 +367,11 @@ for conflicts first:
 
 ## Crash Recovery
 
-`LockManager.start()` automatically scans for leftover markers in `/local/_system/redo/` on startup:
+QueueFS resumes asynchronous tasks when its workers start:
 
 | Scenario | Recovery action |
 |----------|----------------|
-| session_memory extraction crash | Redo memory extraction + write + enqueue from archive |
+| session_memory extraction crash | SQLite QueueFS retains the unacknowledged task and re-runs Phase 2 from the archive |
 | Crash while holding lock | Lock file remains in AGFS; stale detection auto-cleans on next acquisition (default 300s expiry) |
 | Crash after enqueue, before worker processes | QueueFS SQLite persistence; worker auto-pulls after restart |
 | Orphan index | Cleaned on L2 on-demand load |
@@ -384,7 +382,7 @@ for conflicts first:
 |-----------------|--------|-----------------|
 | Crash during operation | Lock auto-expires + stale detection | Next acquisition of same path lock |
 | Crash during add_resource semantic processing | Lifecycle lock expires + SemanticProcessor re-acquires on restart | Worker restart |
-| Crash during session.commit Phase 2 | RedoLog marker + redo | On restart |
+| Crash during session.commit Phase 2 | QueueFS SQLite persistence + redo from archive | Worker restart |
 | Crash after enqueue, before worker | QueueFS SQLite persistence | Worker restart |
 | Orphan index | L2 on-demand load cleanup | When user accesses |
 

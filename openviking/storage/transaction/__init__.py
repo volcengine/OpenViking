@@ -3,7 +3,7 @@
 """
 Transaction module for OpenViking.
 
-Provides path-lock management and redo-log crash recovery.
+Provides path-lock management.
 """
 
 from openviking.storage.transaction.lock_context import LockContext
@@ -25,7 +25,6 @@ from openviking.storage.transaction.lock_manager import (
     reset_lock_manager,
 )
 from openviking.storage.transaction.path_lock import PathLockEngine
-from openviking.storage.transaction.redo_log import RedoLog
 
 __all__ = [
     "BorrowedLockLease",
@@ -39,7 +38,6 @@ __all__ = [
     "NO_LOCK",
     "OwnedLockLease",
     "PathLockEngine",
-    "RedoLog",
     "get_lock_handle_async",
     "get_lock_manager",
     "init_lock_manager",
