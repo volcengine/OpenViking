@@ -354,7 +354,7 @@ def create_grid_overlay(
         img: Original PIL Image
         rows: Number of grid rows
         cols: Number of grid columns
-        label_prefix: Prefix for labels (e.g., "./3_5_")
+        label_prefix: Prefix for labels (e.g., "3_5_")
         config: Optional ImageConfig for custom thresholds
 
     Returns:
@@ -402,7 +402,7 @@ def create_grid_overlay(
             draw.rectangle([sx1, sy1, sx2, sy2], outline=grid_color, width=line_width)
 
             # Calculate label (use .jpg to match tile file extension)
-            label = f"./{label_prefix}_{row+1}_{col+1}.jpg"
+            label = f"./tiles/{label_prefix}_{row+1}_{col+1}.jpg"
 
             # Try to find a suitable font
             font = ImageFont.load_default()
