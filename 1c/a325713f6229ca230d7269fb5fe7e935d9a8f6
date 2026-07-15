@@ -1,0 +1,32 @@
+docs/design/local-embedding-llama-cpp-design.md
+  s_a138734bec311c::t_8f26beb8cd8b22 348
+openviking/models/embedder/gemini_embedders.py
+  s_a138734bec311c::t_27a9afad3415f0 5
+tests/misc/test_embedding_input_type.py
+  s_a138734bec311c::t_665221b056ce48 162
+tests/unit/test_gemini_embedder.py
+  s_a138734bec311c::t_e5bf74dfa432ae 8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "1ca325713f6229ca230d7269fb5fe7e935d9a8f6",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_a138734bec311c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f64db-a570-7f83-bf32-ce121c1f8dd7",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
