@@ -40,7 +40,7 @@ from openviking.storage.transaction import init_lock_manager, reset_lock_manager
 @pytest.fixture(autouse=True)
 def _train_lock_manager():
     reset_lock_manager()
-    init_lock_manager(InMemoryAGFS(), redo_recovery_enabled=False)
+    init_lock_manager(InMemoryAGFS())
     yield
     reset_lock_manager()
 

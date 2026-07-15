@@ -8,14 +8,11 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from openviking import AsyncOpenViking
 from openviking.client.session import Session as ClientSession
 from openviking.message import TextPart
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
-from openviking.storage.transaction import get_lock_manager
 
 
 async def _wait_for_task(task_id: str, timeout: float = 30.0) -> dict:
@@ -602,20 +599,3 @@ class TestCommit:
         session.add_message("user", [TextPart("Second round message")])
         second = await session.commit_async()
         assert second["status"] == "accepted"
-
-    async def test_commit_skips_redo_when_recovery_disabled(
-        self, session_with_messages: Session, monkeypatch: pytest.MonkeyPatch
-    ):
-        """Phase 2 should not write or clear redo markers when redo recovery is disabled."""
-
-        redo_log = MagicMock()
-        lock_manager = get_lock_manager()
-        monkeypatch.setattr(lock_manager, "_redo_recovery_enabled", False)
-        monkeypatch.setattr(lock_manager, "_redo_log", redo_log)
-
-        result = await session_with_messages.commit_async()
-        task_result = await _wait_for_task(result["task_id"])
-
-        assert task_result["status"] == "completed"
-        redo_log.write_pending.assert_not_called()
-        redo_log.mark_done.assert_not_called()
