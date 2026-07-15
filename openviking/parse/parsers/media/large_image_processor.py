@@ -299,6 +299,36 @@ def split_image_into_tiles(
     return tiles
 
 
+def _load_cjk_font(font_size: int) -> ImageFont.FreeTypeFont:
+    """Load a font that supports CJK characters, falling back to default."""
+    # Common CJK-capable font paths across platforms
+    font_paths = [
+        # Linux
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        # macOS
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/System/Library/Fonts/Arial.ttf",
+        "/System/Library/Fonts/Helvetica.ttf",
+        # Windows
+        "C:/Windows/Fonts/msyh.ttc",
+        "C:/Windows/Fonts/simsun.ttc",
+        "C:/Windows/Fonts/arial.ttf",
+    ]
+    for path in font_paths:
+        try:
+            return ImageFont.truetype(path, font_size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
 def create_grid_overlay(
     img: Image.Image,
     rows: int,
@@ -367,21 +397,8 @@ def create_grid_overlay(
             # Calculate label (use ext to match tile file extension)
             label = f"./tiles/{label_prefix}_{row+1}_{col+1}{ext}"
 
-            # Try to find a suitable font
-            font = ImageFont.load_default()
-            try:
-                for font_size in [16, 14, 12, 10, 8]:
-                    try:
-                        font = ImageFont.truetype("/System/Library/Fonts/Arial.ttf", font_size)
-                        break
-                    except Exception:
-                        try:
-                            font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttf", font_size)
-                            break
-                        except Exception:
-                            continue
-            except Exception:
-                pass
+            # Load a CJK-capable font
+            font = _load_cjk_font(16)
 
             # Get text size and center
             bbox = draw.textbbox((0, 0), label, font=font)
