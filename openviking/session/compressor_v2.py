@@ -282,12 +282,17 @@ class SessionCompressorV2:
         telemetry.set("memory.extract.deleted", 0)
         telemetry.set("memory.extract.skipped", 0)
 
-        from openviking.storage.transaction import get_lock_manager, init_lock_manager
+        from openviking.storage.transaction import (
+            OwnedLockLease,
+            get_lock_manager,
+            init_lock_manager,
+        )
 
         # 初始化锁管理器（仅在有 AGFS 时使用锁机制）
         viking_fs = get_viking_fs()
         lock_manager = None
         transaction_handle = None
+        transaction_lease = None
         if viking_fs and hasattr(viking_fs, "agfs") and viking_fs.agfs:
             init_lock_manager(viking_fs.agfs)
             lock_manager = get_lock_manager()
@@ -357,6 +362,9 @@ class SessionCompressorV2:
                         timeout=None,
                     )
                     if lock_acquired:
+                        transaction_lease = OwnedLockLease.from_handle(
+                            lock_manager, transaction_handle
+                        )
                         break
                     retry_count += 1
                     if max_retries > 0 and retry_count >= max_retries:
@@ -470,7 +478,12 @@ class SessionCompressorV2:
             return []
         finally:
             # 确保释放所有锁（仅在有锁管理器时）
-            if lock_manager and transaction_handle:
+            if transaction_lease is not None:
+                try:
+                    await transaction_lease.close()
+                except Exception as e:
+                    logger.warning(f"Failed to close transaction lease: {e}")
+            elif lock_manager and transaction_handle:
                 try:
                     await lock_manager.release(transaction_handle)
                 except Exception as e:
@@ -732,7 +745,11 @@ class SessionCompressorV2:
         Returns None on failure (unless strict_extract_errors is True, in which case
         the exception is re-raised).
         """
-        from openviking.storage.transaction import get_lock_manager, init_lock_manager
+        from openviking.storage.transaction import (
+            OwnedLockLease,
+            get_lock_manager,
+            init_lock_manager,
+        )
 
         config = get_openviking_config()
         vlm = config.vlm.get_vlm_instance()
@@ -766,6 +783,7 @@ class SessionCompressorV2:
 
         lock_manager = None
         transaction_handle = None
+        transaction_lease = None
         if viking_fs and hasattr(viking_fs, "agfs") and viking_fs.agfs:
             init_lock_manager(viking_fs.agfs)
             lock_manager = get_lock_manager()
@@ -799,6 +817,9 @@ class SessionCompressorV2:
                         timeout=None,
                     )
                     if lock_acquired:
+                        transaction_lease = OwnedLockLease.from_handle(
+                            lock_manager, transaction_handle
+                        )
                         break
                     retry_count += 1
                     if max_retries > 0 and retry_count >= max_retries:
@@ -916,7 +937,12 @@ class SessionCompressorV2:
                 raise
             return None
         finally:
-            if lock_manager and transaction_handle:
+            if transaction_lease is not None:
+                try:
+                    await transaction_lease.close()
+                except Exception as e:
+                    logger.warning(f"[{phase_label}] Failed to close transaction lease: {e}")
+            elif lock_manager and transaction_handle:
                 try:
                     await lock_manager.release(transaction_handle)
                 except Exception as e:
