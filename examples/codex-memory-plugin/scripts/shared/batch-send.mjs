@@ -35,8 +35,14 @@ async function enqueueRemainder(sessionId, payloads, startIndex, result, retryab
     const queued = await enqueue("addMessage", sessionId, payloads[i], {
       createdAt: baseCreatedAt + (i - startIndex),
     });
-    if (queued.ok) result.queued++;
-    else result.enqueueFailed++;
+    if (!queued.ok) {
+      // Stop at the first enqueue failure so queued entries stay a contiguous
+      // prefix: consumers mark the first sent+queued payloads as captured, so
+      // skipping a payload here and queueing a later one would silently drop it.
+      result.enqueueFailed += payloads.length - i;
+      return result;
+    }
+    result.queued++;
   }
   return result;
 }

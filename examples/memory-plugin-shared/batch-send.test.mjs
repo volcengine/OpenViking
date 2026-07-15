@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -145,6 +146,44 @@ test("sendSessionMessages treats missing status failures as retryable", async ()
     assert.equal(res.queued, 2);
     assert.equal(res.failed, 0);
     assert.equal(res.retryable, true);
+  });
+});
+
+test("sendSessionMessages stops queueing at the first enqueue failure to keep the queued prefix contiguous", async () => {
+  await withPendingDir(async (dir) => {
+    // Poison the second payload's pending filename: the pre-created garbage
+    // file triggers EEXIST on write and defeats the dedup-recovery read, so
+    // enqueue reports ok:false for exactly that payload. Filename layout
+    // mirrors pending-queue.mjs makeDedupKey/pendingFilename.
+    const dedupKey = createHash("sha256")
+      .update("addMessage")
+      .update("\n")
+      .update("prefix-session")
+      .update("\n")
+      .update('{"content":"message-1","role":"user"}')
+      .digest("hex");
+    await writeFile(join(dir, `${dedupKey}_0.json`), "not json", "utf-8");
+
+    const res = await sendSessionMessages(
+      async () => ({ ok: false, status: 503, error: { message: "unavailable" } }),
+      "prefix-session",
+      payloads(3),
+      { enqueueOnRetryable: true },
+    );
+
+    // message-0 queued, message-1 failed to enqueue, message-2 must NOT be
+    // queued: consumers mark the first sent+queued payloads as captured, so a
+    // queued entry after a gap would let the gapped message be dropped.
+    assert.equal(res.sent, 0);
+    assert.equal(res.queued, 1);
+    assert.equal(res.enqueueFailed, 2);
+    assert.equal(res.failed, 0);
+    assert.equal(res.retryable, true);
+    const pending = await listPending();
+    assert.deepEqual(
+      pending.map(({ entry }) => entry.payload.content),
+      ["message-0"],
+    );
   });
 });
 
