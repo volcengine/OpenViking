@@ -5,6 +5,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createMemorySessionManager } from "../lib/memory-session.mjs"
+import { createQueueScope, enqueue, listPending } from "../lib/shared/pending-queue.mjs"
 
 async function withTempDir(prefix, fn) {
   const dir = await mkdtemp(join(tmpdir(), prefix))
@@ -53,6 +54,7 @@ function baseConfig(endpoint) {
     user: "",
     peerId: "",
     timeoutMs: 5000,
+    autoCapture: true,
     captureAssistantTurns: true,
     captureToolMaxChars: 2000,
     captureMode: "semantic",
@@ -62,6 +64,65 @@ function baseConfig(endpoint) {
   }
 }
 
+test("autoCapture=false defers queued automatic writes but replays manual commits", async () => {
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-session-", async (dir) => {
+      const previousPendingDir = process.env.OPENVIKING_PENDING_DIR
+      const previousKeyFile = process.env.OPENVIKING_QUEUE_SCOPE_KEY_FILE
+      process.env.OPENVIKING_PENDING_DIR = join(dir, "pending")
+      process.env.OPENVIKING_QUEUE_SCOPE_KEY_FILE = join(dir, "queue-scope.key")
+      try {
+        const config = { ...baseConfig(endpoint), autoCapture: false }
+        const scope = await createQueueScope({
+          producer: "opencode", baseUrl: config.endpoint, account: config.account,
+          user: config.user, apiKey: config.apiKey,
+        })
+        await enqueue(scope,
+          "addMessage",
+          "oc-queued-auto",
+          { role: "user", content: "Queued automatic capture must remain deferred." },
+          { provenance: "autoCapture" },
+        )
+        await enqueue(scope,
+          "commitSession",
+          "oc-queued-manual",
+          { keep_recent_count: 0 },
+          { provenance: "manual" },
+        )
+
+        const manager = createMemorySessionManager({
+          config,
+          pluginRoot: dir,
+        })
+        await manager.init()
+        await manager.handleEvent({
+          type: "session.created",
+          properties: { info: { id: "oc-session-after-disabled-init" } },
+        })
+
+        assert.equal(
+          requests.some((request) => request.url === "/api/v1/sessions/oc-queued-auto/messages"),
+          false,
+          "disabled automatic capture must not replay queued conversation writes",
+        )
+        assert.equal(
+          requests.some((request) => request.url === "/api/v1/sessions/oc-queued-manual/commit"),
+          true,
+          "manual queued commits must remain replayable",
+        )
+        const pending = await listPending(scope)
+        assert.equal(pending.length, 1)
+        assert.equal(pending[0].entry.provenance, "autoCapture")
+        await manager.flushAll({ commit: false })
+      } finally {
+        if (previousPendingDir === undefined) delete process.env.OPENVIKING_PENDING_DIR
+        else process.env.OPENVIKING_PENDING_DIR = previousPendingDir
+        if (previousKeyFile === undefined) delete process.env.OPENVIKING_QUEUE_SCOPE_KEY_FILE
+        else process.env.OPENVIKING_QUEUE_SCOPE_KEY_FILE = previousKeyFile
+      }
+    })
+  })
+})
 test("session.idle event flushes pending OpenCode capture", async () => {
   await withCaptureServer(async ({ endpoint, requests }) => {
     await withTempDir("ov-oc-session-", async (dir) => {

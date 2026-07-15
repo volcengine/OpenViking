@@ -77,7 +77,9 @@ async function saveState(sessionId, state) {
   try {
     await mkdir(STATE_DIR, { recursive: true });
     await writeFile(stateFilePath(sessionId), JSON.stringify(state));
-  } catch { /* best effort */ }
+  } catch {
+    /* best effort */
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -94,16 +96,20 @@ const MEMORY_TRIGGERS = [
   /(?:favorite|favourite|love|hate|enjoy|dislike|admire|idol|fan of)/i,
 ];
 
-const RELEVANT_MEMORIES_BLOCK_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>/gi;
-const OPENVIKING_CTX_BLOCK_RE = /<openviking-context>[\s\S]*?<\/openviking-context>/gi;
-const SYSTEM_REMINDER_BLOCK_RE = /<system-reminder>[\s\S]*?<\/system-reminder>/gi;
-const SUBAGENT_CONTEXT_LINE_RE = /^\[Subagent Context\][^\n]*$/gmi;
+const RELEVANT_MEMORIES_BLOCK_RE =
+  /<relevant-memories>[\s\S]*?<\/relevant-memories>/gi;
+const OPENVIKING_CTX_BLOCK_RE =
+  /<openviking-context>[\s\S]*?<\/openviking-context>/gi;
+const SYSTEM_REMINDER_BLOCK_RE =
+  /<system-reminder>[\s\S]*?<\/system-reminder>/gi;
+const SUBAGENT_CONTEXT_LINE_RE = /^\[Subagent Context\][^\n]*$/gim;
 const COMMAND_TEXT_RE = /^\/[a-z0-9_-]{1,64}\b/i;
 const NON_CONTENT_TEXT_RE = /^[\p{P}\p{S}\s]+$/u;
 const CJK_CHAR_RE = /[぀-ヿ㐀-鿿豈-﫿가-힯]/;
 // Question-only heuristic (ported from openclaw-plugin/text-utils.ts
 // looksLikeQuestionOnlyText). Pure interrogatives rarely yield memories.
-const QUESTION_ONLY_RE = /^(who|what|when|where|why|how|is|are|does|did|can|could|would|should|may|might|will|谁|什么|何|哪|为什么|怎么|如何|是|会|能|能否)\b.{0,200}[?？]$/i;
+const QUESTION_ONLY_RE =
+  /^(who|what|when|where|why|how|is|are|does|did|can|could|would|should|may|might|will|谁|什么|何|哪|为什么|怎么|如何|是|会|能|能否)\b.{0,200}[?？]$/i;
 
 // Strip plugin-injected blocks (auto-recall context, system reminders,
 // subagent context, relevant-memories) without collapsing whitespace —
@@ -121,9 +127,7 @@ function stripInjectedBlocks(text) {
 }
 
 function sanitize(text) {
-  return stripInjectedBlocks(text)
-    .replace(/\s+/g, " ")
-    .trim();
+  return stripInjectedBlocks(text).replace(/\s+/g, " ").trim();
 }
 
 function shouldCapture(text) {
@@ -151,7 +155,11 @@ function shouldCapture(text) {
   if (cfg.captureMode === "keyword") {
     for (const trigger of MEMORY_TRIGGERS) {
       if (trigger.test(normalized)) {
-        return { capture: true, reason: `trigger:${trigger}`, text: normalized };
+        return {
+          capture: true,
+          reason: `trigger:${trigger}`,
+          text: normalized,
+        };
       }
     }
     return { capture: false, reason: "no_trigger", text: normalized };
@@ -169,12 +177,18 @@ function parseTranscript(content) {
   try {
     const data = JSON.parse(content);
     if (Array.isArray(data)) return data;
-  } catch { /* not a JSON array */ }
+  } catch {
+    /* not a JSON array */
+  }
 
-  const lines = content.split("\n").filter(l => l.trim());
+  const lines = content.split("\n").filter((l) => l.trim());
   const messages = [];
   for (const line of lines) {
-    try { messages.push(JSON.parse(line)); } catch { /* skip */ }
+    try {
+      messages.push(JSON.parse(line));
+    } catch {
+      /* skip */
+    }
   }
   return messages;
 }
@@ -280,11 +294,14 @@ function buildParts(content, toolNameById) {
         tool_id: typeof block.id === "string" ? block.id : undefined,
         tool_name: block.name,
         tool_input:
-          block.input && typeof block.input === "object" ? block.input : undefined,
+          block.input && typeof block.input === "object"
+            ? block.input
+            : undefined,
         tool_status: "running",
       });
     } else if (block.type === "tool_result") {
-      const id = typeof block.tool_use_id === "string" ? block.tool_use_id : undefined;
+      const id =
+        typeof block.tool_use_id === "string" ? block.tool_use_id : undefined;
       out.push({
         type: "tool",
         tool_id: id,
@@ -323,12 +340,19 @@ function extractAllTurns(messages) {
           if (!block || typeof block !== "object") continue;
           if (block.type === "text" && typeof block.text === "string") {
             parts.push(block.text);
-          } else if (block.type === "tool_use" && typeof block.name === "string") {
+          } else if (
+            block.type === "tool_use" &&
+            typeof block.name === "string"
+          ) {
             toolNames.push(block.name);
-            parts.push(`[tool: ${block.name}]\n${formatToolInput(block.input)}`);
+            parts.push(
+              `[tool: ${block.name}]\n${formatToolInput(block.input)}`,
+            );
           } else if (block.type === "tool_result") {
             const resultText = extractToolResultText(block.content);
-            const truncated = resultText ? truncateToolResult(resultText) : null;
+            const truncated = resultText
+              ? truncateToolResult(resultText)
+              : null;
             if (truncated) {
               parts.push(`[tool result]\n${truncated}`);
             }
@@ -423,7 +447,12 @@ async function enqueueTurnsToPending(ovSessionId, turns, peerId = "") {
 
     const payload = { role: turn.role, parts };
     if (peerId) payload.peer_id = peerId;
-    const res = await enqueuePendingDirectly("addMessage", ovSessionId, payload);
+    const res = await enqueuePendingDirectly(
+      "addMessage",
+      ovSessionId,
+      payload,
+      fetchJSON.queueScope,
+    );
     if (res.ok) queued++;
     else failed++;
   }
@@ -456,9 +485,15 @@ async function main() {
   const transcriptPath = input.transcript_path;
   const sessionId = input.session_id || "unknown";
   const cwd = input.cwd;
-  const ovSessionId = sessionId !== "unknown" ? deriveOvSessionId(sessionId) : null;
+  const ovSessionId =
+    sessionId !== "unknown" ? deriveOvSessionId(sessionId) : null;
   const effectivePeer = getEffectivePeerId(cfg, { sessionId, cwd });
-  log("start", { sessionId, ovSessionId, transcriptPath, peerSource: effectivePeer.source });
+  log("start", {
+    sessionId,
+    ovSessionId,
+    transcriptPath,
+    peerSource: effectivePeer.source,
+  });
 
   if (isBypassed(cfg, { sessionId, cwd })) {
     log("skip", { reason: "bypass_session_pattern" });
@@ -467,7 +502,10 @@ async function main() {
   }
 
   if (!transcriptPath || !ovSessionId) {
-    log("skip", { stage: "input_check", reason: "no transcript_path or session_id" });
+    log("skip", {
+      stage: "input_check",
+      reason: "no transcript_path or session_id",
+    });
     approve();
     return;
   }
@@ -490,7 +528,10 @@ async function main() {
   const messages = parseTranscript(transcriptContent);
   const allTurns = extractAllTurns(messages);
   if (allTurns.length === 0) {
-    log("skip", { stage: "transcript_parse", reason: "no user/assistant turns found" });
+    log("skip", {
+      stage: "transcript_parse",
+      reason: "no user/assistant turns found",
+    });
     approve();
     return;
   }
@@ -499,7 +540,7 @@ async function main() {
   const newTurns = allTurns.slice(state.capturedTurnCount);
   const captureTurns = cfg.captureAssistantTurns
     ? newTurns
-    : newTurns.filter(turn => turn.role === "user");
+    : newTurns.filter((turn) => turn.role === "user");
   log("transcript_parse", {
     totalTurns: allTurns.length,
     previouslyCaptured: state.capturedTurnCount,
@@ -516,7 +557,10 @@ async function main() {
 
   if (captureTurns.length === 0) {
     await saveState(sessionId, { capturedTurnCount: allTurns.length });
-    log("state_update", { newCapturedTurnCount: allTurns.length, reason: "assistant_only_increment" });
+    log("state_update", {
+      newCapturedTurnCount: allTurns.length,
+      reason: "assistant_only_increment",
+    });
     approve();
     return;
   }
@@ -548,7 +592,10 @@ async function main() {
         MEMORY_TRIGGERS.some((re) => re.test(sanitize(t.text))),
     );
     if (!hasTrigger) {
-      log("skip", { stage: "keyword_mode_no_trigger", turns: captureTurns.length });
+      log("skip", {
+        stage: "keyword_mode_no_trigger",
+        turns: captureTurns.length,
+      });
       await saveState(sessionId, { capturedTurnCount: allTurns.length });
       approve();
       return;
@@ -557,17 +604,29 @@ async function main() {
 
   log("should_capture", {
     capture: true,
-    reason: cfg.captureMode === "keyword" ? "keyword_trigger_matched" : "semantic",
+    reason:
+      cfg.captureMode === "keyword" ? "keyword_trigger_matched" : "semantic",
     combinedLength: combined.length,
   });
 
   const health = await fetchJSON("/health");
   let result;
   if (health.ok) {
-    result = await pushTurnsToOv(ovSessionId, captureTurns, effectivePeer.peerId);
+    result = await pushTurnsToOv(
+      ovSessionId,
+      captureTurns,
+      effectivePeer.peerId,
+    );
   } else if (isRetryableFailure(health)) {
-    logError("health_check", "server unreachable or unhealthy; enqueuing capture");
-    result = await enqueueTurnsToPending(ovSessionId, captureTurns, effectivePeer.peerId);
+    logError(
+      "health_check",
+      "server unreachable or unhealthy; enqueuing capture",
+    );
+    result = await enqueueTurnsToPending(
+      ovSessionId,
+      captureTurns,
+      effectivePeer.peerId,
+    );
     log("push_turns", {
       ovSessionId,
       ok: result.ok,
@@ -575,12 +634,18 @@ async function main() {
       failed: result.failed,
     });
     if (result.failed > 0) {
-      logError("pending_enqueue", "some turns failed to enqueue; state not advanced");
+      logError(
+        "pending_enqueue",
+        "some turns failed to enqueue; state not advanced",
+      );
       approve();
       return;
     }
     await saveState(sessionId, { capturedTurnCount: allTurns.length });
-    log("state_update", { newCapturedTurnCount: allTurns.length, reason: "pending_queued" });
+    log("state_update", {
+      newCapturedTurnCount: allTurns.length,
+      reason: "pending_queued",
+    });
     writeJsonState("last-capture.json", {
       turns_captured: 0,
       turns_queued: result.queued,
@@ -593,10 +658,17 @@ async function main() {
       ov_session_id: ovSessionId,
       cc_session_id: sessionId,
     });
-    approve(result.queued > 0 ? `queued ${result.queued} turns to pending queue` : undefined);
+    approve(
+      result.queued > 0
+        ? `queued ${result.queued} turns to pending queue`
+        : undefined,
+    );
     return;
   } else {
-    logError("health_check", `non-retryable status ${health.status || "unknown"}`);
+    logError(
+      "health_check",
+      `non-retryable status ${health.status || "unknown"}`,
+    );
     approve();
     return;
   }
@@ -609,7 +681,10 @@ async function main() {
   });
 
   if (result.enqueueFailed > 0) {
-    logError("pending_enqueue", "some retryable failures could not be enqueued; state not advanced");
+    logError(
+      "pending_enqueue",
+      "some retryable failures could not be enqueued; state not advanced",
+    );
     approve();
     return;
   }
@@ -632,7 +707,11 @@ async function main() {
     pendingTokens = Number(meta?.pending_tokens || 0);
     commitCount = Number(meta?.commit_count || 0);
     totalMessageCount = Number(meta?.total_message_count || 0);
-    log("pending_tokens", { ovSessionId, pending: pendingTokens, threshold: cfg.commitTokenThreshold });
+    log("pending_tokens", {
+      ovSessionId,
+      pending: pendingTokens,
+      threshold: cfg.commitTokenThreshold,
+    });
     if (pendingTokens >= cfg.commitTokenThreshold) {
       const commitRes = await commitSession(fetchJSON, ovSessionId, {
         keep_recent_count: cfg.commitKeepRecentCount,
@@ -678,11 +757,14 @@ async function main() {
   if (result.ok > 0) {
     approve(
       `captured ${result.ok} turns to ov session ${ovSessionId}` +
-      (committed ? " (committed)" : ""),
+        (committed ? " (committed)" : ""),
     );
   } else {
     approve();
   }
 }
 
-main().catch((err) => { logError("uncaught", err); approve(); });
+main().catch((err) => {
+  logError("uncaught", err);
+  approve();
+});

@@ -9,6 +9,7 @@ import {
   deriveHarnessSessionId,
 } from "./shared/session-model.mjs"
 import {
+  createQueueScope,
   enqueue,
   replayPending,
 } from "./shared/pending-queue.mjs"
@@ -25,16 +26,36 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   const oldSessionMapPath = path.join(pluginRoot, "openviking-session-map.json")
   let saveTimer = null
 
+  let queueScopePromise = null
+  function queueScope() {
+    if (!queueScopePromise) {
+      queueScopePromise = createQueueScope({
+        producer: "opencode",
+        baseUrl: config.endpoint,
+        account: config.account,
+        user: config.user,
+        apiKey: config.apiKey,
+      })
+    }
+    return queueScopePromise
+  }
+
   async function init() {
     await migrateLegacySessionMap()
     await loadState()
     const health = await fetchJSON(config, "/health", {}, { timeoutMs: 5000 })
-    if (health.ok) {
-      await replayPending(
-        (endpoint, init = {}, options = {}) => fetchJSON(config, endpoint, init, options),
-        (stage, data) => log("DEBUG", "pending", stage, data),
-      )
-    }
+    if (health.ok) await replayPendingWrites()
+  }
+
+  async function replayPendingWrites() {
+    return replayPending(
+      await queueScope(),
+      (endpoint, init = {}, options = {}) => fetchJSON(config, endpoint, init, options),
+      (stage, data) => log("DEBUG", "pending", stage, data),
+      {
+        shouldReplay: (entry) => config.autoCapture || entry?.provenance === "manual",
+      },
+    )
   }
 
   async function loadState() {
@@ -153,12 +174,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     const state = getOrCreateSession(sessionId, event)
     debouncedSaveState()
     const health = await fetchJSON(config, "/health", {}, { timeoutMs: 5000 })
-    if (health.ok) {
-      await replayPending(
-        (endpoint, init = {}, options = {}) => fetchJSON(config, endpoint, init, options),
-        (stage, data) => log("DEBUG", "pending", stage, data),
-      )
-    }
+    if (health.ok) await replayPendingWrites()
     log("INFO", "event", "OpenViking session derived", {
       opencode_session: sessionId,
       openviking_session: state.ovSessionId,
@@ -257,7 +273,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
 
     const added = await flushPendingMessages(opencodeSessionId, state)
     if (commit) {
-      await commitOvSession(state.ovSessionId, { force: true, reason })
+      await commitOvSession(state.ovSessionId, { force: true, reason, provenance: "autoCapture" })
     } else if (added > 0) {
       await maybeCommitByThreshold(state)
     }
@@ -270,7 +286,12 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       const state = sessions.get(opencodeSessionId)
       if (state) await flushPendingMessages(opencodeSessionId, state)
     }
-    return commitOvSession(sessionId, { force: true, abortSignal, reason: "tool" })
+    return commitOvSession(sessionId, {
+      force: true,
+      abortSignal,
+      reason: "tool",
+      provenance: "manual",
+    })
   }
 
   return {
@@ -381,7 +402,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   async function addMessageToSession(ovSessionId, body) {
     const health = await fetchJSON(config, "/health", {}, { timeoutMs: 5000 })
     if (!health.ok) {
-      await enqueue("addMessage", ovSessionId, body)
+      await enqueue(await queueScope(), "addMessage", ovSessionId, body, { provenance: "autoCapture" })
       return true
     }
     const res = await fetchJSON(config, `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/messages`, {
@@ -390,7 +411,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     }, { timeoutMs: 10000 })
     if (res.ok) return true
     if (isRetryableFailure(res)) {
-      const queued = await enqueue("addMessage", ovSessionId, body)
+      const queued = await enqueue(await queueScope(), "addMessage", ovSessionId, body, { provenance: "autoCapture" })
       return Boolean(queued.ok)
     }
     log("ERROR", "message", "Failed to add message to OpenViking session", {
@@ -414,10 +435,17 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       threshold: config.commitTokenThreshold,
     })
     if (!meta.ok || pendingTokens < config.commitTokenThreshold) return { committed: false, pendingTokens }
-    return commitOvSession(state.ovSessionId, { force: true, reason: "threshold" })
+    return commitOvSession(state.ovSessionId, {
+      force: true,
+      reason: "threshold",
+      provenance: "autoCapture",
+    })
   }
 
-  async function commitOvSession(ovSessionId, { force = false, reason = "manual", abortSignal } = {}) {
+  async function commitOvSession(
+    ovSessionId,
+    { force = false, reason = "manual", abortSignal, provenance = "manual" } = {},
+  ) {
     if (!force && config.commitTokenThreshold <= 0) return { status: "skipped" }
     const body = { keep_recent_count: config.commitKeepRecentCount }
     const res = await fetchJSON(config, `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`, {
@@ -433,7 +461,8 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       return { status: "accepted", result: res.result }
     }
     if (isRetryableFailure(res)) {
-      await enqueue("commitSession", ovSessionId, body)
+      const queued = await enqueue(await queueScope(), "commitSession", ovSessionId, body, { provenance })
+      if (!queued.ok) throw new Error(`Failed to queue OpenViking session commit: ${queued.error || "unknown error"}`)
       log("WARN", "session", "Queued OpenViking session commit", { openviking_session: ovSessionId, reason })
       return { status: "queued" }
     }
@@ -451,7 +480,11 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       }
       for (const ovSessionId of ovSessionIds) {
         try {
-          await commitOvSession(ovSessionId, { force: true, reason: "legacy-migration" })
+          await commitOvSession(ovSessionId, {
+            force: true,
+            reason: "legacy-migration",
+            provenance: "autoCapture",
+          })
         } catch (error) {
           log("WARN", "migration", "Legacy orphan session commit failed", {
             openviking_session: ovSessionId,
