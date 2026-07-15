@@ -200,6 +200,30 @@ async def test_viking_vector_index_backend_upsert_many_delegates_once():
 
 
 @pytest.mark.asyncio
+async def test_viking_vector_index_backend_bulk_ingest_balances_scope_on_error():
+    backend = object.__new__(VikingVectorIndexBackend)
+    ctx = SimpleNamespace(account_id="acc1")
+    calls = []
+
+    class _BoundBackend:
+        async def begin_bulk_ingest(self):
+            calls.append("begin")
+
+        async def end_bulk_ingest(self):
+            calls.append("end")
+
+    bound_backend = _BoundBackend()
+    backend._get_backend_for_context = lambda _ctx: bound_backend
+
+    with pytest.raises(RuntimeError, match="injected"):
+        async with backend.bulk_ingest(ctx=ctx):
+            calls.append("body")
+            raise RuntimeError("injected")
+
+    assert calls == ["begin", "body", "end"]
+
+
+@pytest.mark.asyncio
 async def test_viking_vector_index_backend_upsert_many_persists_batch(tmp_path):
     collection_name = "bulk_upsert_test"
     backend = VikingVectorIndexBackend(
@@ -266,3 +290,31 @@ async def test_vikingdb_manager_proxy_upsert_many_forwards_bound_context():
 
     assert await proxy.upsert_many(records) == ["rec-1", "rec-2"]
     assert captured == {"data_list": records, "ctx": ctx}
+
+
+@pytest.mark.asyncio
+async def test_vikingdb_manager_proxy_bulk_ingest_forwards_bound_context():
+    from contextlib import asynccontextmanager
+
+    from openviking.storage.vikingdb_manager import VikingDBManagerProxy
+
+    ctx = SimpleNamespace(account_id="acc1")
+    calls = []
+
+    class _Manager:
+        collection_name = "context"
+        mode = "local"
+
+        @asynccontextmanager
+        async def bulk_ingest(self, *, ctx):
+            calls.append(("begin", ctx))
+            try:
+                yield
+            finally:
+                calls.append(("end", ctx))
+
+    proxy = VikingDBManagerProxy(_Manager(), ctx)
+    async with proxy.bulk_ingest():
+        calls.append(("body", ctx))
+
+    assert calls == [("begin", ctx), ("body", ctx), ("end", ctx)]

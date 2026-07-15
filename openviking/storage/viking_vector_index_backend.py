@@ -6,7 +6,8 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from typing import Any, Dict, List, Optional
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 from openviking.core.namespace import canonicalize_uri, visible_roots
 from openviking.server.identity import RequestContext, Role
@@ -352,6 +353,12 @@ class _SingleAccountBackend:
                 f"(expected {len(expected_ids)}, got {len(normalized_ids)})"
             )
         return normalized_ids
+
+    async def begin_bulk_ingest(self) -> None:
+        await self._async_adapter.call("begin_bulk_ingest")
+
+    async def end_bulk_ingest(self) -> None:
+        await self._async_adapter.call("end_bulk_ingest")
 
     async def update(self, data: Dict[str, Any]) -> UpdateResult:
         """Strict update path. The target record must already exist."""
@@ -863,6 +870,21 @@ class VikingVectorIndexBackend:
             len(result),
         )
         return result
+
+    @asynccontextmanager
+    async def bulk_ingest(self, *, ctx: RequestContext) -> AsyncIterator[None]:
+        """Coalesce optional derived-index rebuilds across many write calls.
+
+        The scope is a performance hint only. It does not make the enclosed
+        writes transactional or atomic, and adapters that do not maintain a
+        derived local index treat it as a no-op.
+        """
+        backend = self._get_backend_for_context(ctx)
+        await backend.begin_bulk_ingest()
+        try:
+            yield
+        finally:
+            await backend.end_bulk_ingest()
 
     async def update(self, data: Dict[str, Any], *, ctx: RequestContext) -> UpdateResult:
         """Strict update path. The target record must already exist."""

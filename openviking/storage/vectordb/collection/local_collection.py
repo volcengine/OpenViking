@@ -5,6 +5,7 @@ import json
 import os
 import random
 import shutil
+import threading
 import time
 from itertools import zip_longest
 from typing import Any, Dict, List, Optional
@@ -122,6 +123,8 @@ class LocalCollection(ICollection):
         config: Optional[Dict[str, Any]] = None,
     ):
         self.indexes = ThreadSafeDictManager[IIndex]()
+        self._bulk_ingest_lock = threading.RLock()
+        self._bulk_ingest_depth = 0
         self.meta: CollectionMeta = meta
         self.collection_name = ""
 
@@ -184,6 +187,85 @@ class LocalCollection(ICollection):
         self.indexes.iterate(close_index)
         self.indexes.clear()
 
+    def begin_bulk_ingest(self) -> None:
+        """Defer optional derived-index rebuilds until the outer scope exits."""
+
+        with self._bulk_ingest_lock:
+            if self._bulk_ingest_depth > 0:
+                self._bulk_ingest_depth += 1
+                return
+            suspended: List[IIndex] = []
+            try:
+                for index in self.indexes.get_all().values():
+                    index.begin_bulk_ingest()
+                    suspended.append(index)
+            except Exception:
+                for index in reversed(suspended):
+                    try:
+                        index.end_bulk_ingest()
+                    except Exception:
+                        logger.warning(
+                            "Failed to roll back bulk-ingest suspension",
+                            exc_info=True,
+                        )
+                raise
+            self._bulk_ingest_depth = 1
+
+    def end_bulk_ingest(self) -> None:
+        """Resume derived-index maintenance after a matching begin call."""
+
+        with self._bulk_ingest_lock:
+            if self._bulk_ingest_depth <= 0:
+                raise RuntimeError("bulk ingest scope is not active")
+            if self._bulk_ingest_depth > 1:
+                self._bulk_ingest_depth -= 1
+                return
+            first_error: Optional[Exception] = None
+            for index in self.indexes.get_all().values():
+                try:
+                    index.end_bulk_ingest()
+                except Exception as exc:
+                    if first_error is None:
+                        first_error = exc
+                    logger.warning("Failed to end bulk-ingest suspension", exc_info=True)
+            self._bulk_ingest_depth = 0
+            if first_error is not None:
+                raise first_error
+
+    @staticmethod
+    def _start_index_background_rebuild(index: IIndex) -> None:
+        start = getattr(index, "_start_dense_rebuild_worker", None)
+        if callable(start):
+            start()
+
+    @staticmethod
+    def _stop_index_background_rebuild(index: IIndex) -> None:
+        stop = getattr(index, "_stop_dense_rebuild_worker", None)
+        if callable(stop):
+            stop()
+
+    def _install_index(
+        self,
+        index_name: str,
+        index: IIndex,
+        *,
+        start_background_rebuild: bool = False,
+    ) -> None:
+        """Publish a prepared index after inheriting the active maintenance scope."""
+
+        with self._bulk_ingest_lock:
+            replaced = self.indexes.get(index_name)
+            if self._bulk_ingest_depth > 0:
+                index.begin_bulk_ingest()
+            self.indexes.set(index_name, index)
+            if replaced is not None and replaced is not index:
+                # A background worker keeps a bound-method reference to its
+                # LocalIndex. Stop only that maintenance thread; in-flight
+                # readers may continue using the old immutable index object.
+                self._stop_index_background_rebuild(replaced)
+            if start_background_rebuild:
+                self._start_index_background_rebuild(index)
+
     def drop(self):
         self.close()
 
@@ -194,8 +276,13 @@ class LocalCollection(ICollection):
         if not self.store_mgr:
             raise RuntimeError("Store manager is not initialized")
         cands_list: List[CandidateData] = self.store_mgr.get_all_cands_data()
-        index = self._new_index(index_name, meta_data, cands_list)
-        self.indexes.set(index_name, index)
+        index = self._new_index(
+            index_name,
+            meta_data,
+            cands_list,
+            defer_dense_rebuild_start=True,
+        )
+        self._install_index(index_name, index, start_background_rebuild=True)
         self._delete_expire_delta_record()
         return index
 
@@ -648,53 +735,64 @@ class LocalCollection(ICollection):
 
         Uses locks to ensure no concurrent read/write requests cause errors during the operation.
         """
-        # Use get_all_with_lock() to ensure atomicity of the entire operation
-        with self.indexes.get_all_with_lock() as indexes_dict:
-            # 1. Save metadata and names for all indexes
-            indexes_metadata = []
-            for index_name, index in indexes_dict.items():
+        # Keep one lock order everywhere: bulk-ingest state, then the index map.
+        # This also lets replacement indexes inherit an active suspension before
+        # they become visible to concurrent readers or writers.
+        with self._bulk_ingest_lock:
+            with self.indexes.get_all_with_lock() as indexes_dict:
+                # 1. Save metadata and names for all indexes
+                indexes_metadata = []
+                for index_name, index in indexes_dict.items():
+                    try:
+                        meta_data = index.get_meta_data()
+                        indexes_metadata.append((index_name, meta_data))
+                        logger.debug(f"Saved metadata for index: {index_name}")
+                    except Exception as e:
+                        logger.error(f"Failed to get metadata for index {index_name}: {e}")
+
+                # 2. Delete all indexes
+                index_names = list(indexes_dict.keys())
+                for index_name in index_names:
+                    try:
+                        index = indexes_dict.pop(index_name, None)
+                        if index:
+                            index.drop()
+                            logger.debug(f"Dropped index: {index_name}")
+                    except Exception as e:
+                        logger.error(f"Failed to drop index {index_name}: {e}")
+
+                # 3. Clear storage data
                 try:
-                    meta_data = index.get_meta_data()
-                    indexes_metadata.append((index_name, meta_data))
-                    logger.debug(f"Saved metadata for index: {index_name}")
+                    if self.store_mgr:
+                        self.store_mgr.clear()
+                        logger.info(
+                            "Storage cleared successfully",
+                            extra={"collection": self.collection_name},
+                        )
                 except Exception as e:
-                    logger.error(f"Failed to get metadata for index {index_name}: {e}")
+                    logger.error(f"Failed to clear storage: {e}")
+                    raise
 
-            # 2. Delete all indexes
-            index_names = list(indexes_dict.keys())
-            for index_name in index_names:
-                try:
-                    index = indexes_dict.pop(index_name, None)
-                    if index:
-                        index.drop()
-                        logger.debug(f"Dropped index: {index_name}")
-                except Exception as e:
-                    logger.error(f"Failed to drop index {index_name}: {e}")
+                # 4. Rebuild empty indexes using saved metadata
+                for index_name, meta_data in indexes_metadata:
+                    try:
+                        empty_cands_list: List[CandidateData] = []
+                        new_index = self._new_index(
+                            index_name,
+                            meta_data,
+                            empty_cands_list,
+                            defer_dense_rebuild_start=True,
+                        )
+                        if self._bulk_ingest_depth > 0:
+                            new_index.begin_bulk_ingest()
+                        indexes_dict[index_name] = new_index
+                        self._start_index_background_rebuild(new_index)
+                        logger.info(f"Rebuilt index: {index_name}")
+                    except Exception as e:
+                        logger.error(f"Failed to rebuild index {index_name}: {e}")
+                        # Continue rebuilding other indexes, don't interrupt the process
 
-            # 3. Clear storage data
-            try:
-                if self.store_mgr:
-                    self.store_mgr.clear()
-                    logger.info(
-                        "Storage cleared successfully", extra={"collection": self.collection_name}
-                    )
-            except Exception as e:
-                logger.error(f"Failed to clear storage: {e}")
-                raise
-
-            # 4. Rebuild empty indexes using saved metadata
-            for index_name, meta_data in indexes_metadata:
-                try:
-                    # Rebuild index with empty data list
-                    empty_cands_list: List[CandidateData] = []
-                    new_index = self._new_index(index_name, meta_data, empty_cands_list)
-                    indexes_dict[index_name] = new_index
-                    logger.info(f"Rebuilt index: {index_name}")
-                except Exception as e:
-                    logger.error(f"Failed to rebuild index {index_name}: {e}")
-                    # Continue rebuilding other indexes, don't interrupt the process
-
-            logger.info(f"delete_all_data completed. Rebuilt {len(indexes_dict)} indexes")
+                logger.info(f"delete_all_data completed. Rebuilt {len(indexes_dict)} indexes")
 
     def _delete_expire_delta_record(self):
         oldest_version = 0
@@ -803,14 +901,21 @@ class LocalCollection(ICollection):
             meta_data = old_index.get_meta_data()
 
             # 3. Create new index (this process is safe and doesn't affect the old index)
-            new_index = self._new_index(index_name, meta_data, cands_list, True)
+            new_index = self._new_index(
+                index_name,
+                meta_data,
+                cands_list,
+                True,
+                defer_dense_rebuild_start=True,
+            )
 
-            # 4. Atomically replace the old index (ThreadSafeDictManager ensures thread safety)
-            self.indexes.set(index_name, new_index)
+            # 4. Atomically replace the old index after inheriting any active
+            # bulk-ingest maintenance suspension.
+            self._install_index(index_name, new_index, start_background_rebuild=True)
 
-            # 5. Don't manually close the old index, let Python GC automatically reclaim it
-            #    This avoids errors for threads currently using old_index
-            #    The object will be automatically destructed when all references are released
+            # 5. _install_index stops only the old background maintenance
+            #    worker. It deliberately leaves the old search object usable
+            #    until concurrent readers release their references.
 
         except Exception as e:
             logger.error(f"Failed to rebuild index {index_name}: {e}")
@@ -886,6 +991,7 @@ class LocalCollection(ICollection):
         meta_data: Dict[str, Any],
         cands_list: List[CandidateData],
         force_rebuild: bool = False,
+        defer_dense_rebuild_start: bool = False,
     ):
         raise NotImplementedError
 
@@ -906,6 +1012,7 @@ class VolatileCollection(LocalCollection):
         meta_data: Dict[str, Any],
         cands_list: List[CandidateData],
         force_rebuild: bool = False,
+        defer_dense_rebuild_start: bool = False,
     ):
         meta = create_index_meta(self.meta, "", meta_data)
         index = VolatileIndex(
@@ -913,6 +1020,7 @@ class VolatileCollection(LocalCollection):
             meta=meta,
             cands_list=cands_list,
             dense_search_config=self.dense_search_config,
+            defer_dense_rebuild_start=defer_dense_rebuild_start,
         )
         return index
 
@@ -1132,6 +1240,7 @@ class PersistCollection(LocalCollection):
         meta_data: Dict[str, Any],
         cands_list: List[CandidateData],
         force_rebuild: bool = False,
+        defer_dense_rebuild_start: bool = False,
     ):
         new_index_dir = str(safe_join_name(self.index_dir, index_name))
         os.makedirs(new_index_dir, exist_ok=True)
@@ -1144,6 +1253,7 @@ class PersistCollection(LocalCollection):
             cands_list=cands_list,
             force_rebuild=force_rebuild,
             dense_search_config=self.dense_search_config,
+            defer_dense_rebuild_start=defer_dense_rebuild_start,
         )
         return index
 
