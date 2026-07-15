@@ -164,6 +164,11 @@ class ImageParser(BaseParser):
 
         if large_image_result.needs_processing:
             # Large image processing mode: save preview, grid, tiles
+            # NOTE: The original file is intentionally NOT saved. Large images can be
+            # hundreds of MB; storing the full-resolution original would exceed storage
+            # budgets. The preview + tiles are the canonical representation. The
+            # `original_filename` metadata field records the original name for reference
+            # but the corresponding file is not persisted.
             logger.info(f"Processing large image {original_filename}: {width}x{height}")
 
             # Save low-res preview (original is too large to store)
