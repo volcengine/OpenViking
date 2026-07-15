@@ -309,6 +309,77 @@ class _SingleAccountBackend:
         ids = await self._async_adapter.call("upsert", payload)
         return ids[0] if ids else ""
 
+    async def upsert_batch(
+        self,
+        records: List[Dict[str, Any]],
+        partial_update: bool = False,
+    ) -> List[str]:
+        """Upsert multiple records using one adapter call when possible.
+
+        With partial_update=True, existing records are fetched in a single batch
+        and merged before the final upsert. This keeps the old preserve-fields
+        behavior without paying one read per message.
+        """
+        if not records:
+            return []
+
+        payloads: List[Dict[str, Any]] = []
+        for item in records:
+            payload = dict(item)
+            if self._bound_account_id and not payload.get("account_id"):
+                payload["account_id"] = self._bound_account_id
+
+            context_type = payload.get("context_type")
+            if context_type and context_type not in VikingVectorIndexBackend.ALLOWED_CONTEXT_TYPES:
+                logger.warning(
+                    "Invalid context_type: %s. Must be one of %s",
+                    context_type,
+                    sorted(VikingVectorIndexBackend.ALLOWED_CONTEXT_TYPES),
+                )
+                continue
+
+            if not payload.get("id"):
+                payload["id"] = str(uuid.uuid4())
+            payloads.append(payload)
+
+        if not payloads:
+            return []
+
+        if partial_update:
+            ids = [str(payload["id"]) for payload in payloads if payload.get("id")]
+            try:
+                existing_records = await self._async_adapter.call("get", ids)
+                if self._bound_account_id:
+                    existing_records = [
+                        record
+                        for record in existing_records
+                        if record.get("account_id") == self._bound_account_id
+                    ]
+            except Exception as e:
+                logger.error("Error reading existing records before batch partial update: %s", e)
+                return []
+
+            existing_by_id = {
+                str(record["id"]): dict(record)
+                for record in existing_records
+                if record.get("id") is not None
+            }
+            merged_payloads: List[Dict[str, Any]] = []
+            for payload in payloads:
+                existing = existing_by_id.get(str(payload.get("id")))
+                if existing:
+                    existing.update({k: v for k, v in payload.items() if v is not None})
+                    merged_payloads.append(existing)
+                else:
+                    merged_payloads.append(payload)
+            payloads = merged_payloads
+
+        prepared_payloads = await self._async_adapter.run(
+            lambda: [self._prepare_upsert_payload(payload) for payload in payloads]
+        )
+        ids = await self._async_adapter.call("upsert", prepared_payloads)
+        return [str(item) for item in (ids or []) if item is not None]
+
     async def update(self, data: Dict[str, Any]) -> UpdateResult:
         """Strict update path. The target record must already exist."""
         try:
@@ -787,6 +858,17 @@ class VikingVectorIndexBackend:
             f"[VikingVectorIndexBackend.upsert] Completed with partial_update={partial_update}, result={result}"
         )
         return result
+
+    async def upsert_batch(
+        self,
+        records: List[Dict[str, Any]],
+        *,
+        ctx: RequestContext,
+        partial_update: bool = False,
+    ) -> List[str]:
+        """Batch write entrypoint for one tenant context."""
+        backend = self._get_backend_for_context(ctx)
+        return await backend.upsert_batch(records, partial_update=partial_update)
 
     async def update(self, data: Dict[str, Any], *, ctx: RequestContext) -> UpdateResult:
         """Strict update path. The target record must already exist."""

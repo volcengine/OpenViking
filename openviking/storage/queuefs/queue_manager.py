@@ -183,9 +183,14 @@ class QueueManager:
         asyncio.set_event_loop(loop)
         try:
             if max_concurrent > 1:
-                loop.run_until_complete(
-                    self._worker_async_concurrent(queue, stop_event, max_concurrent)
-                )
+                if queue.supports_batch_dequeue():
+                    loop.run_until_complete(
+                        self._worker_async_batch(queue, stop_event, max_concurrent)
+                    )
+                else:
+                    loop.run_until_complete(
+                        self._worker_async_concurrent(queue, stop_event, max_concurrent)
+                    )
             else:
                 while not stop_event.is_set():
                     try:
@@ -270,6 +275,47 @@ class QueueManager:
                 for t in active_tasks:
                     t.cancel()
                 await asyncio.gather(*active_tasks, return_exceptions=True)
+
+    async def _worker_async_batch(
+        self, queue: NamedQueue, stop_event: threading.Event, batch_size: int
+    ) -> None:
+        """Batch worker: drains up to batch_size items and processes them together."""
+        batch_size = max(1, batch_size)
+
+        while not stop_event.is_set():
+            batch: list[Dict[str, Any]] = []
+            try:
+                while len(batch) < batch_size:
+                    queue_size = await queue.size()
+                    if not queue.has_dequeue_handler() or queue_size == 0:
+                        break
+                    data = await queue.dequeue_raw()
+                    if data is None:
+                        break
+                    queue._on_dequeue_start()
+                    batch.append(data)
+            except Exception as e:
+                logger.error(f"[QueueManager] Batch drain error for {queue.name}: {e}")
+
+            if not batch:
+                await asyncio.sleep(self._poll_interval)
+                continue
+
+            msg_ids = [item.get("id", "") if isinstance(item, dict) else "" for item in batch]
+            try:
+                await queue.process_dequeued_batch(batch)
+                for msg_id in msg_ids:
+                    await queue.ack(msg_id)
+                logger.debug(
+                    f"[QueueManager] Processed batch for {queue.name} size={len(batch)}"
+                )
+            except Exception as e:
+                # Handler did not complete; do NOT ack so RecoverStale can retry.
+                for item in batch:
+                    queue._on_process_error(str(e), item)
+                logger.error(f"[QueueManager] Batch worker error for {queue.name}: {e}")
+
+        # There are no detached tasks in batch mode, so shutdown is immediate.
 
     def stop(self) -> None:
         """Stop QueueManager and release resources."""

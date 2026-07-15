@@ -61,6 +61,22 @@ class _DummyEmbedder:
         return self.embed(text, is_query=is_query)
 
 
+class _BatchEmbedder(_DummyEmbedder):
+    def __init__(self):
+        super().__init__()
+        self.batch_calls = 0
+        self.batch_inputs = []
+
+    def prepare_embedding_inputs(self, contents):
+        return list(contents)
+
+    async def embed_batch_async(self, contents, is_query: bool = False):
+        del is_query
+        self.batch_calls += 1
+        self.batch_inputs.append(list(contents))
+        return [EmbedResult(dense_vector=[0.1, 0.2]) for _ in contents]
+
+
 class _DummyConfig:
     def __init__(
         self,
@@ -124,6 +140,20 @@ def _build_queue_payload_for_account(account_id: str) -> dict:
             "abstract": "sample",
         },
         telemetry_id="telemetry-1",
+    )
+    return {"data": json.dumps(msg.to_dict())}
+
+
+def _build_queue_payload_for_uri(uri: str, account_id: str = "default") -> dict:
+    msg = EmbeddingMsg(
+        message=f"message for {uri}",
+        context_data={
+            "id": f"id-{uri.rsplit('/', 1)[-1]}",
+            "uri": uri,
+            "account_id": account_id,
+            "abstract": uri,
+        },
+        telemetry_id="telemetry-batch",
     )
     return {"data": json.dumps(msg.to_dict())}
 
@@ -445,6 +475,66 @@ async def test_embedding_handler_propagates_account_id_on_success(monkeypatch):
     await handler.on_dequeue(_build_queue_payload_for_account("acct-embed-success"))
 
     assert captured["account_id"] == "acct-embed-success"
+
+
+@pytest.mark.asyncio
+async def test_embedding_handler_batches_embed_and_upsert(monkeypatch):
+    class _BatchVikingDB:
+        is_closing = False
+        has_queue_manager = False
+
+        def __init__(self):
+            self.batch_calls = []
+
+        async def upsert_batch(self, records, *, ctx, partial_update=False):
+            assert partial_update is True
+            self.batch_calls.append((ctx.account_id, [dict(record) for record in records]))
+            return [record["id"] for record in records]
+
+    embedder = _BatchEmbedder()
+    vikingdb = _BatchVikingDB()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(embedder),
+    )
+
+    handler = TextEmbeddingHandler(vikingdb)
+    status = {"success": 0, "requeue": 0, "error": 0}
+    handler.set_callbacks(
+        on_success=lambda: status.__setitem__("success", status["success"] + 1),
+        on_requeue=lambda: status.__setitem__("requeue", status["requeue"] + 1),
+        on_error=lambda *_: status.__setitem__("error", status["error"] + 1),
+    )
+
+    result = await handler.on_dequeue_batch(
+        [
+            _build_queue_payload_for_uri("viking://resources/one", account_id="acct-batch"),
+            _build_queue_payload_for_uri("viking://resources/two", account_id="acct-batch"),
+        ]
+    )
+
+    assert embedder.batch_calls == 1
+    assert embedder.calls == 0
+    assert embedder.batch_inputs == [
+        [
+            "message for viking://resources/one",
+            "message for viking://resources/two",
+        ]
+    ]
+    assert len(vikingdb.batch_calls) == 1
+    account_id, records = vikingdb.batch_calls[0]
+    assert account_id == "acct-batch"
+    assert [record["uri"] for record in records] == [
+        "viking://resources/one",
+        "viking://resources/two",
+    ]
+    assert all(record["vector"] == [0.1, 0.2] for record in records)
+    assert all(record["id"] for record in records)
+    assert [item["uri"] for item in result if item] == [
+        "viking://resources/one",
+        "viking://resources/two",
+    ]
+    assert status == {"success": 2, "requeue": 0, "error": 0}
 
 
 @pytest.mark.asyncio
@@ -1694,6 +1784,89 @@ async def test_single_account_backend_upsert_partial_update_reads_then_upserts_e
                 "account_id": "acc1",
                 "uri": "viking://resources/old",
             },
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_single_account_backend_upsert_batch_partial_update_reads_once_then_upserts_list():
+    calls = []
+
+    class _Collection:
+        def get_meta_data(self):
+            return {
+                "Fields": [
+                    {"FieldName": "id", "FieldType": "string"},
+                    {"FieldName": "uri", "FieldType": "path"},
+                    {"FieldName": "abstract", "FieldType": "string"},
+                    {"FieldName": "account_id", "FieldType": "string"},
+                    {"FieldName": "vector", "FieldType": "vector", "Dim": 2},
+                ]
+            }
+
+    class _Adapter:
+        mode = "local"
+        USE_CONTENT_FIELD = False
+
+        def get_collection(self):
+            return _Collection()
+
+        def get(self, ids):
+            calls.append(("get", list(ids)))
+            return [
+                {
+                    "id": "rec-1",
+                    "abstract": "before-1",
+                    "account_id": "acc1",
+                    "uri": "viking://resources/old-1",
+                },
+                {
+                    "id": "rec-2",
+                    "abstract": "before-2",
+                    "account_id": "acc1",
+                    "uri": "viking://resources/old-2",
+                },
+            ]
+
+        def upsert(self, data):
+            calls.append(("upsert", data))
+            return [item["id"] for item in data]
+
+    backend = _SingleAccountBackend(
+        config=VectorDBBackendConfig(backend="local", name="context", dimension=2),
+        bound_account_id="acc1",
+        shared_adapter=_Adapter(),
+    )
+
+    result = await backend.upsert_batch(
+        [
+            {"id": "rec-1", "abstract": "patched-1", "vector": [0.1, 0.2]},
+            {"id": "rec-2", "abstract": "patched-2", "vector": [0.3, 0.4]},
+        ],
+        partial_update=True,
+    )
+
+    assert result == ["rec-1", "rec-2"]
+    assert calls == [
+        ("get", ["rec-1", "rec-2"]),
+        (
+            "upsert",
+            [
+                {
+                    "id": "rec-1",
+                    "abstract": "patched-1",
+                    "account_id": "acc1",
+                    "uri": "viking://resources/old-1",
+                    "vector": [0.1, 0.2],
+                },
+                {
+                    "id": "rec-2",
+                    "abstract": "patched-2",
+                    "account_id": "acc1",
+                    "uri": "viking://resources/old-2",
+                    "vector": [0.3, 0.4],
+                },
+            ],
         ),
     ]
 
