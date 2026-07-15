@@ -3,6 +3,38 @@
 
 """Tests for relations endpoints: get relations, link, unlink."""
 
+from types import SimpleNamespace
+
+from openviking.server.identity import RequestContext, Role
+from openviking.server.routers import relations as relations_router
+from openviking.session.memory import graph_view
+from openviking_cli.session.user_id import UserIdentifier
+
+
+async def test_build_graph_returns_html_without_output_uri(monkeypatch):
+    captured = {}
+
+    class FakeGraph:
+        def __init__(self, viking_fs):
+            assert viking_fs is fake_fs
+
+        async def render_graph(self, space_uris, ctx):
+            captured.update(space_uris=space_uris, ctx=ctx)
+            return "<html>graph</html>"
+
+    ctx = RequestContext(user=UserIdentifier("default", "alice"), role=Role.USER)
+    fake_fs = SimpleNamespace()
+    monkeypatch.setattr(relations_router, "get_service", lambda: SimpleNamespace(viking_fs=fake_fs))
+    monkeypatch.setattr(graph_view, "MemoryGraph", FakeGraph)
+
+    response = await relations_router.build_graph(
+        relations_router.BuildGraphRequest(space_uris=["viking://resources"]),
+        _ctx=ctx,
+    )
+
+    assert captured == {"space_uris": ["viking://resources"], "ctx": ctx}
+    assert response.result == {"html": "<html>graph</html>"}
+
 
 async def test_get_relations_empty(client_with_resource):
     client, uri = client_with_resource

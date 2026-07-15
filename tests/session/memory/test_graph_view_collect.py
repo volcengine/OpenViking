@@ -165,6 +165,46 @@ async def test_collect_graph_data_reads_all_nodes_before_filling_edge_targets():
 
 
 @pytest.mark.asyncio
+async def test_collect_graph_data_canonicalizes_current_user_shorthand():
+    shorthand_uri = "viking://user/memories/entities/project.md"
+    canonical_uri = "viking://user/alice/memories/entities/project.md"
+    target_uri = "viking://user/alice/memories/entities/company.md"
+    source_content = f"""# Project
+
+<!-- MEMORY_FIELDS
+{{"memory_type": "entities", "links": [{{"to_uri": "{target_uri}"}}]}}
+-->"""
+    target_content = """# Company
+
+<!-- MEMORY_FIELDS
+{"memory_type": "entities", "links": []}
+-->"""
+    mock_fs = MagicMock()
+    mock_fs.tree = AsyncMock(
+        return_value=[
+            _file_entry(shorthand_uri, "project.md"),
+            _file_entry(target_uri, "company.md"),
+        ]
+    )
+    mock_fs.read_file = AsyncMock(side_effect=[source_content, target_content])
+
+    graph = MemoryGraph(viking_fs=mock_fs)
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+    nodes, edges = await graph._collect_graph_data(["viking://user/memories/entities"], ctx)
+
+    assert {node["uri"] for node in nodes} == {canonical_uri, target_uri}
+    assert edges == [
+        {
+            "source": canonical_uri,
+            "target": target_uri,
+            "link_type": "related_to",
+            "weight": 1.0,
+            "description": "",
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_collect_graph_data_raises_when_reading_memory_file_fails():
     mock_fs = MagicMock()
     mock_fs.tree = AsyncMock(
@@ -235,7 +275,9 @@ OpenViking is a memory system.
 
     resource_node = next(node for node in nodes if node["uri"] == overview_uri)
     assert resource_node["memory_type"] == "resource"
-    assert resource_node["label"] == "docs"
+    assert resource_node["label"] == "docs-Summary"
+    assert mock_fs.tree.await_args_list[0].kwargs["show_all_hidden"] is True
+    assert mock_fs.tree.await_args_list[1].kwargs["show_all_hidden"] is False
     assert edges == [
         {
             "source": overview_uri,

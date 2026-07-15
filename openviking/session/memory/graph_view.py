@@ -14,7 +14,7 @@ import hashlib
 import json
 from typing import Any, Dict, List
 
-from openviking.core.namespace import context_type_for_uri
+from openviking.core.namespace import canonicalize_uri, context_type_for_uri
 from openviking.server.identity import RequestContext
 from openviking.session.memory.merge_op.link_merge import wiki_links_enabled
 from openviking.session.memory.utils.link_renderer import LinkRenderer
@@ -103,11 +103,12 @@ class MemoryGraph:
                 space_uri,
                 node_limit=1000000,
                 level_limit=None,
+                show_all_hidden=resource_wiki_space,
                 ctx=ctx,
             )
             if resource_wiki_space:
                 md_uris = [
-                    entry["uri"]
+                    canonicalize_uri(entry["uri"], ctx)
                     for entry in entries
                     if not entry.get("isDir")
                     and (
@@ -117,7 +118,7 @@ class MemoryGraph:
                 ]
             else:
                 md_uris = [
-                    entry["uri"]
+                    canonicalize_uri(entry["uri"], ctx)
                     for entry in entries
                     if not entry.get("isDir")
                     and entry.get("rel_path", "").endswith(".md")
@@ -148,8 +149,8 @@ class MemoryGraph:
                 category = mf.extra_fields.get("category", "")
                 name = mf.extra_fields.get("name", "")
                 label = name if name else uri.split("/")[-1].replace(".md", "")
-                if resource_wiki_space and not name:
-                    label = uri.rstrip("/").rsplit("/", 2)[-2]
+                if resource_wiki_space:
+                    label = f"{uri.rstrip('/').rsplit('/', 2)[-2]}-Summary"
 
                 rendered_content = LinkRenderer.render_links(mf.content or "", uri, mf.links)
 
@@ -170,9 +171,11 @@ class MemoryGraph:
                     to_uri = link_data.get("to_uri", "")
                     if not to_uri:
                         continue
+                    from_uri = canonicalize_uri(link_data.get("from_uri") or uri, ctx)
+                    to_uri = canonicalize_uri(to_uri, ctx)
                     edges.append(
                         {
-                            "source": link_data.get("from_uri", uri),
+                            "source": from_uri,
                             "target": to_uri,
                             "link_type": link_data.get("link_type", "related_to"),
                             "weight": float(link_data.get("weight", 1.0)),
@@ -202,6 +205,17 @@ class MemoryGraph:
         graph_path = f"{space_uri.rstrip('/')}/.graph.html"
         return await self.build_graph([space_uri], graph_path, ctx)
 
+    async def render_graph(
+        self,
+        space_uris: List[str],
+        ctx: RequestContext,
+    ) -> str:
+        """Build graph HTML without writing it to VikingFS."""
+        if not space_uris:
+            raise ValueError("space_uris must not be empty")
+        nodes, edges = await self._collect_graph_data(space_uris, ctx)
+        return _render_graph_html(nodes, edges)
+
     async def build_graph(
         self,
         space_uris: List[str],
@@ -209,8 +223,6 @@ class MemoryGraph:
         ctx: RequestContext,
     ) -> str:
         """Scan multiple memory roots, extract links, build graph HTML, and write to output URI."""
-        if not space_uris:
-            raise ValueError("space_uris must not be empty")
         if not output_uri:
             raise ValueError("output_uri must not be empty")
 
@@ -218,8 +230,7 @@ class MemoryGraph:
         if not viking_fs:
             raise ValueError("VikingFS not available")
 
-        nodes, edges = await self._collect_graph_data(space_uris, ctx)
-        html = _render_graph_html(nodes, edges)
+        html = await self.render_graph(space_uris, ctx)
         try:
             await viking_fs.write_file(output_uri, html, ctx=ctx)
             tracer.info(f"[build_graph] Generated graph: {output_uri}")
