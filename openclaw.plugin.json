@@ -1,0 +1,513 @@
+{
+  "id": "openviking",
+  "name": "OpenViking",
+  "kind": "context-engine",
+  "description": "OpenClaw context-engine plugin for memory management — powered by OpenViking",
+  "activation": {
+    "onStartup": true,
+    "onCapabilities": [
+      "hook",
+      "tool"
+    ]
+  },
+  "contracts": {
+    "tools": [
+      "add_skill",
+      "ov_search",
+      "ov_read",
+      "ov_multi_read",
+      "ov_list",
+      "memory_recall",
+      "ov_recall_trace",
+      "memory_store",
+      "memory_forget",
+      "ov_archive_search",
+      "ov_archive_expand",
+      "openviking_tool_result_read",
+      "openviking_tool_result_search",
+      "openviking_tool_result_list"
+    ]
+  },
+  "commandAliases": [
+    {
+      "name": "setup",
+      "kind": "runtime-slash",
+      "cliCommand": "openviking"
+    },
+    {
+      "name": "status",
+      "kind": "runtime-slash",
+      "cliCommand": "openviking"
+    }
+  ],
+  "providerAuthEnvVars": {
+    "openviking": [
+      "OPENVIKING_API_KEY",
+      "OPENVIKING_BASE_URL"
+    ]
+  },
+  "skills": [
+    "./skills/install-openviking-memory",
+    "./skills/openviking-context-database"
+  ],
+  "setup": {
+    "providers": [
+      {
+        "id": "openviking",
+        "authMethods": [
+          "api_key",
+          "trusted"
+        ],
+        "envVars": [
+          "OPENVIKING_API_KEY",
+          "OPENVIKING_BASE_URL"
+        ],
+        "cliFlags": {
+          "api_key": [
+            "--base-url",
+            "--api-key"
+          ],
+          "trusted": [
+            "--base-url"
+          ]
+        }
+      }
+    ],
+    "requiresRuntime": true,
+    "cliCommand": "openclaw openviking setup"
+  },
+  "uiHints": {
+    "baseUrl": {
+      "label": "OpenViking Base URL",
+      "placeholder": "http://127.0.0.1:1933",
+      "help": "HTTP URL when mode is remote (or ${OPENVIKING_BASE_URL})"
+    },
+    "peer_role": {
+      "label": "Peer Role",
+      "placeholder": "assistant",
+      "help": "Controls which messages include peer_id: none, assistant, or person. New installs default to assistant."
+    },
+    "peer_prefix": {
+      "label": "Peer Prefix",
+      "placeholder": "optional-prefix",
+      "help": "Optional prefix for assistant peer_id values derived from OpenClaw runtime agent IDs."
+    },
+    "apiKey": {
+      "label": "OpenViking API Key",
+      "sensitive": true,
+      "placeholder": "${OPENVIKING_API_KEY}",
+      "help": "Optional API key for OpenViking server"
+    },
+    "headers": {
+      "label": "Headers",
+      "advanced": true,
+      "help": "Optional HTTP headers merged into every OpenViking request."
+    },
+    "accountId": {
+      "label": "Account ID",
+      "placeholder": "(derived from API key)",
+      "help": "Advanced option. Tenant account ID. Only needed when explicitly sending identity headers, such as root-key or trusted deployments. With a user key the server derives identity from the key.",
+      "advanced": true
+    },
+    "userId": {
+      "label": "User ID",
+      "placeholder": "(derived from API key)",
+      "help": "Advanced option. Tenant user ID. Only needed when explicitly sending identity headers.",
+      "advanced": true
+    },
+    "targetUri": {
+      "label": "Search Target URI",
+      "placeholder": "viking://user/memories",
+      "help": "Default OpenViking target URI for memory search"
+    },
+    "timeoutMs": {
+      "label": "Request Timeout (ms)",
+      "placeholder": "15000",
+      "advanced": true
+    },
+    "autoCapture": {
+      "label": "Auto-Capture",
+      "help": "Extract memories from recent conversation messages via OpenViking sessions"
+    },
+    "captureMode": {
+      "label": "Capture Mode",
+      "placeholder": "semantic",
+      "advanced": true,
+      "help": "semantic captures all eligible user text; keyword uses trigger regex first"
+    },
+    "captureMaxLength": {
+      "label": "Capture Max Length",
+      "placeholder": "24000",
+      "advanced": true,
+      "help": "Maximum sanitized user text length allowed for auto-capture"
+    },
+    "autoRecall": {
+      "label": "Auto-Recall",
+      "help": "Inject relevant OpenViking memories into agent context"
+    },
+    "autoRecallTimeoutMs": {
+      "label": "Auto-Recall Timeout (ms)",
+      "placeholder": "5000",
+      "advanced": true,
+      "help": "Outer time budget for the whole auto-recall flow, including search, ranking, and memory reads."
+    },
+    "recallResources": {
+      "label": "Recall Resources",
+      "help": "Include resources (viking://resources) in auto-recall and default memory_recall search. Enables account-level shared knowledge retrieval.",
+      "advanced": true
+    },
+    "recallTargetTypes": {
+      "label": "Recall Target Types",
+      "placeholder": "user,agent",
+      "help": "Comma-separated auto-recall and default memory_recall targets: user, agent, resource. Session history is available through ov_archive_search and ov_archive_expand.",
+      "advanced": true
+    },
+    "recallLimit": {
+      "label": "Recall Limit",
+      "placeholder": "6",
+      "advanced": true
+    },
+    "recallScoreThreshold": {
+      "label": "Recall Score Threshold",
+      "placeholder": "0.15",
+      "advanced": true
+    },
+    "recallMaxInjectedChars": {
+      "label": "Recall Max Injected Chars",
+      "placeholder": "4000",
+      "advanced": true,
+      "help": "Maximum total characters for auto-recall memory injection. Complete memories that do not fit are skipped, not truncated."
+    },
+    "recallMaxContentChars": {
+      "label": "Deprecated Recall Max Content Chars",
+      "placeholder": "5000",
+      "advanced": true,
+      "help": "Deprecated compatibility option and will be removed in a future release. Auto-recall now keeps individual memories intact and uses recallMaxInjectedChars."
+    },
+    "recallPreferAbstract": {
+      "label": "Recall Prefer Abstract",
+      "advanced": true,
+      "help": "Use memory abstract instead of fetching full content when available"
+    },
+    "recallTokenBudget": {
+      "label": "Deprecated Recall Token Budget",
+      "placeholder": "4000",
+      "advanced": true,
+      "help": "Deprecated compatibility alias and will be removed in a future release. Use recallMaxInjectedChars."
+    },
+    "bypassSessionPatterns": {
+      "label": "Bypass Session Patterns",
+      "placeholder": "agent:*:cron:**",
+      "help": "Completely bypass OpenViking for matching session keys. Use * within one segment and ** across segments.",
+      "advanced": true
+    },
+    "commitTokenThresholdRatio": {
+      "label": "Commit Token Threshold Ratio",
+      "placeholder": "0.5",
+      "advanced": true,
+      "help": "Auto-commit triggers once estimated pending tokens reach this fraction (0-1) of the model context window (e.g. 0.5 = 50%). Set to 0 to commit every turn."
+    },
+    "commitKeepRecentCount": {
+      "label": "Commit Keep Recent Count",
+      "placeholder": "10",
+      "advanced": true,
+      "help": "WM v2: number of most-recent messages kept live after an afterTurn commit. Compact path always uses 0."
+    },
+    "emitStandardDiagnostics": {
+      "label": "Standard diagnostics (diag JSON lines)",
+      "advanced": true,
+      "help": "Emit structured openviking: diag {...} for assemble/afterTurn. Set false to disable."
+    },
+    "logFindRequests": {
+      "label": "Log find requests",
+      "help": "Log tenant routing: /search/find + session messages/commit (X-OpenViking-*; not apiKey). Or set env OPENVIKING_LOG_ROUTING=1 or OPENVIKING_DEBUG=1.",
+      "advanced": true
+    },
+    "traceRecall": {
+      "label": "Trace Recall",
+      "placeholder": "false",
+      "help": "Enable best-effort recall trace recording for debugging recall and search decisions.",
+      "advanced": true
+    },
+    "traceRecallPersist": {
+      "label": "Persist Recall Trace",
+      "placeholder": "false",
+      "help": "Persist recall traces to local JSONL files. Disabled by default.",
+      "advanced": true
+    },
+    "traceRecallDir": {
+      "label": "Recall Trace Directory",
+      "placeholder": "~/.openclaw/openviking/recall-traces",
+      "help": "Directory for persisted recall trace JSONL files.",
+      "advanced": true
+    },
+    "enableAddResourceTool": {
+      "label": "Enable Add Resource Tool",
+      "placeholder": "false",
+      "help": "Disabled by default so search and read flows cannot call add_resource. Set true only when agents should import resources; manual /add-resource remains available.",
+      "advanced": true
+    },
+    "enabledTools": {
+      "label": "Enabled Tools",
+      "placeholder": "default",
+      "help": "Agent-visible tool allowlist. Accepts tool names or groups: default, all, memory, resource_query, import, recall_trace, archive, tool_result. add_resource also requires enableAddResourceTool=true.",
+      "advanced": true
+    },
+    "disabledTools": {
+      "label": "Disabled Tools",
+      "placeholder": "memory",
+      "help": "Agent-visible tool blocklist applied after enabledTools. Accepts the same tool names or groups.",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "mode": {
+        "type": "string",
+        "description": "Legacy field kept for backward compatibility. Only 'remote' is supported."
+      },
+      "baseUrl": {
+        "type": "string"
+      },
+      "peer_role": {
+        "type": "string",
+        "enum": [
+          "none",
+          "assistant",
+          "person"
+        ],
+        "default": "assistant",
+        "description": "Controls which session messages include peer_id."
+      },
+      "peer_prefix": {
+        "type": "string",
+        "description": "Optional prefix for assistant peer_id values."
+      },
+      "serverAuthMode": {
+        "type": "string",
+        "description": "Deprecated and ignored. Tenant identity headers are controlled by explicit accountId/userId."
+      },
+      "apiKey": {
+        "type": "string"
+      },
+      "headers": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
+      },
+      "accountId": {
+        "type": "string"
+      },
+      "userId": {
+        "type": "string"
+      },
+      "targetUri": {
+        "type": "string"
+      },
+      "timeoutMs": {
+        "type": "number"
+      },
+      "autoCapture": {
+        "type": "boolean"
+      },
+      "captureMode": {
+        "type": "string"
+      },
+      "captureMaxLength": {
+        "type": "number"
+      },
+      "autoRecall": {
+        "type": "boolean"
+      },
+      "autoRecallTimeoutMs": {
+        "type": "number",
+        "minimum": 1000,
+        "maximum": 300000
+      },
+      "recallResources": {
+        "type": "boolean"
+      },
+      "recallTargetTypes": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "resource",
+                "user",
+                "agent"
+              ]
+            }
+          }
+        ]
+      },
+      "recallLimit": {
+        "type": "number"
+      },
+      "recallScoreThreshold": {
+        "type": "number"
+      },
+      "recallMaxInjectedChars": {
+        "type": "number"
+      },
+      "recallMaxContentChars": {
+        "type": "number"
+      },
+      "recallPreferAbstract": {
+        "type": "boolean"
+      },
+      "recallTokenBudget": {
+        "type": "number"
+      },
+      "commitTokenThreshold": {
+        "type": "number"
+      },
+      "commitTokenThresholdRatio": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+      },
+      "commitKeepRecentCount": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1000
+      },
+      "bypassSessionPatterns": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "ingestReplyAssist": {
+        "type": "boolean"
+      },
+      "ingestReplyAssistMinSpeakerTurns": {
+        "type": "number"
+      },
+      "ingestReplyAssistMinChars": {
+        "type": "number"
+      },
+      "ingestReplyAssistIgnoreSessionPatterns": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "emitStandardDiagnostics": {
+        "type": "boolean"
+      },
+      "logFindRequests": {
+        "type": "boolean"
+      },
+      "traceRecall": {
+        "type": "boolean"
+      },
+      "traceRecallPersist": {
+        "type": "boolean"
+      },
+      "traceRecallDir": {
+        "type": "string"
+      },
+      "traceRecallRetentionDays": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 3650
+      },
+      "traceRecallLoadRecentDays": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 3650
+      },
+      "traceRecallMaxEntries": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 1000000
+      },
+      "traceRecallMaxResultsPerSearch": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 1000
+      },
+      "traceRecallPreviewChars": {
+        "type": "number",
+        "minimum": 20,
+        "maximum": 10000
+      },
+      "traceRecallQueryMaxChars": {
+        "type": "number",
+        "minimum": 200,
+        "maximum": 200000
+      },
+      "traceRecallQueryMaxDays": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 3650
+      },
+      "traceRecallIncludeContentByDefault": {
+        "type": "boolean"
+      },
+      "traceRecallIncludeRawUserPreview": {
+        "type": "boolean"
+      },
+      "enableAddResourceTool": {
+        "type": "boolean"
+      },
+      "enabledTools": {
+        "oneOf": [
+          {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "disabledTools": {
+        "oneOf": [
+          {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "agentExperience": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable agent experience memory recall. Default is false for conservative rollout."
+          },
+          "recallLimit": {
+            "type": "number"
+          },
+          "scoreThreshold": {
+            "type": "number"
+          },
+          "maxInjectedChars": {
+            "type": "number"
+          },
+          "minQueryChars": {
+            "type": "number"
+          }
+        }
+      }
+    }
+  }
+}
