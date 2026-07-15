@@ -828,8 +828,6 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     if record_id:
                         self._schedule_local_bm25_sparse_rebuild(ctx)
                     if record_id:
-                        self._schedule_local_bm25_sparse_rebuild(ctx)
-                    if record_id:
                         logger.debug(
                             f"Successfully wrote embedding to database: {record_id} abstract {inserted_data['abstract']} vector {inserted_data['vector'][:5]}"
                         )

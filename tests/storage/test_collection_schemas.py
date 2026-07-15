@@ -591,9 +591,16 @@ async def test_embedding_handler_local_bm25_write_embeds_dense_then_rebuilds(mon
         def __init__(self):
             super().__init__()
             self.rebuilt_with = None
+            self.schedule_calls = 0
 
         async def upsert(self, _data, *, ctx, partial_update=False):
             return "rec-1"
+
+        def schedule_local_bm25_rebuild(self, sparse_embedder, *, ctx, delta_docs=1):
+            self.schedule_calls += 1
+            return super().schedule_local_bm25_rebuild(
+                sparse_embedder, ctx=ctx, delta_docs=delta_docs
+            )
 
         async def rebuild_local_bm25_sparse_vectors(self, sparse_embedder, *, ctx):
             self.rebuilt_with = sparse_embedder
@@ -618,6 +625,7 @@ async def test_embedding_handler_local_bm25_write_embeds_dense_then_rebuilds(mon
     assert dense.calls == [("hello", False)]
     assert sparse.stats.doc_count == 0
     assert vikingdb.rebuilt_with is sparse
+    assert vikingdb.schedule_calls == 1
 
 
 @pytest.mark.asyncio
