@@ -368,7 +368,9 @@ class Session:
         self._session_compressor = session_compressor
         self.user = user or UserIdentifier.the_default_user()
         self.ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
-        self.session_id = session_id or str(uuid4())
+        self.session_id = (
+            session_id or f"{datetime.now(timezone.utc):%Y%m%d-%H%M%S}-{uuid4().hex[:16]}"
+        )
         self.created_at = int(datetime.now(timezone.utc).timestamp() * 1000)
         self._auto_commit_threshold = auto_commit_threshold
         self._session_uri = session_uri or canonical_session_uri(self.ctx, self.session_id)
