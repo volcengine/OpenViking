@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, NoReturn, Optional, Tuple, Union
 from urllib.parse import urlparse
 
+from openviking.parse.feishu_markdown import FeishuBlockMarkdownMixin
 from openviking.utils.exceptions import error_code_from_http_status
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils.logger import get_logger
@@ -30,13 +31,6 @@ logger = get_logger(__name__)
 
 _FEISHU_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(feishu://image/([^)]+)\)")
 _FEISHU_DOCUMENT_FORBIDDEN = 1770032
-
-
-def _getattr_safe(obj, key: str, default=None):
-    """Get attribute from SDK object or dict, with safe fallback."""
-    if isinstance(obj, dict):
-        return obj.get(key, default)
-    return getattr(obj, key, default)
 
 
 def _response_http_status(response: Any) -> int | None:
@@ -91,7 +85,7 @@ class FeishuDocument:
     meta: Dict[str, Any]
 
 
-class FeishuAccessor(DataAccessor):
+class FeishuAccessor(FeishuBlockMarkdownMixin, DataAccessor):
     """
     Accessor for Feishu/Lark cloud documents.
 
@@ -553,114 +547,7 @@ class FeishuAccessor(DataAccessor):
 
         return all_blocks
 
-    # ========== Block -> Markdown Conversion ==========
-
-    def _detect_block_attr(self, block) -> Optional[str]:
-        """Detect which content attribute is populated on a block object.
-
-        Uses block_type integer as the primary dispatch (reliable), falling
-        back to attribute inspection over a known whitelist for unknown types.
-        """
-        # Primary: lookup by block_type integer
-        block_type = getattr(block, "block_type", None)
-        if block_type is not None:
-            attr = self._BLOCK_TYPE_TO_ATTR.get(block_type)
-            if attr:
-                return attr
-
-        # Fallback: scan known content attributes for unknown block types
-        for attr in self._KNOWN_CONTENT_ATTRS:
-            if getattr(block, attr, None) is not None:
-                return attr
-        return None
-
-    def _block_to_markdown(
-        self, block, block_map: Dict, ordered_counter: Dict[str, int], document_id: str = ""
-    ) -> Optional[str]:
-        """Convert a single SDK block object to markdown string.
-
-        Uses block_type integer for primary dispatch, with attribute whitelist
-        fallback for unknown types. Formatting is data-driven via _TEXT_FORMAT
-        and _SPECIAL_BLOCK_HANDLERS tables.
-        """
-        attr = self._detect_block_attr(block)
-
-        if attr is None:
-            return None
-
-        # Skip structural containers (processed via their children)
-        if attr in self._SKIP_ATTRS:
-            return None
-
-        # Reset ordered list counter when any non-ordered block appears
-        if attr != "ordered":
-            parent_id = block.parent_id or ""
-            if parent_id in ordered_counter:
-                del ordered_counter[parent_id]
-
-        # Special blocks (non-text: divider, image, table)
-        special_handler = self._SPECIAL_BLOCK_HANDLERS.get(attr)
-        if special_handler:
-            return getattr(self, special_handler)(block, block_map, document_id=document_id)
-
-        # --- Text-bearing blocks: extract elements, apply formatting ---
-        content_obj = getattr(block, attr, None)
-        if not content_obj or not hasattr(content_obj, "elements") or not content_obj.elements:
-            return None
-
-        text = self._extract_text_from_elements(content_obj.elements)
-        if not text:
-            return None
-
-        # Headings: heading1 -> #, heading2 -> ##, ...
-        if attr.startswith("heading"):
-            level = int(attr.replace("heading", "") or "1")
-            return f"{'#' * level} {text}"
-
-        # Ordered list (needs counter state)
-        if attr == "ordered":
-            parent_id = block.parent_id or ""
-            counter = ordered_counter.get(parent_id, 0) + 1
-            ordered_counter[parent_id] = counter
-            return f"{counter}. {text}"
-
-        # Code block (needs language from style)
-        if attr == "code":
-            lang = ""
-            if hasattr(content_obj, "style") and content_obj.style:
-                lang = str(getattr(content_obj.style, "language", "") or "")
-            return f"```{lang}\n{text}\n```"
-
-        # Todo (needs done state from style)
-        if attr == "todo":
-            done = False
-            if hasattr(content_obj, "style") and content_obj.style:
-                done = getattr(content_obj.style, "done", False)
-            checkbox = "[x]" if done else "[ ]"
-            return f"- {checkbox} {text}"
-
-        # Simple template formatting (bullet, quote, etc.)
-        fmt = self._TEXT_FORMAT.get(attr)
-        if fmt:
-            return fmt.format(text=text)
-
-        # Default: return plain text (covers callout, equation, task, unknown, etc.)
-        return text
-
-    @staticmethod
-    def _handle_divider(block, block_map: Dict = None, **_) -> str:
-        """Convert divider block to markdown."""
-        return "---"
-
-    @staticmethod
-    def _handle_image(block, block_map: Dict = None, **_) -> Optional[str]:
-        """Convert image block to markdown."""
-        image = block.image
-        if not image:
-            return None
-        file_token = image.token or ""
-        alt_text = getattr(image, "alt", "") or "image"
-        return f"![{alt_text}](feishu://image/{file_token})"
+    # Block-to-Markdown conversion is inherited from FeishuBlockMarkdownMixin.
 
     # Image byte-magic signatures → file extension. Sniffed from the raw bytes
     # first, since the actual content is authoritative over a (possibly generic
@@ -822,120 +709,3 @@ class FeishuAccessor(DataAccessor):
             return f"![{alt_text}]({rel_path})"
 
         return _FEISHU_IMAGE_RE.sub(_replace, markdown), downloaded_images
-
-    def _extract_block_text(self, block, attr_name: str) -> str:
-        """Extract text from a block's named attribute (e.g. block.text, block.heading2)."""
-        content_obj = getattr(block, attr_name, None)
-        if content_obj and hasattr(content_obj, "elements") and content_obj.elements:
-            return self._extract_text_from_elements(content_obj.elements)
-        return ""
-
-    def _extract_text_from_elements(self, elements) -> str:
-        """Convert Feishu TextElement SDK objects to formatted text."""
-        if not elements:
-            return ""
-        parts = []
-        for element in elements:
-            # TextRun
-            text_run = element.text_run
-            if text_run:
-                content = text_run.content or ""
-                style = text_run.text_element_style
-                content = self._apply_text_style(content, style)
-                parts.append(content)
-                continue
-
-            # MentionUser
-            mention_user = element.mention_user
-            if mention_user:
-                user_id = _getattr_safe(mention_user, "user_id", "user")
-                parts.append(f"@{user_id}")
-                continue
-
-            # MentionDoc
-            mention_doc = element.mention_doc
-            if mention_doc:
-                title = _getattr_safe(mention_doc, "title", "document")
-                url = _getattr_safe(mention_doc, "url", "")
-                parts.append(f"[{title}]({url})" if url else str(title))
-                continue
-
-            # Equation
-            equation = element.equation
-            if equation:
-                parts.append(f"${_getattr_safe(equation, 'content', '')}$")
-                continue
-
-        return "".join(parts)
-
-    @staticmethod
-    def _apply_text_style(text: str, style) -> str:
-        """Apply markdown formatting based on TextElementStyle SDK object."""
-        if not text or not style:
-            return text
-        # inline_code (SDK uses 'inline_code', not 'code_inline')
-        if getattr(style, "inline_code", False):
-            return f"`{text}`"
-        # link
-        link = getattr(style, "link", None)
-        if link:
-            url = _getattr_safe(link, "url", "")
-            if url:
-                text = f"[{text}]({url})"
-        if getattr(style, "bold", False):
-            text = f"**{text}**"
-        if getattr(style, "italic", False):
-            text = f"*{text}*"
-        if getattr(style, "strikethrough", False):
-            text = f"~~{text}~~"
-        return text
-
-    def _table_block_to_markdown(self, block, block_map: Dict, **_) -> Optional[str]:
-        """Convert table block to markdown table."""
-        table = block.table
-        children = block.children
-        if not table or not children:
-            return None
-
-        prop = table.property
-        if not prop:
-            return None
-        row_size = prop.row_size or 0
-        col_size = prop.column_size or 0
-        if not row_size or not col_size:
-            return None
-
-        rows = []
-        for row_idx in range(row_size):
-            row = []
-            for col_idx in range(col_size):
-                cell_idx = row_idx * col_size + col_idx
-                if cell_idx < len(children):
-                    cell_block_id = children[cell_idx]
-                    cell_block = block_map.get(cell_block_id)
-                    cell_text = self._extract_cell_text(cell_block, block_map)
-                    row.append(cell_text)
-                else:
-                    row.append("")
-            rows.append(row)
-
-        from openviking.parse.base import format_table_to_markdown
-
-        return format_table_to_markdown(rows, has_header=True) if rows else None
-
-    def _extract_cell_text(self, cell_block, block_map: Dict) -> str:
-        """Extract text from a table cell block by reading its children."""
-        if not cell_block or not cell_block.children:
-            return ""
-        texts = []
-        for child_id in cell_block.children:
-            child = block_map.get(child_id)
-            if not child:
-                continue
-            # Use attribute-driven detection to find text in any block type
-            attr = self._detect_block_attr(child)
-            if attr:
-                text = self._extract_block_text(child, attr)
-                if text:
-                    texts.append(text)
-        return " ".join(texts)

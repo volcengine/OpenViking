@@ -8,6 +8,8 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
 from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+from openviking.parse.feishu_markdown import FeishuBlockMarkdownMixin
+from openviking.parse.parsers.feishu import FeishuParser
 
 
 class _SuccessResponse:
@@ -185,9 +187,7 @@ def test_resolve_image_refs_uses_content_type_extension(monkeypatch):
     accessor._config = SimpleNamespace(download_images=True)
     accessor._client = SimpleNamespace(request=request_media)
 
-    updated, images = accessor._resolve_image_refs(
-        "![j](feishu://image/img_token_jpeg)"
-    )
+    updated, images = accessor._resolve_image_refs("![j](feishu://image/img_token_jpeg)")
 
     assert updated == "![j](images/img_token_jpeg.jpg)"
     assert images == {"images/img_token_jpeg.jpg": b"\xff\xd8\xff\xe0jpeg-bytes"}
@@ -202,9 +202,7 @@ def test_resolve_image_refs_falls_back_to_byte_magic_extension(monkeypatch):
     accessor._config = SimpleNamespace(download_images=True)
     accessor._client = SimpleNamespace(request=request_media)
 
-    updated, images = accessor._resolve_image_refs(
-        "![w](feishu://image/img_token_webp)"
-    )
+    updated, images = accessor._resolve_image_refs("![w](feishu://image/img_token_webp)")
 
     assert updated == "![w](images/img_token_webp.webp)"
     assert images == {"images/img_token_webp.webp": webp_bytes}
@@ -332,3 +330,31 @@ def test_access_writes_downloaded_images_next_to_markdown(monkeypatch):
         resource.cleanup()
 
     assert not resource.path.parent.exists()
+
+
+def test_accessor_and_legacy_parser_share_docx_block_conversion():
+    """Both Feishu entry points must use one conversion implementation."""
+    assert FeishuAccessor._block_to_markdown is FeishuBlockMarkdownMixin._block_to_markdown
+    assert FeishuParser._block_to_markdown is FeishuBlockMarkdownMixin._block_to_markdown
+
+    style = SimpleNamespace(
+        bold=True,
+        italic=False,
+        inline_code=False,
+        strikethrough=False,
+        link=None,
+    )
+    element = SimpleNamespace(
+        text_run=SimpleNamespace(content="shared", text_element_style=style),
+        mention_user=None,
+        mention_doc=None,
+        equation=None,
+    )
+    block = SimpleNamespace(
+        block_type=2,
+        parent_id="root",
+        text=SimpleNamespace(elements=[element]),
+    )
+
+    assert FeishuAccessor()._block_to_markdown(block, {}, {}) == "**shared**"
+    assert FeishuParser()._block_to_markdown(block, {}, {}) == "**shared**"
