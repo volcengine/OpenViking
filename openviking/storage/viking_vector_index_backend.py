@@ -401,17 +401,19 @@ class _SingleAccountBackend:
         the account bound to this backend so arbitrary cross-tenant ids cannot
         be passed through this repair path.
         """
-        if self._mode != "local":
+        if not self._adapter.LOCAL_STORAGE_BACKED:
             return 0
         if not self._bound_account_id or self._bound_account_id != account_id:
             raise ValueError("deterministic URI deletion requires the bound account")
 
         ids: list[str] = []
+        seen_ids: set[str] = set()
         for uri in uris:
             seeds = (uri, f"{uri}/.abstract.md", f"{uri}/.overview.md")
             for seed_uri in seeds:
                 record_id = hashlib.md5(f"{account_id}:{seed_uri}".encode("utf-8")).hexdigest()
-                if record_id not in ids:
+                if record_id not in seen_ids:
+                    seen_ids.add(record_id)
                     ids.append(record_id)
         if not ids:
             return 0

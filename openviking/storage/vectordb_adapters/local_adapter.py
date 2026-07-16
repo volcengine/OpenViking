@@ -19,6 +19,7 @@ class LocalCollectionAdapter(CollectionAdapter):
     """Adapter for local embedded vectordb backend."""
 
     DEFAULT_LOCAL_PROJECT_NAME = "vectordb"
+    LOCAL_STORAGE_BACKED = True
 
     def __init__(
         self,

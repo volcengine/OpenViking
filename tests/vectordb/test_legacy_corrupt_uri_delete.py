@@ -7,9 +7,13 @@ import json
 import pytest
 
 from openviking.server.identity import RequestContext, Role, UserIdentifier
+from openviking.storage.expr import And, Eq
+from openviking.storage.vectordb.collection.local_collection import PersistCollection
 from openviking.storage.vectordb.index import local_index as local_index_module
 from openviking.storage.vectordb.index.local_index import LocalIndex
-from openviking.storage.vectordb.store.data import DeltaRecord
+from openviking.storage.vectordb.store.data import CandidateData, DeltaRecord
+from openviking.storage.vectordb.utils.str_to_uint64 import str_to_uint64
+from openviking.storage.vectordb_adapters.local_adapter import LocalCollectionAdapter
 from openviking.storage.viking_vector_index_backend import (
     VikingVectorIndexBackend,
     _SingleAccountBackend,
@@ -68,7 +72,7 @@ def test_delete_legacy_record_ignores_unparseable_old_fields(monkeypatch):
     ]
 
 
-def test_upsert_legacy_record_keeps_invalid_old_fields_fail_closed():
+def test_local_index_upsert_conversion_rejects_unparseable_old_fields():
     index, proxy = _make_index()
     record = DeltaRecord(
         type=DeltaRecord.Type.UPSERT,
@@ -97,11 +101,15 @@ def test_delete_valid_old_fields_still_converts_them():
 
 
 @pytest.mark.asyncio
-async def test_local_backend_deletes_tenant_scoped_ids_without_query(monkeypatch):
+@pytest.mark.parametrize("mode", ["local", "cuvs"])
+async def test_local_backed_modes_delete_tenant_scoped_ids_without_query(monkeypatch, mode):
     deleted = []
 
     class _Adapter:
-        mode = "local"
+        LOCAL_STORAGE_BACKED = True
+
+        def __init__(self):
+            self.mode = mode
 
         def delete(self, **kwargs):
             deleted.extend(kwargs["ids"])
@@ -114,7 +122,7 @@ async def test_local_backend_deletes_tenant_scoped_ids_without_query(monkeypatch
         "openviking.storage.viking_vector_index_backend.asyncio.to_thread", _fake_to_thread
     )
     backend = _SingleAccountBackend(
-        config=VectorDBBackendConfig(backend="local", name="context", dimension=2),
+        config=VectorDBBackendConfig(backend="local", name="context", dimension=4),
         bound_account_id="acc1",
         shared_adapter=_Adapter(),
     )
@@ -128,6 +136,72 @@ async def test_local_backend_deletes_tenant_scoped_ids_without_query(monkeypatch
 
     with pytest.raises(ValueError, match="bound account"):
         await backend.delete_deterministic_uris("acc2", [uri])
+
+
+@pytest.mark.asyncio
+async def test_real_local_store_removes_corrupt_candidate_after_filter_skip(tmp_path):
+    account_id = "acc1"
+    uri = "viking://resources/acc1/wiki/broken.md"
+    record_id = hashlib.md5(f"{account_id}:{uri}".encode()).hexdigest()
+    adapter = LocalCollectionAdapter(
+        collection_name="context",
+        project_path=str(tmp_path),
+        index_name="default",
+    )
+    backend = _SingleAccountBackend(
+        config=VectorDBBackendConfig(backend="local", name="context", dimension=4),
+        bound_account_id=account_id,
+        shared_adapter=adapter,
+    )
+    schema = {
+        "CollectionName": "context",
+        "Fields": [
+            {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+            {"FieldName": "uri", "FieldType": "path"},
+            {"FieldName": "account_id", "FieldType": "string"},
+            {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+        ],
+        "ScalarIndex": ["uri", "account_id"],
+    }
+
+    try:
+        assert await backend.create_collection("context", schema)
+        assert (
+            await backend.upsert(
+                {
+                    "id": record_id,
+                    "uri": uri,
+                    "account_id": account_id,
+                    "vector": [1.0, 0.0, 0.0, 0.0],
+                }
+            )
+            == record_id
+        )
+
+        collection = adapter.get_collection()
+        local_collection = collection._Collection__collection
+        assert isinstance(local_collection, PersistCollection)
+        label = str_to_uint64(record_id)
+        assert local_collection.store_mgr is not None
+        corrupt = CandidateData(
+            label=label,
+            vector=[1.0, 0.0, 0.0, 0.0],
+            fields='{"truncated":',
+        )
+        local_collection.store_mgr.add_cands_data([corrupt], need_delta=False)
+
+        # The scalar filter still finds the indexed label, but the collection
+        # skips its unparseable CandidateData before the adapter can recover an id.
+        assert (
+            await backend.delete_by_filter(And([Eq("account_id", account_id), Eq("uri", uri)])) == 0
+        )
+        assert local_collection.store_mgr.fetch_cands_data([label]) == [corrupt]
+
+        assert await backend.delete_deterministic_uris(account_id, [uri]) == 3
+        assert local_collection.store_mgr.fetch_cands_data([label]) == [None]
+        assert collection.search_by_vector("default", [1.0, 0.0, 0.0, 0.0], limit=1).data == []
+    finally:
+        await backend.close()
 
 
 @pytest.mark.asyncio
