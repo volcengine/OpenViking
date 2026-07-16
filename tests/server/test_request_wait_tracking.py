@@ -11,6 +11,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.telemetry.context import bind_telemetry
 from openviking.telemetry.operation import OperationTelemetry
+from openviking_cli.exceptions import DeadlineExceededError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -35,6 +36,14 @@ class _FakeRequestWaitTracker:
 
     def cleanup(self, telemetry_id: str) -> None:
         self.cleaned.append(telemetry_id)
+
+
+class _TimeoutThenCompleteRequestWaitTracker(_FakeRequestWaitTracker):
+    async def wait_for_request(self, telemetry_id: str, timeout=None, poll_interval=None):
+        del poll_interval
+        self.wait_calls.append((telemetry_id, timeout))
+        if len(self.wait_calls) == 1:
+            raise TimeoutError("request wait timed out")
 
 
 class _ExplodingQueueManager:
@@ -162,6 +171,67 @@ async def test_add_resource_wait_uses_request_tracker_when_telemetry_disabled(se
     assert tracker.registered_requests == [telemetry.telemetry_id]
     assert tracker.wait_calls == [(telemetry.telemetry_id, 12.0)]
     assert tracker.build_calls == [telemetry.telemetry_id]
+    assert tracker.cleaned == [telemetry.telemetry_id]
+
+
+@pytest.mark.asyncio
+async def test_add_resource_wait_timeout_returns_pollable_background_task(service, monkeypatch):
+    from openviking.service.task_tracker import TaskStatus, get_task_tracker
+
+    tracker = _TimeoutThenCompleteRequestWaitTracker(
+        {
+            "Semantic": {"processed": 1, "error_count": 0, "errors": []},
+            "Embedding": {"processed": 2, "error_count": 0, "errors": []},
+        }
+    )
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+    telemetry = OperationTelemetry(operation="resources.add_resource", enabled=True)
+
+    async def _fake_process_resource(**kwargs):
+        del kwargs
+        return {"status": "success", "root_uri": "viking://resources/demo"}
+
+    monkeypatch.setattr(
+        service.resources._resource_processor, "process_resource", _fake_process_resource
+    )
+    monkeypatch.setattr(
+        "openviking.service.resource_service.get_queue_manager",
+        lambda: _ExplodingQueueManager(),
+    )
+    monkeypatch.setattr(
+        "openviking.service.resource_service.get_request_wait_tracker",
+        lambda: tracker,
+        raising=False,
+    )
+
+    with bind_telemetry(telemetry):
+        with pytest.raises(DeadlineExceededError) as exc_info:
+            await service.resources.add_resource(
+                path="/tmp/demo.md",
+                ctx=ctx,
+                wait=True,
+                timeout=0.1,
+            )
+
+    task_id = exc_info.value.details["task_id"]
+    assert exc_info.value.details["poll_command"] == f"ov task status {task_id}"
+    assert tracker.cleaned == []
+
+    background_tasks = list(service.resources._background_tasks)
+    assert len(background_tasks) == 1
+    await background_tasks[0]
+
+    task = await get_task_tracker().get(
+        task_id,
+        account_id=ctx.account_id,
+        user_id=ctx.user.user_id,
+    )
+    assert task is not None
+    assert task.status == TaskStatus.COMPLETED
+    assert task.result == {
+        "root_uri": "viking://resources/demo",
+        "queue_status": tracker.queue_status,
+    }
     assert tracker.cleaned == [telemetry.telemetry_id]
 
 

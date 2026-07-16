@@ -5,10 +5,12 @@
 
 import pytest
 
+from openviking_cli.client._http_compat import _raise_legacy_exception
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.exceptions import (
     AbortedError,
     ConflictError,
+    DeadlineExceededError,
     OpenVikingError,
     ResourceExhaustedError,
     UnimplementedError,
@@ -63,3 +65,42 @@ def test_client_preserves_unknown_error_code():
 
     assert exc_info.value.code == "PROVIDER_SPECIFIC"
     assert exc_info.value.details == {"x": 1}
+
+
+def test_client_preserves_pollable_task_on_deadline_exceeded():
+    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
+
+    with pytest.raises(DeadlineExceededError) as exc_info:
+        client._raise_exception(
+            {
+                "code": "DEADLINE_EXCEEDED",
+                "message": "queue processing timed out",
+                "details": {
+                    "operation": "queue processing",
+                    "timeout": 0.1,
+                    "task_id": "task-123",
+                },
+            }
+        )
+
+    assert exc_info.value.details["task_id"] == "task-123"
+    assert exc_info.value.details["poll_command"] == "ov task status task-123"
+    assert "ov task status task-123" in str(exc_info.value)
+
+
+def test_legacy_client_preserves_pollable_task_on_deadline_exceeded():
+    with pytest.raises(DeadlineExceededError) as exc_info:
+        _raise_legacy_exception(
+            {
+                "code": "DEADLINE_EXCEEDED",
+                "message": "queue processing timed out",
+                "details": {
+                    "operation": "queue processing",
+                    "timeout": 0.1,
+                    "task_id": "task-legacy",
+                },
+            }
+        )
+
+    assert exc_info.value.details["task_id"] == "task-legacy"
+    assert "ov task status task-legacy" in str(exc_info.value)

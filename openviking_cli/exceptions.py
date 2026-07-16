@@ -145,14 +145,26 @@ class InternalError(OpenVikingError):
 
 
 class DeadlineExceededError(OpenVikingError):
-    """Operation timed out."""
+    """Operation timed out, optionally while background work continues."""
 
-    def __init__(self, operation: str = "operation", timeout: Optional[float] = None):
+    def __init__(
+        self,
+        operation: str = "operation",
+        timeout: Optional[float] = None,
+        task_id: Optional[str] = None,
+    ):
         message = f"{operation.capitalize()} timed out"
         if timeout:
             message += f" after {timeout}s"
+        details = {"operation": operation, "timeout": timeout}
+        if task_id:
+            poll_command = f"ov task status {task_id}"
+            message += f". Background task {task_id} is still running; poll with `{poll_command}`"
+            details.update({"task_id": task_id, "poll_command": poll_command})
         super().__init__(
-            message, code="DEADLINE_EXCEEDED", details={"operation": operation, "timeout": timeout}
+            message,
+            code="DEADLINE_EXCEEDED",
+            details=details,
         )
 
 

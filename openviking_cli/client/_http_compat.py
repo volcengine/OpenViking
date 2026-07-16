@@ -104,6 +104,13 @@ def _raise_legacy_exception(error: Dict[str, Any]) -> None:
         resource = details.get("resource", "") if details else ""
         resource_type = details.get("type", "resource") if details else "resource"
         raise exc_class(resource, resource_type)
+    if exc_class == DeadlineExceededError:
+        details = details or {}
+        raise exc_class(
+            details.get("operation", "operation"),
+            details.get("timeout"),
+            details.get("task_id"),
+        )
     raise exc_class(message)
 
 

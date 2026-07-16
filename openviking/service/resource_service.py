@@ -923,7 +923,18 @@ class ResourceService:
                         "DEADLINE_EXCEEDED",
                         str(exc),
                     )
-                    raise DeadlineExceededError("queue processing", timeout) from exc
+                    task_id = await self._start_resource_queue_monitor(
+                        result=result,
+                        telemetry_id=telemetry_id,
+                        ctx=ctx,
+                        reason=reason,
+                        source_name=kwargs.get("source_name"),
+                        timeout=timeout,
+                    )
+                    monitor_started = True
+                    raise DeadlineExceededError(
+                        "queue processing", timeout, task_id=task_id
+                    ) from exc
                 queue_wait_duration_ms = round((time.perf_counter() - wait_start) * 1000, 3)
                 try:
                     from openviking.metrics.datasources.resource import (
@@ -968,47 +979,15 @@ class ResourceService:
                     timeout=timeout,
                 )
             if not wait:
-                from openviking.service.task_tracker import get_task_tracker
-
-                task_tracker = get_task_tracker()
-                root_uri = result.get("root_uri", "")
-                task = await task_tracker.create(
-                    "add_resource",
-                    resource_id=root_uri,
-                    account_id=ctx.account_id,
-                    user_id=ctx.user.user_id,
+                await self._start_resource_queue_monitor(
+                    result=result,
+                    telemetry_id=telemetry_id,
+                    ctx=ctx,
+                    reason=reason,
+                    source_name=kwargs.get("source_name"),
+                    timeout=timeout,
                 )
-                result["task_id"] = task.task_id
-                if telemetry_id:
-                    monitor_started = True
-                    background = asyncio.create_task(
-                        self._monitor_resource_queue_then_link_memory(
-                            task.task_id,
-                            telemetry_id,
-                            ctx,
-                            root_uri=root_uri,
-                            reason=reason,
-                            source_name=kwargs.get("source_name"),
-                            timeout=timeout,
-                        )
-                    )
-                    self._background_tasks.add(background)
-                    background.add_done_callback(self._background_tasks.discard)
-                else:
-                    monitor_started = True
-                    background = asyncio.create_task(
-                        self._monitor_resource_queue_then_link_memory(
-                            task.task_id,
-                            None,
-                            ctx,
-                            root_uri=root_uri,
-                            reason=reason,
-                            source_name=kwargs.get("source_name"),
-                            timeout=timeout,
-                        )
-                    )
-                    self._background_tasks.add(background)
-                    background.add_done_callback(self._background_tasks.discard)
+                monitor_started = True
             return result
         except Exception as exc:
             telemetry.set_error(
@@ -1022,9 +1001,45 @@ class ResourceService:
                 "resource.request.duration_ms",
                 round((time.perf_counter() - request_start) * 1000, 3),
             )
-            if wait or not telemetry_id or not monitor_started:
+            if not telemetry_id or not monitor_started:
                 get_request_wait_tracker().cleanup(telemetry_id)
                 unregister_wait_telemetry(telemetry_id)
+
+    async def _start_resource_queue_monitor(
+        self,
+        *,
+        result: Dict[str, Any],
+        telemetry_id: Optional[str],
+        ctx: RequestContext,
+        reason: str,
+        source_name: Optional[str],
+        timeout: Optional[float],
+    ) -> str:
+        """Expose queued resource work through the shared task lifecycle."""
+        from openviking.service.task_tracker import get_task_tracker
+
+        root_uri = str(result.get("root_uri") or "")
+        task = await get_task_tracker().create(
+            "add_resource",
+            resource_id=root_uri,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        )
+        result["task_id"] = task.task_id
+        background = asyncio.create_task(
+            self._monitor_resource_queue_then_link_memory(
+                task.task_id,
+                telemetry_id,
+                ctx,
+                root_uri=root_uri,
+                reason=reason,
+                source_name=source_name,
+                timeout=timeout,
+            )
+        )
+        self._background_tasks.add(background)
+        background.add_done_callback(self._background_tasks.discard)
+        return task.task_id
 
     async def _link_resource_reason_memory(
         self,
@@ -1272,7 +1287,9 @@ class ResourceService:
                 "wait=true (Connector imports run asynchronously; poll the returned task_id)"
             )
         if reason:
-            unsupported.append("reason (Connector imports cannot preserve resource-reason semantics)")
+            unsupported.append(
+                "reason (Connector imports cannot preserve resource-reason semantics)"
+            )
         if instruction:
             unsupported.append("instruction")
         if not build_index:
