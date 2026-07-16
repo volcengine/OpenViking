@@ -227,6 +227,44 @@ test("appends local tools to the upstream tools/list result", async () => {
   });
 });
 
+test("replaces an upstream tool definition when the local tool has the same name", async () => {
+  const localTool = {
+    name: "search_experience",
+    description: "Local experience search",
+    inputSchema: { type: "object", required: ["query"] },
+  };
+  await withServer((_req, res, entry) => {
+    assert.equal(entry.body.method, "tools/list");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(jsonRpc(entry.body.id, {
+      tools: [
+        { name: "find", description: "Find context", inputSchema: { type: "object" } },
+        {
+          name: "search_experience",
+          description: "Upstream experience search",
+          inputSchema: { type: "object", required: ["text"] },
+        },
+      ],
+    })));
+  }, async ({ url }) => {
+    const { proxy, messages } = makeProxy({
+      url,
+      localToolProvider: {
+        listTools: () => [localTool],
+        async callTool() { return null; },
+      },
+    });
+
+    await proxy.handleMessage({ jsonrpc: "2.0", id: 22, method: "tools/list" });
+
+    const [response] = await messages();
+    assert.deepEqual(response.result.tools, [
+      { name: "find", description: "Find context", inputSchema: { type: "object" } },
+      localTool,
+    ]);
+  });
+});
+
 test("handles local tools without forwarding tools/call upstream", async () => {
   const calls = [];
   const { proxy, messages } = makeProxy({

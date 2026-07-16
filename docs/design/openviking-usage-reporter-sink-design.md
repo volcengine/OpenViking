@@ -65,6 +65,7 @@ UsageEvent 是 OpenViking 内核和外部 Sink 之间的稳定协议。
 ```json
 {
   "schema_version": "v1",
+  "event_id": "ue_<sha256>",
   "event_type": "memory.injected",
   "resource_uri": "viking://user/test/memories/experiences/xxx.md",
   "resource_type": "experience",
@@ -198,9 +199,10 @@ archive session success
 - Sink 成功：正常返回。
 - Sink 失败：记录日志，不影响 commit。
 - 多个 Sink：某个 Sink 失败不影响其他 Sink。
-- 事件带幂等 key，方便下游去重。
+- Usage Reporter 采用 at-least-once 语义。进程在 Sink 写入成功后、phase2 完成前退出时，同一事件可能被再次发送。
+- 每个事件包含稳定的 `event_id`，Sink 应将其作为 Kafka message key 或下游幂等键，消费端按 `event_id` 去重。
 
-幂等 key：
+`event_id` 为以下字段规范序列化后的 SHA-256：
 
 ```text
 schema_version
@@ -213,5 +215,7 @@ schema_version
 + evidence.tool_call_id
 + resource_uri
 ```
+
+`occurred_at`、`message_id` 和 `attributes` 不参与计算，避免重放时间差或附加属性变化破坏幂等性。同一 archive 中同一 tool call 对同一资源产生的事件，在 phase2 重放后仍得到相同 `event_id`。
 
 后续如果需要更高可靠性，可以增加本地 buffer / dead letter file，但不作为第一期必需能力。

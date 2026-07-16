@@ -278,3 +278,30 @@ async def test_memory_usage_extractor_correlates_read_input_by_tool_id():
 
     assert [event.event_type for event in events] == ["memory.injected"]
     assert events[0].resource_uri == experience_uri
+
+
+@pytest.mark.asyncio
+async def test_memory_usage_extractor_replay_uses_stable_event_id():
+    experience_uri = "viking://user/test/memories/experiences/replay.md"
+    messages = [
+        Message(
+            id="msg-replay",
+            role="user",
+            created_at="2026-07-16T10:00:00Z",
+            parts=[
+                ToolPart(
+                    tool_id="call-replay",
+                    tool_name="read_experience",
+                    tool_status="completed",
+                    tool_input={"uri": experience_uri},
+                )
+            ],
+        )
+    ]
+    extractor = MemoryUsageExtractor()
+
+    first = await extractor.extract(messages=messages, context=_context())
+    replay = await extractor.extract(messages=messages, context=_context())
+
+    assert first[0].event_id
+    assert replay[0].event_id == first[0].event_id

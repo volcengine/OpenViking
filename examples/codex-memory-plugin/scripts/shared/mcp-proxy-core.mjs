@@ -190,14 +190,15 @@ export function createOpenVikingMcpProxy({
     if (message.method !== "tools/list" || !Array.isArray(outbound?.result?.tools)) {
       return outbound;
     }
-    const existingNames = new Set(outbound.result.tools.map((tool) => tool?.name).filter(Boolean));
-    const additions = localTools().filter((tool) => tool?.name && !existingNames.has(tool.name));
+    const additions = localTools().filter((tool) => tool?.name);
     if (additions.length === 0) return outbound;
+    const localNames = new Set(additions.map((tool) => tool.name));
+    const upstreamTools = outbound.result.tools.filter((tool) => !localNames.has(tool?.name));
     return {
       ...outbound,
       result: {
         ...outbound.result,
-        tools: [...outbound.result.tools, ...additions],
+        tools: [...upstreamTools, ...additions],
       },
     };
   }
