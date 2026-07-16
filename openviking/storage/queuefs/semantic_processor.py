@@ -25,8 +25,8 @@ from openviking.parse.parsers.constants import (
     FILE_TYPE_OTHER,
 )
 from openviking.parse.parsers.media.detection import (
-    MPEG_TS_SNIFF_BYTES,
-    is_mpeg_transport_stream_bytes,
+    get_ambiguous_media_rule,
+    matches_ambiguous_media_bytes,
 )
 from openviking.parse.parsers.media.utils import (
     generate_audio_summary,
@@ -1159,16 +1159,17 @@ class SemanticProcessor(DequeueHandlerBase):
         file_name = file_path.split("/")[-1]
         llm_sem = llm_sem or asyncio.Semaphore(self.max_concurrent_llm)
         media_type = get_media_type(file_name, None)
-        if file_name.lower().endswith(".ts"):
-            # The suffix is ambiguous: TypeScript source must use the text/code
-            # summary path, while actual MPEG transport streams remain video.
+        ambiguous_rule = get_ambiguous_media_rule(file_name)
+        if ambiguous_rule:
             file_bytes = await get_viking_fs().read(
                 file_path,
                 offset=0,
-                size=MPEG_TS_SNIFF_BYTES,
+                size=ambiguous_rule.sniff_bytes,
                 ctx=ctx,
             )
-            if not is_mpeg_transport_stream_bytes(file_bytes):
+            if matches_ambiguous_media_bytes(file_name, file_bytes):
+                media_type = ambiguous_rule.media_type
+            else:
                 media_type = None
         if media_type == "image":
             return await generate_image_summary(file_path, file_name, llm_sem, ctx=ctx)

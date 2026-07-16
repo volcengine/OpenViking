@@ -51,14 +51,14 @@ class ParserRouter:
 
         ext = self._extract_extension(source_path)
         extensions = getattr(parser_api, "extensions", None) or []
-        if ext == "ts":
-            from openviking.parse.parsers.media.detection import (
-                is_mpeg_transport_stream_file,
-            )
+        from openviking.parse.parsers.media.detection import (
+            matches_ambiguous_media_file,
+        )
 
-            local_path = Path(source_path)
-            if local_path.is_file() and not is_mpeg_transport_stream_file(local_path):
-                return False
+        local_path = Path(source_path)
+        ambiguous_media_match = matches_ambiguous_media_file(local_path)
+        if local_path.is_file() and ambiguous_media_match is False:
+            return False
         return ext in extensions
 
     def _extract_extension(self, source_path: Union[str, Path]) -> str:
