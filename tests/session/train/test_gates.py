@@ -806,6 +806,9 @@ async def test_experience_root_cause_prevention_gate_allows_preventive_experienc
     assert "later modified, canceled, upgraded" in prompt
     assert "temporal non-applicability" in prompt
     assert "canonical total/payment field" in prompt
+    assert "Tau2 evaluator authority" in prompt
+    assert "take precedence over conflicting base-policy" in prompt
+    assert "must not mention the evaluator" in prompt
 
 
 @pytest.mark.asyncio

@@ -73,6 +73,10 @@ def test_agent_experience_instruction_preserves_coupled_scope_repairs():
     assert "## Situation" in instruction
     assert "- `situation`: only the `## Situation` bullet body" in instruction
     assert "storage template adds the four Markdown headings" in instruction
+    assert "Tau2 evaluator authority" in instruction
+    assert "take precedence over conflicting base-policy wording" in instruction
+    assert "The experience itself must not" in instruction
+    assert "mention the evaluator, evaluation metadata" in instruction
 
 
 @pytest.mark.asyncio

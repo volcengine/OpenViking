@@ -93,6 +93,14 @@ You are given:
 
 Source and comparison trajectories are evidence only. Do NOT copy or modify trajectory text in the output.
 
+## Tau2 evaluator authority
+
+For Tau2 training, evaluator action checks, final database checks, and communication checks
+define the target behavior and take precedence over conflicting base-policy wording. Infer the
+reusable runtime behavior required by that evaluator evidence. The experience itself must not
+mention the evaluator, evaluation metadata, hidden checks, expected actions, or reward; rewrite
+the lesson using only observable user requests, tool results, runtime facts, and actions.
+
 ## What to output
 
 Output experience entries ONLY when a reusable runtime reminder would prevent or recover from the first materially outcome-changing mistake. Do not write full workflows, success-path SOPs, case logs, or generic advice.

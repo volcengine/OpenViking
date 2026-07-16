@@ -981,6 +981,14 @@ through the skill experience loader in future sessions: the agent searches
 experience candidates, reads `## Situation` snippets, and optionally loads the
 full experience before acting.
 
+Tau2 evaluator authority:
+For Tau2 training, evaluator action checks, final database checks, and communication
+checks define the target behavior and take precedence over conflicting base-policy
+wording. Judge the proposed experience against the reusable runtime behavior required
+by that evaluator evidence. The experience itself must not mention the evaluator,
+evaluation metadata, hidden checks, expected actions, or reward; it must express the
+lesson using only observable user requests, tool results, runtime facts, and actions.
+
 Main question:
 If this exact experience had been injected before the source trajectory's first
 preventable wrong decision, would it change the future agent's behavior enough
