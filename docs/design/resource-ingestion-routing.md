@@ -113,7 +113,7 @@ ParserRouter --> MarkdownParser --> ParseResult --> TreeBuilder
 | URL 类型 | Accessor 行为 | 当前边界 |
 |---|---|---|
 | `docx/{token}` | 拉取文档 block，转换标题、列表、代码、表格、图片和内嵌 sheet | 图片下载受 `download_images` 控制；内嵌 sheet 最多读取 100 行、A-Z 列 |
-| `sheets/{token}` | 枚举所有 sheet，把单元格转换成 Markdown 表格 | 每个 sheet 最多读取 `max_rows_per_sheet` 行、A-Z 列，截断会写入 Markdown 提示 |
+| `sheets/{token}` | 枚举所有 sheet；普通网格读取单元格，内嵌多维表格根据 `blockInfo` 转走 Bitable API，统一输出 Markdown 表格 | 普通网格最多读取 `max_rows_per_sheet` 行、A-Z 列；内嵌多维表格最多读取 `max_records_per_table` 条记录，截断会写入提示 |
 | `base/{app_token}` | 枚举数据表、字段和记录，把每张表转换成 Markdown 表格 | 表和字段完整翻页；每张表最多读取 `max_records_per_table` 条记录，截断会写入提示 |
 | `wiki/{token}` | 先解析 wiki 节点的实际类型和 token，再进入上述 `docx`、`sheets` 或 `base` 处理器 | wiki 指向其他飞书对象类型时明确报不支持 |
 

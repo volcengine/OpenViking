@@ -138,9 +138,6 @@ def _install_fake_lark_modules(monkeypatch):
     lark.AccessTokenType = SimpleNamespace(TENANT="tenant", USER="user")
     docx_v1 = ModuleType("lark_oapi.api.docx.v1")
     docx_v1.ListDocumentBlockRequest = _FakeListDocumentBlockRequest
-    sheets_v3 = ModuleType("lark_oapi.api.sheets.v3")
-    sheets_v3.GetSpreadsheetRequest = _FakeTypedRequest
-    sheets_v3.QuerySpreadsheetSheetRequest = _FakeTypedRequest
     bitable_v1 = ModuleType("lark_oapi.api.bitable.v1")
     bitable_v1.ListAppTableRequest = _FakeTypedRequest
     bitable_v1.ListAppTableFieldRequest = _FakeTypedRequest
@@ -149,7 +146,6 @@ def _install_fake_lark_modules(monkeypatch):
     core_model.RequestOption = _FakeRequestOption
     monkeypatch.setitem(sys.modules, "lark_oapi", lark)
     monkeypatch.setitem(sys.modules, "lark_oapi.api.docx.v1", docx_v1)
-    monkeypatch.setitem(sys.modules, "lark_oapi.api.sheets.v3", sheets_v3)
     monkeypatch.setitem(sys.modules, "lark_oapi.api.bitable.v1", bitable_v1)
     monkeypatch.setitem(sys.modules, "lark_oapi.core.model", core_model)
 
@@ -397,39 +393,50 @@ def test_fetch_document_dispatches_all_supported_types(monkeypatch):
     assert handlers["_parse_bitable"].call_args_list[-1].args == ("wiki_app_token", None)
 
 
-def test_parse_sheets_uses_user_token_and_limits_rows(monkeypatch):
+def test_parse_sheets_handles_grid_and_embedded_bitable(monkeypatch):
     _install_fake_lark_modules(monkeypatch)
-    metadata = MagicMock(
-        return_value=_SuccessResponse(SimpleNamespace(spreadsheet=SimpleNamespace(title="Budget")))
+    request = MagicMock(
+        side_effect=[
+            _FakeMediaResponse(
+                b'{"data":{"properties":{"title":"Budget"},"sheets":['
+                b'{"sheetId":"sheet-1","title":"Q1","rowCount":3,"columnCount":28},'
+                b'{"sheetId":"block-1","title":"Content Calendar","rowCount":0,'
+                b'"columnCount":0,"blockInfo":{"blockType":"BITABLE_BLOCK",'
+                b'"blockToken":"app-token_table-1"}}]}}'
+            ),
+            _FakeMediaResponse(b'{"data":{"valueRange":{"values":[["name","amount"],["A",1]]}}}'),
+        ]
     )
-    query = MagicMock(
+    list_tables = MagicMock()
+    list_fields = MagicMock(
         return_value=_SuccessResponse(
             SimpleNamespace(
-                sheets=[
-                    SimpleNamespace(
-                        sheet_id="sheet-1",
-                        title="Q1",
-                        grid_properties=SimpleNamespace(row_count=3, column_count=28),
-                    )
-                ]
+                items=[SimpleNamespace(field_name="Topic")],
+                has_more=False,
+                page_token=None,
             )
         )
     )
-    read_range = MagicMock(
-        return_value=_FakeMediaResponse(
-            b'{"data":{"valueRange":{"values":[["name","amount"],["A",1]]}}}'
+    list_records = MagicMock(
+        return_value=_SuccessResponse(
+            SimpleNamespace(
+                items=[SimpleNamespace(fields={"Topic": "Welcome"})],
+                has_more=False,
+                page_token=None,
+            )
         )
     )
     accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(max_rows_per_sheet=2)
+    accessor._config = SimpleNamespace(max_rows_per_sheet=2, max_records_per_table=10)
     accessor._user_token_client = SimpleNamespace(
-        sheets=SimpleNamespace(
-            v3=SimpleNamespace(
-                spreadsheet=SimpleNamespace(get=metadata),
-                spreadsheet_sheet=SimpleNamespace(query=query),
+        request=request,
+        bitable=SimpleNamespace(
+            v1=SimpleNamespace(
+                app_table=SimpleNamespace(list=list_tables),
+                app_table_field=SimpleNamespace(list=list_fields),
+                app_table_record=SimpleNamespace(list=list_records),
             )
         ),
-        request=read_range,
     )
 
     markdown, title = accessor._parse_sheets("sht_token", "u-test")
@@ -438,9 +445,13 @@ def test_parse_sheets_uses_user_token_and_limits_rows(monkeypatch):
     assert "| name | amount |" in markdown
     assert "1 more rows truncated" in markdown
     assert "2 columns after Z omitted" in markdown
-    assert metadata.call_args.args[1].user_access_token == "u-test"
-    assert read_range.call_args.args[0].token_types == {"user"}
-    assert read_range.call_args.args[1].user_access_token == "u-test"
+    assert "### Content Calendar" in markdown
+    assert "Welcome" in markdown
+    assert "Empty sheet" not in markdown
+    assert list_tables.call_count == 0
+    assert list_fields.call_args.args[0].table_id == "table-1"
+    assert all(call.args[0].token_types == {"user"} for call in request.call_args_list)
+    assert all(call.args[1].user_access_token == "u-test" for call in request.call_args_list)
 
 
 def test_parse_bitable_uses_user_token_and_formats_records(monkeypatch):

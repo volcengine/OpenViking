@@ -1042,17 +1042,22 @@ class FeishuAccessor(DataAccessor):
         feishu_access_token: Optional[str] = None,
     ) -> Tuple[str, str]:
         """Fetch a Feishu spreadsheet and convert it to Markdown."""
-        from lark_oapi.api.sheets.v3 import (
-            GetSpreadsheetRequest,
-            QuerySpreadsheetSheetRequest,
-        )
+        import lark_oapi as lark
 
         client = self._get_client(use_user_token=bool(feishu_access_token))
         config = self._get_config()
-
-        metadata_request = GetSpreadsheetRequest.builder().spreadsheet_token(token).build()
+        token_type = (
+            lark.AccessTokenType.USER if feishu_access_token else lark.AccessTokenType.TENANT
+        )
+        metadata_request = (
+            lark.BaseRequest.builder()
+            .http_method(lark.HttpMethod.GET)
+            .uri(f"/open-apis/sheets/v2/spreadsheets/{token}/metainfo")
+            .token_types({token_type})
+            .build()
+        )
         metadata_response = self._call_api(
-            client.sheets.v3.spreadsheet.get,
+            client.request,
             metadata_request,
             feishu_access_token,
         )
@@ -1062,32 +1067,38 @@ class FeishuAccessor(DataAccessor):
                 operation=f"fetch spreadsheet metadata for {token}",
                 resource=token,
             )
-        spreadsheet = metadata_response.data.spreadsheet
-        title = spreadsheet.title if spreadsheet and spreadsheet.title else "Spreadsheet"
-
-        sheets_request = QuerySpreadsheetSheetRequest.builder().spreadsheet_token(token).build()
-        sheets_response = self._call_api(
-            client.sheets.v3.spreadsheet_sheet.query,
-            sheets_request,
-            feishu_access_token,
-        )
-        if not sheets_response.success():
-            _raise_from_lark_response(
-                sheets_response,
-                operation=f"list sheets for {token}",
-                resource=token,
-            )
-
-        sheets = sheets_response.data.sheets or []
+        metadata = json.loads(metadata_response.raw.content).get("data", {})
+        title = (metadata.get("properties") or {}).get("title") or "Spreadsheet"
+        sheets = metadata.get("sheets") or []
         markdown_parts = [f"# {title}", f"**Sheets:** {len(sheets)}"]
         for sheet in sheets:
-            sheet_id = sheet.sheet_id
-            sheet_title = sheet.title or sheet_id
-            properties = sheet.grid_properties
-            row_count = properties.row_count if properties else 0
-            col_count = properties.column_count if properties else 0
+            sheet_id = sheet.get("sheetId") or ""
+            sheet_title = sheet.get("title") or sheet_id
             parts = [f"## Sheet: {sheet_title}"]
 
+            block_info = sheet.get("blockInfo")
+            if block_info:
+                block_type = block_info.get("blockType") or "unknown"
+                if block_type != "BITABLE_BLOCK":
+                    parts.append(f"*Unsupported sheet block: {block_type}*")
+                else:
+                    block_token = block_info.get("blockToken") or ""
+                    tokens = block_token.rsplit("_", 1)
+                    if len(tokens) != 2 or not all(tokens):
+                        parts.append("*Invalid embedded bitable token*")
+                    else:
+                        bitable, _ = self._parse_bitable(
+                            tokens[0],
+                            feishu_access_token,
+                            table_id=tokens[1],
+                            table_name=sheet_title,
+                        )
+                        parts.append(bitable or "*Empty bitable*")
+                markdown_parts.append("\n\n".join(parts))
+                continue
+
+            row_count = int(sheet.get("rowCount") or 0)
+            col_count = int(sheet.get("columnCount") or 0)
             if not row_count or not col_count:
                 parts.append("*Empty sheet*")
                 markdown_parts.append("\n\n".join(parts))
@@ -1160,6 +1171,9 @@ class FeishuAccessor(DataAccessor):
         self,
         app_token: str,
         feishu_access_token: Optional[str] = None,
+        *,
+        table_id: Optional[str] = None,
+        table_name: Optional[str] = None,
     ) -> Tuple[str, str]:
         """Fetch a Feishu bitable app and convert it to Markdown."""
         from lark_oapi.api.bitable.v1 import (
@@ -1170,42 +1184,49 @@ class FeishuAccessor(DataAccessor):
 
         client = self._get_client(use_user_token=bool(feishu_access_token))
         config = self._get_config()
-        tables = []
-        page_token = None
-        while True:
-            builder = ListAppTableRequest.builder().app_token(app_token).page_size(100)
-            if page_token:
-                builder = builder.page_token(page_token)
-            tables_response = self._call_api(
-                client.bitable.v1.app_table.list,
-                builder.build(),
-                feishu_access_token,
-            )
-            if not tables_response.success():
-                _raise_from_lark_response(
-                    tables_response,
-                    operation=f"list bitable tables for {app_token}",
-                    resource=app_token,
+        if table_id:
+            tables = [(table_id, table_name or table_id)]
+            title = table_name or table_id
+            markdown_parts = []
+            heading = "###"
+        else:
+            table_models = []
+            page_token = None
+            while True:
+                builder = ListAppTableRequest.builder().app_token(app_token).page_size(100)
+                if page_token:
+                    builder = builder.page_token(page_token)
+                tables_response = self._call_api(
+                    client.bitable.v1.app_table.list,
+                    builder.build(),
+                    feishu_access_token,
                 )
-            tables.extend(tables_response.data.items or [])
-            if not getattr(tables_response.data, "has_more", False):
-                break
-            page_token = getattr(tables_response.data, "page_token", None)
-            if not page_token:
-                raise RuntimeError("Feishu returned more bitable tables without a page token")
+                if not tables_response.success():
+                    _raise_from_lark_response(
+                        tables_response,
+                        operation=f"list bitable tables for {app_token}",
+                        resource=app_token,
+                    )
+                table_models.extend(tables_response.data.items or [])
+                if not getattr(tables_response.data, "has_more", False):
+                    break
+                page_token = getattr(tables_response.data, "page_token", None)
+                if not page_token:
+                    raise RuntimeError("Feishu returned more bitable tables without a page token")
 
-        title = f"Bitable ({len(tables)} tables)"
-        markdown_parts = [f"# {title}"]
-        for table in tables:
-            table_id = table.table_id
-            table_name = table.name or table_id
+            tables = [(table.table_id, table.name or table.table_id) for table in table_models]
+            title = f"Bitable ({len(tables)} tables)"
+            markdown_parts = [f"# {title}"]
+            heading = "##"
+
+        for current_table_id, current_table_name in tables:
             fields = []
             page_token = None
             while True:
                 builder = (
                     ListAppTableFieldRequest.builder()
                     .app_token(app_token)
-                    .table_id(table_id)
+                    .table_id(current_table_id)
                     .page_size(100)
                 )
                 if page_token:
@@ -1218,7 +1239,7 @@ class FeishuAccessor(DataAccessor):
                 if not fields_response.success():
                     _raise_from_lark_response(
                         fields_response,
-                        operation=f"list fields for bitable table {table_id}",
+                        operation=f"list fields for bitable table {current_table_id}",
                         resource=app_token,
                     )
                 fields.extend(fields_response.data.items or [])
@@ -1227,7 +1248,8 @@ class FeishuAccessor(DataAccessor):
                 page_token = getattr(fields_response.data, "page_token", None)
                 if not page_token:
                     raise RuntimeError(
-                        f"Feishu returned more fields for table {table_id} without a page token"
+                        f"Feishu returned more fields for table {current_table_id} "
+                        "without a page token"
                     )
             field_names = [field.field_name for field in fields]
 
@@ -1239,7 +1261,7 @@ class FeishuAccessor(DataAccessor):
                 builder = (
                     ListAppTableRecordRequest.builder()
                     .app_token(app_token)
-                    .table_id(table_id)
+                    .table_id(current_table_id)
                     .page_size(min(remaining, 500))
                 )
                 if page_token:
@@ -1252,7 +1274,7 @@ class FeishuAccessor(DataAccessor):
                 if not records_response.success():
                     _raise_from_lark_response(
                         records_response,
-                        operation=f"list records for bitable table {table_id}",
+                        operation=f"list records for bitable table {current_table_id}",
                         resource=app_token,
                     )
                 items = records_response.data.items or []
@@ -1269,10 +1291,11 @@ class FeishuAccessor(DataAccessor):
                 page_token = records_response.data.page_token
                 if not page_token:
                     raise RuntimeError(
-                        f"Feishu returned more records for table {table_id} without a page token"
+                        f"Feishu returned more records for table {current_table_id} "
+                        "without a page token"
                     )
 
-            parts = [f"## {table_name}", f"**Records:** {len(records)}"]
+            parts = [f"{heading} {current_table_name}", f"**Records:** {len(records)}"]
             if field_names and records:
                 rows = [field_names]
                 for record in records:
