@@ -144,7 +144,7 @@ def test_release_data_dir_lock_resets_service_state(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_close_releases_data_dir_lock_when_resource_cleanup_fails(monkeypatch):
+async def test_close_preserves_data_dir_lock_when_resource_cleanup_fails(monkeypatch):
     class _FailingResourceService:
         async def close_background_tasks(self) -> None:
             raise RuntimeError("cleanup failed")
@@ -157,4 +157,26 @@ async def test_close_releases_data_dir_lock_when_resource_cleanup_fails(monkeypa
     with pytest.raises(RuntimeError, match="cleanup failed"):
         await service.close()
 
+    assert released == []
+
+
+@pytest.mark.asyncio
+async def test_close_releases_data_dir_lock_after_successful_cleanup(monkeypatch):
+    class _ResourceService:
+        async def close_background_tasks(self) -> None:
+            return None
+
+    released = []
+    service = OpenVikingService.__new__(OpenVikingService)
+    service._resource_service = _ResourceService()
+    service._watch_scheduler = None
+    service._queue_manager = None
+    service._lock_manager = None
+    service._vikingdb_manager = None
+    service._initialized = True
+    monkeypatch.setattr(service, "_release_data_dir_lock", lambda: released.append(True))
+
+    await service.close()
+
+    assert service._initialized is False
     assert released == [True]

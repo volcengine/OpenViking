@@ -287,6 +287,18 @@ class TestReleaseDataDirLock:
 
         assert not (tmp_path / LOCK_FILENAME).exists()
 
+    def test_release_keeps_lock_until_last_same_process_holder(self, tmp_path: Path):
+        lock_path = acquire_data_dir_lock(str(tmp_path))
+        assert acquire_data_dir_lock(str(tmp_path)) == lock_path
+
+        release_data_dir_lock(lock_path)
+
+        assert (tmp_path / LOCK_FILENAME).read_text() == str(os.getpid())
+
+        release_data_dir_lock(lock_path)
+
+        assert not (tmp_path / LOCK_FILENAME).exists()
+
 
 class TestProcessLockIntegration:
     """Integration tests for process lock."""

@@ -460,46 +460,48 @@ class OpenVikingService:
 
     async def close(self) -> None:
         """Close OpenViking and release resources."""
-        try:
-            await self._resource_service.close_background_tasks()
+        await self._resource_service.close_background_tasks()
 
-            if self._watch_scheduler:
-                await self._watch_scheduler.stop()
-                self._watch_scheduler = None
-                logger.info("WatchScheduler stopped")
+        if self._watch_scheduler:
+            await self._watch_scheduler.stop()
+            self._watch_scheduler = None
+            logger.info("WatchScheduler stopped")
 
-            if self._queue_manager:
-                await asyncio.to_thread(self._queue_manager.stop)
-                self._queue_manager = None
-                logger.info("Queue manager stopped")
+        if self._queue_manager:
+            await asyncio.to_thread(self._queue_manager.stop)
+            self._queue_manager = None
+            logger.info("Queue manager stopped")
 
-            if self._lock_manager:
-                await self._lock_manager.stop()
-                self._lock_manager = None
+        if self._lock_manager:
+            await self._lock_manager.stop()
+            self._lock_manager = None
 
-            if self._vikingdb_manager:
-                self._vikingdb_manager.mark_closing()
+        if self._vikingdb_manager:
+            self._vikingdb_manager.mark_closing()
 
-            if self._vikingdb_manager:
-                await self._vikingdb_manager.close()
-                self._vikingdb_manager = None
+        if self._vikingdb_manager:
+            await self._vikingdb_manager.close()
+            self._vikingdb_manager = None
 
-            self._viking_fs = None
-            self._resource_processor = None
-            self._skill_processor = None
-            self._session_compressor = None
-            self._directory_initializer = None
-            self._privacy_config_service = None
-            self._initialized = False
+        self._viking_fs = None
+        self._resource_processor = None
+        self._skill_processor = None
+        self._session_compressor = None
+        self._directory_initializer = None
+        self._privacy_config_service = None
+        self._initialized = False
 
-            # Clear the process-wide registration if it still points at us, so a
-            # closed service is never resolved via the dependency global.
-            from openviking.server.dependencies import get_service_or_none, set_service
+        # Clear the process-wide registration if it still points at us, so a
+        # closed service is never resolved via the dependency global.
+        from openviking.server.dependencies import get_service_or_none, set_service
 
-            if get_service_or_none() is self:
-                set_service(None)
-        finally:
-            self._release_data_dir_lock()
+        if get_service_or_none() is self:
+            set_service(None)
+
+        # The PID lock protects every live workspace resource above.  If any
+        # cleanup step failed or was cancelled, keep the lock so another
+        # process cannot enter while this service may still own storage state.
+        self._release_data_dir_lock()
 
         logger.info("OpenVikingService closed")
 
