@@ -654,10 +654,14 @@ class LocalIndex(IIndex):
 
     def _stop_dense_rebuild_worker(self) -> None:
         thread = self._dense_rebuild_thread
-        if thread is None:
-            return
+        # Retirement is durable even if publication has not started this
+        # worker yet. A concurrent replacement can otherwise stop this index
+        # in the map-swap/start window, only for the earlier publisher to start
+        # an orphan worker afterwards.
         self._dense_rebuild_stop.set()
         self._dense_rebuild_event.set()
+        if thread is None:
+            return
         thread.join()
         self._dense_rebuild_thread = None
 
