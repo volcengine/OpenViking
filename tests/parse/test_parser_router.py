@@ -34,9 +34,7 @@ def test_should_use_understanding_api_for_feishu_url(monkeypatch):
 
     router = ParserRouter(parser_registry=object())
 
-    assert router.should_use_understanding_api(
-        "https://example.larkoffice.com/wiki/wikicnToken"
-    )
+    assert router.should_use_understanding_api("https://example.larkoffice.com/wiki/wikicnToken")
     assert not router.should_use_understanding_api(
         "https://larkoffice.com.evil.example/wiki/wikicnToken"
     )
@@ -57,6 +55,4 @@ def test_feishu_url_flag_defaults_to_extension_routing(monkeypatch):
 
     router = ParserRouter(parser_registry=object())
 
-    assert not router.should_use_understanding_api(
-        "https://example.larkoffice.com/docx/doxcnToken"
-    )
+    assert not router.should_use_understanding_api("https://example.larkoffice.com/docx/doxcnToken")

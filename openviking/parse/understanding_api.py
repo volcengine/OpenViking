@@ -153,11 +153,12 @@ class UnderstandingAPI(BaseParser):
             )
 
         if not prepared_response_id:
-            response_id = response_obj.get("id")
-            if not response_id:
+            response_id_value = response_obj.get("id")
+            if not response_id_value:
                 raise RuntimeError(
                     f"responses api missing id: {self._safe_error_summary(response_obj)}"
                 )
+            response_id = str(response_id_value)
         task_meta["response_id"] = response_id
 
         response_obj = await self._poll_response(response_id=response_id)
