@@ -91,6 +91,34 @@ LocalAccessor (1)
 
 Accessor 的产物统一是 `LocalResource`，包含本地文件或目录路径、`source_type`、原始来源、是否需要清理，以及检测元数据。Parser 不再负责 clone、下载或识别飞书链接。
 
+### 飞书资源的 Accessor 链路
+
+飞书是“远程私有数据源”，不是一种本地文件格式，因此统一由 `FeishuAccessor` 获取并归一化：
+
+```text
+飞书 URL
+    |
+    v
+FeishuAccessor --调用飞书 OpenAPI--> Markdown + 下载后的图片
+    |
+    v
+LocalResource(document.md)
+    |
+    v
+ParserRouter --> MarkdownParser --> ParseResult --> TreeBuilder
+```
+
+预期支持范围如下：
+
+| URL 类型 | Accessor 行为 | 当前边界 |
+|---|---|---|
+| `docx/{token}` | 拉取文档 block，转换标题、列表、代码、表格、图片和内嵌 sheet | 图片下载受 `download_images` 控制；内嵌 sheet 最多读取 100 行、A-Z 列 |
+| `sheets/{token}` | 枚举所有 sheet，把单元格转换成 Markdown 表格 | 每个 sheet 最多读取 `max_rows_per_sheet` 行、A-Z 列，截断会写入 Markdown 提示 |
+| `base/{app_token}` | 枚举数据表、字段和记录，把每张表转换成 Markdown 表格 | 表和字段完整翻页；每张表最多读取 `max_records_per_table` 条记录，截断会写入提示 |
+| `wiki/{token}` | 先解析 wiki 节点的实际类型和 token，再进入上述 `docx`、`sheets` 或 `base` 处理器 | wiki 指向其他飞书对象类型时明确报不支持 |
+
+四类入口都支持应用凭证获取的 tenant token；显式传入 `args.feishu_access_token` 时，同一 user token 会用于 wiki 解析、正文、sheet/base 和图片请求。飞书专有逻辑到 `FeishuAccessor` 为止，后面只处理本地 Markdown，因此不再保留并行的 `FeishuParser` 入口。
+
 `UnifiedResourceProcessor.prepare` 随后冻结两个字段：
 
 - `resolved_extension`：本次 Parser 路由唯一使用的扩展名。
