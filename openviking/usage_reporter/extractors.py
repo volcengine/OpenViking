@@ -89,6 +89,8 @@ class MemoryUsageExtractor:
             for part in message.parts:
                 if not isinstance(part, ToolPart):
                     continue
+                if not part.tool_id:
+                    continue
                 if part.tool_status != "completed":
                     continue
                 if part.tool_name == "search_experience":

@@ -305,3 +305,30 @@ async def test_memory_usage_extractor_replay_uses_stable_event_id():
 
     assert first[0].event_id
     assert replay[0].event_id == first[0].event_id
+
+
+@pytest.mark.asyncio
+async def test_memory_usage_extractor_ignores_completed_tools_without_tool_id():
+    experience_uri = "viking://user/test/memories/experiences/missing-tool-id.md"
+    messages = [
+        Message(
+            id="msg-missing-tool-id",
+            role="user",
+            parts=[
+                ToolPart(
+                    tool_name="search_experience",
+                    tool_status="completed",
+                    tool_output={"results": [{"uri": experience_uri}]},
+                ),
+                ToolPart(
+                    tool_name="read_experience",
+                    tool_status="completed",
+                    tool_input={"uri": experience_uri},
+                ),
+            ],
+        )
+    ]
+
+    events = await MemoryUsageExtractor().extract(messages=messages, context=_context())
+
+    assert events == []

@@ -86,7 +86,7 @@ UsageEvent 是 OpenViking 内核和外部 Sink 之间的稳定协议。
 
 默认只上报结构化事件，不上报完整 session 内容。
 
-`resource_uri` 和 `resource_type` 描述被使用的资源，不限定为记忆文件；事件类型特有的数据写入 `attributes`。当前 `MemoryUsageExtractor` 只接受属于 `UsageContext.user_id` 的规范 experience URI，其他用户 URI 不生成 UsageEvent。
+`resource_uri` 和 `resource_type` 描述被使用的资源，不限定为记忆文件；事件类型特有的数据写入 `attributes`。当前 `MemoryUsageExtractor` 只接受属于 `UsageContext.user_id` 的规范 experience URI，其他用户 URI 不生成 UsageEvent。ToolPart 必须包含非空 `tool_id`，无法稳定标识具体调用的 ToolPart 不进入统计。
 
 UsageEvent 是可独立传输和消费的完整事件。`UsageContext` 只用于 Extractor 构造事件，不再重复传给 Sink。
 
@@ -194,13 +194,15 @@ archive session success
 
 ## 9. 可靠性策略
 
-失败处理：
+Usage Reporter 采用 best-effort 投递语义：
 
 - Sink 成功：正常返回。
-- Sink 失败：记录日志，不影响 commit。
-- 多个 Sink：某个 Sink 失败不影响其他 Sink。
-- Usage Reporter 采用 at-least-once 语义。进程在 Sink 写入成功后、phase2 完成前退出时，同一事件可能被再次发送。
-- 每个事件包含稳定的 `event_id`，Sink 应将其作为 Kafka message key 或下游幂等键，消费端按 `event_id` 去重。
+- Sink 失败或超时：记录日志，不影响 session commit，也不自动重试。
+- 多个 Sink 相互隔离，某个 Sink 失败不影响其他 Sink。
+- Sink 失败时事件可能丢失，因此本机制不保证 at-least-once。
+- 如果 Sink 已写入成功，但进程在 phase2 写入完成标记前退出，phase2 恢复执行时可能重复发送同一事件。
+- 每个事件包含稳定的 `event_id`。Sink 可将其作为 Kafka message key，消费端可按 `event_id` 去重。
+- `event_id` 只用于识别重复事件，不代表事件一定成功送达。
 
 `event_id` 为以下字段规范序列化后的 SHA-256：
 
@@ -218,4 +220,4 @@ schema_version
 
 `occurred_at`、`message_id` 和 `attributes` 不参与计算，避免重放时间差或附加属性变化破坏幂等性。同一 archive 中同一 tool call 对同一资源产生的事件，在 phase2 重放后仍得到相同 `event_id`。
 
-后续如果需要更高可靠性，可以增加本地 buffer / dead letter file，但不作为第一期必需能力。
+如果后续需要可靠投递，需要增加持久化 outbox、失败重试和发送确认机制。
