@@ -412,37 +412,6 @@ class FSService:
             rollback_resource=lambda: viking_fs.mv(to_uri, from_uri, ctx=ctx),
         )
 
-    async def _plan_watch_before_mv(self, from_uri: str, to_uri: str) -> None:
-        if context_type_for_uri(from_uri) != "resource":
-            return
-        if context_type_for_uri(to_uri) != "resource":
-            return
-        if is_watch_task_control_uri(from_uri) or is_watch_task_control_uri(to_uri):
-            return
-        watch_manager = self._get_watch_manager()
-        if not watch_manager:
-            return
-        await watch_manager.plan_move_tasks_under_uri_internal(from_uri, to_uri)
-
-    async def _sync_watch_after_mv(self, from_uri: str, to_uri: str) -> None:
-        if context_type_for_uri(from_uri) != "resource":
-            return
-        if context_type_for_uri(to_uri) != "resource":
-            return
-        if is_watch_task_control_uri(from_uri) or is_watch_task_control_uri(to_uri):
-            return
-        watch_manager = self._get_watch_manager()
-        if not watch_manager:
-            return
-        updated = await watch_manager.move_tasks_under_uri_internal(from_uri, to_uri)
-        if updated:
-            logger.info(
-                "Updated %d watch task target URI(s) after moving %s to %s",
-                len(updated),
-                from_uri,
-                to_uri,
-            )
-
     async def _sync_watch_after_rm(self, uri: str, *, context_type: str) -> None:
         if context_type != "resource":
             return

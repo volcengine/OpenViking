@@ -445,7 +445,7 @@ export function createOpenVikingQueryRuntime<TQueryConfigContext>(deps: OpenViki
       sessionId: traceCtx?.sessionId,
       sessionKey: traceCtx?.sessionKey,
       ovSessionId: traceCtx?.ovSessionId,
-      agentId,
+      agentId: traceCtx?.agentId,
       source: "ov_search",
       operationType: "semantic_find",
       resourceTypes: [...new Set(searches.map((search) => search.resourceType).filter((resourceType): resourceType is RecallResourceType => resourceType !== "archive"))],

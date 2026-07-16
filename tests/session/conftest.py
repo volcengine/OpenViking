@@ -10,7 +10,7 @@ import pytest_asyncio
 
 from openviking import AsyncOpenViking
 from openviking.message import TextPart, ToolPart
-from openviking.service.task_tracker import TaskStatus, get_task_tracker, reset_task_tracker
+from openviking.service.task_tracker import TaskStatus, get_task_tracker, set_task_tracker
 from openviking.session import Session
 
 
@@ -29,7 +29,7 @@ async def _drain_background_tasks(client: AsyncOpenViking):
         if not pending:
             break
         await asyncio.sleep(0.1)
-    reset_task_tracker()
+    set_task_tracker(None)
 
 
 @pytest_asyncio.fixture(scope="function")

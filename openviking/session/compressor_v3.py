@@ -1127,16 +1127,6 @@ def _case_evidence(case: Case) -> str:
     return "Structured batch training CaseSpec supplied by the training pipeline."
 
 
-def _operations_to_cases(operations: ResolvedOperations) -> list[Case]:
-    cases: list[Case] = []
-    for op in getattr(operations, "upsert_operations", []) or []:
-        if getattr(op, "memory_type", None) != _CASES_MEMORY_TYPE:
-            continue
-        case = _operation_to_case(op)
-        if case is not None:
-            cases.append(case)
-    return cases
-
 
 async def _canonical_cases_from_update_result(
     *,

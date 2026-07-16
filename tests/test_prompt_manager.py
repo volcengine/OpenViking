@@ -9,9 +9,6 @@ import yaml
 
 from openviking.prompts.manager import PromptManager
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
-from openviking.session.memory.session_extract_context_provider import (
-    SessionExtractContextProvider,
-)
 from openviking_cli.utils.config import (
     OPENVIKING_CONFIG_ENV,
     OPENVIKING_PROMPT_TEMPLATES_DIR_ENV,
@@ -262,79 +259,6 @@ def test_memory_type_registry_prefers_custom_memory_dir_over_prompt_manager_temp
     assert registry.get("prompt_root_memory") is None
 
 
-def test_context_provider_schema_directories_use_prompt_manager_resolved_templates_root(
-    tmp_path, monkeypatch
-):
-    resolved_templates_dir = tmp_path / "resolved-prompts"
-    expected_memory_dir = resolved_templates_dir / "memory"
-    expected_memory_dir.mkdir(parents=True)
-
-    monkeypatch.setattr(
-        PromptManager,
-        "_resolve_templates_dir",
-        classmethod(lambda cls, templates_dir=None: resolved_templates_dir),
-    )
-    monkeypatch.setattr(
-        "openviking.session.memory.session_extract_context_provider.get_openviking_config",
-        lambda: SimpleNamespace(
-            memory=SimpleNamespace(
-                custom_templates_dir="",
-                eager_prefetch=False,
-                prefetch_search_topn=5,
-                experimental_memory_switch=False,
-                link_enabled=True,
-            )
-        ),
-    )
-
-    provider = SessionExtractContextProvider(messages=[])
-
-    bundled_memory_dir = str(PromptManager._get_bundled_templates_dir() / "memory")
-    dirs = provider.get_schema_directories()
-    # Bundled is always first; resolved is appended when different from bundled
-    assert dirs[0] == bundled_memory_dir
-    assert str(expected_memory_dir) in dirs
-
-
-def test_context_provider_schema_directories_prefer_custom_memory_dir_over_prompt_manager_root(
-    tmp_path, monkeypatch
-):
-    resolved_templates_dir = tmp_path / "resolved-prompts"
-    custom_memory_dir = tmp_path / "custom-memory"
-
-    monkeypatch.setattr(
-        PromptManager,
-        "_resolve_templates_dir",
-        classmethod(lambda cls, templates_dir=None: resolved_templates_dir),
-    )
-    monkeypatch.setattr(
-        "openviking.session.memory.session_extract_context_provider.get_openviking_config",
-        lambda: SimpleNamespace(
-            memory=SimpleNamespace(
-                custom_templates_dir=str(custom_memory_dir),
-                eager_prefetch=False,
-                prefetch_search_topn=5,
-                experimental_memory_switch=False,
-                link_enabled=False,
-            )
-        ),
-    )
-    monkeypatch.setattr(
-        "os.path.exists",
-        lambda path: (
-            path == str(custom_memory_dir)
-            or path == str(PromptManager._get_bundled_templates_dir() / "memory")
-        ),
-    )
-
-    provider = SessionExtractContextProvider(messages=[])
-
-    assert provider.get_schema_directories() == [
-        str(PromptManager._get_bundled_templates_dir() / "memory"),
-        str(custom_memory_dir),
-    ]
-
-
 def test_memory_type_registry_loads_experimental_templates_when_switch_enabled(monkeypatch):
     """When experimental_memory_switch is True, experimental templates override defaults."""
     monkeypatch.setattr(
@@ -370,29 +294,3 @@ def test_memory_type_registry_does_not_load_experimental_templates_when_switch_d
 
     entities = registry.get("entities")
     assert entities is not None
-
-
-def test_context_provider_includes_experimental_dir_when_switch_enabled(monkeypatch):
-    """When experimental_memory_switch is True, schema directories include experimental subdir."""
-    monkeypatch.setattr(
-        "openviking.session.memory.session_extract_context_provider.get_openviking_config",
-        lambda: SimpleNamespace(
-            memory=SimpleNamespace(
-                custom_templates_dir="",
-                eager_prefetch=False,
-                prefetch_search_topn=5,
-                experimental_memory_switch=True,
-                link_enabled=False,
-            )
-        ),
-    )
-
-    provider = SessionExtractContextProvider(messages=[])
-    dirs = provider.get_schema_directories()
-
-    bundled_memory_dir = str(PromptManager._get_bundled_templates_dir() / "memory")
-    experimental_memory_dir = str(
-        PromptManager._get_bundled_templates_dir() / "memory" / "experimental_memory"
-    )
-    assert bundled_memory_dir in dirs
-    assert experimental_memory_dir in dirs

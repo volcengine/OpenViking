@@ -13,47 +13,6 @@ from openviking.storage.vectordb.collection.vikingdb_clients import (
 from openviking_cli.utils.logger import default_logger as logger
 
 
-def get_or_create_vikingdb_project(
-    project_name: str = "default", config: Optional[Dict[str, Any]] = None
-):
-    """
-    Get or create a VikingDB project for private deployment.
-
-    Args:
-        project_name: Project name
-        config: Configuration dict with keys:
-            - Host: VikingDB service host
-            - Headers: Custom headers for authentication/context
-            - CollectionClass: Class path for collection implementation
-            - CollectionArgs: Optional dictionary of arguments to pass to collection constructor
-
-    Returns:
-        VikingDBProject instance
-    """
-    if config is None:
-        raise ValueError("config is required")
-
-    host = config.get("Host")
-    headers = config.get("Headers")
-    collection_class_path = config.get(
-        "CollectionClass",
-        "openviking.storage.vectordb.collection.vikingdb_collection.VikingDBCollection",
-    )
-    # Extract any other arguments that might be needed for collection initialization
-    collection_args = config.get("CollectionArgs", {})
-
-    if not host:
-        raise ValueError("config must contain 'Host'")
-
-    return VikingDBProject(
-        host=host,
-        headers=headers,
-        project_name=project_name,
-        collection_class_path=collection_class_path,
-        collection_args=collection_args,
-    )
-
-
 class VikingDBProject:
     """
     VikingDB project class for private deployment.
@@ -174,28 +133,6 @@ class VikingDBProject:
     def create_collection(self, collection_name: str, meta_data: Dict[str, Any]) -> Collection:
         """collection should be pre-created"""
         raise NotImplementedError("collection should be pre-created")
-
-    def get_or_create_collection(
-        self, collection_name: str, meta_data: Optional[Dict[str, Any]] = None
-    ) -> Collection:
-        """
-        Get or create collection.
-
-        Args:
-            collection_name: Collection name
-            meta_data: Collection metadata (required if not exists)
-
-        Returns:
-            Collection instance
-        """
-        collection = self.get_collection(collection_name)
-        if collection:
-            return collection
-
-        if meta_data is None:
-            raise ValueError(f"meta_data is required to create collection {collection_name}")
-
-        return self.create_collection(collection_name, meta_data)
 
     def drop_collection(self, collection_name: str):
         """Drop specified collection"""

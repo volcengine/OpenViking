@@ -1474,12 +1474,6 @@ class VikingFS:
             return base_path
         return f"{base_path.rstrip('/')}/{match_file.lstrip('/')}"
 
-    def _calculate_grep_match_depth(self, match_file: str) -> int:
-        """Calculate relative depth from a grep result path relative to the query root."""
-        if not match_file or match_file == ".":
-            return 0
-        return len([part for part in match_file.split("/") if part])
-
     async def stat(
         self, uri: str, ctx: Optional[RequestContext] = None, skip_count: bool = False
     ) -> Dict[str, Any]:
@@ -2884,21 +2878,6 @@ class VikingFS:
                     return data.decode("latin-1")
                 except UnicodeDecodeError:
                     return data.decode("utf-8", errors="replace")
-
-    def _handle_agfs_content(self, result: Union[bytes, Any, None]) -> str:
-        """Handle AGFSClient content return types consistently."""
-        if isinstance(result, bytes):
-            return self._decode_bytes(result)
-        elif hasattr(result, "content") and result.content is not None:
-            return self._decode_bytes(result.content)
-        elif result is None:
-            return ""
-        else:
-            # Try to convert to string
-            try:
-                return str(result)
-            except Exception:
-                return ""
 
     # ========== Vector Sync Helper Methods ==========
 

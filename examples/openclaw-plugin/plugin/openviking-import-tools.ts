@@ -12,6 +12,7 @@ export type OpenVikingImportToolContext = {
   sessionId?: string;
   agentId?: string;
   senderId?: string;
+  requesterSenderId?: string;
 };
 
 export type OpenVikingImportSession = {
@@ -19,6 +20,7 @@ export type OpenVikingImportSession = {
   sessionKey?: string;
   ovSessionId?: string;
   agentId: string;
+  actorPeerId?: string;
 };
 
 export type OpenVikingImportClient = {
@@ -80,7 +82,7 @@ export function registerOpenVikingImportTools(deps: OpenVikingImportToolsDeps): 
             instruction: typeof params.instruction === "string" ? params.instruction : undefined,
             wait: typeof params.wait === "boolean" ? params.wait : undefined,
             timeout: typeof params.timeout === "number" ? params.timeout : undefined,
-          }, session.agentId);
+          }, session.actorPeerId);
           return {
             content: [{ type: "text" as const, text: formatResourceImportText(result) }],
             details: {
@@ -118,7 +120,7 @@ export function registerOpenVikingImportTools(deps: OpenVikingImportToolsDeps): 
           data: params.data,
           wait: typeof params.wait === "boolean" ? params.wait : undefined,
           timeout: typeof params.timeout === "number" ? params.timeout : undefined,
-        }, session.agentId);
+        }, session.actorPeerId);
         return {
           content: [{ type: "text" as const, text: formatSkillImportText(result) }],
           details: {

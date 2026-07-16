@@ -10,7 +10,6 @@ to the storage system.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:
@@ -52,25 +51,6 @@ logger = get_logger(__name__)
 _MEMORY_ABSTRACT_MAX_BYTES = 50_000
 _EXTRACTION_CHUNK_MIN_CHARS = 100
 _EXTRACTION_CHUNK_BOUNDARY_RE = re.compile(r"(\n+|[。！？；!?;]+|(?<!\d)\.(?!\d))")
-_RESOURCE_ADDITION_FIELD_RE = re.compile(
-    r"^(Resource URI|Source name|Added at|Resource abstract|User reason):\s*(.*)$",
-    re.MULTILINE,
-)
-_RESOURCE_URI_MARKER_RE = re.compile(
-    r"[，,；;：:\s]*(?:资源\s*URI\s*为|资源\s*URI|Resource\s+URI)\s*[:：为]?\s*",
-    re.IGNORECASE,
-)
-
-
-@dataclass(frozen=True)
-class ChunkMeta:
-    """Metadata for a derived extraction chunk message."""
-
-    source_message_id: str
-    chunk_index: int
-    chunk_count: int
-
-
 async def write_stored_links(
     links: List[StoredLink],
     ctx: RequestContext,
@@ -163,24 +143,17 @@ class ExtractContext:
     def __init__(
         self,
         messages: List[Message],
-        chunk_meta: Optional[Dict[int, ChunkMeta]] = None,
         *,
         split_long_text_messages: bool = True,
     ):
-        if chunk_meta is None:
-            if split_long_text_messages:
-                self.messages, self.chunk_meta = self._build_extraction_messages(messages)
-            else:
-                self.messages, self.chunk_meta = list(messages or []), {}
+        if split_long_text_messages:
+            self.messages = self._build_extraction_messages(messages)
         else:
-            self.messages = messages
-            self.chunk_meta = chunk_meta
+            self.messages = list(messages or [])
         self.page_id_map = PageIdMap()
 
     @classmethod
-    def _build_extraction_messages(
-        cls, messages: List[Message]
-    ) -> Tuple[List[Message], Dict[int, ChunkMeta]]:
+    def _build_extraction_messages(cls, messages: List[Message]) -> List[Message]:
         """Build messages used by memory extraction.
 
         Long text-only messages are split into derived chunks so event `ranges`
@@ -188,26 +161,20 @@ class ExtractContext:
         matching. The original session messages are not modified.
         """
         extraction_messages: List[Message] = []
-        chunk_meta: Dict[int, ChunkMeta] = {}
         for message in messages:
-            for extraction_message, meta in cls._split_message_for_extraction(message):
-                extraction_messages.append(extraction_message)
-                if meta is not None:
-                    chunk_meta[id(extraction_message)] = meta
-        return extraction_messages, chunk_meta
+            extraction_messages.extend(cls._split_message_for_extraction(message))
+        return extraction_messages
 
     @classmethod
-    def _split_message_for_extraction(
-        cls, message: Message
-    ) -> List[Tuple[Message, Optional[ChunkMeta]]]:
+    def _split_message_for_extraction(cls, message: Message) -> List[Message]:
         parts = getattr(message, "parts", [])
         if not parts or not all(isinstance(part, TextPart) for part in parts):
-            return [(message, None)]
+            return [message]
 
         text = "".join(part.text for part in parts)
         chunks = cls._split_text_for_extraction(text)
         if len(chunks) <= 1:
-            return [(message, None)]
+            return [message]
 
         chunk_messages = []
         for idx, chunk in enumerate(chunks):
@@ -218,16 +185,7 @@ class ExtractContext:
                 parts=[TextPart(chunk)],
                 created_at=message.created_at,
             )
-            chunk_messages.append(
-                (
-                    chunk_message,
-                    ChunkMeta(
-                        source_message_id=message.id,
-                        chunk_index=idx,
-                        chunk_count=len(chunks),
-                    ),
-                )
-            )
+            chunk_messages.append(chunk_message)
         return chunk_messages
 
     @classmethod
@@ -351,138 +309,6 @@ class ExtractContext:
                     continue
         return datetime.now().strftime("%Y%m%d%H%M%S")
 
-    def get_event_content(
-        self, ranges_str: str, summary: str | None, ratio_threshold: float = 0.2
-    ) -> str:
-        """根据原始消息与 summary 的字符数比例，决定返回原始消息还是摘要。"""
-        if not ranges_str:
-            return summary or ""
-        msg_range = self.read_message_ranges(ranges_str)
-        original = msg_range.pretty_print()
-        if not summary or not summary.strip():
-            return original or ""
-        if not original:
-            return summary
-        if len(summary) / len(original) >= ratio_threshold:
-            return original
-        return summary
-
-    def get_resource_event_content(self, ranges_str: str, summary: str) -> str:
-        """Return a user-readable event body for add-resource derived events."""
-        if not ranges_str:
-            return ""
-        additions = self._resource_additions_from_ranges(ranges_str)
-        if not additions:
-            return ""
-        addition = additions[0]
-        resource_uri = addition.get("Resource URI", "")
-        if not resource_uri:
-            return ""
-        return self._link_resource_summary(summary or "", resource_uri, addition).strip()
-
-    def _resource_additions_from_ranges(self, ranges_str: str) -> List[Dict[str, str]]:
-        msg_range = self.read_message_ranges(ranges_str)
-        additions: List[Dict[str, str]] = []
-        for msg_group in msg_range.elements:
-            for msg in msg_group:
-                text = self._message_text(msg)
-                if "## Resource Addition" not in text:
-                    continue
-                fields = {
-                    match.group(1): match.group(2).strip()
-                    for match in _RESOURCE_ADDITION_FIELD_RE.finditer(text)
-                }
-                if fields.get("Resource URI"):
-                    additions.append(fields)
-        return additions
-
-    @staticmethod
-    def _message_text(message: Message) -> str:
-        parts = getattr(message, "parts", [])
-        texts = [part.text for part in parts if isinstance(part, TextPart) and part.text]
-        if texts:
-            return "\n".join(texts)
-        return message.content or ""
-
-    @classmethod
-    def _link_resource_summary(
-        cls,
-        summary: str,
-        resource_uri: str,
-        addition: Dict[str, str],
-    ) -> str:
-        text = (summary or "").strip()
-        if not text:
-            return cls._resource_addition_fallback_sentence(resource_uri, addition)
-        if f"]({resource_uri})" in text:
-            return text
-        if resource_uri in text:
-            return cls._replace_bare_resource_uri(text, resource_uri, addition)
-        label = cls._resource_label_from_addition(addition)
-        return cls._finish_sentence(f"{text.rstrip('。.!')}，关联资源为[{label}]({resource_uri})")
-
-    @classmethod
-    def _replace_bare_resource_uri(
-        cls,
-        text: str,
-        resource_uri: str,
-        addition: Dict[str, str],
-    ) -> str:
-        uri_start = text.find(resource_uri)
-        if uri_start < 0:
-            return text
-        prefix = text[:uri_start]
-        suffix = text[uri_start + len(resource_uri) :]
-        marker = _RESOURCE_URI_MARKER_RE.search(prefix)
-        if marker:
-            visible_prefix = prefix[: marker.start()].rstrip("，,；;：: ")
-            label = cls._resource_clause_from_summary_prefix(visible_prefix)
-            if not label:
-                label = cls._resource_label_from_addition(addition)
-            if label and visible_prefix.endswith(label):
-                visible_prefix = visible_prefix[: -len(label)] + f"[{label}]({resource_uri})"
-            else:
-                visible_prefix = f"{visible_prefix}[{label}]({resource_uri})"
-            return cls._finish_sentence(visible_prefix)
-
-        label = cls._resource_label_from_addition(addition)
-        return cls._finish_sentence(f"{prefix.rstrip()}[{label}]({resource_uri}){suffix.strip()}")
-
-    @staticmethod
-    def _resource_clause_from_summary_prefix(prefix: str) -> str:
-        text = prefix.strip("，,；;：: ")
-        tail = re.split(r"[，,；;。.!?？]", text)[-1].strip()
-        return tail if 0 < len(tail) <= 120 else ""
-
-    @classmethod
-    def _resource_label_from_addition(cls, addition: Dict[str, str]) -> str:
-        reason = addition.get("User reason", "").strip()
-        for prefix in ("这是一张", "这是一个", "该资源是", "这个是", "这是"):
-            if reason.startswith(prefix):
-                reason = reason[len(prefix) :].strip()
-                break
-        reason = reason.strip("。.!！ ")
-        if reason:
-            return reason[:80]
-        source_name = addition.get("Source name", "").strip()
-        return source_name or "相关资源"
-
-    @classmethod
-    def _resource_addition_fallback_sentence(
-        cls,
-        resource_uri: str,
-        addition: Dict[str, str],
-    ) -> str:
-        label = cls._resource_label_from_addition(addition)
-        return f"用户保存了[{label}]({resource_uri})。"
-
-    @staticmethod
-    def _finish_sentence(text: str) -> str:
-        text = text.strip("，,；;：: ")
-        if text.endswith(("。", ".", "！", "!", "？", "?")):
-            return text
-        return text + "。"
-
     def read_message_ranges(self, ranges_str: str) -> "MessageRange":
         """Parse ranges string like "0-10,50-60" or "7,9,11,13" and return combined MessageRange.
 
@@ -537,93 +363,14 @@ class ExtractContext:
             range_msgs = self.messages[start : end + 1]
             elements.append(range_msgs)
 
-        return MessageRange(elements, chunk_meta=self.chunk_meta)
+        return MessageRange(elements)
 
 
 class MessageRange:
     """Represents a range of messages for formatting."""
 
-    def __init__(
-        self,
-        elements: List[List[Message]],
-        chunk_meta: Optional[Dict[int, ChunkMeta]] = None,
-    ):
+    def __init__(self, elements: List[List[Message]]):
         self.elements = elements
-        self.chunk_meta = chunk_meta or {}
-
-    def pretty_print(self) -> str:
-        """Pretty print the message range with '...' separator between non-contiguous ranges."""
-        result = []
-        for i, msg_group in enumerate(self.elements):
-            result.extend(self._format_contiguous_group(msg_group))
-            # Add "..." separator between non-contiguous message groups
-            if i < len(self.elements) - 1:
-                result.append("...")
-        return "\n".join(result)
-
-    def _format_contiguous_group(self, msg_group: List[Message]) -> List[str]:
-        formatted = []
-        current_messages: List[Message] = []
-
-        def flush_current() -> None:
-            nonlocal current_messages
-            if not current_messages:
-                return
-            content = self._format_merged_content(current_messages)
-            formatted.append(f"**{self._speaker_for(current_messages[0])}**: {content}")
-            current_messages = []
-
-        for msg in msg_group:
-            if current_messages and not self._can_merge_messages(current_messages[-1], msg):
-                flush_current()
-            current_messages.append(msg)
-
-        flush_current()
-        return formatted
-
-    @staticmethod
-    def _speaker_for(message: Message) -> str:
-        return getattr(message, "peer_id", None) or message.role
-
-    def _can_merge_messages(self, previous: Message, current: Message) -> bool:
-        previous_meta = self._chunk_meta_for(previous)
-        current_meta = self._chunk_meta_for(current)
-        if previous_meta is None or current_meta is None:
-            return False
-        if self._speaker_for(previous) != self._speaker_for(current):
-            return False
-        return (
-            previous_meta.source_message_id == current_meta.source_message_id
-            and current_meta.chunk_index == previous_meta.chunk_index + 1
-        )
-
-    def _format_merged_content(self, messages: List[Message]) -> str:
-        content = "".join((self._message_content(msg) or "") for msg in messages)
-        if not messages or not self._contains_chunk_message(messages):
-            return content
-
-        first_chunk = self._chunk_meta_for(messages[0])
-        if first_chunk is not None and first_chunk.chunk_index > 0:
-            content = "..." + content.lstrip()
-        last_chunk = self._chunk_meta_for(messages[-1])
-        if last_chunk is not None and last_chunk.chunk_index < last_chunk.chunk_count - 1:
-            content = content.rstrip() + "..."
-        return content
-
-    def _message_content(self, message: Message) -> str:
-        texts: List[str] = []
-        for part in getattr(message, "parts", []) or []:
-            if isinstance(part, TextPart):
-                texts.append(part.text or "")
-        if texts:
-            return "".join(texts)
-        return getattr(message, "content", "") or ""
-
-    def _contains_chunk_message(self, messages: List[Message]) -> bool:
-        return any(self._chunk_meta_for(msg) is not None for msg in messages)
-
-    def _chunk_meta_for(self, message: Message) -> Optional[ChunkMeta]:
-        return self.chunk_meta.get(id(message))
 
     def _first_message_time(self) -> str | None:
         """获取第一条消息的时间（内部方法）"""
@@ -675,9 +422,6 @@ class MemoryUpdateResult:
     def add_error(self, uri: str, error: Exception) -> None:
         self.errors.append((uri, error))
 
-    def has_changes(self) -> bool:
-        return len(self.written_uris) > 0 or len(self.edited_uris) > 0 or len(self.deleted_uris) > 0
-
     def summary(self) -> str:
         return (
             f"Written: {len(self.written_uris)}, "
@@ -713,10 +457,6 @@ class MemoryUpdater:
         self._registry = registry
         self._vikingdb = vikingdb
         self._transaction_handle = transaction_handle
-
-    def set_registry(self, registry: MemoryTypeRegistry) -> None:
-        """Set the memory type registry for URI resolution."""
-        self._registry = registry
 
     def _get_viking_fs(self):
         """Get or create VikingFS instance."""

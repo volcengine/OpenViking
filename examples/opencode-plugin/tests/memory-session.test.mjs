@@ -26,7 +26,7 @@ async function withCaptureServer(fn) {
     res.setHeader("Content-Type", "application/json")
     if (req.url === "/health") {
       res.end(JSON.stringify({ status: "ok" }))
-    } else if (req.url?.startsWith("/api/v1/sessions/") && req.url.endsWith("/messages")) {
+    } else if (req.url?.startsWith("/api/v1/sessions/") && req.url.endsWith("/messages/batch")) {
       res.end(JSON.stringify({ status: "ok", result: { accepted: true } }))
     } else if (req.url?.startsWith("/api/v1/sessions/")) {
       res.end(JSON.stringify({ status: "ok", result: { pending_tokens: 0 } }))
@@ -94,11 +94,11 @@ test("session.idle event flushes pending OpenCode capture", async () => {
 
       await manager.handleEvent({ type: "session.idle", sessionID: "oc-session-1" })
 
-      const addMessage = requests.find((request) => request.url === "/api/v1/sessions/oc-oc-session-1/messages")
+      const addMessage = requests.find((request) => request.url === "/api/v1/sessions/oc-oc-session-1/messages/batch")
       assert.ok(addMessage, "session.idle should POST pending messages")
       const body = JSON.parse(addMessage.body)
-      assert.equal(body.role, "user")
-      assert.match(body.content, /idle events must flush captures/)
+      assert.equal(body.messages[0].role, "user")
+      assert.match(body.messages[0].content, /idle events must flush captures/)
       await manager.flushAll({ commit: false })
     })
   })
@@ -136,11 +136,11 @@ test("assistant messages are captured even when finish is not stop", async () =>
 
       await manager.handleEvent({ type: "session.idle", properties: { sessionID: "oc-session-2" } })
 
-      const addMessage = requests.find((request) => request.url === "/api/v1/sessions/oc-oc-session-2/messages")
+      const addMessage = requests.find((request) => request.url === "/api/v1/sessions/oc-oc-session-2/messages/batch")
       assert.ok(addMessage, "session.idle should capture non-stop assistant messages")
       const body = JSON.parse(addMessage.body)
-      assert.equal(body.role, "assistant")
-      assert.match(body.content, /Partial assistant output/)
+      assert.equal(body.messages[0].role, "assistant")
+      assert.match(body.messages[0].content, /Partial assistant output/)
       await manager.flushAll({ commit: false })
     })
   })

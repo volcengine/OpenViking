@@ -47,8 +47,3 @@ class PageIdMap:
     def resolve(self, page_id: int) -> Optional[str]:
         """Resolve page_id to URI."""
         return self._id_to_uri.get(page_id)
-
-    @property
-    def has_links_enabled(self) -> bool:
-        """Whether any pages have been registered (links feature is active)."""
-        return len(self._id_to_uri) > 0

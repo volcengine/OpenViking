@@ -113,7 +113,8 @@ test("Cursor injects recall before the request and Stop captures transcript delt
         actorPeers.push(request.headers["x-openviking-actor-peer"]);
         response.end(JSON.stringify({ result: { rendered: "remembered context" } }));
       } else if (request.url?.includes("/messages")) {
-        messages.push(JSON.parse(body));
+        const parsed = JSON.parse(body);
+        messages.push(...(parsed.messages ?? [parsed]));
         response.end(JSON.stringify({ result: { ok: true } }));
       } else if (request.url?.endsWith("/commit")) {
         response.end(JSON.stringify({ result: { ok: true } }));
@@ -172,7 +173,8 @@ test("Cursor replays offline capture on the next SessionStart", async () => {
           response.end(JSON.stringify({ status: "error", error: "offline" }));
           return;
         }
-        messages.push(JSON.parse(body));
+        const parsed = JSON.parse(body);
+        messages.push(...(parsed.messages ?? [parsed]));
       }
       response.end(JSON.stringify({ result: { ok: true } }));
     });

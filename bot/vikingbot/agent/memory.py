@@ -97,18 +97,6 @@ class MemoryStore:
             else getattr(memory, "_recall_type", "")
         )
 
-    @staticmethod
-    def _get_recall_rank(memory: Any) -> int:
-        raw_rank = (
-            memory.get("_recall_rank", 0)
-            if isinstance(memory, dict)
-            else getattr(memory, "_recall_rank", 0)
-        )
-        try:
-            return int(raw_rank)
-        except (TypeError, ValueError):
-            return 0
-
     @classmethod
     def _infer_memory_type(cls, memory: Any) -> str:
         recall_type = cls._get_recall_type(memory)

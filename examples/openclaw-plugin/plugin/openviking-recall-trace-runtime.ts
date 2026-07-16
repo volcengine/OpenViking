@@ -26,6 +26,7 @@ export type OpenVikingRecallTraceSession = {
   sessionKey?: string;
   ovSessionId?: string;
   agentId: string;
+  actorPeerId?: string;
 };
 
 export type OpenVikingRecallTraceQueryResult = {
@@ -248,11 +249,11 @@ export function createOpenVikingRecallTraceRuntime(deps: OpenVikingRecallTraceRu
       for (const fallbackQuery of fallbackIdentities) {
         const fallback = await deps.traceRecorder.queryWithFallback(fallbackQuery);
         if (fallback.entries.length > 0) {
-          return enrichTraceEntriesWithContent(fallback, shouldIncludeTraceContent(input), session.agentId);
+          return enrichTraceEntriesWithContent(fallback, shouldIncludeTraceContent(input), session.actorPeerId);
         }
       }
     }
-    return enrichTraceEntriesWithContent(base, shouldIncludeTraceContent(input), session.agentId);
+    return enrichTraceEntriesWithContent(base, shouldIncludeTraceContent(input), session.actorPeerId);
   };
 
   const handleUriDetail = async (request?: RecallTraceRouteRequest) => {
@@ -298,7 +299,7 @@ export function createOpenVikingRecallTraceRuntime(deps: OpenVikingRecallTraceRu
     }
     try {
       const client = await deps.getClient();
-      const content = await client.read(uri, toString(query.agentId) ?? session.agentId);
+      const content = await client.read(uri, session.actorPeerId);
       const text = typeof content === "string" ? content : JSON.stringify(content, null, 2);
       const chars = Array.from(text);
       const slice = chars.slice(offset, offset + contentLimit).join("");

@@ -27,7 +27,6 @@ export type OpenVikingToolResultClient = {
     sessionId: string,
     toolResultId: string,
     options: { offset: number; limit: number; includeMetadata: boolean },
-    agentId?: string,
   ) => Promise<{
     content: string;
     offset: number;
@@ -42,7 +41,6 @@ export type OpenVikingToolResultClient = {
     toolResultId: string,
     query: string,
     options: { limit: number; contextChars: number },
-    agentId?: string,
   ) => Promise<{
     tool_result_id: string;
     matches?: Array<{ offset: number; snippet: string }>;
@@ -50,7 +48,6 @@ export type OpenVikingToolResultClient = {
   listToolResults: (
     sessionId: string,
     options: { toolName?: string; limit: number },
-    agentId?: string,
   ) => Promise<{
     tool_results?: Array<{
       storage_uri?: string;
@@ -180,7 +177,6 @@ export function registerOpenVikingToolResultTools({
             session.ovSessionId,
             parsed.toolResultId,
             { offset, limit, includeMetadata: true },
-            session.agentId,
           );
           const returnedChars = result.content.length;
           const nextOffset = result.offset + returnedChars;
@@ -281,7 +277,6 @@ export function registerOpenVikingToolResultTools({
             parsed.toolResultId,
             query,
             { limit, contextChars },
-            session.agentId,
           );
           const matches = result.matches ?? [];
           const text = matches.length
@@ -354,7 +349,6 @@ export function registerOpenVikingToolResultTools({
           const result = await client.listToolResults(
             session.ovSessionId,
             { toolName, limit },
-            session.agentId,
           );
           const items = result.tool_results ?? [];
           const text = items.length

@@ -8,14 +8,12 @@ from typing import Dict, List
 import pytest
 
 from openviking.parse.parsers.upload_utils import (
-    _sanitize_rel_path,
     detect_and_convert_encoding,
     is_text_file,
-    should_skip_directory,
     should_skip_file,
     upload_directory,
-    upload_text_files,
 )
+from openviking.utils.path_safety import sanitize_relative_viking_path
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -249,76 +247,9 @@ class TestShouldSkipFile:
 # ---------------------------------------------------------------------------
 
 
-class TestShouldSkipDirectory:
-    def test_ignored_dirs(self) -> None:
-        assert should_skip_directory(".git") is True
-        assert should_skip_directory("__pycache__") is True
-        assert should_skip_directory("node_modules") is True
-
-    def test_hidden_dirs(self) -> None:
-        assert should_skip_directory(".vscode") is True
-        assert should_skip_directory(".idea") is True
-
-    def test_normal_dirs(self) -> None:
-        assert should_skip_directory("src") is False
-        assert should_skip_directory("tests") is False
-        assert should_skip_directory("docs") is False
-
-
 # ---------------------------------------------------------------------------
 # upload_text_files
 # ---------------------------------------------------------------------------
-
-
-class TestUploadTextFiles:
-    @pytest.mark.asyncio
-    async def test_upload_success(self, tmp_path: Path, viking_fs: FakeVikingFS) -> None:
-        f = tmp_path / "hello.py"
-        f.write_text("print('hi')", encoding="utf-8")
-        file_paths = [(f, "hello.py")]
-
-        count, warnings = await upload_text_files(file_paths, "viking://temp/abc", viking_fs)
-
-        assert count == 1
-        assert len(warnings) == 0
-        assert "viking://temp/abc/hello.py" in viking_fs.files
-
-    @pytest.mark.asyncio
-    async def test_upload_multiple(self, tmp_path: Path, viking_fs: FakeVikingFS) -> None:
-        f1 = tmp_path / "a.py"
-        f1.write_text("a", encoding="utf-8")
-        f2 = tmp_path / "b.md"
-        f2.write_text("b", encoding="utf-8")
-        file_paths = [(f1, "a.py"), (f2, "b.md")]
-
-        count, warnings = await upload_text_files(file_paths, "viking://temp/x", viking_fs)
-
-        assert count == 2
-        assert len(warnings) == 0
-
-    @pytest.mark.asyncio
-    async def test_upload_with_encoding_conversion(
-        self, tmp_path: Path, viking_fs: FakeVikingFS
-    ) -> None:
-        f = tmp_path / "chinese.py"
-        f.write_bytes("你好".encode("gbk"))
-        file_paths = [(f, "chinese.py")]
-
-        count, warnings = await upload_text_files(file_paths, "viking://temp/enc", viking_fs)
-
-        assert count == 1
-        uploaded = viking_fs.files["viking://temp/enc/chinese.py"]
-        assert uploaded.decode("utf-8") == "你好"
-
-    @pytest.mark.asyncio
-    async def test_upload_nonexistent_file(self, tmp_path: Path, viking_fs: FakeVikingFS) -> None:
-        fake = tmp_path / "nonexistent.py"
-        file_paths = [(fake, "nonexistent.py")]
-
-        count, warnings = await upload_text_files(file_paths, "viking://temp/err", viking_fs)
-
-        assert count == 0
-        assert len(warnings) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -454,85 +385,43 @@ class TestShouldSkipFileEdgeCases:
 # ---------------------------------------------------------------------------
 
 
-class TestShouldSkipDirectoryCustom:
-    def test_custom_ignore_dirs(self) -> None:
-        assert should_skip_directory("vendor", ignore_dirs={"vendor"}) is True
-        assert should_skip_directory("src", ignore_dirs={"vendor"}) is False
-
-    def test_hidden_dir_with_custom_ignore(self) -> None:
-        # Hidden dirs should still be skipped even with custom ignore set
-        assert should_skip_directory(".secret", ignore_dirs={"vendor"}) is True
-
-
 # ---------------------------------------------------------------------------
-# _sanitize_rel_path (path traversal protection)
+# sanitize_relative_viking_path (path traversal protection)
 # ---------------------------------------------------------------------------
 
 
 class TestSanitizeRelPath:
     def test_normal_path(self) -> None:
-        assert _sanitize_rel_path("src/main.py") == "src/main.py"
+        assert sanitize_relative_viking_path("src/main.py") == "src/main.py"
 
     def test_rejects_parent_traversal(self) -> None:
         with pytest.raises(ValueError, match="Unsafe"):
-            _sanitize_rel_path("../etc/passwd")
+            sanitize_relative_viking_path("../etc/passwd")
 
     def test_rejects_absolute_path(self) -> None:
         with pytest.raises(ValueError, match="Unsafe"):
-            _sanitize_rel_path("/etc/passwd")
+            sanitize_relative_viking_path("/etc/passwd")
 
     def test_rejects_windows_drive_absolute(self) -> None:
         with pytest.raises(ValueError, match="Unsafe"):
-            _sanitize_rel_path("C:\\Windows\\System32")
+            sanitize_relative_viking_path("C:\\Windows\\System32")
 
     def test_rejects_windows_drive_relative(self) -> None:
         with pytest.raises(ValueError, match="Unsafe"):
-            _sanitize_rel_path("C:Windows\\System32")
+            sanitize_relative_viking_path("C:Windows\\System32")
 
     def test_rejects_nested_traversal(self) -> None:
         with pytest.raises(ValueError, match="Unsafe"):
-            _sanitize_rel_path("foo/../../bar")
+            sanitize_relative_viking_path("foo/../../bar")
 
     def test_normalizes_backslashes(self) -> None:
-        result = _sanitize_rel_path("src\\main.py")
+        result = sanitize_relative_viking_path("src\\main.py")
         assert result == "src/main.py"
 
 
 # ---------------------------------------------------------------------------
 # upload_text_files (additional edge cases)
 # ---------------------------------------------------------------------------
-
-
-class TestUploadTextFilesEdgeCases:
-    @pytest.mark.asyncio
-    async def test_rejects_path_traversal(self, tmp_path: Path, viking_fs: FakeVikingFS) -> None:
-        f = tmp_path / "evil.py"
-        f.write_text("hack", encoding="utf-8")
-        file_paths = [(f, "../../../etc/passwd")]
-
-        count, warnings = await upload_text_files(file_paths, "viking://temp/safe", viking_fs)
-
-        assert count == 0
-        assert len(warnings) == 1
-
-    @pytest.mark.asyncio
-    async def test_upload_failure_produces_warning(self, tmp_path: Path) -> None:
-        class FailingFS:
-            async def write_file_bytes(self, uri: str, content: bytes) -> None:
-                raise IOError("disk full")
-
-            async def mkdir(self, uri: str, exist_ok: bool = False) -> None:
-                pass
-
-        f = tmp_path / "ok.py"
-        f.write_text("print(1)", encoding="utf-8")
-        file_paths = [(f, "ok.py")]
-
-        count, warnings = await upload_text_files(file_paths, "viking://temp/fail", FailingFS())
-
-        assert count == 0
-        assert len(warnings) == 1
-        assert "disk full" in warnings[0]
 
 
 # ---------------------------------------------------------------------------
@@ -569,15 +458,15 @@ class TestUploadDirectoryEdgeCases:
 
 
 # ---------------------------------------------------------------------------
-# _sanitize_rel_path (additional edge cases)
+# sanitize_relative_viking_path (additional edge cases)
 # ---------------------------------------------------------------------------
 
 
 class TestSanitizeRelPathEdgeCases:
     def test_rejects_empty_path(self) -> None:
         with pytest.raises(ValueError, match="Unsafe"):
-            _sanitize_rel_path("")
+            sanitize_relative_viking_path("")
 
     def test_rejects_backslash_absolute(self) -> None:
         with pytest.raises(ValueError, match="Unsafe"):
-            _sanitize_rel_path("\\Windows\\System32")
+            sanitize_relative_viking_path("\\Windows\\System32")
