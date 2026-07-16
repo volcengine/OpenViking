@@ -279,7 +279,11 @@ def main() -> int:
     args = parser.parse_args()
 
     cfg = _load_trace_config(args.config)
-    files = _iter_input_files(Path(args.file), include_rotated=not args.no_include_rotated)
+    main_file = Path(args.file).expanduser()
+    if not main_file.exists():
+        print(f"Error: main file not found: {main_file}", file=sys.stderr)
+        return 1
+    files = _iter_input_files(main_file, include_rotated=not args.no_include_rotated)
     summary = upload_files(files, cfg)
 
     print("Loaded files:")
@@ -299,6 +303,12 @@ def main() -> int:
     print(f"  endpoint: {cfg.endpoint}")
     print(f"  protocol: {cfg.protocol}")
     print(f"  service_name: {cfg.service_name}")
+    if summary["uploaded_batches"] == 0:
+        print(
+            "Error: no batches were uploaded (file is empty or all lines were invalid).",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 
