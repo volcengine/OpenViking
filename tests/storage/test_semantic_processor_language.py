@@ -237,6 +237,22 @@ class TestOverviewGenerationFlow:
             in prompt
         )
 
+    def test_chinese_overview_uses_localized_headings(self):
+        prompt = render_prompt(
+            "semantic.overview_generation",
+            {
+                "dir_name": "测试",
+                "file_summaries": "[1] test.md: 测试文档",
+                "children_abstracts": "",
+                "output_language": "zh-CN",
+            },
+        )
+
+        assert "**快速导航** (H2)" in prompt
+        assert "**详细说明** (H2)" in prompt
+        assert "**Quick Navigation** (H2)" not in prompt
+        assert "**Detailed Description** (H2)" not in prompt
+
 class LanguageAwareMockVLM:
     """语言感知的 MockVLM，根据 prompt 中的 Output Language 返回对应语言的响应。"""
 

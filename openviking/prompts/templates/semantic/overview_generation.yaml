@@ -60,13 +60,13 @@ template: |
      - Include core keywords for easy searching
      - Who it's suitable for
 
-  3. **Quick Navigation** (H2): Decision Tree style
+  3. **{{ "快速导航" if output_language == "zh-CN" else "Quick Navigation" }}** (H2): Decision Tree style
      - Guide with "What do you want to learn?" or "What do you want to do?"
      - Use → arrow to point to specific files or directories
      - **Use file number references**: such as [1], [2], [3]
      - Concise keyword descriptions
 
-  4. **Detailed Description** (H2): One H3 subsection for each file/subdirectory
+  4. **{{ "详细说明" if output_language == "zh-CN" else "Detailed Description" }}** (H2): One H3 subsection for each file/subdirectory
      - Use the file summaries or subdirectory summaries provided above as description content
 
   Total length: 400-800 words
