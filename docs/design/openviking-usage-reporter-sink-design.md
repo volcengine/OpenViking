@@ -127,7 +127,7 @@ def load_class(class_path: str):
 
 只有配置了该 Sink 时才 import 对应模块。OpenViking 内核不 import 或安装具体下游依赖。
 
-每个 Sink 的 `write()` 调用最多等待 5 秒。超时或异常只记录日志，不影响其他 Sink。Reporter 在应用生命周期内只创建一次，应用退出时调用 Sink 可选的 `close()` 方法。同步和异步 `close()` 均受同一超时限制；同步 hook 在线程中执行，避免阻塞事件循环和后续 Sink 清理。
+每个 Sink 的 `write()` 调用最多等待 5 秒。超时或异常只记录日志，不影响其他 Sink。Reporter 在应用生命周期内只创建一次，应用退出时调用 Sink 可选的 `close()` 方法。同步和异步 `close()` 均受同一超时限制；同步 hook 在独立 daemon 线程中执行，超时后不会阻塞事件循环、后续 Sink 清理或进程退出。
 
 ## 7. 配置设计
 

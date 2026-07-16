@@ -5,7 +5,9 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import inspect
+import threading
 from dataclasses import dataclass, field
 from typing import Iterable
 
@@ -74,7 +76,26 @@ class UsageReporter:
         if inspect.iscoroutinefunction(close):
             await close()
             return
-        result = await asyncio.to_thread(close)
+        result_future: concurrent.futures.Future = concurrent.futures.Future()
+
+        def _run_sync_close() -> None:
+            try:
+                result_future.set_result(close())
+            except concurrent.futures.InvalidStateError:
+                # The timeout cancelled the waiter; the daemon thread may finish later.
+                pass
+            except Exception as exc:
+                try:
+                    result_future.set_exception(exc)
+                except concurrent.futures.InvalidStateError:
+                    pass
+
+        threading.Thread(
+            target=_run_sync_close,
+            name="openviking-usage-sink-close",
+            daemon=True,
+        ).start()
+        result = await asyncio.wrap_future(result_future)
         if inspect.isawaitable(result):
             await result
 
