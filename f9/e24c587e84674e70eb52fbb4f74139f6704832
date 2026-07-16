@@ -1,0 +1,75 @@
+openviking/service/reindex_executor.py
+  s_502f174854034d::t_377e8b48fc5248 1830-1836
+openviking/service/resource_memory_link_service.py
+  s_502f174854034d::t_f952fa6322b760 3,8,22,24-33,54,91-99,133,233-388,455-498,517-524,589,594,615,631,642,668,684,700,717,720-745,795,822-843,937,953-960
+openviking/service/resource_service.py
+  s_502f174854034d::t_007c6772ada433 36,945-950,1039-1061,1104-1109
+openviking/session/memory/dataclass.py
+  s_502f174854034d::t_836feae11abec0 114,116,119,133
+openviking/session/memory/extract_loop.py
+  s_502f174854034d::t_df510c72dfe9a1 14,26,146,223,421-426,464-469,636-640
+openviking/session/memory/graph_view.py
+  s_502f174854034d::t_371565abb7d2fe 5,17,19,39,51,95,98-101,108-126,140-147,151-152
+openviking/session/memory/memory_updater.py
+  s_502f174854034d::t_65ddf7717b14f2 1117,1120-1149,1155,1157-1164
+openviking/session/memory/merge_op/link_merge.py
+  s_502f174854034d::t_127aa041b3821d 14-90
+openviking/session/memory/schema_model_generator.py
+  s_502f174854034d::t_0c7433544e5539 294
+openviking/session/memory/session_extract_context_provider.py
+  s_502f174854034d::t_c46d3df6fbaaab 13-14,55,150-164,207-238,583-590
+openviking/session/memory/streaming_memory_updater.py
+  s_502f174854034d::t_84002361e51c53 44-47,225-243,354-359,1440,1442-1454,1613-1616,1623-1629,1713-1718,1755,1757
+openviking/session/memory/utils/link_renderer.py
+  s_502f174854034d::t_ff41cff23e73f5 15,29,32,35,44-56,60-81,91-93,97-117,121-123,126-137,142,144-145
+openviking/session/memory/utils/resource_refs.py
+  s_502f174854034d::t_2332c2202ea81b 110,131-153
+openviking/storage/queuefs/semantic_processor.py
+  s_502f174854034d::t_40eee28bbb9e4b 1170-1174,1260-1270
+openviking/storage/queuefs/understanding_parse_processor.py
+  s_502f174854034d::t_47b2a0578cb8ad 16,32-53,104-109,342-347
+tests/service/test_resource_memory_link_service.py
+  s_502f174854034d::t_aeb89bceef4074 5,11,354-588,748-849
+tests/session/memory/test_graph_view_collect.py
+  s_502f174854034d::t_165140fd92e643 199-247
+tests/session/memory/test_memory_react_system_prompt.py
+  s_502f174854034d::t_3a24eb3154303e 7-14,94-175,323-362,364,473
+tests/session/memory/test_memory_updater.py
+  s_502f174854034d::t_e3d594d6168d49 118-215
+tests/session/memory/test_resource_overview_metadata.py
+  s_502f174854034d::t_e93e2b3dccb295 1-2,29-33,39-43,47-63
+tests/session/memory/test_resource_refs.py
+  s_502f174854034d::t_2e09bf4aac3264 127-166
+tests/session/memory/test_schema_models.py
+  s_502f174854034d::t_b01698597c8ce4 296,428
+tests/session/memory/test_streaming_memory_updater.py
+  s_502f174854034d::t_7f082512de6cb5 11,25-27,36,38,393-533,1199-1222
+tests/storage/test_semantic_processor_l0_l1.py
+  s_502f174854034d::t_a57f0cb2faa6d4 63-72,105,117
+tests/test_link_renderer.py
+  s_502f174854034d::t_ff91e90fcdc973 374,389-459,461,623,640,662-664
+tests/unit/session/memory/test_extract_loop_match_text.py
+  s_502f174854034d::t_174bc36658a1fb 79-125,154-174,299-302,371-374
+tests/unit/session/memory/test_link_merge.py
+  s_502f174854034d::t_34ad0b9eb274bc 4-5,10,27-83
+tests/unit/session/memory/test_link_models.py
+  s_502f174854034d::t_0175dd7dadc42f 53-55,62-74
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "f9e24c587e84674e70eb52fbb4f74139f6704832",
+  "prompts": {},
+  "sessions": {
+    "s_502f174854034d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6483-d77e-7ee0-be66-bd7f11806837",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
