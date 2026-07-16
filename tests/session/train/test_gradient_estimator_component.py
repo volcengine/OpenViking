@@ -28,6 +28,10 @@ class FakeExperienceGradientEstimator(ExperienceGradientEstimator):
         super().__init__()
         self.operations_by_trajectory_uri = operations_by_trajectory_uri
         self.calls = []
+        # Inject a pass-through VLM so ExperienceRootCausePreventionGate
+        # runs but always allows the gradient through.  This isolates the
+        # test to gradient conversion logic, not LLM gate verdicts.
+        self.vlm = _PassThroughVLM()
 
     async def _run_extract_loop(self, trajectory, context):
         self.calls.append((trajectory, context))
@@ -80,6 +84,18 @@ def _experience_set() -> ExperienceSet:
 
 def _context() -> ExperienceGradientContext:
     return ExperienceGradientContext(request_context=SimpleNamespace(), messages=[])
+
+
+class _PassThroughVLM:
+    """Minimal VLM mock whose LLM gate verdict always passes."""
+
+    async def get_completion_async(self, *, prompt, thinking=False):
+        del prompt, thinking
+        return (
+            '{"pass": true, "root_cause_quality": "sufficient", '
+            '"reason": "test pass-through", "expected_behavior_change": "none", '
+            '"repair_prompt": "", "risks": []}'
+        )
 
 
 @pytest.mark.asyncio
