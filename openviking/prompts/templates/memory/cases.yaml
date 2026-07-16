@@ -106,5 +106,6 @@ fields:
       amounts, flight numbers, and airport codes with their semantic roles (e.g. "a reservation",
       "the user", "a future date", "a business-class booking").
       This field is the primary embedding source; it must be semantically rich and specific to
-      the task pattern, not to the individual instance.
+      the task pattern, not to the individual instance. Write from the agent's perspective using
+      third-person ("the customer wants…"), never second-person ("you want…").
     merge_op: immutable

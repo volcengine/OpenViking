@@ -1160,6 +1160,28 @@ def _case_situation(case: Case) -> str:
     )
     situation = re.sub(r"\b\d{4}-\d{2}-\d{2}\b", "<date>", situation)
     situation = re.sub(r"\s+", " ", situation).strip()
+    # Rewrite from second-person ("you want") to agent-observed third-person
+    # ("the customer wants") so embeddings match agent-side search queries.
+    situation = re.sub(r"\bYou want\b", "The customer wants", situation)
+    situation = re.sub(r"\byou want\b", "the customer wants", situation)
+    situation = re.sub(r"\bYou are\b", "The customer is", situation)
+    situation = re.sub(r"\byou are\b", "the customer is", situation)
+    situation = re.sub(r"\bYou\b", "The customer", situation)
+    situation = re.sub(r"\byou\b", "the customer", situation)
+    situation = re.sub(r"\bYour\b", "The customer's", situation)
+    situation = re.sub(r"\byour\b", "the customer's", situation)
+    situation = re.sub(r"\s+", " ", situation).strip()
+    # Rewrite from second-person ("you want") to agent-observed third-person
+    # ("the customer wants") so embeddings match agent-side search queries.
+    situation = re.sub(r"\bYou want\b", "The customer wants", situation)
+    situation = re.sub(r"\byou want\b", "the customer wants", situation)
+    situation = re.sub(r"\bYou are\b", "The customer is", situation)
+    situation = re.sub(r"\byou are\b", "the customer is", situation)
+    situation = re.sub(r"\bYour\b", "Their", situation)
+    situation = re.sub(r"\byour\b", "their", situation)
+    situation = re.sub(r"\bYou\b", "The customer", situation)
+    situation = re.sub(r"\byou\b", "the customer", situation)
+    situation = re.sub(r"\s+", " ", situation).strip()
     return situation
 
 
@@ -1992,5 +2014,27 @@ def _case_situation(case: Case) -> str:
         situation,
     )
     situation = re.sub(r"\b\d{4}-\d{2}-\d{2}\b", "<date>", situation)
+    situation = re.sub(r"\s+", " ", situation).strip()
+    # Rewrite from second-person ("you want") to agent-observed third-person
+    # ("the customer wants") so embeddings match agent-side search queries.
+    situation = re.sub(r"\bYou want\b", "The customer wants", situation)
+    situation = re.sub(r"\byou want\b", "the customer wants", situation)
+    situation = re.sub(r"\bYou are\b", "The customer is", situation)
+    situation = re.sub(r"\byou are\b", "the customer is", situation)
+    situation = re.sub(r"\bYou\b", "The customer", situation)
+    situation = re.sub(r"\byou\b", "the customer", situation)
+    situation = re.sub(r"\bYour\b", "The customer's", situation)
+    situation = re.sub(r"\byour\b", "the customer's", situation)
+    situation = re.sub(r"\s+", " ", situation).strip()
+    # Rewrite from second-person ("you want") to agent-observed third-person
+    # ("the customer wants") so embeddings match agent-side search queries.
+    situation = re.sub(r"\bYou want\b", "The customer wants", situation)
+    situation = re.sub(r"\byou want\b", "the customer wants", situation)
+    situation = re.sub(r"\bYou are\b", "The customer is", situation)
+    situation = re.sub(r"\byou are\b", "the customer is", situation)
+    situation = re.sub(r"\bYour\b", "Their", situation)
+    situation = re.sub(r"\byour\b", "their", situation)
+    situation = re.sub(r"\bYou\b", "The customer", situation)
+    situation = re.sub(r"\byou\b", "the customer", situation)
     situation = re.sub(r"\s+", " ", situation).strip()
     return situation
