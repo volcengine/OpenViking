@@ -10,6 +10,7 @@ import pytest
 
 from openviking.message import Message
 from openviking.message.part import TextPart
+from openviking.prompts.manager import PromptManager
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import (
     MemoryField,
@@ -79,6 +80,82 @@ class TestMemoryUpdater:
         assert len(split_context.messages) > 1
         assert len(unsplit_context.messages) == 1
         assert unsplit_context.messages[0] is messages[0]
+        assert unsplit_context.chunk_meta == {}
+
+    def test_extract_context_resource_event_content_hides_add_resource_fields(self):
+        resource_uri = "viking://resources/images/2026/06/12/yueqian_jpeg"
+        extract_context = ExtractContext(
+            messages=[
+                Message(
+                    id="1",
+                    role="user",
+                    parts=[
+                        TextPart(
+                            text=(
+                                "## Resource Addition\n"
+                                f"Resource URI: {resource_uri}\n"
+                                "Source name: yueqian.jpeg\n"
+                                "Added at: 2026-06-12T03:43:36.343325+00:00\n"
+                                "Resource abstract: This directory contains an anime illustration.\n"
+                                "User reason: 这是越前龙马的照片"
+                            )
+                        )
+                    ],
+                    created_at="2026-06-12T03:43:36.343325+00:00",
+                )
+            ]
+        )
+
+        content = extract_context.get_resource_event_content(
+            "0",
+            f"2026-06-12，用户保存了粉丝创作的越前龙马动漫插画资源，资源URI为{resource_uri}。",
+        )
+
+        assert (
+            content == f"2026-06-12，[用户保存了粉丝创作的越前龙马动漫插画资源]({resource_uri})。"
+        )
+        assert "Resource URI" not in content
+        assert "Added at" not in content
+        assert "Resource abstract" not in content
+        assert "User reason" not in content
+
+        registry = MemoryTypeRegistry(load_schemas=False)
+        registry.load_from_yaml(
+            str(PromptManager._get_bundled_templates_dir() / "memory" / "events.yaml")
+        )
+        rendered = MemoryFileUtils.write(
+            MemoryFile(
+                extra_fields={
+                    "event_name": "resource_saved",
+                    "goal": "save resource",
+                    "summary": (
+                        "2026-06-12，用户保存了粉丝创作的越前龙马动漫插画资源，"
+                        f"资源URI为{resource_uri}。"
+                    ),
+                    "ranges": "0",
+                }
+            ),
+            content_template=registry.get("events").content_template,
+            extract_context=extract_context,
+        )
+
+        assert rendered.startswith(content)
+
+    def test_extract_context_event_content_falls_back_to_range_when_summary_empty(self):
+        extract_context = ExtractContext(
+            messages=[
+                Message(
+                    id="1",
+                    role="user",
+                    parts=[TextPart(text="Gina can expand her clothing store now.")],
+                    created_at="2023-02-01T00:48:00",
+                )
+            ]
+        )
+
+        content = extract_context.get_event_content("0", "")
+
+        assert "Gina can expand her clothing store now." in content
 
     def test_create(self):
         """Test creating a MemoryUpdater."""
