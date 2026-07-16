@@ -12,10 +12,11 @@ import pytest
 
 from openviking import AsyncOpenViking
 from openviking.client.session import Session as ClientSession
-from openviking.message import TextPart
+from openviking.message import Message, TextPart
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
 from openviking.storage.transaction import get_lock_manager
+from openviking_cli.exceptions import FailedPreconditionError
 
 
 async def _wait_for_task(task_id: str, timeout: float = 30.0) -> dict:
@@ -340,6 +341,68 @@ class TestCommit:
         assert result.get("archived") is True
         # Current message list should be cleared after commit
         assert len(session_with_messages.messages) == 0
+
+    async def test_commit_rejects_when_live_clear_is_not_persisted(
+        self, client: AsyncOpenViking, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Commit must not return accepted if the live messages file still has archived rows."""
+        session = client.session(session_id="commit_live_clear_confirm_test")
+        session.add_message("user", [TextPart("old user")])
+        session.add_message("assistant", [TextPart("old assistant")])
+
+        root_messages_uri = f"{session.uri}/messages.jsonl"
+        original_write_file = session._viking_fs.write_file
+
+        async def drop_empty_root_messages_write(*args, **kwargs):
+            uri = args[0] if args else kwargs.get("uri")
+            content = args[1] if len(args) > 1 else kwargs.get("content")
+            if uri == root_messages_uri and content == "":
+                return None
+            return await original_write_file(*args, **kwargs)
+
+        monkeypatch.setattr(session._viking_fs, "write_file", drop_empty_root_messages_write)
+
+        with pytest.raises(FailedPreconditionError, match="persistence check failed"):
+            await session.commit_async()
+
+        assert [message.parts[0].text for message in session.messages] == [
+            "old user",
+            "old assistant",
+        ]
+
+        archive_uri = f"{session.uri}/history/archive_001"
+        assert not await _marker_exists(session, archive_uri, ".done")
+        failed = json.loads(
+            await session._viking_fs.read_file(f"{archive_uri}/.failed.json", ctx=session.ctx)
+        )
+        assert failed["stage"] == "phase1_live_persist"
+
+        reloaded = client.session(session_id="commit_live_clear_confirm_test", must_exist=True)
+        context = await reloaded.get_session_context()
+        assert [message.parts[0].text for message in context["messages"]] == [
+            "old user",
+            "old assistant",
+        ]
+
+    async def test_commit_keep_recent_accepts_legacy_retained_message_without_created_at(
+        self, client: AsyncOpenViking
+    ):
+        """Retained legacy messages without created_at should not fail live persistence confirm."""
+        session = client.session(session_id="commit_legacy_retained_created_at_test")
+        session.add_message("user", [TextPart("archive me")])
+        session._messages.append(
+            Message(
+                id="legacy-retained",
+                role="assistant",
+                parts=[TextPart("retain me")],
+                created_at=None,
+            )
+        )
+
+        result = await session.commit_async(keep_recent_count=1)
+
+        assert result.get("archived") is True
+        assert [message.parts[0].text for message in session.messages] == ["retain me"]
 
     async def test_commit_empty_session(self, session: Session):
         """Test committing empty session"""

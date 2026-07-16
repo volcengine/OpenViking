@@ -1172,8 +1172,20 @@ class Session:
                     )
                 self._messages = retained_messages
                 await self._write_to_agfs_async(messages=self._messages)
+                await self._confirm_live_messages_persisted(self._messages)
             except Exception as e:
                 logger.error(f"[commit] Failed to persist archive/live messages: {e}")
+                try:
+                    await self._write_failed_marker(
+                        archive_uri,
+                        stage="phase1_live_persist",
+                        error=str(e),
+                    )
+                except Exception:
+                    logger.warning(
+                        "[commit] Failed to mark archive as failed after Phase 1 error",
+                        exc_info=True,
+                    )
                 self._messages = list(messages_to_archive) + list(retained_messages)
                 self._compression.compression_index -= 1
                 raise
@@ -2114,6 +2126,77 @@ class Session:
         except Exception:
             return len(self._messages)
         return len([line for line in content.strip().split("\n") if line.strip()])
+
+    async def _confirm_live_messages_persisted(self, expected_messages: List[Message]) -> None:
+        """Verify the persisted live messages match the retained in-memory tail."""
+        if not self._viking_fs:
+            return
+
+        ignore_created_at = [message.created_at is None for message in expected_messages]
+        expected_rows = [
+            self._message_row_for_confirm(
+                json.loads(message.to_jsonl()),
+                ignore_created_at=ignore,
+            )
+            for message, ignore in zip(expected_messages, ignore_created_at)
+        ]
+        try:
+            content = await self._viking_fs.read_file(
+                f"{self._session_uri}/messages.jsonl",
+                ctx=self.ctx,
+            )
+        except Exception as exc:
+            raise FailedPreconditionError(
+                "Session commit could not confirm persisted live messages",
+                details={
+                    "session_id": self.session_id,
+                    "expected_message_count": len(expected_rows),
+                    "error": str(exc),
+                },
+            ) from exc
+
+        try:
+            actual_rows = []
+            lines = [line for line in (content or "").splitlines() if line.strip()]
+            for index, line in enumerate(lines):
+                actual_rows.append(
+                    self._message_row_for_confirm(
+                        json.loads(line),
+                        ignore_created_at=(
+                            ignore_created_at[index] if index < len(ignore_created_at) else False
+                        ),
+                    )
+                )
+        except json.JSONDecodeError as exc:
+            raise FailedPreconditionError(
+                "Session commit could not parse persisted live messages",
+                details={
+                    "session_id": self.session_id,
+                    "expected_message_count": len(expected_rows),
+                    "error": str(exc),
+                },
+            ) from exc
+
+        if actual_rows != expected_rows:
+            raise FailedPreconditionError(
+                "Session commit live messages persistence check failed",
+                details={
+                    "session_id": self.session_id,
+                    "expected_message_count": len(expected_rows),
+                    "actual_message_count": len(actual_rows),
+                },
+            )
+
+    @staticmethod
+    def _message_row_for_confirm(
+        row: Dict[str, Any],
+        *,
+        ignore_created_at: bool,
+    ) -> Dict[str, Any]:
+        """Return the comparable persisted message row."""
+        if not ignore_created_at:
+            return row
+        return {key: value for key, value in row.items() if key != "created_at"}
 
     def _extract_abstract_from_summary(self, summary: str) -> str:
         """Extract one-sentence overview from structured summary."""
