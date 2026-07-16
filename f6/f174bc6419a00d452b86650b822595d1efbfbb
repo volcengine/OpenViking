@@ -1,0 +1,25 @@
+examples/codex-memory-plugin/README.md
+  s_6fe15e66a05bf5::t_e0b4e83ff3af2b 157,195
+examples/codex-memory-plugin/scripts/auto-recall.mjs
+  s_6fe15e66a05bf5::t_03f30d1402d048 39,310-312,323-342,575,580-599
+examples/codex-memory-plugin/scripts/auto-recall.test.mjs
+  s_6fe15e66a05bf5::t_d6478c523713bf 3,80-164,307,313-351
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "f6f174bc6419a00d452b86650b822595d1efbfbb",
+  "prompts": {},
+  "sessions": {
+    "s_6fe15e66a05bf5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4aa1-02af-7ff2-8876-044dd610c7a1",
+        "model": "unknown"
+      },
+      "human_author": "huangruiteng <huangruiteng@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
