@@ -150,6 +150,8 @@ claude
 | `OPENVIKING_MIN_QUERY_LENGTH`          | `3`           | 短于此长度的 query 跳过召回                                        |
 | `OPENVIKING_LOG_RANKING_DETAILS`       | `false`       | 每候选打分日志（很啰嗦）                                           |
 
+正常记忆召回没有有效结果时，只有带明确历史意图的 prompt 才会触发一次只读 session 归档兜底检索。该检索严格限制在当前用户的 `sessions` 下，最多返回 12 个 grep 命中、向下 10 层、总注入不超过 2,000 字符；tool result 会被过滤，每段内容都以带源 URI 的引用数据呈现，并提示其可能已经过时。非历史问题不会访问归档；零命中或请求失败都会静默降级，不阻塞本轮 prompt。
+
 #### 捕获调优
 
 | 环境变量                                | 默认值        | 说明                                                                |

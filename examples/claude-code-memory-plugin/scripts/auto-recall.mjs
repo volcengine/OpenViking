@@ -19,7 +19,7 @@ import { createLogger } from "./debug-log.mjs";
 import { isBypassed, makeFetchJSON } from "./lib/ov-session.mjs";
 import { writeJsonState } from "./lib/state.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
-import { postRecall } from "./shared/recall-core.mjs";
+import { buildArchiveFallbackBlock, postRecall } from "./shared/recall-core.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -322,6 +322,10 @@ async function recallViaTypeQuotaEndpoint(query, actorPeerId = "") {
   ].join("\n");
 }
 
+async function recallFromArchiveFallback(query, actorPeerId = "") {
+  return buildArchiveFallbackBlock(fetchJSON, cfg, query, { actorPeerId, log });
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -398,9 +402,14 @@ async function main() {
   const endpointBlock = await recallViaTypeQuotaEndpoint(userPrompt, effectivePeer.peerId);
   if (endpointBlock !== null) {
     if (!endpointBlock) {
-      log("skip", { reason: "recall_endpoint_no_results" });
-      writeRecallState({ count: 0, reason: "no_results", cc_session_id: sessionId });
-      approve();
+      const archiveBlock = await recallFromArchiveFallback(userPrompt, effectivePeer.peerId);
+      log("recall_endpoint", { reason: "no_results", archiveFallback: Boolean(archiveBlock) });
+      writeRecallState({
+        count: archiveBlock ? 1 : 0,
+        reason: archiveBlock ? "archive_fallback" : "no_results",
+        cc_session_id: sessionId,
+      });
+      approve(archiveBlock);
       return;
     }
     writeRecallState({
@@ -420,9 +429,14 @@ async function main() {
   const perSourceLimit = Math.max(cfg.recallLimit * 2, 8);
   const raw = await searchAllSources(userPrompt, perSourceLimit, effectivePeer.peerId);
   if (raw.length === 0) {
-    log("skip", { reason: "no results" });
-    writeRecallState({ count: 0, reason: "no_results", cc_session_id: sessionId });
-    approve();
+    const archiveBlock = await recallFromArchiveFallback(userPrompt, effectivePeer.peerId);
+    log("search", { reason: "no_results", archiveFallback: Boolean(archiveBlock) });
+    writeRecallState({
+      count: archiveBlock ? 1 : 0,
+      reason: archiveBlock ? "archive_fallback" : "no_results",
+      cc_session_id: sessionId,
+    });
+    approve(archiveBlock);
     return;
   }
 
@@ -440,8 +454,13 @@ async function main() {
   });
 
   if (picked.length === 0) {
-    writeRecallState({ count: 0, reason: "filtered_out", cc_session_id: sessionId });
-    approve();
+    const archiveBlock = await recallFromArchiveFallback(userPrompt, effectivePeer.peerId);
+    writeRecallState({
+      count: archiveBlock ? 1 : 0,
+      reason: archiveBlock ? "archive_fallback" : "filtered_out",
+      cc_session_id: sessionId,
+    });
+    approve(archiveBlock);
     return;
   }
 

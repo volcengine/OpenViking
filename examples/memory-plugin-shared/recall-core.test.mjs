@@ -1,6 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildRecallBlock, buildRecallEndpointBody, postRecall } from "./lib/recall-core.mjs";
+import {
+  buildArchiveFallbackBlock,
+  buildRecallBlock,
+  buildRecallEndpointBody,
+  deriveArchiveGrepPattern,
+  hasArchiveHistoryIntent,
+  postRecall,
+} from "./lib/recall-core.mjs";
 
 test("buildRecallEndpointBody maps quotas and max chars", () => {
   const body = buildRecallEndpointBody({
@@ -127,4 +134,96 @@ test("postRecall does not retry default body or server errors", async () => {
   }, { query: "hello", peer_scope: "actor" });
   assert.equal(serverError.ok, false);
   assert.equal(serverErrorBodies.length, 1);
+});
+
+test("archive fallback only opens for explicit historical intent with safe anchors", () => {
+  assert.equal(hasArchiveHistoryIntent("what command did we use last time for deploy-3258?"), true);
+  assert.equal(hasArchiveHistoryIntent("how do I deploy now?"), false);
+  assert.equal(hasArchiveHistoryIntent("上次修复 #3258 用了什么命令？"), true);
+
+  const pattern = deriveArchiveGrepPattern("what command did we use last time for deploy-3258?");
+  assert.match(pattern, /deploy-3258/);
+  assert.doesNotMatch(pattern, /last time/);
+  assert.equal(deriveArchiveGrepPattern("之前修复登录问题用了什么命令？"), "修复登录问题");
+  assert.equal(deriveArchiveGrepPattern("what did we do last time?"), "");
+});
+
+test("archive fallback is user-scoped, bounded, cited, and strips tool output", async () => {
+  const calls = [];
+  const logs = [];
+  const block = await buildArchiveFallbackBlock(async (path, init, opts) => {
+    calls.push({ path, body: init?.body ? JSON.parse(init.body) : null, opts });
+    if (path === "/api/v1/system/status") {
+      return { ok: true, result: { user: "alice" } };
+    }
+    if (path.startsWith("/api/v1/fs/ls")) return { ok: true, result: [] };
+    if (path === "/api/v1/search/grep") {
+      return {
+        ok: true,
+        result: {
+          matches: [
+            {
+              uri: "viking://user/alice/sessions/cx-1/history/archive_001/.overview.md",
+              line: 8,
+              content: "Used deploy-3258 with ./scripts/release.sh --safe.",
+            },
+            {
+              uri: "viking://user/alice/sessions/cx-1/history/archive_001/messages.jsonl",
+              line: 9,
+              content: '{"type":"tool_result","content":"secret output"}',
+            },
+          ],
+        },
+      };
+    }
+    return { ok: false, status: 404 };
+  }, {
+    archiveFallbackMaxChars: 2000,
+    user: "alice",
+  }, "what command did we use last time for deploy-3258?", {
+    actorPeerId: "peer-a",
+    log: (stage, data) => logs.push({ stage, data }),
+  });
+
+  const grepCall = calls.find((call) => call.path === "/api/v1/search/grep");
+  assert.deepEqual(grepCall.body, {
+    uri: "viking://user/alice/sessions",
+    pattern: "deploy-3258|deploy|3258",
+    case_insensitive: true,
+    node_limit: 12,
+    level_limit: 10,
+  });
+  assert.equal(grepCall.opts.actorPeerId, "peer-a");
+  assert.match(block, /quoted reference data/i);
+  assert.match(block, /archive_001\/\.overview\.md#L8/);
+  assert.match(block, /> Used deploy-3258 with \.\/scripts\/release\.sh --safe\./);
+  assert.doesNotMatch(block, /secret output/);
+  assert.ok(block.length <= 2000);
+  assert.equal(logs.at(-1).stage, "archive_fallback_result");
+  assert.equal(logs.at(-1).data.matchCount, 1);
+});
+
+test("archive fallback fails open for non-history, zero-match, and errors", async () => {
+  let calls = 0;
+  const fetchJSON = async () => {
+    calls += 1;
+    return { ok: false, status: 500 };
+  };
+
+  assert.equal(await buildArchiveFallbackBlock(fetchJSON, {}, "deploy now"), null);
+  assert.equal(calls, 0);
+
+  assert.equal(
+    await buildArchiveFallbackBlock(async (path) => {
+      if (path === "/api/v1/system/status") return { ok: true, result: { user: "default" } };
+      if (path.startsWith("/api/v1/fs/ls")) return { ok: true, result: [] };
+      return { ok: true, result: { matches: [] } };
+    }, {}, "what command did I use previously for release-42?"),
+    null,
+  );
+
+  assert.equal(
+    await buildArchiveFallbackBlock(fetchJSON, {}, "what command did I use previously for release-42?"),
+    null,
+  );
 });
