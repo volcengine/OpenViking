@@ -808,23 +808,23 @@ class MemoryUpdater:
                 result.add_error("unknown", ValueError(error))
             return result
 
-        unresolved_ops = [
-            resolved_op for resolved_op in operations.upsert_operations if not resolved_op.uris
-        ]
-        if unresolved_ops:
-            missing = [
-                f"{resolved_op.memory_type}(page_id={resolved_op.page_id})"
-                for resolved_op in unresolved_ops
-            ]
-            raise ValueError(
-                f"Cannot apply operations: missing resolved URIs for {', '.join(missing)}"
+        applicable_upserts: List[ResolvedOperation] = []
+        for resolved_op in operations.upsert_operations:
+            if resolved_op.uris:
+                applicable_upserts.append(resolved_op)
+                continue
+            error_target = f"{resolved_op.memory_type}(page_id={resolved_op.page_id})"
+            resolution_error = ValueError("Missing resolved URI")
+            result.add_error(error_target, resolution_error)
+            tracer.error(
+                f"Skipping unresolved memory operation: {error_target}", resolution_error
             )
 
         # Distribute resolved_links to corresponding upsert operations
         self._distribute_links_to_operations(operations)
 
         # Apply unified operations - _apply_edit returns True if edited, False if written
-        for resolved_op in operations.upsert_operations:
+        for resolved_op in applicable_upserts:
             try:
                 await self._apply_upsert(
                     resolved_op,

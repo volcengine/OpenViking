@@ -415,35 +415,51 @@ class TestMemoryUpdater:
         isolation_handler.calculate_memory_uris.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_apply_operations_requires_pre_resolved_uris(self):
+    async def test_apply_operations_isolates_unresolved_uris(self):
         registry = MagicMock()
         registry.get.return_value = MemoryTypeSchema(
-            memory_type="entities",
-            description="entity memory",
-            directory="viking://user/{{ user_space }}/memories/entities",
-            filename_template="{{ name }}.md",
+            memory_type="events",
+            description="event memory",
+            directory="viking://user/{{ user_space }}/memories/events",
+            filename_template="{{ event_name }}.md",
             fields=[],
         )
 
         updater = MemoryUpdater(registry=registry)
         updater._get_viking_fs = MagicMock(return_value=MagicMock())
+        updater._apply_upsert = AsyncMock(return_value=None)
+        updater._sync_resource_refs_for_result = AsyncMock()
+        updater._vectorize_memories = AsyncMock()
+        updater.generate_overview = AsyncMock()
 
+        resolved_uri = "viking://user/alice/memories/events/resolved.md"
         operations = ResolvedOperations(
             upsert_operations=[
                 ResolvedOperation(
-                    memory_fields={"name": "SharedFact", "content": "shared content"},
-                    memory_type="entities",
+                    memory_fields={"event_name": "resolved", "summary": "resolved event"},
+                    memory_type="events",
+                    uris=[resolved_uri],
+                    page_id=101,
+                ),
+                ResolvedOperation(
+                    memory_fields={"event_name": "unresolved", "summary": "unresolved event"},
+                    memory_type="events",
                     uris=[],
-                    page_id=100,
-                )
+                    page_id=102,
+                ),
             ],
             delete_file_contents=[],
             errors=[],
         )
         ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
-        with pytest.raises(ValueError, match="missing resolved URIs"):
-            await updater.apply_operations(operations=operations, ctx=ctx)
+        result = await updater.apply_operations(operations=operations, ctx=ctx)
+
+        assert result.written_uris == [resolved_uri]
+        assert len(result.errors) == 1
+        error_target, error = result.errors[0]
+        assert error_target == "events(page_id=102)"
+        assert str(error) == "Missing resolved URI"
 
     @pytest.mark.asyncio
     async def test_apply_operations_matches_overview_directory_from_resolved_user_uri(self):
