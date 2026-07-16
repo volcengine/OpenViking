@@ -21,6 +21,7 @@ from openviking.parse.parsers.media.constants import IMAGE_EXTENSIONS
 from openviking.parse.parsers.media.large_image_processor import (
     LargeImageResult,
     process_large_image,
+    save_image_to_bytes,
 )
 from openviking.parse.parsers.media.naming import resolve_media_names
 from openviking.parse.parsers.media.utils import _convert_svg_to_png
@@ -106,6 +107,8 @@ class ImageParser(BaseParser):
         temp_uri = viking_fs.create_temp_uri()
 
         # Load image (SVG is converted to PNG first since PIL doesn't support it)
+        # For other formats not natively supported by VLM/embedding, convert to PNG
+        # to ensure end-to-end compatibility with image understanding and vectorization
         try:
             file_bytes = file_path.read_bytes()
             if file_path.suffix.lower() == ".svg" or file_bytes[:4] == b"<svg" or (file_bytes[:5] == b"<?xml" and b"<svg" in file_bytes[:100]):
@@ -118,11 +121,26 @@ class ImageParser(BaseParser):
                 img.verify()
                 img.close()
                 img = Image.open(io.BytesIO(png_bytes))
+                # Save as PNG in output
+                needs_png_conversion = True
+                converted_png_bytes = png_bytes  # Save for small-image branch
             else:
-                img = Image.open(file_path)
-                img.verify()  # Verify that it's a valid image
-                img.close()  # Close and reopen to reset after verify()
-                img = Image.open(file_path)
+                # Check if extension is in VLM-natively supported list
+                suffix_lower = file_path.suffix.lower()
+                supported_by_vlm = suffix_lower in {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
+                if supported_by_vlm:
+                    img = Image.open(file_path)
+                    img.verify()  # Verify that it's a valid image
+                    img.close()  # Close and reopen to reset after verify()
+                    img = Image.open(file_path)
+                    needs_png_conversion = False
+                else:
+                    # Convert unsupported formats to PNG for VLM compatibility
+                    img = Image.open(file_path)
+                    img.verify()
+                    img.close()
+                    img = Image.open(file_path)
+                    needs_png_conversion = True
             width, height = img.size
             format_str = img.format or file_path.suffix[1:].upper() if file_path.suffix else "JPEG"
         except Exception as e:
@@ -131,6 +149,12 @@ class ImageParser(BaseParser):
         # Resolve names
         display_stem, stem, original_filename = resolve_media_names(file_path, file_path.suffix, **kwargs)
         ext_no_dot = file_path.suffix[1:] if file_path.suffix else "jpg"
+        if needs_png_conversion:
+            # Convert to PNG and change extension for VLM/embedding compatibility
+            ext_no_dot = "png"
+            original_filename = f"{stem}.png"
+            format_str = "png"
+
         root_dir_name = VikingURI.sanitize_segment(f"{stem}_{ext_no_dot}")
         root_dir_uri = f"{temp_uri}/{root_dir_name}"
         await viking_fs.mkdir(root_dir_uri, exist_ok=True)
@@ -207,8 +231,16 @@ class ImageParser(BaseParser):
                 root_node.meta["original_height"] = height
 
         else:
-            # Small image: save original as-is
-            image_bytes = file_path.read_bytes()
+            # Small image: save as PNG if format is not VLM-supported, else as-is
+            if needs_png_conversion:
+                # SVG was already converted to PNG bytes during loading
+                if file_path.suffix.lower() == ".svg":
+                    image_bytes = converted_png_bytes
+                else:
+                    with Image.open(file_path) as converted_img:
+                        image_bytes = save_image_to_bytes(converted_img, format="PNG")
+            else:
+                image_bytes = file_path.read_bytes()
             await viking_fs.write_file_bytes(f"{root_dir_uri}/{original_filename}", image_bytes)
 
         # Phase 3: Build directory structure (handled by TreeBuilder)
