@@ -16,6 +16,23 @@ bool is_close(float a, float b, float epsilon = 1e-5) {
   return std::fabs(a - b) < epsilon;
 }
 
+void expect_filter_projection(IndexEngine& engine, const std::string& dsl,
+                              uint64_t expected_count,
+                              uint32_t expected_first_word) {
+  FilterResult result = engine.evaluate_filter(dsl);
+  const uint32_t first_word =
+      result.bitset_words.empty() ? 0U : result.bitset_words[0];
+  if (result.eligible_count != expected_count ||
+      result.bitset_words.size() != 1 || first_word != expected_first_word) {
+    SPDLOG_ERROR(
+        "Unexpected filter projection: dsl={}, count={} (expected {}), "
+        "words={}, first_word={} (expected {})",
+        dsl, result.eligible_count, expected_count, result.bitset_words.size(),
+        first_word, expected_first_word);
+    exit(1);
+  }
+}
+
 void test_basic_workflow() {
   SPDLOG_INFO("[Running] test_basic_workflow...");
 
@@ -159,11 +176,159 @@ void test_basic_workflow() {
     exit(1);
   }
 
+  std::filesystem::remove_all(db_path);
   SPDLOG_INFO("[Passed] test_basic_workflow");
+}
+
+void test_path_bitmap_lifecycle_and_reload() {
+  SPDLOG_INFO("[Running] test_path_bitmap_lifecycle_and_reload...");
+
+  const std::string db_path = "test_data_cpp/path_bitmap_lifecycle";
+  if (std::filesystem::exists(db_path)) {
+    std::filesystem::remove_all(db_path);
+  }
+  std::filesystem::create_directories(db_path);
+
+  const std::string config = R"({
+        "CollectionName": "path_bitmap_lifecycle",
+        "IndexName": "default",
+        "VectorIndex": {
+            "IndexType": "flat",
+            "ElementCount": 0,
+            "MaxElementCount": 6,
+            "Dimension": 4,
+            "Distance": "l2",
+            "Quant": "float"
+        },
+        "ScalarIndex": [
+            {"FieldName": "uri", "FieldType": "path"}
+        ]
+    })";
+
+  IndexEngine engine(config);
+  if (!engine.is_valid()) {
+    SPDLOG_ERROR("Path bitmap lifecycle engine initialization failed");
+    exit(1);
+  }
+
+  std::vector<AddDataRequest> initial(5);
+  initial[0].label = 2001;
+  initial[0].vector = {1.0, 0.0, 0.0, 0.0};
+  initial[0].fields_str = R"({"uri":"/docs/a"})";
+  initial[1].label = 2002;
+  initial[1].vector = {0.9, 0.1, 0.0, 0.0};
+  initial[1].fields_str = R"({"uri":"/docs/deep/b"})";
+  initial[2].label = 2003;
+  initial[2].vector = {0.0, 1.0, 0.0, 0.0};
+  initial[2].fields_str = R"({"uri":"/other/c"})";
+  // These spellings resolve to one trie leaf. Both bitmap bindings must be
+  // retained without adding a vector to every ordinary TrieNode.
+  initial[3].label = 2005;
+  initial[3].vector = {0.0, 0.0, 1.0, 0.0};
+  initial[3].fields_str = R"({"uri":"/aliases/a"})";
+  initial[4].label = 2006;
+  initial[4].vector = {0.0, 0.0, 0.9, 0.1};
+  initial[4].fields_str = R"({"uri":"/aliases//a"})";
+  if (engine.add_data(initial) != 0) {
+    SPDLOG_ERROR("Initial path bitmap data add failed");
+    exit(1);
+  }
+
+  const std::string docs_recursive =
+      R"({"op":"must","field":"uri","conds":["/docs"],"para":"-d=-1"})";
+  const std::string docs_depth_one =
+      R"({"op":"must","field":"uri","conds":["/docs"],"para":"-d=1"})";
+  const std::string docs_overlapping =
+      R"({"op":"must","field":"uri","conds":["/docs","/docs/deep"],"para":"-d=-1"})";
+  const std::string other_recursive =
+      R"({"op":"must","field":"uri","conds":["/other"],"para":"-d=-1"})";
+  const std::string aliases_recursive =
+      R"({"op":"must","field":"uri","conds":["/aliases"],"para":"-d=-1"})";
+
+  engine.set_filter_layout({2001, 2002, 2003});
+  expect_filter_projection(engine, docs_recursive, 2, 0b011U);
+  expect_filter_projection(engine, docs_depth_one, 1, 0b001U);
+  expect_filter_projection(engine, docs_overlapping, 2, 0b011U);
+
+  engine.set_filter_layout({2005, 2006});
+  expect_filter_projection(engine, aliases_recursive, 2, 0b11U);
+
+  engine.set_filter_layout({2001, 2002, 2003});
+  FilterResult cached_docs = engine.evaluate_filter(docs_recursive, 10);
+  if (cached_docs.native_filter_token == 0) {
+    SPDLOG_ERROR("Path filter token was not retained before mutation");
+    exit(1);
+  }
+
+  AddDataRequest update;
+  update.label = 2001;
+  update.vector = {1.0, 0.0, 0.0, 0.0};
+  update.fields_str = R"({"uri":"/other/a"})";
+  update.old_fields_str = R"({"uri":"/docs/a"})";
+  if (engine.add_data({update}) != 0) {
+    SPDLOG_ERROR("Path bitmap update failed");
+    exit(1);
+  }
+  SearchRequest token_query;
+  token_query.query = {1.0, 0.0, 0.0, 0.0};
+  token_query.topk = 10;
+  if (engine.search_with_filter_token(token_query,
+                                      cached_docs.native_filter_token)) {
+    SPDLOG_ERROR("Path filter token survived an upsert mutation");
+    exit(1);
+  }
+
+  engine.set_filter_layout({2001, 2002, 2003});
+  expect_filter_projection(engine, docs_recursive, 1, 0b010U);
+  expect_filter_projection(engine, other_recursive, 2, 0b101U);
+
+  AddDataRequest added;
+  added.label = 2004;
+  added.vector = {0.8, 0.2, 0.0, 0.0};
+  added.fields_str = R"({"uri":"/docs/new"})";
+  if (engine.add_data({added}) != 0) {
+    SPDLOG_ERROR("New descendant add failed");
+    exit(1);
+  }
+  engine.set_filter_layout({2001, 2002, 2003, 2004});
+  expect_filter_projection(engine, docs_recursive, 2, 0b1010U);
+
+  DeleteDataRequest deleted;
+  deleted.label = 2002;
+  deleted.old_fields_str = R"({"uri":"/docs/deep/b"})";
+  if (engine.delete_data({deleted}) != 0) {
+    SPDLOG_ERROR("Path descendant delete failed");
+    exit(1);
+  }
+  engine.set_filter_layout({2001, 2003, 2004});
+  expect_filter_projection(engine, docs_recursive, 1, 0b100U);
+  expect_filter_projection(engine, other_recursive, 2, 0b011U);
+
+  if (engine.dump(db_path) <= 0) {
+    SPDLOG_ERROR("Path bitmap lifecycle dump failed");
+    exit(1);
+  }
+
+  {
+    IndexEngine reloaded(db_path);
+    if (!reloaded.is_valid()) {
+      SPDLOG_ERROR("Reloaded path bitmap engine is invalid");
+      exit(1);
+    }
+    reloaded.set_filter_layout({2001, 2003, 2004});
+    expect_filter_projection(reloaded, docs_recursive, 1, 0b100U);
+    expect_filter_projection(reloaded, other_recursive, 2, 0b011U);
+    reloaded.set_filter_layout({2005, 2006});
+    expect_filter_projection(reloaded, aliases_recursive, 2, 0b11U);
+  }
+
+  std::filesystem::remove_all(db_path);
+  SPDLOG_INFO("[Passed] test_path_bitmap_lifecycle_and_reload");
 }
 
 int main() {
   init_logging("INFO", "stdout", "[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
   test_basic_workflow();
+  test_path_bitmap_lifecycle_and_reload();
   return 0;
 }
