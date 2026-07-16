@@ -1,0 +1,34 @@
+docs/en/guides/01-configuration.md
+  s_238599711c0a36::t_a83015ddaa3d76 871,1645
+docs/zh/guides/01-configuration.md
+  s_238599711c0a36::t_d703253dd78222 840,1612
+openviking/retrieve/hierarchical_retriever.py
+  s_238599711c0a36::t_6c4098e19942b1 78,354,356,361-370
+openviking_cli/utils/config/rerank_config.py
+  s_238599711c0a36::t_22bc5bbee0c979 51-52,55,75-77
+tests/retrieve/test_hierarchical_retriever_rerank.py
+  s_238599711c0a36::t_fd7f61932a4510 242-247,298-318
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "157525d021a3bc6c968ef8cb80850f99847a8885",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_238599711c0a36": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f69de-a71f-7393-9400-1b6d168a2974",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
