@@ -14,6 +14,11 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.parse.image_rewrite import rewrite_image_uris
 from openviking.parse.tree_builder import TreeBuilder
+from openviking.resource.source_metadata import (
+    build_source_metadata,
+    encode_source_metadata,
+    source_metadata_uri,
+)
 from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
 from openviking.storage.errors import LockAcquisitionError
@@ -136,6 +141,7 @@ class ResourceProcessor:
             "source_path": None,
         }
         preacquired_lock = kwargs.pop("resource_lock", NO_LOCK) or NO_LOCK
+        source_fingerprint = kwargs.pop("source_fingerprint", None)
         telemetry = get_current_telemetry()
 
         async def _set_stage(stage: str) -> None:
@@ -242,6 +248,13 @@ class ResourceProcessor:
                     if context_tree and context_tree.root:
                         result["root_uri"] = context_tree.root.uri
                         result["temp_uri"] = context_tree.root.temp_uri
+                        source_metadata = build_source_metadata(source_fingerprint)
+                        await get_viking_fs().write_file(
+                            source_metadata_uri(context_tree.root.temp_uri),
+                            encode_source_metadata(source_metadata),
+                            ctx=ctx,
+                        )
+                        result["source_metadata"] = source_metadata
                 telemetry.set(
                     "resource.finalize.duration_ms",
                     round((time.perf_counter() - finalize_start) * 1000, 3),

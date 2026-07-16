@@ -27,6 +27,12 @@ from openviking.resource.feishu_watch_auth import (
     create_feishu_auth_state,
     load_feishu_app_credentials,
 )
+from openviking.resource.source_metadata import (
+    decode_source_metadata,
+    fingerprints_match,
+    normalize_source_fingerprint,
+    source_metadata_uri,
+)
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
     is_remote_resource_source,
@@ -60,6 +66,7 @@ from openviking_cli.exceptions import (
     InternalError,
     InvalidArgumentError,
     NotInitializedError,
+    NotFoundError,
 )
 from openviking_cli.utils import get_logger
 
@@ -100,6 +107,8 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "create_parent",
         "telemetry",
         "request_validator",
+        "if_changed",
+        "source_fingerprint",
     }
 )
 
@@ -609,6 +618,8 @@ class ResourceService:
         resource_lock: Optional[LockLease] = None,
         stage_callback: Optional[Callable[[str], Any]] = None,
         args: Optional[Dict[str, Any]] = None,
+        if_changed: bool = False,
+        source_fingerprint: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (only supports resources scope).
@@ -639,6 +650,10 @@ class ResourceService:
             enforce_public_remote_targets: When True, reject non-public remote hosts and
                 validate each outbound HTTP request URL during fetch.
             args: Parser/accessor-specific options forwarded to the processing chain.
+            if_changed: Atomically skip an exact-target temp upload when its persisted
+                source SHA-256 matches. Disabled by default for compatibility.
+            source_fingerprint: Trusted server-derived source identity. HTTP callers cannot
+                supply this field directly; the temp-upload resolver computes it.
             **kwargs: Extra options forwarded to the parser chain
 
         Returns:
@@ -651,6 +666,10 @@ class ResourceService:
         self._ensure_initialized()
         normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
         kwargs.update(normalized_args.processor_kwargs)
+        try:
+            normalized_fingerprint = normalize_source_fingerprint(source_fingerprint)
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
         if not to and not parent:
             from openviking.server.dependencies import get_server_config
 
@@ -663,7 +682,7 @@ class ResourceService:
                 parent = default_parent
                 kwargs["create_parent"] = True
 
-        if self._should_use_connector(
+        use_connector = self._should_use_connector(
             path,
             ctx=ctx,
             to=to,
@@ -676,7 +695,66 @@ class ResourceService:
             watch_interval=watch_interval,
             connector_args=args or {},
             kwargs=kwargs,
-        ):
+        )
+
+        conditional_lock: LockLease = NO_LOCK
+        if if_changed:
+            if source_fingerprint is None or not allow_local_path_resolution:
+                raise InvalidArgumentError(
+                    "if_changed currently supports temporary uploads only."
+                )
+            if not to or parent:
+                raise InvalidArgumentError("if_changed requires an exact 'to' target.")
+            if watch_interval != 0 or skip_watch_management:
+                raise InvalidArgumentError(
+                    "if_changed is not supported for resource watch refreshes."
+                )
+            if use_connector:
+                raise InvalidArgumentError(
+                    "if_changed is not supported for Connector resource imports."
+                )
+            target = ContentTargetSpec.from_fields(
+                ctx=ctx,
+                kind="resource",
+                to=to,
+                parent=parent,
+                create_parent=bool(kwargs.get("create_parent", False)),
+            )
+            if not target.to:
+                raise InvalidArgumentError("if_changed requires an exact 'to' target.")
+            from openviking.storage.transaction import get_lock_manager
+
+            dst_path = self._viking_fs._uri_to_path(target.to, ctx=ctx)
+            conditional_lock = await self._resource_processor.acquire_resource_lock(
+                get_lock_manager(), dst_path, uri=target.to, timeout=0.0
+            )
+            try:
+                persisted_metadata = None
+                try:
+                    raw_metadata = await self._viking_fs.read_file(
+                        source_metadata_uri(target.to), ctx=ctx
+                    )
+                    persisted_metadata = decode_source_metadata(raw_metadata)
+                except (NotFoundError, FileNotFoundError):
+                    pass
+                if persisted_metadata and fingerprints_match(
+                    persisted_metadata, normalized_fingerprint
+                ):
+                    await conditional_lock.close()
+                    conditional_lock = NO_LOCK
+                    return {
+                        "status": "no-op",
+                        "reason": "source_sha256_match",
+                        "root_uri": target.to,
+                        "source_sha256": normalized_fingerprint["source_sha256"],
+                        "target_revision": persisted_metadata["target_revision"],
+                    }
+            except Exception:
+                await conditional_lock.close()
+                raise
+            resource_lock = conditional_lock
+
+        if use_connector:
             return await self._add_resource_via_connector(
                 path=path,
                 ctx=ctx,
@@ -880,20 +958,27 @@ class ResourceService:
                     "task_id": task.task_id,
                 }
 
-            result = await self._resource_processor.process_resource(
-                path=path,
-                ctx=ctx,
-                reason=reason,
-                instruction=instruction,
-                scope="resources",
-                to=target.to,
-                parent=target.parent,
-                build_index=build_index,
-                summarize=summarize,
-                stage_callback=stage_callback,
-                allow_local_path_resolution=allow_local_path_resolution,
-                **kwargs,
-            )
+            try:
+                result = await self._resource_processor.process_resource(
+                    path=path,
+                    ctx=ctx,
+                    reason=reason,
+                    instruction=instruction,
+                    scope="resources",
+                    to=target.to,
+                    parent=target.parent,
+                    build_index=build_index,
+                    summarize=summarize,
+                    stage_callback=stage_callback,
+                    allow_local_path_resolution=allow_local_path_resolution,
+                    source_fingerprint=(
+                        normalized_fingerprint if source_fingerprint is not None else None
+                    ),
+                    **kwargs,
+                )
+            finally:
+                if conditional_lock.active:
+                    await conditional_lock.close()
 
             if result.get("status") == "error":
                 return result

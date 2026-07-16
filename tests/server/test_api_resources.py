@@ -4,6 +4,7 @@
 """Tests for resource management endpoints."""
 
 import asyncio
+import hashlib
 import zipfile
 
 import httpx
@@ -672,6 +673,107 @@ async def test_shared_temp_upload_and_add_resource_deletes_upload_dir(
     assert body["status"] == "ok"
     assert body["result"]["root_uri"].startswith("viking://")
     assert not await vfs.exists(upload_root)
+
+
+async def test_add_resource_if_changed_noops_before_parse_and_consumes_upload(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    content = b"# stable source\n"
+    first_upload = await client.post(
+        "/api/v1/resources/temp_upload",
+        files={"file": ("stable.md", content, "text/markdown")},
+        data={"upload_mode": "shared"},
+    )
+    first_id = first_upload.json()["result"]["temp_file_id"]
+    target = "viking://resources/if-changed-stable"
+    first_add = await client.post(
+        "/api/v1/resources",
+        json={"temp_file_id": first_id, "to": target, "wait": True},
+    )
+    assert first_add.status_code == 200
+
+    second_upload = await client.post(
+        "/api/v1/resources/temp_upload",
+        files={"file": ("stable.md", content, "text/markdown")},
+        data={"upload_mode": "shared"},
+    )
+    second_id = second_upload.json()["result"]["temp_file_id"]
+
+    async def fail_if_parsed(**kwargs):
+        raise AssertionError("identical if_changed input must not enter the parse pipeline")
+
+    monkeypatch.setattr(service.resources._resource_processor, "process_resource", fail_if_parsed)
+    second_add = await client.post(
+        "/api/v1/resources",
+        json={"temp_file_id": second_id, "to": target, "if_changed": True},
+    )
+
+    assert second_add.status_code == 200
+    result = second_add.json()["result"]
+    assert result["status"] == "no-op"
+    assert result["reason"] == "source_sha256_match"
+    assert result["root_uri"] == target
+    assert len(result["source_sha256"]) == 64
+    assert len(result["target_revision"]) == 32
+    second_upload_root = f"viking://upload/{second_id.removeprefix('shared_')}"
+    assert not await get_viking_fs().exists(second_upload_root)
+
+
+async def test_add_resource_if_changed_writes_changed_source(
+    client: httpx.AsyncClient,
+):
+    target = "viking://resources/if-changed-update"
+
+    async def upload_and_add(content: bytes, *, conditional: bool):
+        upload = await client.post(
+            "/api/v1/resources/temp_upload",
+            files={"file": ("update.md", content, "text/markdown")},
+            data={"upload_mode": "shared"},
+        )
+        temp_file_id = upload.json()["result"]["temp_file_id"]
+        return await client.post(
+            "/api/v1/resources",
+            json={
+                "temp_file_id": temp_file_id,
+                "to": target,
+                "if_changed": conditional,
+                "wait": True,
+            },
+        )
+
+    first = await upload_and_add(b"# version one\n", conditional=False)
+    second = await upload_and_add(b"# version two\n", conditional=True)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["result"]["status"] == "success"
+    metadata = await get_viking_fs().read_file(f"{target}/.source.json")
+    assert hashlib.sha256(b"# version two\n").hexdigest() in metadata
+
+
+async def test_add_resource_if_changed_rejects_non_upload_and_watch(client: httpx.AsyncClient):
+    remote = await client.post(
+        "/api/v1/resources",
+        json={
+            "path": "https://example.com/resource.md",
+            "to": "viking://resources/remote",
+            "if_changed": True,
+        },
+    )
+    watched = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": "upload.md",
+            "to": "viking://resources/watched",
+            "watch_interval": 1,
+            "if_changed": True,
+        },
+    )
+
+    assert remote.status_code == 422
+    assert watched.status_code == 422
 
 
 async def test_shared_temp_upload_failed_consume_is_retryable(

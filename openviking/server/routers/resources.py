@@ -59,6 +59,10 @@ class AddResourceRequest(BaseModel):
             - watch_interval < 0: Same as watch_interval = 0, cancels any existing watch task.
             Default is 0 (no monitoring).
 
+        if_changed: For an exact target and temporary upload, atomically return a no-op
+            when the uploaded source bytes match the source fingerprint persisted by the
+            previous write. Other source kinds intentionally reject this first contract.
+
             Note: If the target URI already has an active watch task, a ConflictError will be
             raised. You must first cancel the existing watch (set watch_interval <= 0) before
             creating a new one.
@@ -85,11 +89,19 @@ class AddResourceRequest(BaseModel):
     args: Dict[str, Any] = Field(default_factory=dict)
     telemetry: TelemetryRequest = False
     watch_interval: float = 0
+    if_changed: bool = False
 
     @model_validator(mode="after")
     def check_path_or_temp_file_id(self):
         if not self.path and not self.temp_file_id:
             raise ValueError("Either 'path' or 'temp_file_id' must be provided")
+        if self.if_changed:
+            if not self.temp_file_id:
+                raise ValueError("'if_changed' currently requires 'temp_file_id'")
+            if not self.to:
+                raise ValueError("'if_changed' requires an exact 'to' target")
+            if self.watch_interval != 0:
+                raise ValueError("'if_changed' is not supported with resource watches")
         return self
 
 
@@ -188,8 +200,14 @@ async def add_resource(
         path = resolved.local_path
         original_filename = resolved.original_filename
         allow_local_path_resolution = True
+        source_fingerprint = {
+            "source_kind": "temp_upload",
+            "source_sha256": resolved.source_sha256,
+            "source_size": resolved.source_size,
+        }
     elif path is not None:
         path = require_remote_resource_source(path)
+        source_fingerprint = None
     if path is None:
         raise InvalidArgumentError("Either 'path' or 'temp_file_id' must be provided.")
 
@@ -227,6 +245,8 @@ async def add_resource(
                 allow_local_path_resolution=allow_local_path_resolution,
                 enforce_public_remote_targets=True,
                 args=request.args,
+                if_changed=request.if_changed,
+                source_fingerprint=source_fingerprint,
                 **kwargs,
             )
         except Exception:
