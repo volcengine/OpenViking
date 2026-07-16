@@ -126,6 +126,8 @@ await client.patch_memory_settings(agent_evolution_enabled=True)
 await client.patch_memory_settings(agent_evolution_enabled=None)
 ```
 
+HTTP SDK 与 embedded 模式的 `AsyncOpenViking` / `SyncOpenViking` 均提供相同方法。
+
 CLI：
 
 ```bash
@@ -139,7 +141,6 @@ ov user-settings set-memory --clear-agent-evolution-enabled
 
 - 没有显式配置的新增用户和存量用户，有效值均为 `false`。
 - 存量 trajectory/experience 文件保持原 URI 和检索可见性。
-- 幂等初始化函数只在开关缺失时写入 `false`，不覆盖用户显式值。
 - `user_config.json` 的更新使用文件锁执行 read-modify-write，避免并发覆盖 `add_targets` 或 Agent 进化配置。
 
 ## 8. Future TODO：企业版

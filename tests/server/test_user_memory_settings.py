@@ -104,25 +104,3 @@ async def test_delete_add_locations_preserves_memory_settings(
     stored = await read_user_config(service.viking_fs, _ctx())
     assert stored.add_targets.skill_uri is None
     assert stored.agent_evolution.enabled is True
-
-
-async def test_initialize_missing_agent_evolution_switch_is_idempotent(
-    service,
-):
-    from openviking.server.user_config import initialize_agent_evolution_disabled
-
-    uri = "viking://user/default/settings/user_config.json"
-    await service.viking_fs.write_file(
-        uri,
-        '{"add_targets":{"skill_uri":"viking://user/skills"}}',
-        ctx=_ctx(),
-    )
-
-    first = await initialize_agent_evolution_disabled(service.viking_fs, _ctx())
-    second = await initialize_agent_evolution_disabled(service.viking_fs, _ctx())
-
-    assert first is True
-    assert second is False
-    stored = await read_user_config(service.viking_fs, _ctx())
-    assert stored.add_targets.skill_uri == "viking://user/skills"
-    assert stored.agent_evolution.enabled is False

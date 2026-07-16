@@ -11,6 +11,12 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from openviking.core.namespace import canonical_session_uri
 from openviking.server.config import ToolOutputExternalizationConfig, UserConfig
 from openviking.server.identity import RequestContext
+from openviking.server.user_config import (
+    public_memory_settings,
+    read_user_config,
+    resolve_memory_settings,
+    write_user_memory_settings,
+)
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
@@ -67,6 +73,39 @@ class SessionService:
     def set_user_config_defaults(self, config: UserConfig) -> None:
         """Set deployment defaults used by newly created session objects."""
         self._user_config_defaults = config.model_copy(deep=True)
+
+    async def get_memory_settings(self, ctx: RequestContext) -> Dict[str, Any]:
+        """Return current-user memory overrides and their effective values."""
+        self._ensure_initialized()
+        override = await read_user_config(self._viking_fs, ctx)
+        effective = await resolve_memory_settings(
+            viking_fs=self._viking_fs,
+            ctx=ctx,
+            user_config_defaults=self._user_config_defaults,
+            user_config=override,
+        )
+        return {
+            "override": public_memory_settings(override),
+            "effective": {
+                "agent_evolution_enabled": effective.agent_evolution_enabled,
+            },
+        }
+
+    async def patch_memory_settings(
+        self,
+        ctx: RequestContext,
+        *,
+        agent_evolution_enabled: Any,
+    ) -> Dict[str, Any]:
+        """Update the current user's Agent Evolution override."""
+        self._ensure_initialized()
+        await write_user_memory_settings(
+            self._viking_fs,
+            ctx,
+            agent_evolution_enabled=agent_evolution_enabled,
+            agent_evolution_enabled_set=True,
+        )
+        return await self.get_memory_settings(ctx)
 
     def set_usage_reporter(self, usage_reporter: Optional["UsageReporter"]) -> None:
         """Set the usage reporter for newly created sessions."""

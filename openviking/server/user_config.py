@@ -236,23 +236,6 @@ async def write_user_memory_settings(
     await update_user_config(viking_fs, ctx, _set)
 
 
-async def initialize_agent_evolution_disabled(
-    viking_fs: VikingFS,
-    ctx: RequestContext,
-) -> bool:
-    """Persist the personal-edition default without overriding explicit state."""
-    changed = False
-
-    def _initialize(user_config: UserConfig) -> None:
-        nonlocal changed
-        if user_config.agent_evolution.enabled is None:
-            user_config.agent_evolution.enabled = False
-            changed = True
-
-    await update_user_config(viking_fs, ctx, _initialize)
-    return changed
-
-
 async def resolve_memory_settings(
     *,
     viking_fs: VikingFS,

@@ -30,6 +30,20 @@ class BaseClient(ABC):
         """Close the client and release resources."""
         ...
 
+    @abstractmethod
+    async def get_memory_settings(self) -> Dict[str, Any]:
+        """Return current-user memory setting overrides and effective values."""
+        ...
+
+    @abstractmethod
+    async def patch_memory_settings(
+        self,
+        *,
+        agent_evolution_enabled: Any,
+    ) -> Dict[str, Any]:
+        """Update the current user's Agent Evolution override."""
+        ...
+
     # ============= Resource Management =============
 
     @abstractmethod

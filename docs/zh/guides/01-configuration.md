@@ -1410,6 +1410,9 @@ openviking add-resource ./docs --exclude "*.tmp"
       "add_targets": {
         "resource_uri": "viking://user/resources",
         "skill_uri": "viking://user/skills"
+      },
+      "agent_evolution": {
+        "enabled": false
       }
     }
   }
@@ -1431,12 +1434,13 @@ openviking add-resource ./docs --exclude "*.tmp"
 | `temp_upload.shared_prefix` | str | 分配 shared `temp_file_id` 对象时使用的 URI 前缀。 | `"viking://upload"` |
 | `user_config_defaults.add_targets.resource_uri` | str | `add_resource` 未传 `to` 和 `parent` 时使用的部署级默认资源添加目录。`viking://user/...` 会按请求用户解析。 | `null` |
 | `user_config_defaults.add_targets.skill_uri` | str | `add_skill` 未传 `target_uri` 时使用的部署级默认技能添加根目录。仅允许 `viking://user/skills` 和 `viking://agent/skills`。 | `null` |
+| `user_config_defaults.agent_evolution.enabled` | bool | 用户未显式覆盖时，控制 session commit 是否生成或更新 trajectories 和 experiences 的部署级默认值。 | `null`（有效值为 `false`） |
 
 `api_key` 模式使用 API Key 认证，也是默认模式；`trusted` 模式信任上游网关或受信调用方注入的 `X-OpenViking-Account` / `X-OpenViking-User` 请求头。
 
 在 `api_key` 模式下配置 `root_api_key` 后，服务端启用正式多租户认证，并通过 Admin API 创建工作区和用户 key。在 `trusted` 模式下，普通请求不需要先注册 user key；每个请求都会根据注入的身份头解析成 `USER`。只有在 `auth_mode = "api_key"` 且未配置 `root_api_key` 时，服务端才会进入开发模式。
 
-`user_config_defaults` 用于给没有个人覆盖配置的新老用户提供默认用户配置。添加操作中，显式请求目标仍然优先：`add_resource.to` / `add_resource.parent` 优先于用户默认值，`add_skill.target_uri` 优先于用户默认值。个人覆盖配置存储在 `viking://user/{user_id}/settings/user_config.json`。
+`user_config_defaults` 用于给没有个人覆盖配置的新老用户提供默认用户配置。添加操作中，显式请求目标仍然优先：`add_resource.to` / `add_resource.parent` 优先于用户默认值，`add_skill.target_uri` 优先于用户默认值。`agent_evolution.enabled` 在用户级和部署级都未设置时，有效值为 `false`。个人覆盖配置存储在 `viking://user/{user_id}/settings/user_config.json`。
 
 支持的 add target URI：
 

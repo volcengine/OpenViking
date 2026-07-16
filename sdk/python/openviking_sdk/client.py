@@ -1593,7 +1593,7 @@ class AsyncHTTPClient:
 
     async def get_memory_settings(self) -> Dict[str, Any]:
         """Return current-user memory setting overrides and effective values."""
-        response = await self._http.get("/api/v1/user-settings/memory")
+        response = await self._request("GET", "/api/v1/user-settings/memory")
         return self._handle_response(response)
 
     async def patch_memory_settings(
@@ -1609,7 +1609,8 @@ class AsyncHTTPClient:
         payload: Dict[str, Any] = {}
         if agent_evolution_enabled is not _UNSET:
             payload["agent_evolution_enabled"] = agent_evolution_enabled
-        response = await self._http.patch(
+        response = await self._request(
+            "PATCH",
             "/api/v1/user-settings/memory",
             json=payload,
         )

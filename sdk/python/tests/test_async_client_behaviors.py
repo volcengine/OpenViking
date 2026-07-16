@@ -1,6 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
 
 import pytest
 from openviking_sdk import AsyncHTTPClient, SyncHTTPClient
@@ -778,21 +778,20 @@ async def test_import_ovpack_fails_fast_when_path_is_directory(tmp_path):
 @pytest.mark.asyncio
 async def test_async_http_client_gets_and_partially_patches_memory_settings():
     client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(
-        get=AsyncMock(return_value=object()),
-        patch=AsyncMock(return_value=object()),
-    )
-    client._http = fake_http
+    client._request = AsyncMock(return_value=object())
     client._handle_response = lambda _response: {"effective": {}}
 
     assert await client.get_memory_settings() == {"effective": {}}
     await client.patch_memory_settings(agent_evolution_enabled=True)
 
-    fake_http.get.assert_awaited_once_with("/api/v1/user-settings/memory")
-    fake_http.patch.assert_awaited_once_with(
-        "/api/v1/user-settings/memory",
-        json={"agent_evolution_enabled": True},
-    )
+    assert client._request.await_args_list == [
+        call("GET", "/api/v1/user-settings/memory"),
+        call(
+            "PATCH",
+            "/api/v1/user-settings/memory",
+            json={"agent_evolution_enabled": True},
+        ),
+    ]
 
     with pytest.raises(TypeError):
         await client.patch_memory_settings(memory_types=["profile"])
