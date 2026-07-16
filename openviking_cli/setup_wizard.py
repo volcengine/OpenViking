@@ -399,10 +399,6 @@ def _prompt_confirm(prompt: str, default: bool = True) -> bool:
     return raw in ("y", "yes")
 
 
-def _configured_hint(enabled: bool) -> str:
-    """Return a non-sensitive summary label for setup output."""
-    return "configured" if enabled else _dim("(not configured)")
-
 
 def _rule(title: str) -> None:
     """Print a section rule (rich when available, plain bold header otherwise)."""
@@ -883,71 +879,6 @@ def _ollama_vlm_config(vlm: VLMPreset) -> dict[str, Any]:
     }
 
 
-def _build_local_config(
-    model_name: str,
-    dimension: int,
-    workspace: str,
-    model_path: str | None = None,
-    cache_dir: str | None = None,
-    vlm_config: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Build ov.conf dict for llama.cpp local embedding setup."""
-    embedding_dense: dict[str, Any] = {
-        "provider": "local",
-        "model": model_name,
-        "dimension": dimension,
-    }
-    if model_path:
-        embedding_dense["model_path"] = model_path
-    if cache_dir:
-        embedding_dense["cache_dir"] = cache_dir
-
-    config: dict[str, Any] = {
-        "storage": {"workspace": workspace},
-        "embedding": {"dense": embedding_dense},
-    }
-    if vlm_config:
-        config["vlm"] = vlm_config
-    return config
-
-
-def _build_cloud_config(
-    provider: CloudProvider,
-    embedding_api_key: str,
-    embedding_model: str,
-    embedding_dim: int,
-    vlm_model: str,
-    workspace: str,
-    embedding_api_base: str | None = None,
-    vlm_provider: str | None = None,
-    vlm_api_key: str | None = None,
-    vlm_api_base: str | None = None,
-) -> dict[str, Any]:
-    resolved_vlm_provider = vlm_provider or provider.provider
-    resolved_vlm_api_base = vlm_api_base or provider.default_api_base
-    vlm_config: dict[str, Any] = {
-        "provider": resolved_vlm_provider,
-        "model": vlm_model,
-        "api_base": resolved_vlm_api_base,
-        "temperature": 0.0,
-        "max_retries": 2,
-    }
-    if vlm_api_key:
-        vlm_config["api_key"] = vlm_api_key
-
-    return {
-        "storage": {"workspace": workspace},
-        "embedding": {
-            "dense": {
-                "provider": provider.provider,
-                "model": embedding_model,
-                "api_key": embedding_api_key,
-                "api_base": embedding_api_base or provider.default_api_base,
-                "dimension": embedding_dim,
-            },
-        },
-        "vlm": vlm_config,
-    }
 
 
 def _build_query_planner_config(preset: QueryPlannerPreset) -> dict[str, Any]:
@@ -1596,32 +1527,6 @@ def _wizard_two_step() -> tuple[dict[str, Any] | None | object, bool | None]:
             config["vlm"] = vlm_config
         return config, ollama_running
 
-
-def _wizard_cloud() -> tuple[dict[str, Any] | None | object, bool | None]:
-    """Cloud API model setup flow: embedding first, then VLM.
-
-    Returns ``(config, ollama_running)``. ``config`` may also be the
-    ``_CUSTOM_SETUP`` sentinel when the user was routed to manual editing.
-    """
-    dense = _prompt_cloud_embedding()
-    if dense is _CUSTOM_SETUP:
-        return _CUSTOM_SETUP, None
-    if dense is None:
-        return None, None
-
-    reuse_key = None
-    if isinstance(dense, dict) and dense.get("api_key"):
-        reuse_key = (dense["provider"], dense["api_key"])
-    vlm_config, ollama_running = _prompt_cloud_vlm(reuse_key=reuse_key)
-    if vlm_config is None:
-        return None, ollama_running
-
-    config: dict[str, Any] = {
-        "storage": {"workspace": _workspace_path()},
-        "embedding": {"dense": dense},
-        "vlm": vlm_config,
-    }
-    return config, ollama_running
 
 
 def _wizard_server(current: dict[str, Any] | None = None) -> dict[str, Any] | None:

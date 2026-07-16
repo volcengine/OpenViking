@@ -166,6 +166,34 @@ func TestFindOmitsSearchFiltersWhenUnset(t *testing.T) {
 	}
 }
 
+func TestListSendsOrderingOptions(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/fs/ls" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("node_limit"); got != "200" {
+			t.Fatalf("node_limit = %q", got)
+		}
+		if got := r.URL.Query().Get("sort_by"); got != "mtime" {
+			t.Fatalf("sort_by = %q", got)
+		}
+		if got := r.URL.Query().Get("sort_order"); got != "desc" {
+			t.Fatalf("sort_order = %q", got)
+		}
+		writeOK(t, w, []any{})
+	}))
+	defer closeServer()
+
+	_, err := client.List(context.Background(), "viking://session", &ListOptions{
+		NodeLimit: 200,
+		SortBy:    "mtime",
+		SortOrder: "desc",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFindSendsImageQuery(t *testing.T) {
 	imagePath := filepath.Join(t.TempDir(), "query.png")
 	if err := os.WriteFile(imagePath, []byte("\x89PNG\r\n\x1a\n"), 0o600); err != nil {
@@ -190,6 +218,40 @@ func TestFindSendsImageQuery(t *testing.T) {
 	if _, err := client.Find(context.Background(), "", &FindOptions{
 		TargetURI: "viking://resources/images",
 		Image:     imagePath,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReindexSendsDryRun(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/content/reindex" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s", r.Method)
+		}
+		body := readJSONBody(t, r)
+		if got := body["uri"]; got != "viking://resources/demo" {
+			t.Fatalf("uri = %#v", got)
+		}
+		if got := body["mode"]; got != "prune_orphans" {
+			t.Fatalf("mode = %#v", got)
+		}
+		if got := body["wait"]; got != false {
+			t.Fatalf("wait = %#v", got)
+		}
+		if got := body["dry_run"]; got != true {
+			t.Fatalf("dry_run = %#v", got)
+		}
+		writeOK(t, w, map[string]any{"status": "completed"})
+	}))
+	defer closeServer()
+
+	if _, err := client.Reindex(context.Background(), "resources/demo", &ReindexOptions{
+		Mode:   "prune_orphans",
+		Wait:   false,
+		DryRun: true,
 	}); err != nil {
 		t.Fatal(err)
 	}

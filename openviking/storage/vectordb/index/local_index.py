@@ -555,20 +555,6 @@ class LocalIndex(IIndex):
         thread.join()
         self._dense_rebuild_thread = None
 
-    def wait_for_background_rebuild(self, timeout: float = 5.0) -> bool:
-        if not self._auto_background_rebuild:
-            return False
-        deadline = time.monotonic() + max(0.0, timeout)
-        while self.dense_search is not None and self.dense_search.needs_rebuild:
-            self._raise_dense_rebuild_failure()
-            if not self._retry_memory_blocked_rebuild():
-                self._wake_dense_rebuild_worker()
-            remaining = deadline - time.monotonic()
-            if remaining <= 0 or not self._dense_rebuild_completed.wait(remaining):
-                return False
-            self._raise_dense_rebuild_failure()
-        return self.dense_search is not None
-
     def search(
         self,
         query_vector: Optional[List[float]],

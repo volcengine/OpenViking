@@ -10,8 +10,6 @@ They serve as a design reference for future media parsing capabilities.
 For current document parsing (PDF, Markdown, HTML, Text), see other parser modules.
 """
 
-import asyncio
-import io
 from pathlib import Path
 from typing import List, Optional, Union
 
@@ -21,9 +19,7 @@ from openviking.parse.base import NodeType, ParseResult, ResourceNode
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.media.constants import IMAGE_EXTENSIONS
 from openviking.parse.parsers.media.naming import resolve_media_names
-from openviking.prompts import render_prompt
 from openviking.storage.viking_fs import get_viking_fs
-from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.config.parser_config import ImageConfig
 from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
@@ -154,129 +150,6 @@ class ImageParser(BaseParser):
             parser_name="ImageParser",
             meta={"content_type": "image", "format": format_str.lower()},
         )
-
-    async def _vlm_describe(self, image_bytes: bytes, model: Optional[str]) -> str:
-        """
-        Generate image description using VLM.
-
-        Args:
-            image_bytes: Image binary data
-            model: VLM model name
-
-        Returns:
-            Image description in markdown format
-        """
-        try:
-            vlm = get_openviking_config().vlm
-
-            # Render prompt
-            prompt = render_prompt(
-                "parsing.image_summary",
-                {
-                    "context": "No additional context",
-                },
-            )
-            response = await vlm.get_vision_completion_async(
-                prompt=prompt,
-                images=[image_bytes],
-            )
-            logger.info(
-                f"[ImageParser._vlm_describe] VLM response received, length: {len(response)}, content: {response[:256]}"
-            )
-
-            return response.strip()
-
-        except Exception as e:
-            logger.error(
-                f"[ImageParser._vlm_describe] Error in VLM image description: {e}", exc_info=True
-            )
-            # Fallback to basic description
-            return "Image description (VLM integration failed)\n\nThis is an image file."
-
-    async def _ocr_extract(self, image_bytes: bytes, lang: str) -> Optional[str]:
-        """
-        Extract text from image using OCR via Tesseract.
-
-        Args:
-            image_bytes: Image binary data
-            lang: OCR language code (e.g., "eng", "chi_sim")
-
-        Returns:
-            Extracted text as a string, or None if no text found
-        """
-        try:
-            import pytesseract
-        except ImportError:
-            logger.warning("pytesseract not installed. Install with: pip install openviking[ocr]")
-            return None
-
-        def _sync_ocr() -> Optional[str]:
-            img = Image.open(io.BytesIO(image_bytes))
-            text = pytesseract.image_to_string(img, lang=lang).strip()
-            return text if text else None
-
-        try:
-            return await asyncio.get_event_loop().run_in_executor(None, _sync_ocr)
-        except Exception as e:
-            logger.error(f"[ImageParser._ocr_extract] OCR extraction failed: {e}", exc_info=True)
-            return None
-
-    async def _generate_semantic_info(
-        self, node: ResourceNode, description: str, viking_fs, has_ocr: bool, root_dir_uri: str
-    ):
-        """
-        Phase 2: Generate abstract and overview and write to .abstract.md and .overview.md.
-
-        Args:
-            node: ResourceNode to update
-            description: Image description
-            viking_fs: VikingFS instance
-            has_ocr: Whether OCR file exists
-            root_dir_uri: Root directory URI to write semantic files
-        """
-        # Generate abstract (short summary, < 100 tokens)
-        abstract = description[:253] + "..." if len(description) > 256 else description
-
-        # Generate overview (content summary + file list + usage instructions)
-        overview_parts = [
-            "## Content Summary\n",
-            description,
-            "\n\n## Available Files\n",
-            f"- {node.meta['original_filename']}: Original image file ({node.meta['width']}x{node.meta['height']}, {node.meta['format'].upper()} format)\n",
-        ]
-
-        if has_ocr:
-            overview_parts.append("- ocr.md: OCR text recognition result from the image\n")
-
-        overview_parts.append("\n## Usage\n")
-        overview_parts.append("### View Image\n")
-        overview_parts.append("```python\n")
-        overview_parts.append("image_bytes = await image_resource.view()\n")
-        overview_parts.append("# Returns: PNG/JPG format image binary data\n")
-        overview_parts.append("# Purpose: Display or save the image\n")
-        overview_parts.append("```\n\n")
-
-        if has_ocr:
-            overview_parts.append("### Get OCR-recognized Text\n")
-            overview_parts.append("```python\n")
-            overview_parts.append("ocr_text = await image_resource.ocr()\n")
-            overview_parts.append("# Returns: FileContent object or None\n")
-            overview_parts.append("# Purpose: Extract text information from the image\n")
-            overview_parts.append("```\n\n")
-
-        overview_parts.append("### Get Image Metadata\n")
-        overview_parts.append("```python\n")
-        overview_parts.append(
-            f"size = image_resource.get_size()  # ({node.meta['width']}, {node.meta['height']})\n"
-        )
-        overview_parts.append(f'format = image_resource.get_format()  # "{node.meta["format"]}"\n')
-        overview_parts.append("```\n")
-
-        overview = "".join(overview_parts)
-
-        # Store in node meta
-        node.meta["abstract"] = abstract
-        node.meta["overview"] = overview
 
         # Write to files in temp directory
         # await viking_fs.write_file(f"{root_dir_uri}/.abstract.md", abstract)

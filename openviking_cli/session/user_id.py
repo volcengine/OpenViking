@@ -55,9 +55,6 @@ class UserIdentifier(object):
         """User-level space name."""
         return self._user_id
 
-    def memory_space_uri(self) -> str:
-        return f"viking://user/{self.user_space_name()}/memories"
-
     def to_dict(self):
         return {
             "account_id": self._account_id,

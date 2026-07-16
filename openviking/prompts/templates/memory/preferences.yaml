@@ -37,12 +37,15 @@ fields:
       {% if language == 'en' %}Use lowercase with underscores, max 3 words.{% else %}Keep the topic concise and natural in {{ language }}.{% endif %}
       Preference topic used to uniquely identify this preference memory.
       Should be a semantic topic description such as "Python code style", "Communication style", "Food preference", "Commute preference", etc.
-      Different preference topics should be stored as separate memories, do not mix unrelated preferences.
+      Store unrelated preferences separately, but merge overlapping or synonymous topics into one stable topic.
     merge_op: immutable
 
   - name: content
     type: string
     description: |
       Preference content in Markdown format describing "what the user prefers/is accustomed to".
-      Example: "User has shown clear preferences for Python code style in multiple conversations: dislikes using type hints, considers them redundant; requires concise function comments, limited to 1-2 lines; prefers direct implementation, avoids excessive fallbacks and over-engineering."
+      Write one concise bullet per distinct, reusable preference; omit duplicates, events, dates, plans, and supporting evidence.
+      Example:
+      - Prefers concise written updates with decisions and next actions.
+      - Chooses lightweight tools when they cover the workflow.
     merge_op: patch

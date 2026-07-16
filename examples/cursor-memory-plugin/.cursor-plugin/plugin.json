@@ -1,7 +1,7 @@
 {
   "name": "openviking-memory",
   "displayName": "OpenViking Memory",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Automatic long-term memory recall and conversation capture for Cursor",
   "author": {
     "name": "OpenViking"

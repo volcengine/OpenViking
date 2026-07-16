@@ -155,66 +155,6 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"Embedding failed: {str(e)}") from e
 
-    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
-        """Batch embedding."""
-        if not texts:
-            return []
-
-        def _call() -> List[EmbedResult]:
-            response = self.client.embeddings.create(**self._build_kwargs(texts))
-            return [EmbedResult(dense_vector=item.embedding) for item in response.data]
-
-        try:
-            results = self._run_with_retry(
-                _call,
-                logger=logger,
-                operation_name="Voyage batch embedding",
-            )
-            # Estimate token usage for batch
-            total_tokens = sum(self._estimate_tokens(text) for text in texts)
-            self.update_token_usage(
-                model_name=self.model_name,
-                provider="voyage",
-                prompt_tokens=total_tokens,
-                completion_tokens=0,
-            )
-            return results
-        except openai.APIError as e:
-            raise RuntimeError(f"Voyage API error: {e.message}") from e
-        except Exception as e:
-            raise RuntimeError(f"Batch embedding failed: {str(e)}") from e
-
-    async def embed_batch_async(
-        self, texts: List[str], is_query: bool = False
-    ) -> List[EmbedResult]:
-        if not texts:
-            return []
-
-        client = self._get_async_client()
-
-        async def _call() -> List[EmbedResult]:
-            response = await client.embeddings.create(**self._build_kwargs(texts))
-            return [EmbedResult(dense_vector=item.embedding) for item in response.data]
-
-        try:
-            results = await self._run_with_async_retry(
-                _call,
-                logger=logger,
-                operation_name="Voyage async batch embedding",
-            )
-            total_tokens = sum(self._estimate_tokens(text) for text in texts)
-            self.update_token_usage(
-                model_name=self.model_name,
-                provider="voyage",
-                prompt_tokens=total_tokens,
-                completion_tokens=0,
-            )
-            return results
-        except openai.APIError as e:
-            raise RuntimeError(f"Voyage API error: {e.message}") from e
-        except Exception as e:
-            raise RuntimeError(f"Batch embedding failed: {str(e)}") from e
-
     def get_dimension(self) -> int:
         """Get embedding dimension."""
         return self._dimension

@@ -136,6 +136,8 @@ async def get_request_context(
     identity: ResolvedIdentity = Depends(resolve_identity),
     x_openviking_actor_peer: Optional[str] = Header(None, alias="X-OpenViking-Actor-Peer"),
     x_openviking_agent: Optional[str] = Header(None, alias="X-OpenViking-Agent"),
+    x_api_key_ctx: Optional[str] = Header(None, alias="X-API-Key"),
+    authorization_ctx: Optional[str] = Header(None, alias="Authorization"),
 ) -> RequestContext:
     """Convert ResolvedIdentity to RequestContext."""
     path = request.url.path
@@ -146,6 +148,8 @@ async def get_request_context(
         x_openviking_agent,
     )
 
+    raw_api_key = _extract_api_key(x_api_key_ctx, authorization_ctx)
+
     ctx = RequestContext(
         user=UserIdentifier(
             identity.account_id or "default",
@@ -155,6 +159,7 @@ async def get_request_context(
         actor_peer_id=actor_peer_id,
         legacy_agent_id=legacy_agent_id,
         from_oauth=identity.from_oauth,
+        api_key=raw_api_key,
     )
     # Update the unified root observability context after authentication succeeds.
     update_root_span_identity(

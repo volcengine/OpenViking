@@ -119,12 +119,15 @@ class OTelExporterConfig(BaseModel):
         model_config = {"extra": "forbid"}
 
     enabled: bool = False
-    protocol: str = "grpc"  # "grpc" or "http"
+    protocol: str = "grpc"  # "grpc", "http", or "local" for traces
     tls: TLSConfig = Field(default_factory=TLSConfig)
     endpoint: str = "localhost:4317"  # gRPC default: 4317; HTTP default: 4318
     service_name: str = "openviking-server"
     export_interval_ms: int = 10000
     headers: Dict[str, str] = Field(default_factory=dict)
+    local_path: str = "~/.openviking/logs/traces.jsonl"
+    local_rotation_mb: int = Field(default=40, gt=0)
+    local_backup_count: int = Field(default=2, ge=0)
 
     model_config = {"extra": "forbid"}
 

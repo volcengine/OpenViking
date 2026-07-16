@@ -132,7 +132,7 @@ def test_case_experience_links_require_policy_root_uri():
 
 
 @pytest.mark.asyncio
-async def test_train_from_extracted_case_memories_submits_streaming_rollout(monkeypatch):
+async def test_train_from_extracted_cases_submits_streaming_rollout(monkeypatch):
     submitted_gradients = []
     submitted_analyses = []
 
@@ -221,17 +221,7 @@ async def test_train_from_extracted_case_memories_submits_streaming_rollout(monk
             max_gradients_per_update=8,
         ),
     )
-    operations = ResolvedOperations(
-        upsert_operations=[_case_operation()],
-        delete_file_contents=[],
-        errors=[],
-    )
-
-    # The extracted case comes from the same memory operations as profile/preferences/etc.;
-    # no extra LLM/VLM case extractor is involved.
-    cases = __import__(
-        "openviking.session.compressor_v3", fromlist=["_operations_to_cases"]
-    )._operations_to_cases(operations)
+    cases = [_training_case()]
     result = await compressor.train_from_extracted_cases(
         cases=cases,
         messages=_messages(),
@@ -246,10 +236,7 @@ async def test_train_from_extracted_case_memories_submits_streaming_rollout(monk
     # Verify analysis was used
     assert submitted_analyses[0] is not None
     assert submitted_analyses[0].trajectories[0].name == "duplicate_booking"
-    # Verify case info carried through correctly
-    assert cases[0].name == "重复预订处理"
-    assert cases[0].input["summary"] == "用户要求处理重复预订"
-    assert cases[0].rubric.criteria[0].name == "先验证重复"
+    assert cases[0].name == "duplicate_booking"
 
 
 @pytest.mark.asyncio
@@ -929,9 +916,11 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
     case_uri = "viking://user/u/memories/cases/duplicate_booking.md"
     traj_uri = "viking://user/u/memories/trajectories/duplicate_booking.md"
     exp_uri = "viking://user/u/memories/experiences/booking_duplicate_handling.md"
+    deleted_exp_uri = "viking://user/u/memories/experiences/legacy_booking_handling.md"
 
     class FakeFS:
         def __init__(self):
+            self.commits = []
             self.files = {
                 case_uri: MemoryFileUtils.write(
                     MemoryFile(
@@ -997,6 +986,9 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
             del uri, output, ctx
             return []
 
+        async def commit(self, **kwargs):
+            self.commits.append(kwargs)
+
     class FakeTrainer:
         policy_set = ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[])
 
@@ -1034,6 +1026,7 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
                         policies=[],
                     ),
                     written_uris=[exp_uri],
+                    deleted_uris=[deleted_exp_uri],
                     errors=[],
                 ),
                 metadata={},
@@ -1095,6 +1088,8 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
         case_uri_by_name={"duplicate_booking": case_uri},
         messages=_messages(),
         ctx=_ctx(),
+        session_id="session-1",
+        archive_uri="viking://user/u/sessions/session-1/history/archive_001",
     )
 
     assert result["submitted"] == 1
@@ -1125,3 +1120,10 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
     assert any(link["from_uri"] == case_uri for link in traj_file.backlinks)
     exp_file = MemoryFileUtils.read(fs.files[exp_uri], uri=exp_uri)
     assert any(link["from_uri"] == case_uri for link in exp_file.backlinks)
+    assert fs.commits == [
+        {
+            "message": "Update experience memories from session commit archive_001",
+            "paths": [exp_uri, deleted_exp_uri],
+            "ctx": _ctx(),
+        }
+    ]

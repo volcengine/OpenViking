@@ -15,13 +15,13 @@ from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
 from openviking.server.dependencies import set_service
 from openviking.service.core import OpenVikingService
-from openviking.service.task_tracker import TaskStatus, get_task_tracker, reset_task_tracker
+from openviking.service.task_tracker import TaskStatus, get_task_tracker, set_task_tracker
 
 
 @pytest_asyncio.fixture
 async def api_client(temp_dir) -> AsyncGenerator[Tuple[httpx.AsyncClient, OpenVikingService], None]:
     """Create in-process HTTP client for API endpoint tests."""
-    reset_task_tracker()
+    set_task_tracker(None)
     service = OpenVikingService(path=str(temp_dir / "api_data"))
     await service.initialize()
     app = create_app(config=ServerConfig(), service=service)
@@ -33,19 +33,19 @@ async def api_client(temp_dir) -> AsyncGenerator[Tuple[httpx.AsyncClient, OpenVi
 
     await service.close()
     await AsyncOpenViking.reset()
-    reset_task_tracker()
+    set_task_tracker(None)
 
 
 @pytest_asyncio.fixture
 async def ov_client(temp_dir) -> AsyncGenerator[AsyncOpenViking, None]:
     """Create AsyncOpenViking client for unit tests."""
-    reset_task_tracker()
+    set_task_tracker(None)
     client = AsyncOpenViking(path=str(temp_dir / "ov_data"))
     await client.initialize()
     yield client
     await client.close()
     await AsyncOpenViking.reset()
-    reset_task_tracker()
+    set_task_tracker(None)
 
 
 async def _new_session_with_one_message(client: httpx.AsyncClient) -> str:

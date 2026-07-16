@@ -30,14 +30,12 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Optional, Sequence
 
 from benchmark.vectordb_perf.async_utils import map_bounded_as_completed
-
-from openviking.storage.expr import PathScope
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.collection_schemas import CollectionSchemas
+from openviking.storage.expr import PathScope
 from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import OpenVikingConfigSingleton
-
 
 BENCH_ACCOUNT_ID = "bench_account"
 BENCH_USER_ID = "bench_user"
@@ -524,7 +522,9 @@ def build_synthetic_workload(options: BenchOptions) -> Workload:
     cases: list[QueryCase] = []
     for qindex in range(query_count):
         record_index = (qindex * max(1, rows // query_count)) % rows
-        full_path = synthetic_path(record_index, depth=options.path_depth, fanout=options.path_fanout)
+        full_path = synthetic_path(
+            record_index, depth=options.path_depth, fanout=options.path_fanout
+        )
         cases.append(
             QueryCase(
                 query_id=f"syn-q{qindex}",
@@ -619,7 +619,7 @@ def build_dir_vector_workload(options: BenchOptions) -> Workload:
             if sample_metadata is not None
             else iter_json_records(paths["corpus"], row_limit)
         )
-        for index, (meta, vector) in enumerate(zip(metadata_iter, vector_iter)):
+        for index, (meta, vector) in enumerate(zip(metadata_iter, vector_iter, strict=False)):
             rid = record_id(meta, index)
             path = extract_path(meta)
             category = str(pick_value(meta, ("category", "primary_category", "type")) or "")
@@ -638,7 +638,7 @@ def build_dir_vector_workload(options: BenchOptions) -> Workload:
     ground_truth = load_ground_truth(paths["ground_truth"])
     covered_cases: list[QueryCase] = []
     fallback_cases: list[QueryCase] = []
-    for index, (query_meta, vector) in enumerate(zip(query_records, query_vectors)):
+    for index, (query_meta, vector) in enumerate(zip(query_records, query_vectors, strict=False)):
         qid = record_id(query_meta, index)
         gt = [str(item) for item in (ground_truth.get(qid) or ground_truth.get(str(index)) or [])]
         if sampled_ids is not None:
@@ -760,7 +760,10 @@ async def run_search_phase(
                 level=[2],
                 limit=top_k,
             ),
-            extra={"query_id": query.query_id, "filter_path": query.filter_path if filtered else ""},
+            extra={
+                "query_id": query.query_id,
+                "filter_path": query.filter_path if filtered else "",
+            },
         )
 
     events: list[Event] = []
@@ -785,13 +788,12 @@ async def run_search_phase(
                 force=done == len(queries),
             )
     else:
+
         async def tagged_query(query: QueryCase):
             event, rows = await one_query(query)
             return query, event, rows
 
-        async for query, event, rows in map_bounded_as_completed(
-            queries, tagged_query, workers
-        ):
+        async for query, event, rows in map_bounded_as_completed(queries, tagged_query, workers):
             events.append(event)
             results.append((query, rows or []))
             done += 1
@@ -843,11 +845,9 @@ def benchmark_context() -> RequestContext:
 async def upsert_records(
     backend: VikingVectorIndexBackend, ctx: RequestContext, records: list[dict[str, Any]]
 ) -> list[str]:
-    ids: list[str] = []
-    for record in records:
-        inserted = await backend.upsert(record, ctx=ctx)
-        if inserted:
-            ids.append(inserted)
+    ids = await backend.upsert_many(records, ctx=ctx)
+    if len(ids) != len(records):
+        raise RuntimeError(f"bulk upsert returned {len(ids)} ids for {len(records)} records")
     return ids
 
 
@@ -946,13 +946,13 @@ async def run_benchmark_async(options: BenchOptions) -> RunResult:
                 fetch_ids.extend(str(row["id"]) for row in batch[: 20 - len(fetch_ids)])
             event, ids = await async_timed_event(
                 "ingest",
-                "upsert_rows_serial",
+                "upsert_rows_batch",
                 lambda batch=batch: upsert_records(backend, ctx, batch),
                 count=len(batch),
             )
             events.append(event)
             if not event.success:
-                validation_errors.append(event.error or "upsert_rows_serial failed")
+                validation_errors.append(event.error or "upsert_rows_batch failed")
                 break
             inserted += len(ids or [])
             last_ingest_reported_at = progress_count(
@@ -1018,7 +1018,9 @@ async def run_benchmark_async(options: BenchOptions) -> RunResult:
     if not event.success:
         validation_errors.append(event.error or "fetch_by_ids failed")
     elif len(fetched or []) != len(fetch_ids):
-        validation_errors.append(f"fetch_by_ids returned {len(fetched or [])}, expected {len(fetch_ids)}")
+        validation_errors.append(
+            f"fetch_by_ids returned {len(fetched or [])}, expected {len(fetch_ids)}"
+        )
 
     selected_queries = workload.queries
     search_events, errors, vector_quality = await run_search_phase(
@@ -1152,9 +1154,7 @@ def phase_summary_rows(events: list[Event]) -> list[dict[str, Any]]:
                 "p95_ms": round(percentile(latencies, 95), 3),
                 "p99_ms": round(percentile(latencies, 99), 3),
                 "max_ms": round(max(latencies), 3),
-                "throughput_per_sec": round((count / wall_ms) * 1000.0, 3)
-                if wall_ms > 0
-                else 0.0,
+                "throughput_per_sec": round((count / wall_ms) * 1000.0, 3) if wall_ms > 0 else 0.0,
             }
         )
     return rows
@@ -1283,9 +1283,7 @@ def write_outputs(result: RunResult, options: BenchOptions) -> None:
     write_text(output_dir / "summary_zh.md", build_markdown_report(result, summary_rows, options))
 
 
-def write_suite_outputs(
-    output_dir: Path, runs: list[tuple[BenchOptions, RunResult]]
-) -> None:
+def write_suite_outputs(output_dir: Path, runs: list[tuple[BenchOptions, RunResult]]) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     run_summaries = {
         run_options.dataset: phase_summary_rows(result.events) for run_options, result in runs
@@ -1299,7 +1297,9 @@ def write_suite_outputs(
             "queries": result.workload.get("query_count"),
             "dim": result.workload.get("vector_dim"),
             "top_k": result.workload.get("top_k"),
-            "vector_qps": metric_value(run_summaries[run_options.dataset], "vector_search", "throughput_per_sec"),
+            "vector_qps": metric_value(
+                run_summaries[run_options.dataset], "vector_search", "throughput_per_sec"
+            ),
             "vector_recall": quality_rate(result.quality, "vector_search"),
             "filtered_qps": metric_value(
                 run_summaries[run_options.dataset], "filtered_vector_search", "throughput_per_sec"
@@ -1332,9 +1332,11 @@ def write_suite_outputs(
     ]
     for run_options, result in runs:
         lines.extend(["", f"## {run_options.dataset} 明细", ""])
-        detail = build_markdown_report(
-            result, run_summaries[run_options.dataset], run_options
-        ).strip().splitlines()
+        detail = (
+            build_markdown_report(result, run_summaries[run_options.dataset], run_options)
+            .strip()
+            .splitlines()
+        )
         for line in detail[1:]:
             lines.append("#" + line if line.startswith("#") else line)
     write_text(output_dir / "summary_zh.md", "\n".join(lines))
@@ -1518,7 +1520,9 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> BenchOptions:
-    parser = argparse.ArgumentParser(description="Run OpenViking vector backend performance benchmark")
+    parser = argparse.ArgumentParser(
+        description="Run OpenViking vector backend performance benchmark"
+    )
     parser.add_argument("--config", help="Path to ov.conf. Defaults to OpenViking config lookup.")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--run-id")
@@ -1556,7 +1560,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> BenchOptions:
         raise ValueError("--drop-at-end is not allowed with --mode read-only")
 
     defaults = PROFILE_DEFAULTS[args.profile]
-    run_id = args.run_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid.uuid4().hex[:8]
+    run_id = (
+        args.run_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid.uuid4().hex[:8]
+    )
     output_dir = args.output_dir or Path("benchmark/results/vectordb_perf") / run_id
     return BenchOptions(
         config=args.config,

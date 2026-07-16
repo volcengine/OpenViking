@@ -634,6 +634,14 @@ class SemanticConfig:
     memory_chunk_overlap: int = 200
     """Character overlap between adjacent memory chunks for context continuity."""
 
+    def __post_init__(self):
+        if self.memory_chunk_chars <= 0:
+            raise ValueError("memory_chunk_chars must be positive")
+        if self.memory_chunk_overlap < 0:
+            raise ValueError("memory_chunk_overlap must be non-negative")
+        if self.memory_chunk_overlap >= self.memory_chunk_chars:
+            raise ValueError("memory_chunk_overlap must be smaller than memory_chunk_chars")
+
 
 # Configuration registry for dynamic loading
 PARSER_CONFIG_REGISTRY = {

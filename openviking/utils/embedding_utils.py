@@ -202,8 +202,8 @@ def get_resource_content_type(file_name: str) -> Optional[ResourceContentType]:
         ".mm",
     }
     image_extensions = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
-    video_extensions = {".mp4", ".avi", ".mov", ".wmv", ".flv"}
-    audio_extensions = {".mp3", ".wav", ".aac", ".flac"}
+    video_extensions = {".mp4", ".avi", ".mov", ".wmv", ".flv", ".mkv", ".webm"}
+    audio_extensions = {".mp3", ".wav", ".aac", ".flac", ".ogg", ".m4a", ".opus", ".ac3"}
 
     if any(file_name.endswith(ext) for ext in text_extensions):
         return ResourceContentType.TEXT

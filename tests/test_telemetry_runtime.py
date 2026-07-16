@@ -28,7 +28,6 @@ from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.telemetry import (
     get_current_telemetry,
-    get_telemetry_runtime,
     register_telemetry,
     tracer_module,
     unregister_telemetry,
@@ -39,17 +38,6 @@ from openviking.telemetry.snapshot import TelemetrySnapshot
 from openviking.telemetry.span_models import OperationSpanAttributes, RootSpanAttributes
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import logger as logger_module
-
-
-def test_telemetry_module_exports_snapshot_and_runtime():
-    snapshot = TelemetrySnapshot(
-        telemetry_id="tm_demo",
-        summary={"duration_ms": 1.2},
-    )
-    usage = snapshot.to_usage_dict()
-
-    assert usage == {"duration_ms": 1.2, "token_total": 0}
-    assert get_telemetry_runtime().meter() is not None
 
 
 def test_root_observability_context_bind_and_reset():

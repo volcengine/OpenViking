@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { parseCursorTranscript } from "./cursor-transcript.mjs";
 
 import {
-  addAgentMessage,
+  addAgentMessages,
   buildAgentProfile,
   commitAgentSession,
   createAgentLogger,
@@ -40,19 +40,18 @@ async function captureTranscript(input, state, sessionId) {
   let turns = [];
   try { turns = parseCursorTranscript(await readFile(transcriptPath, "utf8")); } catch { return { state, captured: 0 }; }
   const capturedHashes = new Set(Array.isArray(state.capturedHashes) ? state.capturedHashes : []);
-  let captured = 0;
+  const toSend = [];
   for (const [index, turn] of turns.entries()) {
     // Cursor transcripts do not expose a stable message id. Include the
     // transcript position so two legitimate identical turns are retained,
     // while duplicate Hook executions over the same transcript still dedupe.
     const hash = stableHash(index, turn.role, turn.content);
     if (capturedHashes.has(hash)) continue;
-    const result = await addAgentMessage(fetchJSON, sessionId, turn);
-    if (result.ok || [0, 408, 429].includes(result.status) || result.status >= 500) {
-      capturedHashes.add(hash);
-      captured += 1;
-    }
+    toSend.push({ hash, turn });
   }
+  const result = await addAgentMessages(fetchJSON, sessionId, toSend.map((item) => item.turn));
+  const captured = result.sent + result.queued;
+  for (const item of toSend.slice(0, captured)) capturedHashes.add(item.hash);
   return {
     captured,
     state: {

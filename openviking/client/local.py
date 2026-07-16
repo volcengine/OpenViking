@@ -315,7 +315,11 @@ class LocalClient(BaseClient):
             result["abstract"] = abstract
         if level is None or level == 1:
             result["overview"] = await service.fs.overview(root_uri, ctx=ctx)
-        if level == 2 or include_content is True or (level is None and include_content is not False):
+        if (
+            level == 2
+            or include_content is True
+            or (level is None and include_content is not False)
+        ):
             from openviking.server.routers.skills import _skill_md_uri
 
             result["content"] = await service.fs.read(_skill_md_uri(root_uri), ctx=ctx)
@@ -506,12 +510,14 @@ class LocalClient(BaseClient):
         uri: str,
         mode: str = "vectors_only",
         wait: bool = True,
+        dry_run: bool = False,
     ) -> Dict[str, Any]:
         """Reindex semantic/vector artifacts for a URI."""
         return await self._service.reindex(
             uri=uri,
             mode=mode,
             wait=wait,
+            dry_run=dry_run,
         )
 
     async def build_index(self, resource_uris: Union[str, List[str]], **kwargs) -> Dict[str, Any]:
@@ -536,6 +542,9 @@ class LocalClient(BaseClient):
         output: str = "original",
         abs_limit: int = 256,
         show_all_hidden: bool = False,
+        node_limit: int = 1000,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
     ) -> List[Any]:
         """List directory contents."""
         return await self._service.fs.ls(
@@ -546,6 +555,9 @@ class LocalClient(BaseClient):
             output=output,
             abs_limit=abs_limit,
             show_all_hidden=show_all_hidden,
+            node_limit=node_limit,
+            sort_by=sort_by,
+            sort_order=sort_order,
         )
 
     async def tree(

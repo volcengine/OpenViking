@@ -128,6 +128,12 @@ jobs:
             fi
           done
 
+          echo "Checking a real OpenClaw JSON response..."
+          openclaw --version || true
+          cd tests/oc2ov_test
+          python3 utils/openclaw_cli_smoke.py \
+            --session-id "oc2ov-ci-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
       - name: Install test dependencies
         run: |
           echo "📦 Setting up Python virtual environment..."

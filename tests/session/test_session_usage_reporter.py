@@ -4,6 +4,7 @@
 import pytest
 
 from openviking.message import ToolPart
+from openviking.server.dependencies import get_service
 from openviking.service.task_tracker import get_task_tracker
 from openviking.usage_reporter import MemoryUsageExtractor, UsageReporter
 
@@ -29,10 +30,11 @@ async def test_commit_reports_memory_usage_events_to_sink(session):
             reported_events.extend(events)
 
     experience_uri = "viking://user/default/memories/experiences/no-order-exchange.md"
-    session._usage_reporter = UsageReporter(
+    reporter = UsageReporter(
         extractors=[MemoryUsageExtractor()],
         sinks=[RecordingSink()],
     )
+    get_service().sessions.set_usage_reporter(reporter)
     session.add_message(
         "user",
         [

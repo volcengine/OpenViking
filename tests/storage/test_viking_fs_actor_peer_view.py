@@ -254,7 +254,7 @@ async def test_actor_peer_view_blocks_read_stat_and_write_to_other_peer(fs, acto
         await fs.write_file(_other_peer_uri(), "blocked", ctx=actor_ctx)
 
     await fs.write_file("viking://user/support_bot/resources/new.md", "allowed", ctx=actor_ctx)
-    assert "/local/acct/user/support_bot/resources/new.md" in fs._async_agfs.sync_client.writes
+    assert "/local/acct/user/support_bot/resources/new.md" in fs._async_agfs._client.writes
 
 
 @pytest.mark.asyncio
