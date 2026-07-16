@@ -66,6 +66,25 @@ class MigrateLegacyDataRequest(BaseModel):
     action: str = "migrate"
 
 
+class _LegacyCleanupUserIdentifier:
+    """Minimal user identity for deleting pre-validation legacy accounts."""
+
+    def __init__(self, account_id: str, user_id: str):
+        self._account_id = account_id
+        self._user_id = user_id
+
+    @property
+    def account_id(self) -> str:
+        return self._account_id
+
+    @property
+    def user_id(self) -> str:
+        return self._user_id
+
+    def user_space_name(self) -> str:
+        return self._user_id
+
+
 def _get_api_key_manager(request: Request):
     """Get APIKeyManager from app state."""
     return get_api_key_manager_or_raise(request)
@@ -131,6 +150,17 @@ def _validate_register_user_role(ctx: RequestContext, role: str) -> Role:
             "register_user cannot mint ROOT users; use the ROOT-only set_role endpoint instead."
         )
     return resolved_role
+
+
+def _cleanup_user_identifier(account_id: str) -> UserIdentifier | _LegacyCleanupUserIdentifier:
+    """Build a cleanup identity, allowing already-existing legacy account ids."""
+    try:
+        return UserIdentifier(account_id, "system")
+    except ValueError:
+        logger.warning(
+            "Using legacy cleanup identity for non-conforming account_id=%s", account_id
+        )
+        return _LegacyCleanupUserIdentifier(account_id, "system")
 
 
 async def _run_legacy_migration_task(
@@ -264,7 +294,7 @@ async def delete_account(
 
     # Build a ROOT-level context scoped to the target account for cleanup
     cleanup_ctx = RequestContext(
-        user=UserIdentifier(account_id, "system"),
+        user=_cleanup_user_identifier(account_id),
         role=Role.ROOT,
     )
 
