@@ -70,15 +70,24 @@ class UsageReporter:
         await self.report(events=events)
         return events
 
+    async def _close_sink(self, close) -> None:  # noqa: ANN001
+        if inspect.iscoroutinefunction(close):
+            await close()
+            return
+        result = await asyncio.to_thread(close)
+        if inspect.isawaitable(result):
+            await result
+
     async def close(self) -> None:
         for sink in self.sinks:
             close = getattr(sink, "close", None)
             if not callable(close):
                 continue
             try:
-                result = close()
-                if inspect.isawaitable(result):
-                    await asyncio.wait_for(result, timeout=self.sink_timeout_seconds)
+                await asyncio.wait_for(
+                    self._close_sink(close),
+                    timeout=self.sink_timeout_seconds,
+                )
             except TimeoutError:
                 logger.warning(
                     "Usage sink close timed out after %.1fs: %s",

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import asyncio
+import time
 
 from openviking.usage_reporter import UsageContext, UsageEvent, UsageReporter
 
@@ -99,6 +100,31 @@ async def test_close_calls_optional_sink_close():
     await reporter.close()
 
     assert closed == [True]
+
+
+async def test_sync_close_timeout_does_not_block_later_sinks():
+    closed = []
+
+    class BlockingSyncSink:
+        def close(self):
+            closed.append("sync-started")
+            time.sleep(0.05)
+
+    class AsyncSink:
+        async def close(self):
+            closed.append("async")
+
+    reporter = UsageReporter(
+        sinks=[BlockingSyncSink(), AsyncSink()],
+        sink_timeout_seconds=0.005,
+    )
+
+    started_at = time.monotonic()
+    await reporter.close()
+    elapsed = time.monotonic() - started_at
+
+    assert elapsed < 0.04
+    assert closed == ["sync-started", "async"]
 
 
 async def test_sinks_are_reported_concurrently():
