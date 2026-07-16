@@ -47,6 +47,15 @@ class RerankConfig(BaseModel):
         default=0.1, description="Relevance threshold (score > threshold is relevant)"
     )
 
+    max_input_tokens: int = Field(
+        default=2048,
+        ge=128,
+        description=(
+            "Maximum estimated raw-text tokens for each query-document pair sent to "
+            "the rerank provider"
+        ),
+    )
+
     model_config = {"extra": "forbid"}
 
     def _effective_provider(self) -> Optional[str]:

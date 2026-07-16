@@ -25,6 +25,10 @@ from openviking.storage import VikingDBManager, VikingDBManagerProxy
 from openviking.storage.expr import FilterExpr
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import parse_iso_datetime
+from openviking.utils.token_estimation import (
+    estimate_text_tokens,
+    truncate_text_to_token_budget,
+)
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.retrieve.types import (
     ContextType,
@@ -71,6 +75,7 @@ class HierarchicalRetriever:
         self.vector_store = storage
         self.embedder = embedder
         self.rerank_config = rerank_config
+        self.rerank_max_input_tokens = rerank_config.max_input_tokens if rerank_config else 2048
         self.retrieval_config = retrieval_config or RetrievalConfig()
         self.hotness_alpha = self.retrieval_config.hotness_alpha
         self.score_propagation_alpha = self.retrieval_config.score_propagation_alpha
@@ -346,8 +351,18 @@ class HierarchicalRetriever:
         if not self._rerank_client or not documents:
             return fallback_scores
 
+        query_tokens = estimate_text_tokens(query)
+        max_query_tokens = self.rerank_max_input_tokens * 3 // 4
+        rerank_query = (
+            truncate_text_to_token_budget(query, max_query_tokens)
+            if query_tokens > max_query_tokens
+            else query
+        )
+        document_tokens = self.rerank_max_input_tokens - estimate_text_tokens(rerank_query)
         rerank_documents = [
-            (index, document) for index, document in enumerate(documents) if document.strip()
+            (index, truncate_text_to_token_budget(document, document_tokens))
+            for index, document in enumerate(documents)
+            if document.strip()
         ]
         if not rerank_documents:
             return fallback_scores
@@ -355,7 +370,7 @@ class HierarchicalRetriever:
         try:
             scores = await asyncio.to_thread(
                 self._rerank_client.rerank_batch,
-                query,
+                rerank_query,
                 [document for _, document in rerank_documents],
             )
         except Exception as e:
