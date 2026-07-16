@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 import time
-from typing import List, Optional, Tuple
+from typing import Iterator, List, Optional, Tuple
 
 from openviking.storage.vectordb.store.data import CandidateData, DeltaRecord
 from openviking.storage.vectordb.store.local_store import create_store_engine_proxy
@@ -225,9 +225,18 @@ class StoreManager:
         Returns:
             List[CandidateData]: List of all candidate data objects.
         """
-        cands_kv_list = self.storage.read_all(StoreManager.CandsTable)
-        cands_list = [CandidateData.from_bytes(data[1]) for data in cands_kv_list]
-        return cands_list
+        return list(self.iter_all_cands_data())
+
+    def iter_all_cands_data(self) -> Iterator[CandidateData]:
+        """Iterate over all candidates without retaining deserialized rows.
+
+        The underlying store may still return its encoded rows as one range result,
+        but each potentially large Python-float vector is deserialized only when the
+        caller advances the iterator.  This keeps recovery from holding a second
+        full candidate representation while a dense-search shadow is being packed.
+        """
+        for _, bytes_data in self.storage.read_all(StoreManager.CandsTable):
+            yield CandidateData.from_bytes(bytes_data)
 
     def clear(self):
         """Clear all data from the store."""

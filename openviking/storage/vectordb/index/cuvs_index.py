@@ -1531,4 +1531,11 @@ class CuVSDenseIndex:
                 self._snapshot = None
                 self._filter_cache.clear()
                 self._preflight_filter_cache.clear()
-                self._runtime.close()
+                try:
+                    self._runtime.close()
+                finally:
+                    # A failed recovery can otherwise keep this partially packed
+                    # host shadow alive through the constructor traceback.
+                    self._records.clear()
+                    self._records_generation += 1
+                    self._filter_layout_generation = -1

@@ -418,6 +418,11 @@ def test_cuvs_host_shadow_is_immutable_compact_fp32():
     assert reinserted.labels == (20, 10)
     assert runtime.dataset[1] == pytest.approx([7.0, 8.0])
 
+    index.close()
+    assert index.size == 0
+    assert index.host_shadow_nbytes == 0
+    assert runtime.closed
+
 
 @pytest.mark.parametrize(
     ("dtype", "expected_upload_dtype"),
