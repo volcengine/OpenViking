@@ -218,6 +218,8 @@ curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://resources/do
 openviking read viking://resources/docs/api.md
 ```
 
+读取目录 URI 时会返回该目录生成的 L1 overview；如需查看或读取具体子文件，请使用 `ls`。
+
 
 **响应**
 

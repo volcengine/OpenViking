@@ -32,21 +32,17 @@ async def test_read_content(client_with_resource):
     assert body["result"] is not None
 
 
-async def test_read_directory_uri_returns_invalid_argument(client_with_resource):
+async def test_read_directory_uri_returns_overview(client_with_resource):
     client, uri = client_with_resource
 
     resp = await client.get("/api/v1/content/read", params={"uri": uri})
+    overview_resp = await client.get("/api/v1/content/overview", params={"uri": uri})
 
-    assert resp.status_code == 400
+    assert resp.status_code == 200
     body = resp.json()
-    assert body["status"] == "error"
-    assert body["error"]["code"] == "INVALID_ARGUMENT"
-    assert "Cannot read directory as file" in body["error"]["message"]
-    assert body["error"]["details"] == {
-        "resource": uri,
-        "expected": "file",
-        "actual": "directory",
-    }
+    assert body["status"] == "ok"
+    assert overview_resp.status_code == 200
+    assert body["result"] == overview_resp.json()["result"]
 
 
 @pytest.mark.parametrize("uri", ["viking://temp/generated", "viking://queue/tasks"])

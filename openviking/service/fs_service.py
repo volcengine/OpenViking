@@ -26,7 +26,11 @@ from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import build_queue_status_payload
 from openviking.utils.embedding_utils import vectorize_directory_meta
-from openviking_cli.exceptions import DeadlineExceededError, NotInitializedError
+from openviking_cli.exceptions import (
+    DeadlineExceededError,
+    InvalidArgumentError,
+    NotInitializedError,
+)
 from openviking_cli.utils import VikingURI, get_logger
 
 logger = get_logger(__name__)
@@ -470,10 +474,15 @@ class FSService:
         return await viking_fs.system_sync_retry(uri, ctx=ctx)
 
     async def read(self, uri: str, ctx: RequestContext, offset: int = 0, limit: int = -1) -> str:
-        """Read file content."""
+        """Read file content, or a directory's generated overview."""
         viking_fs = self._ensure_initialized()
         uri = validate_viking_uri(uri)
-        content = await viking_fs.read_file(uri, ctx=ctx)
+        try:
+            content = await viking_fs.read_file(uri, ctx=ctx)
+        except InvalidArgumentError as exc:
+            if exc.details.get("expected") != "file" or exc.details.get("actual") != "directory":
+                raise
+            content = await viking_fs.overview(uri, ctx=ctx)
         skill_name = get_skill_name_from_uri(uri)
         if skill_name and self._privacy_config_service:
             current = await self._privacy_config_service.get_current(

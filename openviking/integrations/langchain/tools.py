@@ -175,7 +175,7 @@ def create_openviking_tools(
     def viking_read(
         uris: Annotated[
             str | list[str],
-            Field(description="One or more file/document OpenViking URIs to read."),
+            Field(description="One or more file, document, or directory OpenViking URIs to read."),
         ],
         max_chars: Annotated[
             int,
@@ -188,10 +188,11 @@ def create_openviking_tools(
             ),
         ] = "read",
     ) -> str:
-        """Read file/document OpenViking URIs.
+        """Read file, document, or directory OpenViking URIs.
 
-        Directory URIs are not readable; call viking_browse on directories to
-        list children, then call viking_read on returned file/document URIs.
+        Directory URIs return their generated abstract or overview. On older
+        backends that reject directory reads, the result contains a recoverable
+        hint to call viking_browse and then read a child URI.
         """
 
         active_client = get_client()
