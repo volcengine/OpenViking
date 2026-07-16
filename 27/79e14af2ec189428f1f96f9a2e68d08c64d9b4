@@ -1,0 +1,27 @@
+docs/design/resource-ingestion-routing.md
+  s_c2efe1f8754877::t_df39697af85a3d 1-216
+tests/parse/test_understanding_api.py
+  s_c2efe1f8754877::t_b3d5e0101e32e0 1-58
+tests/parse/test_understanding_parse_msg.py
+  s_c2efe1f8754877::t_637e83a23776e5 1-17
+tests/service/test_resource_service_understanding_routing.py
+  s_c2efe1f8754877::t_a46d21a4057fee 1-102
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "2779e14af2ec189428f1f96f9a2e68d08c64d9b4",
+  "prompts": {},
+  "sessions": {
+    "s_c2efe1f8754877": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f64f7-7452-7790-8205-20f489377bbb",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
