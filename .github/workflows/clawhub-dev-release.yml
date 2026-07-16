@@ -291,7 +291,7 @@ jobs:
           find "$package_dir/package" -maxdepth 3 -type f | sort
 
       - name: Upload npm package tarball
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openviking-plugin-tarball
           path: ${{ steps.pack.outputs.tarball_path }}
@@ -509,7 +509,7 @@ jobs:
           PY
 
       - name: Upload ClawHub publish log artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: clawhub-package-publish-log
           path: |
