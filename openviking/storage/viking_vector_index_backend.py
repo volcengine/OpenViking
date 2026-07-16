@@ -70,6 +70,28 @@ URI_REWRITE_OUTPUT_FIELDS = [
 VIKINGDB_CONTENT_MAX_SIZE = 1024 * 1024
 
 
+async def _wait_for_task_completion_despite_cancellation(
+    task: asyncio.Task[Any],
+) -> Optional[asyncio.CancelledError]:
+    """Wait for an offloaded lifecycle operation without leaking its state."""
+
+    pending_cancellation: Optional[asyncio.CancelledError] = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as exc:
+            # A child that cancels itself did not complete the lifecycle
+            # operation and must still be reported by ``task.result()``.
+            if not task.cancelled() and pending_cancellation is None:
+                pending_cancellation = exc
+        except BaseException:
+            # Read the task's exception below so the caller can apply the
+            # lifecycle-specific exception ordering.
+            if not task.done():
+                raise
+    return pending_cancellation
+
+
 class _AsyncVectorAdapter:
     """Thread-offloaded facade for sync vector adapters."""
 
@@ -880,11 +902,26 @@ class VikingVectorIndexBackend:
         derived local index treat it as a no-op.
         """
         backend = self._get_backend_for_context(ctx)
-        await backend.begin_bulk_ingest()
+        begin_task = asyncio.create_task(backend.begin_bulk_ingest())
+        entry_cancellation = await _wait_for_task_completion_despite_cancellation(begin_task)
+        # A failed or self-cancelled begin did not acquire the scope, so it
+        # must not be balanced with an end call.
+        begin_task.result()
+        if entry_cancellation is not None:
+            end_task = asyncio.create_task(backend.end_bulk_ingest())
+            await _wait_for_task_completion_despite_cancellation(end_task)
+            # Cleanup failures take priority because they mean the suspension
+            # may still be live. Otherwise preserve the original cancellation.
+            end_task.result()
+            raise entry_cancellation
         try:
             yield
         finally:
-            await backend.end_bulk_ingest()
+            end_task = asyncio.create_task(backend.end_bulk_ingest())
+            exit_cancellation = await _wait_for_task_completion_despite_cancellation(end_task)
+            end_task.result()
+            if exit_cancellation is not None:
+                raise exit_cancellation
 
     async def update(self, data: Dict[str, Any], *, ctx: RequestContext) -> UpdateResult:
         """Strict update path. The target record must already exist."""

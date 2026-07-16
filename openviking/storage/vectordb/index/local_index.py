@@ -31,6 +31,9 @@ from openviking.storage.vectordb.utils.path_safety import (
 from openviking.storage.vectordb.utils.validation import validate_name_str
 from openviking_cli.utils.logger import default_logger as logger
 
+_DENSE_REBUILD_MEMORY_RETRY_BASE_SECONDS = 1.0
+_DENSE_REBUILD_MEMORY_RETRY_MAX_SECONDS = 30.0
+
 
 def normalize_vector(vector: List[float]) -> List[float]:
     """Perform L2 normalization on a vector.
@@ -342,6 +345,8 @@ class LocalIndex(IIndex):
         self._dense_rebuild_deferred = False
         self._dense_rebuild_failure: Optional[Tuple[type[Exception], str]] = None
         self._dense_rebuild_memory_blocked = False
+        self._dense_rebuild_memory_retry_attempts = 0
+        self._dense_rebuild_memory_retry_not_before = 0.0
         self._dense_rebuild_thread: Optional[threading.Thread] = None
         dense_search_config = dict(dense_search_config or {})
         dense_search_backend = dense_search_config.get("backend")
@@ -420,6 +425,8 @@ class LocalIndex(IIndex):
             self._dense_rebuild_generation += 1
             self._dense_rebuild_failure = None
             self._dense_rebuild_memory_blocked = False
+            self._dense_rebuild_memory_retry_attempts = 0
+            self._dense_rebuild_memory_retry_not_before = 0.0
             self._dense_rebuild_completed.clear()
             if self._dense_rebuild_suspend_count > 0:
                 self._dense_rebuild_deferred = True
@@ -462,6 +469,8 @@ class LocalIndex(IIndex):
                     )
                     self._dense_rebuild_failure = None
                     self._dense_rebuild_memory_blocked = False
+                    self._dense_rebuild_memory_retry_attempts = 0
+                    self._dense_rebuild_memory_retry_not_before = 0.0
                     self._dense_rebuild_completed.clear()
         if should_wake:
             self._dense_rebuild_event.set()
@@ -484,18 +493,20 @@ class LocalIndex(IIndex):
         self._dense_rebuild_thread.start()
         self._schedule_dense_rebuild()
 
-    def _wake_dense_rebuild_worker(self) -> None:
+    def _wake_dense_rebuild_worker(self) -> bool:
         """Wake the worker without extending the mutation debounce window."""
 
         if not self._auto_background_rebuild or self.dense_search is None:
-            return
+            return False
         with self._dense_rebuild_state_lock:
-            self._dense_rebuild_memory_blocked = False
+            if self._dense_rebuild_memory_blocked:
+                return False
             self._dense_rebuild_completed.clear()
             if self._dense_rebuild_suspend_count > 0:
                 self._dense_rebuild_deferred = True
-                return
+                return False
         self._dense_rebuild_event.set()
+        return True
 
     def _rearm_dense_rebuild_after_stale_candidate(self) -> None:
         """Retry a stale build only after a fresh trailing-edge debounce."""
@@ -514,12 +525,14 @@ class LocalIndex(IIndex):
         self._dense_rebuild_event.set()
 
     def _retry_memory_blocked_rebuild(self) -> bool:
-        """Let the first later query retry an expected memory-budget fallback."""
+        """Let a later query retry memory admission after bounded backoff."""
 
         if not self._auto_background_rebuild or self.dense_search is None:
             return False
         with self._dense_rebuild_state_lock:
             if not self._dense_rebuild_memory_blocked:
+                return False
+            if time.monotonic() < self._dense_rebuild_memory_retry_not_before:
                 return False
             self._dense_rebuild_memory_blocked = False
             self._dense_rebuild_completed.clear()
@@ -584,12 +597,21 @@ class LocalIndex(IIndex):
                     if self._dense_rebuild_generation == rebuild_generation:
                         self._dense_rebuild_failure = None
                         self._dense_rebuild_memory_blocked = True
+                        self._dense_rebuild_memory_retry_attempts += 1
+                        exponent = min(self._dense_rebuild_memory_retry_attempts - 1, 5)
+                        retry_delay = min(
+                            _DENSE_REBUILD_MEMORY_RETRY_BASE_SECONDS * (2**exponent),
+                            _DENSE_REBUILD_MEMORY_RETRY_MAX_SECONDS,
+                        )
+                        self._dense_rebuild_memory_retry_not_before = time.monotonic() + retry_delay
                 logger.debug("cuVS background rebuild kept native search: %s", exc)
             except Exception as exc:
                 with self._dense_rebuild_state_lock:
                     if self._dense_rebuild_generation == rebuild_generation:
                         self._dense_rebuild_failure = (type(exc), str(exc))
                         self._dense_rebuild_memory_blocked = False
+                        self._dense_rebuild_memory_retry_attempts = 0
+                        self._dense_rebuild_memory_retry_not_before = 0.0
                 logger.warning("cuVS background rebuild failed", exc_info=True)
             else:
                 if committed:
@@ -597,6 +619,8 @@ class LocalIndex(IIndex):
                         if self._dense_rebuild_generation == rebuild_generation:
                             self._dense_rebuild_failure = None
                             self._dense_rebuild_memory_blocked = False
+                            self._dense_rebuild_memory_retry_attempts = 0
+                            self._dense_rebuild_memory_retry_not_before = 0.0
             finally:
                 self._dense_rebuild_completed.set()
 
@@ -672,10 +696,26 @@ class LocalIndex(IIndex):
             if self._dense_rebuild_suspend_count > 0:
                 return False
         deadline = time.monotonic() + max(0.0, timeout)
+        memory_retry_attempted = False
         while self.dense_search is not None and self.dense_search.needs_rebuild:
             self._raise_dense_rebuild_failure()
-            if not self._retry_memory_blocked_rebuild():
-                self._wake_dense_rebuild_worker()
+            with self._dense_rebuild_state_lock:
+                memory_blocked = self._dense_rebuild_memory_blocked
+            if memory_blocked:
+                # A readiness wait may retry a previously blocked admission at
+                # most once. A second rejection returns immediately instead of
+                # rebuilding an O(N) host candidate in a tight timeout loop.
+                if memory_retry_attempted:
+                    return False
+                if self._retry_memory_blocked_rebuild():
+                    memory_retry_attempted = True
+                elif not self._wake_dense_rebuild_worker():
+                    # A mutation may have cleared the blocked state between
+                    # the observation and retry. In that case the normal wake
+                    # path owns the newer generation; otherwise backoff holds.
+                    return False
+            elif not self._wake_dense_rebuild_worker():
+                return False
             remaining = deadline - time.monotonic()
             if remaining <= 0 or not self._dense_rebuild_completed.wait(remaining):
                 return False

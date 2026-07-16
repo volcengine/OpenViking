@@ -430,6 +430,93 @@ def test_auto_cuvs_falls_back_then_retries_when_memory_is_available(monkeypatch)
         collection.close()
 
 
+def test_auto_cuvs_background_memory_fallback_does_not_busy_loop(monkeypatch):
+    class CountingMemoryRuntime(MemoryAwareFakeCuVSRuntime):
+        def __init__(self):
+            super().__init__("inner_product", free_memory_bytes=31)
+            self.memory_info_count = 0
+            self.memory_checked = threading.Event()
+
+        def memory_info(self):
+            self.memory_info_count += 1
+            self.memory_checked.set()
+            return super().memory_info()
+
+    runtime = CountingMemoryRuntime()
+    monkeypatch.setattr(
+        cuvs_index,
+        "_CuVSRuntime",
+        lambda _algorithm, _metric, _build_params, _search_params, _dtype: runtime,
+    )
+    collection = get_or_create_local_collection(
+        meta_data={
+            "CollectionName": "auto_cuvs_memory_backoff",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+            ],
+        },
+        config={
+            "dense_search": {
+                "backend": "auto_cuvs",
+                "algorithm": "brute_force",
+                "filter_cache_size": 0,
+                "auto_memory_reserve_mb": 0,
+                "auto_memory_safety_factor": 1.0,
+                "auto_background_rebuild": True,
+                "auto_rebuild_debounce_ms": 0,
+            }
+        },
+    )
+    try:
+        index = collection.create_index(
+            "default",
+            {
+                "IndexName": "default",
+                "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
+            },
+        )
+        assert index.wait_for_background_rebuild(timeout=5)
+
+        collection.upsert_data(
+            [
+                {"id": "first", "vector": [1.0, 0.0, 0.0, 0.0]},
+                {"id": "second", "vector": [0.0, 1.0, 0.0, 0.0]},
+            ]
+        )
+        assert runtime.memory_checked.wait(timeout=5)
+        assert index._dense_rebuild_completed.wait(timeout=5)
+        with index._dense_rebuild_state_lock:
+            assert index._dense_rebuild_memory_blocked
+            index._dense_rebuild_memory_retry_not_before = float("inf")
+        memory_checks_after_failure = runtime.memory_info_count
+
+        assert not index.wait_for_background_rebuild(timeout=0.1)
+        assert runtime.memory_info_count == memory_checks_after_failure
+        assert runtime.build_count == 0
+
+        runtime.free_memory_bytes = 32
+        with index._dense_rebuild_state_lock:
+            index._dense_rebuild_memory_retry_not_before = 0.0
+        result = collection.search_by_vector(
+            "default",
+            dense_vector=[1.0, 0.0, 0.0, 0.0],
+            limit=1,
+        )
+        assert [item.id for item in result.data] == ["first"]
+        assert index.wait_for_background_rebuild(timeout=5)
+        result = collection.search_by_vector(
+            "default",
+            dense_vector=[1.0, 0.0, 0.0, 0.0],
+            limit=1,
+        )
+        assert [item.id for item in result.data] == ["first"]
+        assert runtime.build_count == 1
+        assert runtime.search_count == 1
+    finally:
+        collection.close()
+
+
 def test_auto_cuvs_bulk_ingest_defers_nested_rebuild_and_routes_native(monkeypatch):
     class BuildStartedRuntime(MemoryAwareFakeCuVSRuntime):
         def __init__(self):
