@@ -498,6 +498,123 @@ class TestCompressorV2:
         debug_mock.assert_any_call("AGFS unavailable, running memory extraction without locks")
 
     @pytest.mark.asyncio
+    async def test_execution_extract_runs_tool_and_skill_schemas_in_one_phase(self):
+        compressor = SessionCompressorV2(vikingdb=None)
+        compressor._run_extract_phase = AsyncMock(
+            return_value=(
+                [
+                    "viking://user/default/memories/tools/read_file.md",
+                    "viking://user/default/memories/skills/code-review.md",
+                ],
+                [],
+                [],
+                {},
+                [],
+            )
+        )
+        ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+        messages = [Message(id="tool-memory", role="user", parts=[TextPart("inspect")])]
+        config = SimpleNamespace(
+            output_language_override="en",
+            memory=SimpleNamespace(
+                session_skill_extraction_enabled=False,
+                eager_prefetch=False,
+                prefetch_search_topn=5,
+                link_enabled=False,
+                custom_templates_dir="/nonexistent/openviking-memory-templates",
+                experimental_memory_switch=False,
+            ),
+        )
+
+        with (
+            patch(
+                "openviking.session.compressor_v2.get_openviking_config",
+                return_value=config,
+            ),
+            patch(
+                "openviking.session.memory.session_extract_context_provider.get_openviking_config",
+                return_value=config,
+            ),
+            patch(
+                "openviking.session.memory.utils.language.get_openviking_config",
+                return_value=config,
+            ),
+            patch("openviking_cli.utils.config.get_openviking_config", return_value=config),
+        ):
+            result = await compressor.extract_execution_memories(
+                messages=messages,
+                ctx=ctx,
+                allowed_memory_types={"tools", "skills"},
+            )
+            compressor._run_extract_phase.assert_awaited_once()
+            call = compressor._run_extract_phase.await_args.kwargs
+            assert call["allowed_memory_types"] == {"tools", "skills"}
+            assert {schema.memory_type for schema in call["provider"].get_memory_schemas(ctx)} == {
+                "tools",
+                "skills",
+            }
+        assert result == {"contexts": [], "session_skills": []}
+
+    @pytest.mark.asyncio
+    async def test_execution_extract_only_consolidates_written_trajectories(self):
+        compressor = SessionCompressorV2(vikingdb=None)
+        tool_uri = "viking://user/default/memories/tools/read_file.md"
+        trajectory_uri = "viking://user/default/memories/trajectories/inspect_repo.md"
+        compressor._run_extract_phase = AsyncMock(
+            side_effect=[
+                ([tool_uri, trajectory_uri], [], [], {}, []),
+                ([], [], [], {}, []),
+            ]
+        )
+        viking_fs = SimpleNamespace(read_file=AsyncMock(return_value="trajectory memory"))
+        ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+        messages = [Message(id="tool-memory", role="user", parts=[TextPart("inspect")])]
+        config = SimpleNamespace(
+            output_language_override="en",
+            memory=SimpleNamespace(
+                session_skill_extraction_enabled=False,
+                eager_prefetch=False,
+                prefetch_search_topn=5,
+                link_enabled=False,
+                custom_templates_dir="/nonexistent/openviking-memory-templates",
+                experimental_memory_switch=False,
+            ),
+        )
+
+        with (
+            patch(
+                "openviking.session.compressor_v2.get_openviking_config",
+                return_value=config,
+            ),
+            patch("openviking.session.compressor_v2.get_viking_fs", return_value=viking_fs),
+            patch(
+                "openviking.session.compressor_v2.MemoryFileUtils.read",
+                return_value=SimpleNamespace(content="trajectory memory"),
+            ),
+            patch(
+                "openviking.session.memory.session_extract_context_provider.get_openviking_config",
+                return_value=config,
+            ),
+            patch(
+                "openviking.session.memory.utils.language.get_openviking_config",
+                return_value=config,
+            ),
+            patch("openviking_cli.utils.config.get_openviking_config", return_value=config),
+        ):
+            await compressor.extract_execution_memories(
+                messages=messages,
+                ctx=ctx,
+                allowed_memory_types={"trajectories", "tools", "experiences"},
+            )
+
+        assert compressor._run_extract_phase.await_count == 2
+        viking_fs.read_file.assert_awaited_once()
+        assert viking_fs.read_file.await_args.args[0] == trajectory_uri
+        assert compressor._run_extract_phase.await_args_list[1].kwargs[
+            "allowed_memory_types"
+        ] == {"experiences"}
+
+    @pytest.mark.asyncio
     async def test_extract_long_term_memories_skips_self_init_when_self_disabled(self):
         compressor = SessionCompressorV2(vikingdb=None)
         user = UserIdentifier.the_default_user()
