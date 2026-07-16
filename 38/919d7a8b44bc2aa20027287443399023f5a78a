@@ -1,0 +1,23 @@
+openviking/storage/observers/models_observer.py
+  s_6fe15e66a05bf5::t_3422b29dcc8bff 64,69-72,131-144
+tests/misc/test_models_observer.py
+  s_6fe15e66a05bf5::t_c007157fd85723 1-34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "38919d7a8b44bc2aa20027287443399023f5a78a",
+  "prompts": {},
+  "sessions": {
+    "s_6fe15e66a05bf5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4aa1-02af-7ff2-8876-044dd610c7a1",
+        "model": "unknown"
+      },
+      "human_author": "huangruiteng <huangruiteng@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

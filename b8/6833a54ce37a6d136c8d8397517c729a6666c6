@@ -1,0 +1,23 @@
+openviking/models/rerank/openai_rerank.py
+  s_6fe15e66a05bf5::t_fd309a1ffe337f 103
+tests/misc/test_rerank_openai.py
+  s_6fe15e66a05bf5::t_e2986757729d6d 92,96-98
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "b86833a54ce37a6d136c8d8397517c729a6666c6",
+  "prompts": {},
+  "sessions": {
+    "s_6fe15e66a05bf5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4aa1-02af-7ff2-8876-044dd610c7a1",
+        "model": "unknown"
+      },
+      "human_author": "huangruiteng <huangruiteng@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

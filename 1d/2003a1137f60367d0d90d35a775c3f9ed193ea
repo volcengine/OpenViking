@@ -1,0 +1,90 @@
+bot/vikingbot/bus/queue.py
+  s_1b6ed2ebad1693::t_94c85de2a390ad 4
+bot/vikingbot/channels/utils.py
+  s_08f3b42e5f13ef::t_4ad97dfd7e1492 5
+docs/design/parser-two-layer-refactor-plan.md
+  s_08f3b42e5f13ef::t_59159f03c27d9f 235-237,250
+openviking/parse/parsers/upload_utils.py
+  s_1b6ed2ebad1693::t_7ea0afd1f77988 18
+openviking/server/oauth/storage.py
+  s_1b6ed2ebad1693::t_6623bffadaabbf 29
+openviking/server/routers/sessions.py
+  s_08f3b42e5f13ef::t_a7e3761857e0b4 7
+openviking/server/routers/skills.py
+  s_08f3b42e5f13ef::t_4d627fd1a00cbb 10
+openviking/session/memory/memory_updater.py
+  s_08f3b42e5f13ef::t_f577ef64b7cd4f 149-150,152,156,165-166,169,172,177,188,366,372
+openviking/session/memory/schema_model_generator.py
+  s_08f3b42e5f13ef::t_ab45bb29a89e50 16-21
+openviking/utils/media_processor.py
+  s_08f3b42e5f13ef::t_a1d38aa60b6a22 8
+tests/README.md
+  s_08f3b42e5f13ef::t_42ac33f7f2cd82 152
+tests/agfs/test_async_client.py
+  s_08f3b42e5f13ef::t_5a053aa89e45c5 34
+tests/agfs/test_viking_fs_git.py
+  s_08f3b42e5f13ef::t_518bb9d26db480 849
+tests/integration/test_agent_memory_e2e.py
+  s_08f3b42e5f13ef::t_d7f27901031e2d 37,41,264,267
+tests/observability/test_events.py
+  s_1b6ed2ebad1693::t_a77a8d282b450f 12,21,39,51,57
+tests/observability/test_usage_audit_runtime.py
+  s_08f3b42e5f13ef::t_3c938a5cd75dd8 10,20,58
+tests/server/test_api_resources.py
+  s_08f3b42e5f13ef::t_25c815046ae80b 813,815
+tests/server/test_auth.py
+  s_08f3b42e5f13ef::t_08a26fa39031cf 413,420,425,472
+tests/server/test_server_health.py
+  s_08f3b42e5f13ef::t_d3ae7e45913d11 12
+tests/service/test_resource_service_watch.py
+  s_08f3b42e5f13ef::t_e7151f0e81a70c 340,342
+tests/session/conftest.py
+  s_08f3b42e5f13ef::t_f4b61f18131722 13,32
+tests/session/test_compressor_v3.py
+  s_08f3b42e5f13ef::t_6639910e3109b2 135,224,239
+tests/storage/test_viking_fs_actor_peer_view.py
+  s_08f3b42e5f13ef::t_65dc2ea3881d2b 257
+tests/test_edge_cases.py
+  s_1b6ed2ebad1693::t_12d1e38ea4f418 31,99,111,123,131,147,225,242-243,335,346,358,367
+tests/test_session_async_commit.py
+  s_08f3b42e5f13ef::t_4b82eb5f0d2dd6 18,24,36,42,48
+tests/test_session_task_tracking.py
+  s_08f3b42e5f13ef::t_5a7cea89e99804 18,24,36
+tests/test_task_tracker.py
+  s_1b6ed2ebad1693::t_e4e0c99d2a8f33 30,32,424
+tests/test_upload_utils.py
+  s_08f3b42e5f13ef::t_7caee95918a2e9 16,389,395,399,403,407,411,415,418,461,468,472
+tests/unit/session/test_session_commit_resume.py
+  s_1b6ed2ebad1693::t_b804c3a1ac5765 10,80
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "1d2003a1137f60367d0d90d35a775c3f9ed193ea",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_08f3b42e5f13ef": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f64f8-3a18-7712-abf7-cd9f5945931d",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    },
+    "s_1b6ed2ebad1693": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f65ca-dd40-7c63-ab58-0f3d2d93cee3",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

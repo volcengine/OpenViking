@@ -1,0 +1,23 @@
+openviking/prompts/templates/semantic/overview_generation.yaml
+  s_8ce67a76b477ab::t_1832b3349a1242 63,69
+tests/storage/test_semantic_processor_language.py
+  s_8ce67a76b477ab::t_6d6dab569a85e9 240-255
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "faaf96e2eed582c5136b2d081fd1f409aeb93b04",
+  "prompts": {},
+  "sessions": {
+    "s_8ce67a76b477ab": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f68d0-0539-7581-b5cf-1c7fa76f8673",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

@@ -1,0 +1,31 @@
+examples/wiki_graph/graph_preview.py
+  s_502f174854034d::t_851e94ca74a65f 1-102
+openviking/server/routers/relations.py
+  s_502f174854034d::t_c9be0dcb946867 84,92,98-103
+openviking/session/memory/graph_view.py
+  s_502f174854034d::t_382442b3328432 17,106,111,121,152-153,174-175,178,208-218,233
+tests/server/test_api_relations.py
+  s_502f174854034d::t_e01d5326d1d335 6-37
+tests/session/memory/test_graph_view_collect.py
+  s_502f174854034d::t_0e260a2c0921d0 167-206,278-280
+tests/test_wiki_graph_example.py
+  s_502f174854034d::t_ef34e13f52fbef 1-64
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "8284041564eccdffa96f6cd63ea8d8dd006ce54e",
+  "prompts": {},
+  "sessions": {
+    "s_502f174854034d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6483-d77e-7ee0-be66-bd7f11806837",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
