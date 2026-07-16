@@ -73,13 +73,6 @@ class ExperienceGradientEstimator:
 
         extract_context = _context_with_analysis_messages(context, analysis)
 
-        # Resolve VLM once for both ExtractLoop and LLM gate evaluation.
-        # Without passing semantic_vlm, _evaluate_experience_gradients skips
-        # the ExperienceRootCausePreventionGate entirely, leaving only
-        # deterministic gates to review extracted experience gradients.
-        config = get_openviking_config()
-        semantic_vlm = self.vlm or config.vlm.get_vlm_instance()
-
         async def estimate_one(trajectory: Trajectory) -> list[PatchSemanticGradient]:
             if not _should_update_experience_from_trajectory(trajectory):
                 return []
@@ -104,7 +97,6 @@ class ExperienceGradientEstimator:
                 gradients=gradients,
                 analysis=analysis,
                 experience_set=experience_set,
-                semantic_vlm=semantic_vlm,
             )
             _record_gate_report(report, analysis=analysis, context=context)
             return gated
