@@ -1,0 +1,28 @@
+openviking/session/session.py
+  s_7cd1cb0b0d8796::t_a84c9f93b9f732 371-373
+tests/session/test_session_lifecycle.py
+  s_7cd1cb0b0d8796::t_4592ac5dae51c7 6-7,21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "10a224b80d56f01ffe8cbb4af05aa40773ed51a3",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_7cd1cb0b0d8796": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f68e9-560f-7e31-9ed4-b244fd588a09",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
