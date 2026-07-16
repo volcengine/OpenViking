@@ -97,35 +97,38 @@ def acquire_data_dir_lock(data_dir: str) -> str:
 
     Raises ``DataDirectoryLocked`` if another live process already holds the
     lock, with a message that explains the situation and suggests HTTP mode.
+    Raises ``OSError`` if the PID file cannot be created or updated.
     """
     lock_path = os.path.join(data_dir, LOCK_FILENAME)
+    lock_key = os.path.realpath(os.path.abspath(lock_path))
     my_pid = os.getpid()
 
-    existing_pid = _read_pid_file(lock_path)
-    if existing_pid and existing_pid != my_pid and _is_pid_alive(existing_pid):
-        raise DataDirectoryLocked(
-            f"Another OpenViking process (PID {existing_pid}) is already using "
-            f"the data directory '{data_dir}'. Running multiple OpenViking "
-            f"instances on the same data directory causes silent storage "
-            f"contention and data corruption.\n\n"
-            f"To fix this, use one of these approaches:\n"
-            f"  1. Use HTTP mode: start a single openviking-server and connect "
-            f"via --transport http (recommended for multi-session hosts)\n"
-            f"  2. Use separate data directories for each instance\n"
-            f"  3. Stop the other process (PID {existing_pid}) first"
-        )
-
-    # Write our PID (overwrites stale lock from a dead process).
-    try:
-        os.makedirs(data_dir, exist_ok=True)
-        with open(lock_path, "w") as f:
-            f.write(str(my_pid))
-    except OSError as exc:
-        logger.warning("Could not write PID lock %s: %s", lock_path, exc)
-        return lock_path
-
-    lock_key = os.path.realpath(os.path.abspath(lock_path))
     with _lock_refcounts_guard:
+        existing_pid = _read_pid_file(lock_path)
+        if existing_pid and existing_pid != my_pid and _is_pid_alive(existing_pid):
+            raise DataDirectoryLocked(
+                f"Another OpenViking process (PID {existing_pid}) is already using "
+                f"the data directory '{data_dir}'. Running multiple OpenViking "
+                f"instances on the same data directory causes silent storage "
+                f"contention and data corruption.\n\n"
+                f"To fix this, use one of these approaches:\n"
+                f"  1. Use HTTP mode: start a single openviking-server and connect "
+                f"via --transport http (recommended for multi-session hosts)\n"
+                f"  2. Use separate data directories for each instance\n"
+                f"  3. Stop the other process (PID {existing_pid}) first"
+            )
+
+        # A same-process reentrant acquire already owns a valid PID file. Avoid
+        # rewriting it so every successful acquire maps to exactly one local ref.
+        if existing_pid != my_pid:
+            try:
+                os.makedirs(data_dir, exist_ok=True)
+                with open(lock_path, "w") as f:
+                    f.write(str(my_pid))
+            except OSError as exc:
+                logger.warning("Could not write PID lock %s: %s", lock_path, exc)
+                raise
+
         _lock_refcounts[lock_key] = _lock_refcounts.get(lock_key, 0) + 1
 
     # Schedule cleanup on exit.
