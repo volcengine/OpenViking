@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.memory.experience_sections import render_experience_sections
 from openviking.session.train import (
     CriterionResult,
     Experience,
@@ -32,6 +33,25 @@ class FakeExperienceGradientEstimator(ExperienceGradientEstimator):
     async def _run_extract_loop(self, trajectory, context):
         self.calls.append((trajectory, context))
         return self.operations_by_trajectory_uri.get(trajectory.uri)
+
+
+def _duplicate_booking_experience_fields() -> dict[str, str]:
+    return {
+        "situation": (
+            "- Applies when: candidate booking may duplicate an existing retrieved booking.\n"
+            "- Does not apply when: no matching existing booking is retrieved.\n"
+            "- Source binding: user request and retrieved booking records."
+        ),
+        "reminder": "- Avoid creating a duplicate booking for the same confirmed trip.",
+        "procedure": (
+            "- Before booking: compare the candidate trip to retrieved bookings.\n"
+            "- If it duplicates an existing booking: do not book and explain.\n"
+            "- Else: proceed."
+        ),
+        "anti_pattern": (
+            "- Do not book a duplicate reservation.\n- Preserve genuinely new bookings."
+        ),
+    }
 
 
 def _analysis(*, passed: bool = True, outcome: str = "success") -> RolloutAnalysis:
@@ -180,7 +200,7 @@ async def test_experience_gradient_estimator_converts_experience_operations():
                 memory_type="experiences",
                 memory_fields={
                     "experience_name": "booking_duplicate_handling",
-                    "constraint": "## Situation\n- Applies when: candidate booking may duplicate an existing retrieved booking.\n- Does not apply when: no matching existing booking is retrieved.\n- Source binding: user request and retrieved booking records.\n\n## Reminder\n- Avoid creating a duplicate booking for the same confirmed trip.\n\n## Procedure\n- Before booking: compare the candidate trip to retrieved bookings.\n- If it duplicates an existing booking: do not book and explain.\n- Else: proceed.\n\n## Anti-pattern\n- Do not book a duplicate reservation.\n- Preserve genuinely new bookings.",
+                    **_duplicate_booking_experience_fields(),
                     "supersedes": ["older_experience"],
                 },
                 uris=["viking://user/u/memories/experiences/booking_duplicate_handling.md"],
@@ -207,6 +227,11 @@ async def test_experience_gradient_estimator_converts_experience_operations():
     assert gradient.base_version == 7
     assert gradient.before_file is old_file
     assert "## Situation" in gradient.after_file.content
+    assert gradient.after_file.content == render_experience_sections(
+        _duplicate_booking_experience_fields()
+    )
+    assert gradient.after_file.extra_fields["situation"].startswith("- Applies when:")
+    assert "constraint" not in gradient.after_file.extra_fields
     assert gradient.after_file.extra_fields["supersedes"] == ["older_experience"]
     assert gradient.metadata["supersedes"] == ["older_experience"]
     assert len(gradient.links) == 1
@@ -230,7 +255,7 @@ async def test_experience_gradient_estimator_uses_policy_version_for_newer_old_f
             SimpleNamespace(
                 memory_type="experiences",
                 memory_fields={
-                    "constraint": "## Situation\n- Applies when: candidate booking may duplicate an existing retrieved booking.\n- Does not apply when: no matching existing booking is retrieved.\n- Source binding: user request and retrieved booking records.\n\n## Reminder\n- Avoid creating a duplicate booking for the same confirmed trip.\n\n## Procedure\n- Before booking: compare the candidate trip to retrieved bookings.\n- If it duplicates an existing booking: do not book and explain.\n- Else: proceed.\n\n## Anti-pattern\n- Do not book a duplicate reservation.\n- Preserve genuinely new bookings.",
+                    **_duplicate_booking_experience_fields(),
                 },
                 uris=["viking://user/u/memories/experiences/booking_duplicate_handling.md"],
                 old_memory_file_content=None,
@@ -391,15 +416,14 @@ async def test_post_validation_gate_sees_prefetched_comparison_trajectories(monk
                         memory_type="experiences",
                         memory_fields={
                             "experience_name": "scope_total",
-                            "constraint": (
-                                "## Situation\n"
+                            "situation": (
                                 "- Applies when: a scoped total is requested.\n"
                                 "- Does not apply when: no scoped total is requested.\n"
-                                "- Source binding: request records.\n\n"
-                                "## Reminder\n- Preserve the requested total scope.\n\n"
-                                "## Procedure\n- Calculate and communicate the requested total.\n\n"
-                                "## Anti-pattern\n- Do not omit the requested total."
+                                "- Source binding: request records."
                             ),
+                            "reminder": "- Preserve the requested total scope.",
+                            "procedure": "- Calculate and communicate the requested total.",
+                            "anti_pattern": "- Do not omit the requested total.",
                         },
                         uris=["viking://user/u/memories/experiences/scope_total.md"],
                         old_memory_file_content=None,

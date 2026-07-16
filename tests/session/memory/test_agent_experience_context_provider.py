@@ -71,6 +71,8 @@ def test_agent_experience_instruction_preserves_coupled_scope_repairs():
     assert "canonical runtime value field" in instruction
     assert 'other", "remaining", "those"' in instruction
     assert "## Situation" in instruction
+    assert "- `situation`: only the `## Situation` bullet body" in instruction
+    assert "storage template adds the four Markdown headings" in instruction
 
 
 @pytest.mark.asyncio
@@ -139,6 +141,10 @@ async def test_agent_experience_prefetch_includes_structured_read_results():
             extra_fields={
                 "experience_name": "personal_experience_sharing_conversation_flow",
                 "page_id": 1,
+                "situation": "- Applies when: the user shares a personal experience.",
+                "reminder": "- Acknowledge the experience before changing topics.",
+                "procedure": "- Before replying: identify the user's main point.",
+                "anti_pattern": "- Do not ignore the shared experience.",
             },
             links=[],
         )
@@ -156,6 +162,9 @@ async def test_agent_experience_prefetch_includes_structured_read_results():
         == "candidate_experience"
     )
     assert add_tool_call_pair.call_args_list[1].kwargs["result"]["page_id"] == 1
+    candidate = add_tool_call_pair.call_args_list[1].kwargs["result"]
+    assert candidate["situation"].startswith("- Applies when:")
+    assert "content" not in candidate
 
 
 @pytest.mark.asyncio

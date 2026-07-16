@@ -15,6 +15,7 @@ from openviking.session.memory.dataclass import (
     ResolvedOperations,
     StoredLink,
 )
+from openviking.session.memory.experience_sections import experience_section_fields
 from openviking.session.memory.memory_type_registry import create_default_registry
 from openviking.session.memory.memory_updater import MemoryUpdater
 from openviking.session.train.domain import (
@@ -132,7 +133,7 @@ class MemoryFilePolicyUpdater:
 
 def _policy_body_metadata(policy: Policy, *, memory_type: str | None = None) -> dict[str, Any]:
     if (memory_type or policy.metadata.get("memory_type") or "experiences") == "experiences":
-        return {"constraint": policy.content}
+        return experience_section_fields(policy.metadata)
     return {"content": policy.content}
 
 
@@ -346,7 +347,6 @@ def _policy_to_memory_file(policy: Policy | None) -> MemoryFile | None:
         memory_type="experiences",
         extra_fields={
             **dict(policy.metadata),
-            "constraint": policy.content,
             "memory_type": "experiences",
             "experience_name": policy.name,
             "version": policy.version,

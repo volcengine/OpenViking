@@ -9,6 +9,7 @@ import pytest
 from test_fakes import fake_request_context
 
 from openviking.session.memory.dataclass import MemoryFile, StoredLink
+from openviking.session.memory.experience_sections import render_experience_sections
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.train import (
     ContentHashPolicySnapshotter,
@@ -25,11 +26,24 @@ from openviking.session.train import (
 from openviking.session.train.components.trajectory_analyzer import (
     _trajectory_content_validation_issues,
 )
-from openviking.session.train.gates import ExperienceSkillReadabilityGate, GateRunner
+from openviking.session.train.gates import ExperienceFieldSemanticsGate, GateRunner
 
 DEFAULT_TRIGGER_CODE = (
     'def should_trigger(ctx):\n    return ctx.get("candidate_tool") == "test_tool"\n'
 )
+
+
+def _experience_fields(reminder: str) -> dict[str, str]:
+    return {
+        "situation": (
+            "- Applies when: the tested operation reaches its decision boundary.\n"
+            "- Does not apply when: the operation pattern is unrelated.\n"
+            "- Source binding: user request and retrieved records."
+        ),
+        "reminder": f"- {reminder}",
+        "procedure": "- Before acting: check the source-bound condition.",
+        "anti_pattern": "- Do not ignore the source-bound condition.",
+    }
 
 
 def test_trajectory_validation_rejects_experience_generation_sections():
@@ -129,6 +143,7 @@ def _memory_file(
         "experience_name": name,
         "status": status,
         "trigger_code": trigger_code,
+        **_experience_fields(content),
     }
     if version is not None:
         fields["version"] = version
@@ -362,7 +377,8 @@ async def test_memory_file_policy_updater_writes_experience_files():
     assert result.errors == []
     assert result.written_uris == [policy_set.policies[0].uri]
     written = fs.files[policy_set.policies[0].uri]
-    assert written.startswith("new content")
+    assert written.startswith("## Situation")
+    assert "- new content" in written
     assert '"memory_type": "experiences"' in written
     assert '"experience_name": "booking_duplicate_handling"' in written
     assert '"version": 2' in written
@@ -535,7 +551,7 @@ async def test_patch_merge_policy_optimizer_runs_patch_merge_extract_loop(monkey
                             ),
                             memory_fields={
                                 "experience_name": "booking_duplicate_handling",
-                                "content": "merged content",
+                                **_experience_fields("merged content"),
                             },
                             memory_type="experiences",
                             uris=[policy_set.policies[0].uri],
@@ -561,16 +577,18 @@ async def test_patch_merge_policy_optimizer_runs_patch_merge_extract_loop(monkey
     assert plan.items[0].kind == "upsert"
     assert plan.items[0].target_uri == policy_set.policies[0].uri
     assert plan.items[0].before_content == "content"
-    assert plan.items[0].after_content == "merged content"
+    assert plan.items[0].after_content == render_experience_sections(
+        _experience_fields("merged content")
+    )
     assert [link.to_uri for link in plan.items[0].links] == [
         "viking://user/u/memories/trajectories/traj1.md"
     ]
     assert captured["context_provider"].__class__.__name__ == "PatchMergeContextProvider"
     assert captured["context_provider"].get_tools() == []
     assert "Patch 1" in captured["prefetch_messages"][-1]["content"]
-    assert "  content:" in captured["prefetch_messages"][-1]["content"]
-    assert "-stale content" in captured["prefetch_messages"][-1]["content"]
-    assert "+merged content" in captured["prefetch_messages"][-1]["content"]
+    assert "  reminder:" in captured["prefetch_messages"][-1]["content"]
+    assert "-- stale content" in captured["prefetch_messages"][-1]["content"]
+    assert "+- merged content" in captured["prefetch_messages"][-1]["content"]
 
 
 @pytest.mark.asyncio
@@ -635,7 +653,7 @@ async def test_patch_merge_policy_optimizer_merges_all_patch_gradients_once(monk
                             old_memory_file_content=None,
                             memory_fields={
                                 "experience_name": "重复预订处理",
-                                "content": "合并后的重复预订处理经验",
+                                **_experience_fields("合并后的重复预订处理经验"),
                             },
                             memory_type="experiences",
                             uris=[f"{root}/重复预订处理.md"],
@@ -742,7 +760,7 @@ async def test_patch_merge_policy_optimizer_recovers_source_link_by_unique_trigg
                             old_memory_file_content=None,
                             memory_fields={
                                 "experience_name": "update_flights支付方式验证",
-                                "content": "改名后的航班支付经验",
+                                **_experience_fields("改名后的航班支付经验"),
                                 "trigger_code": flight_trigger,
                             },
                             memory_type="experiences",
@@ -752,7 +770,7 @@ async def test_patch_merge_policy_optimizer_recovers_source_link_by_unique_trigg
                             old_memory_file_content=None,
                             memory_fields={
                                 "experience_name": "update_baggages支付方式验证",
-                                "content": "改名后的行李支付经验",
+                                **_experience_fields("改名后的行李支付经验"),
                                 "trigger_code": baggage_trigger,
                             },
                             memory_type="experiences",
@@ -835,7 +853,7 @@ async def test_patch_merge_policy_optimizer_keeps_distinct_output_source_links_s
                             old_memory_file_content=None,
                             memory_fields={
                                 "experience_name": "取消资格核验",
-                                "content": "取消前核验资格",
+                                **_experience_fields("取消前核验资格"),
                             },
                             memory_type="experiences",
                             uris=[f"{root}/取消资格核验.md"],
@@ -844,7 +862,7 @@ async def test_patch_merge_policy_optimizer_keeps_distinct_output_source_links_s
                             old_memory_file_content=None,
                             memory_fields={
                                 "experience_name": "退款总额传达",
-                                "content": "多笔退款后传达总额",
+                                **_experience_fields("多笔退款后传达总额"),
                             },
                             memory_type="experiences",
                             uris=[f"{root}/退款总额传达.md"],
@@ -929,7 +947,7 @@ async def test_patch_merge_policy_optimizer_single_canonical_output_inherits_all
                             old_memory_file_content=None,
                             memory_fields={
                                 "experience_name": "重复预订处理",
-                                "content": "合并后的重复预订处理经验",
+                                **_experience_fields("合并后的重复预订处理经验"),
                             },
                             memory_type="experiences",
                             uris=[f"{root}/重复预订处理.md"],
@@ -995,7 +1013,7 @@ async def test_patch_merge_policy_optimizer_runs_llm_for_single_patch(monkeypatc
                             ),
                             memory_fields={
                                 "experience_name": "booking_duplicate_handling",
-                                "content": "merged update",
+                                **_experience_fields("merged update"),
                             },
                             memory_type="experiences",
                             uris=[policy_set.policies[0].uri],
@@ -1019,11 +1037,13 @@ async def test_patch_merge_policy_optimizer_runs_llm_for_single_patch(monkeypatc
 
     assert captured["constructed"] is True
     assert plan.metadata["patch_gradient_count"] == 1
-    assert plan.items[0].after_content == "merged update"
+    assert plan.items[0].after_content == render_experience_sections(
+        _experience_fields("merged update")
+    )
 
 
 @pytest.mark.asyncio
-async def test_patch_merge_instruction_requires_skill_experience_sections(monkeypatch):
+async def test_patch_merge_instruction_requires_structured_experience_fields(monkeypatch):
     from openviking.session.memory.dataclass import ResolvedOperations
 
     policy_set = _experience_set()
@@ -1053,10 +1073,8 @@ async def test_patch_merge_instruction_requires_skill_experience_sections(monkey
         PatchMergePolicyOptimizerContext(request_context=fake_request_context()),
     )
 
-    assert (
-        "put the full runtime-facing Markdown in the `constraint` field" in captured["instruction"]
-    )
-    assert "`## Situation`, `## Reminder`, `## Procedure`, and" in captured["instruction"]
+    assert "preserve the four structured fields" in captured["instruction"]
+    assert "`situation`, `reminder`, `procedure`, and `anti_pattern`" in captured["instruction"]
     assert "canonical value/source-field" in captured["instruction"]
 
 
@@ -1088,7 +1106,7 @@ async def test_patch_merge_post_plan_retry_includes_latest_draft(monkeypatch):
                         old_memory_file_content=None,
                         memory_fields={
                             "experience_name": "bad_experience",
-                            "content": "# bad_experience\n\n## 规则\n1. incomplete production reminder",
+                            "situation": "- Applies when: a test runs.",
                         },
                         memory_type="experiences",
                         uris=[f"{root}/bad_experience.md"],
@@ -1115,16 +1133,13 @@ async def test_patch_merge_post_plan_retry_includes_latest_draft(monkeypatch):
         policy_set,
         PatchMergePolicyOptimizerContext(
             request_context=fake_request_context(),
-            gate_runner=GateRunner([ExperienceSkillReadabilityGate()]),
+            gate_runner=GateRunner([ExperienceFieldSemanticsGate()]),
         ),
     )
 
     assert captured["decision"].retry is True
     assert captured["decision"].include_latest_draft is True
-    assert (
-        "Put the complete four-section Markdown body in the `constraint` field"
-        in captured["decision"].instruction
-    )
+    assert "Populate the structured `situation`" in captured["decision"].instruction
 
 
 def test_experience_memory_schema_is_skill_readable_without_trigger_fields():
@@ -1134,11 +1149,13 @@ def test_experience_memory_schema_is_skill_readable_without_trigger_fields():
 
     assert schema is not None
     fields = {field.name: field for field in schema.fields}
-    assert "constraint" in fields
+    assert {"situation", "reminder", "procedure", "anti_pattern"} <= fields.keys()
+    assert "constraint" not in fields
     assert "trigger_code" not in fields
-    assert "## Situation" in fields["constraint"].description
-    assert "skill loader" in fields["constraint"].description
+    assert "Applies when" in fields["situation"].description
+    assert "root-cause lesson" in fields["reminder"].description
     assert schema.content_template is not None
+    assert "{{ situation }}" in schema.content_template
     assert "# Experience Trigger" not in schema.content_template
 
 
@@ -1148,21 +1165,21 @@ def test_experience_content_template_renders_skill_readable_markdown_only():
     from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
     schema = create_default_registry().get("experiences")
-    body = (
-        "## Situation\n"
-        "- Applies when: refund request.\n"
-        "- Does not apply when: no refund.\n"
-        "- Source binding: user request and retrieved ticket.\n\n"
-        "## Reminder\n"
-        "- Check refund eligibility.\n\n"
-        "## Procedure\n"
-        "- Before refunding: verify eligibility.\n"
-        "- If ineligible: explain policy.\n"
-        "- Else: proceed.\n\n"
-        "## Anti-pattern\n"
-        "- Do not refund without eligibility.\n"
-        "- Preserve eligible refunds.\n"
-    )
+    fields = {
+        "situation": (
+            "- Applies when: refund request.\n"
+            "- Does not apply when: no refund.\n"
+            "- Source binding: user request and retrieved ticket."
+        ),
+        "reminder": "- Check refund eligibility.",
+        "procedure": (
+            "- Before refunding: verify eligibility.\n"
+            "- If ineligible: explain policy.\n"
+            "- Else: proceed."
+        ),
+        "anti_pattern": ("- Do not refund without eligibility.\n- Preserve eligible refunds."),
+    }
+    body = render_experience_sections(fields)
     rendered = MemoryFileUtils.write(
         MemoryFile(
             uri="viking://user/u/memories/experiences/refund.md",
@@ -1171,7 +1188,7 @@ def test_experience_content_template_renders_skill_readable_markdown_only():
             extra_fields={
                 "memory_type": "experiences",
                 "experience_name": "refund_check",
-                "constraint": body,
+                **fields,
             },
         ),
         content_template=schema.content_template,
@@ -1180,10 +1197,13 @@ def test_experience_content_template_renders_skill_readable_markdown_only():
     assert "# Experience Trigger" not in rendered
     assert "```python" not in rendered
     assert "## Situation" in rendered
-    assert '"constraint":' in rendered
+    assert '"situation":' in rendered
+    assert '"anti_pattern":' in rendered
+    assert '"constraint":' not in rendered
     assert '"content":' not in rendered
     parsed = MemoryFileUtils.read(rendered)
-    assert parsed.extra_fields["constraint"] == body
+    assert parsed.plain_content() == body
+    assert {name: parsed.extra_fields[name] for name in fields} == fields
 
 
 @pytest.mark.asyncio
@@ -1192,6 +1212,17 @@ async def test_memory_file_policy_updater_persists_skill_experience_from_merge_f
 
     policy_set = _experience_set()
     fs = FakeVikingFS({})
+    fields = {
+        "situation": (
+            "- Applies when: a duplicate booking is possible.\n"
+            "- Does not apply when: no matching booking exists.\n"
+            "- Source binding: request and retrieved bookings."
+        ),
+        "reminder": "- Avoid duplicate bookings.",
+        "procedure": "- Before booking: compare the candidate with retrieved bookings.",
+        "anti_pattern": "- Do not create a duplicate booking.",
+    }
+    body = render_experience_sections(fields)
     plan = PolicyUpdatePlan(
         items=[
             PolicyPlanItem(
@@ -1200,12 +1231,12 @@ async def test_memory_file_policy_updater_persists_skill_experience_from_merge_f
                 target_name="booking_duplicate_handling",
                 target_uri=policy_set.policies[0].uri,
                 before_content="content",
-                after_content="new content",
+                after_content=body,
                 base_version=1,
                 metadata={
                     "merge_memory_fields": {
                         "experience_name": "booking_duplicate_handling",
-                        "constraint": "new content",
+                        **fields,
                     }
                 },
             )
@@ -1220,10 +1251,12 @@ async def test_memory_file_policy_updater_persists_skill_experience_from_merge_f
 
     assert result.errors == []
     written = fs.files[policy_set.policies[0].uri]
-    assert '"constraint": "new content"' in written
+    assert '"situation":' in written
+    assert '"anti_pattern":' in written
+    assert '"constraint":' not in written
     assert '"trigger_code":' not in written
     assert '"content":' not in written
-    assert "new content" in written
+    assert body in written
 
 
 @pytest.mark.asyncio

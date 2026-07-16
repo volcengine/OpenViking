@@ -10,7 +10,17 @@ enabled: true
 operation_mode: "upsert"
 agent_only: true
 content_template: |
-  {{ constraint|default(content, true) }}
+  ## Situation
+  {{ situation }}
+
+  ## Reminder
+  {{ reminder }}
+
+  ## Procedure
+  {{ procedure }}
+
+  ## Anti-pattern
+  {{ anti_pattern }}
 
 fields:
   - name: experience_name
@@ -22,17 +32,12 @@ fields:
       Good: "booking_duplicate_handling", "missing_total_cost", "汇总费用遗漏".
     merge_op: immutable
 
-  - name: constraint
+  - name: situation
     type: string
     description: |
-      Natural-language content must be written in {{ language }}. Keep tool names, schema
-      fields, Python identifiers, and quoted runtime values unchanged.
-
-      Output the experience in EXACTLY this 4-section Markdown format. The skill loader
-      shows `## Situation` in search results and may load the whole file with
-      `read_experience`, so the experience must be understandable without trigger_code.
-
-      ## Situation
+      Write only the bullet body for `## Situation`; the storage template adds the heading.
+      Content must be written in {{ language }}. Keep tool names, schema fields, Python
+      identifiers, and quoted runtime values unchanged. Use exactly these four bullets:
       - Applies when: <runtime-visible task/user/tool-result situation where this lesson matters>
       - Does not apply when: <closest nearby but non-applicable task pattern; do not use
         temporal stage wording such as before final_response or while still reading/writing>
@@ -42,19 +47,38 @@ fields:
         originally requested set and a later post-action/current-state set, state both
         scopes and how to label them; otherwise none>
 
-      ## Reminder
+    merge_op: patch
+
+  - name: reminder
+    type: string
+    description: |
+      Write only the bullet body for `## Reminder`; the storage template adds the heading.
+      Content must be written in {{ language }}.
       - <one sentence root-cause lesson that changes the next agent behavior>
 
-      ## Procedure
+    merge_op: patch
+
+  - name: procedure
+    type: string
+    description: |
+      Write only the bullet body for `## Procedure`; the storage template adds the heading.
+      Content must be written in {{ language }}. Use concise ordered boundary checks:
       - Before/when <candidate action or communication boundary>: <check the decisive runtime fact>
       - If <bad condition>: <block/change exactly one argument, ask/read one missing fact,
         or include one required user-visible fact>
       - Else: <proceed without rewriting unrelated workflow steps>
 
-      ## Anti-pattern
+    merge_op: patch
+
+  - name: anti_pattern
+    type: string
+    description: |
+      Write only the bullet body for `## Anti-pattern`; the storage template adds the heading.
+      Content must be written in {{ language }}.
       - Do not <the tempting wrong behavior that caused the failure>
       - Preserve <the nearest correct behavior/object/action that must not be blocked>
 
+      Apply these rules across all four section fields:
       Rules:
       - Failure repair only. Do not output generic positive workflows, full SOPs, success-path
         summaries, or case transcripts.

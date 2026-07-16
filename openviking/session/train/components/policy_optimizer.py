@@ -11,6 +11,11 @@ from typing import Any
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryFile, StoredLink
+from openviking.session.memory.experience_sections import (
+    EXPERIENCE_SECTION_FIELDS,
+    experience_section_fields,
+    render_experience_sections,
+)
 from openviking.session.memory.extract_loop import ExtractLoop, PostValidationRetryDecision
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_updater import ExtractContext
@@ -416,20 +421,19 @@ def _gradient_to_merge_patch(gradient: SemanticGradient) -> PatchMergePatch:
     )
 
 
-def _experience_constraint_text(fields: dict[str, Any]) -> str:
-    return str(fields.get("constraint") or fields.get("content") or "")
+def _operation_content(fields: dict[str, Any], *, memory_type: str) -> str:
+    if memory_type == "experiences":
+        return render_experience_sections(fields)
+    return str(fields.get("content") or "")
 
 
 def _compact_gradient_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     compact = dict(metadata)
     memory_fields = compact.get("memory_fields")
-    if isinstance(memory_fields, dict) and (
-        "content" in memory_fields or "constraint" in memory_fields
-    ):
+    hidden_content_fields = {"content", *EXPERIENCE_SECTION_FIELDS}
+    if isinstance(memory_fields, dict) and hidden_content_fields.intersection(memory_fields):
         compact["memory_fields"] = {
-            key: value
-            for key, value in memory_fields.items()
-            if key not in {"content", "constraint"}
+            key: value for key, value in memory_fields.items() if key not in hidden_content_fields
         }
     return compact
 
@@ -506,7 +510,9 @@ def _operations_to_plan_items(
         if getattr(op, "memory_type", None) != memory_type:
             continue
         fields = dict(getattr(op, "memory_fields", {}) or {})
-        after_content = _experience_constraint_text(fields)
+        if memory_type == "experiences" and not any(experience_section_fields(fields).values()):
+            continue
+        after_content = _operation_content(fields, memory_type=memory_type)
         if not after_content.strip():
             continue
         target_name = str(
@@ -883,7 +889,11 @@ def _upsert_output_count(operations: Any, *, memory_type: str) -> int:
         if getattr(op, "memory_type", None) != memory_type:
             continue
         fields = dict(getattr(op, "memory_fields", {}) or {})
-        if _experience_constraint_text(fields).strip():
+        if memory_type == "experiences":
+            has_content = any(experience_section_fields(fields).values())
+        else:
+            has_content = bool(_operation_content(fields, memory_type=memory_type).strip())
+        if has_content:
             count += 1
     return count
 

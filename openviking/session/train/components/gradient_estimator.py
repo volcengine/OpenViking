@@ -14,6 +14,10 @@ from openviking.session.memory.agent_experience_context_provider import (
     AgentExperienceContextProvider,
 )
 from openviking.session.memory.dataclass import MemoryFile, StoredLink
+from openviking.session.memory.experience_sections import (
+    experience_section_fields,
+    render_experience_sections,
+)
 from openviking.session.memory.extract_loop import ExtractLoop, PostValidationRetryDecision
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.train.domain import ExperienceSet, RolloutAnalysis, Trajectory
@@ -453,10 +457,6 @@ def _context_with_analysis_messages(
     )
 
 
-def _experience_constraint_text(fields: dict[str, Any]) -> str:
-    return str(fields.get("constraint") or fields.get("content") or "")
-
-
 def _operations_to_gradients(
     *,
     operations: Any,
@@ -469,8 +469,8 @@ def _operations_to_gradients(
         if getattr(op, "memory_type", None) != "experiences":
             continue
         fields = dict(getattr(op, "memory_fields", {}) or {})
-        after_content = _experience_constraint_text(fields)
-        if not after_content.strip():
+        section_fields = experience_section_fields(fields)
+        if not any(section_fields.values()):
             continue
 
         old_file = getattr(op, "old_memory_file_content", None)
@@ -548,16 +548,16 @@ def _operation_after_file(
     old_file: MemoryFile | None,
 ) -> MemoryFile:
     extra_fields = dict(getattr(old_file, "extra_fields", {}) or {})
+    extra_fields.pop("constraint", None)
+    extra_fields.pop("content", None)
     for key, value in fields.items():
         if key != "content":
             extra_fields[key] = value
-    if "constraint" not in extra_fields and fields.get("content"):
-        extra_fields["constraint"] = str(fields.get("content") or "")
     extra_fields["memory_type"] = "experiences"
     extra_fields["experience_name"] = target_name
     return MemoryFile(
         uri=target_uri,
-        content=_experience_constraint_text(fields),
+        content=render_experience_sections(fields),
         links=list(getattr(old_file, "links", []) or []),
         backlinks=list(getattr(old_file, "backlinks", []) or []),
         memory_type="experiences",

@@ -10,6 +10,7 @@ from typing import Any
 
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryFile, MemoryTypeSchema
+from openviking.session.memory.experience_sections import EXPERIENCE_SECTION_FIELDS
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
@@ -148,12 +149,10 @@ variants. For new segments, use singular snake_case for English and one concise
 canonical term for Chinese; e.g. book not books, 书籍 not 书/图书. If a loser URI
 is an existing file, put it in delete_ids; if it is only a new proposal, omit it.
 
-When merging `experiences`, every upsert must keep the skill-loader format:
-put the full runtime-facing Markdown in the `constraint` field, with exactly
-these top-level sections: `## Situation`, `## Reminder`, `## Procedure`, and
-`## Anti-pattern`. Do not output only a production reminder such as
-`# name` plus `## 规则`; convert that content into the four sections. Preserve
-source-binding, applicability, scope ambiguity, canonical value/source-field
+When merging `experiences`, every upsert must preserve the four structured fields:
+`situation`, `reminder`, `procedure`, and `anti_pattern`. Put only section bullet bodies
+in those fields; the storage template adds the Markdown headings in a fixed order.
+Preserve source-binding, applicability, scope ambiguity, canonical value/source-field
 rules, and anti-patterns from the strongest patches.
 """
 
@@ -289,7 +288,10 @@ def _memory_file_fields(file: MemoryFile) -> dict[str, Any]:
         fields.pop(hidden_field, None)
     if file.memory_type is not None:
         fields["memory_type"] = file.memory_type
-    if file.content and not (file.memory_type == "experiences" and fields.get("constraint")):
+    has_experience_sections = file.memory_type == "experiences" and any(
+        fields.get(name) for name in EXPERIENCE_SECTION_FIELDS
+    )
+    if file.content and not has_experience_sections:
         fields["content"] = file.content
     if file.links:
         fields["links"] = file.links

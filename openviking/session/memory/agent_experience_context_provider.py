@@ -99,10 +99,17 @@ Output experience entries ONLY when a reusable runtime reminder would prevent or
 
 Each entry:
 - `experience_name`: new or existing experience name
-- `constraint`: the full skill-readable experience body. It MUST use the schema's `## Situation`, `## Reminder`, `## Procedure`, and `## Anti-pattern` sections.
+- `situation`: only the `## Situation` bullet body
+- `reminder`: only the `## Reminder` bullet body
+- `procedure`: only the `## Procedure` bullet body
+- `anti_pattern`: only the `## Anti-pattern` bullet body
 - `supersedes`: older `experience_name` replaced by a genuinely broader/corrected one; otherwise empty
 
-The skill loader searches experiences, shows `## Situation` as the applicability snippet, and may then load the whole experience with `read_experience`. Therefore `## Situation` must clearly say when the experience applies, when it does not apply, and which runtime source binds the rule. Do not output `trigger_code`; it is not used by the skill loader.
+The storage template adds the four Markdown headings in a fixed order. Do not include headings
+inside field values. The skill loader shows the rendered `## Situation` as the applicability
+snippet and may then load the whole rendered experience with `read_experience`. Therefore
+`situation` must clearly say when the experience applies, when it does not apply, and which
+runtime source binds the rule. Do not output `trigger_code`; it is not used by the skill loader.
 
 The system handles create vs update automatically:
 - Same `experience_name` as an existing one → update it in place
@@ -351,9 +358,6 @@ All memory content must be written in {output_language}.
         if memory_file is not None:
             payload = memory_file.to_metadata()
             if memory_file.memory_type == EXPERIENCE_MEMORY_TYPE or "/memories/experiences/" in uri:
-                payload["constraint"] = str(
-                    (memory_file.extra_fields or {}).get("constraint") or memory_file.content or ""
-                )
                 payload.pop("content", None)
             else:
                 payload["content"] = memory_file.content

@@ -15,6 +15,11 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
+from openviking.session.memory.experience_sections import (
+    EXPERIENCE_SECTION_FIELDS,
+    experience_section_fields,
+    render_experience_sections,
+)
 from openviking.session.train.domain import PolicyPlanItem, PolicySet, RolloutAnalysis, Trajectory
 from openviking.session.train.interfaces import SemanticGradient
 from openviking.telemetry import tracer
@@ -264,7 +269,7 @@ def default_policy_gate_runner() -> GateRunner:
     return GateRunner(
         gates=[
             ExperienceCausalSignalGate(mode="enforce"),
-            ExperienceSkillReadabilityGate(mode="enforce"),
+            ExperienceFieldSemanticsGate(mode="enforce"),
         ]
     )
 
@@ -287,11 +292,10 @@ Your experience output will be rejected unless every experience satisfies these 
   or when the first reward-changing mistake is reusable and preventable.
 - Do not output experiences for Outcome=success.
 
-2. Skill-loader readability
-- Experience content must include exactly the runtime-facing sections used by the
-  skill experience loader: `## Situation`, `## Reminder`, `## Procedure`, and
-  `## Anti-pattern`.
-- `## Situation` must state applicability, non-applicability, and the runtime
+2. Structured skill-loader fields
+- Experience output must populate the `situation`, `reminder`, `procedure`, and
+  `anti_pattern` fields. The storage template renders their Markdown headings.
+- `situation` must state applicability, non-applicability, and the runtime
   source binding that lets a future agent decide whether to read/apply the
   experience without executing trigger_code.
 - `Does not apply when` must describe a task-pattern mismatch, not a temporal
@@ -371,7 +375,7 @@ class ExperienceToolAlignmentGate:
         return target.memory_type == "experiences" and target.after_content.strip() != ""
 
     async def evaluate(self, target: GateTarget) -> GateDecision | None:
-        _, trigger_code = _experience_constraint_and_trigger(target.after_content, target)
+        _, trigger_code = _experience_content_and_trigger(target.after_content, target)
         profile = TriggerProfile.from_code(trigger_code)
         if not profile.candidate_tools:
             return None  # trigger shape gate reports the structural issue.
@@ -419,8 +423,8 @@ class ExperienceRuntimeWordingGate:
         return target.memory_type == "experiences" and target.after_content.strip() != ""
 
     async def evaluate(self, target: GateTarget) -> GateDecision | None:
-        constraint, _ = _experience_constraint_and_trigger(target.after_content, target)
-        terms = _runtime_control_plane_terms(constraint)
+        content, _ = _experience_content_and_trigger(target.after_content, target)
+        terms = _runtime_control_plane_terms(content)
         if not terms:
             return None
         return GateDecision(
@@ -430,7 +434,7 @@ class ExperienceRuntimeWordingGate:
             evidence={
                 "target_name": target.target_name,
                 "terms": terms,
-                "content_preview": _preview_text(constraint, limit=500),
+                "content_preview": _preview_text(content, limit=500),
             },
             retriable=True,
             repair_prompt=(
@@ -444,23 +448,20 @@ class ExperienceRuntimeWordingGate:
 
 
 @dataclass(slots=True)
-class ExperienceSkillReadabilityGate:
-    """Reject experiences that the skill loader cannot safely search/read."""
+class ExperienceFieldSemanticsGate:
+    """Reject structured experience fields that are empty or semantically unsafe."""
 
     mode: GateMode = "enforce"
-    name: str = "experience_skill_readability"
+    name: str = "experience_field_semantics"
 
     def applies_to(self, target: GateTarget) -> bool:
         return target.memory_type == "experiences" and target.after_content.strip() != ""
 
     async def evaluate(self, target: GateTarget) -> GateDecision | None:
-        content, _ = _experience_constraint_and_trigger(target.after_content, target)
-        missing = [
-            heading
-            for heading in ("Situation", "Reminder", "Procedure", "Anti-pattern")
-            if not _markdown_section(content, heading)
-        ]
-        situation = _markdown_section(content, "Situation")
+        fields = experience_section_fields(_experience_structured_fields(target))
+        missing = [name for name in EXPERIENCE_SECTION_FIELDS if not fields[name]]
+        situation = fields["situation"]
+        content = render_experience_sections(fields)
         situation_lower = situation.lower()
         source_binding_terms = (
             "source binding",
@@ -499,10 +500,10 @@ class ExperienceSkillReadabilityGate:
         return GateDecision(
             gate_name=self.name,
             action="reject",
-            reason="experience is not readable/applicable enough for skill loader",
+            reason="experience fields are not semantically usable by the skill loader",
             evidence={
                 "target_name": target.target_name,
-                "missing_sections": missing,
+                "missing_fields": missing,
                 "has_source_binding": has_source_binding,
                 "has_applicability": has_applicability,
                 "temporal_non_applicability": temporal_non_applicability,
@@ -512,10 +513,10 @@ class ExperienceSkillReadabilityGate:
             },
             retriable=True,
             repair_prompt=(
-                "Rewrite the experience in exactly these sections: `## Situation`, "
-                "`## Reminder`, `## Procedure`, `## Anti-pattern`. In `## Situation`, "
-                "state applies-when, does-not-apply-when, and the runtime source binding "
-                "used to decide applicability. `Does not apply when` must be a task-pattern "
+                "Populate the structured `situation`, `reminder`, `procedure`, and "
+                "`anti_pattern` fields without Markdown headings. In `situation`, state "
+                "applies-when, does-not-apply-when, and the runtime source binding used to "
+                "decide applicability. `Does not apply when` must be a task-pattern "
                 "mismatch, not a temporal stage such as still reading/writing or before "
                 "final_response. If relative wording such as other/remaining/其他/剩余 appears "
                 "while writes such as cancel/upgrade/modify are also discussed, `Scope ambiguity` "
@@ -523,9 +524,8 @@ class ExperienceSkillReadabilityGate:
                 "scope instead of none. For monetary totals/paid/refund/balance values, bind "
                 "the source to explicit canonical total/paid/charged/order/payment amount "
                 "fields when present, and use reconstructed line-item sums only as fallback "
-                "or cross-check. Put the complete four-section Markdown body in the "
-                "`constraint` field (or `content` if that is the only available field); do not "
-                "return a production `# name` / `## 规则` block. Do not add trigger_code."
+                "or cross-check. Do not include section headings inside field values and do "
+                "not add trigger_code."
             ),
         )
 
@@ -547,7 +547,7 @@ class ExperienceTriggerRuntimeGate:
         return target.memory_type == "experiences" and target.after_content.strip() != ""
 
     async def evaluate(self, target: GateTarget) -> GateDecision | None:
-        _, trigger_code = _experience_constraint_and_trigger(target.after_content, target)
+        _, trigger_code = _experience_content_and_trigger(target.after_content, target)
         error = _vikingbot_trigger_runtime_error(trigger_code)
         if not error:
             return None
@@ -689,7 +689,7 @@ class ExperienceTriggerShapeGate:
         return target.memory_type == "experiences" and target.after_content.strip() != ""
 
     async def evaluate(self, target: GateTarget) -> GateDecision | None:
-        _, trigger_code = _experience_constraint_and_trigger(target.after_content, target)
+        _, trigger_code = _experience_content_and_trigger(target.after_content, target)
         profile = TriggerProfile.from_code(trigger_code)
         reasons: list[str] = []
         if profile.parse_error:
@@ -756,8 +756,8 @@ class ExperienceUpdateNarrowingGate:
         )
 
     async def evaluate(self, target: GateTarget) -> GateDecision | None:
-        _, before_trigger = _experience_constraint_and_trigger(target.before_content or "", target)
-        _, after_trigger = _experience_constraint_and_trigger(target.after_content, target)
+        _, before_trigger = _experience_content_and_trigger(target.before_content or "", target)
+        _, after_trigger = _experience_content_and_trigger(target.after_content, target)
         before = TriggerProfile.from_code(before_trigger)
         after = TriggerProfile.from_code(after_trigger)
         reasons: list[str] = []
@@ -1393,10 +1393,17 @@ def _tool_matches_signal(tool: str, signal: TrajectoryRepairSignal) -> bool:
     return tool in candidates
 
 
-def _experience_constraint_and_trigger(
+def _experience_content_and_trigger(
     content: str,
     target: GateTarget,
 ) -> tuple[str, str]:
+    fields = _experience_structured_fields(target)
+    rendered_fields = _rendered_experience_trigger_fields(content)
+    trigger = str(fields.get("trigger_code") or rendered_fields.get("trigger_code") or "").strip()
+    return str(content or "").strip(), trigger
+
+
+def _experience_structured_fields(target: GateTarget) -> dict[str, Any]:
     fields: dict[str, Any] = {}
     if target.gradient is not None:
         fields = dict(getattr(target.gradient.after_file, "extra_fields", {}) or {})
@@ -1405,11 +1412,7 @@ def _experience_constraint_and_trigger(
             value = target.plan_item.metadata.get(key)
             if isinstance(value, dict):
                 fields.update(value)
-    rendered_fields = _rendered_experience_trigger_fields(content)
-    for key, value in rendered_fields.items():
-        fields.setdefault(key, value)
-    trigger = str(fields.get("trigger_code") or "").strip()
-    return str(fields.get("constraint") or fields.get("content") or content or "").strip(), trigger
+    return fields
 
 
 def _rendered_experience_trigger_fields(content: str) -> dict[str, str]:
@@ -1433,9 +1436,6 @@ def _rendered_experience_trigger_fields(content: str) -> dict[str, str]:
     )
     if trigger_match:
         parsed["trigger_code"] = trigger_match.group("code").strip()
-    constraint = (text[: section_match.start()] + text[section_match.end() :]).strip()
-    if constraint:
-        parsed["constraint"] = constraint
     return parsed
 
 
