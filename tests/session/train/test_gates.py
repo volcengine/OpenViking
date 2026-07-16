@@ -803,11 +803,24 @@ async def test_experience_root_cause_prevention_gate_rejects_non_preventive_expe
 
 
 @pytest.mark.asyncio
-async def test_experience_root_cause_prevention_gate_fails_open_on_llm_error():
+async def test_experience_root_cause_prevention_gate_fails_closed_on_llm_error():
     target, gate = _gradient_target(RuntimeError("model unavailable"))
 
     decision = await gate.evaluate(target)
 
     assert decision is not None
-    assert decision.action == "warn"
-    assert "failed open" in decision.reason
+    assert decision.action == "reject"
+    assert decision.retriable is False
+    assert "failed closed" in decision.reason
+
+
+@pytest.mark.asyncio
+async def test_experience_root_cause_prevention_gate_rejects_invalid_llm_output():
+    target, gate = _gradient_target("not JSON")
+
+    decision = await gate.evaluate(target)
+
+    assert decision is not None
+    assert decision.action == "reject"
+    assert decision.retriable is False
+    assert "invalid output" in decision.reason

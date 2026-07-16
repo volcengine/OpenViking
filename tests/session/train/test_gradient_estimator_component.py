@@ -20,7 +20,7 @@ from openviking.session.train import (
     Trajectory,
 )
 from openviking.session.train.components import gradient_estimator as gradient_estimator_module
-from openviking.session.train.gates import GateReport
+from openviking.session.train.gates import GateDecision, GateReport
 
 
 class FakeExperienceGradientEstimator(ExperienceGradientEstimator):
@@ -80,6 +80,68 @@ def _experience_set() -> ExperienceSet:
 
 def _context() -> ExperienceGradientContext:
     return ExperienceGradientContext(request_context=SimpleNamespace(), messages=[])
+
+
+def _rejected_gate_report(
+    *,
+    retriable: bool,
+    repair_prompt: str = "",
+) -> GateReport:
+    return GateReport(
+        stage="post_gradient",
+        evaluated_count=1,
+        rejected_count=1,
+        decisions=[
+            GateDecision(
+                gate_name="test_gate",
+                action="reject",
+                reason="test rejection",
+                evidence={"target_name": "test_experience"},
+                retriable=retriable,
+                repair_prompt=repair_prompt,
+            )
+        ],
+    )
+
+
+def test_experience_post_validation_decision_handles_pass_retry_and_discard():
+    pass_report = GateReport(stage="post_gradient", evaluated_count=1, allowed_count=1)
+    retriable_report = _rejected_gate_report(
+        retriable=True,
+        repair_prompt="repair the experience",
+    )
+    non_retriable_report = _rejected_gate_report(retriable=False)
+
+    assert (
+        gradient_estimator_module._experience_post_validation_decision(
+            pass_report,
+            retry_count=0,
+        )
+        is None
+    )
+
+    retry = gradient_estimator_module._experience_post_validation_decision(
+        retriable_report,
+        retry_count=0,
+    )
+    assert retry is not None
+    assert retry.retry is True
+    assert retry.discard is False
+    assert "repair the experience" in retry.instruction
+
+    non_retriable = gradient_estimator_module._experience_post_validation_decision(
+        non_retriable_report,
+        retry_count=0,
+    )
+    assert non_retriable is not None
+    assert non_retriable.discard is True
+
+    exhausted = gradient_estimator_module._experience_post_validation_decision(
+        retriable_report,
+        retry_count=gradient_estimator_module._EXPERIENCE_POST_VALIDATION_MAX_RETRIES,
+    )
+    assert exhausted is not None
+    assert exhausted.discard is True
 
 
 @pytest.mark.asyncio
@@ -302,7 +364,7 @@ async def test_post_validation_gate_sees_prefetched_comparison_trajectories(monk
             "content": "# same case success\n- Outcome: success\n- Communication: included total.",
         }
     ]
-    captured = {"metadata_seen": []}
+    captured = {"metadata_seen": [], "semantic_vlms": []}
 
     class FakeProvider:
         def __init__(self, **kwargs):
@@ -365,6 +427,7 @@ async def test_post_validation_gate_sees_prefetched_comparison_trajectories(monk
         captured["metadata_seen"].append(
             list(analysis.trajectories[0].metadata.get("comparison_trajectories") or [])
         )
+        captured["semantic_vlms"].append(semantic_vlm)
         return gradients, GateReport(
             stage="post_gradient",
             evaluated_count=len(gradients),
@@ -388,6 +451,59 @@ async def test_post_validation_gate_sees_prefetched_comparison_trajectories(monk
     assert captured["post_validation_decision"] is None
     assert captured["metadata_seen"]
     assert all(item == comparison for item in captured["metadata_seen"])
-    assert analysis.trajectories[0].metadata["comparison_trajectory_uris"] == [
-        comparison[0]["uri"]
-    ]
+    assert captured["semantic_vlms"] == [estimator.vlm]
+    assert len(analysis.metadata["gate_reports"]) == 1
+    assert analysis.trajectories[0].metadata["comparison_trajectory_uris"] == [comparison[0]["uri"]]
+
+
+@pytest.mark.asyncio
+async def test_post_validation_hook_discards_when_gate_evaluation_raises(monkeypatch):
+    analysis = _analysis(passed=False, outcome="failure")
+    context = _context()
+    captured = {}
+
+    class FakeProvider:
+        def __init__(self, **kwargs):
+            self.prefetched_comparison_trajectories = []
+
+    class FakeIsolationHandler:
+        def __init__(self, request_context, extract_context, allowed_memory_types):
+            pass
+
+        def prepare_messages(self):
+            pass
+
+    class FakeExtractLoop:
+        def __init__(self, **kwargs):
+            self.post_validation_hook = kwargs["post_validation_hook"]
+
+        async def run(self):
+            operations = SimpleNamespace(upsert_operations=[])
+            captured["decision"] = await self.post_validation_hook(
+                operations,
+                0,
+                messages=[],
+                latest_draft=operations,
+            )
+            return operations, {"summary": "discarded"}
+
+    async def raise_gate_error(**kwargs):
+        raise RuntimeError("gate unavailable")
+
+    monkeypatch.setattr(gradient_estimator_module, "AgentExperienceContextProvider", FakeProvider)
+    monkeypatch.setattr(gradient_estimator_module, "MemoryIsolationHandler", FakeIsolationHandler)
+    monkeypatch.setattr(gradient_estimator_module, "ExtractLoop", FakeExtractLoop)
+    monkeypatch.setattr(
+        gradient_estimator_module,
+        "_evaluate_experience_gradients",
+        raise_gate_error,
+    )
+
+    estimator = ExperienceGradientEstimator(viking_fs=SimpleNamespace(), vlm=SimpleNamespace())
+
+    assert await estimator.estimate(analysis, _experience_set(), context) == []
+    assert captured["decision"].discard is True
+    assert context.metadata["gate_reports"][-1]["rejected_count"] == 1
+    assert context.metadata["post_validation_retries"][-1]["final_outcome"] == (
+        "discarded_after_gate_error"
+    )

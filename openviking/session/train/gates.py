@@ -609,14 +609,14 @@ class ExperienceRootCausePreventionGate:
             parsed = parse_json_from_response(response)
         except Exception as exc:
             logger.warning(
-                "experience root-cause prevention gate failed open: %s",
+                "experience root-cause prevention gate failed closed: %s",
                 exc,
                 exc_info=True,
             )
             return GateDecision(
                 gate_name=self.name,
-                action="warn",
-                reason="experience root-cause prevention gate failed open",
+                action="reject",
+                reason="experience root-cause prevention gate failed closed",
                 evidence={
                     "target_name": target.target_name,
                     "error": str(exc),
@@ -626,8 +626,8 @@ class ExperienceRootCausePreventionGate:
         if not isinstance(parsed, dict):
             return GateDecision(
                 gate_name=self.name,
-                action="warn",
-                reason="experience root-cause prevention gate returned non-object output",
+                action="reject",
+                reason="experience root-cause prevention gate returned invalid output",
                 evidence={
                     "target_name": target.target_name,
                     "raw_response_preview": _preview_text(str(response), limit=500),

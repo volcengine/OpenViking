@@ -19,6 +19,8 @@ from openviking.session.memory.memory_isolation_handler import MemoryIsolationHa
 from openviking.session.train.domain import ExperienceSet, RolloutAnalysis, Trajectory
 from openviking.session.train.gates import (
     ExperienceRootCausePreventionGate,
+    GateDecision,
+    GateReport,
     GateRunner,
     build_gate_retry_instruction,
     default_policy_gate_runner,
@@ -93,13 +95,7 @@ class ExperienceGradientEstimator:
                 analysis=analysis,
                 experience_set=experience_set,
             )
-            gated, report = await _evaluate_experience_gradients(
-                gradients=gradients,
-                analysis=analysis,
-                experience_set=experience_set,
-            )
-            _record_gate_report(report, analysis=analysis, context=context)
-            return gated
+            return gradients
 
         gradient_batches = await asyncio.gather(
             *(estimate_one(trajectory) for trajectory in analysis.trajectories)
@@ -155,48 +151,68 @@ class ExperienceGradientEstimator:
             messages: list[dict[str, Any]] | None = None,
             latest_draft: Any = None,
         ):
-            _sync_prefetched_comparison_trajectories(provider, trajectory)
-            analysis_obj = _analysis_from_context_metadata(context)
-            experience_set = _experience_set_from_context_metadata(context)
-            gradients = _operations_to_gradients(
-                operations=operations,
-                trajectory=trajectory,
-                analysis=analysis_obj,
-                experience_set=experience_set,
-            )
-            _, report = await _evaluate_experience_gradients(
-                gradients=gradients,
-                analysis=analysis_obj,
-                experience_set=experience_set,
-                semantic_vlm=vlm,
-            )
-            instruction = build_gate_retry_instruction(report)
-            if not instruction:
+            try:
+                _sync_prefetched_comparison_trajectories(provider, trajectory)
+                analysis_obj = _analysis_from_context_metadata(context)
+                experience_set = _experience_set_from_context_metadata(context)
+                gradients = _operations_to_gradients(
+                    operations=operations,
+                    trajectory=trajectory,
+                    analysis=analysis_obj,
+                    experience_set=experience_set,
+                )
+                _, report = await _evaluate_experience_gradients(
+                    gradients=gradients,
+                    analysis=analysis_obj,
+                    experience_set=experience_set,
+                    semantic_vlm=vlm,
+                )
+            except Exception as exc:
+                logger.exception("Experience post-validation failed; discarding draft")
+                analysis_obj = _analysis_from_context_metadata_optional(context)
+                report = _post_validation_failure_report(exc)
+                _record_gate_report(report, analysis=analysis_obj, context=context)
+                event = _post_validation_retry_event(
+                    stage="post_gradient",
+                    retry_index=retry_count,
+                    report=report.to_dict(),
+                    instruction="",
+                    final_outcome="discarded_after_gate_error",
+                )
+                _record_post_validation_event(
+                    event,
+                    context=context,
+                    analysis=analysis_obj,
+                    trajectory=trajectory,
+                )
+                return PostValidationRetryDecision(discard=True)
+
+            _record_gate_report(report, analysis=analysis_obj, context=context)
+            decision = _experience_post_validation_decision(report, retry_count=retry_count)
+            if decision is None:
                 return None
+
+            instruction = decision.instruction
             report_dict = report.to_dict()
             context.metadata.setdefault("gate_retry_reports", []).append(report_dict)
-            final_outcome = (
-                "discarded_after_max_retries"
-                if retry_count >= _EXPERIENCE_POST_VALIDATION_MAX_RETRIES
-                else "retry_requested"
-            )
             event = _post_validation_retry_event(
                 stage="post_gradient",
                 retry_index=retry_count,
                 report=report_dict,
                 instruction=instruction,
-                final_outcome=final_outcome,
+                final_outcome=_post_validation_final_outcome(
+                    report,
+                    decision=decision,
+                    retry_count=retry_count,
+                ),
             )
-            context.metadata.setdefault("post_validation_retries", []).append(event)
-            analysis_obj.metadata.setdefault("post_validation_retries", []).append(event)
-            trajectory.metadata.setdefault("post_validation_retries", []).append(event)
-            if retry_count >= _EXPERIENCE_POST_VALIDATION_MAX_RETRIES:
-                return PostValidationRetryDecision(discard=True)
-            return PostValidationRetryDecision(
-                retry=True,
-                instruction=instruction,
-                include_latest_draft=True,
+            _record_post_validation_event(
+                event,
+                context=context,
+                analysis=analysis_obj,
+                trajectory=trajectory,
             )
+            return decision
 
         orchestrator = ExtractLoop(
             vlm=vlm,
@@ -320,6 +336,70 @@ def _post_validation_retry_event(
     }
 
 
+def _experience_post_validation_decision(
+    report: GateReport,
+    *,
+    retry_count: int,
+) -> PostValidationRetryDecision | None:
+    if report.rejected_count == 0:
+        return None
+    if report.has_non_retriable_rejection():
+        return PostValidationRetryDecision(discard=True)
+
+    instruction = build_gate_retry_instruction(report)
+    if not instruction or retry_count >= _EXPERIENCE_POST_VALIDATION_MAX_RETRIES:
+        return PostValidationRetryDecision(discard=True)
+    return PostValidationRetryDecision(
+        retry=True,
+        instruction=instruction,
+        include_latest_draft=True,
+    )
+
+
+def _post_validation_final_outcome(
+    report: GateReport,
+    *,
+    decision: PostValidationRetryDecision,
+    retry_count: int,
+) -> str:
+    if decision.retry:
+        return "retry_requested"
+    if report.has_non_retriable_rejection():
+        return "discarded_non_retriable"
+    if retry_count >= _EXPERIENCE_POST_VALIDATION_MAX_RETRIES:
+        return "discarded_after_max_retries"
+    return "discarded_without_repair_instruction"
+
+
+def _post_validation_failure_report(error: Exception) -> GateReport:
+    return GateReport(
+        stage="post_gradient",
+        evaluated_count=1,
+        rejected_count=1,
+        decisions=[
+            GateDecision(
+                gate_name="experience_post_validation",
+                action="reject",
+                reason="experience post-validation failed closed",
+                evidence={"error": str(error)},
+            )
+        ],
+    )
+
+
+def _record_post_validation_event(
+    event: dict[str, Any],
+    *,
+    context: ExperienceGradientContext,
+    analysis: RolloutAnalysis | None,
+    trajectory: Trajectory,
+) -> None:
+    context.metadata.setdefault("post_validation_retries", []).append(event)
+    if analysis is not None:
+        analysis.metadata.setdefault("post_validation_retries", []).append(event)
+    trajectory.metadata.setdefault("post_validation_retries", []).append(event)
+
+
 def _preview_instruction(instruction: str, *, limit: int = 500) -> str:
     text = " ".join(str(instruction or "").split())
     if len(text) <= limit:
@@ -330,11 +410,12 @@ def _preview_instruction(instruction: str, *, limit: int = 500) -> str:
 def _record_gate_report(
     report: Any,
     *,
-    analysis: RolloutAnalysis,
+    analysis: RolloutAnalysis | None,
     context: ExperienceGradientContext,
 ) -> None:
     context.metadata.setdefault("gate_reports", []).append(report.to_dict())
-    analysis.metadata.setdefault("gate_reports", []).append(report.to_dict())
+    if analysis is not None:
+        analysis.metadata.setdefault("gate_reports", []).append(report.to_dict())
 
 
 def _analysis_from_context_metadata(context: ExperienceGradientContext) -> RolloutAnalysis:
