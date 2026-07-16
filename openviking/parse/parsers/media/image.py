@@ -10,6 +10,7 @@ They serve as a design reference for future media parsing capabilities.
 For current document parsing (PDF, Markdown, HTML, Text), see other parser modules.
 """
 
+import io
 from pathlib import Path
 from typing import List, Optional, Union
 
