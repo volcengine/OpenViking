@@ -3,10 +3,13 @@
 
 import threading
 import time
+from array import array
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 
 import pytest
 
+from openviking.storage.vectordb.index import cuvs_index as cuvs_index_module
 from openviking.storage.vectordb.index.cuvs_index import (
     CuVSDenseIndex,
     CuVSMemoryBudgetError,
@@ -15,6 +18,7 @@ from openviking.storage.vectordb.index.cuvs_index import (
     CuVSUnavailableError,
     UnsupportedCuVSFilterError,
     _CuVSRuntime,
+    _PackedFP32Rows,
     estimate_cuvs_memory,
     matches_filter,
 )
@@ -354,6 +358,151 @@ def delta(label, vector, **fields):
     import json
 
     return DeltaRecord(label=label, vector=vector, fields=json.dumps(fields))
+
+
+def test_cuvs_host_shadow_is_immutable_compact_fp32():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={},
+        config={"dtype": "float16"},
+        runtime=runtime,
+    )
+    source = [0.1, -3.25]
+    index.add_candidates([candidate(10, source), candidate(20, [2.0, 4.0])])
+
+    assert index.host_shadow_nbytes == 2 * 2 * 4
+    stored = index._records[10].vector
+    assert isinstance(stored, bytes)
+    assert len(stored) == 2 * 4
+    assert list(memoryview(stored).cast("f")) == pytest.approx([0.1, -3.25])
+
+    # The host snapshot owns FP32 values instead of references to caller-owned
+    # Python floats, even when the configured device dataset uses FP16.
+    source[:] = [9.0, 9.0]
+    rebuild = index.prepare_rebuild()
+    assert rebuild is not None
+    assert rebuild.labels == (10, 20)
+    assert runtime.dataset[0] == pytest.approx([0.1, -3.25])
+    assert index.commit_rebuild(rebuild)
+
+    # Updating an existing label keeps dict/row order; delete plus reinsert
+    # retains the previous append-at-end behavior.
+    index.upsert([delta(10, [5.0, 6.0])])
+    replacement = index.prepare_rebuild()
+    assert replacement is not None
+    assert replacement.labels == (10, 20)
+    assert runtime.dataset[0] == pytest.approx([5.0, 6.0])
+    assert index.commit_rebuild(replacement)
+    index.delete([DeltaRecord(label=10)])
+    index.upsert([delta(10, [7.0, 8.0])])
+    reinserted = index.prepare_rebuild()
+    assert reinserted is not None
+    assert reinserted.labels == (20, 10)
+    assert runtime.dataset[1] == pytest.approx([7.0, 8.0])
+
+
+@pytest.mark.parametrize(
+    ("dtype", "expected_upload_dtype"),
+    [("float32", "float32"), ("float16", "float16")],
+)
+def test_cuvs_runtime_uploads_packed_rows_in_bounded_batches(
+    monkeypatch, dtype, expected_upload_dtype
+):
+    class DeviceDataset:
+        def __init__(self, shape, device_dtype):
+            self.rows = [[None] * shape[1] for _ in range(shape[0])]
+            self.dtype = device_dtype
+            self.upload_dtypes = []
+
+        def __getitem__(self, row_slice):
+            owner = self
+
+            class DeviceSlice:
+                def set(self, host_rows):
+                    owner.upload_dtypes.append(str(host_rows.dtype))
+                    owner.rows[row_slice] = host_rows.tolist()
+
+            return DeviceSlice()
+
+    class FakeCuPy:
+        float16 = "float16"
+        float32 = "float32"
+
+        @staticmethod
+        def empty(shape, dtype):
+            return DeviceDataset(shape, dtype)
+
+    class FakeBruteForce:
+        @staticmethod
+        def build(dataset, metric):
+            assert metric == "inner_product"
+            return dataset
+
+    runtime = _CuVSRuntime.__new__(_CuVSRuntime)
+    runtime.cp = FakeCuPy()
+    runtime.device_scope = lambda: nullcontext()
+    runtime.device_dtype = FakeCuPy.float16 if dtype == "float16" else FakeCuPy.float32
+    runtime.dtype = dtype
+    runtime.algorithm = "brute_force"
+    runtime.metric = "inner_product"
+    runtime.brute_force = FakeBruteForce()
+    runtime.cagra = object()
+    runtime.build_params = {}
+
+    rows = _PackedFP32Rows(
+        tuple(array("f", values).tobytes() for values in ([1, 2], [3, 4], [5, 6])),
+        dimension=2,
+    )
+    monkeypatch.setattr(cuvs_index_module, "_FP32_UPLOAD_BATCH_BYTES", 8)
+    built = runtime.build(rows)
+
+    assert built.dataset.rows == [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]
+    assert built.dataset.upload_dtypes == [expected_upload_dtype] * 3
+    assert rows.nbytes == 3 * 2 * 4
+    assert [end - start for start, end, _payload in rows.iter_packed_batches(8)] == [1, 1, 1]
+
+
+def test_mutation_during_packed_rebuild_keeps_candidate_snapshot_immutable():
+    class BlockingRuntime(FakeCuVSRuntime):
+        def __init__(self):
+            super().__init__()
+            self.first_build_started = threading.Event()
+            self.resume_first_build = threading.Event()
+
+        def build(self, dataset):
+            if self.build_count == 0:
+                self.first_build_started.set()
+                assert self.resume_first_build.wait(timeout=5)
+            return super().build(dataset)
+
+    runtime = BlockingRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={},
+        config={},
+        runtime=runtime,
+    )
+    index.add_candidates([candidate(1, [1.0, 0.0])])
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        pending = executor.submit(index.prepare_rebuild)
+        assert runtime.first_build_started.wait(timeout=5)
+        index.upsert([delta(1, [0.0, 1.0])])
+        runtime.resume_first_build.set()
+        stale = pending.result(timeout=5)
+
+    assert stale is not None
+    assert runtime.dataset == [[1.0, 0.0]]
+    assert index.commit_rebuild(stale) is False
+    replacement = index.prepare_rebuild()
+    assert replacement is not None
+    assert runtime.dataset == [[0.0, 1.0]]
+    assert index.commit_rebuild(replacement)
 
 
 def test_cuvs_rebuild_objects_are_released_on_the_captured_device():

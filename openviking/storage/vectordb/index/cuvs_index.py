@@ -23,14 +23,31 @@ import re
 import threading
 import time
 import traceback
+from array import array
 from collections import OrderedDict
 from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+    overload,
+)
 
 from openviking.storage.vectordb.store.data import CandidateData, DeltaRecord
 
 logger = logging.getLogger(__name__)
+
+_FP32_BYTES = 4
+_FP32_UPLOAD_BATCH_BYTES = 64 * 1024 * 1024
 
 NativeFilterEvaluation = Union[
     Tuple[Sequence[int], int],
@@ -355,6 +372,60 @@ def matches_filter(
     raise UnsupportedCuVSFilterError(f"Unsupported cuVS filter operation: {op!r}")
 
 
+@dataclass(frozen=True)
+class _PackedFP32Rows(Sequence[Sequence[float]]):
+    """Immutable FP32 rows captured for one cuVS rebuild.
+
+    The row blobs keep mutation snapshots cheap and safe: an upsert replaces a
+    blob instead of modifying storage which a background rebuild may still be
+    reading.  Runtime uploads concatenate only a bounded number of rows at a
+    time, so a rebuild does not require another full host-side dataset copy.
+    """
+
+    rows: Tuple[bytes, ...]
+    dimension: int
+
+    def __len__(self) -> int:
+        return len(self.rows)
+
+    @overload
+    def __getitem__(self, index: int) -> Sequence[float]: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> Sequence[Sequence[float]]: ...
+
+    def __getitem__(
+        self, index: Union[int, slice]
+    ) -> Union[Sequence[float], Sequence[Sequence[float]]]:
+        if isinstance(index, slice):
+            return tuple(memoryview(row).cast("f") for row in self.rows[index])
+        return memoryview(self.rows[index]).cast("f")
+
+    def __iter__(self) -> Iterator[Sequence[float]]:
+        for row in self.rows:
+            yield memoryview(row).cast("f")
+
+    @property
+    def nbytes(self) -> int:
+        return len(self.rows) * self.dimension * _FP32_BYTES
+
+    def iter_packed_batches(
+        self,
+        max_bytes: int,
+    ) -> Iterator[Tuple[int, int, bytes]]:
+        """Yield row-aligned host buffers bounded by ``max_bytes`` when possible."""
+
+        if max_bytes <= 0:
+            raise ValueError("cuVS FP32 upload batch size must be positive")
+        row_bytes = self.dimension * _FP32_BYTES
+        if row_bytes <= 0:
+            return
+        rows_per_batch = max(1, max_bytes // row_bytes)
+        for start in range(0, len(self.rows), rows_per_batch):
+            end = min(start + rows_per_batch, len(self.rows))
+            yield start, end, b"".join(self.rows[start:end])
+
+
 class _CuVSRuntime:
     """Small adapter around the public cuVS Python API."""
 
@@ -442,9 +513,36 @@ class _CuVSRuntime:
     def build(self, dataset: Sequence[Sequence[float]]):
         with self.device_scope():
             device_dataset = None
+            packed_batch = None
+            host_batch = None
             index = None
             try:
-                device_dataset = self.cp.asarray(dataset, dtype=self.device_dtype)
+                if isinstance(dataset, _PackedFP32Rows):
+                    # CuPy already depends on NumPy, but keep the import on the
+                    # GPU-only path so native OpenViking users do not gain a
+                    # new import-time dependency through this module.
+                    import numpy as np
+
+                    device_dataset = self.cp.empty(
+                        (len(dataset), dataset.dimension),
+                        dtype=self.device_dtype,
+                    )
+                    for start, end, packed_batch in dataset.iter_packed_batches(
+                        _FP32_UPLOAD_BATCH_BYTES
+                    ):
+                        host_batch = np.frombuffer(packed_batch, dtype=np.float32).reshape(
+                            end - start, dataset.dimension
+                        )
+                        if self.dtype == "float16":
+                            host_batch = host_batch.astype(np.float16)
+                        # ndarray.set() without an explicit stream performs a
+                        # synchronous host-to-device copy.  The bounded host
+                        # buffer can therefore be released before the next batch.
+                        device_dataset[start:end].set(host_batch)
+                        host_batch = None
+                        packed_batch = None
+                else:
+                    device_dataset = self.cp.asarray(dataset, dtype=self.device_dtype)
                 if self.algorithm == "brute_force":
                     index = self.brute_force.build(device_dataset, metric=self.metric)
                     return _CuVSRuntimeIndex(index=index, dataset=device_dataset)
@@ -456,6 +554,8 @@ class _CuVSRuntime:
                 # Drop them before Device.__exit__ restores the caller's device.
                 index = None
                 device_dataset = None
+                host_batch = None
+                packed_batch = None
                 # Python/Cython exception frames can retain CUDA arguments even
                 # after the locals above are cleared. Preserve stack locations
                 # while releasing frame locals under the captured device.
@@ -597,7 +697,7 @@ class _CuVSRuntime:
 
 @dataclass(frozen=True)
 class _Record:
-    vector: Tuple[float, ...]
+    vector: bytes
     fields: Mapping[str, Any]
 
 
@@ -748,17 +848,32 @@ class CuVSDenseIndex:
             return len(self._records)
 
     @property
+    def host_shadow_nbytes(self) -> int:
+        """Return the compact FP32 vector payload size, excluding Python metadata."""
+
+        with self._lock:
+            return len(self._records) * self.dimension * _FP32_BYTES
+
+    @property
     def needs_rebuild(self) -> bool:
         with self._lock:
             return self._dirty
 
-    def _prepare_vector(self, vector: Sequence[float]) -> Tuple[float, ...]:
+    def _prepare_vector_values(self, vector: Sequence[float]) -> List[float]:
         if len(vector) != self.dimension:
             raise ValueError(
                 f"cuVS vector dimension mismatch: expected {self.dimension}, got {len(vector)}"
             )
-        prepared = _normalize(vector) if self.normalize_vectors else [float(v) for v in vector]
-        return tuple(prepared)
+        return _normalize(vector) if self.normalize_vectors else [float(v) for v in vector]
+
+    def _prepare_vector(self, vector: Sequence[float]) -> Tuple[float, ...]:
+        return tuple(self._prepare_vector_values(vector))
+
+    def _pack_vector(self, vector: Sequence[float]) -> bytes:
+        packed = array("f", self._prepare_vector_values(vector))
+        if packed.itemsize != _FP32_BYTES:
+            raise RuntimeError("cuVS host vector storage requires 4-byte IEEE FP32 values")
+        return packed.tobytes()
 
     @staticmethod
     def _parse_fields(value: str) -> Mapping[str, Any]:
@@ -776,7 +891,7 @@ class CuVSDenseIndex:
                 if not candidate.vector:
                     continue
                 self._records[int(candidate.label)] = _Record(
-                    vector=self._prepare_vector(candidate.vector),
+                    vector=self._pack_vector(candidate.vector),
                     fields=self._parse_fields(candidate.fields),
                 )
             self._invalidate()
@@ -788,7 +903,7 @@ class CuVSDenseIndex:
                 if not record.vector:
                     continue
                 self._records[int(record.label)] = _Record(
-                    vector=self._prepare_vector(record.vector),
+                    vector=self._pack_vector(record.vector),
                     fields=self._parse_fields(record.fields),
                 )
                 changed = True
@@ -1119,7 +1234,10 @@ class CuVSDenseIndex:
                         generation=generation,
                     )
                 labels = tuple(self._records)
-                dataset = [self._records[label].vector for label in labels]
+                dataset = _PackedFP32Rows(
+                    tuple(self._records[label].vector for label in labels),
+                    self.dimension,
+                )
 
             with _CUVS_MEMORY_COORDINATOR.build_lock(self._runtime):
                 # Admission is checked again while the per-device build lock is
