@@ -26,6 +26,8 @@ from openviking_cli.exceptions import InternalError, NotFoundError, OpenVikingEr
 
 router = APIRouter(prefix="/api/v1/snapshot", tags=["snapshot"])
 
+MAX_LOG_FILTER_PATHS = 32
+
 
 class CommitRequest(BaseModel):
     """Request body for ``POST /api/v1/snapshot/commit``."""
@@ -69,7 +71,11 @@ async def log(
     limit: int = Query(20, ge=1, le=500, description="Max commits to return"),
     paths: Optional[List[str]] = Query(
         None,
-        description="Optional viking:// paths; repeated values filter history to commits touching any path",
+        max_length=MAX_LOG_FILTER_PATHS,
+        description=(
+            "Optional viking:// paths; repeat up to 32 values to filter history "
+            "to commits touching any path"
+        ),
     ),
     _ctx: RequestContext = Depends(get_request_context),
 ):

@@ -124,9 +124,11 @@ Starting from a branch's HEAD, walk history along the first parent (`parents[0]`
 |-----------|------|----------|---------|-------------|
 | branch | str | No | `main` | Branch to walk |
 | limit | int | No | 20 | Max commits to return. The HTTP endpoint accepts values from 1 to 500 |
-| paths | List[str] | No | null | Return only commits that changed any specified `viking://` URI; files and directories are supported. Pass multiple URIs to HTTP as repeated `paths` query parameters |
+| paths | List[str] | No | null | Return only commits that changed any specified `viking://` URI; files and directories are supported. At most 32 paths are accepted, and each account-relative path may contain at most 64 components. Pass multiple URIs to HTTP as repeated `paths` query parameters |
 
 Filtering happens before the result limit is applied, so `limit=10` with `paths=[X]` returns up to 10 commits related to X rather than filtering only the 10 newest commits.
+
+To bound storage work, a filtered request inspects at most 1,000 commits. If the requested number of matches has not been collected and older uninspected history remains, the request returns an `INVALID_ARGUMENT` error instead of a partial history list. Unfiltered history is not subject to this scan budget because every inspected commit advances the result limit.
 
 **Python SDK (Embedded / HTTP)**
 

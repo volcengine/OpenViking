@@ -166,6 +166,7 @@ class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
     def _raise_exception(self, error: Dict[str, Any]) -> None:
         _raise_legacy_exception(error)
 
+
 class SyncHTTPClient(import_openviking_sdk().SyncHTTPClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

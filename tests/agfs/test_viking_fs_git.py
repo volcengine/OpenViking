@@ -258,6 +258,20 @@ class TestCommitShowLog:
             added["commit_oid"],
         ]
 
+    async def test_log_rejects_too_many_unique_paths(self, vfs):
+        ctx = _make_ctx(account="acct_log_path_budget")
+        paths = [f"viking://resources/path-{index}.md" for index in range(33)]
+
+        with pytest.raises(AGFSInvalidOperationError, match="too many log filter paths"):
+            await vfs.log(paths=paths, limit=1, ctx=ctx)
+
+    async def test_log_rejects_path_deeper_than_64_components(self, vfs):
+        ctx = _make_ctx(account="acct_log_depth_budget")
+        path = "viking://" + "/".join(["resources", *(["nested"] * 64)])
+
+        with pytest.raises(AGFSInvalidOperationError, match="has depth 65"):
+            await vfs.log(paths=[path], limit=1, ctx=ctx)
+
     async def test_show_missing_branch_raises(self, vfs):
         ctx = _make_ctx(account="acct_missing")
         with pytest.raises(AGFSNotFoundError):

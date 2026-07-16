@@ -124,9 +124,11 @@ ov snapshot commit -m "v1 initial import" --paths viking://resources/my_md.md -o
 |------|------|------|--------|------|
 | branch | str | 否 | `main` | 要回溯的分支 |
 | limit | int | 否 | 20 | 最多返回的提交数量。HTTP 接口限制范围为 1–500 |
-| paths | List[str] | 否 | null | 只返回修改了任一指定 `viking://` URI 的提交；支持文件和目录。HTTP 接口通过重复 `paths` 查询参数传入多个 URI |
+| paths | List[str] | 否 | null | 只返回修改了任一指定 `viking://` URI 的提交；支持文件和目录。最多接受 32 条路径，每条 account-relative 路径最多包含 64 个层级。HTTP 接口通过重复 `paths` 查询参数传入多个 URI |
 
 过滤发生在限制返回数量之前，因此 `limit=10` 和 `paths=[X]` 表示最多返回 10 条与 X 有关的提交，而不是先取最近 10 条提交再过滤。
+
+为限制存储开销，过滤请求最多检查 1,000 条提交。如果尚未收集到请求数量的匹配结果，并且仍存在未检查的更早历史，接口将返回 `INVALID_ARGUMENT` 错误，而不是返回不完整的历史列表。非过滤请求不受该扫描预算限制，因为每检查一条提交都会推进返回数量限制。
 
 **Python SDK (Embedded / HTTP)**
 
