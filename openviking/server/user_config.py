@@ -12,8 +12,6 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional, TypeVa
 from openviking.core.namespace import canonical_user_root
 from openviking.core.uri_validation import validate_content_target_uri
 from openviking.server.config import AddTargetsConfig, UserConfig
-from openviking.session.memory.constants import EXECUTION_MEMORY_TYPES
-from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.storage.transaction import LockContext, get_lock_manager
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
@@ -32,7 +30,6 @@ class ResolvedAddTargets:
 
 @dataclass(frozen=True)
 class ResolvedMemorySettings:
-    memory_types: tuple[str, ...]
     agent_evolution_enabled: bool
 
 
@@ -143,22 +140,6 @@ async def read_user_config(
     return _user_config_from_payload(payload)
 
 
-def _validate_memory_types(memory_types: Optional[list[str]]) -> None:
-    if memory_types is None:
-        return
-    known = set(MemoryTypeRegistry().list_names(include_disabled=False))
-    unknown = set(memory_types) - known
-    if unknown:
-        raise InvalidArgumentError(
-            "Unknown user memory types: " + ", ".join(sorted(unknown)),
-            details={"field": "memory_types", "unknown": sorted(unknown)},
-        )
-
-
-def validate_user_config(user_config: UserConfig) -> None:
-    _validate_memory_types(user_config.memory.memory_types)
-
-
 async def update_user_config(
     viking_fs: VikingFS,
     ctx: RequestContext,
@@ -170,7 +151,6 @@ async def update_user_config(
         current = await read_user_config(viking_fs, ctx)
         before = current.model_dump()
         result = updater(current)
-        validate_user_config(current)
         validate_add_targets(current.add_targets, ctx=ctx, viking_fs=viking_fs)
         if current.model_dump() != before:
             await viking_fs.write_file(
@@ -191,7 +171,6 @@ async def write_user_config(
     ctx: RequestContext,
     user_config: UserConfig,
 ) -> ResolvedAddTargets:
-    validate_user_config(user_config)
     runtime = validate_add_targets(user_config.add_targets, ctx=ctx, viking_fs=viking_fs)
     uri = user_config_uri(ctx)
     async with _user_config_lock(viking_fs, uri, ctx) as handle:
@@ -247,14 +226,10 @@ async def write_user_memory_settings(
     viking_fs: VikingFS,
     ctx: RequestContext,
     *,
-    memory_types: Any,
     agent_evolution_enabled: Any,
-    memory_types_set: bool,
     agent_evolution_enabled_set: bool,
 ) -> None:
     def _set(user_config: UserConfig) -> None:
-        if memory_types_set:
-            user_config.memory.memory_types = memory_types
         if agent_evolution_enabled_set:
             user_config.agent_evolution.enabled = agent_evolution_enabled
 
@@ -287,32 +262,17 @@ async def resolve_memory_settings(
 ) -> ResolvedMemorySettings:
     current = user_config or await read_user_config(viking_fs, ctx)
     defaults = user_config_defaults or UserConfig()
-    configured_types = current.memory.memory_types
-    if configured_types is None:
-        configured_types = defaults.memory.memory_types
-    _validate_memory_types(configured_types)
-
-    enabled_types = set(MemoryTypeRegistry().list_names(include_disabled=False))
-    effective_types = enabled_types if configured_types is None else set(configured_types)
-
     enabled = current.agent_evolution.enabled
     if enabled is None:
         enabled = defaults.agent_evolution.enabled
     effective_agent_evolution_enabled = bool(enabled) if enabled is not None else False
-    if not effective_agent_evolution_enabled:
-        effective_types -= EXECUTION_MEMORY_TYPES
-
     return ResolvedMemorySettings(
-        memory_types=tuple(sorted(effective_types)),
         agent_evolution_enabled=effective_agent_evolution_enabled,
     )
 
 
 def public_memory_settings(user_config: UserConfig) -> dict[str, Any]:
-    return {
-        "memory_types": user_config.memory.memory_types,
-        "agent_evolution_enabled": user_config.agent_evolution.enabled,
-    }
+    return {"agent_evolution_enabled": user_config.agent_evolution.enabled}
 
 
 async def effective_resource_add_target(

@@ -115,9 +115,7 @@ class TestCommit:
         await write_user_memory_settings(
             session_with_messages._viking_fs,
             session_with_messages.ctx,
-            memory_types=None,
             agent_evolution_enabled=True,
-            memory_types_set=False,
             agent_evolution_enabled_set=True,
         )
 
@@ -132,8 +130,7 @@ class TestCommit:
             session_with_messages._session_compressor.extract_long_term_memories.call_args.kwargs
         )
         assert call_kwargs["agent_evolution_enabled"] is True
-        assert "trajectories" in call_kwargs["allowed_memory_types"]
-        assert "experiences" in call_kwargs["allowed_memory_types"]
+        assert call_kwargs["allowed_memory_types"] is None
 
     async def test_commit_reports_session_skills_separately(
         self, session_with_messages: Session, monkeypatch

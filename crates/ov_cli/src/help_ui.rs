@@ -547,7 +547,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         ],
         next_steps: &[HelpItem {
             label: "ov user-settings set-memory --help",
-            description: "Show memory allow-list and clear options.",
+            description: "Show Agent Evolution override options.",
         }],
     },
     CommandHelpSpec {

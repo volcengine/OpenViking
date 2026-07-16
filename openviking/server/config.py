@@ -81,14 +81,6 @@ class AddTargetsConfig(BaseModel):
         raise ValueError("skill_uri must be viking://user/skills or viking://agent/skills")
 
 
-class UserMemoryConfig(BaseModel):
-    """Persistent memory extraction allow-list for one user."""
-
-    memory_types: Optional[List[str]] = None
-
-    model_config = {"extra": "forbid"}
-
-
 class AgentEvolutionConfig(BaseModel):
     """Per-user Agent Evolution production switch."""
 
@@ -101,7 +93,6 @@ class UserConfig(BaseModel):
     """User configuration values that can be defaulted or initialized."""
 
     add_targets: AddTargetsConfig = Field(default_factory=AddTargetsConfig)
-    memory: UserMemoryConfig = Field(default_factory=UserMemoryConfig)
     agent_evolution: AgentEvolutionConfig = Field(default_factory=AgentEvolutionConfig)
 
     model_config = {"extra": "forbid"}

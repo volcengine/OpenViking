@@ -40,7 +40,6 @@ class PatchAddLocationsRequest(BaseModel):
 class PatchMemorySettingsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    memory_types: Optional[list[str]] = None
     agent_evolution_enabled: Optional[bool] = None
 
 
@@ -86,10 +85,7 @@ async def _memory_response(request: Request, ctx: RequestContext) -> dict[str, A
     )
     return {
         "override": public_memory_settings(override),
-        "effective": {
-            "memory_types": list(effective.memory_types),
-            "agent_evolution_enabled": effective.agent_evolution_enabled,
-        },
+        "effective": {"agent_evolution_enabled": effective.agent_evolution_enabled},
     }
 
 
@@ -165,9 +161,7 @@ async def patch_memory_settings(
     await write_user_memory_settings(
         _viking_fs(),
         _ctx,
-        memory_types=body.memory_types,
         agent_evolution_enabled=body.agent_evolution_enabled,
-        memory_types_set="memory_types" in body.model_fields_set,
         agent_evolution_enabled_set="agent_evolution_enabled" in body.model_fields_set,
     )
     return Response(status="ok", result=await _memory_response(request, _ctx)).model_dump(

@@ -613,3 +613,4 @@ Subsequent API documentation is organized by functional module as follows:
 | [Privacy Configs](10-privacy.md) - Privacy config version management and activation | Privacy configuration |
 | [Metrics](09-metrics.md) - Prometheus metrics export and scraping guide | Metrics documentation |
 | [Admin](08-admin.md) - Multi-tenant management API | Multi-tenant account and user management |
+| [User Memory Settings](12-user-settings.md) | Per-user memory types and Agent Evolution switch |

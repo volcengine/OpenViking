@@ -787,11 +787,15 @@ async def test_async_http_client_gets_and_partially_patches_memory_settings():
 
     assert await client.get_memory_settings() == {"effective": {}}
     await client.patch_memory_settings(agent_evolution_enabled=True)
-    await client.patch_memory_settings(memory_types=None)
 
     fake_http.get.assert_awaited_once_with("/api/v1/user-settings/memory")
-    assert fake_http.patch.await_args_list[0].kwargs["json"] == {"agent_evolution_enabled": True}
-    assert fake_http.patch.await_args_list[1].kwargs["json"] == {"memory_types": None}
+    fake_http.patch.assert_awaited_once_with(
+        "/api/v1/user-settings/memory",
+        json={"agent_evolution_enabled": True},
+    )
+
+    with pytest.raises(TypeError):
+        await client.patch_memory_settings(memory_types=["profile"])
 
 
 def test_sync_http_client_forwards_memory_settings_calls():

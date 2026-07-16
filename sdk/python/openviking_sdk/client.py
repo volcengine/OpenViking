@@ -1599,7 +1599,6 @@ class AsyncHTTPClient:
     async def patch_memory_settings(
         self,
         *,
-        memory_types: Any = _UNSET,
         agent_evolution_enabled: Any = _UNSET,
     ) -> Dict[str, Any]:
         """Partially update current-user memory settings.
@@ -1608,8 +1607,6 @@ class AsyncHTTPClient:
         are not included in the PATCH body.
         """
         payload: Dict[str, Any] = {}
-        if memory_types is not _UNSET:
-            payload["memory_types"] = memory_types
         if agent_evolution_enabled is not _UNSET:
             payload["agent_evolution_enabled"] = agent_evolution_enabled
         response = await self._http.patch(
@@ -1675,13 +1672,10 @@ class SyncHTTPClient:
     def patch_memory_settings(
         self,
         *,
-        memory_types: Any = _UNSET,
         agent_evolution_enabled: Any = _UNSET,
     ) -> Dict[str, Any]:
         """Partially update current-user memory settings."""
         kwargs: Dict[str, Any] = {}
-        if memory_types is not _UNSET:
-            kwargs["memory_types"] = memory_types
         if agent_evolution_enabled is not _UNSET:
             kwargs["agent_evolution_enabled"] = agent_evolution_enabled
         return run_async(self._async_client.patch_memory_settings(**kwargs))

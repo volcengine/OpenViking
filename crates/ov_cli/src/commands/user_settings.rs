@@ -13,25 +13,14 @@ pub async fn get_memory(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn patch_memory(
     client: &HttpClient,
-    memory_types: Option<Vec<String>>,
-    clear_memory_types: bool,
     agent_evolution_enabled: Option<bool>,
     clear_agent_evolution_enabled: bool,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     let mut body = Map::new();
-    if clear_memory_types {
-        body.insert("memory_types".into(), Value::Null);
-    } else if let Some(memory_types) = memory_types {
-        body.insert(
-            "memory_types".into(),
-            Value::Array(memory_types.into_iter().map(Value::String).collect()),
-        );
-    }
     if clear_agent_evolution_enabled {
         body.insert("agent_evolution_enabled".into(), Value::Null);
     } else if let Some(enabled) = agent_evolution_enabled {

@@ -16,7 +16,6 @@ class SessionCommitMsg:
     actor_peer_id: Optional[str] = None
     memory_policy: Dict[str, Any] = field(default_factory=dict)
     usage_uris: List[str] = field(default_factory=list)
-    user_memory_types: Optional[List[str]] = None
     agent_evolution_enabled: Optional[bool] = None
     agent_memory_skip_reason: Optional[str] = None
     user_config_error: Optional[str] = None

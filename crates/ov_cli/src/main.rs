@@ -1570,12 +1570,6 @@ enum UserSettingsCommands {
     Memory,
     /// Partially update current-user memory settings
     SetMemory {
-        /// Comma-separated persistent memory type allow-list
-        #[arg(long, value_delimiter = ',', conflicts_with = "clear_memory_types")]
-        memory_types: Option<Vec<String>>,
-        /// Clear the user memory type override
-        #[arg(long, conflicts_with = "memory_types")]
-        clear_memory_types: bool,
         /// Enable or disable Agent Evolution memory production
         #[arg(long, conflicts_with = "clear_agent_evolution_enabled")]
         agent_evolution_enabled: Option<bool>,
@@ -3033,15 +3027,11 @@ async fn main() {
                         .await
                 }
                 UserSettingsCommands::SetMemory {
-                    memory_types,
-                    clear_memory_types,
                     agent_evolution_enabled,
                     clear_agent_evolution_enabled,
                 } => {
                     commands::user_settings::patch_memory(
                         &client,
-                        memory_types,
-                        clear_memory_types,
                         agent_evolution_enabled,
                         clear_agent_evolution_enabled,
                         ctx.output_format,
@@ -3389,8 +3379,6 @@ mod tests {
             "ov",
             "user-settings",
             "set-memory",
-            "--memory-types",
-            "profile,events",
             "--agent-evolution-enabled",
             "true",
         ])
@@ -3399,16 +3387,25 @@ mod tests {
             Commands::UserSettings {
                 action:
                     UserSettingsCommands::SetMemory {
-                        memory_types,
                         agent_evolution_enabled,
                         ..
                     },
             } => {
-                assert_eq!(memory_types, Some(vec!["profile".into(), "events".into()]));
                 assert_eq!(agent_evolution_enabled, Some(true));
             }
             _ => panic!("expected user-settings set-memory command"),
         }
+
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "user-settings",
+                "set-memory",
+                "--memory-types",
+                "profile,events",
+            ])
+            .is_err()
+        );
     }
 
     #[test]
