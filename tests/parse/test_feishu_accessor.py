@@ -405,13 +405,18 @@ def test_parse_sheets_handles_grid_and_embedded_bitable(monkeypatch):
                 b'"blockToken":"app-token_table-1"}}]}}'
             ),
             _FakeMediaResponse(b'{"data":{"valueRange":{"values":[["name","amount"],["A",1]]}}}'),
+            _FakeMediaResponse(b"\x89PNG\r\n"),
         ]
     )
     list_tables = MagicMock()
     list_fields = MagicMock(
         return_value=_SuccessResponse(
             SimpleNamespace(
-                items=[SimpleNamespace(field_name="Topic")],
+                items=[
+                    SimpleNamespace(field_name="Topic"),
+                    SimpleNamespace(field_name="Cover"),
+                    SimpleNamespace(field_name="Brief"),
+                ],
                 has_more=False,
                 page_token=None,
             )
@@ -420,14 +425,38 @@ def test_parse_sheets_handles_grid_and_embedded_bitable(monkeypatch):
     list_records = MagicMock(
         return_value=_SuccessResponse(
             SimpleNamespace(
-                items=[SimpleNamespace(fields={"Topic": "Welcome"})],
+                items=[
+                    SimpleNamespace(
+                        fields={
+                            "Topic": "Welcome",
+                            "Cover": [
+                                {
+                                    "file_token": "cover-token",
+                                    "name": "cover.png",
+                                    "type": "image/png",
+                                }
+                            ],
+                            "Brief": [
+                                {
+                                    "file_token": "brief-token",
+                                    "name": "brief.pdf",
+                                    "type": "application/pdf",
+                                }
+                            ],
+                        }
+                    )
+                ],
                 has_more=False,
                 page_token=None,
             )
         )
     )
     accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(max_rows_per_sheet=2, max_records_per_table=10)
+    accessor._config = SimpleNamespace(
+        max_rows_per_sheet=2,
+        max_records_per_table=10,
+        download_images=True,
+    )
     accessor._user_token_client = SimpleNamespace(
         request=request,
         bitable=SimpleNamespace(
@@ -447,9 +476,23 @@ def test_parse_sheets_handles_grid_and_embedded_bitable(monkeypatch):
     assert "2 columns after Z omitted" in markdown
     assert "### Content Calendar" in markdown
     assert "Welcome" in markdown
+    assert "![cover.png](feishu://image/cover-token)" in markdown
+    assert "brief.pdf" in markdown
+    assert "feishu://image/brief-token" not in markdown
     assert "Empty sheet" not in markdown
     assert list_tables.call_count == 0
     assert list_fields.call_args.args[0].table_id == "table-1"
+
+    resolved, images = accessor._resolve_image_refs(
+        markdown,
+        feishu_access_token="u-test",
+    )
+
+    assert "![cover.png](images/cover-token.png)" in resolved
+    assert images == {"images/cover-token.png": b"\x89PNG\r\n"}
+    assert request.call_args_list[-1].args[0].uri == (
+        "/open-apis/drive/v1/medias/cover-token/download"
+    )
     assert all(call.args[0].token_types == {"user"} for call in request.call_args_list)
     assert all(call.args[1].user_access_token == "u-test" for call in request.call_args_list)
 

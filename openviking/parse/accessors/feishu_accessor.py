@@ -11,6 +11,7 @@ Included by default in `openviking[bot]` installation.
 
 import asyncio
 import json
+import mimetypes
 import os
 import re
 import tempfile
@@ -1310,18 +1311,18 @@ class FeishuAccessor(DataAccessor):
 
         return "\n\n".join(markdown_parts), title
 
-    @staticmethod
-    def _format_bitable_field(value: Any) -> str:
+    @classmethod
+    def _format_bitable_field(cls, value: Any) -> str:
         """Render the common structured values returned by bitable fields."""
         if value is None:
             return ""
         if isinstance(value, list):
-            return ", ".join(
-                str(item.get("text", item.get("name", item)))
-                if isinstance(item, dict)
-                else str(item)
-                for item in value
-            )
+            return ", ".join(cls._format_bitable_field(item) for item in value)
         if isinstance(value, dict):
+            file_token = value.get("file_token")
+            name = str(value.get("name") or "image")
+            media_type = value.get("type") or mimetypes.guess_type(name)[0]
+            if file_token and str(media_type).lower().startswith("image/"):
+                return f"![{name}](feishu://image/{file_token})"
             return str(value.get("text", value.get("name", value)))
         return str(value)

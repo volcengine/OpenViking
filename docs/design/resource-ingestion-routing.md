@@ -113,11 +113,13 @@ ParserRouter --> MarkdownParser --> ParseResult --> TreeBuilder
 | URL 类型 | Accessor 行为 | 当前边界 |
 |---|---|---|
 | `docx/{token}` | 拉取文档 block，转换标题、列表、代码、表格、图片和内嵌 sheet | 图片下载受 `download_images` 控制；内嵌 sheet 最多读取 100 行、A-Z 列 |
-| `sheets/{token}` | 枚举所有 sheet；普通网格读取单元格，内嵌多维表格根据 `blockInfo` 转走 Bitable API，统一输出 Markdown 表格 | 普通网格最多读取 `max_rows_per_sheet` 行、A-Z 列；内嵌多维表格最多读取 `max_records_per_table` 条记录，截断会写入提示 |
-| `base/{app_token}` | 枚举数据表、字段和记录，把每张表转换成 Markdown 表格 | 表和字段完整翻页；每张表最多读取 `max_records_per_table` 条记录，截断会写入提示 |
+| `sheets/{token}` | 枚举所有 sheet；普通网格读取单元格，内嵌多维表格根据 `blockInfo` 转走 Bitable API，统一输出 Markdown 表格 | 普通网格最多读取 `max_rows_per_sheet` 行、A-Z 列；内嵌多维表格继承 Base 的记录和图片处理能力 |
+| `base/{app_token}` | 枚举数据表、字段和记录，把每张表转换成 Markdown 表格 | 表和字段完整翻页；每张表最多读取 `max_records_per_table` 条记录；附件字段中的图片会下载，其他附件保留文件名 |
 | `wiki/{token}` | 先解析 wiki 节点的实际类型和 token，再进入上述 `docx`、`sheets` 或 `base` 处理器 | wiki 指向其他飞书对象类型时明确报不支持 |
 
 四类入口都支持应用凭证获取的 tenant token；显式传入 `args.feishu_access_token` 时，同一 user token 会用于 wiki 解析、正文、sheet/base 和图片请求。飞书专有逻辑到 `FeishuAccessor` 为止，后面只处理本地 Markdown，因此不再保留并行的 `FeishuParser` 入口；即使 `parser_api.extensions` 包含 `md`，这类已归一化资源的自动路由也固定使用内置 Markdown Parser，不会再次送 Understanding 解析。
+
+文档图片和 Base 附件字段中的图片使用同一条素材下载链路：Accessor 先生成内部 `feishu://image/{file_token}` 引用；`download_images` 开启时，再通过飞书 Drive 素材接口下载到 `images/` 并改写 Markdown 相对路径。关闭该配置或素材下载失败时，不会伪造本地图片文件。
 
 `UnifiedResourceProcessor.prepare` 随后冻结两个字段：
 
