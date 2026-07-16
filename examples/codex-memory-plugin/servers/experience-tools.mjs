@@ -80,16 +80,17 @@ function experiencePrefix(user) {
 
 function isExperienceUri(uri, user) {
   const value = String(uri || "").trim();
+  if (!value || value.includes("?") || value.includes("#")) return false;
   const prefix = experiencePrefix(user);
   const relative = prefix
     ? (value.startsWith(prefix) ? value.slice(prefix.length) : "")
     : value.match(/^viking:\/\/user\/[^/]+\/memories\/experiences\/(.+)$/)?.[1] || "";
-  const segments = relative.split("/").filter(Boolean);
+  const segments = relative.split("/");
   const basename = segments.at(-1) || "";
   return Boolean(
     relative
     && segments.length > 0
-    && segments.every((segment) => segment !== "." && segment !== "..")
+    && segments.every((segment) => segment && segment !== "." && segment !== "..")
     && !EXPERIENCE_SIDECAR_FILENAMES.has(basename),
   );
 }

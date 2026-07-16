@@ -128,6 +128,21 @@ test("plugin bundles the Experience Memory skill", () => {
   assert.match(content, /`read_experience`/);
 });
 
+test("Experience Memory skill examples match the search_experience input schema", () => {
+  const skillPaths = [
+    join(pluginDir, "skills", "ov-experience-memory", "SKILL.md"),
+    join(repoRoot, "examples", "skills", "ov-experience-memory", "SKILL.md"),
+  ];
+  for (const skillPath of skillPaths) {
+    const content = readFileSync(skillPath, "utf-8");
+    const section = content.match(/## Tool: search_experience([\s\S]*?)## Tool: read_experience/)?.[1];
+    assert.ok(section, `missing search_experience section in ${skillPath}`);
+    const inputExample = section.match(/Input schema:\s*```json\s*([\s\S]*?)```/)?.[1];
+    assert.ok(inputExample, `missing search_experience input example in ${skillPath}`);
+    assert.deepEqual(Object.keys(JSON.parse(inputExample)).sort(), ["limit", "query"]);
+  }
+});
+
 test("plugin.json does not describe legacy MCP tool names", () => {
   const manifest = readJson(manifestPath);
   const interfaceText = JSON.stringify(manifest.interface || {});

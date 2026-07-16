@@ -167,6 +167,49 @@ async def test_memory_usage_extractor_ignores_other_users_experience_uris():
 
 
 @pytest.mark.asyncio
+async def test_memory_usage_extractor_ignores_noncanonical_experience_uris():
+    canonical_uri = "viking://user/test/memories/experiences/own.md"
+    query_alias = f"{canonical_uri}?source=codex"
+    fragment_alias = f"{canonical_uri}#approach"
+    messages = [
+        Message(
+            id="msg-1",
+            role="user",
+            parts=[
+                ToolPart(
+                    tool_id="call-search",
+                    tool_name="search_experience",
+                    tool_status="completed",
+                    tool_output={
+                        "results": [
+                            {"uri": canonical_uri},
+                            {"uri": query_alias},
+                            {"uri": fragment_alias},
+                        ]
+                    },
+                ),
+                ToolPart(
+                    tool_id="call-read-query",
+                    tool_name="read_experience",
+                    tool_status="completed",
+                    tool_input={"uri": query_alias},
+                ),
+                ToolPart(
+                    tool_id="call-read-fragment",
+                    tool_name="read_experience",
+                    tool_status="completed",
+                    tool_input={"uri": fragment_alias},
+                ),
+            ],
+        )
+    ]
+
+    events = await MemoryUsageExtractor().extract(messages=messages, context=_context())
+
+    assert [event.resource_uri for event in events] == [canonical_uri]
+
+
+@pytest.mark.asyncio
 async def test_memory_usage_extractor_ignores_internal_experience_sidecars():
     custom_uri = "viking://user/test/memories/experiences/.custom-experience.md"
     messages = [

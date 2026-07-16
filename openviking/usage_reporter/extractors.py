@@ -41,11 +41,11 @@ def _load_mapping(value: Any) -> dict[str, Any]:
 
 def _is_experience_uri(uri: str, context: UsageContext) -> bool:
     prefix = f"viking://user/{context.user_id}/memories/experiences/"
-    if not uri.startswith(prefix):
+    if not uri.startswith(prefix) or "?" in uri or "#" in uri:
         return False
-    relative = uri.removeprefix(prefix).strip("/")
-    segments = [segment for segment in relative.split("/") if segment]
-    if not segments or any(segment in {".", ".."} for segment in segments):
+    relative = uri.removeprefix(prefix)
+    segments = relative.split("/")
+    if not relative or any(not segment or segment in {".", ".."} for segment in segments):
         return False
     return segments[-1] not in _EXPERIENCE_SIDECAR_FILENAMES
 

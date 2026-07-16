@@ -55,6 +55,16 @@ test("search_experience searches only the current user's Experience directory", 
               score: 0.94,
               abstract: "Experience 目录概览。",
             },
+            {
+              uri: "viking://user/test/memories/experiences/无订单号换货处理.md?source=codex",
+              score: 0.93,
+              abstract: "非规范 URI 别名。",
+            },
+            {
+              uri: "viking://user/test/memories/experiences/无订单号换货处理.md#approach",
+              score: 0.92,
+              abstract: "带片段的 URI 别名。",
+            },
           ],
           resources: [],
           skills: [],
@@ -139,6 +149,26 @@ test("read_experience rejects non-Experience URIs without an HTTP request", asyn
   assert.equal(callCount, 0);
   assert.equal(result.isError, true);
   assert.match(result.content[0].text, /Experience URI/);
+});
+
+test("read_experience rejects noncanonical Experience URI aliases", async () => {
+  let callCount = 0;
+  const provider = createExperienceToolProvider({
+    fetchImpl: async () => {
+      callCount += 1;
+      return new Response();
+    },
+  });
+  const canonicalUri = "viking://user/test/memories/experiences/无订单号换货处理.md";
+
+  for (const uri of [`${canonicalUri}?source=codex`, `${canonicalUri}#approach`]) {
+    const result = await provider.callTool(
+      { name: "read_experience", arguments: { uri } },
+      { config },
+    );
+    assert.equal(result.isError, true);
+  }
+  assert.equal(callCount, 0);
 });
 
 test("read_experience rejects internal Experience sidecars", async () => {

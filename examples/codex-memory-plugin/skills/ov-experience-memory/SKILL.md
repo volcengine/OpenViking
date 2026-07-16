@@ -43,8 +43,7 @@ Input schema:
 ```json
 {
   "query": "string",
-  "limit": 5,
-  "target_uri": "viking://user/memories/experiences/"
+  "limit": 5
 }
 ```
 
@@ -65,10 +64,12 @@ Output schema:
 
 Implementation:
 
-Call OpenViking `POST /api/v1/search/find` with `target_uri` set to the
-current-user shorthand `viking://user/memories/experiences/`. OpenViking resolves
-this shorthand against the authenticated request user. Return only canonical
-experience memory URIs for that user; never hardcode `default` or another user ID.
+The runtime tool calls OpenViking `POST /api/v1/search/find` with `target_uri`
+fixed to the current-user shorthand `viking://user/memories/experiences/`.
+Callers provide only `query` and optional `limit`; they cannot override or pass
+`target_uri`. OpenViking resolves the fixed shorthand against the authenticated
+request user. Return only canonical experience memory URIs for that user; never
+hardcode `default` or another user ID.
 
 Usage reporting:
 
