@@ -96,6 +96,7 @@ def test_cuvs_runtime_uses_captured_device_from_worker_thread():
             self.resource_count = 0
             self.fail_build = False
             self.fail_search = False
+            self.fail_host_copy = False
 
         def set_current(self, device_id):
             self.local.current = device_id
@@ -185,6 +186,8 @@ def test_cuvs_runtime_uses_captured_device_from_worker_thread():
         @staticmethod
         def asnumpy(values):
             spy.require_captured_device("asnumpy")
+            if spy.fail_host_copy:
+                raise RuntimeError("injected host copy failure")
             return values
 
         @staticmethod
@@ -251,8 +254,10 @@ def test_cuvs_runtime_uses_captured_device_from_worker_thread():
     runtime._owned_resources = []
     runtime._resource_limit = 1
     runtime._resources_closed = False
-    runtime._use_explicit_resources = False
-    runtime.set_max_concurrent_searches(2)
+    # The default serialized setting must still use an explicit synchronized
+    # resource.  This is the production shape used when benchmark callers
+    # churn worker threads while GPU admission remains at one search.
+    runtime.set_max_concurrent_searches(1)
     constructing_thread = threading.get_ident()
 
     def use_runtime_from_worker():
@@ -297,6 +302,11 @@ def test_cuvs_runtime_uses_captured_device_from_worker_thread():
         assert spy.current() == 9
         assert spy.releases == [("resources-1", 3)]
         assert runtime.search(runtime_index, [1.0, 0.0], 1, [True]) == ([0], [0.25])
+        spy.fail_host_copy = True
+        with pytest.raises(RuntimeError, match="injected host copy failure"):
+            runtime.search(runtime_index, [1.0, 0.0], 1, [True])
+        spy.fail_host_copy = False
+        assert spy.releases == [("resources-1", 3), ("resources-2", 3)]
         runtime.release_index()
         assert spy.current() == 9
         return runtime_index
@@ -321,18 +331,23 @@ def test_cuvs_runtime_uses_captured_device_from_worker_thread():
         assert not thread.is_alive()
 
     assert churn_errors == []
-    assert spy.resource_count == 2
-    assert len(runtime._owned_resources) <= 2
+    assert spy.resource_count == 3
+    assert len(runtime._owned_resources) <= 1
     assert len(runtime._available_resources) == 1
 
-    # A failed search discarded the first resource under device 3. The bounded
-    # pool reused the replacement across short-lived threads and retains it
-    # until close can also destroy it on the captured device.
-    assert spy.releases == [("resources-1", 3)]
+    # Search and post-sync host-copy failures discarded the first two resources
+    # under device 3. The bounded pool reuses the replacement across
+    # short-lived threads and retains it until close can also destroy it on the
+    # captured device.
+    assert spy.releases == [("resources-1", 3), ("resources-2", 3)]
     spy.set_current(9)
     runtime.close()
     assert spy.current() == 9
-    assert spy.releases == [("resources-1", 3), ("resources-2", 3)]
+    assert spy.releases == [
+        ("resources-1", 3),
+        ("resources-2", 3),
+        ("resources-3", 3),
+    ]
 
     assert {
         "memory_info",

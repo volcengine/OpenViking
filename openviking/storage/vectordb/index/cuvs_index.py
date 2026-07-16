@@ -472,13 +472,11 @@ class _CuVSRuntime:
         self._owned_resources: List[Any] = []
         self._resource_limit = 1
         self._resources_closed = False
-        self._use_explicit_resources = False
 
     def set_max_concurrent_searches(self, value: int) -> None:
         limit = max(1, int(value))
         with self._resource_condition:
             self._resource_limit = limit
-            self._use_explicit_resources = limit > 1
             self._resource_condition.notify_all()
 
     def device_scope(self):
@@ -627,8 +625,14 @@ class _CuVSRuntime:
             resource_reusable = False
             try:
                 index = runtime_index.index
-                resources = self._acquire_resources() if self._use_explicit_resources else None
-                resource_kwargs = {"resources": resources} if resources is not None else {}
+                # Always provide an explicit resource, including the serialized
+                # max_concurrent_gpu_searches=1 case.  cuVS synchronizes an
+                # implicit resource before returning, but an owned reusable
+                # resource also pins worker-thread churn to a known stream and
+                # gives filter/result lifetimes an explicit synchronization
+                # boundary inside this admitted search.
+                resources = self._acquire_resources()
+                resource_kwargs = {"resources": resources}
                 queries = self.cp.asarray([query], dtype=self.device_dtype)
                 if mask is None:
                     prefilter = None
@@ -658,14 +662,18 @@ class _CuVSRuntime:
                         filter=prefilter,
                         **resource_kwargs,
                     )
-                if resources is not None:
-                    resources.sync()
-                    resource_reusable = True
+                resources.sync()
                 host_neighbors = self.cp.asnumpy(neighbors)[0].tolist()
                 host_distances = self.cp.asnumpy(distances)[0].tolist()
-                return [int(item) for item in host_neighbors], [
-                    float(item) for item in host_distances
-                ]
+                result = (
+                    [int(item) for item in host_neighbors],
+                    [float(item) for item in host_distances],
+                )
+                # Reuse only after the complete call, including host result
+                # materialization, succeeds.  Any exception discards a
+                # potentially poisoned resource from the pool.
+                resource_reusable = True
+                return result
             except Exception as exc:
                 traceback.clear_frames(exc.__traceback__)
                 raise
