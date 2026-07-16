@@ -62,21 +62,6 @@ from openviking_cli.utils.logger import init_otel_log_handler_from_server_config
 logger = get_logger(__name__)
 
 
-def _on_deferred_init_done(task):
-    if task.cancelled():
-        logger.warning("Deferred initialization cancelled")
-        return
-
-    exc = task.exception()
-    if exc is None:
-        return
-
-    logger.error(
-        "Deferred initialization failed, exiting",
-        exc_info=(type(exc), exc, exc.__traceback__),
-    )
-    os._exit(1)
-
 
 async def _initialize_auth_plugin(
     app: FastAPI,
@@ -225,10 +210,6 @@ def create_app(
 
     if service is not None:
         _configure_session_tool_outputs(service)
-
-    async def _deferred_init(service, app, config):
-        """Retained for tests that validate deferred-init callback behavior."""
-        await _initialize_runtime_state(app, service, config)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

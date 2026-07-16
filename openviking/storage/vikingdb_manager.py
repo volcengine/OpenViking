@@ -294,6 +294,10 @@ class VikingDBManagerProxy:
         """
         return await self._manager.upsert(data, ctx=self._ctx, partial_update=partial_update)
 
+    async def upsert_many(self, data_list: List[Dict[str, Any]]) -> List[str]:
+        """Bulk full-record upsert with the proxy's bound request context."""
+        return await self._manager.upsert_many(data_list, ctx=self._ctx)
+
     async def get(self, ids: List[str]) -> List[Dict[str, Any]]:
         return await self._manager.get(ids, ctx=self._ctx)
 

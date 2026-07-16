@@ -282,7 +282,7 @@ The `context` event fires before each LLM call with a mutable deep copy of messa
 3. If not injected: prepend `<relevant-memories>` block to the user message content
 4. If already injected: skip (cached from first context call for this prompt)
 
-The recall search itself only runs once per prompt (cached in `before_agent_start`). The `context` handler just re-injects the cached block on each LLM iteration.
+The recall search itself only runs once per prompt. `before_agent_start` queues the current prompt without network I/O; the first `context` call consumes it and performs the synchronous search after Pi has rendered the user message. Later LLM iterations reuse the cached block.
 
 ```typescript
 class RecallManager {
@@ -292,8 +292,11 @@ class RecallManager {
 
   constructor(client: OVClient);
 
-  // Called in before_agent_start — runs the actual triple-scope search + profiling + ranking
-  async searchAndCache(userQuery: string): Promise<string | null>;
+  // Called in before_agent_start — records the current prompt without I/O
+  queueSearch(userQuery: string): void;
+
+  // Called on the first context event — runs search and caches the result
+  async searchPending(): Promise<string | null>;
 
   // Called in context event — injects cached block into messages
   injectRecall(messages: Message[]): Message[];
@@ -623,8 +626,8 @@ Main entry point. Wires everything together.
 | Event | Handler | What it does |
 |-------|---------|-------------|
 | `session_start` | Init + Resume + Profile | Health check OV, check bypass, create/reuse session, **inject user profile** (profile.md + preferences/ + entities/ listing, capped at `profileBudget`), on resume: fetch archive overview, build memory index, register tools |
-| `before_agent_start` | Recall + System prompt | Synchronous recall search, inject memory index + tool ad into system prompt |
-| `context` | Recall injection | Prepend `<relevant-memories>` to user message (re-inject cached block on each LLM iteration) |
+| `before_agent_start` | Recall queue + System prompt | Queue current prompt without I/O, inject memory index + tool ad into system prompt |
+| `context` | Recall search + injection | Search after user-message rendering, then prepend `<relevant-memories>` (reuse cached block on later LLM iterations) |
 | `turn_end` | Sync | Strip all injected blocks, **capture filter (shouldCapture)**, **preserve tool USE inputs + tool summary line**, drop tool RESULTS, **enqueue to write queue** (auto-flushes at threshold/interval), track pending tokens, check commit threshold |
 | `session_before_compact` | Pre-compact commit + rehydration | Synchronous `commit(wait=true)` before pi rewrites the transcript, then fetch new archive overview and cache for next `before_agent_start` injection — content about to be compacted is preserved in OV and rehydrated after compaction |
 | `session_shutdown` | Final commit | Commit OV session (blocking), rebuild index, optionally mirror MEMORY.md |
@@ -727,20 +730,23 @@ A `/viking commit` command (or a `viking_commit` tool) triggers a synchronous `c
 ```
 1. before_agent_start fires
    a. Extract user prompt text
-   b. recall.searchAndCache(prompt)  ← SYNCHRONOUS OV search (~50-200ms)
+   b. recall.queueSearch(prompt)  ← no network I/O
    c. Compose system prompt: event.systemPrompt + profileBlock + archiveOverview + indexBuilder.getIndex() + toolAdBlock
       - Profile block: cached from session_start (or empty if OV has no profile)
       - Archive overview: cached from session_start resume, or from pre-compact rehydration
    d. Return { systemPrompt: composed }
 
-2. [For each LLM iteration within this prompt:]
+2. Pi renders the submitted user message.
+
+3. [For each LLM iteration within this prompt:]
    a. context event fires
-   b. recall.injectRecall(event.messages)  ← prepend cached <relevant-memories> to user message
-   c. Return { messages: modified }
+   b. recall.searchPending()  ← first iteration only; synchronous OV search for the current prompt
+   c. recall.injectRecall(event.messages)  ← prepend cached <relevant-memories> to user message
+   d. Return { messages: modified }
 
-3. [Turns execute — LLM may call viking_search, etc.]
+4. [Turns execute — LLM may call viking_search, etc.]
 
-4. agent_end fires
+5. agent_end fires
    a. recall.invalidate()  ← clear cached block
 ```
 

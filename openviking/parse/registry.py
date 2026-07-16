@@ -184,10 +184,6 @@ class ParserRegistry:
                     del self._extension_map[ext.lower()]
             del self._parsers[name]
 
-    def get_parser(self, name: str) -> Optional[BaseParser]:
-        """Get parser by name."""
-        return self._parsers.get(name)
-
     def get_parser_for_file(self, path: Union[str, Path]) -> Optional[BaseParser]:
         """
         Get appropriate parser for a file.

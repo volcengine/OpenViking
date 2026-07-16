@@ -37,7 +37,6 @@ logger = get_logger(__name__)
 # Exported for testing
 __all__ = [
     "extract_json_content",
-    "remove_json_trailing_content",
     "parse_json_with_stability",
     "value_fault_tolerance",
     "parse_value_with_tolerance",
@@ -136,21 +135,6 @@ def extract_json_content(s: str) -> str:
         return s
 
     return result
-
-
-def remove_json_trailing_content(s: str) -> str:
-    """
-    Layer 1: Remove extra content after JSON closing brace.
-
-    DEPRECATED: Use extract_json_content() instead which handles both leading and trailing content.
-
-    Args:
-        s: Raw LLM response string
-
-    Returns:
-        String with only the JSON part
-    """
-    return extract_json_content(s)
 
 
 def _get_origin_type(annotation) -> Type:

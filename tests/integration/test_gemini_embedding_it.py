@@ -24,23 +24,6 @@ def test_embed_returns_correct_dimension(gemini_embedder):
     assert 0.99 < l2_norm(r.dense_vector) < 1.01
 
 
-def test_embed_batch_count(gemini_embedder):
-    texts = ["apple", "banana", "cherry", "date", "elderberry"]
-    results = gemini_embedder.embed_batch(texts)
-    assert len(results) == len(texts)
-    for r in results:
-        assert r.dense_vector and len(r.dense_vector) == 768
-
-
-def test_batch_over_100(gemini_embedder):
-    """150 texts auto-split into 2 batches (100 + 50)."""
-    texts = [f"sentence number {i}" for i in range(150)]
-    results = gemini_embedder.embed_batch(texts)
-    assert len(results) == 150
-    for r in results:
-        assert r.dense_vector and len(r.dense_vector) == 768
-
-
 @pytest.mark.parametrize("model_name,_dim,token_limit", GEMINI_MODELS)
 def test_large_text_chunking(model_name, _dim, token_limit):
     """Text exceeding the model's token limit is auto-chunked by base class."""

@@ -65,10 +65,6 @@ class _FakeEmbedder:
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         return EmbedResult(dense_vector=self._generate_pseudo_embedding(text))
 
-    def embed_batch(self, texts, is_query: bool = False):
-        return [self.embed(text, is_query=is_query) for text in texts]
-
-
 class TestQuickStartLite(unittest.TestCase):
     def setUp(self):
         # Clean up data directory if exists to ensure fresh start

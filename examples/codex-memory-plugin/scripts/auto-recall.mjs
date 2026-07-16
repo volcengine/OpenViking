@@ -36,6 +36,7 @@ const effectivePeer = resolveEffectivePeerId({ cfg, cwd: process.cwd() });
 let emitted = false;
 let activeCompressor = null;
 let recallDeadline = null;
+const DEFAULT_FINAL_RECALL_CHARS = 6500;
 
 function output(obj, exitAfter = false) {
   if (emitted) return;
@@ -306,7 +307,9 @@ async function recallViaTypeQuotaEndpoint(query) {
       preferences: Math.max(1, Math.min(cfg.recallLimit, 3)),
       experiences: 0,
     },
-    max_chars: cfg.recallCompressMaxInputChars || 6500,
+    max_chars: cfg.recallCompress
+      ? cfg.recallCompressMaxInputChars
+      : DEFAULT_FINAL_RECALL_CHARS,
     min_score: cfg.scoreThreshold,
     render: true,
   };
@@ -317,13 +320,26 @@ async function recallViaTypeQuotaEndpoint(query) {
     return null;
   }
   const rendered = String(result.result?.rendered || "").trim();
-  if (!rendered) return "";
-  return [
-    "OpenViking memory digest:",
-    rendered,
-    "",
-    "More detail: use the OpenViking MCP recall/read/search tools with cited viking:// URIs if needed.",
-  ].join("\n");
+  const entries = Array.isArray(result.result?.entries) ? result.result.entries : [];
+  const items = entries
+    .map((entry) => ({
+      uri: String(entry?.uri || "").trim(),
+      category: String(entry?.type || "memory").trim() || "memory",
+      score: clampScore(entry?.score),
+      text: String(
+        entry?.content || entry?.summary || entry?.abstract || entry?.uri || "",
+      ).trim(),
+    }))
+    .filter((entry) => entry.uri && entry.text);
+  const context = rendered
+    ? [
+        "OpenViking memory digest:",
+        rendered,
+        "",
+        "More detail: use the OpenViking MCP recall/read/search tools with cited viking:// URIs if needed.",
+      ].join("\n")
+    : "";
+  return { context, items };
 }
 
 function truncateText(text, maxChars) {
@@ -556,13 +572,31 @@ async function main() {
 
   const endpointRecall = await recallViaTypeQuotaEndpoint(userPrompt);
   if (endpointRecall !== null) {
-    if (!endpointRecall) {
+    if (!endpointRecall.context && endpointRecall.items.length === 0) {
       log("skip", { stage: "recall_endpoint", reason: "no results" });
       emit();
       return;
     }
-    log("recall_endpoint", { chars: endpointRecall.length });
-    emit(endpointRecall);
+    const compressedContext = endpointRecall.items.length > 0
+      ? await compressMemoryContext(userPrompt, endpointRecall.items)
+      : null;
+    const endpointFallback = cfg.recallCompress && endpointRecall.items.length > 0
+      ? fallbackDigest(endpointRecall.items)
+      : endpointRecall.context;
+    const memoryContext = compressedContext === null
+      ? endpointFallback
+      : compressedContext;
+    if (!memoryContext) {
+      log("skip", { stage: "recall_endpoint", reason: "compressor found no relevant memory" });
+      emit();
+      return;
+    }
+    log("recall_endpoint", {
+      chars: memoryContext.length,
+      compressed: compressedContext !== null,
+      entryCount: endpointRecall.items.length,
+    });
+    emit(memoryContext);
     return;
   }
 

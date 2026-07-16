@@ -7,7 +7,7 @@ import re
 import shutil
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional
 
 import yaml
 from fastapi import APIRouter, Depends, Request
@@ -158,18 +158,6 @@ async def _entry_looks_like_skill(
         return False
     return True
 
-
-def _merge_skills(skills_list: list[list[Dict[str, Any]]]) -> list[Dict[str, Any]]:
-    """Merge skills from multiple sources, user skills take precedence."""
-    seen_names = set()
-    result = []
-    for skills in skills_list:
-        for skill in skills:
-            name = skill.get("name")
-            if name not in seen_names:
-                seen_names.add(name)
-                result.append(skill)
-    return result
 
 
 def _validate_skill_name(skill_name: str) -> str:
@@ -484,47 +472,6 @@ async def _list_skill_files(
             visited_dirs.add(normalized_uri)
             queue.append((entry_uri, depth + 1))
     return entries
-
-
-def _parse_skill_data(
-    service,
-    data: Any,
-    *,
-    allow_local_path_resolution: bool,
-    source_path_hint: Optional[str] = None,
-) -> Dict[str, Any]:
-    skill_processor = getattr(service.resources, "_skill_processor", None)
-    if skill_processor is None:
-        raise RuntimeError("SkillProcessor is required for skill validation")
-    skill_dict, _, _, _ = skill_processor._parse_skill(  # noqa: SLF001 - keep parser authority centralized.
-        data,
-        allow_local_path_resolution=allow_local_path_resolution,
-        source_path_hint=source_path_hint,
-    )
-    return skill_dict
-
-
-def _validate_data_matches_name(
-    service,
-    data: Any,
-    skill_name: str,
-    *,
-    allow_local_path_resolution: bool,
-    source_path_hint: Optional[str] = None,
-) -> Dict[str, Any]:
-    parsed = _parse_skill_data(
-        service,
-        data,
-        allow_local_path_resolution=allow_local_path_resolution,
-        source_path_hint=source_path_hint,
-    )
-    expected_name = _validate_skill_name(skill_name)
-    if parsed.get("name") != expected_name:
-        raise InvalidArgumentError(
-            f"Skill name mismatch: path name is '{expected_name}', content name is '{parsed.get('name')}'",
-            details={"expected": expected_name, "actual": parsed.get("name")},
-        )
-    return parsed
 
 
 async def _restore_skill_privacy(

@@ -12,7 +12,9 @@ from openviking.utils.network_guard import ensure_public_remote_target
 from openviking_cli.exceptions import PermissionDeniedError
 
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
-_REMOTE_SOURCE_PREFIXES = ("http://", "https://", "git@", "ssh://", "git://")
+_NETWORK_SOURCE_PREFIXES = ("http://", "https://", "git@", "ssh://", "git://")
+_PRIVATE_SOURCE_PREFIXES = ("tos://",)
+_REMOTE_SOURCE_PREFIXES = _NETWORK_SOURCE_PREFIXES + _PRIVATE_SOURCE_PREFIXES
 
 # Shape of temp_file_ids minted by TempUploadStore. Used by MCP add_resource to
 # detect when an agent has passed a tfid as the `path` argument by mistake and
@@ -20,9 +22,24 @@ _REMOTE_SOURCE_PREFIXES = ("http://", "https://", "git@", "ssh://", "git://")
 TEMP_FILE_ID_RE = re.compile(r"^(upload_|shared_)[a-zA-Z0-9]+(\.[^/\\]+)?$")
 
 
+def _is_configured_connector_source(source: str) -> bool:
+    """Return whether Connector is enabled for the source URL scheme."""
+    try:
+        from openviking_cli.utils.config.open_viking_config import get_openviking_config
+
+        config = get_openviking_config().connector
+    except Exception:
+        return False
+
+    if not config.enable:
+        return False
+    allowed_schemes = tuple(f"{add_type}://" for add_type in config.allowed_add_types)
+    return source.startswith(allowed_schemes)
+
+
 def is_remote_resource_source(source: str) -> bool:
     """Return True if *source* is a remotely fetchable resource location."""
-    return source.startswith(_REMOTE_SOURCE_PREFIXES)
+    return source.startswith(_REMOTE_SOURCE_PREFIXES) or _is_configured_connector_source(source)
 
 
 def looks_like_local_path(value: str) -> bool:
@@ -44,7 +61,8 @@ def require_remote_resource_source(source: str) -> str:
             "HTTP server only accepts remote resource URLs or temp-uploaded files; "
             "direct host filesystem paths are not allowed."
         )
-    ensure_public_remote_target(source)
+    if source.startswith(_NETWORK_SOURCE_PREFIXES):
+        ensure_public_remote_target(source)
     return source
 
 

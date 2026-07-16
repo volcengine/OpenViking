@@ -14,7 +14,6 @@ from openviking.session.memory.dataclass import (
 from openviking.session.memory.extract_loop import (
     ExtractLoop,
 )
-from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 
 
 class TestPreFetchFileFiltering:
@@ -152,34 +151,6 @@ class TestAllowedDirectoriesList:
     def mock_viking_fs(self):
         """Create a mock VikingFS."""
         return MagicMock()
-
-    def test_get_allowed_directories_list(self, mock_vlm, mock_viking_fs):
-        """Test that allowed directories list is properly formatted."""
-        registry = MemoryTypeRegistry(load_schemas=False)
-
-        schema1 = MemoryTypeSchema(
-            memory_type="preferences",
-            description="Preferences",
-            directory="viking://user/{{ user_space }}/memories/preferences",
-            filename_template="{{ topic }}.md",
-            fields=[],
-        )
-        schema2 = MemoryTypeSchema(
-            memory_type="tools",
-            description="Tools",
-            directory="viking://user/{{ user_space }}/memories/tools",
-            filename_template="{{ tool_name }}.md",
-            fields=[],
-        )
-
-        registry.register(schema1)
-        registry.register(schema2)
-
-        result = registry.list_search_uris(user_space="default")
-
-        assert "viking://user/default/memories/preferences" in result
-        assert "viking://user/default/memories/tools" in result
-
 
 class TestExtractLoopFinalJsonRetry:
     def test_final_instruction_includes_schema_aware_empty_json(self):

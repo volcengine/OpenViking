@@ -112,39 +112,6 @@ class TestParseFeishuUrl:
             FeishuParser._parse_feishu_url("https://evil.example/docx/doxcnABC123")
 
 
-class TestIsFeishuUrl:
-    def test_feishu_docx(self):
-        from openviking.utils.media_processor import UnifiedResourceProcessor
-
-        assert UnifiedResourceProcessor._is_feishu_url("https://example.feishu.cn/docx/abc123")
-
-    def test_larksuite(self):
-        from openviking.utils.media_processor import UnifiedResourceProcessor
-
-        assert UnifiedResourceProcessor._is_feishu_url(
-            "https://example.larksuite.com/sheets/abc123"
-        )
-
-    def test_larkoffice(self):
-        from openviking.utils.media_processor import UnifiedResourceProcessor
-
-        assert UnifiedResourceProcessor._is_feishu_url(
-            "https://example.larkoffice.com/wiki/wikicn123"
-        )
-
-    def test_non_feishu_url(self):
-        from openviking.utils.media_processor import UnifiedResourceProcessor
-
-        assert not UnifiedResourceProcessor._is_feishu_url("https://github.com/foo/bar")
-
-    def test_feishu_non_doc_path(self):
-        from openviking.utils.media_processor import UnifiedResourceProcessor
-
-        assert not UnifiedResourceProcessor._is_feishu_url(
-            "https://example.feishu.cn/profile/settings"
-        )
-
-
 class TestBlockToMarkdown:
     """Test attribute-driven block-to-markdown conversion."""
 
