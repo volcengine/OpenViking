@@ -1,0 +1,30 @@
+docs/design/resource-ingestion-routing.md
+  s_c2efe1f8754877::t_1ef52752246dbd 116
+openviking/parse/accessors/feishu_accessor.py
+  s_c2efe1f8754877::t_1be5a962a89c31 1045,1049-1058,1060,1070-1072,1075-1076,1079-1101,1174-1176,1187-1202,1204-1222,1229,1242,1251-1252,1264,1277,1294-1295,1298
+tests/parse/test_feishu_accessor.py
+  s_c2efe1f8754877::t_6875658f0df067 396,398-408,410-411,414-416,420-426,430,432-437,448-454
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ff5a448bc7dec054ececa04c18d1107b28e165c6",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_c2efe1f8754877": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f64f7-7452-7790-8205-20f489377bbb",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

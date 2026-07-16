@@ -1,0 +1,27 @@
+openviking/session/memory/extract_loop.py
+  s_6fe15e66a05bf5::t_ec0eaaefd1b174 49-52,86-106,170-243,259,386-414,456
+openviking/session/memory/session_extract_context_provider.py
+  s_6fe15e66a05bf5::t_ba2d7710fb8bcc 13,225-229
+tests/session/memory/test_memory_react.py
+  s_6fe15e66a05bf5::t_244b74df5f0883 13-14,22-27,276-335
+tests/session/memory/test_memory_react_system_prompt.py
+  s_6fe15e66a05bf5::t_1f7c53b92827fe 7-8,14-19,52-60,359
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "75422081f77e1d35cc79b2333299fa059399436a",
+  "prompts": {},
+  "sessions": {
+    "s_6fe15e66a05bf5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4aa1-02af-7ff2-8876-044dd610c7a1",
+        "model": "unknown"
+      },
+      "human_author": "huangruiteng <huangruiteng@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
