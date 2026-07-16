@@ -49,6 +49,7 @@ from openviking.telemetry.resource_summary import (
 from openviking.utils import is_git_repo_url, parse_code_hosting_url
 from openviking.utils.media_processor import _smart_stem
 from openviking.utils.network_guard import ensure_public_remote_target
+from openviking.utils.request_headers import create_task_with_request_headers
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking.utils.skill_processor import SkillProcessingPreparation, SkillProcessor
 from openviking_cli.exceptions import (
@@ -398,7 +399,7 @@ class ResourceService:
                 allow_local_path_resolution=allow_local_path_resolution,
                 enforce_public_remote_targets=enforce_public_remote_targets,
             )
-            background = asyncio.create_task(
+            background = create_task_with_request_headers(
                 self._run_add_resource_task(
                     task.task_id,
                     ctx=ctx,
@@ -955,7 +956,7 @@ class ResourceService:
                 result["task_id"] = task.task_id
                 if telemetry_id:
                     monitor_started = True
-                    background = asyncio.create_task(
+                    background = create_task_with_request_headers(
                         self._monitor_resource_queue_then_link_memory(
                             task.task_id,
                             telemetry_id,
@@ -970,7 +971,7 @@ class ResourceService:
                     background.add_done_callback(self._background_tasks.discard)
                 else:
                     monitor_started = True
-                    background = asyncio.create_task(
+                    background = create_task_with_request_headers(
                         self._monitor_resource_queue_then_link_memory(
                             task.task_id,
                             None,
@@ -1332,7 +1333,7 @@ class ResourceService:
                 result["task_id"] = task.task_id
                 if telemetry_id:
                     monitor_started = True
-                    asyncio.create_task(
+                    create_task_with_request_headers(
                         self._monitor_queue_processing(
                             task.task_id,
                             telemetry_id,

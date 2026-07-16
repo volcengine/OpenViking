@@ -5,9 +5,14 @@ import json
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Union
 
 from openviking.pyagfs import AGFSSyncClientProtocol, AsyncAGFSClient
+from openviking.utils.request_headers import (
+    MODEL_REQUEST_CONTEXT_KEY,
+    bind_captured_request_headers,
+    capture_request_headers,
+)
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -108,6 +113,7 @@ class NamedQueue:
         name: str,
         enqueue_hook: Optional[EnqueueHookBase] = None,
         dequeue_handler: Optional[DequeueHandlerBase] = None,
+        propagate_model_request_context: bool = False,
     ):
         self.name = name
         self.path = f"{mount_point}/{name}"
@@ -115,6 +121,7 @@ class NamedQueue:
         self._async_agfs = AsyncAGFSClient(agfs)
         self._enqueue_hook = enqueue_hook
         self._dequeue_handler = dequeue_handler
+        self._propagate_model_request_context = propagate_model_request_context
         self._initialized = False
 
         # Status tracking
@@ -151,6 +158,7 @@ class NamedQueue:
 
     def _on_process_error(self, error_msg: str, data: Optional[Dict[str, Any]] = None) -> None:
         """Called on processing failure."""
+        safe_data = self.redact_model_request_context(data)
         with self._lock:
             self._in_progress -= 1
             self._error_count += 1
@@ -158,7 +166,7 @@ class NamedQueue:
                 QueueError(
                     timestamp=datetime.now(),
                     message=error_msg,
-                    data=data,
+                    data=safe_data,
                 )
             )
             if len(self._errors) > self.MAX_ERRORS:
@@ -210,6 +218,22 @@ class NamedQueue:
             data = await self._enqueue_hook.on_enqueue(data)
 
         if isinstance(data, dict):
+            if self._propagate_model_request_context:
+                data = {
+                    key: value
+                    for key, value in data.items()
+                    if key != MODEL_REQUEST_CONTEXT_KEY
+                }
+                captured = capture_request_headers()
+                if captured is not None:
+                    data = {
+                        **data,
+                        MODEL_REQUEST_CONTEXT_KEY: {
+                            "version": 1,
+                            "request_bound": True,
+                            "headers": captured,
+                        },
+                    }
             data = json.dumps(data)
 
         msg_id = await self._async_agfs.write(enqueue_file, data.encode("utf-8"))
@@ -268,7 +292,9 @@ class NamedQueue:
             msg_id = data.get("id", "") if isinstance(data, dict) else ""
             if self._dequeue_handler:
                 self._on_dequeue_start()
-                data = await self._dequeue_handler.on_dequeue(data)
+                data, request_headers = self._extract_model_request_context(data)
+                with bind_captured_request_headers(request_headers):
+                    data = await self._dequeue_handler.on_dequeue(data)
             # Ack unconditionally after handler returns (success or handled error).
             # If on_dequeue raises, the exception propagates and ack is skipped —
             # the message will be recovered on next startup.
@@ -294,8 +320,62 @@ class NamedQueue:
         so that in_progress is incremented atomically with the dequeue.
         """
         if self._dequeue_handler:
-            return await self._dequeue_handler.on_dequeue(data)
+            data, request_headers = self._extract_model_request_context(data)
+            with bind_captured_request_headers(request_headers):
+                return await self._dequeue_handler.on_dequeue(data)
         return data
+
+    def _extract_model_request_context(
+        self, data: Dict[str, Any]
+    ) -> tuple[Dict[str, Any], Optional[dict[str, str]]]:
+        if not self._propagate_model_request_context:
+            return data, None
+
+        cleaned = dict(data)
+        container: Optional[Dict[str, Any]] = None
+        encoded = False
+        if MODEL_REQUEST_CONTEXT_KEY in cleaned:
+            container = cleaned
+        elif isinstance(cleaned.get("data"), dict):
+            container = dict(cleaned["data"])
+            cleaned["data"] = container
+        elif isinstance(cleaned.get("data"), str):
+            try:
+                decoded = json.loads(cleaned["data"])
+            except (TypeError, json.JSONDecodeError):
+                decoded = None
+            if isinstance(decoded, dict):
+                container = decoded
+                encoded = True
+
+        if container is None or MODEL_REQUEST_CONTEXT_KEY not in container:
+            return data, None
+
+        context = container.pop(MODEL_REQUEST_CONTEXT_KEY)
+        if encoded:
+            cleaned["data"] = json.dumps(container)
+        headers = context.get("headers") if isinstance(context, Mapping) else None
+        if (
+            not isinstance(context, Mapping)
+            or context.get("version") != 1
+            or context.get("request_bound") is not True
+            or not isinstance(headers, Mapping)
+            or not all(
+                isinstance(name, str) and isinstance(value, str)
+                for name, value in headers.items()
+            )
+        ):
+            logger.warning("[NamedQueue] Ignoring invalid model request context in %s", self.name)
+            return cleaned, {}
+        return cleaned, {name.lower(): value for name, value in headers.items()}
+
+    def redact_model_request_context(
+        self, data: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        if data is None or not self._propagate_model_request_context:
+            return data
+        cleaned, _ = self._extract_model_request_context(data)
+        return cleaned
 
     async def peek(self) -> Optional[Dict[str, Any]]:
         """Peek at head message without removing."""
@@ -307,11 +387,12 @@ class NamedQueue:
             if not content or content == b"{}":
                 return None
             if isinstance(content, bytes):
-                return json.loads(content.decode("utf-8"))
+                data = json.loads(content.decode("utf-8"))
             elif isinstance(content, str):
-                return json.loads(content)
+                data = json.loads(content)
             else:
                 return None
+            return self.redact_model_request_context(data)
         except Exception as e:
             logger.debug(f"[NamedQueue] Peek failed for {self.name}: {e}")
             return None

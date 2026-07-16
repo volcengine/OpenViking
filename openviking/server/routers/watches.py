@@ -20,6 +20,7 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
+from openviking.utils.request_headers import create_task_with_request_headers
 from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
@@ -310,7 +311,7 @@ async def _trigger_impl(target: WatchTask):
     via subsequent `GET /watches/{task_id}` (last_execution_time updates).
     """
     scheduler = _scheduler()
-    task = asyncio.create_task(scheduler.schedule_task(target.task_id))
+    task = create_task_with_request_headers(scheduler.schedule_task(target.task_id))
     _BACKGROUND_TRIGGER_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_TRIGGER_TASKS.discard)
     return Response(

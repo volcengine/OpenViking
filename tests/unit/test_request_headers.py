@@ -9,7 +9,10 @@ from collections.abc import Mapping
 import pytest
 
 from openviking.utils.request_headers import (
+    bind_captured_request_headers,
     bind_request_headers,
+    collect_dynamic_request_header_names,
+    create_task_with_request_headers,
     get_request_headers_snapshot,
     get_static_extra_headers,
     resolve_dynamic_extra_headers,
@@ -87,7 +90,23 @@ async def test_concurrent_request_contexts_do_not_share_header_values() -> None:
     assert get_request_headers_snapshot() is None
 
 
-async def test_inherited_context_expires_when_request_binding_ends() -> None:
+async def test_explicit_task_context_outlives_request_binding() -> None:
+    release = asyncio.Event()
+
+    async def read_after_request() -> Mapping[str, str] | None:
+        await release.wait()
+        return get_request_headers_snapshot()
+
+    with bind_request_headers({"Authorization": "Bearer expired"}):
+        task = create_task_with_request_headers(read_after_request())
+
+    assert get_request_headers_snapshot() is None
+    release.set()
+    assert await task == {"authorization": "Bearer expired"}
+    assert get_request_headers_snapshot() is None
+
+
+async def test_unmarked_task_context_expires_with_request_binding() -> None:
     release = asyncio.Event()
 
     async def read_after_request() -> Mapping[str, str] | None:
@@ -101,12 +120,48 @@ async def test_inherited_context_expires_when_request_binding_ends() -> None:
     assert await task is None
 
 
+def test_binding_no_captured_request_clears_ambient_context() -> None:
+    with bind_request_headers({"Authorization": "Bearer request"}):
+        with bind_captured_request_headers(None):
+            assert get_request_headers_snapshot() is None
+        assert get_request_headers_snapshot() == {"authorization": "Bearer request"}
+
+
 def test_rfc_token_source_header_names_are_supported() -> None:
     source_name = "X!#$%&'*+-.^_`|~Token"
     configured = {"X-Target": f"@request.header.{source_name}"}
 
     with bind_request_headers({source_name: "value"}):
         assert resolve_dynamic_extra_headers(configured) == {"X-Target": "value"}
+
+
+def test_collect_dynamic_sources_from_nested_model_configs() -> None:
+    config = {
+        "vlm": {
+            "extra_headers": {
+                "Authorization": "@request.header.Authorization",
+                "X-Static": "fixed",
+            },
+            "providers": {
+                "backup": {
+                    "extra_headers": {
+                        "X-Tenant": "@request.header.X-OpenViking-Tenant",
+                    }
+                }
+            },
+        },
+        "embedding": {
+            "credentials": [
+                {"extra_headers": {"X-Trace": "@request.header.X-Trace-ID"}}
+            ]
+        },
+    }
+
+    assert collect_dynamic_request_header_names(config) == {
+        "Authorization",
+        "X-OpenViking-Tenant",
+        "X-Trace-ID",
+    }
 
 
 @pytest.mark.parametrize(

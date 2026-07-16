@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
@@ -40,6 +39,7 @@ from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.embedding_utils import get_resource_content_type
+from openviking.utils.request_headers import create_task_with_request_headers
 from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.exceptions import NotFoundError, OpenVikingError
 from openviking_cli.utils import VikingURI, get_logger
@@ -156,7 +156,7 @@ class ReindexExecutor:
                 details={"uri": uri},
             )
 
-        asyncio.create_task(
+        create_task_with_request_headers(
             self._run_tracked(
                 task.task_id,
                 uri=uri,

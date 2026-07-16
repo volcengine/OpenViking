@@ -317,6 +317,7 @@ class QueueManager:
                     name,
                     enqueue_hook=enqueue_hook,
                     dequeue_handler=dequeue_handler,
+                    propagate_model_request_context=True,
                 )
             elif name == self.SEMANTIC:
                 self._queues[name] = SemanticQueue(
@@ -325,6 +326,7 @@ class QueueManager:
                     name,
                     enqueue_hook=enqueue_hook,
                     dequeue_handler=dequeue_handler,
+                    propagate_model_request_context=True,
                 )
             else:
                 self._queues[name] = NamedQueue(
@@ -333,6 +335,7 @@ class QueueManager:
                     name,
                     enqueue_hook=enqueue_hook,
                     dequeue_handler=dequeue_handler,
+                    propagate_model_request_context=name == self.EXTERNAL_PARSE,
                 )
             if self._started:
                 self._start_queue_worker(self._queues[name])

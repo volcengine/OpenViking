@@ -1,7 +1,9 @@
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
 from openviking.resource.watch_manager import WatchManager
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.service.resource_service import ResourceService
@@ -110,3 +112,34 @@ class TestWatchSchedulerResourceExistence:
         assert updated.is_active is True
         assert resource_service.calls and resource_service.calls[0]["to"] == task.to_uri
         manager.update_execution_time.assert_awaited_once_with(task.task_id)
+
+    @pytest.mark.asyncio
+    async def test_periodic_execution_uses_configured_model_auth(self):
+        vlm = LiteLLMVLMProvider(
+            {
+                "provider": "litellm",
+                "model": "openai/gpt-test",
+                "api_key": "configured-key",
+                "extra_headers": {
+                    "Authorization": "@request.header.Authorization",
+                    "X-Static": "fixed",
+                },
+            }
+        )
+        model_calls = []
+        scheduler = WatchScheduler(resource_service=ResourceService(), check_interval=1)
+        scheduler._watch_manager = SimpleNamespace(
+            get_due_tasks=AsyncMock(
+                return_value=[SimpleNamespace(task_id="periodic-task")]
+            ),
+        )
+
+        async def capture_model_call(_task):
+            model_calls.append(vlm._build_text_kwargs(prompt="periodic watch"))
+
+        scheduler._execute_task = capture_model_call
+
+        await scheduler._check_and_execute_due_tasks()
+
+        assert model_calls[0]["api_key"] == "configured-key"
+        assert model_calls[0]["extra_headers"] == {"X-Static": "fixed"}

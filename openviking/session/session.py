@@ -35,6 +35,7 @@ from openviking.session.tool_result_synopsis import (
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.model_retry import is_retryable_api_error, retry_async
+from openviking.utils.request_headers import create_task_with_request_headers
 from openviking.utils.time_utils import get_current_timestamp
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.exceptions import FailedPreconditionError
@@ -1242,7 +1243,7 @@ class Session:
             user_id=self.ctx.user.user_id,
         )
 
-        asyncio.create_task(
+        create_task_with_request_headers(
             self._run_memory_extraction(
                 task_id=task.task_id,
                 archive_uri=archive_uri,

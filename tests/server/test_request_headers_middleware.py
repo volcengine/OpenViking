@@ -3,15 +3,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import json
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 from fastapi import Request
 
 from openviking.server.config import ServerConfig
+from openviking.storage.queuefs.named_queue import DequeueHandlerBase, NamedQueue
 from openviking.utils.request_headers import (
+    MODEL_REQUEST_CONTEXT_KEY,
+    create_task_with_request_headers,
     get_request_headers_snapshot,
     resolve_extra_headers,
 )
@@ -54,6 +59,11 @@ async def test_request_header_context_covers_rest_and_mcp_and_resets(monkeypatch
         "create_mcp_app",
         lambda: _CapturingMCPApp(mcp_snapshots),
     )
+    monkeypatch.setattr(
+        app_module,
+        "collect_dynamic_request_header_names",
+        lambda *configs: {"Authorization", "X-Tenant"},
+    )
 
     app = app_module.create_app(config=ServerConfig(), service=object())
 
@@ -93,3 +103,87 @@ async def test_request_header_context_covers_rest_and_mcp_and_resets(monkeypatch
     }
     assert mcp_snapshots == [{"authorization": "Bearer mcp", "x-tenant": "mcp-tenant"}]
     assert get_request_headers_snapshot() is None
+
+
+async def test_http_background_task_hands_headers_to_queue_worker(monkeypatch) -> None:
+    app_module = importlib.import_module("openviking.server.app")
+    monkeypatch.setattr(
+        app_module,
+        "collect_dynamic_request_header_names",
+        lambda *configs: {"Authorization", "X-Tenant"},
+    )
+    app = app_module.create_app(config=ServerConfig(), service=object())
+    release = asyncio.Event()
+    tasks = []
+    worker_results = []
+
+    class Handler(DequeueHandlerBase):
+        async def on_dequeue(self, data):
+            worker_results.append(
+                {
+                    "snapshot": dict(get_request_headers_snapshot() or {}),
+                    "resolved": resolve_extra_headers(CONFIGURED_HEADERS),
+                    "data": data,
+                }
+            )
+            self.report_success()
+            return data
+
+    queue = NamedQueue(
+        MagicMock(),
+        "/queue",
+        "Semantic",
+        dequeue_handler=Handler(),
+        propagate_model_request_context=True,
+    )
+    queue._initialized = True
+    queue._async_agfs = MagicMock()
+    queue._async_agfs.write = AsyncMock(return_value="queue-id")
+
+    @app.post("/_test/background-model")
+    async def start_background_model_task() -> dict[str, str]:
+        async def enqueue_after_response() -> None:
+            await release.wait()
+            await queue.enqueue({"uri": "viking://resources/repo"})
+
+        tasks.append(create_task_with_request_headers(enqueue_after_response()))
+        return {"status": "accepted"}
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/_test/background-model",
+            headers={
+                "Authorization": "Bearer user-a",
+                "X-Tenant": "tenant-a",
+                "Cookie": "must-not-persist",
+            },
+        )
+
+    assert response.json() == {"status": "accepted"}
+    assert get_request_headers_snapshot() is None
+    release.set()
+    await tasks[0]
+
+    persisted = queue._async_agfs.write.await_args.args[1].decode()
+    assert "must-not-persist" not in persisted
+    assert MODEL_REQUEST_CONTEXT_KEY in persisted
+    queued = {"id": "queue-id", "data": persisted}
+
+    def run_worker() -> None:
+        queue._on_dequeue_start()
+        asyncio.run(queue.process_dequeued(queued))
+
+    await asyncio.to_thread(run_worker)
+
+    assert worker_results == [
+        {
+            "snapshot": {"authorization": "Bearer user-a", "x-tenant": "tenant-a"},
+            "resolved": {
+                "X-Static": "fixed",
+                "Authorization": "Bearer user-a",
+                "X-Upstream-Tenant": "tenant-a",
+            },
+            "data": {"id": "queue-id", "data": json.dumps({"uri": "viking://resources/repo"})},
+        }
+    ]
