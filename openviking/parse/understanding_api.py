@@ -24,6 +24,10 @@ from urllib.parse import urlparse
 import httpx
 
 from openviking.parse.base import NodeType, ParseResult, ResourceNode
+from openviking.parse.image_rewrite import (
+    IMAGE_MAPPINGS_FILENAME,
+    build_artifact_image_mappings,
+)
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.media.constants import (
     AUDIO_EXTENSIONS,
@@ -258,7 +262,9 @@ class UnderstandingAPI(BaseParser):
         return json.dumps(obj, ensure_ascii=False).encode("utf-8")
 
     def _auth_headers(self, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
-        headers = {"Authorization": f"Bearer {self._api_key}"}
+        headers = {
+            "Authorization": f"Bearer {self._api_key}"
+        }
         if extra:
             headers.update(extra)
         return headers
@@ -600,8 +606,10 @@ class UnderstandingAPI(BaseParser):
             else:
                 root_dir = extract_path
 
+            image_mappings = await asyncio.to_thread(build_artifact_image_mappings, root_dir)
+
             for child in root_dir.iterdir():
-                if child.name in {".", ".."}:
+                if child.name in {".", "..", IMAGE_MAPPINGS_FILENAME}:
                     continue
                 if child.is_dir():
                     sub_uri = f"{temp_doc_uri}/{child.name}"
@@ -612,6 +620,12 @@ class UnderstandingAPI(BaseParser):
                         f"{temp_doc_uri}/{child.name}", child.read_bytes()
                     )
 
+            if image_mappings:
+                await viking_fs.write_file(
+                    f"{temp_doc_uri}/{IMAGE_MAPPINGS_FILENAME}",
+                    json.dumps(image_mappings, ensure_ascii=False),
+                )
+
         return temp_uri
 
     async def _copy_dir_to_fs(self, local_dir: Path, fs_uri: str):
@@ -621,7 +635,7 @@ class UnderstandingAPI(BaseParser):
         viking_fs = get_viking_fs()
 
         for item in local_dir.iterdir():
-            if item.name in [".", ".."]:
+            if item.name in [".", "..", IMAGE_MAPPINGS_FILENAME]:
                 continue
 
             if item.is_dir():
