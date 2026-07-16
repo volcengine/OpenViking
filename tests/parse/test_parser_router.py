@@ -69,6 +69,36 @@ def test_directories_never_route_to_understanding(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_normalized_feishu_markdown_stays_internal(monkeypatch, tmp_path):
+    config = SimpleNamespace(
+        parser_api=SimpleNamespace(enable=True, extensions=["md"]),
+    )
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.open_viking_config.get_openviking_config",
+        lambda: config,
+    )
+    resource = LocalResource(
+        path=tmp_path / "document.md",
+        source_type=SourceType.FEISHU,
+        original_source="https://example.feishu.cn/docx/doc-token",
+        meta={"resolved_extension": ".md"},
+        is_temporary=False,
+    )
+    registry = SimpleNamespace(parse=AsyncMock(return_value=object()))
+    understanding = SimpleNamespace(parse=AsyncMock(return_value=object()))
+    router = ParserRouter(registry)
+    router._understanding_api = understanding
+    processor = UnifiedResourceProcessor()
+    processor._parser_router = router
+
+    assert not processor.should_use_understanding_api(resource)
+    await router.parse(resource, resolved_extension=".md")
+
+    registry.parse.assert_awaited_once()
+    understanding.parse.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_forced_resolved_extension_survives_worker_redownload(tmp_path):
     downloaded = tmp_path / "redetected.docx"
     downloaded.write_bytes(b"content")

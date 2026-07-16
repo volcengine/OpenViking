@@ -7,12 +7,10 @@ Routing is controlled by ov.conf (OpenVikingConfig.parser_api).
 """
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Union
+from typing import Union
 from urllib.parse import urlparse
 
-if TYPE_CHECKING:
-    from openviking.parse.accessors.base import LocalResource
-
+from openviking.parse.accessors.base import LocalResource, SourceType
 from openviking.parse.base import ParseResult
 from openviking.parse.registry import ParserRegistry
 from openviking_cli.utils.logger import get_logger
@@ -46,12 +44,16 @@ class ParserRouter:
 
     def should_use_understanding_api(
         self,
-        source_path: Union[str, Path],
+        source: Union[str, Path, LocalResource],
         resolved_extension: str = "",
     ) -> bool:
         """
         Decide whether to use UnderstandingAPI.
         """
+        # FeishuAccessor has already normalized proprietary content to Markdown.
+        if isinstance(source, LocalResource) and source.source_type == SourceType.FEISHU:
+            return False
+
         try:
             from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
@@ -63,6 +65,7 @@ class ParserRouter:
         if not parser_api or not getattr(parser_api, "enable", False):
             return False
 
+        source_path = self._extract_source_path(source)
         ext = self._normalize_extension(resolved_extension) or self._extract_extension(source_path)
         extensions = getattr(parser_api, "extensions", None) or []
         return ext in extensions
@@ -91,7 +94,7 @@ class ParserRouter:
         use_understanding = parser_backend == "understanding" or (
             parser_backend is None
             and self.should_use_understanding_api(
-                source_path,
+                source,
                 resolved_extension=str(kwargs.get("resolved_extension") or ""),
             )
         )
@@ -115,7 +118,7 @@ class ParserRouter:
             logger.info(f"[ParserRouter] Using internal ParserRegistry for {display}")
             return await self._parser_registry.parse(source_path, **kwargs)
 
-    def _extract_source_path(self, source: Union[str, Path, "LocalResource"]) -> Union[str, Path]:
+    def _extract_source_path(self, source: Union[str, Path, LocalResource]) -> Union[str, Path]:
         """Extract a filesystem path from the source."""
         if hasattr(source, "path"):
             return source.path

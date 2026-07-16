@@ -110,7 +110,7 @@ class UnifiedResourceProcessor:
         if resource.path.is_dir():
             return False
         return self._get_parser_router().should_use_understanding_api(
-            resource.path,
+            resource,
             resolved_extension=str(resource.meta.get("resolved_extension") or ""),
         )
 

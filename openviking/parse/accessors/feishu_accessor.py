@@ -759,12 +759,8 @@ class FeishuAccessor(DataAccessor):
             .token_types({token_type})
             .build()
         )
-        option = self._user_request_option(feishu_access_token)
-
         try:
-            raw_resp = (
-                client.request(raw_req) if option is None else client.request(raw_req, option)
-            )
+            raw_resp = self._call_api(client.request, raw_req, feishu_access_token)
         except Exception as exc:
             logger.warning("[FeishuAccessor] Error downloading image %s: %s", file_token, exc)
             return None

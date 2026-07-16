@@ -117,7 +117,7 @@ ParserRouter --> MarkdownParser --> ParseResult --> TreeBuilder
 | `base/{app_token}` | 枚举数据表、字段和记录，把每张表转换成 Markdown 表格 | 表和字段完整翻页；每张表最多读取 `max_records_per_table` 条记录，截断会写入提示 |
 | `wiki/{token}` | 先解析 wiki 节点的实际类型和 token，再进入上述 `docx`、`sheets` 或 `base` 处理器 | wiki 指向其他飞书对象类型时明确报不支持 |
 
-四类入口都支持应用凭证获取的 tenant token；显式传入 `args.feishu_access_token` 时，同一 user token 会用于 wiki 解析、正文、sheet/base 和图片请求。飞书专有逻辑到 `FeishuAccessor` 为止，后面只处理本地 Markdown，因此不再保留并行的 `FeishuParser` 入口。
+四类入口都支持应用凭证获取的 tenant token；显式传入 `args.feishu_access_token` 时，同一 user token 会用于 wiki 解析、正文、sheet/base 和图片请求。飞书专有逻辑到 `FeishuAccessor` 为止，后面只处理本地 Markdown，因此不再保留并行的 `FeishuParser` 入口；即使 `parser_api.extensions` 包含 `md`，这类已归一化资源的自动路由也固定使用内置 Markdown Parser，不会再次送 Understanding 解析。
 
 `UnifiedResourceProcessor.prepare` 随后冻结两个字段：
 
