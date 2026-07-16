@@ -260,7 +260,7 @@ jobs:
           echo "  source_ref=$source_ref"
           echo "  source_commit=$source_commit"
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -341,7 +341,7 @@ jobs:
         with:
           ref: ${{ needs.prepare-package-source.outputs.package_ref }}
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -533,7 +533,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
 
