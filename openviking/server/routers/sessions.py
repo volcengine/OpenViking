@@ -4,7 +4,7 @@
 
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
@@ -179,12 +179,6 @@ def _to_jsonable(value: Any) -> Any:
         return {k: _to_jsonable(v) for k, v in value.items()}
     return value
 
-
-def _request_auth_mode(request: Request) -> str:
-    config = getattr(request.app.state, "config", None)
-    if config is not None and hasattr(config, "get_effective_auth_mode"):
-        return config.get_effective_auth_mode()
-    return "api_key"
 
 
 @router.post("")

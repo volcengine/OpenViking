@@ -19,6 +19,9 @@ from openviking_cli.client.base import BaseClient
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 
+if TYPE_CHECKING:
+    from openviking.snapshot_namespace import AsyncSnapshotNamespace
+
 logger = get_logger(__name__)
 
 
@@ -272,6 +275,7 @@ class AsyncOpenViking:
         uri: str,
         mode: str = "vectors_only",
         wait: bool = True,
+        dry_run: bool = False,
     ) -> Dict[str, Any]:
         """Reindex semantic/vector artifacts for a URI."""
         await self._ensure_initialized()
@@ -279,6 +283,7 @@ class AsyncOpenViking:
             uri=uri,
             mode=mode,
             wait=wait,
+            dry_run=dry_run,
         )
 
     # ============= Resource methods =============
@@ -352,6 +357,7 @@ class AsyncOpenViking:
         """
         if getattr(self, "_snapshot", None) is None:
             from openviking.snapshot_namespace import AsyncSnapshotNamespace
+
             self._snapshot = AsyncSnapshotNamespace(self)
         return self._snapshot
 

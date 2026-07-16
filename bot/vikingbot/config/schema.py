@@ -190,10 +190,6 @@ class MochatChannelConfig(BaseChannelConfig):
     reply_delay_mode: str = "non-mention"
     reply_delay_ms: int = 120000
 
-    def _generate_default_id(self) -> str:
-        # Use agent_user_id as the ID
-        return self.agent_user_id if self.agent_user_id else "mochat"
-
 
 class DingTalkChannelConfig(BaseChannelConfig):
     """DingTalk channel configuration (multi-channel support)."""
@@ -460,10 +456,10 @@ class AgentsConfig(BaseModel):
         default=True,
         description="Enable the spawn tool so the main agent can start background subagents.",
     )
-    session_context_enabled: bool = False
+    session_context_enabled: bool = True
     session_context_token_budget: int = 3000
     commit_token_threshold: int = 200000
-    commit_keep_recent_count: int = 5
+    commit_keep_recent_count: int = 10
     gen_image_model: str = "openai/doubao-seedream-4-5-251128"
     thinking: bool = Field(
         default=True,

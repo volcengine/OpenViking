@@ -22,7 +22,6 @@ import { tmpdir } from "node:os";
 import { isPluginEnabled, loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import {
-  addMessage,
   commitSession,
   deriveOvSessionId,
   enqueuePendingDirectly,
@@ -32,6 +31,7 @@ import {
 } from "./lib/ov-session.mjs";
 import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
+import { sendSessionMessages } from "./shared/batch-send.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -239,6 +239,7 @@ async function pushTurns(ovSessionId, turns, { peerId = null, enqueueOnly = fals
   let queued = 0;
   let failed = 0;
   let enqueueFailed = 0;
+  const payloads = [];
   for (const turn of turns) {
     // Send structured parts: tool calls/results are dedicated `tool` parts, not
     // inlined into content, so the server can process them separately.
@@ -248,14 +249,22 @@ async function pushTurns(ovSessionId, turns, { peerId = null, enqueueOnly = fals
     if (parts.length === 0) continue;
     const payload = { role: turn.role, parts };
     if (peerId) payload.peer_id = peerId;
-    const res = enqueueOnly
-      ? await enqueuePendingDirectly("addMessage", ovSessionId, payload)
-      : await addMessage(fetchJSON, ovSessionId, payload);
-    if (enqueueOnly && res.ok) queued++;
-    else if (res.ok) ok++;
-    else if (res.pendingQueued) queued++;
-    else if (res.pendingEnqueueFailed || enqueueOnly) enqueueFailed++;
-    else failed++;
+    if (enqueueOnly) {
+      const res = await enqueuePendingDirectly("addMessage", ovSessionId, payload);
+      if (res.ok) queued++;
+      else enqueueFailed++;
+    } else {
+      payloads.push(payload);
+    }
+  }
+  if (!enqueueOnly) {
+    const res = await sendSessionMessages(fetchJSON, ovSessionId, payloads, {
+      enqueueOnRetryable: true,
+    });
+    ok = res.sent;
+    queued = res.queued;
+    failed = res.failed;
+    enqueueFailed = res.enqueueFailed;
   }
   // Commit once at the end; subagents are short-lived, so threshold tracking
   // adds little value.

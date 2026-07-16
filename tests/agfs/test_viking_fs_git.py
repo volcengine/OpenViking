@@ -797,7 +797,6 @@ async def test_restore_returns_pollable_task_id(vfs, monkeypatch):
 
     from openviking.service.task_tracker import (
         TaskTracker,
-        reset_task_tracker,
         set_task_tracker,
     )
 
@@ -847,7 +846,7 @@ async def test_restore_returns_pollable_task_id(vfs, monkeypatch):
         assert task.status.value == "completed"
         assert ("reindex_file", "viking://resources/proj/x.md") in spy.calls
     finally:
-        reset_task_tracker()
+        set_task_tracker(None)
 
 
 # =========================================================================

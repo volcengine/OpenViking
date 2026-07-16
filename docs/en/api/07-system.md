@@ -443,8 +443,9 @@ This API operates on existing `viking://...` content. It does not import new fil
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI to reindex |
-| mode | str | No | `vectors_only` | Reindex mode: `vectors_only` or `semantic_and_vectors` |
+| mode | str | No | `vectors_only` | Reindex mode: `vectors_only`, `semantic_and_vectors`, or `prune_orphans` |
 | wait | bool | No | `true` | Whether to wait for completion |
+| dry_run | bool | No | `false` | Only valid with `mode="prune_orphans"`; report orphan vector records without deleting them |
 
 The HTTP request body rejects unknown fields. `uri` may use OpenViking path variables accepted by other content APIs; it is resolved before validation.
 
@@ -467,10 +468,13 @@ when reindexing a broader user namespace, session subtrees are skipped.
 
 - `vectors_only`: rebuilds vector-store records from currently recoverable source data without rewriting `.abstract.md` or `.overview.md`
 - `semantic_and_vectors`: regenerates semantic artifacts first, then rebuilds vectors from the refreshed semantic outputs
+- `prune_orphans`: deletes vector-store records under the requested URI whose source files no longer exist in the filesystem. With `dry_run=true`, it only reports how many records would be deleted.
 
 For `resource` and `skill`, `semantic_and_vectors` refreshes directory/file semantic artifacts, including `.abstract.md` and `.overview.md`. For `memory`, it rebuilds the current persisted memory subtree semantics and vectors, but it does not replay historical extraction order.
 
 For `semantic_and_vectors`, semantic generation and vector rebuilding are sequenced by the reindex executor. The semantic refresh step does not enqueue its own background vectorization work; vectors are rebuilt by the reindex step so `wait=true` reflects the reindex operation itself.
+
+For `prune_orphans`, source existence is checked against the filesystem. If an entire directory is missing, vector records for files and semantic sidecars below that directory, such as `.abstract.md` and `.overview.md`, are pruned together. `dry_run` is rejected for other modes.
 
 **Python SDK (Embedded / HTTP)**
 
@@ -492,6 +496,15 @@ result = client.reindex(
 print(result["status"])
 ```
 
+```python
+result = client.reindex(
+    uri="viking://resources",
+    mode="prune_orphans",
+    dry_run=True,
+)
+print(result["would_delete_records"])
+```
+
 **TypeScript SDK**
 
 ```typescript
@@ -511,6 +524,18 @@ if err != nil {
 fmt.Println(result["status"])
 ```
 
+```go
+result, err := client.Reindex(ctx, "viking://resources", &openviking.ReindexOptions{
+    Mode: "prune_orphans",
+    Wait: true,
+    DryRun: true,
+})
+if err != nil {
+    return err
+}
+fmt.Println(result["would_delete_records"])
+```
+
 **HTTP API**
 
 ```
@@ -526,8 +551,9 @@ curl -X POST http://localhost:1933/api/v1/content/reindex \
   -H "X-OpenViking-Account: default" \
   -d '{
     "uri": "viking://resources",
-    "mode": "vectors_only",
-    "wait": true
+    "mode": "prune_orphans",
+    "wait": true,
+    "dry_run": true
   }'
 ```
 
@@ -539,6 +565,10 @@ openviking reindex viking://resources --mode vectors_only
 
 ```bash
 openviking reindex viking://user/default/skills --mode semantic_and_vectors --wait false
+```
+
+```bash
+openviking reindex viking://resources --mode prune_orphans --dry-run
 ```
 
 **Synchronous response (`wait=true`)**
@@ -553,6 +583,8 @@ openviking reindex viking://user/default/skills --mode semantic_and_vectors --wa
     "object_type": "resource",
     "scanned_records": 120,
     "rebuilt_records": 118,
+    "deleted_records": 0,
+    "would_delete_records": 0,
     "unsupported_records": 2,
     "failed_records": 0,
     "duration_ms": 1284,
@@ -604,6 +636,8 @@ Task records are persisted under `/local/{account_id}/_system/tasks/{user_id}/{t
 | mode | Effective reindex mode |
 | scanned_records | Number of records or semantic sources considered |
 | rebuilt_records | Number of vector records successfully rebuilt |
+| deleted_records | Number of vector records deleted by `prune_orphans`; `0` for `dry_run=true` |
+| would_delete_records | Number of vector records that would be deleted by `prune_orphans` in dry-run mode |
 | unsupported_records | Number of records skipped because no usable vector source was available |
 | failed_records | Number of records that failed while rebuilding |
 | duration_ms | Synchronous run duration in milliseconds |
@@ -612,11 +646,13 @@ Task records are persisted under `/local/{account_id}/_system/tasks/{user_id}/{t
 
 **Behavior notes**
 
-- Reindex is non-destructive. It uses rebuild/upsert behavior and does not require dropping the vector collection first.
+- `vectors_only` and `semantic_and_vectors` are non-destructive. They use rebuild/upsert behavior and do not require dropping the vector collection first.
+- `prune_orphans` is destructive unless `dry_run=true`: it removes vector records whose source files no longer exist.
 - `viking://` reindex fans out to supported top-level namespaces and excludes `session`.
 - Namespace reindex operations such as `viking://user` propagate to supported child content types.
 - `vectors_only` is the right mode when only the embedding model or vector index needs to be refreshed.
 - `semantic_and_vectors` is the right mode when semantic artifacts themselves must be regenerated before re-vectorization.
+- `prune_orphans` is the right mode when the filesystem has been changed outside normal APIs and the vector store may still contain records for deleted paths.
 - Only one reindex task can run for the same URI and owner at a time. A concurrent request for the same target returns a conflict.
 - For resource files, text files can use file content when no summary is available. Non-text files require a generated summary or existing vector record fallback; otherwise they are counted as unsupported.
 

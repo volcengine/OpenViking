@@ -205,89 +205,6 @@ class TestDashScopeTextEmbed:
 
 
 # ---------------------------------------------------------------------------
-# Text batch embed
-# ---------------------------------------------------------------------------
-
-
-class TestDashScopeTextBatch:
-    """Test text mode batch embedding."""
-
-    @patch("openviking.models.embedder.dashscope_embedders.openai.OpenAI")
-    @patch("openviking.models.embedder.dashscope_embedders.httpx.Client")
-    def test_batch_splits_into_chunks_of_10(self, mock_httpx, mock_openai_class):
-        """15 texts should produce 2 API calls (10 + 5)."""
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
-
-        # First call: 10 items, second call: 5 items
-        mock_response_1 = MagicMock()
-        mock_response_1.data = [MagicMock(embedding=[0.1 * (i + 1)] * 1024) for i in range(10)]
-        mock_response_1.usage = MagicMock(prompt_tokens=100, total_tokens=100)
-
-        mock_response_2 = MagicMock()
-        mock_response_2.data = [MagicMock(embedding=[0.2 * (i + 1)] * 1024) for i in range(5)]
-        mock_response_2.usage = MagicMock(prompt_tokens=50, total_tokens=50)
-
-        mock_client.embeddings.create.side_effect = [mock_response_1, mock_response_2]
-
-        embedder = DashScopeDenseEmbedder(
-            model_name="text-embedding-v4", api_key="sk-test", input_type="text"
-        )
-        results = embedder.embed_batch([f"text-{i}" for i in range(15)])
-
-        assert len(results) == 15
-        assert mock_client.embeddings.create.call_count == 2
-        # Verify first call had 10 texts, second had 5
-        first_call_input = mock_client.embeddings.create.call_args_list[0][1]["input"]
-        assert len(first_call_input) == 10
-        second_call_input = mock_client.embeddings.create.call_args_list[1][1]["input"]
-        assert len(second_call_input) == 5
-
-    @patch("openviking.models.embedder.dashscope_embedders.openai.OpenAI")
-    @patch("openviking.models.embedder.dashscope_embedders.httpx.Client")
-    def test_batch_empty_returns_empty(self, mock_httpx, mock_openai_class):
-        embedder = DashScopeDenseEmbedder(
-            model_name="text-embedding-v4", api_key="sk-test", input_type="text"
-        )
-        results = embedder.embed_batch([])
-        assert results == []
-
-    @patch("openviking.models.embedder.dashscope_embedders.openai.OpenAI")
-    @patch("openviking.models.embedder.dashscope_embedders.httpx.Client")
-    def test_batch_single_item(self, mock_httpx, mock_openai_class):
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
-
-        mock_embedding = MagicMock()
-        mock_embedding.embedding = [0.5] * 1024
-        mock_response = MagicMock()
-        mock_response.data = [mock_embedding]
-        mock_response.usage = MagicMock(prompt_tokens=3, total_tokens=3)
-        mock_client.embeddings.create.return_value = mock_response
-
-        embedder = DashScopeDenseEmbedder(
-            model_name="text-embedding-v4", api_key="sk-test", input_type="text"
-        )
-        results = embedder.embed_batch(["hello"])
-        assert len(results) == 1
-        assert results[0].dense_vector == [0.5] * 1024
-        mock_client.embeddings.create.assert_called_once()
-
-    @patch("openviking.models.embedder.dashscope_embedders.openai.OpenAI")
-    @patch("openviking.models.embedder.dashscope_embedders.httpx.Client")
-    def test_batch_error_raises_runtime_error(self, mock_httpx, mock_openai_class):
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
-        mock_client.embeddings.create.side_effect = Exception("batch fail")
-
-        embedder = DashScopeDenseEmbedder(
-            model_name="text-embedding-v4", api_key="sk-test", input_type="text"
-        )
-        with pytest.raises(RuntimeError, match="DashScope batch embedding failed"):
-            embedder.embed_batch(["a", "b"])
-
-
-# ---------------------------------------------------------------------------
 # Multimodal embed
 # ---------------------------------------------------------------------------
 
@@ -489,32 +406,6 @@ class TestDashScopeAsync:
         with pytest.raises(RuntimeError, match="DashScope embedding failed"):
             await embedder.embed_async("fail text")
 
-    @patch("openviking.models.embedder.dashscope_embedders.openai.OpenAI")
-    @patch("openviking.models.embedder.dashscope_embedders.httpx.Client")
-    @patch("openviking.models.embedder.dashscope_embedders.openai.AsyncOpenAI")
-    @pytest.mark.anyio
-    async def test_embed_batch_async_text_mode(
-        self, mock_async_openai_class, mock_httpx, mock_openai
-    ):
-        mock_async_client = MagicMock()
-        mock_async_openai_class.return_value = mock_async_client
-
-        mock_response = MagicMock()
-        mock_response.data = [
-            MagicMock(embedding=[0.1] * 1024),
-            MagicMock(embedding=[0.2] * 1024),
-        ]
-        mock_response.usage = MagicMock(prompt_tokens=20, total_tokens=20)
-        mock_async_client.embeddings.create = AsyncMock(return_value=mock_response)
-
-        embedder = DashScopeDenseEmbedder(
-            model_name="text-embedding-v4", api_key="sk-test", input_type="text"
-        )
-        results = await embedder.embed_batch_async(["a", "b"])
-        assert len(results) == 2
-        assert results[0].dense_vector == [0.1] * 1024
-        assert results[1].dense_vector == [0.2] * 1024
-
 
 # ---------------------------------------------------------------------------
 # Error handling
@@ -555,50 +446,6 @@ class TestDashScopeErrors:
         with pytest.raises(RuntimeError, match="DashScope embedding failed") as exc_info:
             embedder.embed("hello")
         assert "503" in str(exc_info.value.__cause__)
-
-    @patch("openviking.models.embedder.dashscope_embedders.openai.OpenAI")
-    @patch("openviking.models.embedder.dashscope_embedders.httpx.Client")
-    def test_embed_batch_error(self, mock_httpx, mock_openai_class):
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
-        mock_client.embeddings.create.side_effect = Exception("timeout")
-
-        embedder = DashScopeDenseEmbedder(
-            model_name="text-embedding-v4", api_key="sk-test", input_type="text"
-        )
-        with pytest.raises(RuntimeError, match="DashScope batch embedding failed"):
-            embedder.embed_batch(["text1", "text2"])
-
-    @patch("openviking.models.embedder.dashscope_embedders.openai.OpenAI")
-    @patch("openviking.models.embedder.dashscope_embedders.httpx.Client")
-    def test_multimodal_batch_sends_one_at_a_time(self, mock_httpx_class, mock_openai):
-        """Multimodal batch sends requests one text at a time (no chunking)."""
-        mock_client = MagicMock()
-        mock_httpx_class.return_value = mock_client
-
-        # Each call returns a single embedding
-        responses = []
-        for i in range(3):
-            resp = MagicMock()
-            resp.json.return_value = {
-                "output": {"embeddings": [{"embedding": [float(i)] * 768}]},
-                "usage": {"total_tokens": 5, "input_tokens": 5},
-            }
-            responses.append(resp)
-        mock_client.post.side_effect = responses
-
-        embedder = DashScopeDenseEmbedder(
-            model_name="tongyi-embedding-vision-flash",
-            api_key="sk-test",
-            input_type="multimodal",
-        )
-        results = embedder.embed_batch(["a", "b", "c"])
-        assert len(results) == 3
-        assert mock_client.post.call_count == 3
-        assert results[0].dense_vector == [0.0] * 768
-        assert results[1].dense_vector == [1.0] * 768
-        assert results[2].dense_vector == [2.0] * 768
-
 
 # ---------------------------------------------------------------------------
 # Multimodal params builder

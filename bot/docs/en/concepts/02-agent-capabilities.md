@@ -71,7 +71,54 @@ The main Agent uses `spawn` to submit independent work to SubagentManager. A sub
 
 When a subagent finishes, it reports the result to the main session. The main Agent remains responsible for identity-sensitive actions and final delivery.
 
-## Sandbox and Workspace
+## Workspace and Agent Customization
+
+The Workspace has two responsibilities: it stores bootstrap files and Skills that shape the Agent system prompt, and it serves as the local working directory for file and command tools. It is separate from the OpenViking workspace accessed through `openviking_*` tools.
+
+### Paths and Isolation Scope
+
+The Workspace root is `<storage.workspace>/bot/workspace`. When `storage.workspace` is omitted, it defaults to `~/.openviking/data/bot/workspace`. `vikingbot status` prints the resolved root.
+
+ContextBuilder reads from the active Workspace selected by `sandbox.mode`:
+
+| Mode | Active directory |
+|------|------------------|
+| `shared` | `<workspace>/shared` |
+| `per-session` | `<workspace>/<session-key>` |
+| `per-channel` | `<workspace>/<channel-key>` |
+
+With the default `shared` mode, customize files under `<workspace>/shared`, not directly in the Workspace root.
+
+### Bootstrap Files
+
+On every turn, ContextBuilder reads existing non-empty files in this order: `AGENTS.md`, `SOUL.md`, `TOOLS.md`, and `IDENTITY.md`.
+
+| File | Appropriate content |
+|------|---------------------|
+| `AGENTS.md` | Global working methods, task workflows, output constraints, and mandatory project rules |
+| `SOUL.md` | Personality, values, tone, response style, and default behavior preferences |
+| `TOOLS.md` | Tool selection rules, call order, side-effect confirmation, and safety boundaries |
+| `IDENTITY.md` | Agent name, role, responsibility scope, and identity background |
+
+These files supplement VikingBot's built-in identity and runtime prompt. They do not change actual tool Schemas, Channel authorization, or Sandbox permissions. For example, telling the Agent in `SOUL.md` to always run Shell commands cannot expose a hidden `exec` tool or bypass a sandbox policy.
+
+The initial template also contains `USER.md`, but the current ContextBuilder does not automatically add it to the system prompt. Store durable user information in the OpenViking Peer Profile and Memories. Put static behavior rules in `AGENTS.md` or `SOUL.md`.
+
+### Skills, Heartbeat, and Local Memory
+
+- `skills/<name>/SKILL.md` defines a workflow for a class of tasks. A Workspace Skill takes precedence over a built-in Skill with the same name and is loaded progressively: summary first, full instructions on demand.
+- `HEARTBEAT.md` is not part of the normal system prompt; HeartbeatService reads it periodically.
+- `memory/MEMORY.md` and `memory/HISTORY.md` are local memory files. Old conversation consolidation writes to them only when `bot.use_local_memory` is enabled. OpenViking manages long-term context by default.
+
+### Initialization and Update Behavior
+
+When an active Workspace is first used, VikingBot copies bootstrap files, bundled Skill templates, and supporting directories from the installed `bot/workspace` template. Template initialization does not overwrite existing bootstrap-file customization.
+
+Edit the active Workspace directly. ContextBuilder reads bootstrap files again on every turn, so changes to `SOUL.md`, `AGENTS.md`, `TOOLS.md`, or `IDENTITY.md` normally take effect on the next conversation turn without restarting the Gateway. Changes to `bot/workspace` in the package or repository affect only Workspaces created later.
+
+Bootstrap files are part of the system-level prompt. Restrict their write permissions and never store API Keys, Tokens, or other secrets in them.
+
+## Sandbox and Workspace Isolation
 
 SandboxManager selects a workspace from SessionKey and `sandbox.mode`:
 
@@ -91,8 +138,6 @@ The current implementation provides these execution backends:
 | `aiosandbox` | Executes commands and file operations through AIO Sandbox |
 
 In Direct mode, `restrict_to_workspace=false` may allow files and commands to access content outside the workspace. For services exposed to untrusted users, choose an isolated backend and configure explicit network and file policies.
-
-On first use, SandboxManager copies bootstrap files such as AGENTS, SOUL, USER, TOOLS, and IDENTITY, together with enabled Skills.
 
 ## Multimodal Capabilities
 
@@ -130,6 +175,7 @@ Custom Hooks can be loaded through `bot.hooks`.
 
 | Area | Path |
 |------|------|
+| Workspace template | `bot/workspace/` |
 | Context and Skills | `vikingbot/agent/context.py`, `skills.py` |
 | Tool system | `vikingbot/agent/tools/` |
 | Subagents | `vikingbot/agent/subagent.py` |

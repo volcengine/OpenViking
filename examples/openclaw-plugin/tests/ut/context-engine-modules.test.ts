@@ -126,7 +126,7 @@ describe("context-engine lifecycle service seam", () => {
       agentId: "runtime-agent",
       ovSessionId,
     });
-    expect(client.getSessionContext).toHaveBeenCalledWith(ovSessionId, 4096, "agent_main");
+    expect(client.getSessionContext).toHaveBeenCalledWith(ovSessionId, 4096);
     expect(buildAssembledContext).not.toHaveBeenCalled();
     expect(result).toEqual({ messages, estimatedTokens: 42 });
     expect(diag).toHaveBeenCalledWith("assemble_result", ovSessionId, expect.objectContaining({
@@ -151,15 +151,12 @@ describe("context-engine lifecycle service seam", () => {
     };
     const getClient = vi.fn().mockResolvedValue(client);
     const rememberSessionAgentId = vi.fn();
-    const resolveAgentId = vi.fn().mockReturnValue("agent_main");
-
     const ok = await commitOpenVikingSession({
       sessionId: "plain-session",
       sessionKey: "agent:main:main",
       getClient,
       logger,
       rememberSessionAgentId,
-      resolveAgentId,
       isBypassedSession: () => false,
     });
 
@@ -170,10 +167,8 @@ describe("context-engine lifecycle service seam", () => {
       sessionKey: "agent:main:main",
       ovSessionId,
     });
-    expect(resolveAgentId).toHaveBeenCalledWith("plain-session", "agent:main:main", ovSessionId);
     expect(client.commitSession).toHaveBeenCalledWith(ovSessionId, {
       wait: true,
-      agentId: "agent_main",
       keepRecentCount: 0,
     });
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("memories=5"));
@@ -217,10 +212,9 @@ describe("context-engine lifecycle service seam", () => {
     });
 
     const ovSessionId = openClawSessionToOvStorageId("plain-session", "agent:main:main");
-    expect(client.getSessionContext).toHaveBeenNthCalledWith(1, ovSessionId, 4096, "agent_main");
+    expect(client.getSessionContext).toHaveBeenNthCalledWith(1, ovSessionId, 4096);
     expect(client.commitSession).toHaveBeenCalledWith(ovSessionId, {
       wait: true,
-      agentId: "agent_main",
       keepRecentCount: 0,
     });
     expect(result).toEqual({
@@ -314,14 +308,13 @@ describe("context-engine lifecycle service seam", () => {
       ovSessionId,
       "user",
       [{ type: "text", text: "hello world" }],
-      "agent_main",
+      undefined,
       "2026-04-01T10:01:00.000Z",
-      "telegram_123",
+      undefined,
     );
-    expect(client.getSession).toHaveBeenCalledWith(ovSessionId, "agent_main");
+    expect(client.getSession).toHaveBeenCalledWith(ovSessionId);
     expect(client.commitSession).toHaveBeenCalledWith(ovSessionId, {
       wait: false,
-      agentId: "agent_main",
       keepRecentCount: 7,
     });
     expect(diag).toHaveBeenCalledWith("afterTurn_commit", ovSessionId, expect.objectContaining({

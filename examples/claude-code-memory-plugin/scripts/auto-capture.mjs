@@ -25,7 +25,6 @@ import { tmpdir } from "node:os";
 import { isPluginEnabled, loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import {
-  addMessage,
   commitSession,
   deriveOvSessionId,
   enqueuePendingDirectly,
@@ -37,6 +36,7 @@ import {
 import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
 import { readJsonState, writeJsonState } from "./lib/state.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
+import { sendSessionMessages } from "./shared/batch-send.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -393,10 +393,7 @@ function sanitizePartsForSend(parts) {
 }
 
 async function pushTurnsToOv(ovSessionId, turns, peerId = "") {
-  let ok = 0;
-  let queued = 0;
-  let failed = 0;
-  let enqueueFailed = 0;
+  const payloads = [];
   for (const turn of turns) {
     // Send structured parts: tool calls/results are dedicated `tool` parts, not
     // inlined into content, so the server can process them separately.
@@ -405,13 +402,12 @@ async function pushTurnsToOv(ovSessionId, turns, peerId = "") {
 
     const payload = { role: turn.role, parts };
     if (peerId) payload.peer_id = peerId;
-    const res = await addMessage(fetchJSON, ovSessionId, payload);
-    if (res.ok) ok++;
-    else if (res.pendingQueued) queued++;
-    else if (res.pendingEnqueueFailed) enqueueFailed++;
-    else failed++;
+    payloads.push(payload);
   }
-  return { ok, queued, failed, enqueueFailed };
+  const res = await sendSessionMessages(fetchJSON, ovSessionId, payloads, {
+    enqueueOnRetryable: true,
+  });
+  return { ok: res.sent, queued: res.queued, failed: res.failed, enqueueFailed: res.enqueueFailed };
 }
 
 async function enqueueTurnsToPending(ovSessionId, turns, peerId = "") {

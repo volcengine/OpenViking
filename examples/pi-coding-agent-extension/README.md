@@ -179,15 +179,15 @@ The extension is a single directory of TypeScript files loaded by pi's `jiti` tr
 | Pi Event               | Extension Action                                                                 |
 |------------------------|----------------------------------------------------------------------------------|
 | `session_start`        | Health check → derive OV session → build profile context → restore takeover state |
-| `before_agent_start`   | Idempotent startup for `pi -c` + synchronous recall search                       |
-| `context`              | Takeover overview injection, then recall injection into the latest user turn      |
+| `before_agent_start`   | Idempotent startup for `pi -c` + queue the current prompt for recall              |
+| `context`              | Run current-prompt recall after UI rendering, then inject takeover and recall context |
 | `turn_end`             | Extract branch entries → write or pending-queue OV messages → maybe advance boundary |
 | `session_before_compact`| Takeover mode returns OV overview as pi compaction summary; otherwise commits pending messages |
 | `session_shutdown`     | Persist takeover state or final non-takeover commit                              |
 
 ### Recall: Synchronous, Not Stale
 
-Unlike Hermes's stale prefetch (recall from previous turn's query, injected one turn late), this extension searches OpenViking with the **current** user prompt via pi's `context` event. Results are injected into the same turn as `<openviking-context>` blocks. This means:
+Unlike Hermes's stale prefetch (recall from previous turn's query, injected one turn late), this extension searches OpenViking with the **current** user prompt via pi's `context` event. Pi renders the submitted user message before this hook, so recall latency does not hold the message off-screen. Results are still injected into the same model turn as `<openviking-context>` blocks. This means:
 
 - **First turn** of a session gets relevant context immediately
 - **Topic switches** within a session get correct recall

@@ -30,9 +30,6 @@ def _install_fake_embedder(monkeypatch):
         def embed(self, text: str, is_query: bool = False) -> EmbedResult:
             return EmbedResult(dense_vector=[0.1] * 1024)
 
-        def embed_batch(self, texts: list[str], is_query: bool = False) -> list[EmbedResult]:
-            return [self.embed(text, is_query=is_query) for text in texts]
-
         def get_dimension(self) -> int:
             return 1024
 

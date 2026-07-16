@@ -113,6 +113,7 @@ test("combined Cursor and TRAE install preserves unrelated hooks and is idempote
     const shared = join(home, ".openviking", "agent-integrations", "memory-plugin-shared", "lib");
     assert.ok(existsSync(join(shared, "agent-hook-runtime.mjs")));
     assert.ok(existsSync(join(shared, "agent-uri-guard.mjs")));
+    assert.ok(existsSync(join(shared, "batch-send.mjs")));
     assert.ok(existsSync(join(shared, "mcp-proxy-core.mjs")));
     assert.ok(existsSync(join(shared, "uri-guard.mjs")));
     for (const client of ["cursor", "trae", "trae-cn"]) {

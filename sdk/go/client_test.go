@@ -223,6 +223,40 @@ func TestFindSendsImageQuery(t *testing.T) {
 	}
 }
 
+func TestReindexSendsDryRun(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/content/reindex" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s", r.Method)
+		}
+		body := readJSONBody(t, r)
+		if got := body["uri"]; got != "viking://resources/demo" {
+			t.Fatalf("uri = %#v", got)
+		}
+		if got := body["mode"]; got != "prune_orphans" {
+			t.Fatalf("mode = %#v", got)
+		}
+		if got := body["wait"]; got != false {
+			t.Fatalf("wait = %#v", got)
+		}
+		if got := body["dry_run"]; got != true {
+			t.Fatalf("dry_run = %#v", got)
+		}
+		writeOK(t, w, map[string]any{"status": "completed"})
+	}))
+	defer closeServer()
+
+	if _, err := client.Reindex(context.Background(), "resources/demo", &ReindexOptions{
+		Mode:   "prune_orphans",
+		Wait:   false,
+		DryRun: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAdminCreatePathsAcceptInitialUserConfig(t *testing.T) {
 	var seen []map[string]any
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

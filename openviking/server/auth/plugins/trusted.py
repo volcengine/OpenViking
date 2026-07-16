@@ -17,6 +17,11 @@ from openviking_cli.exceptions import InvalidArgumentError, UnauthenticatedError
 
 _LOCALHOST_HOSTS = {"127.0.0.1", "localhost", "::1"}
 _TRUSTED_RELAXED_IDENTITY_PREFIXES = ("/api/v1/admin",)
+_TRUSTED_ROLE_HEADER = "X-OpenViking-Role"
+_TRUSTED_ASSERTABLE_ROLES = {
+    Role.USER: Role.USER,
+    Role.ADMIN: Role.ADMIN,
+}
 
 
 def _is_localhost(host: str) -> bool:
@@ -57,6 +62,22 @@ def _trusted_request_requires_explicit_identity(path: str) -> bool:
     return True
 
 
+def _asserted_role_from_header(request: Request, *, allow_assertion: bool) -> Optional[Role]:
+    raw_role = request.headers.get(_TRUSTED_ROLE_HEADER)
+    normalized_role = _normalize_request_value(raw_role)
+    if normalized_role is None:
+        return None
+    if not allow_assertion:
+        raise InvalidArgumentError(
+            f"{_TRUSTED_ROLE_HEADER} requires trusted mode with Root API Key enabled."
+        )
+
+    role = normalized_role.lower()
+    if role not in _TRUSTED_ASSERTABLE_ROLES:
+        raise InvalidArgumentError(f"{_TRUSTED_ROLE_HEADER} must be one of: user, admin.")
+    return _TRUSTED_ASSERTABLE_ROLES[role]
+
+
 class TrustedAuthPlugin(AuthPlugin):
     """Trusted mode: trust X-OpenViking-Account/User headers.
 
@@ -84,6 +105,10 @@ class TrustedAuthPlugin(AuthPlugin):
                 raise UnauthenticatedError(
                     "Invalid API Key in trusted mode with Root API Key enabled."
                 )
+        asserted_role = _asserted_role_from_header(
+            request,
+            allow_assertion=bool(configured_root_api_key),
+        )
 
         explicit_account_id, explicit_user_id = _explicit_identity_from_request(request)
         if (
@@ -102,20 +127,22 @@ class TrustedAuthPlugin(AuthPlugin):
         effective_account_id = explicit_account_id or x_openviking_account
         effective_user_id = explicit_user_id or x_openviking_user
 
-        # Admin paths may omit identity completely, but partial identity is rejected.
+        # A verified Root key is the caller identity for admin routes. Path
+        # parameters such as ``account_id`` identify the managed resource, so
+        # they must not be mistaken for a partial caller identity.
         is_admin_path = request.url.path.startswith(_TRUSTED_RELAXED_IDENTITY_PREFIXES)
         if is_admin_path:
-            if bool(effective_account_id) != bool(effective_user_id):
-                raise InvalidArgumentError(
-                    "Trusted mode requests must include "
-                    "X-OpenViking-Account or explicit account_id in the URL and "
-                    "X-OpenViking-User or explicit user_id in the URL."
-                )
             if configured_root_api_key:
                 return ResolvedIdentity(
                     role=Role.ROOT,
                     account_id=effective_account_id or "trusted",
                     user_id=effective_user_id or "trusted",
+                )
+            if bool(effective_account_id) != bool(effective_user_id):
+                raise InvalidArgumentError(
+                    "Trusted mode requests must include "
+                    "X-OpenViking-Account or explicit account_id in the URL and "
+                    "X-OpenViking-User or explicit user_id in the URL."
                 )
             if not effective_account_id and not effective_user_id:
                 return ResolvedIdentity(
@@ -137,7 +164,9 @@ class TrustedAuthPlugin(AuthPlugin):
 
         api_key_manager = getattr(request.app.state, "api_key_manager", None)
         trusted_role = Role.USER
-        if api_key_manager and effective_account_id and effective_user_id:
+        if asserted_role is not None:
+            trusted_role = asserted_role
+        elif api_key_manager and effective_account_id and effective_user_id:
             looked_up_role = api_key_manager.get_user_role(effective_account_id, effective_user_id)
             if looked_up_role is not None:
                 trusted_role = looked_up_role

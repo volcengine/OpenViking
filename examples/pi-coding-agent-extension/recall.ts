@@ -11,14 +11,24 @@ export class RecallManager {
   private client: OVClient;
   private config: OVConfig;
   private cache: RecallCache = { block: null, promptText: "" };
+  private pendingPrompt = "";
 
   constructor(client: OVClient, config: OVConfig) {
     this.client = client;
     this.config = config;
   }
 
-  async searchAndCache(userQuery: string): Promise<string | null> {
+  queueSearch(userQuery: string): void {
+    this.pendingPrompt = userQuery;
+  }
+
+  async searchPending(): Promise<string | null> {
+    if (!this.pendingPrompt) return this.cache.block;
+
+    const userQuery = this.pendingPrompt;
+    this.pendingPrompt = "";
     if (userQuery.trim().length < this.config.minQueryLength) {
+      this.cache = { block: null, promptText: userQuery };
       return null;
     }
 
@@ -68,5 +78,6 @@ export class RecallManager {
 
   invalidate(): void {
     this.cache = { block: null, promptText: "" };
+    this.pendingPrompt = "";
   }
 }

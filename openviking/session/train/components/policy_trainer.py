@@ -178,11 +178,6 @@ class StreamingPolicyTrainer:
     def last_apply_result(self) -> PolicyApplyResult | None:
         return self._last_apply_result
 
-    async def get_buffered_gradient_count(self) -> int:
-        """Return the current buffered gradient count under the buffer lock."""
-
-        return await self._batcher.get_buffered_size()
-
     @property
     def closed(self) -> bool:
         return self._closed

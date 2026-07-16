@@ -112,3 +112,51 @@ async def test_parallel_search_preserves_type_order():
 
     assert [entry.type for entry in result.entries] == ["events", "entities"]
     assert [entry.rank for entry in result.entries] == [1, 1]
+
+
+async def test_recall_hides_persisted_memory_fields_metadata():
+    memory_uri = "viking://user/test_user/memories/events/example.md"
+    raw_memory = """Visible memory body
+
+<!-- MEMORY_FIELDS
+{
+  "event_name": "internal-event",
+  "user_id": "test_user",
+  "memory_type": "events"
+}
+-->"""
+
+    async def fake_find(**kwargs):
+        if kwargs["target_uri"].endswith("/events") and "/peers/" not in kwargs["target_uri"]:
+            return _FakeFindResult([{"uri": memory_uri, "score": 0.9}])
+        return _FakeFindResult()
+
+    async def fake_read(uri, **kwargs):
+        del kwargs
+        assert uri == memory_uri
+        return raw_memory
+
+    service = SimpleNamespace(
+        search=SimpleNamespace(find=fake_find),
+        fs=SimpleNamespace(read=fake_read),
+    )
+    ctx = RequestContext(
+        user=UserIdentifier.the_default_user("test_user"),
+        role=Role.USER,
+        actor_peer_id="current",
+    )
+
+    result = await search_type_quota_recall(
+        service=service,
+        ctx=ctx,
+        query="visible memory",
+        peer_scope="actor",
+        quotas={"events": 1, "entities": 0, "preferences": 0, "experiences": 0},
+        max_chars=10_000,
+    )
+
+    assert len(result.entries) == 1
+    assert result.entries[0].content == "Visible memory body"
+    assert "Visible memory body" in result.rendered
+    assert "MEMORY_FIELDS" not in result.rendered
+    assert "internal-event" not in result.rendered

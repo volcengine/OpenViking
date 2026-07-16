@@ -1323,6 +1323,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 label: "ov reindex viking://projects/acme --mode semantic_and_vectors --wait true",
                 description: "Regenerate semantic artifacts, then vectors.",
             },
+            HelpItem {
+                label: "ov reindex viking://projects/acme --mode prune_orphans --dry-run",
+                description: "Preview orphan vector cleanup.",
+            },
         ],
         next_steps: &[
             HelpItem {
@@ -2873,7 +2877,8 @@ mod tests {
                 .expect("reindex help should render"),
         );
 
-        assert!(rendered.contains("--mode <vectors_only|semantic_and_vectors>"));
+        assert!(rendered.contains("--mode <vectors_only|semantic_and_vectors|prune_orphans>"));
+        assert!(rendered.contains("--dry-run"));
         assert!(rendered.contains("Regenerate semantic artifacts, then vectors."));
     }
 

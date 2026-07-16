@@ -132,7 +132,7 @@ def test_case_experience_links_require_policy_root_uri():
 
 
 @pytest.mark.asyncio
-async def test_train_from_extracted_case_memories_submits_streaming_rollout(monkeypatch):
+async def test_train_from_extracted_cases_submits_streaming_rollout(monkeypatch):
     submitted_gradients = []
     submitted_analyses = []
 
@@ -221,17 +221,7 @@ async def test_train_from_extracted_case_memories_submits_streaming_rollout(monk
             max_gradients_per_update=8,
         ),
     )
-    operations = ResolvedOperations(
-        upsert_operations=[_case_operation()],
-        delete_file_contents=[],
-        errors=[],
-    )
-
-    # The extracted case comes from the same memory operations as profile/preferences/etc.;
-    # no extra LLM/VLM case extractor is involved.
-    cases = __import__(
-        "openviking.session.compressor_v3", fromlist=["_operations_to_cases"]
-    )._operations_to_cases(operations)
+    cases = [_training_case()]
     result = await compressor.train_from_extracted_cases(
         cases=cases,
         messages=_messages(),
@@ -246,10 +236,7 @@ async def test_train_from_extracted_case_memories_submits_streaming_rollout(monk
     # Verify analysis was used
     assert submitted_analyses[0] is not None
     assert submitted_analyses[0].trajectories[0].name == "duplicate_booking"
-    # Verify case info carried through correctly
-    assert cases[0].name == "重复预订处理"
-    assert cases[0].input["summary"] == "用户要求处理重复预订"
-    assert cases[0].rubric.criteria[0].name == "先验证重复"
+    assert cases[0].name == "duplicate_booking"
 
 
 @pytest.mark.asyncio

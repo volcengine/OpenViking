@@ -1003,11 +1003,11 @@ enum Commands {
         /// Viking URI
         #[arg(value_name = "uri")]
         uri: String,
-        /// Reindex mode: vectors_only rebuilds vectors; semantic_and_vectors regenerates semantic artifacts, then vectors
+        /// Reindex mode: vectors_only rebuilds vectors; semantic_and_vectors regenerates semantic artifacts, then vectors; prune_orphans deletes orphan vector records
         #[arg(
             long,
             default_value = "vectors_only",
-            value_parser = ["vectors_only", "semantic_and_vectors"],
+            value_parser = ["vectors_only", "semantic_and_vectors", "prune_orphans"],
             value_name = "mode",
             help_heading = "Common options"
         )]
@@ -1021,6 +1021,9 @@ enum Commands {
             help_heading = "Common options"
         )]
         wait: bool,
+        /// Preview prune_orphans deletions without mutating vectors
+        #[arg(long, help_heading = "Common options")]
+        dry_run: bool,
     },
 }
 
@@ -3111,9 +3114,12 @@ async fn main() {
             mode,
             recursive,
         } => handlers::handle_set_tags(uri, tags, mode, recursive, ctx).await,
-        Commands::Reindex { uri, mode, wait } => {
-            handlers::handle_reindex(uri, mode, wait, ctx).await
-        }
+        Commands::Reindex {
+            uri,
+            mode,
+            wait,
+            dry_run,
+        } => handlers::handle_reindex(uri, mode, wait, dry_run, ctx).await,
         Commands::Get { uri, local_path } => handlers::handle_get(uri, local_path, ctx).await,
         Commands::Find {
             query,
@@ -4497,8 +4503,9 @@ mod tests {
             "reindex",
             "viking://resources/demo",
             "--mode",
-            "semantic_and_vectors",
+            "prune_orphans",
             "--wait=false",
+            "--dry-run",
         ]);
 
         assert!(result.is_ok(), "reindex command should parse");
