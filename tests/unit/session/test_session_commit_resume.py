@@ -48,6 +48,66 @@ class _MemoryVikingFS:
         self.files[uri] = content
 
 
+class _VerifyFailureVikingFS(_MemoryVikingFS):
+    def __init__(self, files, live_uri):
+        super().__init__(files)
+        self.live_uri = live_uri
+        self.live_reads = 0
+
+    async def read_file(self, uri, ctx=None):
+        if uri == self.live_uri:
+            self.live_reads += 1
+            if self.live_reads == 2:
+                raise OSError("transient verification read failure")
+        return await super().read_file(uri, ctx=ctx)
+
+
+@pytest.mark.asyncio
+async def test_live_message_verification_rejects_silently_ignored_empty_write():
+    session_uri = "viking://user/sessions/session-1"
+    stale = Message(id="stale", role="user", parts=[TextPart("old active message")])
+    files = {f"{session_uri}/messages.jsonl": f"{stale.to_jsonl()}\n"}
+    session = Session(
+        viking_fs=_MemoryVikingFS(files), session_id="session-1", session_uri=session_uri
+    )
+
+    with pytest.raises(RuntimeError, match="persistence verification failed"):
+        await session._verify_live_messages_persisted([])
+
+
+@pytest.mark.asyncio
+async def test_commit_restores_disk_live_messages_when_verification_fails(
+    monkeypatch, tmp_path
+):
+    session_uri = "viking://user/sessions/session-1"
+    live_uri = f"{session_uri}/messages.jsonl"
+    original = Message(id="original", role="user", parts=[TextPart("keep me")])
+    original_content = f"{original.to_jsonl()}\n"
+    files = {live_uri: original_content}
+    viking_fs = _VerifyFailureVikingFS(files, live_uri)
+    session = Session(viking_fs=viking_fs, session_id="session-1", session_uri=session_uri)
+    session._messages = [original]
+
+    class _LockContext:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+    monkeypatch.setattr(
+        "openviking.storage.transaction.LockContext", lambda *args, **kwargs: _LockContext()
+    )
+    monkeypatch.setattr("openviking.storage.transaction.get_lock_manager", lambda: object())
+
+    with pytest.raises(OSError, match="transient verification read failure"):
+        await session.commit_async()
+
+    assert session._messages == [original]
+    assert session._compression.compression_index == 0
+    assert files[live_uri] == original_content
+
+
 @pytest.mark.asyncio
 async def test_resume_queued_commit_continues_phase2(monkeypatch):
     session_uri = "viking://user/sessions/session-1"
