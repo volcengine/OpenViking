@@ -1754,9 +1754,16 @@ class Session:
         if include_latest_overview:
             remaining_budget -= latest_archive_tokens
 
-        # pre_archive_abstracts: 保留字段返回空数组，保持 API 向下兼容
         included_pre_archive_abstracts: List[Dict[str, str]] = []
         pre_archive_tokens = 0
+        for item in context["pre_archive_abstracts"]:
+            if item["tokens"] > remaining_budget:
+                break
+            included_pre_archive_abstracts.append(
+                {"archive_id": item["archive_id"], "abstract": item["abstract"]}
+            )
+            pre_archive_tokens += item["tokens"]
+            remaining_budget -= item["tokens"]
 
         archive_tokens = latest_archive_tokens + pre_archive_tokens
         included_archives = len(included_pre_archive_abstracts)
@@ -1768,7 +1775,7 @@ class Session:
             "latest_archive_overview": (
                 latest_archive["overview"] if include_latest_overview else ""
             ),
-            "pre_archive_abstracts": [],  # 保持 API 向后兼容，返回空数组
+            "pre_archive_abstracts": included_pre_archive_abstracts,
             "messages": [m.to_dict() for m in merged_messages],
             "estimatedTokens": message_tokens + archive_tokens,
             "stats": {

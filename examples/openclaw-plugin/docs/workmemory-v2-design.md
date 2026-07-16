@@ -287,7 +287,7 @@ instruction / archive / session 三分区：
 
 实现要点：
 
-- `pre_archive_abstracts` 字段保留在 API（向后兼容），但服务端固定返回空数组，插件侧 `buildArchiveMemory()` 只消费 `latest_archive_overview`
+- 服务端按 token budget 从新到旧返回 `pre_archive_abstracts`；插件侧 `buildArchiveMemory()` 将最近最多 20 条渲染成 `[Archive Index]`
 - 若需要具体 archive 原文，模型走两条路径：按 `archive_id` 用 `ov_archive_expand` 展开；或用 `ov_archive_search` 按关键词跨 archive grep（见 §三）
 
 ---
@@ -308,12 +308,14 @@ OpenViking 在插件侧暴露两个独立的 archive 回查工具。
 - **插件工具**：`ov_archive_search`，参数 `query: string` + 可选 `archiveId: string`
 - **客户端封装**：`client.grepSessionArchives(sessionId, pattern, options)`
 - **服务端 API**：`POST /api/v1/search/grep`，body `{uri, pattern, case_insensitive}`。`uri` 默认 `viking://session/{sessionId}/history`（覆盖所有 archive）；指定 `archiveId` 时收窄为 `viking://session/{sessionId}/history/{archiveId}`
-- **工具输出给 LLM**：最多 12 条命中消息，每条最多 1500 字符，附 archive 标签（如 `archive_005`）和行号
+- **工具输出给 LLM**：最多 5 条命中，每条最多 700 字符，附 archive 标签、来源和行号
 - **行为约束**：
   - 默认遍历所有 archive（新到旧）
   - 默认永远不返回完整 archive 原文
+  - 隐藏 `memory_diff.json` 中 `before`、`uri` 等非当前字段，只保留 `after`
+  - 多 archive 命中时每个 archive 先取最多 3 条，再用剩余结果补满展示上限
   - case-insensitive；正则元字符自动转义为字面量匹配
-- **工具 description 文本**：`"Keyword-grep across all archived original conversation messages of the current session. Use this whenever the [Session History Summary] does not contain the specific detail the user is asking about. Extract 2-3 concrete entity words from the question (names, places, objects, dates) and search each separately. Only conclude information is unavailable after trying at least 2 different keyword variations."`
+- **工具 description 文本**：要求先用一个高信息量查询；仅当结果为空或不足时，才使用另一个具体实体、日期、地点或对象做一次补查
 
 ---
 
@@ -328,9 +330,9 @@ OpenViking 在插件侧暴露两个独立的 archive 回查工具。
 | 滑动窗口 / pending_tokens | `openviking/session/session.py: SessionMeta / add_message()` |
 | commit API + keep_recent_count clamp | `openviking/server/routers/sessions.py: CommitRequest` |
 | WM v2 prompt 模板 | `prompts/templates/compression/ov_wm_v2.yaml`、`ov_wm_v2_update.yaml` |
-| 插件 commit / afterTurn / compact | `examples/openclaw-plugin/context-engine.ts` |
-| 插件 ov_archive_search 工具 | `examples/openclaw-plugin/index.ts: ov_archive_search` |
-| 插件 ov_archive_expand 工具 | `examples/openclaw-plugin/index.ts: ov_archive_expand` |
+| 插件 commit / afterTurn / compact | `examples/openclaw-plugin/services/context-lifecycle-service.ts` |
+| 插件 ov_archive_search 工具 | `examples/openclaw-plugin/plugin/openviking-archive-tools.ts` |
+| 插件 ov_archive_expand 工具 | `examples/openclaw-plugin/plugin/openviking-archive-tools.ts` |
 | 单元测试 | `tests/unit/session/test_wm_v2_guards.py`、`test_working_memory_growth.py`、`test_working_memory_v2.py`（共 107 用例） |
 
 ---

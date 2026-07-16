@@ -355,7 +355,7 @@ Get the assembled session context used for LLM context building. This endpoint r
 
 **Return Fields Description:**
 - `latest_archive_overview`: The `overview` of the latest completed archive, when it fits the token budget
-- `pre_archive_abstracts`: Kept for backward compatibility, returns empty array
+- `pre_archive_abstracts`: Newest completed archive abstracts that fit the remaining token budget
 - `messages`: All incomplete archive messages after the latest completed archive, plus current live session messages
 - `estimatedTokens`: Estimated total tokens
 - `stats`: Statistics
@@ -363,7 +363,7 @@ Get the assembled session context used for LLM context building. This endpoint r
 **Token Budget Allocation Strategy:**
 1. First allocate to current live messages
 2. Remaining budget prioritizes the latest archive overview
-3. Pre-archive abstracts are not currently returned
+3. The remaining budget is filled with archive abstracts in newest-first order
 
 **Code Entries:**
 - `openviking/session/session.py:Session.get_session_context()` - Core implementation
@@ -434,7 +434,12 @@ ov session get-session-context a1b2c3d4 --token-budget 128000
   "status": "ok",
   "result": {
     "latest_archive_overview": "# Session Summary\n\n**Overview**: User discussed deployment and auth setup.",
-    "pre_archive_abstracts": [],
+    "pre_archive_abstracts": [
+      {
+        "archive_id": "archive_003",
+        "abstract": "Deployment and authentication decisions"
+      }
+    ],
     "messages": [
       {
         "id": "msg_pending_1",
@@ -457,7 +462,7 @@ ov session get-session-context a1b2c3d4 --token-budget 128000
     "stats": {
       "totalArchives": 2,
       "includedArchives": 1,
-      "droppedArchives": 0,
+      "droppedArchives": 1,
       "failedArchives": 0,
       "activeTokens": 98,
       "archiveTokens": 62

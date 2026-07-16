@@ -186,13 +186,17 @@ Session handling is the main axis of this design. In the current implementation 
 During preflight, `assemble()` is not just replaying old chat history. It reads session context back from OpenViking under a token budget, then rebuilds OpenClaw-facing messages:
 
 - `latest_archive_overview` becomes `[Session History Summary]`
-- `pre_archive_abstracts` becomes `[Archive Index]`
+- up to 20 of the most recent `pre_archive_abstracts` become `[Archive Index]`
 - active session messages stay in message-block form
 - assistant tool parts become `toolCall` (input compatible: `toolUse`/`input` is normalized to `toolCall`/`arguments`)
 - tool output becomes separate `toolResult`
 - the final message list goes through a tool-use/result pairing repair pass
 
 That means OpenClaw sees "compressed history summary + archive index + active messages", not an ever-growing raw transcript.
+
+`ov_archive_search` labels each displayed match by source, hides stale
+`memory_diff.json` fields such as `before` and `uri`, and returns at most five
+balanced matches so one archive cannot crowd out all others.
 
 ### What `afterTurn()` does
 

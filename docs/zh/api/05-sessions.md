@@ -355,7 +355,7 @@ ov session get a1b2c3d4
 
 **返回字段说明**：
 - `latest_archive_overview`: 最新一个已完成归档的 overview 文本，在 token budget 足够时返回
-- `pre_archive_abstracts`: 保持 API 向下兼容，返回空数组
+- `pre_archive_abstracts`: 在剩余 token budget 内返回最新的已完成归档摘要
 - `messages`: 最新已完成归档之后的所有未完成归档消息，再加上当前 live session 消息
 - `estimatedTokens`: 预估总 token 数
 - `stats`: 统计信息
@@ -363,7 +363,7 @@ ov session get a1b2c3d4
 **token budget 分配策略**：
 1. 先分配给当前活跃消息
 2. 剩余预算优先给最新归档的 overview
-3. pre_archive_abstracts 目前不返回
+3. 剩余预算按从新到旧顺序填充 archive abstracts
 
 **代码入口**：
 - `openviking/session/session.py:Session.get_session_context()` - 核心实现
@@ -434,7 +434,12 @@ ov session get-session-context a1b2c3d4 --token-budget 128000
   "status": "ok",
   "result": {
     "latest_archive_overview": "# Session Summary\n\n**Overview**: User discussed deployment and auth setup.",
-    "pre_archive_abstracts": [],
+    "pre_archive_abstracts": [
+      {
+        "archive_id": "archive_003",
+        "abstract": "部署与认证方案决策"
+      }
+    ],
     "messages": [
       {
         "id": "msg_pending_1",
@@ -457,7 +462,7 @@ ov session get-session-context a1b2c3d4 --token-budget 128000
     "stats": {
       "totalArchives": 2,
       "includedArchives": 1,
-      "droppedArchives": 0,
+      "droppedArchives": 1,
       "failedArchives": 0,
       "activeTokens": 98,
       "archiveTokens": 62

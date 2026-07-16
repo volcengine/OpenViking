@@ -122,7 +122,16 @@ describe("context-engine assemble()", () => {
     expect(result.messages).toEqual([
       {
         role: "user",
-        content: "[Session History Summary]\n# Session Summary\nPreviously discussed repository setup.",
+        content: [
+          {
+            type: "text",
+            text: "[Session History Summary]\n# Session Summary\nPreviously discussed repository setup.",
+          },
+          {
+            type: "text",
+            text: "[Archive Index]\narchive_001: Previously discussed repository setup.",
+          },
+        ],
       },
       {
         role: "assistant",

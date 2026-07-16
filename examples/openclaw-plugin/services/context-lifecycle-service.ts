@@ -167,6 +167,7 @@ type ContextBudgets = {
 const BUDGET_UNLIMITED = -1;
 const ARCHIVE_BUDGET_RATIO = 0.15;
 const ARCHIVE_BUDGET_CAP = 8_000;
+const ARCHIVE_INDEX_LIMIT = 20;
 const RESERVED_MIN = 20_000;
 const RESERVED_RATIO = 0.15;
 const PHASE2_POLL_INTERVAL_MS = 800;
@@ -253,10 +254,13 @@ function buildSystemPromptAddition(): string {
     "  The answer may be expressed with different wording than the question.",
     "  Look for synonyms, related facts, and indirect references.**",
     "- If the Summary mentions a topic but lacks the specific detail asked,",
-    "  use the `ov_archive_search` tool to grep the original archived messages",
-    "  for the exact detail. Try 2-3 different keywords extracted from the question.",
-    "- Only conclude information is unavailable AFTER both checking the Summary",
-    "  thoroughly AND searching the archives with at least 2 keyword variations.",
+    "  use the `ov_archive_search` tool once with one high-signal query made from",
+    "  concrete names, dates, places, objects, or distinctive phrases. Avoid broad",
+    "  category words alone.",
+    "- Run at most one follow-up archive search only when the first result is empty",
+    "  or inconclusive and another concrete entity, date, place, or object is available.",
+    "- Conclude information is unavailable after carefully checking the Summary and",
+    "  those bounded archive searches. Do not loop through generic synonyms.",
   ].join("\n");
 }
 
@@ -265,10 +269,23 @@ function buildInstructionPrompt(): { text: string; tokens: number } {
   return { text, tokens: estimateTextTokens(text) };
 }
 
+function archiveSequence(archiveId: string): number {
+  const match = archiveId.match(/archive_(\d+)/);
+  return match ? Number.parseInt(match[1] ?? "", 10) : -1;
+}
+
+function selectRecentArchiveAbstracts(
+  preAbstracts: Array<{ archive_id: string; abstract: string }>,
+): Array<{ archive_id: string; abstract: string }> {
+  return [...preAbstracts]
+    .sort((a, b) => archiveSequence(b.archive_id) - archiveSequence(a.archive_id))
+    .slice(0, ARCHIVE_INDEX_LIMIT);
+}
+
 function buildArchiveMemory(
   archiveOverview: string | undefined,
-  _preAbstracts: Array<{ archive_id: string; abstract: string }>,
-  _budget: number,
+  preAbstracts: Array<{ archive_id: string; abstract: string }>,
+  budget: number,
   roughEstimate: (messages: AgentMessage[]) => number,
 ): { messages: AgentMessage[]; tokens: number } {
   const messages: AgentMessage[] = [];
@@ -278,6 +295,26 @@ function buildArchiveMemory(
       role: "user",
       content: `[Session History Summary]\n${archiveOverview}`,
     });
+  }
+
+  const archiveIndexLines = selectRecentArchiveAbstracts(preAbstracts)
+    .map((entry) => {
+      const archiveId = String(entry.archive_id ?? "").trim();
+      const abstract = String(entry.abstract ?? "").replace(/\s+/g, " ").trim();
+      return archiveId && abstract ? `${archiveId}: ${abstract}` : "";
+    })
+    .filter(Boolean);
+
+  while (archiveIndexLines.length > 0) {
+    const indexMessage: AgentMessage = {
+      role: "user",
+      content: `[Archive Index]\n${archiveIndexLines.join("\n")}`,
+    };
+    if (budget === BUDGET_UNLIMITED || roughEstimate([...messages, indexMessage]) <= budget) {
+      messages.push(indexMessage);
+      break;
+    }
+    archiveIndexLines.pop();
   }
 
   return { messages, tokens: roughEstimate(messages) };

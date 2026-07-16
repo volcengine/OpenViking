@@ -584,7 +584,7 @@ describe("plugin module seams", () => {
     const grepSessionArchives = vi.fn().mockResolvedValue({
       count: 1,
       matches: [{
-        uri: "viking://session/ov-session-1/history/archive_001#L12",
+        uri: "viking://session/ov-session-1/history/archive_001/messages.jsonl#L12",
         line: 12,
         content: "important command output",
       }],
@@ -629,7 +629,8 @@ describe("plugin module seams", () => {
       archiveId: undefined,
       caseInsensitive: true,
     });
-    expect(searchResult.content[0].text).toContain("Found 1 match(es)");
+    expect(searchResult.content[0].text).toContain("Found 1 relevant match(es)");
+    expect(searchResult.content[0].text).toContain("source: messages.jsonl");
     expect(searchResult.content[0].text).toContain("important command output");
     expect(searchResult.details).toMatchObject({ query: "command", matchCount: 1 });
     expect(recordAndFlush).toHaveBeenCalledWith(expect.objectContaining({
