@@ -9,12 +9,16 @@ directory, which causes silent failures in AGFS and VectorDB.
 import atexit
 import os
 import sys
+import threading
 
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
 LOCK_FILENAME = ".openviking.pid"
+
+_lock_refcounts: dict[str, int] = {}
+_lock_refcounts_guard = threading.Lock()
 
 
 class DataDirectoryLocked(RuntimeError):
@@ -69,12 +73,21 @@ def _is_pid_alive(pid: int) -> bool:
 
 
 def release_data_dir_lock(lock_path: str) -> None:
-    """Remove *lock_path* when it is still owned by the current process."""
-    try:
-        if _read_pid_file(lock_path) == os.getpid():
-            os.remove(lock_path)
-    except OSError:
-        pass
+    """Release one local owner and remove its PID file after the last release."""
+    lock_key = os.path.realpath(os.path.abspath(lock_path))
+    with _lock_refcounts_guard:
+        refcount = _lock_refcounts.get(lock_key, 0)
+        if refcount > 1:
+            _lock_refcounts[lock_key] = refcount - 1
+            return
+        if refcount == 1:
+            del _lock_refcounts[lock_key]
+
+        try:
+            if _read_pid_file(lock_path) == os.getpid():
+                os.remove(lock_path)
+        except OSError:
+            pass
 
 
 def acquire_data_dir_lock(data_dir: str) -> str:
@@ -110,6 +123,10 @@ def acquire_data_dir_lock(data_dir: str) -> str:
     except OSError as exc:
         logger.warning("Could not write PID lock %s: %s", lock_path, exc)
         return lock_path
+
+    lock_key = os.path.realpath(os.path.abspath(lock_path))
+    with _lock_refcounts_guard:
+        _lock_refcounts[lock_key] = _lock_refcounts.get(lock_key, 0) + 1
 
     # Schedule cleanup on exit.
     def _cleanup(*_args: object) -> None:

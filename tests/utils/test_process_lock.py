@@ -54,6 +54,19 @@ def test_release_data_dir_lock_removes_owned_lock(tmp_path: Path):
     assert not Path(lock_path).exists()
 
 
+def test_reentrant_lock_is_removed_only_after_last_release(tmp_path: Path):
+    first_lock_path = acquire_data_dir_lock(str(tmp_path))
+    second_lock_path = acquire_data_dir_lock(str(tmp_path))
+
+    release_data_dir_lock(first_lock_path)
+
+    assert Path(first_lock_path).exists()
+
+    release_data_dir_lock(second_lock_path)
+
+    assert not Path(second_lock_path).exists()
+
+
 def test_release_data_dir_lock_preserves_another_process_lock(tmp_path: Path):
     lock_path = tmp_path / LOCK_FILENAME
     lock_path.write_text("1")
