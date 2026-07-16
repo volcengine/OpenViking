@@ -30,6 +30,9 @@ content_template: |
   ## Evidence
   {{ evidence }}
 
+  ## Situation
+  {{ situation }}
+
   ## Linked Experiences
   {%- for link in links or [] %}
   {%- set target_uri = link.to_uri or "" %}
@@ -39,12 +42,7 @@ content_template: |
   {%- endfor %}
 embedding_template: |-
   {{ case_name }}
-
-  {{ task_signature }}
-
-  {{ input }}
-
-  {{ rubric }}
+  {{ situation }}
 overview_template: |-
   # Cases Overview
   {% for item in items %}
@@ -96,4 +94,17 @@ fields:
       Brief generalized evidence from the commit conversation explaining why this case is useful.
       Write generated natural-language text in {{ language }}.
       Do not include private raw identifiers, exact IDs, personal contact values, or full tool payloads.
+    merge_op: immutable
+
+  - name: situation
+    type: string
+    description: |
+      Generalized, reusable scenario description for semantic retrieval and embedding.
+      Write generated natural-language text in {{ language }}.
+      Describe the task category, user intent, key constraints, and object/effect boundary in 1-3 sentences.
+      Generalize all private identifiers: replace exact reservation IDs, user names, user IDs, dates,
+      amounts, flight numbers, and airport codes with their semantic roles (e.g. "a reservation",
+      "the user", "a future date", "a business-class booking").
+      This field is the primary embedding source; it must be semantically rich and specific to
+      the task pattern, not to the individual instance.
     merge_op: immutable

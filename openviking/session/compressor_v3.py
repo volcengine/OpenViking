@@ -1079,6 +1079,7 @@ def _case_to_memory_fields(case: Case) -> dict[str, Any]:
             sort_keys=True,
         ),
         "evidence": _case_evidence(case),
+        "situation": _case_situation(case),
     }
 
 
@@ -1103,6 +1104,63 @@ def _case_evidence(case: Case) -> str:
     if raw_evidence:
         return str(raw_evidence)
     return "Structured batch training CaseSpec supplied by the training pipeline."
+
+
+def _case_situation(case: Case) -> str:
+    """Generate a generalized scenario description for semantic retrieval.
+
+    In the training fast path there is no LLM, so we extract the
+    "Reason for call" and "Task instructions" sections from the
+    user_query and strip specific identifiers to produce a reusable
+    situation description suitable for embedding.
+    """
+    raw = (case.metadata or {}).get("situation")
+    if raw:
+        return str(raw)
+    user_query = str((case.input or {}).get("user_query") or "")
+    if not user_query:
+        return case.task_signature
+    parts: list[str] = []
+    for label in ("Reason for call", "Task instructions"):
+        marker = f"{label}:"
+        start = user_query.find(marker)
+        if start < 0:
+            continue
+        start += len(marker)
+        # Skip ':', newlines, tabs, spaces after the label
+        while start < len(user_query) and user_query[start] in ":\n\t ":
+            start += 1
+        # Find next section header: \n\t followed by non-tab char
+        end = start
+        while end < len(user_query):
+            if user_query[end] == "\n":
+                if (
+                    end + 1 < len(user_query)
+                    and user_query[end + 1] == "\t"
+                    and end + 2 < len(user_query)
+                    and user_query[end + 2] != "\t"
+                ):
+                    break
+            end += 1
+        text = user_query[start:end].strip()
+        if text:
+            parts.append(text)
+    if not parts:
+        parts.append(user_query[:300])
+    situation = " ".join(parts)
+    # Generalize: replace reservation IDs, user IDs, names, amounts, dates
+    situation = re.sub(r"\b[A-Z0-9]{6}\b", "<reservation_id>", situation)
+    situation = re.sub(r"\b[A-Z]{3}\d{3}\b", "<flight_number>", situation)
+    situation = re.sub(r"\b\w+_\w+_\d{4}\b", "<user_id>", situation)
+    situation = re.sub(r"\$\d+", "<amount>", situation)
+    situation = re.sub(
+        r"\b(May|June|July|August|September|October|November|December)\s+\d{1,2}\b",
+        "<date>",
+        situation,
+    )
+    situation = re.sub(r"\b\d{4}-\d{2}-\d{2}\b", "<date>", situation)
+    situation = re.sub(r"\s+", " ", situation).strip()
+    return situation
 
 
 def _operations_to_cases(operations: ResolvedOperations) -> list[Case]:
@@ -1232,6 +1290,7 @@ def _operation_to_case(op: ResolvedOperation) -> Case | None:
             "source": "session_commit_case_memory",
             "case_uris": list(getattr(op, "uris", []) or []),
             "evidence": str(fields.get("evidence") or ""),
+            "situation": str(fields.get("situation") or ""),
             "memory_fields": fields,
         },
     )
@@ -1878,3 +1937,60 @@ def _commit_policy_snapshot_id(*, session_id: Optional[str], archive_uri: str) -
     if session_id:
         return f"session-commit:{session_id}"
     return f"session-commit:{uuid4().hex}"
+
+
+def _case_situation(case: Case) -> str:
+    """Generate a generalized scenario description for semantic retrieval.
+
+    In the training fast path there is no LLM, so we extract the
+    "Reason for call" and "Task instructions" sections from the
+    user_query and strip specific identifiers to produce a reusable
+    situation description suitable for embedding.
+    """
+    raw = (case.metadata or {}).get("situation")
+    if raw:
+        return str(raw)
+    user_query = str((case.input or {}).get("user_query") or "")
+    if not user_query:
+        return case.task_signature
+    parts: list[str] = []
+    for label in ("Reason for call", "Task instructions"):
+        marker = f"{label}:"
+        start = user_query.find(marker)
+        if start < 0:
+            continue
+        start += len(marker)
+        # Skip ':', newlines, tabs, spaces after the label
+        while start < len(user_query) and user_query[start] in ":\n\t ":
+            start += 1
+        # Find next section header: \n\t followed by non-tab char
+        end = start
+        while end < len(user_query):
+            if user_query[end] == "\n":
+                if (
+                    end + 1 < len(user_query)
+                    and user_query[end + 1] == "\t"
+                    and end + 2 < len(user_query)
+                    and user_query[end + 2] != "\t"
+                ):
+                    break
+            end += 1
+        text = user_query[start:end].strip()
+        if text:
+            parts.append(text)
+    if not parts:
+        parts.append(user_query[:300])
+    situation = " ".join(parts)
+    # Generalize: replace reservation IDs, user IDs, names, amounts, dates
+    situation = re.sub(r"\b[A-Z0-9]{6}\b", "<reservation_id>", situation)
+    situation = re.sub(r"\b[A-Z]{3}\d{3}\b", "<flight_number>", situation)
+    situation = re.sub(r"\b\w+_\w+_\d{4}\b", "<user_id>", situation)
+    situation = re.sub(r"\$\d+", "<amount>", situation)
+    situation = re.sub(
+        r"\b(May|June|July|August|September|October|November|December)\s+\d{1,2}\b",
+        "<date>",
+        situation,
+    )
+    situation = re.sub(r"\b\d{4}-\d{2}-\d{2}\b", "<date>", situation)
+    situation = re.sub(r"\s+", " ", situation).strip()
+    return situation
