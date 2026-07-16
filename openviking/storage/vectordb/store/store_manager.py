@@ -228,14 +228,13 @@ class StoreManager:
         return list(self.iter_all_cands_data())
 
     def iter_all_cands_data(self) -> Iterator[CandidateData]:
-        """Iterate over all candidates without retaining deserialized rows.
+        """Iterate candidates without retaining deserialized full tables.
 
-        The underlying store may still return its encoded rows as one range result,
-        but each potentially large Python-float vector is deserialized only when the
-        caller advances the iterator.  This keeps recovery from holding a second
-        full candidate representation while a dense-search shadow is being packed.
+        The local native store also bounds encoded rows by page. Generic store
+        implementations retain the ``IMutiTableStore.iter_all`` compatibility
+        fallback and may still materialize their encoded table.
         """
-        for _, bytes_data in self.storage.read_all(StoreManager.CandsTable):
+        for _, bytes_data in self.storage.iter_all(StoreManager.CandsTable):
             yield CandidateData.from_bytes(bytes_data)
 
     def clear(self):

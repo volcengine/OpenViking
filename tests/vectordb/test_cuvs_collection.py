@@ -552,6 +552,7 @@ def test_failed_cuvs_recovery_closes_candidate_iterator_and_partial_shadow(monke
     collection.close()
 
     iterator_closed = False
+    original_iter_all_cands_data = StoreManager.iter_all_cands_data
 
     def broken_candidates(_self):
         nonlocal iterator_closed
@@ -582,6 +583,22 @@ def test_failed_cuvs_recovery_closes_candidate_iterator_and_partial_shadow(monke
 
     assert iterator_closed
     assert runtime.closed
+
+    # Release must be complete when the constructor raises: restoring a valid
+    # stream and runtime should allow this same persistent collection to reopen
+    # immediately, without waiting for traceback GC to drop native locks.
+    monkeypatch.setattr(StoreManager, "iter_all_cands_data", original_iter_all_cands_data)
+    patch_cuvs_runtime(monkeypatch)
+    reopened = get_or_create_local_collection(path=path, config=config)
+    try:
+        result = reopened.search_by_vector(
+            "default",
+            dense_vector=[1.0, 0.0, 0.0, 0.0],
+            limit=1,
+        )
+        assert [item.id for item in result.data] == ["persisted"]
+    finally:
+        reopened.close()
 
 
 def test_auto_cuvs_falls_back_then_retries_when_memory_is_available(monkeypatch):

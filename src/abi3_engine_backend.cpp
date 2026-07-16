@@ -1645,6 +1645,33 @@ PyObject* py_store_clear_data(PyObject*, PyObject* args) {
   }
 }
 
+PyObject* store_items_to_python(
+    const std::vector<std::pair<std::string, std::string>>& items) {
+  PyObject* list = PyList_New(static_cast<Py_ssize_t>(items.size()));
+  if (list == nullptr) {
+    return nullptr;
+  }
+  for (Py_ssize_t i = 0; i < static_cast<Py_ssize_t>(items.size()); ++i) {
+    const auto& item = items[static_cast<size_t>(i)];
+    PyObject* tuple = PyTuple_New(2);
+    PyObject* key = PyUnicode_FromStringAndSize(
+        item.first.data(), static_cast<Py_ssize_t>(item.first.size()));
+    PyObject* value = PyBytes_FromStringAndSize(
+        item.second.data(), static_cast<Py_ssize_t>(item.second.size()));
+    if (tuple == nullptr || key == nullptr || value == nullptr) {
+      Py_XDECREF(tuple);
+      Py_XDECREF(key);
+      Py_XDECREF(value);
+      Py_DECREF(list);
+      return nullptr;
+    }
+    PyTuple_SetItem(tuple, 0, key);
+    PyTuple_SetItem(tuple, 1, value);
+    PyList_SetItem(list, i, tuple);
+  }
+  return list;
+}
+
 PyObject* py_store_seek_range(PyObject*, PyObject* args) {
   PyObject* capsule = nullptr;
   const char* start_key = nullptr;
@@ -1661,29 +1688,46 @@ PyObject* py_store_seek_range(PyObject*, PyObject* args) {
   try {
     const auto items = call_without_gil(
         [&]() { return store->seek_range(start_key, end_key); });
-    PyObject* list = PyList_New(static_cast<Py_ssize_t>(items.size()));
-    if (list == nullptr) {
-      return nullptr;
-    }
-    for (Py_ssize_t i = 0; i < static_cast<Py_ssize_t>(items.size()); ++i) {
-      const auto& item = items[static_cast<size_t>(i)];
-      PyObject* tuple = PyTuple_New(2);
-      PyObject* key = PyUnicode_FromStringAndSize(
-          item.first.data(), static_cast<Py_ssize_t>(item.first.size()));
-      PyObject* value = PyBytes_FromStringAndSize(
-          item.second.data(), static_cast<Py_ssize_t>(item.second.size()));
-      if (tuple == nullptr || key == nullptr || value == nullptr) {
-        Py_XDECREF(tuple);
-        Py_XDECREF(key);
-        Py_XDECREF(value);
-        Py_DECREF(list);
-        return nullptr;
-      }
-      PyTuple_SetItem(tuple, 0, key);
-      PyTuple_SetItem(tuple, 1, value);
-      PyList_SetItem(list, i, tuple);
-    }
-    return list;
+    return store_items_to_python(items);
+  } catch (const std::exception& exc) {
+    raise_runtime_error(exc.what());
+    return nullptr;
+  }
+}
+
+PyObject* py_store_seek_range_page(PyObject*, PyObject* args) {
+  PyObject* capsule = nullptr;
+  const char* start_key = nullptr;
+  const char* end_key = nullptr;
+  Py_ssize_t limit = 0;
+  Py_ssize_t max_bytes = 0;
+  int start_exclusive = 0;
+  if (!PyArg_ParseTuple(args, "Ossnnp", &capsule, &start_key, &end_key,
+                        &limit, &max_bytes, &start_exclusive)) {
+    return nullptr;
+  }
+  if (limit <= 0) {
+    raise_value_error("seek_range_page limit must be positive");
+    return nullptr;
+  }
+  if (max_bytes <= 0) {
+    raise_value_error("seek_range_page max_bytes must be positive");
+    return nullptr;
+  }
+
+  auto* store = capsule_to_ptr<vdb::KVStore>(capsule, kStoreCapsuleName);
+  if (store == nullptr) {
+    return nullptr;
+  }
+
+  try {
+    const auto items = call_without_gil([&]() {
+      return store->seek_range_page(start_key, end_key,
+                                    static_cast<size_t>(limit),
+                                    static_cast<size_t>(max_bytes),
+                                    start_exclusive != 0);
+    });
+    return store_items_to_python(items);
   } catch (const std::exception& exc) {
     raise_runtime_error(exc.what());
     return nullptr;
@@ -1745,6 +1789,8 @@ PyMethodDef kModuleMethods[] = {
      "Clear the store."},
     {"_store_seek_range", py_store_seek_range, METH_VARARGS,
      "Read a key range from the store."},
+    {"_store_seek_range_page", py_store_seek_range_page, METH_VARARGS,
+     "Read a bounded page from a key range."},
     {nullptr, nullptr, 0, nullptr},
 };
 

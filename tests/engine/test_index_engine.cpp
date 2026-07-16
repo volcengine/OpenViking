@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 #include "index/index_engine.h"
+#include "store/persist_store.h"
+#include "store/volatile_store.h"
 #include <iostream>
 #include <vector>
 #include <cassert>
@@ -326,9 +328,71 @@ void test_path_bitmap_lifecycle_and_reload() {
   SPDLOG_INFO("[Passed] test_path_bitmap_lifecycle_and_reload");
 }
 
+void expect_paged_store_scan(KVStore& store) {
+  const std::vector<std::string> keys = {
+      "candidate:1", "candidate:10", "candidate:2", "other:1"};
+  const std::vector<std::string> values = {"one", "ten", "two", "other"};
+  if (store.put_data(keys, values) != 0) {
+    SPDLOG_ERROR("Paged store test data add failed");
+    exit(1);
+  }
+
+  const auto first =
+      store.seek_range_page("candidate:", "candidate;", 2, 1024, false);
+  if (first.size() != 2 || first[0].first != "candidate:1" ||
+      first[1].first != "candidate:10") {
+    SPDLOG_ERROR("Paged store first page was incorrect");
+    exit(1);
+  }
+  const auto second =
+      store.seek_range_page(first.back().first, "candidate;", 2, 1024, true);
+  if (second.size() != 1 || second[0].first != "candidate:2") {
+    SPDLOG_ERROR("Paged store exclusive continuation was incorrect");
+    exit(1);
+  }
+  const auto byte_limited =
+      store.seek_range_page("candidate:", "candidate;", 10, 14, false);
+  if (byte_limited.size() != 1 ||
+      byte_limited[0].first != "candidate:1") {
+    SPDLOG_ERROR("Paged store byte budget was not enforced");
+    exit(1);
+  }
+  const auto oversized_first =
+      store.seek_range_page("candidate:", "candidate;", 10, 1, false);
+  if (oversized_first.size() != 1 ||
+      oversized_first[0].first != "candidate:1") {
+    SPDLOG_ERROR("Paged store did not admit one oversized row for progress");
+    exit(1);
+  }
+  const auto full = store.seek_range("candidate:", "candidate;");
+  if (full.size() != 3) {
+    SPDLOG_ERROR("Existing full store scan behavior changed");
+    exit(1);
+  }
+}
+
+void test_paged_store_scan() {
+  SPDLOG_INFO("[Running] test_paged_store_scan...");
+  VolatileStore volatile_store;
+  expect_paged_store_scan(volatile_store);
+
+  const std::string db_path = "test_data_cpp/paged_persist_store";
+  if (std::filesystem::exists(db_path)) {
+    std::filesystem::remove_all(db_path);
+  }
+  std::filesystem::create_directories(db_path);
+  {
+    PersistStore persist_store(db_path);
+    expect_paged_store_scan(persist_store);
+  }
+  std::filesystem::remove_all(db_path);
+  SPDLOG_INFO("[Passed] test_paged_store_scan");
+}
+
 int main() {
   init_logging("INFO", "stdout", "[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
   test_basic_workflow();
   test_path_bitmap_lifecycle_and_reload();
+  test_paged_store_scan();
   return 0;
 }

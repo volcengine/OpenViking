@@ -126,6 +126,7 @@ class Schema:
     def get_field_order(self) -> list[FieldMeta]:
         return self.field_orders
 
+
 def _get_row_value(row_data: Any, field_name: str, default_value: Any) -> Any:
     if isinstance(row_data, dict):
         return row_data.get(field_name, default_value)
@@ -509,6 +510,28 @@ def build_abi3_exports(backend: Any) -> dict[str, Any]:
 
         def seek_range(self, start_key: str, end_key: str) -> list[tuple[str, bytes]]:
             return list(self._backend._store_seek_range(self._handle, start_key, end_key))
+
+        def seek_range_page(
+            self,
+            start_key: str,
+            end_key: str,
+            limit: int,
+            max_bytes: int,
+            start_exclusive: bool = False,
+        ) -> list[tuple[str, bytes]]:
+            seek_page = getattr(self._backend, "_store_seek_range_page", None)
+            if seek_page is None:
+                raise NotImplementedError("This native engine does not support paged store scans")
+            return list(
+                seek_page(
+                    self._handle,
+                    start_key,
+                    end_key,
+                    limit,
+                    max_bytes,
+                    start_exclusive,
+                )
+            )
 
     class PersistStore(_StoreBase):
         def __init__(self, path: str):
