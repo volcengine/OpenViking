@@ -85,7 +85,7 @@ def tmp_with_drafts(tmp_path: Path) -> Path:
 @pytest.fixture
 def registry() -> ParserRegistry:
     """Default parser registry (includes markdown, pdf, html, text, etc.)."""
-    return ParserRegistry(register_optional=False)
+    return ParserRegistry()
 
 
 # ---------------------------------------------------------------------------

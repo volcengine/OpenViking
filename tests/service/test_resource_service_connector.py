@@ -172,9 +172,7 @@ async def test_connector_import_persists_task_before_remote_submission(
         tracker.create.assert_awaited_once()
         raise RuntimeError("submission failed")
 
-    connector_client = SimpleNamespace(
-        submit_doc_add=AsyncMock(side_effect=fail_submission)
-    )
+    connector_client = SimpleNamespace(submit_doc_add=AsyncMock(side_effect=fail_submission))
     _install_connector_dependencies(monkeypatch, tracker, connector_client)
 
     with pytest.raises(RuntimeError, match="submission failed"):
@@ -289,6 +287,34 @@ async def test_add_resource_falls_back_for_shared_source_with_exact_to(
     assert result == {"root_uri": "standard-pipeline"}
     service._add_resource_via_connector.assert_not_awaited()
     service.enqueue_git_add_resource.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_git_background_task_enters_private_execution_chain(
+    monkeypatch,
+    ctx,
+    service,
+):
+    tracker = _task_tracker()
+    monkeypatch.setattr(
+        "openviking.service.task_tracker.get_task_tracker",
+        lambda: tracker,
+    )
+    service.add_resource = AsyncMock(side_effect=AssertionError("public route re-entered"))
+    service._add_resource = AsyncMock(return_value={"status": "success", "root_uri": "root"})
+    resource_lock = SimpleNamespace(close=AsyncMock())
+
+    await service._run_add_resource_task(
+        "task-1",
+        ctx=ctx,
+        add_kwargs={"path": "git://example.com/repo.git", "ctx": ctx},
+        resource_lock=resource_lock,
+    )
+
+    service.add_resource.assert_not_awaited()
+    assert service._add_resource.await_args.kwargs["route_source"] is False
+    tracker.complete.assert_awaited_once()
+    resource_lock.close.assert_awaited_once()
 
 
 @pytest.mark.asyncio

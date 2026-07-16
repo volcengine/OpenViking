@@ -34,7 +34,21 @@ class ParserRouter:
         self._parser_registry = parser_registry
         self._understanding_api = None
 
-    def should_use_understanding_api(self, source_path: Union[str, Path]) -> bool:
+    def understanding_api_enabled(self) -> bool:
+        """Return whether the external parser is enabled."""
+        try:
+            from openviking_cli.utils.config.open_viking_config import get_openviking_config
+
+            parser_api = getattr(get_openviking_config(), "parser_api", None)
+        except Exception:
+            return False
+        return bool(parser_api and getattr(parser_api, "enable", False))
+
+    def should_use_understanding_api(
+        self,
+        source_path: Union[str, Path],
+        resolved_extension: str = "",
+    ) -> bool:
         """
         Decide whether to use UnderstandingAPI.
         """
@@ -49,9 +63,13 @@ class ParserRouter:
         if not parser_api or not getattr(parser_api, "enable", False):
             return False
 
-        ext = self._extract_extension(source_path)
+        ext = self._normalize_extension(resolved_extension) or self._extract_extension(source_path)
         extensions = getattr(parser_api, "extensions", None) or []
         return ext in extensions
+
+    @staticmethod
+    def _normalize_extension(extension: str) -> str:
+        return str(extension or "").lower().lstrip(".")
 
     def _extract_extension(self, source_path: Union[str, Path]) -> str:
         source = str(source_path)
@@ -66,7 +84,19 @@ class ParserRouter:
         """
         source_path = self._extract_source_path(source)
 
-        if self.should_use_understanding_api(source_path):
+        parser_backend = kwargs.pop("parser_backend", None)
+        if parser_backend not in {None, "internal", "understanding"}:
+            raise ValueError(f"Unknown parser backend: {parser_backend}")
+
+        use_understanding = parser_backend == "understanding" or (
+            parser_backend is None
+            and self.should_use_understanding_api(
+                source_path,
+                resolved_extension=str(kwargs.get("resolved_extension") or ""),
+            )
+        )
+
+        if use_understanding:
             display = source_path
             if isinstance(source_path, str) and source_path.startswith(("http://", "https://")):
                 display = "<url>"

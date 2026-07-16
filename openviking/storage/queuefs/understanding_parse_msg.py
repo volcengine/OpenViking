@@ -36,6 +36,7 @@ class UnderstandingParseMsg:
     enforce_public_remote_targets: bool = False
     args: Dict[str, Any] = field(default_factory=dict)
     source_name: Optional[str] = None
+    resolved_extension: str = ""
 
     def __init__(
         self,
@@ -62,6 +63,7 @@ class UnderstandingParseMsg:
         enforce_public_remote_targets: bool = False,
         args: Optional[Dict[str, Any]] = None,
         source_name: Optional[str] = None,
+        resolved_extension: str = "",
     ):
         self.id = str(uuid4())
         self.task_id = task_id
@@ -86,6 +88,7 @@ class UnderstandingParseMsg:
         self.enforce_public_remote_targets = enforce_public_remote_targets
         self.args = args or {}
         self.source_name = source_name
+        self.resolved_extension = str(resolved_extension or "")
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -137,6 +140,7 @@ class UnderstandingParseMsg:
             enforce_public_remote_targets=bool(data.get("enforce_public_remote_targets", False)),
             args=data.get("args") if isinstance(data.get("args"), dict) else {},
             source_name=data.get("source_name"),
+            resolved_extension=str(data.get("resolved_extension", "")),
         )
         if data.get("id"):
             obj.id = str(data["id"])

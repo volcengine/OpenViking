@@ -33,6 +33,7 @@ from openviking_cli.utils import get_logger
 from openviking_cli.utils.storage import StoragePath
 
 if TYPE_CHECKING:
+    from openviking.parse.accessors.base import LocalResource
     from openviking.parse.vlm import VLMProcessor
 
 logger = get_logger(__name__)
@@ -92,6 +93,28 @@ class ResourceProcessor:
             )
         return self._media_processor
 
+    async def prepare_resource(
+        self,
+        path: str,
+        ctx: RequestContext,
+        *,
+        allow_local_path_resolution: bool = True,
+        **kwargs,
+    ) -> "LocalResource":
+        """Resolve a source once before selecting an async parser route."""
+        with get_viking_fs().bind_request_context(ctx):
+            return await self._get_media_processor().prepare(
+                path,
+                allow_local_path_resolution=allow_local_path_resolution,
+                **kwargs,
+            )
+
+    def understanding_api_enabled(self) -> bool:
+        return self._get_media_processor().understanding_api_enabled()
+
+    def should_use_understanding_api(self, resource: "LocalResource") -> bool:
+        return self._get_media_processor().should_use_understanding_api(resource)
+
     async def build_index(
         self, resource_uris: List[str], ctx: RequestContext, **kwargs
     ) -> Dict[str, Any]:
@@ -118,6 +141,7 @@ class ResourceProcessor:
         parent: Optional[str] = None,
         summarize: bool = False,
         stage_callback: Optional[Callable[[str], Any]] = None,
+        prepared_resource: Optional["LocalResource"] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -168,6 +192,7 @@ class ResourceProcessor:
                     parse_result = await media_processor.process(
                         source=path,
                         instruction=effective_instruction,
+                        prepared_resource=prepared_resource,
                         **kwargs,
                     )
                 result["source_path"] = parse_result.source_path or path

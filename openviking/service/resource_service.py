@@ -64,6 +64,7 @@ from openviking_cli.exceptions import (
 from openviking_cli.utils import get_logger
 
 if TYPE_CHECKING:
+    from openviking.parse.accessors.base import LocalResource
     from openviking.resource.watch_manager import WatchManager
     from openviking.resource.watch_scheduler import WatchScheduler
     from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
@@ -158,14 +159,6 @@ class ResourceService:
         if not self._watch_scheduler:
             return None
         return self._watch_scheduler.watch_manager
-
-    def _get_parser_router(self):
-        if not hasattr(self, "_parser_router"):
-            from openviking.parse.parser_router import ParserRouter
-            from openviking.parse.registry import get_registry
-
-            self._parser_router = ParserRouter(get_registry())
-        return self._parser_router
 
     def _sanitize_watch_processor_kwargs(self, processor_kwargs: Dict[str, Any]) -> Dict[str, Any]:
         sanitized: Dict[str, Any] = {}
@@ -449,8 +442,9 @@ class ResourceService:
                 user_id=ctx.user.user_id,
                 stage="queued",
             )
-            result = await self.add_resource(
+            result = await self._add_resource(
                 wait=True,
+                route_source=False,
                 resource_lock=resource_lock,
                 stage_callback=_set_stage,
                 **add_kwargs,
@@ -538,9 +532,6 @@ class ResourceService:
         )
         return root_uri, resource_lock
 
-    def _should_use_understanding_api(self, path: str) -> bool:
-        return self._get_parser_router().should_use_understanding_api(path)
-
     @staticmethod
     def _target_doc_name(
         path: str,
@@ -611,6 +602,52 @@ class ResourceService:
         args: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
+        """Route a public resource-add request to its execution chain."""
+        return await self._add_resource(
+            path=path,
+            ctx=ctx,
+            to=to,
+            parent=parent,
+            reason=reason,
+            instruction=instruction,
+            wait=wait,
+            timeout=timeout,
+            build_index=build_index,
+            summarize=summarize,
+            watch_interval=watch_interval,
+            skip_watch_management=skip_watch_management,
+            allow_local_path_resolution=allow_local_path_resolution,
+            enforce_public_remote_targets=enforce_public_remote_targets,
+            resource_lock=resource_lock,
+            stage_callback=stage_callback,
+            args=args,
+            route_source=True,
+            **kwargs,
+        )
+
+    async def _add_resource(
+        self,
+        path: str,
+        ctx: RequestContext,
+        to: Optional[str] = None,
+        parent: Optional[str] = None,
+        reason: str = "",
+        instruction: str = "",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        build_index: bool = True,
+        summarize: bool = False,
+        watch_interval: float = 0,
+        skip_watch_management: bool = False,
+        allow_local_path_resolution: bool = True,
+        enforce_public_remote_targets: bool = False,
+        resource_lock: Optional[LockLease] = None,
+        stage_callback: Optional[Callable[[str], Any]] = None,
+        args: Optional[Dict[str, Any]] = None,
+        *,
+        route_source: bool,
+        **kwargs,
+    ) -> Dict[str, Any]:
         """Add resource to OpenViking (only supports resources scope).
 
         Args:
@@ -663,7 +700,7 @@ class ResourceService:
                 parent = default_parent
                 kwargs["create_parent"] = True
 
-        if self._should_use_connector(
+        if route_source and self._should_use_connector(
             path,
             ctx=ctx,
             to=to,
@@ -684,7 +721,7 @@ class ResourceService:
                 **kwargs,
             )
 
-        if not wait and is_git_repo_url(path):
+        if route_source and not wait and is_git_repo_url(path):
             return await self.enqueue_git_add_resource(
                 path=path,
                 ctx=ctx,
@@ -717,6 +754,7 @@ class ResourceService:
         telemetry.set("resource.flags.summarize", summarize)
         telemetry.set("resource.flags.watch_enabled", watch_enabled)
 
+        prepared_resource: Optional["LocalResource"] = None
         try:
             target = ContentTargetSpec.from_fields(
                 ctx=ctx,
@@ -734,9 +772,21 @@ class ResourceService:
             if (
                 not wait
                 and not is_git_repo_url(path)
-                and self._should_use_understanding_api(path)
                 and not allow_local_path_resolution
                 and self._resource_processor is not None
+                and self._resource_processor.understanding_api_enabled()
+            ):
+                prepared_resource = await self._resource_processor.prepare_resource(
+                    path,
+                    ctx,
+                    allow_local_path_resolution=allow_local_path_resolution,
+                    **kwargs,
+                )
+
+            if (
+                prepared_resource is not None
+                and self._resource_processor is not None
+                and self._resource_processor.should_use_understanding_api(prepared_resource)
             ):
                 from openviking.service.task_tracker import get_task_tracker
                 from openviking.storage.queuefs import QueueManager, get_queue_manager
@@ -744,12 +794,21 @@ class ResourceService:
                     UnderstandingParseMsg,
                 )
 
-                source_name = kwargs.get("source_name")
+                resolved_extension = str(prepared_resource.meta.get("resolved_extension") or "")
+                source_name = (
+                    kwargs.get("source_name")
+                    or prepared_resource.meta.get("original_filename")
+                    or prepared_resource.meta.get("resolved_name")
+                )
                 source_info = _ResourceSourceInfo(
                     source_name=source_name,
                     source_path=path,
-                    source_format="file",
+                    source_format=resolved_extension.lstrip(".") or "file",
                 )
+                # ponytail: queued remote inputs are fetched again by the worker;
+                # persist the prepared file only if duplicate transfer becomes material.
+                prepared_resource.cleanup()
+                prepared_resource = None
                 doc_name = self._target_doc_name(path, source_name, source_info)
                 source_path = source_info.source_path or source_name or path
                 (
@@ -834,6 +893,7 @@ class ResourceService:
                         enforce_public_remote_targets=enforce_public_remote_targets,
                         args=normalized_args.processor_kwargs,
                         source_name=source_name,
+                        resolved_extension=resolved_extension,
                         lock_handoff=lock_handoff.to_dict() if lock_handoff else None,
                     )
                     qm = get_queue_manager()
@@ -892,8 +952,10 @@ class ResourceService:
                 summarize=summarize,
                 stage_callback=stage_callback,
                 allow_local_path_resolution=allow_local_path_resolution,
+                prepared_resource=prepared_resource,
                 **kwargs,
             )
+            prepared_resource = None
 
             if result.get("status") == "error":
                 return result
@@ -1018,6 +1080,8 @@ class ResourceService:
             )
             raise
         finally:
+            if prepared_resource is not None:
+                prepared_resource.cleanup()
             telemetry.set(
                 "resource.request.duration_ms",
                 round((time.perf_counter() - request_start) * 1000, 3),
@@ -1272,7 +1336,9 @@ class ResourceService:
                 "wait=true (Connector imports run asynchronously; poll the returned task_id)"
             )
         if reason:
-            unsupported.append("reason (Connector imports cannot preserve resource-reason semantics)")
+            unsupported.append(
+                "reason (Connector imports cannot preserve resource-reason semantics)"
+            )
         if instruction:
             unsupported.append("instruction")
         if not build_index:

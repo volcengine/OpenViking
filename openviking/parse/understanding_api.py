@@ -81,24 +81,41 @@ class UnderstandingAPI(BaseParser):
         """
         source_str = str(source)
         original_source = kwargs.get("original_source")
-        candidate = original_source if isinstance(original_source, str) else source_str
+        resolved_extension = str(kwargs.get("resolved_extension") or "").lower().lstrip(".")
+        display_name = kwargs.get("resource_name") or kwargs.get("source_name")
 
         url: Optional[str] = None
         local_path: Optional[Path] = None
-        if isinstance(candidate, str) and candidate.startswith(("http://", "https://")):
-            url = candidate
-            parsed = urlparse(url)
-            doc_name = Path(parsed.path).stem or "resource"
-            doc_type = Path(parsed.path).suffix.lower().lstrip(".") or "unknown"
+        source_path = Path(source_str)
+        if source_path.is_file():
+            local_path = source_path
+            candidate = source_str
+        elif source_str.startswith(("http://", "https://")):
+            url = source_str
+            candidate = source_str
+        elif isinstance(original_source, str) and original_source.startswith(
+            ("http://", "https://")
+        ):
+            url = original_source
+            candidate = original_source
         else:
-            local_path = Path(candidate)
+            candidate = source_str
+            local_path = source_path
+
+        if url is not None:
+            parsed = urlparse(url)
+            inferred_name = Path(parsed.path).name
+        else:
+            inferred_name = local_path.name if local_path is not None else ""
             if not local_path.is_file():
                 raise ValueError(
                     "UnderstandingAPI supports http(s) URLs or local files. "
                     "Got an invalid local file path."
                 )
-            doc_name = local_path.stem or "resource"
-            doc_type = local_path.suffix.lower().lstrip(".") or "unknown"
+
+        effective_name = str(display_name or inferred_name or "resource")
+        doc_name = Path(effective_name).stem or "resource"
+        doc_type = resolved_extension or Path(candidate).suffix.lower().lstrip(".") or "unknown"
 
         task_meta: Dict[str, Any] = {}
 
@@ -167,7 +184,7 @@ class UnderstandingAPI(BaseParser):
 
         result = ParseResult(
             root=root_node,
-            source_path=url or source_str,
+            source_path=original_source if isinstance(original_source, str) else url or source_str,
             source_format=doc_type,
             temp_dir_path=temp_dir_path,
             parser_name="UnderstandingAPI",

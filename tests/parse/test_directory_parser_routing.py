@@ -46,7 +46,7 @@ from openviking.parse.registry import ParserRegistry
 @pytest.fixture
 def registry() -> ParserRegistry:
     """Default registry (no optional parsers like ImageParser)."""
-    return ParserRegistry(register_optional=False)
+    return ParserRegistry()
 
 
 # -- directory tree that covers every parser type ----------------------------

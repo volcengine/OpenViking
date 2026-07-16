@@ -4,8 +4,7 @@
 
 import asyncio
 import json
-
-from contextlib import suppress
+from contextlib import nullcontext
 from typing import Any, Dict, Optional
 
 from openviking.observability.context import (
@@ -38,8 +37,8 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
         reason: str,
         source_name: Optional[str],
     ) -> None:
-        from openviking.telemetry.resource_summary import unregister_wait_telemetry
         from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+        from openviking.telemetry.resource_summary import unregister_wait_telemetry
 
         task_tracker = get_task_tracker()
         request_wait_tracker = get_request_wait_tracker()
@@ -176,6 +175,7 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                         enforce_public_remote_targets=msg.enforce_public_remote_targets,
                         args=new_args,
                         source_name=msg.source_name,
+                        resolved_extension=msg.resolved_extension,
                     )
                     await qm.enqueue(QueueManager.EXTERNAL_PARSE, retry_msg.to_dict())
                     self.report_requeue()
@@ -213,7 +213,7 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
             telemetry = OperationTelemetry(operation="noop", enabled=False)
             telemetry.telemetry_id = telemetry_id
 
-        with bind_execution_context(), (bind_telemetry(telemetry) if telemetry else suppress()):
+        with bind_execution_context(), bind_telemetry(telemetry) if telemetry else nullcontext():
             try:
                 await task_tracker.start(
                     msg.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
@@ -252,6 +252,8 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                     exclude=msg.exclude,
                     directly_upload_media=msg.directly_upload_media,
                     args=msg.args,
+                    parser_backend="understanding",
+                    resolved_extension=msg.resolved_extension,
                     skip_watch_management=True,
                     watch_interval=0,
                     **kwargs,
@@ -293,12 +295,14 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                     root_uri = result.get("root_uri")
                     if root_uri:
                         try:
-                            link_result = await self._resource_memory_link_service.on_resource_added(
-                                ctx=ctx,
-                                resource_uri=root_uri,
-                                reason=msg.reason,
-                                source_name=msg.source_name,
-                                timeout=None,
+                            link_result = (
+                                await self._resource_memory_link_service.on_resource_added(
+                                    ctx=ctx,
+                                    resource_uri=root_uri,
+                                    reason=msg.reason,
+                                    source_name=msg.source_name,
+                                    timeout=None,
+                                )
                             )
                             result["memory_linking"] = link_result
                         except Exception as exc:

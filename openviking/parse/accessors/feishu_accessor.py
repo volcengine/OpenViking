@@ -4,7 +4,6 @@
 Feishu/Lark Accessor.
 
 Fetches Feishu/Lark cloud documents using the lark-oapi SDK.
-This is the DataAccessor layer extracted from FeishuParser.
 
 Note: This accessor requires the `lark-oapi` package.
 Included by default in `openviking[bot]` installation.
@@ -295,7 +294,7 @@ class FeishuAccessor(DataAccessor):
         """
         Fetch a Feishu document and convert to Markdown.
 
-        This method extracts and adapts the logic from FeishuParser.parse().
+        The fetched document is materialized as Markdown for the standard parser chain.
         """
         doc_type, token = self._parse_feishu_url(url)
         title = None
