@@ -239,6 +239,12 @@ def test_retriever_initializes_rerank_client(monkeypatch):
     assert retriever._rerank_client is fake_client
 
 
+def test_rerank_max_input_tokens_accepts_zero_or_at_least_128():
+    assert RerankConfig(max_input_tokens=0).max_input_tokens == 0
+    with pytest.raises(ValueError, match="max_input_tokens"):
+        RerankConfig(max_input_tokens=127)
+
+
 @pytest.mark.asyncio
 async def test_retrieve_uses_rerank_scores_in_thinking_mode(monkeypatch):
     fake_client = FakeRerankClient([0.95, 0.05, 0.11, 0.95])
@@ -287,6 +293,27 @@ async def test_rerank_scores_preserves_fallbacks_for_empty_documents(monkeypatch
 
     assert scores == [0.95, 0.8, 0.7, 0.05]
     assert fake_client.calls == [("hello", ["root A", "root D"])]
+
+
+@pytest.mark.asyncio
+async def test_rerank_scores_does_not_truncate_by_default(monkeypatch):
+    oversized_document = "summary-start " + ("填充内容" * 600) + " relevant-tail"
+    fake_client = FakeRerankClient([0.95])
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: fake_client,
+    )
+
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=DummyEmbedder(),
+        rerank_config=RerankConfig(ak="ak", sk="sk"),
+    )
+
+    await retriever._rerank_scores("query", [oversized_document], [0.2])
+
+    assert retriever.rerank_max_input_tokens == 0
+    assert fake_client.calls == [("query", [oversized_document])]
 
 
 @pytest.mark.asyncio

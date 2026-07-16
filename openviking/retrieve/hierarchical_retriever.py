@@ -75,7 +75,7 @@ class HierarchicalRetriever:
         self.vector_store = storage
         self.embedder = embedder
         self.rerank_config = rerank_config
-        self.rerank_max_input_tokens = rerank_config.max_input_tokens if rerank_config else 2048
+        self.rerank_max_input_tokens = rerank_config.max_input_tokens if rerank_config else 0
         self.retrieval_config = retrieval_config or RetrievalConfig()
         self.hotness_alpha = self.retrieval_config.hotness_alpha
         self.score_propagation_alpha = self.retrieval_config.score_propagation_alpha
@@ -351,21 +351,22 @@ class HierarchicalRetriever:
         if not self._rerank_client or not documents:
             return fallback_scores
 
-        query_tokens = estimate_text_tokens(query)
-        max_query_tokens = self.rerank_max_input_tokens * 3 // 4
-        rerank_query = (
-            truncate_text_to_token_budget(query, max_query_tokens)
-            if query_tokens > max_query_tokens
-            else query
-        )
-        document_tokens = self.rerank_max_input_tokens - estimate_text_tokens(rerank_query)
+        rerank_query = query
         rerank_documents = [
-            (index, truncate_text_to_token_budget(document, document_tokens))
-            for index, document in enumerate(documents)
-            if document.strip()
+            (index, document) for index, document in enumerate(documents) if document.strip()
         ]
         if not rerank_documents:
             return fallback_scores
+
+        if self.rerank_max_input_tokens > 0:
+            max_query_tokens = self.rerank_max_input_tokens * 3 // 4
+            if estimate_text_tokens(query) > max_query_tokens:
+                rerank_query = truncate_text_to_token_budget(query, max_query_tokens)
+            document_tokens = self.rerank_max_input_tokens - estimate_text_tokens(rerank_query)
+            rerank_documents = [
+                (index, truncate_text_to_token_budget(document, document_tokens))
+                for index, document in rerank_documents
+            ]
 
         try:
             scores = await asyncio.to_thread(
