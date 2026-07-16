@@ -111,6 +111,7 @@ class CollectionSchemas:
                 {"FieldName": "search_tags", "FieldType": "list<string>"},
                 {"FieldName": "abstract", "FieldType": "string"},
                 {"FieldName": "content", "FieldType": "text"},
+                {"FieldName": "embedding_text", "FieldType": "string"},
                 {"FieldName": "account_id", "FieldType": "string"},
                 {"FieldName": "owner_user_id", "FieldType": "string"},
             ]
@@ -229,6 +230,14 @@ def _collection_has_content_fulltext(meta: Dict[str, Any]) -> bool:
     return has_content and has_content_fulltext
 
 
+def _collection_has_embedding_text(meta: Dict[str, Any]) -> bool:
+    return any(
+        field.get("FieldName") == "embedding_text"
+        and field.get("FieldType") == "string"
+        for field in meta.get("Fields", [])
+    )
+
+
 def _encode_collection_description(
     base_description: str,
     embedding_meta: Dict[str, Any],
@@ -279,9 +288,11 @@ async def init_context_collection(storage) -> bool:
         and getattr(getattr(vectordb_cfg, "volcengine", None), "api_key", None)
     )
     if uses_volcengine_data_plane:
-        logger.info(
+        logger.warning(
             "Skip collection bootstrap for volcengine data-plane backend; "
-            "collection/index/schema must be pre-created out of band"
+            "collection/index/schema must be pre-created out of band. "
+            "Ensure the pre-created schema includes the 'embedding_text' string field; "
+            "otherwise memory reranking falls back to abstract text."
         )
         return False
     schema = CollectionSchemas.context_collection(
@@ -317,6 +328,14 @@ async def init_context_collection(storage) -> bool:
             "Missing 'content' field or FullText config. "
             "grep engine=auto will fall back to fs. "
             "Recreate the collection to enable vikingdb-based grep."
+        )
+
+    if "Fields" in existing_meta and not _collection_has_embedding_text(existing_meta):
+        logger.warning(
+            "Existing collection schema has no 'embedding_text' string field. "
+            "Memory reranking will fall back to abstract text. "
+            "Recreate or update the collection schema, then re-ingest/replay memories "
+            "to enable embedding-template reranking."
         )
 
     if _embedding_metadata_compatible(existing_embedding_meta, embedding_meta):

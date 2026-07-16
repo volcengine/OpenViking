@@ -169,6 +169,30 @@ class TestContextInit:
         assert ctx.vectorize is not None
         assert ctx.vectorize.text == "Test"
 
+    def test_to_dict_exports_embedding_text_from_meta(self):
+        """embedding_text is exported as a top-level storage field."""
+        ctx = Context(
+            uri="viking://user/test/memories/events/test.md",
+            abstract="plain memory",
+            context_type="memory",
+            meta={"embedding_text": "templated memory"},
+        )
+
+        assert ctx.to_dict()["embedding_text"] == "templated memory"
+
+    def test_from_dict_imports_embedding_text_into_meta(self):
+        """The storage field survives reconstruction as context metadata."""
+        ctx = Context.from_dict(
+            {
+                "uri": "viking://user/test/memories/events/test.md",
+                "abstract": "plain memory",
+                "context_type": "memory",
+                "embedding_text": "templated memory",
+            }
+        )
+
+        assert ctx.meta["embedding_text"] == "templated memory"
+
 
 class TestContextContextType:
     """Test Context context_type inference."""

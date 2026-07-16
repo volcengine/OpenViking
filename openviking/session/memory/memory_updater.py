@@ -1052,6 +1052,7 @@ class MemoryUpdater:
                     abstract=abstract,
                     context_type="memory",
                     level=ContextLevel.DETAIL,
+                    meta={"embedding_text": embedding_text},
                     user=ctx.user,
                     account_id=ctx.account_id,
                 )

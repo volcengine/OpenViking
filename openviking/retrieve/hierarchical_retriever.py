@@ -246,7 +246,7 @@ class HierarchicalRetriever:
             if self._rerank_client and mode == RetrieverMode.THINKING:
                 directory_scores = await self._rerank_scores(
                     query.query,
-                    [str(r.get("abstract", "")) for r in global_results],
+                    [self._build_rerank_document(r) for r in global_results],
                     directory_scores,
                 )
 
@@ -375,6 +375,32 @@ class HierarchicalRetriever:
             normalized_scores[index] = self._finite_score(score, fallback_scores[index])
         return normalized_scores
 
+    @staticmethod
+    def _candidate_embedding_text(candidate: Dict[str, Any]) -> str:
+        value = candidate.get("embedding_text")
+        if value:
+            return str(value)
+        meta = candidate.get("meta")
+        if isinstance(meta, dict) and meta.get("embedding_text"):
+            return str(meta["embedding_text"])
+        return ""
+
+    def _build_rerank_document(self, candidate: Dict[str, Any]) -> str:
+        """Return the document text seen by rerank for a candidate."""
+        if candidate.get("context_type") == "memory":
+            return self._candidate_embedding_text(candidate) or str(
+                candidate.get("abstract", "")
+            )
+        return str(candidate.get("abstract", ""))
+
+    def _llm_context_text(self, candidate: Dict[str, Any]) -> str:
+        """Return the text exposed upstream as the matched context abstract."""
+        if candidate.get("context_type") == "memory":
+            return self._candidate_embedding_text(candidate) or str(
+                candidate.get("abstract", "")
+            )
+        return str(candidate.get("abstract", ""))
+
     async def _recursive_search(
         self,
         vector_proxy: VikingDBManagerProxy,
@@ -480,7 +506,7 @@ class HierarchicalRetriever:
 
                 query_scores = [self._finite_score(r.get("_score", 0.0)) for r in results]
                 if self._rerank_client and mode == RetrieverMode.THINKING:
-                    documents = [str(r.get("abstract", "")) for r in results]
+                    documents = [self._build_rerank_document(r) for r in results]
                     query_scores = await self._rerank_scores(query, documents, query_scores)
 
                 for r, score in zip(results, query_scores, strict=True):
@@ -595,7 +621,7 @@ class HierarchicalRetriever:
                     if c.get("context_type")
                     else ContextType.RESOURCE,
                     level=level,
-                    abstract=c.get("abstract", ""),
+                    abstract=self._llm_context_text(c),
                     category=c.get("category", ""),
                     score=final_score,
                     relations=relations,
