@@ -482,6 +482,24 @@ def build_abi3_exports(backend: Any) -> dict[str, Any]:
                 payload = self._backend._index_engine_evaluate_filter(self._handle, dsl)
             return FilterResult.from_backend(payload)
 
+        def evaluate_filter_for_routing(self, dsl: str, native_threshold: int) -> FilterResult:
+            evaluate_for_routing = getattr(
+                self._backend,
+                "_index_engine_evaluate_filter_for_routing",
+                None,
+            )
+            if evaluate_for_routing is None:
+                return self.evaluate_filter(
+                    dsl,
+                    max_cached_candidates=native_threshold,
+                )
+            payload = evaluate_for_routing(
+                self._handle,
+                dsl,
+                native_threshold,
+            )
+            return FilterResult.from_backend(payload)
+
         def dump(self, path: str) -> int:
             return int(self._backend._index_engine_dump(self._handle, path))
 

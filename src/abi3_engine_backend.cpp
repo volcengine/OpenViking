@@ -1429,6 +1429,32 @@ PyObject* py_index_engine_evaluate_filter_cached(PyObject*, PyObject* args) {
   }
 }
 
+PyObject* py_index_engine_evaluate_filter_for_routing(PyObject*,
+                                                      PyObject* args) {
+  PyObject* capsule = nullptr;
+  const char* dsl = nullptr;
+  unsigned long long native_threshold = 0;
+  if (!PyArg_ParseTuple(args, "OsK", &capsule, &dsl, &native_threshold)) {
+    return nullptr;
+  }
+
+  auto* engine = capsule_to_ptr<vdb::IndexEngine>(capsule, kIndexCapsuleName);
+  if (engine == nullptr) {
+    return nullptr;
+  }
+
+  try {
+    const vdb::FilterResult result = call_without_gil([&]() {
+      return engine->evaluate_filter_for_routing(
+          dsl, static_cast<uint64_t>(native_threshold));
+    });
+    return build_filter_result(result);
+  } catch (const std::exception& exc) {
+    raise_runtime_error(exc.what());
+    return nullptr;
+  }
+}
+
 PyObject* py_index_engine_dump(PyObject*, PyObject* args) {
   PyObject* capsule = nullptr;
   const char* path = nullptr;
@@ -1769,6 +1795,9 @@ PyMethodDef kModuleMethods[] = {
     {"_index_engine_evaluate_filter_cached",
      py_index_engine_evaluate_filter_cached, METH_VARARGS,
      "Evaluate and optionally retain a native scalar filter bitmap."},
+    {"_index_engine_evaluate_filter_for_routing",
+     py_index_engine_evaluate_filter_for_routing, METH_VARARGS,
+     "Evaluate a scalar filter for an adaptive native/GPU route decision."},
     {"_index_engine_dump", py_index_engine_dump, METH_VARARGS,
      "Dump index state to disk."},
     {"_index_engine_get_state", py_index_engine_get_state, METH_VARARGS,

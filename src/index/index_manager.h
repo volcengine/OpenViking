@@ -26,6 +26,12 @@ class IndexManager {
                               uint64_t max_cached_candidates,
                               FilterResult& result) = 0;
 
+  // A narrow result may omit bitset_words because adaptive mode will route it
+  // to native search. A zero threshold retains evaluate_filter semantics.
+  virtual int evaluate_filter_for_routing(const std::string& dsl,
+                                          uint64_t native_threshold,
+                                          FilterResult& result) = 0;
+
   virtual int add_data(const std::vector<AddDataRequest>& data_list) = 0;
 
   virtual int delete_data(const std::vector<DeleteDataRequest>& data_list) = 0;

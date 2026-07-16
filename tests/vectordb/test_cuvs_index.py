@@ -37,6 +37,8 @@ class FakeCuVSRuntime:
         self.free_memory_bytes = 1 << 60
         self.total_memory_bytes = 1 << 60
         self.release_count = 0
+        self.close_count = 0
+        self.close_error = None
 
     def build(self, dataset):
         self.dataset = [list(vector) for vector in dataset]
@@ -77,6 +79,11 @@ class FakeCuVSRuntime:
         return False
 
     def close(self):
+        self.close_count += 1
+        if self.close_error is not None:
+            error = self.close_error
+            self.close_error = None
+            raise error
         self.closed = True
 
 
@@ -373,6 +380,20 @@ def delta(label, vector, **fields):
     import json
 
     return DeltaRecord(label=label, vector=vector, fields=json.dumps(fields))
+
+
+def wait_for_preflight_participants(index, expected, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with index._lock:
+            if any(flight.participants >= expected for flight in index._preflight_flights.values()):
+                return
+        time.sleep(0.001)
+    raise AssertionError(f"Timed out waiting for {expected} preflight participants")
+
+
+class _PreflightAbort(BaseException):
+    """Model an asynchronous owner abort that ordinary Exception misses."""
 
 
 def test_cuvs_host_shadow_is_immutable_compact_fp32():
@@ -1302,6 +1323,245 @@ def test_auto_mode_caches_native_route_for_selective_filter():
     assert runtime.prepare_filter_count == 0
 
 
+@pytest.mark.parametrize(
+    ("evaluation", "expected_route"),
+    [(([], 1), 1), (([0b11], 2), None)],
+    ids=["narrow-native", "broad-gpu"],
+)
+def test_auto_mode_same_key_preflight_is_singleflight(evaluation, expected_route):
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"auto_filter_native_threshold": 1},
+        runtime=runtime,
+        auto_memory=True,
+    )
+    index.add_candidates(
+        [
+            candidate(10, [1.0, 0.0], account_id="a"),
+            candidate(20, [0.0, 1.0], account_id="a"),
+        ]
+    )
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    start = threading.Barrier(4)
+    resolver_started = threading.Event()
+    release_resolver = threading.Event()
+    resolver_calls = 0
+
+    def resolve(_filters):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        resolver_started.set()
+        assert release_resolver.wait(timeout=5)
+        return evaluation
+
+    def invoke():
+        start.wait(timeout=5)
+        return index.preflight_native_count(
+            filter_a,
+            resolve,
+            lambda _labels: None,
+        )
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [executor.submit(invoke) for _ in range(4)]
+        assert resolver_started.wait(timeout=5)
+        wait_for_preflight_participants(index, 4)
+        release_resolver.set()
+        routes = [future.result(timeout=5) for future in futures]
+
+    assert routes == [expected_route] * 4
+    assert resolver_calls == 1
+    assert not index._preflight_flights
+
+
+@pytest.mark.parametrize(
+    "error_type",
+    [RuntimeError, _PreflightAbort],
+    ids=["exception", "base-exception"],
+)
+def test_auto_mode_same_key_preflight_broadcasts_error_and_allows_retry(error_type):
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"auto_filter_native_threshold": 1},
+        runtime=runtime,
+        auto_memory=True,
+    )
+    index.add_candidates([candidate(10, [1.0, 0.0], account_id="a")])
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    start = threading.Barrier(4)
+    resolver_started = threading.Event()
+    release_resolver = threading.Event()
+    resolver_calls = 0
+
+    def failing_resolve(_filters):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        resolver_started.set()
+        assert release_resolver.wait(timeout=5)
+        raise error_type("preflight failed")
+
+    def invoke():
+        start.wait(timeout=5)
+        return index.preflight_native_count(
+            filter_a,
+            failing_resolve,
+            lambda _labels: None,
+        )
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [executor.submit(invoke) for _ in range(4)]
+        assert resolver_started.wait(timeout=5)
+        wait_for_preflight_participants(index, 4)
+        release_resolver.set()
+        for future in futures:
+            with pytest.raises(error_type, match="preflight failed"):
+                future.result(timeout=5)
+
+    assert resolver_calls == 1
+    assert not index._preflight_flights
+    assert (
+        index.preflight_native_count(
+            filter_a,
+            lambda _filters: ([], 1),
+            lambda _labels: None,
+        )
+        == 1
+    )
+
+
+def test_auto_mode_mutation_wakes_same_key_preflight_waiters_and_drops_old_result():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"auto_filter_native_threshold": 1},
+        runtime=runtime,
+        auto_memory=True,
+    )
+    index.add_candidates([candidate(10, [1.0, 0.0], account_id="a")])
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    start = threading.Barrier(2)
+    resolver_started = threading.Event()
+    release_resolver = threading.Event()
+    resolver_calls = 0
+
+    def resolve(_filters):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        resolver_started.set()
+        assert release_resolver.wait(timeout=5)
+        return [], 1
+
+    def invoke():
+        start.wait(timeout=5)
+        return index.preflight_native_count(
+            filter_a,
+            resolve,
+            lambda _labels: None,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(invoke) for _ in range(2)]
+        assert resolver_started.wait(timeout=5)
+        wait_for_preflight_participants(index, 2)
+        index.add_candidates([candidate(20, [0.0, 1.0], account_id="a")])
+
+        deadline = time.monotonic() + 5
+        while not any(future.done() for future in futures) and time.monotonic() < deadline:
+            time.sleep(0.001)
+        assert any(future.done() for future in futures)
+
+        release_resolver.set()
+        assert [future.result(timeout=5) for future in futures] == [None, None]
+
+    assert resolver_calls == 1
+    assert not index._preflight_flights
+    assert (
+        index.preflight_native_count(
+            filter_a,
+            lambda _filters: ([0b11], 2),
+            lambda _labels: None,
+        )
+        is None
+    )
+
+
+def test_auto_mode_close_wakes_same_key_preflight_waiters():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"auto_filter_native_threshold": 1},
+        runtime=runtime,
+        auto_memory=True,
+    )
+    index.add_candidates([candidate(10, [1.0, 0.0], account_id="a")])
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    start = threading.Barrier(2)
+    resolver_started = threading.Event()
+    release_resolver = threading.Event()
+
+    def resolve(_filters):
+        resolver_started.set()
+        assert release_resolver.wait(timeout=5)
+        return [], 1
+
+    def invoke():
+        start.wait(timeout=5)
+        return index.preflight_native_count(
+            filter_a,
+            resolve,
+            lambda _labels: None,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(invoke) for _ in range(2)]
+        assert resolver_started.wait(timeout=5)
+        wait_for_preflight_participants(index, 2)
+        index.close()
+        assert runtime.closed
+        assert not index._preflight_flights
+        release_resolver.set()
+        assert [future.result(timeout=5) for future in futures] == [None, None]
+
+
+def test_close_retries_runtime_cleanup_and_rejects_new_searches():
+    runtime = FakeCuVSRuntime()
+    runtime.close_error = RuntimeError("close failed")
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={},
+        config={},
+        runtime=runtime,
+    )
+
+    with pytest.raises(RuntimeError, match="close failed"):
+        index.close()
+    assert not index._close_complete
+    with pytest.raises(RuntimeError, match="dense index is closed"):
+        index.search([1.0, 0.0], 1, None)
+
+    index.close()
+    index.close()
+    assert index._close_complete
+    assert runtime.closed
+    assert runtime.close_count == 2
+
+
 def test_auto_mode_preflights_different_filters_concurrently():
     runtime = FakeCuVSRuntime()
     index = CuVSDenseIndex(
@@ -1533,6 +1793,105 @@ def test_auto_mode_wide_filter_reuses_preflight_bitmap_after_build():
     assert labels == [10, 20]
     assert resolve_count == 1
     assert runtime.build_count == 1
+
+
+@pytest.mark.parametrize("words", [[], [0xFFFFFFFF]], ids=["empty", "short"])
+def test_auto_mode_rejects_incomplete_gpu_filter_bitset(words):
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"auto_filter_native_threshold": 1},
+        runtime=runtime,
+        auto_memory=True,
+    )
+    index.add_candidates([candidate(label, [1.0, 0.0], account_id="a") for label in range(33)])
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+
+    with pytest.raises(RuntimeError, match="incomplete bitset for GPU routing"):
+        index.preflight_native_count(
+            filter_a,
+            lambda _filters: (words, 33),
+            lambda _labels: None,
+        )
+
+
+def test_explicit_mode_rejects_short_gpu_bitset_below_auto_threshold():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"auto_filter_native_threshold": 100},
+        runtime=runtime,
+        auto_memory=False,
+    )
+    index.add_candidates([candidate(label, [1.0, 0.0], account_id="a") for label in range(33)])
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+
+    with pytest.raises(RuntimeError, match="incomplete bitset for GPU routing"):
+        index.search(
+            [1.0, 0.0],
+            1,
+            filter_a,
+            lambda _filters: ([0b1], 1),
+            lambda _labels: None,
+        )
+
+
+def test_auto_mode_accepts_omitted_bitset_for_native_route():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"auto_filter_native_threshold": 1},
+        runtime=runtime,
+        auto_memory=True,
+    )
+    index.add_candidates([candidate(label, [1.0, 0.0], account_id="a") for label in range(33)])
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+
+    assert (
+        index.preflight_native_count(
+            filter_a,
+            lambda _filters: ([], 1),
+            lambda _labels: None,
+        )
+        == 1
+    )
+
+
+def test_auto_mode_does_not_validate_stale_filter_projection_after_mutation():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"auto_filter_native_threshold": 1},
+        runtime=runtime,
+        auto_memory=True,
+    )
+    index.add_candidates([candidate(label, [1.0, 0.0], account_id="a") for label in range(32)])
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+
+    def resolve_and_mutate(_filters):
+        index.add_candidates([candidate(1000, [0.0, 1.0], account_id="a")])
+        return [0xFFFFFFFF], 32
+
+    assert (
+        index.preflight_native_count(
+            filter_a,
+            resolve_and_mutate,
+            lambda _labels: None,
+        )
+        is None
+    )
 
 
 def test_auto_mode_retains_native_filter_token_for_selective_route():

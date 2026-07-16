@@ -279,6 +279,21 @@ class IndexEngineProxy:
         )
         return result.bitset_words, result.eligible_count, result.native_filter_token
 
+    def evaluate_filter_for_routing(
+        self,
+        filters: Dict[str, Any],
+        native_threshold: int,
+    ) -> Tuple[List[int], int, int]:
+        """Evaluate only the projection needed for an adaptive route decision."""
+
+        if not self.index_engine:
+            raise RuntimeError("Index engine not initialized")
+        result = self.index_engine.evaluate_filter_for_routing(
+            json.dumps(filters),
+            native_threshold=native_threshold,
+        )
+        return result.bitset_words, result.eligible_count, result.native_filter_token
+
     def drop(self):
         """Release the index engine resources.
 
@@ -808,7 +823,7 @@ class LocalIndex(IIndex):
                                     ) * 1000.0
                                 native_count = self.dense_search.preflight_native_count(
                                     filters,
-                                    self._evaluate_cuvs_filter,
+                                    self._evaluate_cuvs_filter_for_routing,
                                     self.engine_proxy.set_filter_layout,
                                     telemetry=cuvs_telemetry,
                                 )
@@ -904,6 +919,11 @@ class LocalIndex(IIndex):
     ) -> Tuple[List[int], List[float]]:
         if self.dense_search is None or self.engine_proxy is None:
             raise RuntimeError("cuVS search requires an initialized index")
+        filter_resolver = (
+            self._evaluate_cuvs_filter_for_routing
+            if self._auto_cuvs
+            else self._evaluate_cuvs_filter
+        )
         if self._auto_background_rebuild:
             queue_started = time.perf_counter()
             with self._dense_search_lock.read():
@@ -917,7 +937,7 @@ class LocalIndex(IIndex):
                     query_vector,
                     limit,
                     filters,
-                    self._evaluate_cuvs_filter,
+                    filter_resolver,
                     self.engine_proxy.set_filter_layout,
                     telemetry=telemetry,
                 )
@@ -931,7 +951,7 @@ class LocalIndex(IIndex):
                         query_vector,
                         limit,
                         filters,
-                        self._evaluate_cuvs_filter,
+                        filter_resolver,
                         self.engine_proxy.set_filter_layout,
                         telemetry=telemetry,
                     )
@@ -945,7 +965,7 @@ class LocalIndex(IIndex):
                         query_vector,
                         limit,
                         filters,
-                        self._evaluate_cuvs_filter,
+                        filter_resolver,
                         self.engine_proxy.set_filter_layout,
                         telemetry=telemetry,
                     )
@@ -993,6 +1013,16 @@ class LocalIndex(IIndex):
         return self.engine_proxy.evaluate_filter(
             filters,
             max_cached_candidates=self.dense_search.native_filter_threshold(filters),
+        )
+
+    def _evaluate_cuvs_filter_for_routing(
+        self, filters: Dict[str, Any]
+    ) -> Tuple[List[int], int, int]:
+        if self.dense_search is None or self.engine_proxy is None:
+            raise RuntimeError("cuVS filter evaluation requires an initialized index")
+        return self.engine_proxy.evaluate_filter_for_routing(
+            filters,
+            native_threshold=self.dense_search.native_filter_threshold(filters),
         )
 
     @staticmethod

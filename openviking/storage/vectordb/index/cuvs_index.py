@@ -26,7 +26,7 @@ import traceback
 from array import array
 from collections import OrderedDict
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import (
     Any,
     Callable,
@@ -748,6 +748,17 @@ class _ResolvedNativeFilter:
     native_filter_token: int = 0
 
 
+@dataclass
+class _NativeFilterPreflightFlight:
+    generation: int
+    done: threading.Event = field(default_factory=threading.Event)
+    route_count: Optional[int] = None
+    eligible_count: int = 0
+    error: Optional[BaseException] = None
+    stale: bool = False
+    participants: int = 1
+
+
 class CuVSDenseIndex:
     """Mutable OpenViking label space backed by a lazily rebuilt cuVS index."""
 
@@ -832,6 +843,7 @@ class CuVSDenseIndex:
         self._dirty = True
         self._filter_cache: OrderedDict[str, _CachedFilter] = OrderedDict()
         self._preflight_filter_cache: OrderedDict[str, _ResolvedNativeFilter] = OrderedDict()
+        self._preflight_flights: Dict[Tuple[int, str], _NativeFilterPreflightFlight] = {}
         self._lock = threading.RLock()
         self._idle_condition = threading.Condition(self._lock)
         self._active_searches = 0
@@ -839,6 +851,8 @@ class CuVSDenseIndex:
         self._filter_layout_lock = threading.Lock()
         self._records_generation = 0
         self._filter_layout_generation = -1
+        self._closed = False
+        self._close_complete = False
         logger.info(
             "Initialized cuVS dense index: algorithm=%s metric=%s dimension=%d",
             self.algorithm,
@@ -930,9 +944,19 @@ class CuVSDenseIndex:
     def _invalidate(self) -> None:
         self._records_generation += 1
         self._dirty = True
+        self._cancel_preflight_flights_()
         with self._runtime_device_scope():
             self._filter_cache.clear()
         self._preflight_filter_cache.clear()
+
+    def _cancel_preflight_flights_(self) -> None:
+        """Mark in-flight projections stale and wake waiters under ``_lock``."""
+
+        flights = tuple(self._preflight_flights.values())
+        self._preflight_flights.clear()
+        for flight in flights:
+            flight.stale = True
+            flight.done.set()
 
     @staticmethod
     def _filter_cache_key(filters: Mapping[str, Any]) -> Optional[str]:
@@ -978,6 +1002,50 @@ class CuVSDenseIndex:
         while len(self._preflight_filter_cache) > capacity:
             self._preflight_filter_cache.popitem(last=False)
 
+    def _lookup_preflight_route_(
+        self,
+        cache_key: Optional[str],
+    ) -> Optional[Tuple[Optional[int], int]]:
+        cached = self._get_cached_filter(cache_key)
+        if cached is not None:
+            return (
+                cached.eligible_count if cached.route_native else None,
+                cached.eligible_count,
+            )
+        resolved = self._get_preflight_filter(cache_key)
+        if resolved is None:
+            return None
+        return (
+            resolved.eligible_count if resolved.route_native else None,
+            resolved.eligible_count,
+        )
+
+    def _store_preflight_route_(
+        self,
+        cache_key: Optional[str],
+        resolved: _ResolvedNativeFilter,
+    ) -> Tuple[Optional[int], int, bool]:
+        existing = self._lookup_preflight_route_(cache_key)
+        if existing is not None:
+            route_count, eligible_count = existing
+            return route_count, eligible_count, True
+        if not resolved.route_native and resolved.eligible_count != 0:
+            self._cache_preflight_filter(cache_key, resolved)
+            return None, resolved.eligible_count, False
+        cached = _CachedFilter(
+            prepared=None,
+            eligible_count=resolved.eligible_count,
+            route_native=resolved.route_native,
+            native_threshold=resolved.native_threshold,
+            native_filter_token=resolved.native_filter_token,
+        )
+        self._cache_filter(cache_key, cached)
+        return (
+            cached.eligible_count if cached.route_native else None,
+            cached.eligible_count,
+            False,
+        )
+
     def native_filter_threshold(self, filters: Mapping[str, Any]) -> int:
         return (
             self.auto_path_filter_native_threshold
@@ -1000,6 +1068,8 @@ class CuVSDenseIndex:
         with self._filter_layout_lock:
             with self._lock:
                 generation = self._records_generation
+                if self._closed:
+                    return None
                 if self._filter_layout_generation == generation:
                     return generation
                 ordered_labels = list(self._records)
@@ -1007,7 +1077,7 @@ class CuVSDenseIndex:
             native_filter_layout_registrar(ordered_labels)
 
             with self._lock:
-                if self._records_generation != generation:
+                if self._closed or self._records_generation != generation:
                     return None
                 self._filter_layout_generation = generation
                 return generation
@@ -1027,6 +1097,8 @@ class CuVSDenseIndex:
                 return None
             cache_key = self._filter_cache_key(filters)
             with self._lock:
+                if self._closed:
+                    return None
                 if telemetry is not None:
                     telemetry.filter_kind = (
                         "path"
@@ -1035,52 +1107,105 @@ class CuVSDenseIndex:
                     )
                     telemetry.records_generation = self._records_generation
                     telemetry.index_size = len(self._records)
-                cached = self._get_cached_filter(cache_key)
-                if cached is not None:
-                    if telemetry is not None:
-                        telemetry.filter_cache_hit = True
-                        telemetry.eligible_count = cached.eligible_count
-                    return cached.eligible_count if cached.route_native else None
                 native_threshold = self.native_filter_threshold(filters)
                 if native_threshold <= 0:
                     return None
-                preflight_cached = self._get_preflight_filter(cache_key)
-                if preflight_cached is not None:
+                cached_route = self._lookup_preflight_route_(cache_key)
+                if cached_route is not None:
+                    route_count, eligible_count = cached_route
                     if telemetry is not None:
                         telemetry.filter_cache_hit = True
-                        telemetry.eligible_count = preflight_cached.eligible_count
-                    return (
-                        preflight_cached.eligible_count if preflight_cached.route_native else None
-                    )
+                        telemetry.eligible_count = eligible_count
+                    return route_count
 
+            # Preserve the existing _filter_layout_lock -> _lock order. Flight
+            # coordination starts only after layout registration releases both.
             generation = self._ensure_native_filter_layout(native_filter_layout_registrar)
             if generation is None:
                 return None
-            resolved = self._resolve_native_filter(filters, native_filter_resolver)
-            if telemetry is not None:
-                telemetry.eligible_count = resolved.eligible_count
 
-            with self._lock:
-                if self._records_generation != generation:
-                    return None
-                cached = self._get_cached_filter(cache_key)
-                if cached is not None:
+            flight_key: Optional[Tuple[int, str]] = None
+            flight: Optional[_NativeFilterPreflightFlight] = None
+            is_owner = True
+            try:
+                with self._lock:
+                    if self._closed or self._records_generation != generation:
+                        return None
+                    cached_route = self._lookup_preflight_route_(cache_key)
+                    if cached_route is not None:
+                        route_count, eligible_count = cached_route
+                        if telemetry is not None:
+                            telemetry.filter_cache_hit = True
+                            telemetry.eligible_count = eligible_count
+                        return route_count
+                    if cache_key is not None:
+                        flight_key = (generation, cache_key)
+                        flight = self._preflight_flights.get(flight_key)
+                        if flight is None:
+                            flight = _NativeFilterPreflightFlight(generation=generation)
+                            self._preflight_flights[flight_key] = flight
+                        else:
+                            flight.participants += 1
+                            is_owner = False
+
+                if not is_owner:
+                    # Never wait while holding _lock. Invalidation and close can
+                    # therefore mark this flight stale and wake every waiter.
+                    flight.done.wait()
+                    with self._lock:
+                        stale = (
+                            flight.stale or self._closed or self._records_generation != generation
+                        )
+                        error = flight.error
+                        route_count = flight.route_count
+                        eligible_count = flight.eligible_count
+                    if stale:
+                        return None
+                    if error is not None:
+                        raise error
                     if telemetry is not None:
                         telemetry.filter_cache_hit = True
-                        telemetry.eligible_count = cached.eligible_count
-                    return cached.eligible_count if cached.route_native else None
-                if not resolved.route_native and resolved.eligible_count != 0:
-                    self._cache_preflight_filter(cache_key, resolved)
-                    return None
-                cached = _CachedFilter(
-                    prepared=None,
-                    eligible_count=resolved.eligible_count,
-                    route_native=resolved.route_native,
-                    native_threshold=resolved.native_threshold,
-                    native_filter_token=resolved.native_filter_token,
-                )
-                self._cache_filter(cache_key, cached)
-                return cached.eligible_count if cached.route_native else None
+                        telemetry.eligible_count = eligible_count
+                    return route_count
+
+                # _resolve_native_filter only snapshots state under _lock; the
+                # potentially expensive native resolver itself runs unlocked.
+                resolved = self._resolve_native_filter(filters, native_filter_resolver)
+                with self._lock:
+                    stale = (
+                        self._closed
+                        or self._records_generation != generation
+                        or (flight is not None and flight.stale)
+                    )
+                    if flight is not None and self._preflight_flights.get(flight_key) is flight:
+                        self._preflight_flights.pop(flight_key, None)
+                    if stale:
+                        if flight is not None:
+                            flight.stale = True
+                            flight.done.set()
+                        return None
+                    route_count, eligible_count, cache_hit = self._store_preflight_route_(
+                        cache_key,
+                        resolved,
+                    )
+                    if flight is not None:
+                        flight.route_count = route_count
+                        flight.eligible_count = eligible_count
+                        flight.done.set()
+            except BaseException as exc:
+                if is_owner and flight is not None:
+                    with self._lock:
+                        if self._preflight_flights.get(flight_key) is flight:
+                            self._preflight_flights.pop(flight_key, None)
+                        if not flight.stale:
+                            flight.error = exc
+                        flight.done.set()
+                raise
+
+            if telemetry is not None:
+                telemetry.filter_cache_hit = cache_hit
+                telemetry.eligible_count = eligible_count
+            return route_count
         finally:
             if telemetry is not None:
                 telemetry.preflight_ms += (time.perf_counter() - started) * 1000.0
@@ -1090,19 +1215,42 @@ class CuVSDenseIndex:
         filters: Mapping[str, Any],
         native_filter_resolver: NativeFilterResolver,
     ) -> _ResolvedNativeFilter:
+        with self._lock:
+            projection_generation = self._records_generation
+            projection_layout_generation = self._filter_layout_generation
+            projection_row_count = len(self._records)
         evaluation = native_filter_resolver(filters)
         if len(evaluation) == 2:
             words, eligible_count = evaluation
             native_filter_token = 0
         else:
             words, eligible_count, native_filter_token = evaluation
+        bitset_words = tuple(int(word) for word in words)
+        eligible_count = int(eligible_count)
         native_threshold = self.native_filter_threshold(filters)
         route_native = (
             self.auto_memory and native_threshold > 0 and eligible_count <= native_threshold
         )
+        if not route_native and eligible_count > 0:
+            # Resolver work intentionally runs outside the records lock. Only
+            # enforce the ABI against the same registered layout snapshot;
+            # callers discard the result when a concurrent mutation wins.
+            with self._lock:
+                projection_is_stable = (
+                    projection_layout_generation == projection_generation
+                    and self._records_generation == projection_generation
+                    and self._filter_layout_generation == projection_generation
+                )
+            required_words = (projection_row_count + 31) // 32
+            if projection_is_stable and len(bitset_words) < required_words:
+                raise RuntimeError(
+                    "Native filter resolver returned an incomplete bitset for GPU routing: "
+                    f"got {len(bitset_words)} words for {projection_row_count} rows "
+                    f"(expected at least {required_words})"
+                )
         return _ResolvedNativeFilter(
-            bitset_words=tuple(int(word) for word in words),
-            eligible_count=int(eligible_count),
+            bitset_words=bitset_words,
+            eligible_count=eligible_count,
             route_native=route_native,
             native_threshold=native_threshold,
             native_filter_token=int(native_filter_token),
@@ -1383,6 +1531,8 @@ class CuVSDenseIndex:
         if self.auto_memory and native_filter_layout_registrar is not None:
             self._ensure_native_filter_layout(native_filter_layout_registrar)
         with self._lock:
+            if self._closed:
+                raise RuntimeError("cuVS dense index is closed")
             if telemetry is not None:
                 telemetry.filter_kind = (
                     "path"
@@ -1525,6 +1675,13 @@ class CuVSDenseIndex:
 
     def close(self) -> None:
         with self._lock:
+            if self._close_complete:
+                return
+            if not self._closed:
+                self._closed = True
+                self._records_generation += 1
+                self._filter_layout_generation = -1
+                self._cancel_preflight_flights_()
             while self._active_searches:
                 self._idle_condition.wait()
             with self._runtime_device_scope():
@@ -1537,5 +1694,4 @@ class CuVSDenseIndex:
                     # A failed recovery can otherwise keep this partially packed
                     # host shadow alive through the constructor traceback.
                     self._records.clear()
-                    self._records_generation += 1
-                    self._filter_layout_generation = -1
+            self._close_complete = True
