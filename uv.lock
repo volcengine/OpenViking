@@ -3633,7 +3633,6 @@ dependencies = [
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-instrumentation-asyncio" },
     { name = "opentelemetry-sdk" },
-    { name = "openviking-sdk" },
     { name = "pathspec" },
     { name = "pdfminer-six" },
     { name = "pdfplumber" },
@@ -3843,7 +3842,6 @@ requires-dist = [
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.14" },
     { name = "opentelemetry-instrumentation-asyncio", specifier = ">=0.61b0" },
     { name = "opentelemetry-sdk", specifier = ">=1.14" },
-    { name = "openviking-sdk", specifier = ">=0.1.1" },
     { name = "pandas", marker = "extra == 'benchmark'", specifier = ">=2.0.0" },
     { name = "pandas", marker = "extra == 'eval'", specifier = ">=2.0.0" },
     { name = "pandas", marker = "extra == 'test'", specifier = ">=2.0.0" },
@@ -3916,18 +3914,6 @@ provides-extras = ["test", "opengauss", "dev", "doc", "eval", "gemini", "gemini-
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=9.0.2" }]
-
-[[package]]
-name = "openviking-sdk"
-version = "0.1.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "httpx" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/b0/d2/1638f2d9592a87e2350a5d663db46b2bab8fff57b79f688a3ed63da069a1/openviking_sdk-0.1.2.tar.gz", hash = "sha256:673370c7df89fa7f7c6708e05251450e1cb736c5b94d1ba87ff18cd40d51eff8", size = 26700, upload-time = "2026-06-22T06:12:06.241Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/2d/c7/f21f7899a8902bbc9b2f8bfc6f60eb0b64addf44fc71b76f0c72241183f6/openviking_sdk-0.1.2-py3-none-any.whl", hash = "sha256:9e4c719d0f3f84dd686ffce45b80e8730c815ce6e4da94b94416307c679caa5f", size = 16904, upload-time = "2026-06-22T06:12:04.866Z" },
-]
 
 [[package]]
 name = "orjson"
