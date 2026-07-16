@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Filesystem endpoints for OpenViking HTTP Server."""
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, Query
 from pydantic import BaseModel
@@ -15,7 +15,8 @@ from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
-from openviking.server.routers.content import SetTagsRequest, set_tags as content_set_tags
+from openviking.server.routers.content import SetTagsRequest
+from openviking.server.routers.content import set_tags as content_set_tags
 from openviking.storage import VikingDBManagerProxy
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
@@ -64,6 +65,11 @@ async def ls(
     show_all_hidden: bool = Query(False, description="List all hidden files, like -a"),
     node_limit: int = Query(1000, description="Maximum number of nodes to list"),
     limit: Optional[int] = Query(None, description="Alias for node_limit"),
+    sort_by: Optional[Literal["name", "mtime"]] = Query(
+        None,
+        description="Sort directory and file groups before applying node_limit",
+    ),
+    sort_order: Literal["asc", "desc"] = Query("asc", description="Sort direction"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """List directory contents."""
@@ -81,6 +87,8 @@ async def ls(
             abs_limit=abs_limit,
             show_all_hidden=show_all_hidden,
             node_limit=actual_node_limit,
+            sort_by=sort_by,
+            sort_order=sort_order,
         )
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")

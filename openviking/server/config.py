@@ -137,12 +137,15 @@ class OTelExporterConfig(BaseModel):
         model_config = {"extra": "forbid"}
 
     enabled: bool = False
-    protocol: str = "grpc"  # "grpc" or "http"
+    protocol: str = "grpc"  # "grpc", "http", or "local" for traces
     tls: TLSConfig = Field(default_factory=TLSConfig)
     endpoint: str = "localhost:4317"  # gRPC default: 4317; HTTP default: 4318
     service_name: str = "openviking-server"
     export_interval_ms: int = 10000
     headers: Dict[str, str] = Field(default_factory=dict)
+    local_path: str = "~/.openviking/logs/traces.jsonl"
+    local_rotation_mb: int = Field(default=40, gt=0)
+    local_backup_count: int = Field(default=2, ge=0)
 
     model_config = {"extra": "forbid"}
 
@@ -184,6 +187,26 @@ class UsageAuditConfig(BaseModel):
     audit_retention_per_account: int = Field(1000, ge=0)
     timezone: str = "local"
     inventory_ttl_seconds: float = Field(10.0, ge=0)
+
+    model_config = {"extra": "forbid"}
+
+
+class UsageReporterSinkConfig(BaseModel):
+    """Usage reporter sink configuration."""
+
+    type: Literal["custom"] = "custom"
+    class_path: Optional[str] = None
+    config: Dict[str, object] = Field(default_factory=dict)
+
+    model_config = {"extra": "forbid"}
+
+
+class UsageReporterConfig(BaseModel):
+    """Usage event reporter configuration."""
+
+    enabled: bool = False
+    extractors: List[Literal["memory_usage"]] = Field(default_factory=lambda: ["memory_usage"])
+    sinks: List[UsageReporterSinkConfig] = Field(default_factory=list)
 
     model_config = {"extra": "forbid"}
 
@@ -252,6 +275,7 @@ class ServerConfig(BaseModel):
     encryption_enabled: bool = False  # Whether file-level AES encryption is enabled
     api_key_hashing_enabled: bool = False  # Whether API key Argon2id hashing is enabled (default: false, rely on file encryption)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    usage_reporter: UsageReporterConfig = Field(default_factory=UsageReporterConfig)
     # Public-facing base URL emitted in MCP-issued upload instructions. See
     # ``openviking.server.mcp_endpoint._resolve_public_base_url`` for the full
     # resolution chain: env var > this field > X-Forwarded-Host/Proto > Host header

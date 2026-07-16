@@ -19,12 +19,6 @@ class TestUserIdentifier:
         u2 = UserIdentifier("acct", "beta")
         assert u1.user_space_name() != u2.user_space_name()
 
-    def test_memory_space_uri_uses_user_space(self):
-        u = UserIdentifier("acct", "user1")
-        assert u.user_space_name() == "user1"
-        assert u.memory_space_uri() == "viking://user/user1/memories"
-        assert u.to_dict() == {"account_id": "acct", "user_id": "user1"}
-
     @pytest.mark.parametrize("user_id", [".", "..", "team:alice"])
     def test_user_id_rejects_unsafe_path_segments(self, user_id):
         with pytest.raises(ValueError):

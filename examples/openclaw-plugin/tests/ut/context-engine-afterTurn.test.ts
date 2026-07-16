@@ -221,7 +221,7 @@ describe("context-engine afterTurn()", () => {
     );
   });
 
-  it("passes sanitized senderId as role_id", async () => {
+  it("does not attribute user messages to the sender in assistant mode", async () => {
     const { engine, client } = makeEngine();
 
     await engine.afterTurn!({
@@ -233,7 +233,8 @@ describe("context-engine afterTurn()", () => {
     });
 
     expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
-    expect(client.addSessionMessage.mock.calls[0][5]).toBe("telegram_12345");
+    expect(client.addSessionMessage.mock.calls[0][3]).toBeUndefined();
+    expect(client.addSessionMessage.mock.calls[0][5]).toBeUndefined();
   });
 
   it("sanitizes <relevant-memories> from user content but not from assistant", async () => {
@@ -436,7 +437,7 @@ describe("context-engine afterTurn()", () => {
     expect(assistantParts.map(p => p.text).join(" ")).toContain("export const x = 1");
   });
 
-  it("passes agentId to addSessionMessage", async () => {
+  it("does not pass actor peer to addSessionMessage", async () => {
     const { engine, client } = makeEngine();
 
     await engine.afterTurn!({
@@ -447,8 +448,7 @@ describe("context-engine afterTurn()", () => {
     });
 
     expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
-    const agentId = client.addSessionMessage.mock.calls[0][3] as string;
-    expect(agentId).toBe("test-agent");
+    expect(client.addSessionMessage.mock.calls[0][3]).toBeUndefined();
   });
 
   it("checks pending tokens after addSessionMessage", async () => {

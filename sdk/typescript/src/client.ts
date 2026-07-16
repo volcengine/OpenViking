@@ -422,6 +422,8 @@ export class OpenVikingClient {
         abs_limit: options.absLimit ?? 256,
         show_all_hidden: options.showAllHidden ?? false,
         node_limit: options.nodeLimit ?? 1000,
+        sort_by: options.sortBy,
+        sort_order: options.sortOrder,
       },
     });
   }
@@ -529,13 +531,14 @@ export class OpenVikingClient {
   /** Rebuild indexes for a URI. */
   reindex(
     uri: string,
-    options: { mode?: string; wait?: boolean } = {},
+    options: { mode?: string; wait?: boolean; dryRun?: boolean } = {},
   ): Promise<JsonObject> {
     return this.request("POST", "/api/v1/content/reindex", {
       body: {
         uri: normalizeURI(uri),
         mode: options.mode ?? "vectors_only",
         wait: options.wait ?? true,
+        dry_run: options.dryRun ?? false,
       },
     });
   }

@@ -133,8 +133,8 @@ Once connected, OpenViking exposes 16 tools:
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
-| `find` | Fast semantic retrieval without session context | `query`, `target_uri` (optional), `limit`, `min_score`, `level` (optional) |
-| `search` | Deep semantic retrieval with optional session context and intent analysis | `query`, `target_uri` (optional), `session_id` (optional), `limit`, `min_score`, `level` (optional) |
+| `find` | Fast semantic retrieval without session context | `query`, `target_uri` (optional), `limit`, `min_score`, `level` (optional), `context_type` (optional) |
+| `search` | Deep semantic retrieval with optional session context and intent analysis | `query`, `target_uri` (optional), `session_id` (optional), `limit`, `min_score`, `level` (optional), `context_type` (optional) |
 | `recall` | Type-quota recall across memory categories | `query`, `quotas` (optional), `max_chars`, `min_score`, `peer_scope`, `other_peer_penalty` (optional) |
 | `read` | Read one or more `viking://` URIs | `uris` (single string or array) |
 | `list` | List entries under a `viking://` directory | `uri`, `recursive` (optional) |

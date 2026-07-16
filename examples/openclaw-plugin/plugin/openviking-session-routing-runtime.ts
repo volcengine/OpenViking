@@ -2,6 +2,9 @@ import type { QueryConfigContext } from "../query-config.js";
 import {
   createSessionAgentResolver,
   openClawSessionToOvStorageId,
+  resolveOpenVikingActorPeerId,
+  sanitizeOpenVikingPeerId,
+  type OpenVikingPeerRole,
 } from "../routing/identity-routing.js";
 
 type Logger = {
@@ -10,6 +13,8 @@ type Logger = {
 
 export type SessionAgentLookup = {
   agentId?: string;
+  senderId?: string;
+  requesterSenderId?: string;
   sessionId?: string;
   sessionKey?: string;
   ovSessionId?: string;
@@ -20,13 +25,16 @@ export type PluginSessionRouting = {
   sessionKey?: string;
   ovSessionId?: string;
   agentId: string;
+  actorPeerId?: string;
 };
 
 export function createOpenVikingSessionRoutingRuntime(options: {
+  peerRole?: OpenVikingPeerRole;
   peerPrefix: string;
   logFindRequests: boolean;
   logger: Logger;
 }) {
+  const peerRole = options.peerRole ?? "assistant";
   const sessionAgentResolver = createSessionAgentResolver(options.peerPrefix);
 
   const rememberSessionAgentId = (ctx: SessionAgentLookup) => {
@@ -81,11 +89,17 @@ export function createOpenVikingSessionRoutingRuntime(options: {
     };
     rememberSessionAgentId(session);
 
+    const agentId = resolveAgentId(session.sessionId, session.sessionKey, session.ovSessionId);
     return {
       sessionId: session.sessionId,
       sessionKey: session.sessionKey,
       ovSessionId: session.ovSessionId,
-      agentId: resolveAgentId(session.sessionId, session.sessionKey, session.ovSessionId),
+      agentId,
+      actorPeerId: resolveOpenVikingActorPeerId({
+        peerRole,
+        personPeerId: sanitizeOpenVikingPeerId(ctx?.requesterSenderId ?? ctx?.senderId),
+        assistantPeerId: agentId,
+      }),
     };
   };
 

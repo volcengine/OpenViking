@@ -122,8 +122,7 @@ class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
                     name
                     for name, param in sig.parameters.items()
                     if name != "self"
-                    and param.kind
-                    in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD)
+                    and param.kind in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD)
                 ]
                 timeout_index = params.index("timeout")
             except Exception:

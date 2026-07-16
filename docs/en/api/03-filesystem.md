@@ -364,6 +364,8 @@ List directory contents.
 | abs_limit | int | No | 256 | Abstract length limit for `agent` output |
 | show_all_hidden | bool | No | False | Include hidden files like `-a` |
 | node_limit | int | No | 1000 | Maximum number of results |
+| sort_by | str | No | None | Sort directories and files within their groups by `name` or `mtime` before applying `node_limit`; directories remain first |
+| sort_order | str | No | `asc` | Sort direction: `asc` or `desc` |
 
 **Entry Structure**
 
@@ -383,7 +385,12 @@ List directory contents.
 **Python SDK (Embedded / HTTP)**
 
 ```python
-entries = client.ls("viking://resources/")
+entries = client.ls(
+    "viking://resources/",
+    node_limit=200,
+    sort_by="mtime",
+    sort_order="desc",
+)
 for entry in entries:
     type_str = "dir" if entry['isDir'] else "file"
     print(f"{entry['name']} - {type_str}")

@@ -28,6 +28,7 @@ logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from openviking.session.compressor_v2 import SessionCompressorV2
+    from openviking.usage_reporter import UsageReporter
 
 
 class SessionService:
@@ -44,6 +45,7 @@ class SessionService:
         self._session_compressor = session_compressor
         self._tool_output_externalization_config = ToolOutputExternalizationConfig()
         self._user_config_defaults = UserConfig()
+        self._usage_reporter: Optional["UsageReporter"] = None
 
     def set_dependencies(
         self,
@@ -65,6 +67,10 @@ class SessionService:
     def set_user_config_defaults(self, config: UserConfig) -> None:
         """Set deployment defaults used by newly created session objects."""
         self._user_config_defaults = config.model_copy(deep=True)
+
+    def set_usage_reporter(self, usage_reporter: Optional["UsageReporter"]) -> None:
+        """Set the usage reporter for newly created sessions."""
+        self._usage_reporter = usage_reporter
 
     def _ensure_initialized(self) -> None:
         """Ensure all dependencies are initialized."""
@@ -126,6 +132,7 @@ class SessionService:
             session_uri=session_uri,
             tool_output_externalization_config=self._tool_output_externalization_config,
             user_config_defaults=self._user_config_defaults,
+            usage_reporter=self._usage_reporter,
         )
 
     async def create(
@@ -200,7 +207,12 @@ class SessionService:
         sessions_by_id: Dict[str, Dict[str, Any]] = {}
 
         try:
-            entries = await self._viking_fs.ls(session_base_uri, ctx=ctx)
+            entries = await self._viking_fs.ls(
+                session_base_uri,
+                sort_by="mtime",
+                sort_order="desc",
+                ctx=ctx,
+            )
             for entry in entries:
                 name = entry.get("name", "")
                 if name in [".", ".."]:
@@ -215,7 +227,12 @@ class SessionService:
             logger.debug("Failed to list sessions", exc_info=True)
 
         try:
-            entries = await self._viking_fs.ls("viking://session", ctx=ctx)
+            entries = await self._viking_fs.ls(
+                "viking://session",
+                sort_by="mtime",
+                sort_order="desc",
+                ctx=ctx,
+            )
             for entry in entries:
                 name = entry.get("name", "")
                 if name in [".", ".."] or name in sessions_by_id:

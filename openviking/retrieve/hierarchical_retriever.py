@@ -346,23 +346,33 @@ class HierarchicalRetriever:
         if not self._rerank_client or not documents:
             return fallback_scores
 
+        rerank_documents = [
+            (index, document) for index, document in enumerate(documents) if document.strip()
+        ]
+        if not rerank_documents:
+            return fallback_scores
+
         try:
-            scores = await asyncio.to_thread(self._rerank_client.rerank_batch, query, documents)
+            scores = await asyncio.to_thread(
+                self._rerank_client.rerank_batch,
+                query,
+                [document for _, document in rerank_documents],
+            )
         except Exception as e:
             logger.warning(
                 "[HierarchicalRetriever] Rerank failed, fallback to vector scores: %s", e
             )
             return fallback_scores
 
-        if not scores or len(scores) != len(documents):
+        if not scores or len(scores) != len(rerank_documents):
             logger.warning(
                 "[HierarchicalRetriever] Invalid rerank result, fallback to vector scores"
             )
             return fallback_scores
 
-        normalized_scores: List[float] = []
-        for score, fallback in zip(scores, fallback_scores, strict=True):
-            normalized_scores.append(self._finite_score(score, fallback))
+        normalized_scores = list(fallback_scores)
+        for score, (index, _) in zip(scores, rerank_documents, strict=True):
+            normalized_scores[index] = self._finite_score(score, fallback_scores[index])
         return normalized_scores
 
     async def _recursive_search(

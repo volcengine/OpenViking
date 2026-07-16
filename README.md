@@ -598,7 +598,7 @@ ov find "what is openviking"
 ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 ```
 
-To rebuild existing indexes, `ov reindex <uri> --mode vectors_only` refreshes vectors only. Use `--mode semantic_and_vectors` when semantic artifacts (`.abstract.md` and `.overview.md`) must be regenerated before vectors; there is no `semantic` or `full` mode alias.
+To rebuild existing indexes, `ov reindex <uri> --mode vectors_only` refreshes vectors only. Use `--mode semantic_and_vectors` when semantic artifacts (`.abstract.md` and `.overview.md`) must be regenerated before vectors. Use `--mode prune_orphans` to remove vector records whose source files no longer exist; add `--dry-run` to preview the cleanup. There is no `semantic` or `full` mode alias.
 
 Congratulations! You have successfully run OpenViking 🎉
 

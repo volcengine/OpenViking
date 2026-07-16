@@ -21,7 +21,7 @@ import contextvars
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 from urllib.parse import quote
 
 from mcp.server.fastmcp import FastMCP
@@ -44,7 +44,7 @@ from openviking.retrieve.type_quota_recall import (
     DEFAULT_QUOTAS,
     search_type_quota_recall,
 )
-from openviking.server.auth import resolve_actor_peer_headers, resolve_identity
+from openviking.server.auth import _extract_api_key, resolve_actor_peer_headers, resolve_identity
 from openviking.server.dependencies import get_server_config, get_service
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
@@ -54,6 +54,7 @@ from openviking.server.local_input_guard import (
 from openviking.server.resource_ingest import ingest_temp_upload
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.server.upload_token_store import upload_token_store
+from openviking.utils.search_filters import SearchContextTypeInput, merge_search_filter
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     PermissionDeniedError,
@@ -149,11 +150,13 @@ class _IdentityASGIMiddleware:
             return await self.app(scope, receive, send)
 
         request = Request(scope)
+        x_api_key = request.headers.get("x-api-key")
+        authorization = request.headers.get("authorization")
         try:
             identity = await resolve_identity(
                 request,
-                x_api_key=request.headers.get("x-api-key"),
-                authorization=request.headers.get("authorization"),
+                x_api_key=x_api_key,
+                authorization=authorization,
                 x_openviking_account=request.headers.get("x-openviking-account"),
                 x_openviking_user=request.headers.get("x-openviking-user"),
             )
@@ -194,6 +197,7 @@ class _IdentityASGIMiddleware:
             actor_peer_id=actor_peer_id,
             legacy_agent_id=legacy_agent_id,
             from_oauth=identity.from_oauth,
+            api_key=_extract_api_key(x_api_key, authorization),
         )
         url_info = {
             "x_forwarded_proto": request.headers.get("x-forwarded-proto"),
@@ -222,6 +226,15 @@ mcp = FastMCP(
 # -- find / search ---------------------------------------------------------
 
 
+def _resolve_context_type_filter(
+    context_type: Optional[SearchContextTypeInput],
+) -> Optional[Dict[str, Any]]:
+    try:
+        return merge_search_filter(None, context_type=context_type)
+    except ValueError as exc:
+        raise InvalidArgumentError(str(exc)) from exc
+
+
 @mcp.tool()
 async def find(
     query: str,
@@ -229,6 +242,7 @@ async def find(
     limit: int = 10,
     min_score: float = 0.35,
     level: Optional[List[int]] = None,
+    context_type: Optional[Union[str, List[str]]] = None,
 ) -> str:
     """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score."""
     service = get_service()
@@ -238,6 +252,7 @@ async def find(
         target_uri=target_uri,
         limit=limit,
         score_threshold=min_score,
+        filter=_resolve_context_type_filter(context_type),
         level=level,
     )
     return _format_search_result(result)
@@ -251,6 +266,7 @@ async def search(
     limit: int = 10,
     min_score: float = 0.35,
     level: Optional[List[int]] = None,
+    context_type: Optional[Union[str, List[str]]] = None,
 ) -> str:
     """Deep semantic retrieval with optional session context and intent analysis. Returns ranked memories, resources, and skills with URI, abstract, and score."""
     service = get_service()
@@ -266,6 +282,7 @@ async def search(
         session=session,
         limit=limit,
         score_threshold=min_score,
+        filter=_resolve_context_type_filter(context_type),
         level=level,
     )
     return _format_search_result(result)
@@ -306,7 +323,7 @@ async def recall(
     max_chars: int = DEFAULT_MAX_CHARS,
     min_score: float = DEFAULT_MIN_SCORE,
     peer_scope: str = "all",
-    other_peer_penalty: Optional[Any] = None,
+    other_peer_penalty: Optional[Union[float, Dict[str, float]]] = None,
 ) -> str:
     """Type-quota memory recall. Searches events, entities, preferences, and experiences separately, then returns a bounded memory_group block."""
     service = get_service()
@@ -517,6 +534,7 @@ async def add_resource(
     description: str = "",
     watch_interval: float = 0,
     to: str = "",
+    parent: str = "",
     args: Optional[dict[str, Any]] = None,
 ) -> str:
     """Add a resource to OpenViking. Asynchronous — processing happens in the background.
@@ -538,6 +556,8 @@ async def add_resource(
             Only applies to remote-URL invocations.
         to: Target URI under viking://resources/ (e.g. "viking://resources/volcengine/OpenViking").
             Leave empty to derive a URI from the source.
+        parent: Parent URI under viking://resources/ for remote imports. Mutually exclusive
+            with ``to``.
         args: Parser-specific options, e.g. {"feishu_access_token": "..."} for Feishu imports,
             or {"site": true} for whole-site ingestion.
     """
@@ -602,6 +622,7 @@ async def add_resource(
                 path=path,
                 ctx=ctx,
                 to=to or None,
+                parent=parent or None,
                 reason=description,
                 wait=False,
                 watch_interval=watch_interval,
@@ -611,15 +632,19 @@ async def add_resource(
         except Exception as exc:
             return f"Error adding resource: {exc}"
         root_uri = result.get("root_uri", "")
+        task_id = result.get("task_id", "")
         if watch_interval > 0:
             watch_suffix = f" (watch enabled, refresh every {watch_interval:g} minute(s))"
         else:
             watch_suffix = ""
-        message = (
-            f"Resource added: {root_uri}{watch_suffix}"
-            if root_uri
-            else f"Resource added (processing in background){watch_suffix}."
-        )
+        if root_uri:
+            message = f"Resource added: {root_uri}{watch_suffix}"
+        elif task_id:
+            message = (
+                f"Resource accepted (task_id: {task_id}; processing in background){watch_suffix}."
+            )
+        else:
+            message = f"Resource added (processing in background){watch_suffix}."
         # Detect-and-suggest: if this single page belongs to a site that exposes a
         # sitemap/RSS feed, hint at whole-site ingestion. Never auto-crawls; the
         # add above is already done, so a slow/failed probe has no functional impact.
@@ -945,6 +970,94 @@ async def health() -> str:
         return f"OpenViking is healthy (service initialized, storage: {type(service.viking_fs).__name__})"
     except Exception as e:
         return f"OpenViking is unhealthy: {e}"
+
+
+# ---------------------------------------------------------------------------
+# Portable tool schemas
+# ---------------------------------------------------------------------------
+#
+# FastMCP derives tool input schemas from Python type hints, so Optional/Union
+# parameters become `anyOf` nodes with no top-level `type`, and nested models
+# become `$ref`/`$defs`. That is valid JSON Schema, but several LLM function
+# calling APIs (notably Gemini's OpenAPI 3.0 subset) require an explicit
+# `type` on every schema node and reject `anyOf`/`$ref`, so MCP clients that
+# forward our schemas verbatim get the whole request rejected. Rewrite the
+# advertised schemas into a plain-typed form: drop null branches, collapse
+# unions to their most general branch, and inline $refs. Runtime argument
+# validation still uses the original function signatures, so union parameters
+# keep accepting every branch (e.g. `read` still takes a bare URI string even
+# though the schema advertises an array).
+
+_PORTABLE_TYPE_PREFERENCE = ("array", "object", "string", "number", "integer", "boolean")
+
+
+def _portable_schema(schema: Any, defs: Optional[Dict[str, Any]] = None) -> Any:
+    if not isinstance(schema, dict):
+        return schema
+    if defs is None:
+        defs = schema.get("$defs") or {}
+    node = {k: v for k, v in schema.items() if k != "$defs"}
+
+    ref = node.pop("$ref", None)
+    if isinstance(ref, str) and ref.startswith("#/$defs/"):
+        target = defs.get(ref.rsplit("/", 1)[-1])
+        if isinstance(target, dict):
+            return _portable_schema({**target, **node}, defs)
+
+    any_of = node.pop("anyOf", None)
+    if isinstance(any_of, list):
+        branches = [
+            b
+            for b in (_portable_schema(b, defs) for b in any_of)
+            if isinstance(b, dict) and b.get("type") != "null"
+        ]
+        if branches:
+
+            def _rank(branch: Dict[str, Any]) -> int:
+                branch_type = branch.get("type")
+                if branch_type in _PORTABLE_TYPE_PREFERENCE:
+                    return _PORTABLE_TYPE_PREFERENCE.index(branch_type)
+                return len(_PORTABLE_TYPE_PREFERENCE)
+
+            node = {**min(branches, key=_rank), **node}
+        # A null default contradicts the collapsed non-null type; omission
+        # already means "not provided", so drop it.
+        if node.get("default", "") is None:
+            node.pop("default")
+
+    if isinstance(node.get("properties"), dict):
+        node["properties"] = {
+            key: _portable_schema(value, defs) for key, value in node["properties"].items()
+        }
+    for key in ("items", "additionalProperties"):
+        if isinstance(node.get(key), dict):
+            node[key] = _portable_schema(node[key], defs)
+
+    if "type" not in node:
+        if "properties" in node:
+            node["type"] = "object"
+        elif "items" in node:
+            node["type"] = "array"
+        else:
+            enum_values = node.get("enum") or ([node["const"]] if "const" in node else [])
+            sample = enum_values[0] if enum_values else ""
+            if isinstance(sample, bool):
+                node["type"] = "boolean"
+            elif isinstance(sample, int):
+                node["type"] = "integer"
+            elif isinstance(sample, float):
+                node["type"] = "number"
+            else:
+                node["type"] = "string"
+    return node
+
+
+def _apply_portable_schemas() -> None:
+    for tool in mcp._tool_manager.list_tools():
+        tool.parameters = _portable_schema(tool.parameters)
+
+
+_apply_portable_schemas()
 
 
 # ---------------------------------------------------------------------------

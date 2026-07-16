@@ -16,6 +16,7 @@ import { createLogger } from "../scripts/debug-log.mjs";
 import { resolveOpenVikingCredentials } from "../scripts/ov-credentials.mjs";
 import { createOpenVikingMcpProxy } from "../scripts/shared/mcp-proxy-core.mjs";
 import { resolveEffectivePeerId } from "../scripts/shared/workspace-peer.mjs";
+import { createExperienceToolProvider } from "./experience-tools.mjs";
 
 export { createOpenVikingMcpProxy } from "../scripts/shared/mcp-proxy-core.mjs";
 
@@ -43,6 +44,7 @@ function readProxyConfig() {
   const effectivePeer = resolveEffectivePeerId({ cfg, cwd: process.cwd() });
   const mcpUrl = creds.mcpUrl || `${trimSlash(creds.baseUrl)}/mcp`;
   return {
+    baseUrl: trimSlash(creds.baseUrl),
     mcpUrl,
     apiKey: creds.apiKey || "",
     account: creds.account || "",
@@ -66,5 +68,10 @@ function readProxyConfig() {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolvePath(process.argv[1])) {
-  createOpenVikingMcpProxy({ readConfig: readProxyConfig, loggerFactory: createLogger }).start();
+  const localToolProvider = createExperienceToolProvider();
+  createOpenVikingMcpProxy({
+    readConfig: readProxyConfig,
+    loggerFactory: createLogger,
+    localToolProvider,
+  }).start();
 }

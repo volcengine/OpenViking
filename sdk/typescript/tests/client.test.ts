@@ -63,6 +63,29 @@ describe("OpenVikingClient", () => {
     });
   });
 
+  it("sends dry_run for prune_orphans reindex requests", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok({ status: "completed" }));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.reindex("resources", {
+      mode: "prune_orphans",
+      wait: true,
+      dryRun: true,
+    });
+
+    const [url, init] = fetcher.mock.calls[0]!;
+    expect(String(url)).toBe("https://example.com/api/v1/content/reindex");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      uri: "viking://resources",
+      mode: "prune_orphans",
+      wait: true,
+      dry_run: true,
+    });
+  });
+
   it("maps response envelopes to typed errors", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(
@@ -97,6 +120,25 @@ describe("OpenVikingClient", () => {
     expect(String(fetcher.mock.calls[0]![0])).toBe(
       "https://example.com/health",
     );
+  });
+
+  it("passes directory list ordering to the server", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok([]));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.list("viking://session", {
+      nodeLimit: 200,
+      sortBy: "mtime",
+      sortOrder: "desc",
+    });
+
+    const url = new URL(String(fetcher.mock.calls[0]![0]));
+    expect(url.searchParams.get("node_limit")).toBe("200");
+    expect(url.searchParams.get("sort_by")).toBe("mtime");
+    expect(url.searchParams.get("sort_order")).toBe("desc");
   });
 
   it("converts an existing Node.js image path to a data URI", async () => {

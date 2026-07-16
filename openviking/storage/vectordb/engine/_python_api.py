@@ -126,10 +126,6 @@ class Schema:
     def get_field_order(self) -> list[FieldMeta]:
         return self.field_orders
 
-    def get_total_byte_length(self) -> int:
-        return self.total_byte_length
-
-
 def _get_row_value(row_data: Any, field_name: str, default_value: Any) -> Any:
     if isinstance(row_data, dict):
         return row_data.get(field_name, default_value)
@@ -410,9 +406,6 @@ def _build_native_bytes_row_exports(backend: Any):
                 self._handle = backend._new_schema(fields)
             except RuntimeError as exc:
                 raise ValueError(str(exc)) from exc
-
-        def get_total_byte_length(self) -> int:
-            return int(backend._schema_get_total_byte_length(self._handle))
 
     class BytesRow:
         def __init__(self, schema: Schema):

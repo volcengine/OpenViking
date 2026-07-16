@@ -137,8 +137,9 @@ export default async function (pi: ExtensionAPI) {
 
     if (!connected || bypassed) return;
 
-    // Synchronous recall
-    await recall.searchAndCache(event.prompt);
+    // Queue recall for the context hook. Pi renders the user message before
+    // that hook, so recall latency does not delay the message appearing.
+    recall.queueSearch(event.prompt);
 
     // Compose system prompt additions
     const parts: string[] = [];
@@ -159,6 +160,11 @@ export default async function (pi: ExtensionAPI) {
   // --- context ---
   pi.on("context", async (event, _ctx) => {
     if (!connected || bypassed) return;
+
+    // Keep recall synchronous with the provider request so the current prompt
+    // still receives current-query memory, without blocking user-message UI.
+    await recall.searchPending();
+
     const afterTakeover = config.takeoverEnabled
       ? takeover.transformContext(event.messages as any)
       : event.messages;

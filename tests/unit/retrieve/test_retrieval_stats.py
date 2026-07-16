@@ -145,6 +145,17 @@ class TestRetrievalObserver:
         assert observer.is_healthy() is False
         assert observer.has_errors() is True
 
+    def test_healthy_with_sparse_fan_out_yield(self):
+        collector = self._setup_collector()
+        for _ in range(6):
+            collector.record_query("unknown", 0, [])
+        for _ in range(4):
+            collector.record_query("unknown", 3, [0.9, 0.8, 0.7])
+
+        observer = RetrievalObserver()
+        assert observer.is_healthy() is True
+        assert observer.has_errors() is False
+
     def test_no_errors_below_min_queries(self):
         collector = self._setup_collector()
         # Only 3 queries (below the 5-query minimum for error flagging)

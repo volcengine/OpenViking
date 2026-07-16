@@ -365,6 +365,8 @@ openviking write viking://resources/docs/api.md \
 | show_all_hidden | bool | 否 | False | 像 `-a` 一样包含隐藏文件 |
 | node_limit | int | 否 | 1000 | 最大返回节点数 |
 | limit | int | 否 | None | `node_limit` 的别名 |
+| sort_by | str | 否 | None | 在应用 `node_limit` 前，分别按 `name` 或 `mtime` 排序目录组和文件组；目录仍优先 |
+| sort_order | str | 否 | `asc` | 排序方向：`asc` 或 `desc` |
 
 **条目结构**
 
@@ -384,7 +386,12 @@ openviking write viking://resources/docs/api.md \
 **Python SDK (Embedded / HTTP)**
 
 ```python
-entries = client.ls("viking://resources/")
+entries = client.ls(
+    "viking://resources/",
+    node_limit=200,
+    sort_by="mtime",
+    sort_order="desc",
+)
 for entry in entries:
     type_str = "dir" if entry['isDir'] else "file"
     print(f"{entry['name']} - {type_str}")

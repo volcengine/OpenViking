@@ -27,6 +27,7 @@ import {
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { loadState, resolveOvSessionId, saveState } from "./session-state.mjs";
+import { sendSessionMessages } from "./shared/batch-send.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
 const cfg = loadConfig();
@@ -41,28 +42,39 @@ function noop(message) {
   output(message ? { systemMessage: message } : {});
 }
 
-async function fetchJSON(path, init = {}) {
+function makeHeaders() {
+  const headers = { "Content-Type": "application/json" };
+  if (cfg.apiKey) {
+    headers["Authorization"] = `Bearer ${cfg.apiKey}`;
+    headers["X-API-Key"] = cfg.apiKey;
+  }
+  if (cfg.sendIdentityHeaders && cfg.account) headers["X-OpenViking-Account"] = cfg.account;
+  if (cfg.sendIdentityHeaders && cfg.user) headers["X-OpenViking-User"] = cfg.user;
+  if (activePeerId) headers["X-OpenViking-Actor-Peer"] = activePeerId;
+  return headers;
+}
+
+async function fetchJSONRes(path, init = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), cfg.captureTimeoutMs);
   try {
-    const headers = { "Content-Type": "application/json" };
-    if (cfg.apiKey) {
-      headers["Authorization"] = `Bearer ${cfg.apiKey}`;
-      headers["X-API-Key"] = cfg.apiKey;
-    }
-    if (cfg.sendIdentityHeaders && cfg.account) headers["X-OpenViking-Account"] = cfg.account;
-    if (cfg.sendIdentityHeaders && cfg.user) headers["X-OpenViking-User"] = cfg.user;
-    if (activePeerId) headers["X-OpenViking-Actor-Peer"] = activePeerId;
-    const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
+    const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers: makeHeaders(), signal: controller.signal });
     const body = await res.json().catch(() => null);
-    if (!body) return null;
-    if (!res.ok || body.status === "error") return null;
-    return body.result ?? body;
-  } catch {
-    return null;
+    if (!body) return { ok: false, status: res.status, error: { message: "empty or invalid JSON response" } };
+    if (!res.ok || body.status === "error") {
+      return { ok: false, status: res.status, error: body.error || body };
+    }
+    return { ok: true, status: res.status, result: body.result ?? body };
+  } catch (err) {
+    return { ok: false, status: 0, error: { message: err?.message || String(err) } };
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function fetchJSON(path, init = {}) {
+  const r = await fetchJSONRes(path, init);
+  return r.ok ? (r.result ?? null) : null;
 }
 
 function parseTranscript(content) {
@@ -95,20 +107,15 @@ async function readTranscriptTurns(transcriptPath) {
 }
 
 async function appendTurns(ovSessionId, turns) {
-  let appended = 0;
-  for (const turn of turns) {
+  const payloads = turns.map((turn) => {
     const body = turn.parts?.length
       ? { role: turn.role, parts: turn.parts }
       : { role: turn.role, content: turn.text };
     if (activePeerId) body.peer_id = activePeerId;
-    const result = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/messages`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
-    if (!result) break;
-    appended += 1;
-  }
-  return appended;
+    return body;
+  });
+  const r = await sendSessionMessages(fetchJSONRes, ovSessionId, payloads);
+  return r.sent;
 }
 
 async function main() {

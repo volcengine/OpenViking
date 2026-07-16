@@ -198,22 +198,6 @@ openviking/
 | **Ruff** | リンティング、フォーマット、インポートソート | `pyproject.toml` |
 | **mypy** | 型チェック | `pyproject.toml` |
 
-### 自動チェック（推奨）
-
-[pre-commit](https://pre-commit.com/)を使用して、コミット前にこれらのチェックを自動実行します。これにより、手動の作業なしでコードが常に基準を満たすことが保証されます。
-
-1. **pre-commitのインストール**:
-   ```bash
-   pip install pre-commit
-   ```
-
-2. **gitフックのインストール**:
-   ```bash
-   pre-commit install
-   ```
-
-これで、`git commit`実行時に`ruff`（チェックとフォーマット）が自動的に実行されます。チェックが失敗した場合、ファイルが自動修正されることがあります。変更をaddして再度コミットするだけです。
-
 ### チェックの実行
 
 ```bash
@@ -436,8 +420,6 @@ git commit -m "refactor(storage): simplify interface methods"
 
 #### A. Lintチェック (`11. _Lint Checks`)
 コードスタイルチェック（Ruff）と型チェック（Mypy）を実行。引数は不要です。
-
-> **ヒント**: コミット前にこれらのチェックを自動的に実行するため、ローカルに[pre-commit](https://pre-commit.com/)をインストールすることを推奨します（上記の[自動チェック](#自動チェック推奨)セクションを参照）。
 
 #### B. テストスイート（Lite）(`12. _Test Suite (Lite)`)
 高速統合テストを実行し、カスタムマトリックス設定をサポートします。

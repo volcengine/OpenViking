@@ -27,6 +27,8 @@ export interface VikingListQueryOptions {
   absLimit?: number
   recursive?: boolean
   simple?: boolean
+  sortBy?: 'name' | 'mtime'
+  sortOrder?: 'asc' | 'desc'
 }
 
 export interface VikingTreeQueryOptions {
