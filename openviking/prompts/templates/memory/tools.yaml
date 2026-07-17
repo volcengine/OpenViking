@@ -91,7 +91,9 @@ fields:
   - name: guidelines
     type: string
     description: |
-      Tool usage guidelines, complete usage guide content.
+      Concise, synthesized tool usage guidance based on observed execution evidence.
+      Do not copy the original tool definition, source document, or raw tool payload.
+      Keep only distinct best practices and examples learned from this session.
       Must include exact English headings:
       - "## Guidelines" - best practices
       - "### Good Cases" - successful usage examples

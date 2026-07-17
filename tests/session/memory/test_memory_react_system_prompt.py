@@ -41,6 +41,16 @@ class TestProviderInstruction:
         assert "Target Output Language" in instruction
         assert "All memory content MUST be written in" in instruction
 
+    def test_instruction_requires_source_distillation(self):
+        provider = SessionExtractContextProvider(messages=[])
+
+        instruction = provider.instruction()
+
+        assert "Store only durable, retrieval-useful facts" in instruction
+        assert "Do NOT copy source documents, skill definitions" in instruction
+        assert "Preserve exact literals only when correctness requires them" in instruction
+        assert "Prefer structured schema fields over narrative dumps" in instruction
+
     def test_instruction_explains_peer_memory_routing(self):
         provider = SessionExtractContextProvider(messages=[])
 
@@ -232,8 +242,6 @@ class TestSessionConversationToolFiltering:
 
         assert provider._detect_language() == "zh-CN"
 
-
-
     async def test_prepare_extraction_messages_replaces_image_part_with_vlm_description(self):
         class FakeVisionVLM:
             def __init__(self):
@@ -340,6 +348,7 @@ class TestSessionConversationToolFiltering:
         assert len(messages) == 1
         assert any(isinstance(part, ImagePart) for part in messages[0].parts)
         assert provider.messages is not messages
+
 
 def test_session_provider_empty_messages_still_uses_environment_fallback(monkeypatch):
     monkeypatch.setenv("TZ", "Asia/Shanghai")
