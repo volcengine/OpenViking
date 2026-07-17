@@ -8,6 +8,7 @@ from typing import Any, Callable, Coroutine
 from loguru import logger
 
 from vikingbot.config.schema import SessionKey
+from vikingbot.sandbox.manager import WORKSPACE_PEER_ID_METADATA_KEY
 from vikingbot.session.manager import SessionManager
 
 # Default interval: 30 minutes
@@ -128,7 +129,20 @@ class HeartbeatService:
             if self._is_session_stale(session_info):
                 continue
 
-            if self.sandbox_mode == "shared":
+            sandbox_manager = getattr(self.session_manager, "sandbox_manager", None)
+            if sandbox_manager is not None:
+                actor_peer_id = metadata.get(WORKSPACE_PEER_ID_METADATA_KEY)
+                try:
+                    sandbox_workspace = sandbox_manager.get_workspace_path(
+                        session_key, actor_peer_id=actor_peer_id
+                    )
+                except ValueError:
+                    logger.debug(
+                        f"Skipping heartbeat for {session_key}: "
+                        "per-peer workspace identity is unavailable"
+                    )
+                    continue
+            elif self.sandbox_mode == "shared":
                 sandbox_workspace = self.workspace / "shared"
             else:
                 sandbox_workspace = self.workspace / session_key.safe_name()

@@ -8,6 +8,16 @@ from vikingbot.config.schema import SessionKey
 from vikingbot.sandbox.manager import SandboxManager
 
 
+async def get_tool_sandbox(tool_context: "ToolContext"):
+    """Resolve the request sandbox while preserving legacy manager test doubles."""
+    actor_peer_id = getattr(tool_context, "actor_peer_id", None)
+    if actor_peer_id is None:
+        return await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
+    return await tool_context.sandbox_manager.get_sandbox(
+        tool_context.session_key, actor_peer_id
+    )
+
+
 @dataclass
 class ToolContext:
     """Context passed to tools during execution, containing runtime information.
@@ -45,7 +55,7 @@ class ToolContext:
 
     session_key: SessionKey = None
     sandbox_manager: SandboxManager | None = None
-    workspace_id: str = sandbox_manager.to_workspace_id(session_key) if sandbox_manager else None
+    workspace_id: str | None = None
     sender_id: str | None = None
     actor_peer_id: str | None = None
     memory_peer_ids: list[str] | None = None
@@ -55,6 +65,14 @@ class ToolContext:
     channel_metadata: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
+        if self.sandbox_manager is not None:
+            actor_peer_id = self.actor_peer_id or self.sender_id
+            if actor_peer_id is None:
+                self.workspace_id = self.sandbox_manager.to_workspace_id(self.session_key)
+            else:
+                self.workspace_id = self.sandbox_manager.to_workspace_id(
+                    self.session_key, actor_peer_id
+                )
         if self.memory_owner_user_ids is None and self.memory_user_ids is not None:
             self.memory_owner_user_ids = self.memory_user_ids
         elif self.memory_user_ids is None and self.memory_owner_user_ids is not None:

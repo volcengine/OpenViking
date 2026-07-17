@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING, Any
 
-from vikingbot.agent.tools.base import Tool
+from vikingbot.agent.tools.base import Tool, get_tool_sandbox
 
 if TYPE_CHECKING:
     from vikingbot.agent.tools.base import ToolContext
@@ -45,7 +45,7 @@ class ExecTool(Tool):
     ) -> str:
         # Always use sandbox manager (includes direct mode)
         try:
-            sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
+            sandbox = await get_tool_sandbox(tool_context)
 
             if command.strip() == "pwd":
                 return sandbox.sandbox_cwd

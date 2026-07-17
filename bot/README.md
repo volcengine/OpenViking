@@ -354,6 +354,7 @@ The active directory used by the Agent also depends on `bot.sandbox.mode`:
 | `shared` (default) | `<workspace>/shared` |
 | `per-session` | `<workspace>/<session-key>` |
 | `per-channel` | `<workspace>/<channel-key>` |
+| `per-peer` | `<workspace>/peer__<actor-peer-id>` |
 
 For example, with the default configuration, edit `~/.openviking/data/bot/workspace/shared/SOUL.md`.
 
@@ -447,6 +448,9 @@ Workspace modes:
 - `shared`: all sessions share one workspace;
 - `per-session`: every Session has an independent workspace;
 - `per-channel`: sessions on the same channel instance share a workspace.
+- `per-peer`: sessions authenticated as the same Peer share a workspace, while different Peers remain isolated.
+
+`per-peer` uses the trusted `actor_peer_id` resolved by the channel. It rejects missing or path-like identities instead of falling back to a shared workspace.
 
 DirectBackend defaults to `restrict_to_workspace: false`. For a Gateway exposed to untrusted users, choose an isolated backend and configure channel allowlists and network/file policies.
 

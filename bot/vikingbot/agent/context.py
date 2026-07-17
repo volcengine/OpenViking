@@ -83,7 +83,7 @@ class ContextBuilder:
 
     def _get_workspace_id(self, session_key: SessionKey) -> str:
         if self.sandbox_manager:
-            return self.sandbox_manager.to_workspace_id(session_key)
+            return self.sandbox_manager.to_workspace_id(session_key, self._actor_peer_id)
         return session_key.safe_name()
 
     @staticmethod

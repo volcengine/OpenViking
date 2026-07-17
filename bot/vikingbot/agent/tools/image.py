@@ -121,7 +121,16 @@ class ImageGenerationTool(Tool):
             mime_type, _ = mimetypes.guess_type(image_str)
             if not mime_type:
                 mime_type = "application/octet-stream"
-            sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
+            actor_peer_id = getattr(tool_context, "actor_peer_id", None)
+            if actor_peer_id is None:
+                sandbox = await tool_context.sandbox_manager.get_sandbox(
+                    tool_context.session_key
+                )
+            else:
+                sandbox = await tool_context.sandbox_manager.get_sandbox(
+                    tool_context.session_key,
+                    actor_peer_id=actor_peer_id,
+                )
             image_bytes = await sandbox.read_file_bytes(image_str)
             base64_str = base64.b64encode(image_bytes).decode("utf-8")
             data_uri = f"data:{mime_type};base64,{base64_str}"

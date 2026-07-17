@@ -1,4 +1,3 @@
-import base64
 import json
 import re
 import uuid
@@ -8,8 +7,8 @@ from loguru import logger
 
 import openviking as ov
 from openviking.core.namespace import uri_parts
-from openviking.core.peer_id import normalize_peer_id
 from vikingbot.config.loader import load_config
+from vikingbot.utils.peer_id import normalize_external_peer_id
 
 if TYPE_CHECKING:
     from vikingbot.config.schema import Config
@@ -19,23 +18,6 @@ viking_resource_prefix = "viking://resources/"
 
 def _is_session_key(agent_id: Optional[str]) -> bool:
     return agent_id is not None and "__" in agent_id
-
-
-def _peer_id_from_external_id(peer_id: Optional[str]) -> Optional[str]:
-    if not peer_id:
-        return None
-    raw_peer_id = str(peer_id).strip()
-    if not raw_peer_id:
-        return None
-    if "/" in raw_peer_id or "\\" in raw_peer_id:
-        return None
-    try:
-        return normalize_peer_id(raw_peer_id)
-    except ValueError:
-        pass
-
-    encoded = base64.urlsafe_b64encode(raw_peer_id.encode("utf-8")).decode("ascii").rstrip("=")
-    return normalize_peer_id(f"ext-{encoded}")
 
 
 class VikingClient:
@@ -360,7 +342,7 @@ class VikingClient:
 
     @staticmethod
     def _peer_id(value: Optional[str]) -> Optional[str]:
-        return _peer_id_from_external_id(str(value)) if value is not None else None
+        return normalize_external_peer_id(value)
 
     def _apply_actor_peer_scope(self, client_kwargs: Dict[str, Any]) -> None:
         if self.actor_peer_id:

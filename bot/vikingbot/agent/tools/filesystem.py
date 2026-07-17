@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING, Any
 
-from vikingbot.agent.tools.base import Tool
+from vikingbot.agent.tools.base import Tool, get_tool_sandbox
 
 if TYPE_CHECKING:
     from vikingbot.agent.tools.base import ToolContext
@@ -29,7 +29,7 @@ class ReadFileTool(Tool):
 
     async def execute(self, tool_context: "ToolContext", path: str, **kwargs: Any) -> str:
         try:
-            sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
+            sandbox = await get_tool_sandbox(tool_context)
             content = await sandbox.read_file(path)
             return content
         except FileNotFoundError as e:
@@ -66,7 +66,7 @@ class WriteFileTool(Tool):
         self, tool_context: "ToolContext", path: str, content: str, **kwargs: Any
     ) -> str:
         try:
-            sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
+            sandbox = await get_tool_sandbox(tool_context)
             await sandbox.write_file(path, content)
             return f"Successfully wrote {len(content)} bytes to {path}"
         except IOError as e:
@@ -102,7 +102,7 @@ class EditFileTool(Tool):
         self, tool_context: "ToolContext", path: str, old_text: str, new_text: str, **kwargs: Any
     ) -> str:
         try:
-            sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
+            sandbox = await get_tool_sandbox(tool_context)
             content = await sandbox.read_file(path)
 
             if old_text not in content:
@@ -145,7 +145,7 @@ class ListDirTool(Tool):
 
     async def execute(self, tool_context: "ToolContext", path: str, **kwargs: Any) -> str:
         try:
-            sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
+            sandbox = await get_tool_sandbox(tool_context)
             items = await sandbox.list_dir(path)
 
             if not items:
