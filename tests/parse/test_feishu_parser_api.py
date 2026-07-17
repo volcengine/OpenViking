@@ -1,3 +1,4 @@
+import asyncio
 import json
 import zipfile
 from pathlib import Path
@@ -411,6 +412,114 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(monk
     assert call.kwargs[PREPARED_RESPONSE_ID_ARG] == "response-1"
     assert call.kwargs["custom_option"] == "forwarded"
     assert "args" not in call.kwargs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cancel_stage", "queue_persisted"),
+    [
+        ("submit", False),
+        ("enqueue", False),
+        ("handoff", True),
+    ],
+)
+async def test_uat_producer_cancellation_respects_queue_ownership(
+    monkeypatch,
+    cancel_stage,
+    queue_persisted,
+):
+    source = "https://example.larkoffice.com/docx/doxcnToken"
+    root_uri = "viking://resources/fixed"
+    submit_url = AsyncMock(return_value="response-1")
+    enqueue = AsyncMock()
+    handoff = AsyncMock()
+    if cancel_stage == "submit":
+        submit_url.side_effect = asyncio.CancelledError
+    elif cancel_stage == "enqueue":
+        enqueue.side_effect = asyncio.CancelledError
+    else:
+        handoff.side_effect = asyncio.CancelledError
+
+    parser_router = SimpleNamespace(
+        should_use_understanding_api=lambda _source: True,
+        submit_url=submit_url,
+    )
+    resource_processor = SimpleNamespace(
+        tree_builder=SimpleNamespace(
+            resolve_target_uri=AsyncMock(return_value=(root_uri, None))
+        ),
+    )
+    task_tracker = SimpleNamespace(
+        create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
+        update_stage=AsyncMock(),
+        fail=AsyncMock(),
+    )
+    queue_manager = SimpleNamespace(enqueue=enqueue)
+    lock_lease = SimpleNamespace(
+        to_handoff=Mock(
+            return_value=SimpleNamespace(
+                to_dict=Mock(
+                    return_value={
+                        "handle_id": "lock-1",
+                        "lock_paths": ["/resources/fixed"],
+                    }
+                )
+            )
+        ),
+        handoff=handoff,
+        close=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "openviking.service.task_tracker.get_task_tracker",
+        Mock(return_value=task_tracker),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        Mock(return_value=queue_manager),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.transaction.get_lock_manager",
+        Mock(return_value=SimpleNamespace()),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.transaction.OwnedLockLease.acquire_tree",
+        AsyncMock(return_value=lock_lease),
+    )
+
+    service = ResourceService(
+        viking_fs=SimpleNamespace(_uri_to_path=lambda _uri, _ctx: "/resources/fixed"),
+        resource_processor=resource_processor,
+        skill_processor=SimpleNamespace(),
+    )
+    service._parser_router = parser_router
+    monkeypatch.setattr(service, "_is_feishu_url", Mock(return_value=True))
+    ctx = RequestContext(
+        user=UserIdentifier("account-1", "user-1"),
+        role=Role.USER,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await service.add_resource(
+            path=source,
+            ctx=ctx,
+            to=root_uri,
+            wait=False,
+            allow_local_path_resolution=False,
+            args={"feishu_access_token": "u-secret"},
+        )
+
+    if queue_persisted:
+        lock_lease.close.assert_not_awaited()
+        task_tracker.fail.assert_not_awaited()
+        enqueue.assert_awaited_once()
+    else:
+        lock_lease.close.assert_awaited_once_with()
+        task_tracker.fail.assert_awaited_once_with(
+            "task-1",
+            "external parse scheduling cancelled",
+            account_id="account-1",
+            user_id="user-1",
+        )
 
 
 def test_prepared_response_id_is_reserved_from_public_args():

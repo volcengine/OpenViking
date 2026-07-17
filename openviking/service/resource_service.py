@@ -813,6 +813,7 @@ class ResourceService:
 
                 task_tracker = get_task_tracker()
                 task = None
+                queue_persisted = False
                 try:
                     task = await task_tracker.create(
                         "add_resource",
@@ -865,20 +866,43 @@ class ResourceService:
                     )
                     qm = get_queue_manager()
                     await qm.enqueue(QueueManager.EXTERNAL_PARSE, msg.to_dict())
-                    await lock_lease.handoff()
+                    queue_persisted = True
                     monitor_started = True
-                except Exception as exc:
-                    with contextlib.suppress(Exception):
-                        await lock_lease.close()
-
-                    if task is not None:
+                    handoff_task = asyncio.create_task(lock_lease.handoff())
+                    try:
+                        await asyncio.shield(handoff_task)
+                    except asyncio.CancelledError:
+                        with contextlib.suppress(asyncio.CancelledError, Exception):
+                            await handoff_task
+                        raise
+                except asyncio.CancelledError:
+                    if not queue_persisted:
                         with contextlib.suppress(Exception):
-                            await task_tracker.fail(
-                                task.task_id,
-                                str(exc),
-                                account_id=ctx.account_id,
-                                user_id=ctx.user.user_id,
-                            )
+                            await lock_lease.close()
+
+                        if task is not None:
+                            with contextlib.suppress(Exception):
+                                await task_tracker.fail(
+                                    task.task_id,
+                                    "external parse scheduling cancelled",
+                                    account_id=ctx.account_id,
+                                    user_id=ctx.user.user_id,
+                                )
+
+                    raise
+                except Exception as exc:
+                    if not queue_persisted:
+                        with contextlib.suppress(Exception):
+                            await lock_lease.close()
+
+                        if task is not None:
+                            with contextlib.suppress(Exception):
+                                await task_tracker.fail(
+                                    task.task_id,
+                                    str(exc),
+                                    account_id=ctx.account_id,
+                                    user_id=ctx.user.user_id,
+                                )
 
                     raise
                 logger.info(
