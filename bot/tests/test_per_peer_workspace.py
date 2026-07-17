@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
+from vikingbot.agent.context import ContextBuilder
 from vikingbot.config.schema import Config, SandboxConfig, SessionKey
 from vikingbot.heartbeat.service import HeartbeatService
 from vikingbot.sandbox.manager import WORKSPACE_PEER_ID_METADATA_KEY, SandboxManager
@@ -49,6 +50,28 @@ def test_session_manager_defers_per_peer_workspace_until_identity_is_known(tmp_p
 
     assert session.key == _session("one")
     assert manager._sandboxes == {}
+
+
+@pytest.mark.asyncio
+async def test_context_prompt_uses_actor_identity_for_per_peer_workspace(tmp_path, monkeypatch):
+    manager = _manager(tmp_path)
+    observed_actor_peer_ids = []
+
+    async def get_sandbox_cwd(session_key, actor_peer_id=None):
+        observed_actor_peer_ids.append(actor_peer_id)
+        return str(manager.get_workspace_path(session_key, actor_peer_id))
+
+    monkeypatch.setattr(manager, "get_sandbox_cwd", get_sandbox_cwd)
+    context = ContextBuilder(
+        workspace=tmp_path / "source",
+        sandbox_manager=manager,
+        actor_peer_id="alice",
+    )
+
+    prompt = await context.build_system_prompt(_session("one"), ov_tools_enable=False)
+
+    assert str(manager.workspace / "peer__alice") in prompt
+    assert observed_actor_peer_ids == ["alice", "alice"]
 
 
 def test_heartbeat_groups_sessions_by_recorded_peer_workspace(tmp_path):

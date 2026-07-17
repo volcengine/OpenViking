@@ -128,7 +128,9 @@ class ContextBuilder:
 
         # Sandbox environment info
         if self.sandbox_manager:
-            sandbox_cwd = await self.sandbox_manager.get_sandbox_cwd(session_key)
+            sandbox_cwd = await self.sandbox_manager.get_sandbox_cwd(
+                session_key, self._actor_peer_id
+            )
             parts.append(
                 f"## Sandbox Environment\n\nYou are running in a sandboxed environment. All file operations and command execution are restricted to the sandbox directory.\nThe sandbox root directory is `{sandbox_cwd}` (use relative paths for all operations)."
             )
@@ -291,7 +293,9 @@ Skills with available="false" need dependencies installed first - you can try in
 
         # Determine workspace display based on sandbox state
         if self.sandbox_manager:
-            workspace_display = await self.sandbox_manager.get_sandbox_cwd(session_key)
+            workspace_display = await self.sandbox_manager.get_sandbox_cwd(
+                session_key, self._actor_peer_id
+            )
         else:
             workspace_display = workspace_path
 
