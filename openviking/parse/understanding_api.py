@@ -263,9 +263,7 @@ class UnderstandingAPI(BaseParser):
         return json.dumps(obj, ensure_ascii=False).encode("utf-8")
 
     def _auth_headers(self, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
-        headers = {
-            "Authorization": f"Bearer {self._api_key}"
-        }
+        headers = {"Authorization": f"Bearer {self._api_key}"}
         if extra:
             headers.update(extra)
         return headers

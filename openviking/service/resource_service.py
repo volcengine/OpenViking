@@ -829,14 +829,12 @@ class ResourceService:
 
                     queued_args = dict(normalized_args.processor_kwargs)
                     feishu_access_token = queued_args.pop(FEISHU_ACCESS_TOKEN_ARG, None)
+                    understanding_response_id = None
                     if self._is_feishu_url(path) and feishu_access_token:
-                        from openviking.parse.understanding_api import PREPARED_RESPONSE_ID_ARG
-
-                        response_id = await self._get_parser_router().submit_url(
+                        understanding_response_id = await self._get_parser_router().submit_url(
                             path,
                             feishu_access_token=feishu_access_token,
                         )
-                        queued_args[PREPARED_RESPONSE_ID_ARG] = response_id
 
                     lock_handoff = lock_lease.to_handoff()
                     msg = UnderstandingParseMsg(
@@ -863,10 +861,7 @@ class ResourceService:
                         source_name=source_name,
                         lock_handoff=lock_handoff.to_dict() if lock_handoff else None,
                         defer_target_resolution=defer_target_resolution,
-                        parent_uri=(target.parent or target.to)
-                        if defer_target_resolution
-                        else None,
-                        create_parent=target.create_parent,
+                        understanding_response_id=understanding_response_id,
                     )
                     qm = get_queue_manager()
                     await qm.enqueue(QueueManager.EXTERNAL_PARSE, msg.to_dict())
@@ -906,11 +901,13 @@ class ResourceService:
                     watch_auth_state=normalized_args.watch_auth_state,
                     ctx=ctx,
                 )
-                return {
+                response = {
                     "status": "success",
-                    "root_uri": root_uri,
                     "task_id": task.task_id,
                 }
+                if not defer_target_resolution:
+                    response["root_uri"] = root_uri
+                return response
 
             result = await self._resource_processor.process_resource(
                 path=path,

@@ -37,8 +37,7 @@ class UnderstandingParseMsg:
     args: Dict[str, Any] = field(default_factory=dict)
     source_name: Optional[str] = None
     defer_target_resolution: bool = False
-    parent_uri: Optional[str] = None
-    create_parent: bool = False
+    understanding_response_id: Optional[str] = None
 
     def __init__(
         self,
@@ -66,8 +65,7 @@ class UnderstandingParseMsg:
         args: Optional[Dict[str, Any]] = None,
         source_name: Optional[str] = None,
         defer_target_resolution: bool = False,
-        parent_uri: Optional[str] = None,
-        create_parent: bool = False,
+        understanding_response_id: Optional[str] = None,
     ):
         self.id = str(uuid4())
         self.task_id = task_id
@@ -93,8 +91,7 @@ class UnderstandingParseMsg:
         self.args = args or {}
         self.source_name = source_name
         self.defer_target_resolution = defer_target_resolution
-        self.parent_uri = parent_uri
-        self.create_parent = create_parent
+        self.understanding_response_id = understanding_response_id
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -147,8 +144,11 @@ class UnderstandingParseMsg:
             args=data.get("args") if isinstance(data.get("args"), dict) else {},
             source_name=data.get("source_name"),
             defer_target_resolution=bool(data.get("defer_target_resolution", False)),
-            parent_uri=data.get("parent_uri"),
-            create_parent=bool(data.get("create_parent", False)),
+            understanding_response_id=(
+                data.get("understanding_response_id")
+                if isinstance(data.get("understanding_response_id"), str)
+                else None
+            ),
         )
         if data.get("id"):
             obj.id = str(data["id"])

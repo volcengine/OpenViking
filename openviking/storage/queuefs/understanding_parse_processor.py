@@ -177,8 +177,7 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                         args=new_args,
                         source_name=msg.source_name,
                         defer_target_resolution=msg.defer_target_resolution,
-                        parent_uri=msg.parent_uri,
-                        create_parent=msg.create_parent,
+                        understanding_response_id=msg.understanding_response_id,
                     )
                     await qm.enqueue(QueueManager.EXTERNAL_PARSE, retry_msg.to_dict())
                     self.report_requeue()
@@ -237,7 +236,16 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
 
                     kwargs.setdefault("request_validator", ensure_public_remote_target)
                 processor_args = dict(msg.args or {})
+                if msg.understanding_response_id is not None:
+                    from openviking.parse.understanding_api import PREPARED_RESPONSE_ID_ARG
+
+                    processor_args[PREPARED_RESPONSE_ID_ARG] = msg.understanding_response_id
                 processor_args.update(kwargs)
+                deferred_parent = None
+                if msg.defer_target_resolution:
+                    from openviking_cli.utils.uri import VikingURI
+
+                    deferred_parent = VikingURI(msg.root_uri).parent.uri
                 result = await resource_processor.process_resource(
                     path=msg.path,
                     ctx=ctx,
@@ -245,7 +253,7 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                     instruction=msg.instruction,
                     scope="resources",
                     to=None if msg.defer_target_resolution else msg.root_uri,
-                    parent=msg.parent_uri if msg.defer_target_resolution else None,
+                    parent=deferred_parent,
                     build_index=msg.build_index,
                     summarize=msg.summarize,
                     allow_local_path_resolution=msg.allow_local_path_resolution,
@@ -258,7 +266,6 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                     directly_upload_media=msg.directly_upload_media,
                     skip_watch_management=True,
                     watch_interval=0,
-                    create_parent=msg.create_parent,
                     **processor_args,
                 )
 
