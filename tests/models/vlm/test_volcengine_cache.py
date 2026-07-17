@@ -2,11 +2,54 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for VolcEngineVLM cache logic."""
 
-from unittest.mock import AsyncMock, MagicMock
+import inspect
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from openviking.models.vlm.backends.volcengine_vlm import VolcEngineVLM as VLMClass
+
+
+def test_async_completion_tracer_ignores_function_arguments() -> None:
+    closure = inspect.getclosurevars(VLMClass.get_completion_async)
+    trace_decorator = closure.nonlocals["self"]
+
+    assert trace_decorator.ignore_args is True
+
+
+def test_build_vlm_response_traces_text_when_tools_are_enabled() -> None:
+    vlm = object.__new__(VLMClass)
+    message = SimpleNamespace(content="raw final response", tool_calls=None)
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(message=message, finish_reason="stop")],
+    )
+
+    with patch("openviking.models.vlm.backends.volcengine_vlm.tracer.info") as trace_info:
+        result = vlm._build_vlm_response(response, has_tools=True)
+
+    assert result.content == "raw final response"
+    trace_info.assert_called_once_with("message.content=raw final response")
+
+
+def test_build_vlm_response_traces_tool_calls_when_tools_are_enabled() -> None:
+    vlm = object.__new__(VLMClass)
+    tool_calls = [
+        SimpleNamespace(
+            id="call-1",
+            function=SimpleNamespace(name="read", arguments='{"path": "/tmp/data"}'),
+        )
+    ]
+    message = SimpleNamespace(content=None, tool_calls=tool_calls)
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(message=message, finish_reason="tool_calls")],
+    )
+
+    with patch("openviking.models.vlm.backends.volcengine_vlm.tracer.info") as trace_info:
+        result = vlm._build_vlm_response(response, has_tools=True)
+
+    assert result.tool_calls[0].name == "read"
+    trace_info.assert_called_once_with(f"message.tool_calls={tool_calls}")
 
 
 def make_message(role: str, content: str, cache_control: bool = False) -> dict:

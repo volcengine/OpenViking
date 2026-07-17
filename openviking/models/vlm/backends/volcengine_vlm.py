@@ -60,6 +60,8 @@ class VolcEngineVLM(OpenAIVLM):
         """Build response from Chat Completions response. Returns str or VLMResponse based on has_tools."""
         choice = response.choices[0]
         message = choice.message
+        if message.content:
+            tracer.info(f"message.content={message.content}")
         if hasattr(message, "tool_calls") and message.tool_calls:
             tracer.info(f"message.tool_calls={message.tool_calls}")
         if has_tools:
@@ -146,7 +148,7 @@ class VolcEngineVLM(OpenAIVLM):
             return result
         return self._clean_response(str(result))
 
-    @tracer("volcengine.vlm.call", ignore_result=True, ignore_args=False)
+    @tracer("volcengine.vlm.call", ignore_result=True, ignore_args=True)
     async def get_completion_async(
         self,
         prompt: str = "",
@@ -191,8 +193,6 @@ class VolcEngineVLM(OpenAIVLM):
                 if tools:
                     return result
                 content = self._clean_response(str(result))
-                if content:
-                    tracer.info(f"message.content={content}")
                 return content
             except Exception as e:
                 last_error = e

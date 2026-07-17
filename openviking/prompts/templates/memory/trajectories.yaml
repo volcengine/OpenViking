@@ -14,7 +14,7 @@ embedding_template: |-
   {{ retrieval_anchor }}
 
 directory: "viking://user/{{ user_space }}/memories/trajectories"
-filename_template: "{{ extract_context.get_session_year() }}/{{ extract_context.get_session_month() }}/{{ extract_context.get_session_day() }}/{{ trajectory_name }}_{{ extract_context.get_session_time() }}.md"
+filename_template: "{{ extract_context.get_session_timestamp()[:4] }}/{{ extract_context.get_session_timestamp()[4:6] }}/{{ extract_context.get_session_timestamp()[6:8] }}/{{ trajectory_name }}_{{ extract_context.get_session_timestamp()[-6:] }}.md"
 enabled: true
 operation_mode: "add_only"
 agent_only: true

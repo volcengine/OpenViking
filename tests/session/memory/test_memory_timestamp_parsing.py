@@ -76,8 +76,8 @@ def test_message_range_accepts_extended_fractional_seconds():
     assert msg_range._first_message_time_with_weekday() == "2026-04-17 (Friday)"
 
 
-def test_trajectory_uri_uses_session_date_directories_and_time_suffix():
-    extract_context = ExtractContext([_message(created_at="2024-05-15T15:00:00+08:00")])
+def test_trajectory_uri_uses_stable_session_timestamp_interface():
+    extract_context = SimpleNamespace(get_session_timestamp=lambda: "20240515150000")
     memory_dir = PromptManager._get_bundled_templates_dir() / "memory"
     registry = MemoryTypeRegistry(load_schemas=False)
     registry.load_from_yaml(str(memory_dir / "trajectories.yaml"))

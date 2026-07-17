@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import inspect
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -20,6 +21,11 @@ from openviking.session.memory.page_id_map import PageIdMap
 
 class AttrDict(dict):
     __getattr__ = dict.get
+
+
+def test_extract_loop_does_not_duplicate_vlm_payload_traces() -> None:
+    assert "pretty_print_messages" not in inspect.getsource(ExtractLoop.run)
+    assert "llm_response=" not in inspect.getsource(ExtractLoop._call_llm)
 
 
 class TestResolveOperations:
@@ -191,14 +197,8 @@ class TestPageIdInstruction:
         loop._check_unread_existing_files = AsyncMock(return_value=[])
         loop.finalize_operations = AsyncMock()
 
-        captured_messages = []
-
-        def capture_messages(messages):
-            captured_messages.extend(messages)
-
         with (
             patch("openviking.session.memory.extract_loop.get_openviking_config") as mock_config,
-            patch("openviking.session.memory.extract_loop.pretty_print_messages", capture_messages),
             patch(
                 "openviking.session.memory.extract_loop.SchemaModelGenerator.generate_all_models"
             ),
@@ -211,6 +211,7 @@ class TestPageIdInstruction:
 
             await loop.run()
 
+        captured_messages = loop._call_llm.await_args.args[0]
         system_content = captured_messages[0]["content"]
         assert "## Page ID Rules" in system_content
         assert "## Read Format Rules" in system_content
@@ -270,14 +271,8 @@ class TestPageIdInstruction:
         loop._check_unread_existing_files = AsyncMock(return_value=[])
         loop.finalize_operations = AsyncMock()
 
-        captured_messages = []
-
-        def capture_messages(messages):
-            captured_messages.extend(messages)
-
         with (
             patch("openviking.session.memory.extract_loop.get_openviking_config") as mock_config,
-            patch("openviking.session.memory.extract_loop.pretty_print_messages", capture_messages),
             patch(
                 "openviking.session.memory.extract_loop.SchemaModelGenerator.generate_all_models"
             ),
@@ -290,6 +285,7 @@ class TestPageIdInstruction:
 
             await loop.run()
 
+        captured_messages = loop._call_llm.await_args.args[0]
         system_content = captured_messages[0]["content"]
         assert "## Page ID Rules" in system_content
         assert "## Read Format Rules" in system_content
