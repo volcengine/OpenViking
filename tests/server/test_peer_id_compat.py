@@ -5,11 +5,13 @@
 
 import pytest
 
+from openviking.server.identity import RequestContext, Role
 from openviking.server.routers.search import (
     FindRequest,
     SearchRequest,
 )
-from openviking.server.routers.sessions import AddMessageRequest
+from openviking.server.routers.sessions import AddMessageRequest, _resolve_message_peer_id
+from openviking_cli.session.user_id import UserIdentifier
 
 
 def test_search_request_preserves_legacy_agent_fields_without_peer_selector():
@@ -55,3 +57,27 @@ def test_add_message_request_rejects_path_like_peer_id():
                 "peer_id": "code/agent",
             }
         )
+
+
+def test_actor_peer_defaults_unscoped_session_message_to_current_peer():
+    request = AddMessageRequest.model_validate({"role": "user", "content": "hello"})
+    ctx = RequestContext(
+        user=UserIdentifier("acct", "user"),
+        role=Role.USER,
+        actor_peer_id="code-agent",
+    )
+
+    assert _resolve_message_peer_id(request, ctx) == "code-agent"
+
+
+def test_explicit_session_message_peer_overrides_actor_default():
+    request = AddMessageRequest.model_validate(
+        {"role": "user", "content": "hello", "peer_id": "explicit-peer"}
+    )
+    ctx = RequestContext(
+        user=UserIdentifier("acct", "user"),
+        role=Role.USER,
+        actor_peer_id="code-agent",
+    )
+
+    assert _resolve_message_peer_id(request, ctx) == "explicit-peer"

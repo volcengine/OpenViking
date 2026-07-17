@@ -426,6 +426,7 @@ async def remember(messages: list[StoreMessage]) -> str:
             session.add_message(
                 msg.role,
                 [TextPart(text=msg.content)],
+                peer_id=ctx.actor_peer_id,
             )
     await service.sessions.commit_async(session_id, ctx)
     return f"Stored {len(messages)} message(s) and committed for memory extraction."

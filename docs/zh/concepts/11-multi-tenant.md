@@ -117,17 +117,18 @@ viking://user/alice/peers/web-visitor-alice/resources/
 
 <a id="peer-restricted-view"></a>
 
-### Peer 集合过滤
+### Peer 默认视图
 
 `peer_id` 是当前 user 边界内的内容范围，不会改变 tenant 或 user 身份。
 
-当一次请求只应该看到当前用户 peer 集合中的某一个 peer 时，设置
+当一次请求默认应在当前用户的某一个 peer 工作区内操作时，设置
 `X-OpenViking-Actor-Peer: <peer_id>`，或使用 SDK/CLI 的 `actor_peer_id`：
 
-- 空 target 检索仍包含当前用户根和公共 `viking://resources`。
+- 空 target 检索不再包含 user-root memories/resources，而是包含所选 peer 的 memories/resources；公共 `viking://resources` 和 user skills 仍可用。
 - 检索解析到 `viking://user/{user}/peers` 时，只选择该 peer 的 memories/resources。
 - 文件系统操作不能 read、list、tree、grep/search/find、write、move 或 delete `viking://user/{user}/peers` 下的其他 peer。
-- User-scoped memories、resources、skills、共享 resources 和 session 归属不因 actor peer 改变。
+- 没有显式 `peer_id` 的 session message 会继承 actor peer，因此 `remember`、`ov add-memory` 和 session commit 提取的记忆会写入该 peer。调用方确实需要 user root 时，仍可显式指定 user-memory target。
+- User skills、共享 resources 和 session 归属不因 actor peer 改变。
 - peer ID 必须是安全的单段路径标识，例如 `web-visitor-alice`。
 
 ## 标准使用流程

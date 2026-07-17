@@ -62,19 +62,13 @@ def default_target_directories(
     user_root = canonical_user_root(ctx)
     if context_type == ContextType.MEMORY:
         if ctx.actor_peer_id:
-            return _dedupe(
-                [
-                    f"{user_root}/memories",
-                    f"{user_root}/peers/{ctx.actor_peer_id}/memories",
-                ]
-            )
+            return [f"{user_root}/peers/{ctx.actor_peer_id}/memories"]
         return [user_root]
     if context_type == ContextType.RESOURCE:
         if ctx.actor_peer_id:
             return _dedupe(
                 [
                     "viking://resources",
-                    f"{user_root}/resources",
                     f"{user_root}/peers/{ctx.actor_peer_id}/resources",
                 ]
             )
@@ -137,8 +131,6 @@ def _default_user_root_targets(ctx: RequestContext) -> List[str]:
         return [user_root]
     return _dedupe(
         [
-            f"{user_root}/memories",
-            f"{user_root}/resources",
             *_default_skill_targets(ctx),
             *_actor_peer_targets(ctx),
         ]
@@ -160,7 +152,6 @@ def _actor_peer_targets(ctx: RequestContext) -> List[str]:
 def _is_agent_scope_uri(target_uri: str) -> bool:
     parts = target_uri[len("viking://"):].strip("/").split("/")
     return parts and parts[0] == "agent" and len(parts) >= 2 and parts[1] in {"skills", "endpoints", "tools", "payments"}
-
 
 
 def _resolve_peer_target(

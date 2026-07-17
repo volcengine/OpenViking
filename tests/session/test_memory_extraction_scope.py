@@ -56,7 +56,7 @@ def test_owner_memory_extraction_scope_includes_assistant_peer_ids():
     assert scope.include_session_skills is True
 
 
-def test_actor_memory_extraction_scope_still_uses_policy_and_messages():
+def test_actor_memory_extraction_scope_defaults_to_actor_peer():
     scope = _resolve_memory_extraction_scope(
         _ctx("alice"),
         MemoryPolicy(peer_enabled=True),
@@ -64,6 +64,19 @@ def test_actor_memory_extraction_scope_still_uses_policy_and_messages():
         config_session_skill_extraction_enabled=True,
     )
 
-    assert scope.allow_self_memory is True
-    assert scope.allowed_peer_ids == {"bob"}
-    assert scope.include_session_skills is True
+    assert scope.allow_self_memory is False
+    assert scope.allowed_peer_ids == {"alice", "bob"}
+    assert scope.include_session_skills is False
+
+
+def test_actor_memory_extraction_scope_routes_unscoped_messages_to_actor_peer():
+    scope = _resolve_memory_extraction_scope(
+        _ctx("alice"),
+        MemoryPolicy(peer_enabled=True),
+        [_message()],
+        config_session_skill_extraction_enabled=True,
+    )
+
+    assert scope.allow_self_memory is False
+    assert scope.allowed_peer_ids == {"alice"}
+    assert scope.include_session_skills is False

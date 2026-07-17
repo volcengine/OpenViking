@@ -450,8 +450,8 @@ async def test_store_batch_messages(service):
     assert "2 message" in result
 
 
-async def test_store_does_not_autofill_peer_id_from_ctx(service, monkeypatch):
-    """MCP store should not create synthetic peer_id values."""
+async def test_store_without_actor_peer_keeps_messages_user_scoped(service, monkeypatch):
+    """MCP store without an actor peer keeps messages user-scoped."""
     from openviking.session.session import Session
 
     captured: list[tuple[str, str | None]] = []
@@ -473,6 +473,39 @@ async def test_store_does_not_autofill_peer_id_from_ctx(service, monkeypatch):
     assert captured == [
         ("user", None),
         ("assistant", None),
+    ]
+
+
+async def test_store_defaults_messages_to_actor_peer(service, monkeypatch):
+    from openviking.session.session import Session
+
+    captured: list[tuple[str, str | None]] = []
+    original = Session.add_message
+
+    def _spy(self, role, parts, peer_id=None, created_at=None):
+        captured.append((role, peer_id))
+        return original(self, role, parts, peer_id=peer_id, created_at=created_at)
+
+    monkeypatch.setattr(Session, "add_message", _spy)
+    actor_ctx = RequestContext(
+        user=UserIdentifier("acct", "caller"),
+        role=Role.USER,
+        actor_peer_id="code-agent",
+    )
+    token = _mcp_ctx.set(actor_ctx)
+    try:
+        await remember(
+            messages=[
+                StoreMessage(role="user", content="user msg"),
+                StoreMessage(role="assistant", content="assistant msg"),
+            ]
+        )
+    finally:
+        _mcp_ctx.reset(token)
+
+    assert captured == [
+        ("user", "code-agent"),
+        ("assistant", "code-agent"),
     ]
 
 
