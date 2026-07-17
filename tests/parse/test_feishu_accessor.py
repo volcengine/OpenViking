@@ -332,3 +332,52 @@ def test_access_writes_downloaded_images_next_to_markdown(monkeypatch):
         resource.cleanup()
 
     assert not resource.path.parent.exists()
+
+
+def test_fetch_latest_modify_time_offloads_supported_url(monkeypatch):
+    accessor = FeishuAccessor()
+    calls = []
+
+    def fake_fetch(token, doc_type, access_token):
+        calls.append((token, doc_type, access_token))
+        return 123
+
+    monkeypatch.setattr(accessor, "_fetch_latest_modify_time_sync", fake_fetch)
+
+    result = asyncio.run(
+        accessor.fetch_latest_modify_time(
+            "https://example.feishu.cn/docx/doc_token",
+            feishu_access_token="user-token",
+        )
+    )
+
+    assert result == 123
+    assert calls == [("doc_token", "docx", "user-token")]
+
+
+def test_fetch_latest_modify_time_ignores_unsupported_feishu_url(monkeypatch):
+    accessor = FeishuAccessor()
+    fetch = MagicMock()
+    monkeypatch.setattr(accessor, "_fetch_latest_modify_time_sync", fetch)
+
+    result = asyncio.run(
+        accessor.fetch_latest_modify_time("https://example.feishu.cn/sheets/sheet_token")
+    )
+
+    assert result is None
+    fetch.assert_not_called()
+
+
+def test_fetch_latest_modify_time_fails_open(monkeypatch):
+    accessor = FeishuAccessor()
+
+    def fail(*_args):
+        raise RuntimeError("temporary metadata failure")
+
+    monkeypatch.setattr(accessor, "_fetch_latest_modify_time_sync", fail)
+
+    result = asyncio.run(
+        accessor.fetch_latest_modify_time("https://example.feishu.cn/wiki/wiki_token")
+    )
+
+    assert result is None

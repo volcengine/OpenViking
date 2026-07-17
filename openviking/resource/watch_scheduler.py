@@ -26,6 +26,8 @@ from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
+_FEISHU_LATEST_MODIFY_TIME_KEY = "feishu_latest_modify_time"
+
 
 class WatchScheduler:
     """Scheduled task scheduler for resource watch tasks.
@@ -68,6 +70,7 @@ class WatchScheduler:
         self._executing_tasks: Set[str] = set()
         self._lock = asyncio.Lock()
         self._feishu_oauth_client: Optional[Any] = None
+        self._feishu_accessor: Optional[Any] = None
 
     @property
     def watch_manager(self) -> Optional[WatchManager]:
@@ -225,6 +228,9 @@ class WatchScheduler:
         cancelled = False
         should_deactivate = False
         deactivation_reason = ""
+        feishu_latest_modify_time: Optional[int] = None
+        skip_resource_sync = False
+        resource_sync_succeeded = False
 
         try:
             if not self._check_resource_exists(task.path):
@@ -281,7 +287,28 @@ class WatchScheduler:
                             else:
                                 raise
 
-                if not should_deactivate:
+                    if not should_deactivate:
+                        feishu_latest_modify_time = await self._fetch_feishu_latest_modify_time(
+                            task.path,
+                            processor_kwargs.get("feishu_access_token"),
+                        )
+                        previous_modify_time = (getattr(task, "sync_state", {}) or {}).get(
+                            _FEISHU_LATEST_MODIFY_TIME_KEY
+                        )
+                        skip_resource_sync = (
+                            feishu_latest_modify_time is not None
+                            and previous_modify_time is not None
+                            and feishu_latest_modify_time == previous_modify_time
+                        )
+                        if skip_resource_sync:
+                            logger.info(
+                                "[WatchScheduler] Task %s source is unchanged; "
+                                "skipping full Feishu synchronization",
+                                task.task_id,
+                            )
+                            resource_sync_succeeded = True
+
+                if not should_deactivate and not skip_resource_sync:
                     result = await self._resource_service.add_resource(
                         path=task.path,
                         ctx=ctx,
@@ -295,6 +322,7 @@ class WatchScheduler:
                         skip_watch_management=True,
                         **processor_kwargs,
                     )
+                    resource_sync_succeeded = True
 
                     logger.info(
                         f"[WatchScheduler] Task {task.task_id} executed successfully, "
@@ -333,9 +361,25 @@ class WatchScheduler:
                             f"[WatchScheduler] Deactivated task {task.task_id}: {deactivation_reason}"
                         )
                     else:
-                        await asyncio.shield(
-                            self._watch_manager.update_execution_time(task.task_id)
-                        )
+                        sync_state_updates = None
+                        if (
+                            resource_sync_succeeded
+                            and not skip_resource_sync
+                            and feishu_latest_modify_time is not None
+                        ):
+                            sync_state_updates = {
+                                _FEISHU_LATEST_MODIFY_TIME_KEY: feishu_latest_modify_time
+                            }
+                        if sync_state_updates is None:
+                            update_execution_time = self._watch_manager.update_execution_time(
+                                task.task_id
+                            )
+                        else:
+                            update_execution_time = self._watch_manager.update_execution_time(
+                                task.task_id,
+                                sync_state_updates=sync_state_updates,
+                            )
+                        await asyncio.shield(update_execution_time)
                         logger.info(
                             f"[WatchScheduler] Updated execution time for task {task.task_id}"
                         )
@@ -375,6 +419,26 @@ class WatchScheduler:
         if self._feishu_oauth_client is None:
             self._feishu_oauth_client = FeishuOAuthClient.from_config()
         return self._feishu_oauth_client
+
+    def _get_feishu_accessor(self):
+        if self._feishu_accessor is None:
+            from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+
+            self._feishu_accessor = FeishuAccessor()
+        return self._feishu_accessor
+
+    async def _fetch_feishu_latest_modify_time(
+        self,
+        path: str,
+        feishu_access_token: Optional[str] = None,
+    ) -> Optional[int]:
+        accessor = self._get_feishu_accessor()
+        if not accessor.can_handle(path):
+            return None
+        return await accessor.fetch_latest_modify_time(
+            path,
+            feishu_access_token=feishu_access_token,
+        )
 
     def _check_resource_exists(self, path: str) -> bool:
         """Check if a resource path exists.

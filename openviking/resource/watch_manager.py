@@ -70,6 +70,9 @@ class WatchTask(BaseModel):
     processor_kwargs: Dict[str, Any] = Field(
         default_factory=dict, description="Extra kwargs forwarded to processor"
     )
+    sync_state: Dict[str, Any] = Field(
+        default_factory=dict, description="Private source synchronization state"
+    )
     auth_state: Optional[Dict[str, Any]] = Field(
         default=None, description="Private authentication state for scheduled re-processing"
     )
@@ -114,6 +117,8 @@ class WatchTask(BaseModel):
     def to_storage_dict(self) -> Dict[str, Any]:
         """Convert task to dictionary for watch-task persistence."""
         data = self.to_dict()
+        if self.sync_state:
+            data["sync_state"] = self.sync_state
         if self.auth_state is not None:
             data["auth_state"] = self.auth_state
         return data
@@ -130,6 +135,8 @@ class WatchTask(BaseModel):
             data["next_execution_time"] = datetime.fromisoformat(data["next_execution_time"])
         if data.get("processor_kwargs") is None:
             data["processor_kwargs"] = {}
+        if not isinstance(data.get("sync_state"), dict):
+            data["sync_state"] = {}
         if data.get("auth_state") is not None and not isinstance(data.get("auth_state"), dict):
             data["auth_state"] = None
         return cls(**data)
@@ -802,16 +809,26 @@ class WatchManager:
 
             return task
 
-    async def update_execution_time(self, task_id: str) -> None:
+    async def update_execution_time(
+        self,
+        task_id: str,
+        *,
+        sync_state_updates: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """Update task execution time after execution.
 
         Args:
             task_id: Task ID to update
+            sync_state_updates: Private source state to persist atomically with
+                the successful execution timestamp.
         """
         async with self._lock:
             task = self._tasks.get(task_id)
             if not task:
                 return
+
+            if sync_state_updates:
+                task.sync_state.update(sync_state_updates)
 
             if not task.is_active or task.watch_interval <= 0:
                 task.is_active = False
