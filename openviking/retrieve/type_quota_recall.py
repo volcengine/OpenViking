@@ -16,6 +16,7 @@ from typing import Any, Mapping
 
 from openviking.core.namespace import canonical_user_root
 from openviking.server.identity import RequestContext
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
 TYPE_ORDER = ("events", "entities", "preferences", "experiences")
 DEFAULT_QUOTAS = {"events": 10, "entities": 10, "preferences": 3, "experiences": 0}
@@ -399,7 +400,11 @@ async def search_type_quota_recall(
         abstract = _abstract(item)
         content = ""
         try:
-            content = await service.fs.read(uri, ctx=read_ctx)
+            raw_content = await service.fs.read(uri, ctx=read_ctx)
+            if isinstance(raw_content, bytes):
+                raw_content = raw_content.decode("utf-8")
+            if isinstance(raw_content, str):
+                content = MemoryFileUtils.read(raw_content, uri=uri).content
         except Exception:
             content = ""
 

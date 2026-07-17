@@ -1824,13 +1824,16 @@ async def test_viking_client_normalizes_system_tool_and_tool_result_messages(mon
         "assistant",
         "assistant",
         "assistant",
+        "assistant",
     ]
     assert all("peer_id" not in message for message in normalized)
-    assert normalized[0]["content"] == "system context"
-    assert normalized[1]["content"] == "tool response"
-    assert normalized[2]["content"] == "assistant answer"
-    assert normalized[2]["parts"][1]["type"] == "tool"
-    assert normalized[2]["parts"][1]["tool_name"] == "read_file"
+    assert normalized[0]["parts"] == [{"type": "text", "text": "system context"}]
+    assert normalized[1]["parts"] == [{"type": "text", "text": "tool response"}]
+    assert "content" not in normalized[2]
+    assert normalized[2]["parts"][0]["type"] == "tool"
+    assert normalized[2]["parts"][0]["tool_name"] == "read_file"
+    assert "content" not in normalized[3]
+    assert normalized[3]["parts"] == [{"type": "text", "text": "assistant answer"}]
 
 
 @pytest.mark.asyncio

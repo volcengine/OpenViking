@@ -104,6 +104,10 @@ def test_agents_config_enables_subagents_by_default():
     assert AgentsConfig().subagent_enabled is True
 
 
+def test_agents_config_keeps_ten_recent_openviking_messages_by_default():
+    assert AgentsConfig().commit_keep_recent_count == 10
+
+
 def test_agent_loop_omits_spawn_tool_when_subagents_disabled(temp_dir: Path, monkeypatch):
     monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
     monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
@@ -206,14 +210,26 @@ async def test_agent_loop_makes_final_no_tool_call_when_iteration_limit_reached(
             )
             if len(self.calls) == 1:
                 return LLMResponse(
-                    content=None,
+                    content="Let me check these sources.",
                     tool_calls=[
                         ToolCallRequest(
                             id="call-1",
                             name="lookup_fact",
-                            arguments={"query": "current facts"},
+                            arguments={"query": "current facts 1"},
                             tokens=3,
-                        )
+                        ),
+                        ToolCallRequest(
+                            id="call-2",
+                            name="lookup_fact",
+                            arguments={"query": "current facts 2"},
+                            tokens=3,
+                        ),
+                        ToolCallRequest(
+                            id="call-3",
+                            name="lookup_fact",
+                            arguments={"query": "current facts 3"},
+                            tokens=3,
+                        ),
                     ],
                     usage={"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
                 )
@@ -259,10 +275,12 @@ async def test_agent_loop_makes_final_no_tool_call_when_iteration_limit_reached(
     loop.tools = tools
 
     session_key = SessionKey(type="cli", channel_id="default", chat_id="session-limit")
+    captured_turns = []
     final_content, _reasoning, tools_used, token_usage, iteration = await loop._run_agent_loop(
         messages=[{"role": "user", "content": "please answer with lookup"}],
         session_key=session_key,
         publish_events=False,
+        captured_turns=captured_turns,
     )
 
     assert final_content == "final answer from gathered tool results"
@@ -277,9 +295,25 @@ async def test_agent_loop_makes_final_no_tool_call_when_iteration_limit_reached(
         message.get("content") == "tool result: useful context"
         for message in provider.calls[1]["messages"]
     )
-    assert len(tools.execute_calls) == 1
-    assert tools.execute_calls[0][:2] == ("lookup_fact", {"query": "current facts"})
-    assert [tool["tool_name"] for tool in tools_used] == ["lookup_fact"]
+    assert len(tools.execute_calls) == 3
+    assert tools.execute_calls[0][:2] == ("lookup_fact", {"query": "current facts 1"})
+    assert [tool["tool_name"] for tool in tools_used] == [
+        "lookup_fact",
+        "lookup_fact",
+        "lookup_fact",
+    ]
+    assert len(captured_turns) == 1
+    assert captured_turns[0]["content"] == "Let me check these sources."
+    assert [tool["tool_call_id"] for tool in captured_turns[0]["tool_calls"]] == [
+        "call-1",
+        "call-2",
+        "call-3",
+    ]
+    assert [tool["result"] for tool in captured_turns[0]["tool_calls"]] == [
+        "tool result: useful context",
+        "tool result: useful context",
+        "tool result: useful context",
+    ]
     assert token_usage == {"prompt_tokens": 17, "completion_tokens": 7, "total_tokens": 24}
 
 
@@ -552,6 +586,68 @@ async def test_agent_loop_build_prompt_history_skips_tail_when_sync_cursor_is_pa
     history = await loop._build_prompt_history(session)
 
     assert [message["content"] for message in history] == ["OV user turn"]
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_build_prompt_history_enforces_token_budget_for_live_tool_outputs(
+    temp_dir: Path, monkeypatch
+):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    tool_output = "x" * 10_000
+    fake_ov_client = _FakeOVClient(
+        context_payload={
+            "messages": [
+                {"role": "user", "parts": [{"type": "text", "text": "original query"}]},
+                *[
+                    {
+                        "role": "assistant",
+                        "parts": [
+                            {"type": "text", "text": f"turn {index}"},
+                            {"type": "tool", "tool_output": tool_output},
+                        ],
+                    }
+                    for index in range(10)
+                ],
+                {"role": "assistant", "parts": [{"type": "text", "text": "final answer"}]},
+            ]
+        }
+    )
+
+    async def fake_get_ov_client(self, session_key, openviking_connection=None, actor_peer_id=None):
+        del self, session_key, openviking_connection, actor_peer_id
+        return fake_ov_client
+
+    monkeypatch.setattr(AgentLoop, "_get_ov_client", fake_get_ov_client)
+
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_FakeProvider(),
+        workspace=temp_dir / "workspace",
+        config=Config(
+            storage_workspace=str(temp_dir),
+            ov_server={"server_url": "http://127.0.0.1:1933"},
+            agents={"session_context_enabled": True, "session_context_token_budget": 3000},
+        ),
+    )
+    session = loop.sessions.get_or_create(
+        SessionKey(type="cli", channel_id="default", chat_id="session-large-tools"),
+        skip_heartbeat=True,
+    )
+    session.metadata["openviking"] = {
+        "session_id": "ov-session-large-tools",
+        "last_synced_local_index": -1,
+    }
+
+    history = await loop._build_prompt_history(session)
+
+    assert fake_ov_client.context_calls == [("ov-session-large-tools", 3000)]
+    assert sum(loop._history_message_tokens(message) for message in history) <= 3000
+    assert history[-1]["content"] == "final answer"
+    assert sum(str(message.get("content", "")).count("x") for message in history) < 100_000
+    assert any("History truncated" in str(message.get("content", "")) for message in history)
 
 
 @pytest.mark.asyncio
@@ -996,10 +1092,32 @@ async def test_agent_loop_emits_normalized_response_completed_payload(temp_dir: 
     )
 
     async def fake_run_agent_loop(self, **kwargs):
+        turn_tools = [
+            {
+                "tool_call_id": "call-search",
+                "tool_name": "search_docs",
+                "args": '{"query": "docs"}',
+                "result": "search result",
+            },
+            {
+                "tool_call_id": "call-fetch",
+                "tool_name": "fetch_page",
+                "args": '{"url": "https://example.com"}',
+                "result": "page result",
+            },
+        ]
+        kwargs["captured_turns"].append(
+            {
+                "role": "assistant",
+                "content": "I will check the docs.",
+                "tool_calls": turn_tools,
+                "timestamp": "2026-04-30T00:05:01",
+            }
+        )
         return (
             "final answer",
             None,
-            [{"tool_name": "search_docs"}, {"tool_name": "fetch_page"}],
+            turn_tools,
             {"prompt_tokens": 12, "completion_tokens": 8},
             3,
         )
@@ -1062,8 +1180,32 @@ async def test_agent_loop_emits_normalized_response_completed_payload(temp_dir: 
     assert fake_langfuse.calls == [(response.response_id, payload)]
 
     session_path = temp_dir / "bot" / "sessions" / "cli__default__session-1.jsonl"
-    metadata = json.loads(session_path.read_text().splitlines()[0])
+    session_lines = session_path.read_text().splitlines()
+    metadata = json.loads(session_lines[0])
     assert metadata["metadata"]["response_facts"][response.response_id] == payload
+    persisted_assistant = json.loads(session_lines[-1])
+    assert persisted_assistant["content"] == "final answer"
+    assert persisted_assistant["agent_turns"] == [
+        {
+            "role": "assistant",
+            "content": "I will check the docs.",
+            "tool_calls": [
+                {
+                    "tool_call_id": "call-search",
+                    "tool_name": "search_docs",
+                    "args": '{"query": "docs"}',
+                    "result": "search result",
+                },
+                {
+                    "tool_call_id": "call-fetch",
+                    "tool_name": "fetch_page",
+                    "args": '{"url": "https://example.com"}',
+                    "result": "page result",
+                },
+            ],
+            "timestamp": "2026-04-30T00:05:01",
+        }
+    ]
 
 
 @pytest.mark.asyncio

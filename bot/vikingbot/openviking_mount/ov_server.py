@@ -886,6 +886,87 @@ class VikingClient:
         normalized: list[dict[str, Any]] = []
         assistant_peer_id = self._assistant_peer_id()
 
+        def build_payload(
+            payload_role: str,
+            parts: list[dict[str, Any]],
+            created_at: Any,
+            peer_id: Optional[str],
+        ) -> dict[str, Any]:
+            payload: dict[str, Any] = {
+                "role": payload_role,
+                "parts": parts,
+                "created_at": created_at,
+            }
+            if peer_id:
+                payload["peer_id"] = peer_id
+            return payload
+
+        def build_tool_parts(tool_infos: Any) -> list[dict[str, Any]]:
+            parts: list[dict[str, Any]] = []
+            if not isinstance(tool_infos, list):
+                return parts
+
+            for tool_info in tool_infos:
+                if not isinstance(tool_info, dict):
+                    continue
+                tool_name = str(tool_info.get("tool_name") or tool_info.get("name") or "").strip()
+                if not tool_name:
+                    continue
+                if tool_info.get("auto") is True or tool_name == "auto_memory_search":
+                    continue
+
+                raw_args = tool_info.get("args", tool_info.get("arguments", {}))
+                if isinstance(raw_args, dict):
+                    tool_input = raw_args
+                else:
+                    try:
+                        tool_input = json.loads(raw_args) if raw_args else {}
+                    except Exception:
+                        tool_input = {"raw_args": str(raw_args)}
+
+                result_str = str(tool_info.get("result", tool_info.get("tool_output", "")))
+                skill_uri = ""
+                if tool_name == "read_file" and result_str:
+                    match = re.search(
+                        r"^---\s*\nname:\s*(.+?)\s*\n",
+                        result_str,
+                        re.MULTILINE,
+                    )
+                    if match:
+                        skill_name = match.group(1).strip()
+                        skill_uri = self._skill_memory_uri(skill_name)
+
+                tool_id = str(
+                    tool_info.get("tool_call_id")
+                    or tool_info.get("tool_id")
+                    or tool_info.get("id")
+                    or f"{tool_name}_{uuid.uuid4().hex[:8]}"
+                )
+                explicit_status = str(tool_info.get("tool_status") or "").strip()
+                parts.append(
+                    {
+                        "type": "tool",
+                        "tool_id": tool_id,
+                        "tool_name": tool_name,
+                        "tool_uri": f"viking://session/{session_id}/tools/{tool_id}"
+                        if session_id
+                        else "",
+                        "tool_input": tool_input,
+                        "tool_output": result_str,
+                        "tool_status": explicit_status
+                        or (
+                            "completed"
+                            if tool_info.get("execute_success", True)
+                            else "error"
+                        ),
+                        "skill_uri": skill_uri,
+                        "duration_ms": float(tool_info.get("duration", 0.0) or 0.0),
+                        "prompt_tokens": tool_info.get("input_token"),
+                        "completion_tokens": tool_info.get("output_token"),
+                    }
+                )
+            return parts
+
         for message in messages:
             role = str(message.get("role") or "").strip().lower()
             if role not in {"user", "assistant", "system", "tool"}:
@@ -893,72 +974,13 @@ class VikingClient:
 
             content = self._session_message_content(message)
             tools_used = message.get("tools_used") or []
-            parts: list[dict[str, Any]] = []
+            tool_parts = build_tool_parts(tools_used)
+            agent_turns = message.get("agent_turns")
 
-            if content:
-                parts.append({"type": "text", "text": content})
-
-            if isinstance(tools_used, list):
-                for tool_info in tools_used:
-                    if not isinstance(tool_info, dict):
-                        continue
-                    tool_name = str(tool_info.get("tool_name") or "").strip()
-                    if not tool_name:
-                        continue
-
-                    raw_args = tool_info.get("args", {})
-                    if isinstance(raw_args, dict):
-                        tool_input = raw_args
-                    else:
-                        try:
-                            tool_input = json.loads(raw_args) if raw_args else {}
-                        except Exception:
-                            tool_input = {"raw_args": str(raw_args)}
-
-                    result_str = str(tool_info.get("result", ""))
-                    skill_uri = ""
-                    if tool_name == "read_file" and result_str:
-                        match = re.search(
-                            r"^---\s*\nname:\s*(.+?)\s*\n",
-                            result_str,
-                            re.MULTILINE,
-                        )
-                        if match:
-                            skill_name = match.group(1).strip()
-                            skill_uri = self._skill_memory_uri(skill_name)
-
-                    tool_id = f"{tool_name}_{uuid.uuid4().hex[:8]}"
-                    parts.append(
-                        {
-                            "type": "tool",
-                            "tool_id": tool_id,
-                            "tool_name": tool_name,
-                            "tool_uri": f"viking://session/{session_id}/tools/{tool_id}"
-                            if session_id
-                            else "",
-                            "tool_input": tool_input,
-                            "tool_output": result_str[:2000],
-                            "tool_status": "completed"
-                            if tool_info.get("execute_success", True)
-                            else "error",
-                            "skill_uri": skill_uri,
-                            "duration_ms": float(tool_info.get("duration", 0.0) or 0.0),
-                            "prompt_tokens": tool_info.get("input_token"),
-                            "completion_tokens": tool_info.get("output_token"),
-                        }
-                    )
-
-            if not parts:
+            if not content and not tool_parts and not agent_turns:
                 continue
 
             ov_role = "user" if role == "user" else "assistant"
-            payload = {
-                "role": ov_role,
-                "content": content,
-                "parts": parts,
-                "created_at": message.get("created_at") or message.get("timestamp"),
-            }
-
             peer_id = message.get("peer_id")
             if not peer_id and ov_role == "user":
                 peer_id = message.get("sender_id") or default_user_peer_id
@@ -966,10 +988,58 @@ class VikingClient:
                 peer_id = assistant_peer_id
 
             safe_message_peer_id = self._peer_id(peer_id)
-            if safe_message_peer_id:
-                payload["peer_id"] = safe_message_peer_id
+            created_at = message.get("created_at") or message.get("timestamp")
 
-            normalized.append(payload)
+            turn_payloads: list[dict[str, Any]] = []
+            if ov_role == "assistant" and isinstance(agent_turns, list):
+                for turn in agent_turns:
+                    if not isinstance(turn, dict):
+                        continue
+                    turn_parts: list[dict[str, Any]] = []
+                    turn_content = self._session_message_content(turn)
+                    if turn_content:
+                        turn_parts.append({"type": "text", "text": turn_content})
+                    turn_parts.extend(build_tool_parts(turn.get("tool_calls") or turn.get("tools")))
+                    if not turn_parts:
+                        continue
+                    turn_payloads.append(
+                        build_payload(
+                            "assistant",
+                            turn_parts,
+                            turn.get("created_at") or turn.get("timestamp") or created_at,
+                            safe_message_peer_id,
+                        )
+                    )
+
+            if ov_role == "user" and content:
+                normalized.append(
+                    build_payload(
+                        "user",
+                        [{"type": "text", "text": content}],
+                        created_at,
+                        safe_message_peer_id,
+                    )
+                )
+            if turn_payloads:
+                normalized.extend(turn_payloads)
+            elif tool_parts:
+                normalized.append(
+                    build_payload(
+                        "assistant",
+                        tool_parts,
+                        created_at,
+                        safe_message_peer_id if ov_role == "assistant" else None,
+                    )
+                )
+            if ov_role == "assistant" and content:
+                normalized.append(
+                    build_payload(
+                        "assistant",
+                        [{"type": "text", "text": content}],
+                        created_at,
+                        safe_message_peer_id,
+                    )
+                )
 
         return normalized
 
