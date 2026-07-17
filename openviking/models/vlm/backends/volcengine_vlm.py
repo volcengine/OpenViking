@@ -13,6 +13,7 @@ from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
 
 from ..base import ToolCall, VLMResponse
+from ..message_format import format_messages
 from .openai_vlm import OpenAIVLM
 
 logger = get_logger(__name__)
@@ -173,8 +174,7 @@ class VolcEngineVLM(OpenAIVLM):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
 
-        # 用 tracer.info 打印请求
-        tracer.info(f"request: {json.dumps(kwargs_messages, ensure_ascii=False, indent=2)}")
+        tracer.info(f"request: {format_messages(kwargs_messages)}")
         if tools:
             tracer.info(
                 f"tools: {json.dumps([t['function']['name'] for t in tools], ensure_ascii=False)}"

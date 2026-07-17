@@ -33,6 +33,7 @@ from openviking.session.memory.utils.line_numbers import (
     strip_line_numbers,
 )
 from openviking.session.memory.utils.messages import (
+    format_messages,
     parse_memory_file_with_fields,
     pretty_print_messages,
 )
@@ -59,6 +60,7 @@ __all__ = [
     "split_content_lines",
     "strip_line_numbers",
     # Messages
+    "format_messages",
     "pretty_print_messages",
     "parse_memory_file_with_fields",
     # URI

@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import functools
 import inspect
-import json
 from collections.abc import Callable, Sequence
 from typing import Any, TypeVar, cast
 
 from openviking.telemetry.tracer import tracer
 
 from .codecs import ReplayCodec, encode_value, register_codec
+from .json_attributes import encode_json_attribute
 from .registry import register_component, register_entry
 from .runtime import current_replay_session
 
@@ -79,7 +79,7 @@ def _decorate_call(
         return encode_value(values)
 
     def annotate(span: Any, key: str, value: Any) -> None:
-        span.set_attribute(key, value if isinstance(value, str) else _json(value))
+        span.set_attribute(key, value if isinstance(value, str) else encode_json_attribute(value))
 
     def start(arguments: dict[str, Any]):
         context_manager = tracer.start_as_current_span(f"replay.{kind}:{name}")
@@ -139,7 +139,3 @@ def _decorate_call(
             context_manager.__exit__(None, None, None)
 
     return cast(F, sync_wrapper)
-
-
-def _json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)

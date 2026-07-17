@@ -19,6 +19,7 @@ from openviking.telemetry.replay import (
     decode_value,
     encode_value,
 )
+from openviking.telemetry.replay.trace import entries_from_jaeger_trace
 
 
 class AliasedReplayPayload(BaseModel):
@@ -202,3 +203,94 @@ async def test_entry_and_mock_record_structured_span_attributes(monkeypatch) -> 
     assert json.loads(entry_span.attributes["replay.arguments"]) == encode_value({"key": "a"})
     assert json.loads(mock_span.attributes["replay.match"]) == encode_value({"key": "a"})
     assert json.loads(mock_span.attributes["replay.result"]) == encode_value("value:a")
+
+
+@pytest.mark.asyncio
+async def test_large_replay_attributes_are_compressed_and_parseable(monkeypatch) -> None:
+    spans = []
+
+    class FakeSpan:
+        def __init__(self, name):
+            self.name = name
+            self.attributes = {}
+
+        def set_attribute(self, key, value):
+            self.attributes[key] = value
+
+        def record_exception(self, _error):
+            pass
+
+    class FakeSpanContext:
+        def __init__(self, name):
+            self.span = FakeSpan(name)
+
+        def __enter__(self):
+            spans.append(self.span)
+            return self.span
+
+        def __exit__(self, *_args):
+            pass
+
+    monkeypatch.setattr(
+        "openviking.telemetry.replay.api.tracer.start_as_current_span",
+        lambda name: FakeSpanContext(name),
+    )
+
+    @replay.entry("test.record.large")
+    async def execute(value: str) -> str:
+        return value
+
+    value = "large replay value " * 10_000
+    assert await execute(value) == value
+
+    entry_span = spans[0]
+    assert entry_span.attributes["replay.arguments"].startswith("zlib+base64:")
+    assert entry_span.attributes["replay.result"].startswith("zlib+base64:")
+
+    trace = {
+        "data": [
+            {
+                "spans": [
+                    {
+                        "spanID": "01",
+                        "operationName": entry_span.name,
+                        "startTime": 1,
+                        "references": [],
+                        "tags": [
+                            {"key": key, "type": "string", "value": attribute_value}
+                            for key, attribute_value in entry_span.attributes.items()
+                        ],
+                    }
+                ]
+            }
+        ]
+    }
+
+    [record] = entries_from_jaeger_trace(trace)
+    assert record.arguments == encode_value({"value": value})
+    assert record.result == encode_value(value)
+
+
+def test_invalid_compressed_replay_attribute_fails_immediately() -> None:
+    trace = {
+        "data": [
+            {
+                "spans": [
+                    {
+                        "spanID": "01",
+                        "startTime": 1,
+                        "tags": [
+                            {"key": "replay.kind", "value": "entry"},
+                            {"key": "replay.name", "value": "test.invalid"},
+                            {"key": "replay.module", "value": "tests.invalid"},
+                            {"key": "replay.outcome", "value": "returned"},
+                            {"key": "replay.arguments", "value": "zlib+base64:not-base64"},
+                        ],
+                    }
+                ]
+            }
+        ]
+    }
+
+    with pytest.raises(ReplayCodecError, match="replay.arguments.*not valid JSON"):
+        entries_from_jaeger_trace(trace)

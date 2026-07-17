@@ -13,12 +13,65 @@ from openviking.session.memory.dataclass import (
 )
 from openviking.session.memory.merge_op.base import FieldType, MergeOp
 from openviking.session.memory.utils import (
+    format_messages,
     generate_uri,
     is_uri_allowed,
     parse_memory_file_with_fields,
     validate_uri_template,
 )
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+
+
+def test_format_messages_renders_readable_roles_and_tool_exchange() -> None:
+    assert format_messages.__module__ == "openviking.models.vlm.message_format"
+
+    messages = [
+        {"role": "system", "content": "Follow the rules."},
+        {"role": "user", "content": "Read the memory."},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "function": {
+                        "name": "read",
+                        "arguments": '{"uri": "viking://memories/example"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call-1",
+            "content": '{"content": "example"}',
+        },
+    ]
+
+    formatted = format_messages(messages)
+
+    assert (
+        formatted
+        == """=== Messages ===
+
+[system]
+Follow the rules.
+
+[user]
+Read the memory.
+
+[assistant tool_call] (id=call-1, name=read)
+{
+  "uri": "viking://memories/example"
+}
+
+[tool] (id=call-1)
+{
+  "content": "example"
+}
+
+=== End Messages ==="""
+    )
 
 
 class TestUriGeneration:

@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from .json_attributes import decode_json_attribute
 from .models import EntryRecord, MockRecord, ReplayCodecError
 
 
@@ -108,8 +109,8 @@ def _optional_json_object(tags: dict[str, Any], key: str) -> dict[str, Any] | No
     if value is None:
         return None
     try:
-        decoded = json.loads(value) if isinstance(value, str) else value
-    except json.JSONDecodeError as error:
+        decoded = decode_json_attribute(value) if isinstance(value, str) else value
+    except (json.JSONDecodeError, ValueError) as error:
         raise ReplayCodecError(f"Replay span {key!r} is not valid JSON") from error
     if not isinstance(decoded, dict):
         raise ReplayCodecError(f"Replay span {key!r} must contain a JSON object")
