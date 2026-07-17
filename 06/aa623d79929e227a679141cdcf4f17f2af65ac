@@ -1,0 +1,39 @@
+.gitignore
+  s_737a1124a834e6::t_a5f423f764bbbd 226
+benchmark/wiki/judge.py
+  s_6cc54644bd9b2c::t_b7f5085666ee57 1-657
+benchmark/wiki/run_eval.py
+  s_6cc54644bd9b2c::t_7308c8b23c0759 1-883
+examples/wiki-demo/journey-to-the-west/ab-eval/natural-qa-research.md
+  s_737a1124a834e6::t_84f30a2e700734 1-42
+examples/wiki-demo/journey-to-the-west/ab-eval/wiki-first-pilot.json
+  s_737a1124a834e6::t_c7f224026e697c 1-3221
+examples/wiki-demo/journey-to-the-west/ab-eval/wiki-first-questions.json
+  s_737a1124a834e6::t_b73b3092f77819 1-308
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "06aa623d79929e227a679141cdcf4f17f2af65ac",
+  "prompts": {},
+  "sessions": {
+    "s_6cc54644bd9b2c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6f25-ed6d-7311-aa8d-b826896904d1",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    },
+    "s_737a1124a834e6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6e25-168d-79c0-b357-d8741d4c5024",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
