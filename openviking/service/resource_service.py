@@ -1301,7 +1301,9 @@ class ResourceService:
                 "wait=true (Connector imports run asynchronously; poll the returned task_id)"
             )
         if reason:
-            unsupported.append("reason (Connector imports cannot preserve resource-reason semantics)")
+            unsupported.append(
+                "reason (Connector imports cannot preserve resource-reason semantics)"
+            )
         if instruction:
             unsupported.append("instruction")
         if not build_index:

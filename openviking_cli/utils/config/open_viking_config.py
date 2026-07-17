@@ -62,9 +62,7 @@ class ConnectorConfig(BaseModel):
     tracker: str = ""
     timeout_seconds: int = 3600
     poll_interval_ms: int = 5000
-    allowed_add_types: List[str] = Field(
-        default_factory=lambda: ["tos"]
-    )
+    allowed_add_types: List[str] = Field(default_factory=lambda: ["tos"])
 
     model_config = {"extra": "forbid"}
 
