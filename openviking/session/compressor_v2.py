@@ -583,7 +583,6 @@ class SessionCompressorV2:
                 continue
 
             exp_provider = AgentExperienceContextProvider(
-                messages=messages,
                 trajectory_summary=traj_content,
                 trajectory_uri=traj_uri,
             )

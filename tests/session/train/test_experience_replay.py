@@ -6,18 +6,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from openviking.message import Message
-from openviking.message.part import TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.agent_experience_context_provider import (
     AgentExperienceContextProvider,
-)
-from openviking.session.memory.dataclass import MemoryFile
-from openviking.session.memory.experience_evidence import (
     CandidateExperienceEvidence,
     ExperienceEvidenceBundle,
     ExperienceEvidenceQuery,
 )
+from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.train.components import gradient_estimator as gradient_estimator_module
 from openviking.session.train.components.gradient_estimator import (
     ExperienceGradientEstimateRequest,
@@ -45,14 +41,6 @@ def _request() -> ExperienceGradientEstimateRequest:
             retrieval_anchor="Stage: final",
             metadata={"training_category": "booking"},
         ),
-        messages=[
-            Message(
-                id="m1",
-                role="user",
-                parts=[TextPart(text="book this flight")],
-                created_at="2026-07-17T08:00:00Z",
-            )
-        ],
         evaluation=RubricEvaluation(
             passed=False,
             score=0.0,
@@ -72,7 +60,6 @@ def _request() -> ExperienceGradientEstimateRequest:
 
 def _evidence_query(request: ExperienceGradientEstimateRequest) -> ExperienceEvidenceQuery:
     provider = AgentExperienceContextProvider(
-        messages=request.messages,
         trajectory_summary=request.trajectory.content,
         trajectory_uri=request.trajectory.uri,
         case_uri=request.case_uri,

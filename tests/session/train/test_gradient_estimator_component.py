@@ -8,8 +8,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from openviking.message import Message
-from openviking.message.part import TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.experience_sections import render_experience_sections
@@ -112,7 +110,6 @@ def _experience_set() -> ExperienceSet:
 def _context() -> ExperienceGradientContext:
     return ExperienceGradientContext(
         request_context=RequestContext(UserIdentifier("account", "user"), Role.USER),
-        messages=[],
     )
 
 
@@ -175,19 +172,13 @@ async def test_experience_gradient_estimator_schedules_isolated_per_trajectory_r
         ]
     )
     context = _context()
-    context.messages = [Message(id="m1", role="user", parts=[TextPart(text="original")])]
-    analysis.metadata["rollout_messages"] = [
-        Message(id="m2", role="user", parts=[TextPart(text="rollout")])
-    ]
     estimator = RecordingEntryEstimator()
 
     gradients = await estimator.estimate(analysis, _experience_set(), context)
 
     assert gradients == [analysis.trajectories[0].uri, analysis.trajectories[1].uri]
     assert [request.trajectory for request in estimator.requests] == analysis.trajectories[:2]
-    assert all(
-        request.messages == analysis.metadata["rollout_messages"] for request in estimator.requests
-    )
+    assert all(not hasattr(request, "messages") for request in estimator.requests)
     assert estimator.requests[0] is not estimator.requests[1]
     assert estimator.requests[1].case_uri == "viking://user/u/memories/cases/case-1.md"
     assert "current_analysis" not in context.metadata
@@ -409,7 +400,6 @@ async def test_experience_gradient_estimator_skips_empty_content_and_handles_ext
 
     strict_context = ExperienceGradientContext(
         request_context=_context().request_context,
-        messages=[],
         strict_extract_errors=True,
     )
     with pytest.raises(RuntimeError, match="extract failure"):
@@ -452,7 +442,6 @@ async def test_experience_gradient_estimator_runs_extract_loop(monkeypatch):
 
     assert gradients == []
     assert captured["provider_kwargs"] == {
-        "messages": context.messages,
         "trajectory_summary": analysis.trajectories[0].content,
         "trajectory_uri": analysis.trajectories[0].uri,
     }

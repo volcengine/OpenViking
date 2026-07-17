@@ -643,7 +643,6 @@ async def _run_policy_optimization_pipeline_real_config_llm_e2e_writes_updated_e
             analysis_context=TrajectoryAnalyzerContext(request_context=request_context),
             gradient_context=ExperienceGradientContext(
                 request_context=request_context,
-                messages=[],
             ),
             optimization_context=PatchMergePolicyOptimizerContext(request_context=request_context),
             apply_context=request_context,
@@ -759,7 +758,7 @@ async def test_experience_gradient_estimator_real_config_llm_generates_gradient(
     gradients = await estimator.estimate(
         analysis,
         policy_set,
-        ExperienceGradientContext(request_context=request_context, messages=[]),
+        ExperienceGradientContext(request_context=request_context),
     )
 
     assert gradients

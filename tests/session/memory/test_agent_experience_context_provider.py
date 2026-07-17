@@ -13,16 +13,14 @@ from openviking.message.part import TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.agent_experience_context_provider import (
     AgentExperienceContextProvider,
+    CandidateExperienceEvidence,
+    ExperienceEvidenceBundle,
+    TrajectoryEvidence,
 )
 from openviking.session.memory.agent_trajectory_context_provider import (
     AgentTrajectoryContextProvider,
 )
 from openviking.session.memory.dataclass import MemoryFile
-from openviking.session.memory.experience_evidence import (
-    CandidateExperienceEvidence,
-    ExperienceEvidenceBundle,
-    TrajectoryEvidence,
-)
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
@@ -48,7 +46,6 @@ def _loader(bundle: ExperienceEvidenceBundle):
 
 def test_create_tool_context_uses_extract_context_page_id_map():
     provider = AgentExperienceContextProvider(
-        messages=[],
         trajectory_summary="album release party discussion",
         trajectory_uri="viking://user/user_sample_9/memories/trajectories/album_release_party_discussion.md",
     )
@@ -77,7 +74,6 @@ def test_user_memory_provider_splits_but_trajectory_provider_keeps_messages_whol
 
 def test_agent_experience_instruction_preserves_coupled_scope_repairs():
     provider = AgentExperienceContextProvider(
-        messages=[],
         trajectory_summary="scope and communication failure",
         trajectory_uri="viking://user/user_1/memories/trajectories/scope_failure.md",
     )
@@ -120,11 +116,10 @@ def test_experience_schema_action_benefit_rule_requires_authoritative_evidence()
 
 
 @pytest.mark.asyncio
-async def test_agent_experience_prefetch_starts_with_conversation_and_new_trajectory_read():
+async def test_agent_experience_prefetch_starts_with_new_trajectory_without_conversation():
     evidence_loader = _loader(ExperienceEvidenceBundle())
     provider = AgentExperienceContextProvider(
-        messages=[],
-        trajectory_summary="album release party discussion",
+        trajectory_summary="用户要求取消预订，但执行失败。",
         trajectory_uri="viking://user/user_sample_9/memories/trajectories/album_release_party_discussion.md",
         evidence_loader=evidence_loader,
     )
@@ -135,9 +130,8 @@ async def test_agent_experience_prefetch_starts_with_conversation_and_new_trajec
     ) as add_tool_call_pair:
         messages = await provider.prefetch()
 
-    assert messages[0]["role"] == "user"
-    assert "## Conversation History" in messages[0]["content"]
-    assert "After exploring, analyze the conversation" in messages[0]["content"]
+    assert provider.get_output_language() == "中文"
+    assert all("Conversation History" not in message.get("content", "") for message in messages)
     assert add_tool_call_pair.call_count == 1
     assert add_tool_call_pair.call_args_list[0].kwargs["result"]["context_role"] == "new_trajectory"
     assert add_tool_call_pair.call_args_list[0].kwargs["result"]["memory_type"] == "trajectories"
@@ -166,7 +160,6 @@ async def test_agent_experience_prefetch_renders_candidate_without_content_and_p
         },
     )
     provider = AgentExperienceContextProvider(
-        messages=[],
         trajectory_summary="album release party discussion",
         trajectory_uri="viking://user/user_sample_9/memories/trajectories/current.md",
         evidence_loader=_loader(
@@ -210,7 +203,6 @@ async def test_agent_experience_prefetch_injects_only_two_newest_comparisons():
         ]
     )
     provider = AgentExperienceContextProvider(
-        messages=[],
         trajectory_summary="failed execution",
         trajectory_uri="viking://user/user_1/memories/trajectories/current_failure.md",
         evidence_loader=_loader(bundle),

@@ -8,7 +8,6 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
-from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory.agent_experience_context_provider import (
     AgentExperienceContextProvider,
@@ -56,7 +55,6 @@ class ExperienceGradientContext:
     """Context for ExperienceGradientEstimator."""
 
     request_context: RequestContext
-    messages: list[Message]
     strict_extract_errors: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -66,7 +64,6 @@ class ExperienceGradientEstimateRequest:
     """Serializable input for one trajectory's experience-gradient replay entry."""
 
     trajectory: Trajectory
-    messages: list[Message]
     evaluation: RubricEvaluation
     experience_set: ExperienceSet
     request_context: RequestContext
@@ -92,7 +89,6 @@ class ExperienceGradientEstimateRequestReplayCodec:
     def encode(value: ExperienceGradientEstimateRequest, encode):
         return {
             "trajectory": encode(value.trajectory),
-            "messages": encode(value.messages),
             "evaluation": encode(value.evaluation),
             "experience_set": encode(value.experience_set),
             "request_context": encode(value.request_context),
@@ -106,7 +102,6 @@ class ExperienceGradientEstimateRequestReplayCodec:
     def decode(payload, decode):
         return ExperienceGradientEstimateRequest(
             trajectory=decode(_encoded_request_field(payload, "trajectory")),
-            messages=decode(_encoded_request_field(payload, "messages")),
             evaluation=decode(_encoded_request_field(payload, "evaluation")),
             experience_set=decode(_encoded_request_field(payload, "experience_set")),
             request_context=decode(_encoded_request_field(payload, "request_context")),
@@ -143,14 +138,12 @@ class ExperienceGradientEstimator:
         if context is None or context.request_context is None:
             raise ValueError("ExperienceGradientContext.request_context is required")
 
-        extract_context = _context_with_analysis_messages(context, analysis)
         requests = [
             ExperienceGradientEstimateRequest(
                 trajectory=trajectory,
-                messages=list(extract_context.messages),
                 evaluation=analysis.evaluation,
                 experience_set=experience_set,
-                request_context=extract_context.request_context,
+                request_context=context.request_context,
                 case_uri=_trajectory_or_analysis_metadata(trajectory, analysis, "case_uri"),
                 case_name=_trajectory_or_analysis_metadata(trajectory, analysis, "case_name"),
                 task_signature=_trajectory_or_analysis_metadata(
@@ -199,7 +192,6 @@ class ExperienceGradientEstimator:
         )
         context = ExperienceGradientContext(
             request_context=request.request_context,
-            messages=list(request.messages),
             metadata={
                 "current_analysis": analysis,
                 "current_experience_set": request.experience_set,
@@ -242,7 +234,6 @@ class ExperienceGradientEstimator:
 
         analysis_obj = _analysis_from_context_metadata_optional(context)
         provider_kwargs = {
-            "messages": context.messages,
             "trajectory_summary": trajectory.content,
             "trajectory_uri": trajectory.uri,
         }
@@ -563,21 +554,6 @@ def _experience_set_from_context_metadata(context: ExperienceGradientContext) ->
 
 def _should_update_experience_from_trajectory(trajectory: Trajectory) -> bool:
     return str(getattr(trajectory, "outcome", "") or "").strip().lower() != "success"
-
-
-def _context_with_analysis_messages(
-    context: ExperienceGradientContext,
-    analysis: RolloutAnalysis,
-) -> ExperienceGradientContext:
-    messages = analysis.metadata.get("rollout_messages")
-    if not messages:
-        return context
-    return ExperienceGradientContext(
-        request_context=context.request_context,
-        messages=list(messages),
-        strict_extract_errors=context.strict_extract_errors,
-        metadata=dict(context.metadata),
-    )
 
 
 def _merge_diagnostics(target: dict[str, Any], diagnostics: dict[str, Any]) -> None:

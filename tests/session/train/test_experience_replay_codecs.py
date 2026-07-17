@@ -241,14 +241,6 @@ def test_experience_gradient_request_codec_round_trips_complete_entry_input() ->
             retrieval_anchor="Stage: final",
             metadata={"training_category": "booking"},
         ),
-        messages=[
-            Message(
-                id="m1",
-                role="user",
-                parts=[TextPart(text="book a flight")],
-                created_at="2026-07-17T08:00:00Z",
-            )
-        ],
         evaluation=RubricEvaluation(
             passed=False,
             score=0.0,

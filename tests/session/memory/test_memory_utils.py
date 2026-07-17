@@ -36,7 +36,7 @@ def test_format_messages_renders_readable_roles_and_tool_exchange() -> None:
                     "id": "call-1",
                     "function": {
                         "name": "read",
-                        "arguments": '{"uri": "viking://memories/example"}',
+                        "arguments": {"uri": "viking://memories/example"},
                     },
                 }
             ],
@@ -44,7 +44,7 @@ def test_format_messages_renders_readable_roles_and_tool_exchange() -> None:
         {
             "role": "tool",
             "tool_call_id": "call-1",
-            "content": '{"content": "example"}',
+            "content": {"content": "example"},
         },
     ]
 

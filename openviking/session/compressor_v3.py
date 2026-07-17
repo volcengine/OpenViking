@@ -594,7 +594,6 @@ class SessionCompressorV3:
             optimizer_context = PatchMergePolicyOptimizerContext(request_context=ctx)
             gradient_context = ExperienceGradientContext(
                 request_context=ctx,
-                messages=list(messages),
                 strict_extract_errors=strict_extract_errors,
             )
             analysis_context = TrajectoryAnalyzerContext(
