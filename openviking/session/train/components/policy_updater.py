@@ -15,7 +15,10 @@ from openviking.session.memory.dataclass import (
     ResolvedOperations,
     StoredLink,
 )
-from openviking.session.memory.experience_sections import experience_section_fields
+from openviking.session.memory.experience_sections import (
+    EXPERIENCE_SECTION_FIELDS,
+    resolve_experience_section_fields,
+)
 from openviking.session.memory.memory_type_registry import create_default_registry
 from openviking.session.memory.memory_updater import MemoryUpdater
 from openviking.session.train.domain import (
@@ -133,7 +136,7 @@ class MemoryFilePolicyUpdater:
 
 def _policy_body_metadata(policy: Policy, *, memory_type: str | None = None) -> dict[str, Any]:
     if (memory_type or policy.metadata.get("memory_type") or "experiences") == "experiences":
-        return experience_section_fields(policy.metadata)
+        return resolve_experience_section_fields(policy.metadata)
     return {"content": policy.content}
 
 
@@ -180,7 +183,22 @@ def _apply_items_to_snapshot(items: list[PolicyPlanItem], policy_set: PolicySet)
             name=item.target_name,
         )
         metadata = dict(existing.metadata) if existing is not None else {}
-        metadata.update(_metadata_patch_fields(item))
+        patch_fields = _metadata_patch_fields(item)
+        if (item.memory_type or "experiences") == "experiences":
+            section_updates = resolve_experience_section_fields(
+                patch_fields,
+                base_fields=metadata,
+            )
+            metadata.update(
+                {
+                    key: value
+                    for key, value in patch_fields.items()
+                    if key not in EXPERIENCE_SECTION_FIELDS
+                }
+            )
+            metadata.update(section_updates)
+        else:
+            metadata.update(patch_fields)
         metadata.setdefault("memory_type", item.memory_type or "experiences")
         metadata["experience_name"] = item.target_name
         if (item.memory_type or "experiences") == "experiences":

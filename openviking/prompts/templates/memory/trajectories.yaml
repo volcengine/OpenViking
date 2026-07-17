@@ -106,6 +106,8 @@ fields:
       coverage applies after execution). Record the runtime fields, policy
       conditions, and user statements that determined each dimension separately.
       If the user explicitly accepted no refund/benefit, record that acceptance.
+      Do not infer from that acceptance alone that action and benefit eligibility
+      are separate; preserve the evidence that establishes or refutes separation.
       If the agent conflated the two dimensions (e.g., refused a write because a
       benefit was unavailable), record which dimension the agent used and which
       it should have used.
@@ -144,6 +146,8 @@ fields:
         which dimension the agent used, which it should have used, whether the
         user explicitly accepted no refund/benefit, which policy conditions were
         checked vs. skipped, and the specific runtime fields that determined each.
+        Do not treat willingness to forgo a benefit as sufficient proof that the
+        action is allowed.
       - Value/Scope Evidence:
         - Requested value/list/summary role: <semantic role, or none>
         - Request boundary/timing: <when the user asked relative to reads/writes/communications, or unknown>

@@ -1,9 +1,11 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import yaml
 
 from openviking.message import Message
 from openviking.message.part import TextPart
@@ -73,10 +75,25 @@ def test_agent_experience_instruction_preserves_coupled_scope_repairs():
     assert "## Situation" in instruction
     assert "- `situation`: only the `## Situation` bullet body" in instruction
     assert "storage template adds the four Markdown headings" in instruction
-    assert "Tau2 evaluator authority" in instruction
-    assert "take precedence over conflicting base-policy wording" in instruction
+    assert "Authoritative outcome evidence" in instruction
+    assert "smallest conflicting policy interpretation" in instruction
+    assert "preserve non-conflicting constraints and object boundaries" in instruction
+    assert "Tau2 evaluator authority" not in instruction
     assert "The experience itself must not" in instruction
-    assert "mention the evaluator, evaluation metadata" in instruction
+    assert "mention the evaluator" in instruction
+    assert "evaluation metadata, hidden checks" in instruction
+
+
+def test_experience_schema_action_benefit_rule_requires_authoritative_evidence():
+    schema_path = Path(__file__).parents[3] / "openviking/prompts/templates/memory/experiences.yaml"
+    schema = yaml.safe_load(schema_path.read_text(encoding="utf-8"))
+    anti_pattern = next(field for field in schema["fields"] if field["name"] == "anti_pattern")
+    description = " ".join(anti_pattern["description"].split())
+
+    assert "authoritative outcome evidence" in description
+    assert "is not sufficient by itself" in description
+    assert "preserve that gate instead of weakening it" in description
+    assert "refund ineligibility as cancellation ineligibility" not in description
 
 
 @pytest.mark.asyncio

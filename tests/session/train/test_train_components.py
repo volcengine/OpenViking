@@ -10,6 +10,7 @@ from test_fakes import fake_request_context
 
 from openviking.session.memory.dataclass import MemoryFile, StoredLink
 from openviking.session.memory.experience_sections import render_experience_sections
+from openviking.session.memory.merge_op.base import SearchReplaceBlock, StrPatch
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.train import (
     ContentHashPolicySnapshotter,
@@ -21,6 +22,7 @@ from openviking.session.train import (
     PatchMergePolicyOptimizer,
     PatchMergePolicyOptimizerContext,
     PatchSemanticGradient,
+    PolicyPlanItem,
     PolicyUpdatePlan,
 )
 from openviking.session.train.components.trajectory_analyzer import (
@@ -382,6 +384,81 @@ async def test_memory_file_policy_updater_writes_experience_files():
     assert '"memory_type": "experiences"' in written
     assert '"experience_name": "booking_duplicate_handling"' in written
     assert '"version": 2' in written
+
+
+@pytest.mark.asyncio
+async def test_memory_file_policy_updater_applies_experience_section_patches_before_writing():
+    name = "先执行合格航班取消"
+    uri = f"viking://user/u/memories/experiences/{name}.md"
+    original_fields = _experience_fields("old reminder")
+    original_content = render_experience_sections(original_fields)
+    policy_set = ExperienceSet(
+        root_uri="viking://user/u/memories/experiences",
+        policies=[
+            Experience(
+                name=name,
+                uri=uri,
+                version=1,
+                status="draft",
+                content=original_content,
+                metadata={
+                    "memory_type": "experiences",
+                    "experience_name": name,
+                    "status": "draft",
+                    **original_fields,
+                },
+            )
+        ],
+    )
+    patch_fields = {
+        "experience_name": name,
+        "situation": StrPatch(
+            blocks=[
+                SearchReplaceBlock(
+                    search="- Applies when: the tested operation reaches its decision boundary.",
+                    replace="- Applies when: 用户请求取消多个航班预约。",
+                )
+            ]
+        ),
+        "reminder": StrPatch(
+            blocks=[
+                SearchReplaceBlock(
+                    search="- old reminder",
+                    replace="- 先取消可执行的预订，再处理剩余请求。",
+                )
+            ]
+        ),
+    }
+    plan = PolicyUpdatePlan(
+        items=[
+            PolicyPlanItem(
+                kind="upsert",
+                memory_type="experiences",
+                target_name=name,
+                target_uri=uri,
+                before_content=original_content,
+                after_content=render_experience_sections({**original_fields, **patch_fields}),
+                base_version=1,
+                confidence=0.8,
+                links=[],
+                metadata={"merge_memory_fields": patch_fields},
+            )
+        ]
+    )
+
+    fs = FakeVikingFS({})
+    result = await MemoryFilePolicyUpdater(viking_fs=fs).apply(
+        plan,
+        policy_set,
+        fake_request_context(),
+    )
+
+    assert result.errors == []
+    written = fs.files[uri]
+    assert "SearchReplaceBlock" not in written
+    assert "blocks=[" not in written
+    assert "- Applies when: 用户请求取消多个航班预约。" in written
+    assert "- 先取消可执行的预订，再处理剩余请求。" in written
 
 
 @pytest.mark.asyncio

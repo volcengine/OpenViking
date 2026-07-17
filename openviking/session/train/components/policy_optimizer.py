@@ -15,6 +15,7 @@ from openviking.session.memory.experience_sections import (
     EXPERIENCE_SECTION_FIELDS,
     experience_section_fields,
     render_experience_sections,
+    resolve_experience_section_fields,
 )
 from openviking.session.memory.extract_loop import ExtractLoop, PostValidationRetryDecision
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
@@ -421,9 +422,16 @@ def _gradient_to_merge_patch(gradient: SemanticGradient) -> PatchMergePatch:
     )
 
 
-def _operation_content(fields: dict[str, Any], *, memory_type: str) -> str:
+def _operation_content(
+    fields: dict[str, Any],
+    *,
+    memory_type: str,
+    base_fields: dict[str, Any] | None = None,
+) -> str:
     if memory_type == "experiences":
-        return render_experience_sections(fields)
+        return render_experience_sections(
+            resolve_experience_section_fields(fields, base_fields=base_fields)
+        )
     return str(fields.get("content") or "")
 
 
@@ -510,9 +518,15 @@ def _operations_to_plan_items(
         if getattr(op, "memory_type", None) != memory_type:
             continue
         fields = dict(getattr(op, "memory_fields", {}) or {})
+        old_file = getattr(op, "old_memory_file_content", None)
+        base_fields = dict(getattr(old_file, "extra_fields", {}) or {})
         if memory_type == "experiences" and not any(experience_section_fields(fields).values()):
             continue
-        after_content = _operation_content(fields, memory_type=memory_type)
+        after_content = _operation_content(
+            fields,
+            memory_type=memory_type,
+            base_fields=base_fields,
+        )
         if not after_content.strip():
             continue
         target_name = str(
@@ -521,7 +535,6 @@ def _operations_to_plan_items(
             or _fallback_policy_name(op, memory_type=memory_type)
         )
         target_uri = first_uri(getattr(op, "uris", []) or [])
-        old_file = getattr(op, "old_memory_file_content", None)
         before_content = old_file.plain_content() if old_file is not None else None
         if before_content is None and target_uri:
             policy = _find_policy_by_uri(policy_set, target_uri)
@@ -889,10 +902,18 @@ def _upsert_output_count(operations: Any, *, memory_type: str) -> int:
         if getattr(op, "memory_type", None) != memory_type:
             continue
         fields = dict(getattr(op, "memory_fields", {}) or {})
+        old_file = getattr(op, "old_memory_file_content", None)
+        base_fields = dict(getattr(old_file, "extra_fields", {}) or {})
         if memory_type == "experiences":
             has_content = any(experience_section_fields(fields).values())
         else:
-            has_content = bool(_operation_content(fields, memory_type=memory_type).strip())
+            has_content = bool(
+                _operation_content(
+                    fields,
+                    memory_type=memory_type,
+                    base_fields=base_fields,
+                ).strip()
+            )
         if has_content:
             count += 1
     return count

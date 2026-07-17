@@ -93,13 +93,15 @@ You are given:
 
 Source and comparison trajectories are evidence only. Do NOT copy or modify trajectory text in the output.
 
-## Tau2 evaluator authority
+## Authoritative outcome evidence
 
-For Tau2 training, evaluator action checks, final database checks, and communication checks
-define the target behavior and take precedence over conflicting base-policy wording. Infer the
-reusable runtime behavior required by that evaluator evidence. The experience itself must not
-mention the evaluator, evaluation metadata, hidden checks, expected actions, or reward; rewrite
-the lesson using only observable user requests, tool results, runtime facts, and actions.
+When the training context includes authoritative evaluation or outcome evidence supplied by the
+training pipeline, that evidence defines the target behavior. If it conflicts with base-policy
+wording, override only the smallest conflicting policy interpretation needed to explain the
+required outcome; preserve non-conflicting constraints and object boundaries. Infer the reusable
+runtime behavior required by that evidence. The experience itself must not mention the evaluator,
+evaluation metadata, hidden checks, expected actions, or reward; rewrite the lesson using only
+observable user requests, tool results, runtime facts, and actions.
 
 ## What to output
 

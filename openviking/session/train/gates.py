@@ -981,13 +981,15 @@ through the skill experience loader in future sessions: the agent searches
 experience candidates, reads `## Situation` snippets, and optionally loads the
 full experience before acting.
 
-Tau2 evaluator authority:
-For Tau2 training, evaluator action checks, final database checks, and communication
-checks define the target behavior and take precedence over conflicting base-policy
-wording. Judge the proposed experience against the reusable runtime behavior required
-by that evaluator evidence. The experience itself must not mention the evaluator,
-evaluation metadata, hidden checks, expected actions, or reward; it must express the
-lesson using only observable user requests, tool results, runtime facts, and actions.
+Authoritative outcome evidence:
+When the source context includes authoritative evaluation or outcome evidence supplied
+by the training pipeline, that evidence defines the target behavior. If it conflicts
+with base-policy wording, override only the smallest conflicting policy interpretation
+needed to explain the required outcome; preserve non-conflicting constraints and object
+boundaries. Judge the proposed experience against the reusable runtime behavior required
+by that evidence. The experience itself must not mention the evaluator, evaluation
+metadata, hidden checks, expected actions, or reward; it must express the lesson using
+only observable user requests, tool results, runtime facts, and actions.
 
 Main question:
 If this exact experience had been injected before the source trajectory's first
@@ -1047,11 +1049,12 @@ earlier request-time aggregate, uses temporal non-applicability to avoid skill
 loading, uses a wrong value source field where a canonical total/payment field
 exists, lacks a concrete future behavior change, or would likely harm correct
 behavior.
-Also fail when the proposed experience conflates action eligibility (whether a
-write/mutation may be performed) with benefit eligibility (whether a refund,
-compensation, or coverage applies after execution), especially when the user
-explicitly accepted no refund/benefit. The experience must not exclude an
-action on benefit-eligibility grounds when the policy permits the action itself.
+When source, comparison, or authoritative outcome evidence demonstrates that the
+agent skipped an action because an attached benefit was unavailable even though the
+target behavior requires the action, require the experience to distinguish action
+eligibility from benefit eligibility. Do not infer that distinction merely because
+the user accepted no benefit. Preserve benefit conditions that the evidence shows are
+true prerequisites for the action.
 
 Return JSON only:
 {{

@@ -153,16 +153,15 @@ fields:
       - Keep the experience concise: no setup chatter, no policy dumps, no full paths, no raw IDs,
         no hidden answers. Use semantic roles instead of case literals.
       - Use imperative, machine-readable bullets. No introductory or closing paragraphs.
-      - For policy/eligibility failures where the agent skipped or refused a write
-        action because a benefit, refund, compensation, or coverage was unavailable,
-        the experience must distinguish *action eligibility* (the agent may execute
-        the write) from *benefit eligibility* (a refund/compensation applies after
-        execution). The experience must tell the future agent: when the user
-        explicitly accepts no refund/benefit, do not exclude the action on
-        benefit-eligibility grounds; only exclude when the policy explicitly
-        forbids the action itself. `## Anti-pattern` must name the tempting
-        confusion (e.g., "treating refund ineligibility as cancellation
-        ineligibility") and `## Reminder` must state the correct rule (e.g.,
-        "benefit ineligibility does not block the action").
+      - For policy/eligibility failures, distinguish *action eligibility* (whether the
+        write may be executed) from *benefit eligibility* (whether a refund,
+        compensation, coverage, or other benefit applies) only when source,
+        comparison, or authoritative outcome evidence demonstrates that the target
+        behavior requires the action despite the unavailable benefit. A user's
+        willingness to forgo the benefit is relevant evidence, but is not sufficient
+        by itself to prove that the action is allowed. When separation is supported,
+        encode the minimal runtime discriminator and behavior change without exposing
+        evaluator terms. When the evidence shows that benefit eligibility is a true
+        prerequisite for the action, preserve that gate instead of weakening it.
 
     merge_op: patch

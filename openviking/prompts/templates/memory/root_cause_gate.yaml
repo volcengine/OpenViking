@@ -64,12 +64,11 @@ system_prompt: |
   evidence for both request-time and post-action scopes. Also fail when a
   monetary/value repair would keep using the wrong source field even though the
   retrieved record exposes a canonical total/paid/charged/payment amount field.
-  Also fail when the draft conflates action eligibility (whether a write/mutation
-  may be performed) with benefit eligibility (whether a refund/compensation/
-  coverage applies after execution), especially when the user explicitly accepted
-  no refund/benefit. The follow-up should ask the extractor to re-diagnose
-  whether the agent refused an action on benefit-eligibility grounds when the
-  policy permits the action itself.
+  When source, comparison, or authoritative outcome evidence demonstrates that
+  the target behavior requires an action despite an unavailable attached benefit,
+  fail drafts that conflate action eligibility with benefit eligibility. Do not
+  infer that separation merely because the user accepted no benefit. Preserve a
+  benefit condition when the evidence shows it is a true action prerequisite.
 
   Return JSON only.
 user_prompt: |
@@ -114,9 +113,9 @@ user_prompt: |
   - the draft cannot explain why that changed behavior would make the next
     similar session succeed;
   - the repair is broad, case-literal, or could block correct behavior.
-  - the draft conflates action eligibility with benefit eligibility; the agent
-    refused a write because a refund/compensation was unavailable, but the policy
-    permits the action itself, and the user accepted no refund;
+  - authoritative outcome evidence requires an action despite an unavailable
+    benefit, but the draft still conflates action eligibility with benefit
+    eligibility or fails to identify the runtime discriminator;
 
   Do not ask for a particular lesson template. Ask for the causal diagnosis that
   would make the next extraction produce a truly preventive experience.

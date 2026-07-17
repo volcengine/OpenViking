@@ -17,6 +17,7 @@ from openviking.session.memory.dataclass import MemoryFile, StoredLink
 from openviking.session.memory.experience_sections import (
     experience_section_fields,
     render_experience_sections,
+    resolve_experience_section_fields,
 )
 from openviking.session.memory.extract_loop import ExtractLoop, PostValidationRetryDecision
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
@@ -548,16 +549,18 @@ def _operation_after_file(
     old_file: MemoryFile | None,
 ) -> MemoryFile:
     extra_fields = dict(getattr(old_file, "extra_fields", {}) or {})
+    resolved_sections = resolve_experience_section_fields(fields, base_fields=extra_fields)
     extra_fields.pop("constraint", None)
     extra_fields.pop("content", None)
     for key, value in fields.items():
-        if key != "content":
+        if key != "content" and key not in resolved_sections:
             extra_fields[key] = value
+    extra_fields.update(resolved_sections)
     extra_fields["memory_type"] = "experiences"
     extra_fields["experience_name"] = target_name
     return MemoryFile(
         uri=target_uri,
-        content=render_experience_sections(fields),
+        content=render_experience_sections(resolved_sections),
         links=list(getattr(old_file, "links", []) or []),
         backlinks=list(getattr(old_file, "backlinks", []) or []),
         memory_type="experiences",
