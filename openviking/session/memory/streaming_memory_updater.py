@@ -47,6 +47,10 @@ from openviking.session.memory.patch_merge_context_provider import (
 )
 from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils, next_memory_version
+from openviking.session.memory.utils.provenance import (
+    merge_memory_provenance,
+    provenance_sources_for_operation,
+)
 from openviking.session.memory.utils.streaming_batcher import (
     StreamingBatcher,
     StreamingBatcherConfig,
@@ -982,6 +986,12 @@ def render_operation_after_file_content(
     source_trace_id = source_trace_id_for_operation(op)
     if source_trace_id:
         metadata["last_update_trace_id"] = source_trace_id
+    provenance = merge_memory_provenance(
+        old_content.extra_fields.get("provenance") if old_content is not None else None,
+        provenance_sources_for_operation(op),
+    )
+    if provenance:
+        metadata["provenance"] = provenance
     for field_def in schema.fields:
         if field_def.name not in metadata:
             continue
@@ -1112,15 +1122,25 @@ def _inherit_source_metadata_to_merged_operations(
             if uri:
                 input_by_uri.setdefault(uri, []).append(input_op)
 
-    if not all_source_ids:
-        return
-
     for merged_op in merged_operations or []:
-        if _operation_source_extraction_ids(merged_op):
-            continue
         matched_inputs: list[ResolvedOperation] = []
         for uri in list(getattr(merged_op, "uris", []) or []):
             matched_inputs.extend(input_by_uri.get(uri, []))
+        provenance_inputs = matched_inputs or list(input_operations or [])
+        provenance = merge_memory_provenance(
+            merged_op.memory_fields.get("provenance"),
+            [
+                source
+                for input_op in provenance_inputs
+                for source in provenance_sources_for_operation(input_op)
+            ],
+            getattr(merged_op, "source", None),
+        )
+        if provenance:
+            merged_op.memory_fields["provenance"] = provenance
+
+        if _operation_source_extraction_ids(merged_op):
+            continue
         matched_ids = {
             source_id
             for input_op in matched_inputs
@@ -1263,9 +1283,22 @@ def attach_source_to_request_operations(request: MemoryUpdateRequest) -> None:
     source = memory_operation_source_from_request(request)
     if source is None:
         return
+    messages = list(getattr(request, "messages", []) or [])
+    extract_context = ExtractContext(messages)
     for op in list(getattr(request.operations, "upsert_operations", []) or []):
         if getattr(op, "source", None) is None:
-            op.source = source
+            message_ids = list(source.message_ids)
+            ranges = dict(getattr(op, "memory_fields", {}) or {}).get("ranges")
+            if ranges is not None:
+                try:
+                    ranged_ids = extract_context.read_message_ranges(
+                        str(ranges)
+                    ).source_message_ids()
+                    if ranged_ids:
+                        message_ids = ranged_ids
+                except (TypeError, ValueError):
+                    pass
+            op.source = source.model_copy(deep=True, update={"message_ids": message_ids})
         source_extraction_id = getattr(op.source, "extraction_id", None)
         if source_extraction_id:
             op.memory_fields.setdefault("source_extraction_id", source_extraction_id)
@@ -1284,6 +1317,13 @@ def memory_operation_source_from_request(
     return MemoryOperationSource(
         extraction_id=str(extraction_id),
         session_id=_optional_str(metadata.get("session_id")),
+        message_ids=list(
+            dict.fromkeys(
+                str(message.id)
+                for message in list(getattr(request, "messages", []) or [])
+                if getattr(message, "id", None)
+            )
+        ),
         archive_uri=_optional_str(metadata.get("archive_uri")),
         task_id=_optional_str(metadata.get("task_id")),
         trace_id=_optional_str(metadata.get("trace_id")),

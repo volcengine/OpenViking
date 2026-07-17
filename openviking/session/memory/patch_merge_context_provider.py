@@ -16,6 +16,7 @@ from openviking.session.memory.session_extract_context_provider import (
 from openviking.session.memory.utils.language import resolve_output_language_from_text
 
 _SYSTEM_HIDDEN_FIELDS = {
+    "provenance",
     "source_extraction_id",
     "source_extraction_ids",
     "last_update_trace_id",

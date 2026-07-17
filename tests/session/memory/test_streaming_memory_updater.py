@@ -28,6 +28,7 @@ from openviking.session.memory.streaming_memory_updater import (
     StreamingMemoryUpdater,
     StreamingMemoryUpdaterConfig,
     StreamingMemoryUpdateResult,
+    attach_source_to_request_operations,
     classify_memory_merge_mode,
     enforce_merge_group_peer_id,
     merge_one_memory_type_operations,
@@ -36,6 +37,7 @@ from openviking.session.memory.streaming_memory_updater import (
     split_request_by_merge_group,
 )
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.memory.utils.provenance import merge_memory_provenance
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -486,6 +488,113 @@ def test_scope_memory_update_result_to_submitter_filters_shared_batch_by_source(
     assert scoped.metadata["unscoped_written_uris"] == [op_a.uris[0], op_b.uris[0]]
 
 
+def test_rendered_memory_persists_session_and_message_provenance():
+    op = _note_op("auditable_note")
+    request = MemoryUpdateRequest(
+        operations=ResolvedOperations(
+            upsert_operations=[op],
+            delete_file_contents=[],
+            errors=[],
+        ),
+        messages=[
+            Message(id="msg-1", role="user", parts=[TextPart("first fact")]),
+            Message(id="msg-2", role="assistant", parts=[TextPart("second fact")]),
+        ],
+        ctx=_ctx(),
+        metadata={
+            "source_extraction_id": "extract-1",
+            "session_id": "session-1",
+            "archive_uri": "viking://user/u/sessions/session-1/history/archive-1",
+            "trace_id": "trace-1",
+            "extracted_at": "2026-07-17T09:00:00+00:00",
+        },
+    )
+
+    attach_source_to_request_operations(request)
+    rendered = render_operation_after_file_content(
+        op,
+        schema=_registry().get("notes"),
+        extract_context=ExtractContext(request.messages),
+    )
+    memory_file = MemoryFileUtils.read(rendered, uri=op.uris[0])
+
+    assert memory_file.extra_fields["provenance"] == {
+        "sources": [
+            {
+                "extraction_id": "extract-1",
+                "session_id": "session-1",
+                "message_ids": ["msg-1", "msg-2"],
+                "archive_uri": "viking://user/u/sessions/session-1/history/archive-1",
+                "trace_id": "trace-1",
+                "extracted_at": "2026-07-17T09:00:00+00:00",
+            }
+        ]
+    }
+
+
+def test_memory_provenance_merges_message_coverage_per_extraction():
+    merged = merge_memory_provenance(
+        {
+            "sources": [
+                {
+                    "extraction_id": "extract-1",
+                    "session_id": "session-1",
+                    "message_ids": ["msg-1"],
+                }
+            ]
+        },
+        MemoryOperationSource(
+            extraction_id="extract-1",
+            session_id="session-1",
+            message_ids=["msg-1", "msg-2"],
+        ),
+        MemoryOperationSource(
+            extraction_id="extract-2",
+            session_id="session-2",
+            message_ids=["msg-3"],
+        ),
+    )
+
+    assert merged == {
+        "sources": [
+            {
+                "extraction_id": "extract-1",
+                "session_id": "session-1",
+                "message_ids": ["msg-1", "msg-2"],
+            },
+            {
+                "extraction_id": "extract-2",
+                "session_id": "session-2",
+                "message_ids": ["msg-3"],
+            },
+        ]
+    }
+
+
+def test_operation_ranges_narrow_provenance_to_original_message_ids():
+    op = _note_op("ranged_note")
+    op.memory_fields["ranges"] = "1-2"
+    request = MemoryUpdateRequest(
+        operations=ResolvedOperations(
+            upsert_operations=[op],
+            delete_file_contents=[],
+            errors=[],
+        ),
+        messages=[
+            Message(id="msg-0", role="user", parts=[TextPart("zero")]),
+            Message(id="msg-1", role="assistant", parts=[TextPart("one")]),
+            Message(id="msg-2", role="user", parts=[TextPart("two")]),
+        ],
+        ctx=_ctx(),
+        metadata={"source_extraction_id": "extract-ranged", "session_id": "session-ranged"},
+    )
+
+    attach_source_to_request_operations(request)
+
+    assert op.source is not None
+    assert op.source.message_ids == ["msg-1", "msg-2"]
+
+
 def test_split_request_by_merge_group_groups_by_peer_and_memory_type():
     self_op = _note_op("self_note")
     peer_op = _peer_note_op("peer_note", "web-visitor-alice")
@@ -887,13 +996,32 @@ async def test_streaming_memory_updater_persists_source_extraction_id_trace_id_a
             ),
             messages=[Message(id="m1", role="user", parts=[TextPart("note source")])],
             ctx=_ctx(),
-            metadata={"source_extraction_id": "extract_1", "trace_id": "trace_1"},
+            metadata={
+                "source_extraction_id": "extract_1",
+                "session_id": "session_1",
+                "archive_uri": "viking://user/u/sessions/session_1/history/archive_1",
+                "trace_id": "trace_1",
+                "extracted_at": "2026-07-17T09:00:00+00:00",
+            },
         )
     )
 
     assert result.apply_result.written_uris == [op.uris[0]]
     assert '"source_extraction_id": "extract_1"' in fs.files[op.uris[0]]
     assert '"last_update_trace_id": "trace_1"' in fs.files[op.uris[0]]
+    persisted = MemoryFileUtils.read(fs.files[op.uris[0]], uri=op.uris[0])
+    assert persisted.extra_fields["provenance"] == {
+        "sources": [
+            {
+                "extraction_id": "extract_1",
+                "session_id": "session_1",
+                "message_ids": ["m1"],
+                "archive_uri": "viking://user/u/sessions/session_1/history/archive_1",
+                "trace_id": "trace_1",
+                "extracted_at": "2026-07-17T09:00:00+00:00",
+            }
+        ]
+    }
 
     from openviking.server.identity import ToolContext
     from openviking.session.memory.tools import MemoryReadTool
@@ -905,6 +1033,7 @@ async def test_streaming_memory_updater_persists_source_extraction_id_trace_id_a
 
     assert "source_extraction_id" not in read_result
     assert "last_update_trace_id" not in read_result
+    assert "provenance" not in read_result
 
 
 def test_render_operation_after_file_content_persists_source_trace_id():
