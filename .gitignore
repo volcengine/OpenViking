@@ -223,6 +223,7 @@ tests/integration/.tmp_*/
 
 # LoopX local control-plane state
 .loopx/
+.local/
 
 # all node_modules folders
 node_modules/

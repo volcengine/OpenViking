@@ -1,0 +1,308 @@
+{
+  "schema_version": "openviking_wiki_first_questions_v1",
+  "frozen_at": "2026-07-17T15:10:47+08:00",
+  "language": "zh-CN",
+  "question_count": 12,
+  "points_per_question": 10,
+  "answer_threshold": 8,
+  "question_text_policy": "问题正文只使用普通读者语气；实验约束不进入题面。",
+  "gold_source_policy": "公开资料只用于学习命题风格；答案和量表只以本地 13 篇已导入 Resource 为准。",
+  "closed_book_subset_rule": "闭卷答案未满足统一 correct 判定（中位分低于 8/10，或多数 judge 认定触发关键错误）的题组成 retrieval-needed 子集。",
+  "source_style_references": [
+    "https://aclanthology.org/Q18-1023/",
+    "https://aclanthology.org/2022.acl-long.34/",
+    "https://github.com/nyu-mll/quality",
+    "https://github.com/baidu/DuReader",
+    "https://dataset.org/c3/",
+    "https://res.cqnews.net/contentcloud/20024/REPRINT/MEDIA/DOCUMENT/2026/1/6/5d34818131dd4de19fe3c4c050d1dc0d.pdf",
+    "https://www.ecnu.edu.cn/info/1426/66095.htm"
+  ],
+  "corpus_snapshot": {
+    "resource_files": 41,
+    "resource_composite_sha256": "0f0ec4db642fa540da840229b66d2141638b2c45f6b5f4a655b679d599bc5bf4",
+    "wiki_files": 51,
+    "wiki_composite_sha256": "7aef447716d59d1d6e7619e6a5feff5161b48bb2a1e616b14953d1f33fc40701"
+  },
+  "questions": [
+    {
+      "id": "NQ01",
+      "question": "孙悟空、猪八戒、沙僧和白龙马分别是怎么加入取经队伍的？",
+      "category": "character_action",
+      "scope": "single_story",
+      "answerability": "explicit",
+      "expected_wiki_sufficiency": "likely_needs_resource",
+      "source_uris": [
+        "viking://resources/demos/journey-to-the-west/01-取经团队形成/取经团队形成.md"
+      ],
+      "gold_answer": "唐僧揭下五行山法帖救出孙悟空，观音留下的紧箍又约束他护送师父；鹰愁涧白龙原是西海龙王之子，吞马后经观音说明身份，化作白龙马；高老庄的猪妖原是天蓬元帅，受戒后被收为猪八戒；流沙河妖怪原是卷帘大将，经木叉说明后成为沙僧。观音贯穿了几人的受戒和身份确认，最终形成唐僧、孙悟空、猪八戒、沙僧和白龙马的分工团队。",
+      "rubric": [
+        {"points": 2, "criterion": "说明唐僧在五行山救出孙悟空，以及紧箍使其受约束护送。"},
+        {"points": 2, "criterion": "说明白龙是西海龙王之子，吞马后化作白龙马加入。"},
+        {"points": 2, "criterion": "说明猪八戒原为天蓬元帅，在高老庄被收为徒。"},
+        {"points": 2, "criterion": "说明沙僧原为卷帘大将，在流沙河经点明身份后加入。"},
+        {"points": 2, "criterion": "概括观音及木叉在几人受戒、身份确认和加入过程中的引导作用。"}
+      ],
+      "critical_errors": [
+        "把孙悟空、猪八戒、沙僧或白龙马的原始身份张冠李戴。",
+        "把观音说成取经队伍中的常驻同行徒弟。"
+      ]
+    },
+    {
+      "id": "NQ02",
+      "question": "孙悟空为什么会大闹天宫，天庭和如来先后是怎么对付他的？",
+      "category": "cause_and_outcome",
+      "scope": "single_story",
+      "answerability": "implicit",
+      "expected_wiki_sufficiency": "likely_needs_resource",
+      "source_uris": [
+        "viking://resources/demos/journey-to-the-west/02-大闹天宫/孙悟空大闹天宫.md"
+      ],
+      "gold_answer": "天庭先用弼马温和有名无实的齐天大圣安置孙悟空，又让他看守蟠桃园却不请他参加蟠桃会，冲突逐步升级。孙悟空偷桃、饮酒、吃太上老君金丹后返回花果山，与天庭全面交战。二郎神交战时太上老君用金刚琢协助擒住他，八卦炉没有炼死他，反而炼出火眼金睛。最后如来以掌中赌赛制住孙悟空，将他压在五行山下。",
+      "rubric": [
+        {"points": 2, "criterion": "指出低职招安、空名安置和蟠桃会排斥等矛盾逐步升级。"},
+        {"points": 2, "criterion": "说明偷桃、饮酒、偷吃金丹后与天庭公开交战。"},
+        {"points": 2, "criterion": "说明二郎神交战时太上老君以金刚琢协助擒拿。"},
+        {"points": 2, "criterion": "说明八卦炉未炼死孙悟空，反而使其获得火眼金睛。"},
+        {"points": 2, "criterion": "说明如来以掌中赌赛制服并压在五行山下。"}
+      ],
+      "critical_errors": [
+        "把如来压住孙悟空这一最终收场改写成由玉皇大帝、二郎神或太上老君完成。",
+        "说孙悟空被八卦炉炼死或因此失去法力。"
+      ]
+    },
+    {
+      "id": "NQ03",
+      "question": "唐僧为什么在白骨精这一难里赶走孙悟空？",
+      "category": "motivation_and_misunderstanding",
+      "scope": "single_story",
+      "answerability": "implicit",
+      "expected_wiki_sufficiency": "likely_needs_resource",
+      "source_uris": [
+        "viking://resources/demos/journey-to-the-west/03-三打白骨精/三打白骨精.md"
+      ],
+      "gold_answer": "白骨精为了吃唐僧，连续变成送饭女子、寻女老妇和老翁。孙悟空用火眼金睛看穿伪装，前两次妖怪以解尸法留下假尸，第三次才被打死。唐僧看到的却一直是凡人外貌和尸体，认定孙悟空滥杀；猪八戒又不断挑动，紧箍惩罚也加深了冲突。即使白骨精最终现出白骨，师徒之间的信任也没有恢复，唐僧仍写下贬书赶走孙悟空。",
+      "rubric": [
+        {"points": 2, "criterion": "说明白骨精依次假扮女子、老妇和老翁接近唐僧。"},
+        {"points": 2, "criterion": "说明孙悟空看穿妖怪，但前两次只打中解尸法留下的假身。"},
+        {"points": 2, "criterion": "说明唐僧只能看到凡人外貌和表面尸体，因而认为孙悟空滥杀。"},
+        {"points": 2, "criterion": "指出猪八戒挑动和紧箍惩罚放大了师徒矛盾。"},
+        {"points": 2, "criterion": "说明妖怪虽被打死，信任仍未恢复，唐僧写贬书逐走孙悟空。"}
+      ],
+      "critical_errors": [
+        "说孙悟空认错了人、杀死了真正的一家三口。",
+        "说白骨精最后成功吃掉或带走唐僧。"
+      ]
+    },
+    {
+      "id": "NQ04",
+      "question": "金角大王、银角大王和孙悟空之间发生了什么？",
+      "category": "event_sequence",
+      "scope": "single_story",
+      "answerability": "explicit",
+      "expected_wiki_sufficiency": "likely_needs_resource",
+      "source_uris": [
+        "viking://resources/demos/journey-to-the-west/04-金角银角/金角大王与银角大王.md"
+      ],
+      "gold_answer": "金角、银角在平顶山设法拖住孙悟空并捉走唐僧、猪八戒和沙僧，还用紫金红葫芦、羊脂玉净瓶、芭蕉扇、幌金绳和七星剑对付他。孙悟空靠变化、冒充小妖和九尾狐狸、调包法宝等办法破坏二妖的信任和宝物优势，最后反过来用葫芦收了银角并制伏金角。太上老君随后说明二妖是自己的金炉、银炉童子，将童子和五件法宝一同带回。",
+      "rubric": [
+        {"points": 2, "criterion": "说明二妖先拖住孙悟空并抓走其余师徒。"},
+        {"points": 2, "criterion": "从五件法宝中至少正确说明三件；每件给出名称或可唯一识别的功能。"},
+        {"points": 2, "criterion": "说明孙悟空用变化、冒充和调包逐步骗走或夺回法宝。"},
+        {"points": 2, "criterion": "说明孙悟空反用葫芦收银角并最终制伏二妖。"},
+        {"points": 2, "criterion": "说明二妖是太上老君童子，最终连同法宝被带回。"}
+      ],
+      "critical_errors": [
+        "把金角、银角说成太上老君坐骑或如来门下。",
+        "说二妖最后被孙悟空打死。"
+      ]
+    },
+    {
+      "id": "NQ05",
+      "question": "真假美猴王为什么这么难分辨，谛听和如来分别作了什么判断？",
+      "category": "identity_disambiguation",
+      "scope": "single_story",
+      "answerability": "implicit",
+      "expected_wiki_sufficiency": "likely_needs_resource",
+      "source_uris": [
+        "viking://resources/demos/journey-to-the-west/08-真假美猴王/真假美猴王.md"
+      ],
+      "gold_answer": "假猴王趁孙悟空离队打伤唐僧、抢走行李，还变出一套假取经队伍。它与孙悟空外貌、声音、兵器、本领和往事记忆都相近，连紧箍咒也表现出疼痛，所以唐僧、观音和天庭照妖镜都无法公开分辨。谛听其实听出了根由，却担心当场揭破难以收场。最后如来指出假猴王是六耳猕猴，用金钵使其现出本相；孙悟空将它打死后回到取经队伍。",
+      "rubric": [
+        {"points": 2, "criterion": "说明真假双方在外貌、声音、兵器、本领、记忆或紧箍反应上高度相同。"},
+        {"points": 2, "criterion": "说明唐僧、观音和天庭照妖镜等常规见证者都无法分辨。"},
+        {"points": 2, "criterion": "说明谛听已经听出根由，但因担心冥府无法收场而没有公开揭破。"},
+        {"points": 2, "criterion": "说明如来公开识别假猴王为六耳猕猴。"},
+        {"points": 2, "criterion": "说明如来以金钵使六耳猕猴现出本相，从而证实真假是两个不同实体。"}
+      ],
+      "critical_errors": [
+        "把六耳猕猴说成如来的坐骑、童子或孙悟空本人分裂出的实体。",
+        "说谛听当场公开揭破，或说如来也无法识别假猴王。"
+      ]
+    },
+    {
+      "id": "NQ06",
+      "question": "玉兔精是怎么冒充天竺公主的，她为什么这么做，身份最后又是怎么暴露的？",
+      "category": "identity_and_outcome",
+      "scope": "single_story",
+      "answerability": "explicit",
+      "expected_wiki_sufficiency": "likely_needs_resource",
+      "source_uris": [
+        "viking://resources/demos/journey-to-the-west/13-天竺玉兔/天竺国玉兔精.md"
+      ],
+      "gold_answer": "玉兔精先用妖风摄走真公主，使她流落布金禅寺，自己在宫中顶替公主一年；随后借抛绣球招亲让唐僧成为驸马，想取他的元阳。孙悟空把禅寺女子的经历和宫中妖气联系起来，在婚礼时藏在唐僧身边逼妖怪出手。太阴星君带广寒宫仙众赶到，说明她是下界报复真公主前世的捣药玉兔。玉兔现出原形后由太阴星君带回，真公主也被送回王宫。",
+      "rubric": [
+        {"points": 2, "criterion": "说明玉兔摄走真公主并让她流落布金禅寺，自己入宫顶替。"},
+        {"points": 2, "criterion": "说明假公主借抛绣球婚事接近唐僧并企图取其元阳。"},
+        {"points": 2, "criterion": "说明孙悟空结合禅寺女子和宫中妖气，在婚礼时设计使妖怪暴露。"},
+        {"points": 2, "criterion": "说明太阴星君确认其广寒宫捣药玉兔身份及下界因果。"},
+        {"points": 2, "criterion": "说明太阴星君带回玉兔，真公主恢复身份。"}
+      ],
+      "critical_errors": [
+        "把玉兔精的原属或最终收回者明确写成嫦娥，并与资料给出的太阴星君相冲突。",
+        "把真假公主或她们的去向写反。"
+      ]
+    },
+    {
+      "id": "NQ07",
+      "question": "太上老君在大闹天宫、金角银角和青牛精这三段故事里分别起了什么作用？",
+      "category": "cross_story_entity",
+      "scope": "cross_story",
+      "answerability": "implicit",
+      "expected_wiki_sufficiency": "likely_needs_resource",
+      "source_uris": [
+        "viking://resources/demos/journey-to-the-west/02-大闹天宫/孙悟空大闹天宫.md",
+        "viking://resources/demos/journey-to-the-west/04-金角银角/金角大王与银角大王.md",
+        "viking://resources/demos/journey-to-the-west/07-青牛精与金刚琢/青牛精与金刚琢.md"
+      ],
+      "gold_answer": "大闹天宫时，孙悟空偷吃太上老君的金丹，老君又用金刚琢协助二郎神擒他，并把他投入八卦炉；炉火反而炼出火眼金睛。金角银角原是老君看守金炉、银炉的童子，所用五件法宝也属于老君，最后由他一并收回。青牛精则是老君的坐骑，趁童子睡着偷走金刚琢下界，老君最终确认身份、收回法宝和被套兵器，并骑牛返回。金刚琢在前后两段中是同一件宝物，只是使用者不同；童子和坐骑的关系也不能混写。",
+      "rubric": [
+        {"points": 3, "criterion": "正确说明大闹天宫中的金丹、金刚琢、八卦炉及其关键结果。"},
+        {"points": 3, "criterion": "说明金角、银角是老君的金炉、银炉童子，五件法宝归老君并被收回。"},
+        {"points": 3, "criterion": "说明青牛精是老君坐骑，偷走金刚琢，最后由老君连同法宝和兵器收回。"},
+        {"points": 1, "criterion": "指出大闹天宫与青牛精故事中的金刚琢是同一件宝物，只是使用者不同。"}
+      ],
+      "critical_errors": [
+        "把金角银角说成坐骑，或把青牛精说成炼丹童子。",
+        "把大闹天宫和青牛精故事中的金刚琢说成两件无关法宝。"
+      ]
+    },
+    {
+      "id": "NQ08",
+      "question": "观音收服红孩儿和通天河的灵感大王时，过程和两只妖怪的来历有什么不同？",
+      "category": "cross_story_comparison",
+      "scope": "cross_story",
+      "answerability": "implicit",
+      "expected_wiki_sufficiency": "likely_sufficient",
+      "source_uris": [
+        "viking://resources/demos/journey-to-the-west/05-红孩儿/红孩儿与火云洞.md",
+        "viking://resources/demos/journey-to-the-west/06-通天河金鱼精/通天河金鱼精.md"
+      ],
+      "gold_answer": "红孩儿原是牛魔王和铁扇公主之子，并不是观音原有童子。他用受难孩童的伪装掳走唐僧，又以三昧真火让孙悟空和普通水攻吃亏；观音用莲台和金箍逐步制住他，收为善财童子。灵感大王则本来就是观音莲花池中的金鱼，逃到通天河后以童男童女祭献和冰封河面害人。观音赶到后直接以鱼篮收回它。前者是降服后才加入观音座下，后者是原属逃走后被主人带回。",
+      "rubric": [
+        {"points": 2, "criterion": "说明红孩儿原是牛魔王和铁扇公主之子，并非观音原有童子。"},
+        {"points": 2, "criterion": "说明红孩儿的伪装、三昧真火，以及观音用莲台和金箍制伏。"},
+        {"points": 2, "criterion": "说明红孩儿被收为善财童子，佛门关系发生在降服之后。"},
+        {"points": 2, "criterion": "说明灵感大王原是观音莲花池金鱼及其祭献、冰封等作恶方式。"},
+        {"points": 2, "criterion": "说明观音用鱼篮收回灵感大王，并概括两者原始归属的区别。"}
+      ],
+      "critical_errors": [
+        "说红孩儿作妖前就是观音童子，或说灵感大王原本与观音无关。",
+        "把莲台、金箍和鱼篮的使用对象对调。"
+      ]
+    },
+    {
+      "id": "NQ09",
+      "question": "铁扇公主为什么不肯借芭蕉扇？孙悟空最后是怎么借到真扇并过了火焰山的？",
+      "category": "cross_story_causality",
+      "scope": "cross_story",
+      "answerability": "implicit",
+      "expected_wiki_sufficiency": "likely_needs_resource",
+      "source_uris": [
+        "viking://resources/demos/journey-to-the-west/05-红孩儿/红孩儿与火云洞.md",
+        "viking://resources/demos/journey-to-the-west/09-三调芭蕉扇/三调芭蕉扇.md"
+      ],
+      "gold_answer": "铁扇公主和牛魔王把红孩儿被观音收为善财童子归咎于孙悟空，所以旧日结拜关系反而变成了家族怨恨。第一次借扇，铁扇公主把孙悟空扇走；他拿定风丹回来并钻进她腹中，却只得到越扇火越旺的假扇。后来孙悟空变成牛魔王骗到真扇，牛魔王又变成猪八戒把扇骗回。最终猪八戒、天兵等共同制住牛魔王，铁扇公主交出真扇和口诀，孙悟空扇灭火焰山、降下雨水，过山后又把扇归还。",
+      "rubric": [
+        {"points": 2, "criterion": "说明拒借源于红孩儿被观音收走，父母因此怨恨孙悟空。"},
+        {"points": 2, "criterion": "说明第一次被扇走，凭定风丹和钻腹只取得假扇。"},
+        {"points": 2, "criterion": "说明孙悟空变牛魔王骗真扇，牛魔王又变猪八戒骗回。"},
+        {"points": 2, "criterion": "说明多方制住牛魔王，铁扇公主交出真扇和使用口诀。"},
+        {"points": 2, "criterion": "说明孙悟空灭火降雨、顺利过山并归还芭蕉扇。"}
+      ],
+      "critical_errors": [
+        "说铁扇公主拒借与红孩儿无关。",
+        "说孙悟空永久占有芭蕉扇，或说火焰山最终没有被熄灭。"
+      ]
+    },
+    {
+      "id": "NQ10",
+      "question": "青牛精和黄眉大王为什么能让孙悟空请来的帮手也吃亏？他们最后分别是怎么被收服的？",
+      "category": "mechanism_comparison",
+      "scope": "cross_story",
+      "answerability": "implicit",
+      "expected_wiki_sufficiency": "likely_sufficient",
+      "source_uris": [
+        "viking://resources/demos/journey-to-the-west/07-青牛精与金刚琢/青牛精与金刚琢.md",
+        "viking://resources/demos/journey-to-the-west/10-黄眉大王/黄眉大王与小雷音寺.md"
+      ],
+      "gold_answer": "青牛精靠偷来的金刚琢套走金箍棒以及哪吒、火德星君、雷公等援军的兵器法具，使增援越多、战利品越多。它原是太上老君坐骑，最终由老君用咒语和扇子使其现形，再把金刚琢套回牛鼻并骑走。黄眉大王先用金铙困住孙悟空，又用人种袋把援军和兵器成批收走。它原是弥勒佛的司磬童子，最终中了弥勒安排的瓜田计，孙悟空钻入其腹，弥勒用人种袋把童子收回。",
+      "rubric": [
+        {"points": 2, "criterion": "说明青牛精以金刚琢收取多路援军的兵器和法具。"},
+        {"points": 1, "criterion": "说明青牛精原是太上老君坐骑。"},
+        {"points": 2, "criterion": "说明太上老君以咒语和扇子使青牛现形、收回金刚琢并骑牛返回。"},
+        {"points": 2, "criterion": "说明黄眉大王用金铙困单个强敌、人种袋成批收取援军。"},
+        {"points": 1, "criterion": "说明黄眉大王原是弥勒佛司磬童子。"},
+        {"points": 2, "criterion": "说明瓜田计、孙悟空入腹和弥勒以人种袋收回童子的结局。"}
+      ],
+      "critical_errors": [
+        "把金刚琢和人种袋的主人或作用对调。",
+        "把青牛精与黄眉大王的原始身份对调。"
+      ]
+    },
+    {
+      "id": "NQ11",
+      "question": "盘丝洞的蜘蛛精和百眼魔君是什么关系，孙悟空最后是怎么破局的？",
+      "category": "relationship_and_resolution",
+      "scope": "cross_entity",
+      "answerability": "explicit",
+      "expected_wiki_sufficiency": "likely_needs_resource",
+      "source_uris": [
+        "viking://resources/demos/journey-to-the-west/11-盘丝洞/盘丝洞与百眼魔君.md"
+      ],
+      "gold_answer": "七名蜘蛛精先在盘丝洞用蛛丝捉住唐僧，败退后去投奔同门师兄百眼魔君。百眼魔君在黄花观以毒茶害人，现出蜈蚣精本相后又从多目放出金光困住孙悟空。孙悟空抓住蜘蛛精想换师父，百眼魔君拒绝，他便打死蜘蛛精；自己仍破解不了金光。黎山老母指点他去请毗蓝婆菩萨，毗蓝婆用昴日星官眼中炼成的绣花针破掉金光，解毒并把百眼魔君带回看守门户；这不代表百眼魔君原本就是她的属下。",
+      "rubric": [
+        {"points": 2, "criterion": "说明七名蜘蛛精与百眼魔君是同门师妹、师兄关系。"},
+        {"points": 2, "criterion": "说明蜘蛛精以蛛丝捉唐僧，百眼魔君以毒茶和多目金光继续设难。"},
+        {"points": 2, "criterion": "说明百眼魔君拒绝交换，孙悟空打死蜘蛛精但仍无法破金光。"},
+        {"points": 2, "criterion": "说明黎山老母指路，毗蓝婆以绣花针破光并解毒。"},
+        {"points": 2, "criterion": "说明百眼魔君被毗蓝婆带回，但不是其原有童子或坐骑。"}
+      ],
+      "critical_errors": [
+        "把蜘蛛精和百眼魔君写成母子、夫妻或主仆。",
+        "倒推出百眼魔君作妖前就是毗蓝婆的属下。"
+      ]
+    },
+    {
+      "id": "NQ12",
+      "question": "狮驼岭的青狮、白象和大鹏各是什么来历，最后都去了哪里？",
+      "category": "multi_entity_relation",
+      "scope": "cross_entity",
+      "answerability": "explicit",
+      "expected_wiki_sufficiency": "likely_sufficient",
+      "source_uris": [
+        "viking://resources/demos/journey-to-the-west/12-狮驼岭/狮驼岭三魔.md"
+      ],
+      "gold_answer": "青狮是文殊菩萨坐骑，能张口吞人，最后被文殊骑回；白象是普贤菩萨坐骑，擅长用长鼻卷人，最后被普贤骑回。大鹏速度极快并持有阴阳二气瓶，它与孔雀大明王同源，因孔雀被尊为佛母而与如来有亲缘关系，但不是如来的坐骑。最后如来封住大鹏去路，将它收服并留作护法。",
+      "rubric": [
+        {"points": 3, "criterion": "说明青狮是文殊菩萨坐骑并由文殊骑回。"},
+        {"points": 3, "criterion": "说明白象是普贤菩萨坐骑并由普贤骑回。"},
+        {"points": 2, "criterion": "说明大鹏与孔雀大明王同源，并经佛母关系与如来有亲缘关联，且不是如来坐骑。"},
+        {"points": 2, "criterion": "说明大鹏最终被如来收服并留作护法。"}
+      ],
+      "critical_errors": [
+        "把大鹏写成如来坐骑。",
+        "把青狮、白象各自所属的菩萨对调。"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,3221 @@
+{
+  "schema_version": "openviking_wiki_first_results_v1",
+  "run_started_at": "2026-07-17T07:29:26.866759+00:00",
+  "completed": true,
+  "contract": "wiki-first-experiment.json",
+  "contract_sha256": "6fd9881a89f1fd3263287580cf92d903550054064e6a411fe745be8f0fffbf34",
+  "runner_sha256": "5913e36c41b90281e157844099cf32e88a3d65b2aa51a8790ce2ef79264068af",
+  "questions": "wiki-first-questions.json",
+  "question_sha256": "299b1bce00dba9cc21c7cb29d3ebb98dbddc7de862a86c49169ef4238b17a060",
+  "model": "ep-20260514141842-c7s2n",
+  "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+  "source_before": {
+    "resource": {
+      "files": 41,
+      "composite_sha256": "0f0ec4db642fa540da840229b66d2141638b2c45f6b5f4a655b679d599bc5bf4"
+    },
+    "wiki": {
+      "files": 51,
+      "composite_sha256": "7aef447716d59d1d6e7619e6a5feff5161b48bb2a1e616b14953d1f33fc40701"
+    }
+  },
+  "requested_question_ids": [
+    "NQ04",
+    "NQ10"
+  ],
+  "reused_from": null,
+  "results": [
+    {
+      "question_id": "NQ04",
+      "question": "金角大王、银角大王和孙悟空之间发生了什么？",
+      "category": "event_sequence",
+      "scope": "single_story",
+      "expected_wiki_sufficiency": "likely_needs_resource",
+      "execution_order": [
+        "C_closed_book",
+        "W_wiki_only",
+        "WF_wiki_then_resource(fallback)",
+        "R_resource_only"
+      ],
+      "arm_runs": {
+        "C_closed_book": {
+          "answer": "金角大王、银角大王是平顶山莲花洞的妖王，本是太上老君门下看守炼丹炉的童子，被观音菩萨借去下界考验唐僧师徒。二人持有紫金红葫芦、羊脂玉净瓶、芭蕉扇、幌金绳、七星剑五件法宝，捉拿了唐僧、猪八戒、沙悟净。孙悟空与二人缠斗，先后用计骗取、偷盗到几样法宝，先将银角大王收入紫金红葫芦化掉，又击败金角大王。太上老君随后赶来收回两位童子与全部法宝，孙悟空救出唐僧一行人继续西行。",
+          "evidence_uris": [],
+          "answer_call": {
+            "data": {
+              "answer": "金角大王、银角大王是平顶山莲花洞的妖王，本是太上老君门下看守炼丹炉的童子，被观音菩萨借去下界考验唐僧师徒。二人持有紫金红葫芦、羊脂玉净瓶、芭蕉扇、幌金绳、七星剑五件法宝，捉拿了唐僧、猪八戒、沙悟净。孙悟空与二人缠斗，先后用计骗取、偷盗到几样法宝，先将银角大王收入紫金红葫芦化掉，又击败金角大王。太上老君随后赶来收回两位童子与全部法宝，孙悟空救出唐僧一行人继续西行。",
+              "evidence_uris": []
+            },
+            "usage": {
+              "input_tokens": 106,
+              "output_tokens": 437,
+              "total_tokens": 543
+            },
+            "calls": [
+              {
+                "attempt": 1,
+                "usage": {
+                  "input_tokens": 106,
+                  "output_tokens": 437,
+                  "total_tokens": 543
+                },
+                "finish_reason": "stop",
+                "latency_seconds": 13.433
+              }
+            ],
+            "finish_reason": "stop",
+            "protocol_errors": [],
+            "latency_seconds": 13.433
+          }
+        },
+        "W_wiki_only": {
+          "status": "needs_resource",
+          "answer": "目前可获知的相关内容为：金角大王、银角大王本是太上老君座下的炼丹童子，占据平顶山莲花洞为妖，持有多件来自太上老君的法宝。唐僧师徒西行途经平顶山时，金角大王、银角大王和孙悟空多次斗智斗勇，二人的法宝先后被孙悟空夺走，最终金角大王、银角大王未被打杀，被太上老君带回天庭。",
+          "missing": "缺少金角大王、银角大王与孙悟空发生冲突的具体起因、二者和孙悟空斗智斗勇的具体过程细节、相关事件的完整脉络信息",
+          "resource_query": "西游记中金角大王、银角大王与孙悟空相关的完整情节内容",
+          "evidence_uris": [
+            "viking://user/jiajie/memories/entities/文学角色/金角大王.md",
+            "viking://user/jiajie/memories/entities/文学角色/银角大王.md",
+            "viking://user/jiajie/memories/entities/文档资料/04-金角银角内容包.md"
+          ],
+          "answer_call": {
+            "data": {
+              "status": "needs_resource",
+              "answer": "目前可获知的相关内容为：金角大王、银角大王本是太上老君座下的炼丹童子，占据平顶山莲花洞为妖，持有多件来自太上老君的法宝。唐僧师徒西行途经平顶山时，金角大王、银角大王和孙悟空多次斗智斗勇，二人的法宝先后被孙悟空夺走，最终金角大王、银角大王未被打杀，被太上老君带回天庭。",
+              "missing": "缺少金角大王、银角大王与孙悟空发生冲突的具体起因、二者和孙悟空斗智斗勇的具体过程细节、相关事件的完整脉络信息",
+              "resource_query": "西游记中金角大王、银角大王与孙悟空相关的完整情节内容",
+              "evidence_uris": [
+                "viking://user/jiajie/memories/entities/文学角色/金角大王.md",
+                "viking://user/jiajie/memories/entities/文学角色/银角大王.md",
+                "viking://user/jiajie/memories/entities/文档资料/04-金角银角内容包.md"
+              ]
+            },
+            "usage": {
+              "input_tokens": 781,
+              "output_tokens": 1433,
+              "total_tokens": 2214
+            },
+            "calls": [
+              {
+                "attempt": 1,
+                "usage": {
+                  "input_tokens": 781,
+                  "output_tokens": 1433,
+                  "total_tokens": 2214
+                },
+                "finish_reason": "stop",
+                "latency_seconds": 32.047
+              }
+            ],
+            "finish_reason": "stop",
+            "protocol_errors": [],
+            "latency_seconds": 32.047
+          },
+          "retrieval": {
+            "kind": "wiki",
+            "query": "金角大王、银角大王和孙悟空之间发生了什么？",
+            "find": {
+              "candidates": [
+                {
+                  "uri": "viking://user/jiajie/memories/entities/文学角色/金角大王.md",
+                  "score": 0.57041228
+                },
+                {
+                  "uri": "viking://user/jiajie/memories/entities/文学角色/银角大王.md",
+                  "score": 0.55835211
+                },
+                {
+                  "uri": "viking://user/jiajie/memories/entities/文档资料/04-金角银角内容包.md",
+                  "score": 0.54605502
+                },
+                {
+                  "uri": "viking://user/jiajie/memories/entities/神话地点/平顶山莲花洞.md",
+                  "score": 0.49507061
+                },
+                {
+                  "uri": "viking://user/jiajie/memories/entities/神话法宝/紫金红葫芦.md",
+                  "score": 0.4877741
+                }
+              ],
+              "telemetry": {
+                "id": "tm_9533fdb3bb42438189c4644d62a56b59",
+                "summary": {
+                  "operation": "search.find",
+                  "status": "ok",
+                  "duration_ms": 669.149,
+                  "tokens": {
+                    "total": 33,
+                    "embedding": {
+                      "total": 33
+                    },
+                    "stages": {
+                      "embed_query": {
+                        "embedding": {
+                          "total": 33
+                        }
+                      }
+                    }
+                  },
+                  "vector": {
+                    "searches": 1,
+                    "scored": 10,
+                    "returned": 5,
+                    "scanned": 10,
+                    "scan_reason": ""
+                  },
+                  "search": {
+                    "embed_query": {
+                      "duration_ms": 662.438
+                    },
+                    "vector_retrieval": {
+                      "duration_ms": 5.495
+                    }
+                  }
+                }
+              },
+              "telemetry_tokens": 33,
+              "latency_seconds": 0.681,
+              "errors": []
+            },
+            "selector": {
+              "selected_uris": [
+                "viking://user/jiajie/memories/entities/文学角色/金角大王.md",
+                "viking://user/jiajie/memories/entities/文学角色/银角大王.md",
+                "viking://user/jiajie/memories/entities/文档资料/04-金角银角内容包.md"
+              ],
+              "selection_source": "model_selector",
+              "model_call": {
+                "data": {
+                  "selected_uris": [
+                    "viking://user/jiajie/memories/entities/文学角色/金角大王.md",
+                    "viking://user/jiajie/memories/entities/文学角色/银角大王.md",
+                    "viking://user/jiajie/memories/entities/文档资料/04-金角银角内容包.md"
+                  ],
+                  "reason": "所选文件分别为金角大王、银角大王的专属角色文档，以及专门的金角银角相关内容集合，能够完整覆盖二者与孙悟空之间发生的相关情节，是回答该问题所需的最少且足够的资料。"
+                },
+                "usage": {
+                  "input_tokens": 379,
+                  "output_tokens": 1013,
+                  "total_tokens": 1392
+                },
+                "calls": [
+                  {
+                    "attempt": 1,
+                    "usage": {
+                      "input_tokens": 379,
+                      "output_tokens": 1013,
+                      "total_tokens": 1392
+                    },
+                    "finish_reason": "stop",
+                    "latency_seconds": 24.682
+                  }
+                ],
+                "finish_reason": "stop",
+                "protocol_errors": [],
+                "latency_seconds": 24.682
+              },
+              "protocol_errors": []
+            },
+            "reads": [
+              {
+                "uri": "viking://user/jiajie/memories/entities/文学角色/金角大王.md",
+                "status": "ok",
+                "characters": 220,
+                "estimated_content_tokens": 253,
+                "links_before": 4,
+                "links_after": 4,
+                "links_stripped": 0,
+                "latency_seconds": 0.245,
+                "delivered": true,
+                "budget_rejected": false
+              },
+              {
+                "uri": "viking://user/jiajie/memories/entities/文学角色/银角大王.md",
+                "status": "ok",
+                "characters": 209,
+                "estimated_content_tokens": 245,
+                "links_before": 3,
+                "links_after": 3,
+                "links_stripped": 0,
+                "latency_seconds": 0.064,
+                "delivered": true,
+                "budget_rejected": false
+              },
+              {
+                "uri": "viking://user/jiajie/memories/entities/文档资料/04-金角银角内容包.md",
+                "status": "ok",
+                "characters": 389,
+                "estimated_content_tokens": 460,
+                "links_before": 4,
+                "links_after": 4,
+                "links_stripped": 0,
+                "latency_seconds": 0.053,
+                "delivered": true,
+                "budget_rejected": false
+              }
+            ],
+            "successful_ov_read_calls": 3,
+            "unique_files_read": 3,
+            "documents_delivered": 3,
+            "delivered_uris": [
+              "viking://user/jiajie/memories/entities/文学角色/金角大王.md",
+              "viking://user/jiajie/memories/entities/文学角色/银角大王.md",
+              "viking://user/jiajie/memories/entities/文档资料/04-金角银角内容包.md"
+            ],
+            "retrieved_payload_estimated_tokens": 1060,
+            "payload_serialization": "canonical_compact_json",
+            "budget_rejections": [],
+            "errors": [],
+            "latency_seconds": 25.727
+          }
+        },
+        "WF_wiki_then_resource": {
+          "answer": "唐僧师徒西行途经平顶山时，占据当地莲花洞的金角大王、银角大王计划捉拿唐僧，二人熟悉孙悟空善变化的特点，先动用搬山术拖住孙悟空，分头抓走了唐僧、猪八戒和沙僧。二妖持有太上老君的紫金红葫芦、羊脂玉净瓶、芭蕉扇、幌金绳、七星剑多件威力强大的法宝，起初一度将孙悟空逼入险境。孙悟空脱身后多次变换身份，既冒充小妖，还变作二妖的母亲九尾狐狸骗取信任，用假宝物、调包计等方法逐件骗走或夺回法宝，先将银角大王收入紫金红葫芦，之后又制伏了金角大王。就在孙悟空准备彻底处置二妖时，太上老君赶到说明情况，原来二妖本是兜率宫看守金炉、银炉的童子，相关法宝也都属于太上老君。最终太上老君收回了两位童子和全部法宝，唐僧师徒重新踏上西行之路。",
+          "evidence_uris": [
+            "viking://resources/demos/journey-to-the-west/04-金角银角/金角大王与银角大王.md"
+          ],
+          "answer_call": {
+            "data": {
+              "answer": "唐僧师徒西行途经平顶山时，占据当地莲花洞的金角大王、银角大王计划捉拿唐僧，二人熟悉孙悟空善变化的特点，先动用搬山术拖住孙悟空，分头抓走了唐僧、猪八戒和沙僧。二妖持有太上老君的紫金红葫芦、羊脂玉净瓶、芭蕉扇、幌金绳、七星剑多件威力强大的法宝，起初一度将孙悟空逼入险境。孙悟空脱身后多次变换身份，既冒充小妖，还变作二妖的母亲九尾狐狸骗取信任，用假宝物、调包计等方法逐件骗走或夺回法宝，先将银角大王收入紫金红葫芦，之后又制伏了金角大王。就在孙悟空准备彻底处置二妖时，太上老君赶到说明情况，原来二妖本是兜率宫看守金炉、银炉的童子，相关法宝也都属于太上老君。最终太上老君收回了两位童子和全部法宝，唐僧师徒重新踏上西行之路。",
+              "evidence_uris": [
+                "viking://resources/demos/journey-to-the-west/04-金角银角/金角大王与银角大王.md"
+              ]
+            },
+            "usage": {
+              "input_tokens": 896,
+              "output_tokens": 840,
+              "total_tokens": 1736
+            },
+            "calls": [
+              {
+                "attempt": 1,
+                "usage": {
+                  "input_tokens": 896,
+                  "output_tokens": 840,
+                  "total_tokens": 1736
+                },
+                "finish_reason": "stop",
+                "latency_seconds": 20.032
+              }
+            ],
+            "finish_reason": "stop",
+            "protocol_errors": [],
+            "latency_seconds": 20.032
+          },
+          "fallback_used": true,
+          "fallback_reasons": [
+            "status_needs_resource"
+          ],
+          "shared_wiki_stage": true,
+          "gap_memo_estimated_tokens": 200,
+          "fallback_retrieval": {
+            "kind": "resource",
+            "query": "西游记中金角大王、银角大王与孙悟空相关的完整情节内容",
+            "find": {
+              "candidates": [
+                {
+                  "uri": "viking://resources/demos/journey-to-the-west/04-金角银角/金角大王与银角大王.md",
+                  "score": 0.59696877
+                },
+                {
+                  "uri": "viking://resources/demos/journey-to-the-west/02-大闹天宫/孙悟空大闹天宫.md",
+                  "score": 0.49977353
+                },
+                {
+                  "uri": "viking://resources/demos/journey-to-the-west/10-黄眉大王/黄眉大王与小雷音寺.md",
+                  "score": 0.49598479
+                },
+                {
+                  "uri": "viking://resources/demos/journey-to-the-west/07-青牛精与金刚琢/青牛精与金刚琢.md",
+                  "score": 0.45412973
+                },
+                {
+                  "uri": "viking://resources/demos/journey-to-the-west/05-红孩儿/红孩儿与火云洞.md",
+                  "score": 0.45075434
+                }
+              ],
+              "telemetry": {
+                "id": "tm_f24f17519a074d399e26629199272d5c",
+                "summary": {
+                  "operation": "search.find",
+                  "status": "ok",
+                  "duration_ms": 781.895,
+                  "tokens": {
+                    "total": 34,
+                    "embedding": {
+                      "total": 34
+                    },
+                    "stages": {
+                      "embed_query": {
+                        "embedding": {
+                          "total": 34
+                        }
+                      }
+                    }
+                  },
+                  "vector": {
+                    "searches": 1,
+                    "scored": 10,
+                    "returned": 5,
+                    "scanned": 10,
+                    "scan_reason": ""
+                  },
+                  "search": {
+                    "embed_query": {
+                      "duration_ms": 772.998
+                    },
+                    "vector_retrieval": {
+                      "duration_ms": 7.91
+                    }
+                  }
+                }
+              },
+              "telemetry_tokens": 34,
+              "latency_seconds": 0.79,
+              "errors": []
+            },
+            "selector": {
+              "selected_uris": [
+                "viking://resources/demos/journey-to-the-west/04-金角银角/金角大王与银角大王.md"
+              ],
+              "selection_source": "model_selector",
+              "model_call": {
+                "data": {
+                  "selected_uris": [
+                    "viking://resources/demos/journey-to-the-west/04-金角银角/金角大王与银角大王.md"
+                  ],
+                  "reason": "该文件直接对应金角大王、银角大王相关的《西游记》剧情，包含二者与孙悟空之间发生事件的相关内容，其余候选文件均对应《西游记》其他章节的其他妖怪相关剧情，与当前问题无关。"
+                },
+                "usage": {
+                  "input_tokens": 410,
+                  "output_tokens": 351,
+                  "total_tokens": 761
+                },
+                "calls": [
+                  {
+                    "attempt": 1,
+                    "usage": {
+                      "input_tokens": 410,
+                      "output_tokens": 351,
+                      "total_tokens": 761
+                    },
+                    "finish_reason": "stop",
+                    "latency_seconds": 11.097
+                  }
+                ],
+                "finish_reason": "stop",
+                "protocol_errors": [],
+                "latency_seconds": 11.097
+              },
+              "protocol_errors": []
+            },
+            "reads": [
+              {
+                "uri": "viking://resources/demos/journey-to-the-west/04-金角银角/金角大王与银角大王.md",
+                "status": "ok",
+                "characters": 905,
+                "estimated_content_tokens": 1324,
+                "links_before": 5,
+                "links_after": 0,
+                "links_stripped": 5,
+                "latency_seconds": 0.088,
+                "delivered": true,
+                "budget_rejected": false
+              }
+            ],
+            "successful_ov_read_calls": 1,
+            "unique_files_read": 1,
+            "documents_delivered": 1,
+            "delivered_uris": [
+              "viking://resources/demos/journey-to-the-west/04-金角银角/金角大王与银角大王.md"
+            ],
+            "retrieved_payload_estimated_tokens": 1370,
+            "payload_serialization": "canonical_compact_json",
+            "budget_rejections": [],
+            "errors": [],
+            "latency_seconds": 11.976
+          }
+        },
+        "R_resource_only": {
+          "answer": "唐僧师徒取经途经平顶山时，莲花洞的金角大王、银角大王计划捉拿唐僧，二人先是用搬山的办法拖住孙悟空，分头抓走了唐僧、猪八戒和沙僧。二者持有紫金红葫芦、羊脂玉净瓶、芭蕉扇、幌金绳、七星剑多件威力强大的法宝，最初一度将孙悟空逼入险境。孙悟空脱身之后多次变换身份，靠假宝物、变化之术和调包计逐步骗走、夺回法宝，还曾变作二妖的母亲九尾狐狸寻找破绽，最终先将银角大王收入紫金红葫芦，又制伏了金角大王。就在孙悟空准备处置二妖时，太上老君赶来说明二妖本是兜率宫看守金炉、银炉的童子，法宝也都归自己所有，最终太上老君收回了二妖和全部法宝，唐僧师徒重新上路。",
+          "evidence_uris": [
+            "viking://resources/demos/journey-to-the-west/04-金角银角/金角大王与银角大王.md"
+          ],
+          "answer_call": {
+            "data": {
+              "answer": "唐僧师徒取经途经平顶山时，莲花洞的金角大王、银角大王计划捉拿唐僧，二人先是用搬山的办法拖住孙悟空，分头抓走了唐僧、猪八戒和沙僧。二者持有紫金红葫芦、羊脂玉净瓶、芭蕉扇、幌金绳、七星剑多件威力强大的法宝，最初一度将孙悟空逼入险境。孙悟空脱身之后多次变换身份，靠假宝物、变化之术和调包计逐步骗走、夺回法宝，还曾变作二妖的母亲九尾狐狸寻找破绽，最终先将银角大王收入紫金红葫芦，又制伏了金角大王。就在孙悟空准备处置二妖时，太上老君赶来说明二妖本是兜率宫看守金炉、银炉的童子，法宝也都归自己所有，最终太上老君收回了二妖和全部法宝，唐僧师徒重新上路。",
+              "evidence_uris": [
+                "viking://resources/demos/journey-to-the-west/04-金角银角/金角大王与银角大王.md"
+              ]
+            },
+            "usage": {
+              "input_tokens": 761,
+              "output_tokens": 768,
+              "total_tokens": 1529
+            },
+            "calls": [
+              {
+                "attempt": 1,
+                "usage": {
+                  "input_tokens": 761,
+                  "output_tokens": 768,
+                  "total_tokens": 1529
+                },
+                "finish_reason": "stop",
+                "latency_seconds": 17.617
+              }
+            ],
+            "finish_reason": "stop",
+            "protocol_errors": [],
+            "latency_seconds": 17.617
+          },
+          "retrieval": {
+            "kind": "resource",
+            "query": "金角大王、银角大王和孙悟空之间发生了什么？",
+            "find": {
+              "candidates": [
+                {
+                  "uri": "viking://resources/demos/journey-to-the-west/04-金角银角/金角大王与银角大王.md",
+                  "score": 0.6033994
+                },
+                {
+                  "uri": "viking://resources/demos/journey-to-the-west/02-大闹天宫/孙悟空大闹天宫.md",
+                  "score": 0.53230816
+                },
+                {
+                  "uri": "viking://resources/demos/journey-to-the-west/10-黄眉大王/黄眉大王与小雷音寺.md",
+                  "score": 0.49036333
+                },
+                {
+                  "uri": "viking://resources/demos/journey-to-the-west/12-狮驼岭/狮驼岭三魔.md",
+                  "score": 0.48453438
+                },
+                {
+                  "uri": "viking://resources/demos/journey-to-the-west/07-青牛精与金刚琢/青牛精与金刚琢.md",
+                  "score": 0.48432875
+                }
+              ],
+              "telemetry": {
+                "id": "tm_4e711dbf00994b34b8ca73ecadcda751",
+                "summary": {
+                  "operation": "search.find",
+                  "status": "ok",
+                  "duration_ms": 896.395,
+                  "tokens": {
+                    "total": 33,
+                    "embedding": {
+                      "total": 33
+                    },
+                    "stages": {
+                      "embed_query": {
+                        "embedding": {
+                          "total": 33
+                        }
+                      }
+                    }
+                  },
+                  "vector": {
+                    "searches": 1,
+                    "scored": 10,
+                    "returned": 5,
+                    "scanned": 10,
+                    "scan_reason": ""
+                  },
+                  "search": {
+                    "embed_query": {
+                      "duration_ms": 887.306
+                    },
+                    "vector_retrieval": {
+                      "duration_ms": 7.609
+                    }
+                  }
+                }
+              },
+              "telemetry_tokens": 33,
+              "latency_seconds": 0.904,
+              "errors": []
+            },
+            "selector": {
+              "selected_uris": [
+                "viking://resources/demos/journey-to-the-west/04-金角银角/金角大王与银角大王.md"
+              ],
+              "selection_source": "model_selector",
+              "model_call": {
+                "data": {
+                  "selected_uris": [
+                    "viking://resources/demos/journey-to-the-west/04-金角银角/金角大王与银角大王.md"
+                  ],
+                  "reason": "查询内容为金角大王、银角大王和孙悟空之间的故事，选中的文件主题与查询需求高度匹配，其余候选文件的主题均与该查询无关，仅需该文件即可满足信息获取需求。"
+                },
+                "usage": {
+                  "input_tokens": 410,
+                  "output_tokens": 324,
+                  "total_tokens": 734
+                },
+                "calls": [
+                  {
+                    "attempt": 1,
+                    "usage": {
+                      "input_tokens": 410,
+                      "output_tokens": 324,
+                      "total_tokens": 734
+                    },
+                    "finish_reason": "stop",
+                    "latency_seconds": 9.284
+                  }
+                ],
+                "finish_reason": "stop",
+                "protocol_errors": [],
+                "latency_seconds": 9.284
+              },
+              "protocol_errors": []
+            },
+            "reads": [
+              {
+                "uri": "viking://resources/demos/journey-to-the-west/04-金角银角/金角大王与银角大王.md",
+                "status": "ok",
+                "characters": 905,
+                "estimated_content_tokens": 1324,
+                "links_before": 5,
+                "links_after": 0,
+                "links_stripped": 5,
+                "latency_seconds": 0.142,
+                "delivered": true,
+                "budget_rejected": false
+              }
+            ],
+            "successful_ov_read_calls": 1,
+            "unique_files_read": 1,
+            "documents_delivered": 1,
+            "delivered_uris": [
+              "viking://resources/demos/journey-to-the-west/04-金角银角/金角大王与银角大王.md"
+            ],
+            "retrieved_payload_estimated_tokens": 1370,
+            "payload_serialization": "canonical_compact_json",
+            "budget_rejections": [],
+            "errors": [],
+            "latency_seconds": 10.331
+          }
+        }
+      },
+      "arm_metrics": {
+        "C_closed_book": {
+          "ark_usage": {
+            "input_tokens": 106,
+            "output_tokens": 437,
+            "total_tokens": 543
+          },
+          "ov_find_tokens": 0,
+          "arm_equivalent_total_tokens": 543,
+          "find_calls": 0,
+          "successful_ov_read_calls": 0,
+          "unique_files_read": 0,
+          "documents_delivered": 0,
+          "retrieved_payload_estimated_tokens": 0,
+          "budget_rejections": 0,
+          "latency_seconds": 13.433,
+          "errors": []
+        },
+        "W_wiki_only": {
+          "ark_usage": {
+            "input_tokens": 1160,
+            "output_tokens": 2446,
+            "total_tokens": 3606
+          },
+          "ov_find_tokens": 33,
+          "arm_equivalent_total_tokens": 3639,
+          "find_calls": 1,
+          "successful_ov_read_calls": 3,
+          "unique_files_read": 3,
+          "documents_delivered": 3,
+          "retrieved_payload_estimated_tokens": 1060,
+          "budget_rejections": 0,
+          "latency_seconds": 57.774,
+          "errors": []
+        },
+        "WF_wiki_then_resource": {
+          "ark_usage": {
+            "input_tokens": 2466,
+            "output_tokens": 3637,
+            "total_tokens": 6103
+          },
+          "ov_find_tokens": 67,
+          "arm_equivalent_total_tokens": 6170,
+          "find_calls": 2,
+          "successful_ov_read_calls": 4,
+          "unique_files_read": 4,
+          "documents_delivered": 4,
+          "retrieved_payload_estimated_tokens": 2430,
+          "budget_rejections": 0,
+          "latency_seconds": 89.782,
+          "errors": []
+        },
+        "R_resource_only": {
+          "ark_usage": {
+            "input_tokens": 1171,
+            "output_tokens": 1092,
+            "total_tokens": 2263
+          },
+          "ov_find_tokens": 33,
+          "arm_equivalent_total_tokens": 2296,
+          "find_calls": 1,
+          "successful_ov_read_calls": 1,
+          "unique_files_read": 1,
+          "documents_delivered": 1,
+          "retrieved_payload_estimated_tokens": 1370,
+          "budget_rejections": 0,
+          "latency_seconds": 27.948,
+          "errors": []
+        }
+      },
+      "judge": {
+        "runs": [
+          {
+            "repeat": 1,
+            "blind_labels": {
+              "A": "R_resource_only",
+              "B": "W_wiki_only",
+              "C": "WF_wiki_then_resource",
+              "D": "C_closed_book"
+            },
+            "scores": {
+              "R_resource_only": {
+                "criteria": [
+                  {
+                    "index": 1,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 2,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 3,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 4,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 5,
+                    "awarded": 2
+                  }
+                ],
+                "score": 10,
+                "critical_error_indices": []
+              },
+              "W_wiki_only": {
+                "criteria": [
+                  {
+                    "index": 1,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 2,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 3,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 4,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 5,
+                    "awarded": 2
+                  }
+                ],
+                "score": 2,
+                "critical_error_indices": []
+              },
+              "WF_wiki_then_resource": {
+                "criteria": [
+                  {
+                    "index": 1,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 2,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 3,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 4,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 5,
+                    "awarded": 2
+                  }
+                ],
+                "score": 10,
+                "critical_error_indices": []
+              },
+              "C_closed_book": {
+                "criteria": [
+                  {
+                    "index": 1,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 2,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 3,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 4,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 5,
+                    "awarded": 2
+                  }
+                ],
+                "score": 6,
+                "critical_error_indices": []
+              }
+            },
+            "model_call": {
+              "data": {
+                "A": {
+                  "criteria": [
+                    {
+                      "index": 1,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 2,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 3,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 4,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 5,
+                      "awarded": 2
+                    }
+                  ],
+                  "score": 10,
+                  "critical_error_indices": []
+                },
+                "B": {
+                  "criteria": [
+                    {
+                      "index": 1,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 2,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 3,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 4,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 5,
+                      "awarded": 2
+                    }
+                  ],
+                  "score": 2,
+                  "critical_error_indices": []
+                },
+                "C": {
+                  "criteria": [
+                    {
+                      "index": 1,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 2,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 3,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 4,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 5,
+                      "awarded": 2
+                    }
+                  ],
+                  "score": 10,
+                  "critical_error_indices": []
+                },
+                "D": {
+                  "criteria": [
+                    {
+                      "index": 1,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 2,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 3,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 4,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 5,
+                      "awarded": 2
+                    }
+                  ],
+                  "score": 6,
+                  "critical_error_indices": []
+                }
+              },
+              "usage": {
+                "input_tokens": 2961,
+                "output_tokens": 5699,
+                "total_tokens": 8660
+              },
+              "calls": [
+                {
+                  "attempt": 1,
+                  "usage": {
+                    "input_tokens": 1324,
+                    "output_tokens": 3769,
+                    "total_tokens": 5093
+                  },
+                  "finish_reason": "stop",
+                  "latency_seconds": 85.194
+                },
+                {
+                  "attempt": 2,
+                  "usage": {
+                    "input_tokens": 1637,
+                    "output_tokens": 1930,
+                    "total_tokens": 3567
+                  },
+                  "finish_reason": "stop",
+                  "latency_seconds": 43.215
+                }
+              ],
+              "finish_reason": "stop",
+              "protocol_errors": [
+                "protocol_1:JSONDecodeError:Extra data: line 1 column 712 (char 711)"
+              ],
+              "latency_seconds": 128.409
+            }
+          },
+          {
+            "repeat": 2,
+            "blind_labels": {
+              "A": "W_wiki_only",
+              "B": "WF_wiki_then_resource",
+              "C": "C_closed_book",
+              "D": "R_resource_only"
+            },
+            "scores": {
+              "W_wiki_only": {
+                "criteria": [
+                  {
+                    "index": 1,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 2,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 3,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 4,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 5,
+                    "awarded": 2
+                  }
+                ],
+                "score": 2,
+                "critical_error_indices": []
+              },
+              "WF_wiki_then_resource": {
+                "criteria": [
+                  {
+                    "index": 1,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 2,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 3,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 4,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 5,
+                    "awarded": 2
+                  }
+                ],
+                "score": 10,
+                "critical_error_indices": []
+              },
+              "C_closed_book": {
+                "criteria": [
+                  {
+                    "index": 1,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 2,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 3,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 4,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 5,
+                    "awarded": 2
+                  }
+                ],
+                "score": 6,
+                "critical_error_indices": []
+              },
+              "R_resource_only": {
+                "criteria": [
+                  {
+                    "index": 1,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 2,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 3,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 4,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 5,
+                    "awarded": 2
+                  }
+                ],
+                "score": 10,
+                "critical_error_indices": []
+              }
+            },
+            "model_call": {
+              "data": {
+                "A": {
+                  "criteria": [
+                    {
+                      "index": 1,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 2,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 3,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 4,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 5,
+                      "awarded": 2
+                    }
+                  ],
+                  "score": 2,
+                  "critical_error_indices": []
+                },
+                "B": {
+                  "criteria": [
+                    {
+                      "index": 1,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 2,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 3,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 4,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 5,
+                      "awarded": 2
+                    }
+                  ],
+                  "score": 10,
+                  "critical_error_indices": []
+                },
+                "C": {
+                  "criteria": [
+                    {
+                      "index": 1,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 2,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 3,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 4,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 5,
+                      "awarded": 2
+                    }
+                  ],
+                  "score": 6,
+                  "critical_error_indices": []
+                },
+                "D": {
+                  "criteria": [
+                    {
+                      "index": 1,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 2,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 3,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 4,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 5,
+                      "awarded": 2
+                    }
+                  ],
+                  "score": 10,
+                  "critical_error_indices": []
+                }
+              },
+              "usage": {
+                "input_tokens": 1324,
+                "output_tokens": 2167,
+                "total_tokens": 3491
+              },
+              "calls": [
+                {
+                  "attempt": 1,
+                  "usage": {
+                    "input_tokens": 1324,
+                    "output_tokens": 2167,
+                    "total_tokens": 3491
+                  },
+                  "finish_reason": "stop",
+                  "latency_seconds": 51.11
+                }
+              ],
+              "finish_reason": "stop",
+              "protocol_errors": [],
+              "latency_seconds": 51.11
+            }
+          },
+          {
+            "repeat": 3,
+            "blind_labels": {
+              "A": "WF_wiki_then_resource",
+              "B": "C_closed_book",
+              "C": "R_resource_only",
+              "D": "W_wiki_only"
+            },
+            "scores": {
+              "WF_wiki_then_resource": {
+                "criteria": [
+                  {
+                    "index": 1,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 2,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 3,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 4,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 5,
+                    "awarded": 2
+                  }
+                ],
+                "score": 10,
+                "critical_error_indices": []
+              },
+              "C_closed_book": {
+                "criteria": [
+                  {
+                    "index": 1,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 2,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 3,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 4,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 5,
+                    "awarded": 2
+                  }
+                ],
+                "score": 6,
+                "critical_error_indices": []
+              },
+              "R_resource_only": {
+                "criteria": [
+                  {
+                    "index": 1,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 2,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 3,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 4,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 5,
+                    "awarded": 2
+                  }
+                ],
+                "score": 10,
+                "critical_error_indices": []
+              },
+              "W_wiki_only": {
+                "criteria": [
+                  {
+                    "index": 1,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 2,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 3,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 4,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 5,
+                    "awarded": 1
+                  }
+                ],
+                "score": 1,
+                "critical_error_indices": []
+              }
+            },
+            "model_call": {
+              "data": {
+                "A": {
+                  "criteria": [
+                    {
+                      "index": 1,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 2,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 3,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 4,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 5,
+                      "awarded": 2
+                    }
+                  ],
+                  "score": 10,
+                  "critical_error_indices": []
+                },
+                "B": {
+                  "criteria": [
+                    {
+                      "index": 1,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 2,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 3,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 4,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 5,
+                      "awarded": 2
+                    }
+                  ],
+                  "score": 6,
+                  "critical_error_indices": []
+                },
+                "C": {
+                  "criteria": [
+                    {
+                      "index": 1,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 2,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 3,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 4,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 5,
+                      "awarded": 2
+                    }
+                  ],
+                  "score": 10,
+                  "critical_error_indices": []
+                },
+                "D": {
+                  "criteria": [
+                    {
+                      "index": 1,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 2,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 3,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 4,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 5,
+                      "awarded": 1
+                    }
+                  ],
+                  "score": 1,
+                  "critical_error_indices": []
+                }
+              },
+              "usage": {
+                "input_tokens": 1324,
+                "output_tokens": 3285,
+                "total_tokens": 4609
+              },
+              "calls": [
+                {
+                  "attempt": 1,
+                  "usage": {
+                    "input_tokens": 1324,
+                    "output_tokens": 3285,
+                    "total_tokens": 4609
+                  },
+                  "finish_reason": "stop",
+                  "latency_seconds": 72.648
+                }
+              ],
+              "finish_reason": "stop",
+              "protocol_errors": [],
+              "latency_seconds": 72.648
+            }
+          }
+        ],
+        "aggregate": {
+          "C_closed_book": {
+            "score": 6.0,
+            "correct": false,
+            "critical_free_judges": 3,
+            "criterion_awards": [
+              0,
+              2,
+              0,
+              2,
+              2
+            ],
+            "judge_scores": [
+              6.0,
+              6.0,
+              6.0
+            ]
+          },
+          "W_wiki_only": {
+            "score": 2.0,
+            "correct": false,
+            "critical_free_judges": 3,
+            "criterion_awards": [
+              0,
+              0,
+              0,
+              0,
+              2
+            ],
+            "judge_scores": [
+              2.0,
+              2.0,
+              1.0
+            ]
+          },
+          "WF_wiki_then_resource": {
+            "score": 10.0,
+            "correct": true,
+            "critical_free_judges": 3,
+            "criterion_awards": [
+              2,
+              2,
+              2,
+              2,
+              2
+            ],
+            "judge_scores": [
+              10.0,
+              10.0,
+              10.0
+            ]
+          },
+          "R_resource_only": {
+            "score": 10.0,
+            "correct": true,
+            "critical_free_judges": 3,
+            "criterion_awards": [
+              2,
+              2,
+              2,
+              2,
+              2
+            ],
+            "judge_scores": [
+              10.0,
+              10.0,
+              10.0
+            ]
+          }
+        },
+        "usage": {
+          "input_tokens": 5609,
+          "output_tokens": 11151,
+          "total_tokens": 16760
+        },
+        "manual_audit_flags": []
+      }
+    },
+    {
+      "question_id": "NQ10",
+      "question": "青牛精和黄眉大王为什么能让孙悟空请来的帮手也吃亏？他们最后分别是怎么被收服的？",
+      "category": "mechanism_comparison",
+      "scope": "cross_story",
+      "expected_wiki_sufficiency": "likely_sufficient",
+      "execution_order": [
+        "C_closed_book",
+        "W_wiki_only",
+        "WF_wiki_then_resource(shared_no_fallback)",
+        "R_resource_only"
+      ],
+      "arm_runs": {
+        "C_closed_book": {
+          "answer": "青牛精能让孙悟空的帮手吃亏，是因为他本是太上老君的座骑青牛，偷了老君的至宝金刚琢下凡，金刚琢可以收套世间一切兵器、法器，孙悟空请来的哪吒、火德星君、水德星君、十八罗汉等的兵器法宝都被金刚琢套走，因此纷纷失利。黄眉大王本是弥勒佛座下的司磬黄眉童子，偷了弥勒佛的人种袋、金铙下凡，金铙能困囚仙神，人种袋可吞收所有活物，孙悟空请来的二十八星宿、小张太子、各路龙神等都被人种袋收擒，所以帮手也会吃亏。收服过程：青牛精最后由太上老君亲自出面，用芭蕉扇引出青牛精的金刚琢，再将青牛降服带回兜率宫；黄眉大王是弥勒佛设计变作种瓜老农，让孙悟空变作西瓜被黄眉大王吃下，趁黄眉大王腹痛难耐时现身收走法宝，将黄眉童子带回。",
+          "evidence_uris": [],
+          "answer_call": {
+            "data": {
+              "answer": "青牛精能让孙悟空的帮手吃亏，是因为他本是太上老君的座骑青牛，偷了老君的至宝金刚琢下凡，金刚琢可以收套世间一切兵器、法器，孙悟空请来的哪吒、火德星君、水德星君、十八罗汉等的兵器法宝都被金刚琢套走，因此纷纷失利。黄眉大王本是弥勒佛座下的司磬黄眉童子，偷了弥勒佛的人种袋、金铙下凡，金铙能困囚仙神，人种袋可吞收所有活物，孙悟空请来的二十八星宿、小张太子、各路龙神等都被人种袋收擒，所以帮手也会吃亏。收服过程：青牛精最后由太上老君亲自出面，用芭蕉扇引出青牛精的金刚琢，再将青牛降服带回兜率宫；黄眉大王是弥勒佛设计变作种瓜老农，让孙悟空变作西瓜被黄眉大王吃下，趁黄眉大王腹痛难耐时现身收走法宝，将黄眉童子带回。",
+              "evidence_uris": []
+            },
+            "usage": {
+              "input_tokens": 118,
+              "output_tokens": 1154,
+              "total_tokens": 1272
+            },
+            "calls": [
+              {
+                "attempt": 1,
+                "usage": {
+                  "input_tokens": 118,
+                  "output_tokens": 1154,
+                  "total_tokens": 1272
+                },
+                "finish_reason": "stop",
+                "latency_seconds": 28.436
+              }
+            ],
+            "finish_reason": "stop",
+            "protocol_errors": [],
+            "latency_seconds": 28.436
+          }
+        },
+        "W_wiki_only": {
+          "status": "answerable",
+          "answer": "二者让孙悟空请来的帮手吃亏的原因都是持有威力强大的专属法宝：1. 青牛精的法宝是金刚琢，这件法宝有可以收取所有器物的特殊功能，孙悟空请来的天庭、如来势力的帮手的诸多法宝都被金刚琢收走，因此纷纷吃亏；2. 黄眉大王有两件强力法宝，金铙可以封闭单个强敌，人种袋可以成批收取对手，孙悟空及各路援军都被这两件法宝克制，因此接连吃亏。二者的收服结局分别是：青牛精最后被自己的主人太上老君收服；黄眉大王最后被自己的主人弥勒佛用计收回，没有被打杀，被弥勒佛带回。",
+          "missing": "",
+          "resource_query": "",
+          "evidence_uris": [
+            "viking://user/jiajie/memories/entities/神话角色/青牛精.md",
+            "viking://user/jiajie/memories/entities/文学角色/黄眉大王.md",
+            "viking://user/jiajie/memories/entities/文档资料/07-青牛精与金刚琢内容包.md",
+            "viking://user/jiajie/memories/entities/文档资料/10-黄眉大王与小雷音寺内容包.md"
+          ],
+          "answer_call": {
+            "data": {
+              "status": "answerable",
+              "answer": "二者让孙悟空请来的帮手吃亏的原因都是持有威力强大的专属法宝：1. 青牛精的法宝是金刚琢，这件法宝有可以收取所有器物的特殊功能，孙悟空请来的天庭、如来势力的帮手的诸多法宝都被金刚琢收走，因此纷纷吃亏；2. 黄眉大王有两件强力法宝，金铙可以封闭单个强敌，人种袋可以成批收取对手，孙悟空及各路援军都被这两件法宝克制，因此接连吃亏。二者的收服结局分别是：青牛精最后被自己的主人太上老君收服；黄眉大王最后被自己的主人弥勒佛用计收回，没有被打杀，被弥勒佛带回。",
+              "missing": "",
+              "resource_query": "",
+              "evidence_uris": [
+                "viking://user/jiajie/memories/entities/神话角色/青牛精.md",
+                "viking://user/jiajie/memories/entities/文学角色/黄眉大王.md",
+                "viking://user/jiajie/memories/entities/文档资料/07-青牛精与金刚琢内容包.md",
+                "viking://user/jiajie/memories/entities/文档资料/10-黄眉大王与小雷音寺内容包.md"
+              ]
+            },
+            "usage": {
+              "input_tokens": 1119,
+              "output_tokens": 843,
+              "total_tokens": 1962
+            },
+            "calls": [
+              {
+                "attempt": 1,
+                "usage": {
+                  "input_tokens": 1119,
+                  "output_tokens": 843,
+                  "total_tokens": 1962
+                },
+                "finish_reason": "stop",
+                "latency_seconds": 20.397
+              }
+            ],
+            "finish_reason": "stop",
+            "protocol_errors": [],
+            "latency_seconds": 20.397
+          },
+          "retrieval": {
+            "kind": "wiki",
+            "query": "青牛精和黄眉大王为什么能让孙悟空请来的帮手也吃亏？他们最后分别是怎么被收服的？",
+            "find": {
+              "candidates": [
+                {
+                  "uri": "viking://user/jiajie/memories/entities/神话角色/青牛精.md",
+                  "score": 0.60612756
+                },
+                {
+                  "uri": "viking://user/jiajie/memories/entities/文学角色/黄眉大王.md",
+                  "score": 0.58215809
+                },
+                {
+                  "uri": "viking://user/jiajie/memories/entities/文档资料/07-青牛精与金刚琢内容包.md",
+                  "score": 0.5441981
+                },
+                {
+                  "uri": "viking://user/jiajie/memories/entities/文档资料/10-黄眉大王与小雷音寺内容包.md",
+                  "score": 0.54248846
+                },
+                {
+                  "uri": "viking://user/jiajie/memories/entities/神话人物/弥勒佛.md",
+                  "score": 0.51969892
+                }
+              ],
+              "telemetry": {
+                "id": "tm_9e030b4fe5bc4b719b043b9af559aa36",
+                "summary": {
+                  "operation": "search.find",
+                  "status": "ok",
+                  "duration_ms": 787.049,
+                  "tokens": {
+                    "total": 45,
+                    "embedding": {
+                      "total": 45
+                    },
+                    "stages": {
+                      "embed_query": {
+                        "embedding": {
+                          "total": 45
+                        }
+                      }
+                    }
+                  },
+                  "vector": {
+                    "searches": 1,
+                    "scored": 10,
+                    "returned": 5,
+                    "scanned": 10,
+                    "scan_reason": ""
+                  },
+                  "search": {
+                    "embed_query": {
+                      "duration_ms": 781.061
+                    },
+                    "vector_retrieval": {
+                      "duration_ms": 4.62
+                    }
+                  }
+                }
+              },
+              "telemetry_tokens": 45,
+              "latency_seconds": 0.792,
+              "errors": []
+            },
+            "selector": {
+              "selected_uris": [
+                "viking://user/jiajie/memories/entities/神话角色/青牛精.md",
+                "viking://user/jiajie/memories/entities/文学角色/黄眉大王.md",
+                "viking://user/jiajie/memories/entities/文档资料/07-青牛精与金刚琢内容包.md",
+                "viking://user/jiajie/memories/entities/文档资料/10-黄眉大王与小雷音寺内容包.md"
+              ],
+              "selection_source": "model_selector",
+              "model_call": {
+                "data": {
+                  "selected_uris": [
+                    "viking://user/jiajie/memories/entities/神话角色/青牛精.md",
+                    "viking://user/jiajie/memories/entities/文学角色/黄眉大王.md",
+                    "viking://user/jiajie/memories/entities/文档资料/07-青牛精与金刚琢内容包.md",
+                    "viking://user/jiajie/memories/entities/文档资料/10-黄眉大王与小雷音寺内容包.md"
+                  ],
+                  "reason": "查询涉及青牛精、黄眉大王二者让孙悟空帮手吃亏的原因及各自收服方式的内容，所选文件按相关度从高到低排序，分别对应两个角色的基础信息档案及专属内容包，覆盖了二者的法宝特性、对战表现、收服过程等全部所需信息，足以回答问题。"
+                },
+                "usage": {
+                  "input_tokens": 402,
+                  "output_tokens": 1615,
+                  "total_tokens": 2017
+                },
+                "calls": [
+                  {
+                    "attempt": 1,
+                    "usage": {
+                      "input_tokens": 402,
+                      "output_tokens": 1615,
+                      "total_tokens": 2017
+                    },
+                    "finish_reason": "stop",
+                    "latency_seconds": 36.76
+                  }
+                ],
+                "finish_reason": "stop",
+                "protocol_errors": [],
+                "latency_seconds": 36.76
+              },
+              "protocol_errors": []
+            },
+            "reads": [
+              {
+                "uri": "viking://user/jiajie/memories/entities/神话角色/青牛精.md",
+                "status": "ok",
+                "characters": 181,
+                "estimated_content_tokens": 209,
+                "links_before": 2,
+                "links_after": 2,
+                "links_stripped": 0,
+                "latency_seconds": 0.178,
+                "delivered": true,
+                "budget_rejected": false
+              },
+              {
+                "uri": "viking://user/jiajie/memories/entities/文学角色/黄眉大王.md",
+                "status": "ok",
+                "characters": 235,
+                "estimated_content_tokens": 260,
+                "links_before": 4,
+                "links_after": 4,
+                "links_stripped": 0,
+                "latency_seconds": 0.076,
+                "delivered": true,
+                "budget_rejected": false
+              },
+              {
+                "uri": "viking://user/jiajie/memories/entities/文档资料/07-青牛精与金刚琢内容包.md",
+                "status": "ok",
+                "characters": 352,
+                "estimated_content_tokens": 413,
+                "links_before": 3,
+                "links_after": 3,
+                "links_stripped": 0,
+                "latency_seconds": 0.066,
+                "delivered": true,
+                "budget_rejected": false
+              },
+              {
+                "uri": "viking://user/jiajie/memories/entities/文档资料/10-黄眉大王与小雷音寺内容包.md",
+                "status": "ok",
+                "characters": 450,
+                "estimated_content_tokens": 534,
+                "links_before": 5,
+                "links_after": 5,
+                "links_stripped": 0,
+                "latency_seconds": 0.063,
+                "delivered": true,
+                "budget_rejected": false
+              }
+            ],
+            "successful_ov_read_calls": 4,
+            "unique_files_read": 4,
+            "documents_delivered": 4,
+            "delivered_uris": [
+              "viking://user/jiajie/memories/entities/神话角色/青牛精.md",
+              "viking://user/jiajie/memories/entities/文学角色/黄眉大王.md",
+              "viking://user/jiajie/memories/entities/文档资料/07-青牛精与金刚琢内容包.md",
+              "viking://user/jiajie/memories/entities/文档资料/10-黄眉大王与小雷音寺内容包.md"
+            ],
+            "retrieved_payload_estimated_tokens": 1568,
+            "payload_serialization": "canonical_compact_json",
+            "budget_rejections": [],
+            "errors": [],
+            "latency_seconds": 37.938
+          }
+        },
+        "WF_wiki_then_resource": {
+          "answer": "二者让孙悟空请来的帮手吃亏的原因都是持有威力强大的专属法宝：1. 青牛精的法宝是金刚琢，这件法宝有可以收取所有器物的特殊功能，孙悟空请来的天庭、如来势力的帮手的诸多法宝都被金刚琢收走，因此纷纷吃亏；2. 黄眉大王有两件强力法宝，金铙可以封闭单个强敌，人种袋可以成批收取对手，孙悟空及各路援军都被这两件法宝克制，因此接连吃亏。二者的收服结局分别是：青牛精最后被自己的主人太上老君收服；黄眉大王最后被自己的主人弥勒佛用计收回，没有被打杀，被弥勒佛带回。",
+          "evidence_uris": [
+            "viking://user/jiajie/memories/entities/神话角色/青牛精.md",
+            "viking://user/jiajie/memories/entities/文学角色/黄眉大王.md",
+            "viking://user/jiajie/memories/entities/文档资料/07-青牛精与金刚琢内容包.md",
+            "viking://user/jiajie/memories/entities/文档资料/10-黄眉大王与小雷音寺内容包.md"
+          ],
+          "fallback_used": false,
+          "fallback_reasons": [],
+          "shared_wiki_stage": true,
+          "answer_call": null
+        },
+        "R_resource_only": {
+          "answer": "他们能让孙悟空请来的帮手吃亏的原因如下：青牛精偷了太上老君的金刚琢，这件法宝可以收走各类兵器、器具，孙悟空请来的天兵、神将的兵器、火具、雷器甚至如来派罗汉送来的金丹砂都能被套走，所以帮手们纷纷落败；黄眉大王偷了弥勒佛的金铙和人种袋（后天袋），金铙坚固能困住强敌，人种袋可以张开就把对手连同兵器一并收走，孙悟空请来的天兵、星宿、武当山神将等援军往往刚摆开阵势就被袋子吸入，自然吃亏。\n二者的收服过程分别是：青牛精最后是孙悟空循线索找到其主人太上老君，太上老君下界用咒语和扇子让青牛精现出原形，把金刚琢套在牛鼻上，将它骑回兜率宫收服；黄眉大王是其主人弥勒佛现身，设下瓜田计策，孙悟空变成西瓜进入黄眉大王腹内折腾让他失去抵抗，弥勒佛趁机用人种袋将他装回收走。",
+          "evidence_uris": [
+            "viking://resources/demos/journey-to-the-west/10-黄眉大王/黄眉大王与小雷音寺.md",
+            "viking://resources/demos/journey-to-the-west/07-青牛精与金刚琢/青牛精与金刚琢.md"
+          ],
+          "answer_call": {
+            "data": {
+              "answer": "他们能让孙悟空请来的帮手吃亏的原因如下：青牛精偷了太上老君的金刚琢，这件法宝可以收走各类兵器、器具，孙悟空请来的天兵、神将的兵器、火具、雷器甚至如来派罗汉送来的金丹砂都能被套走，所以帮手们纷纷落败；黄眉大王偷了弥勒佛的金铙和人种袋（后天袋），金铙坚固能困住强敌，人种袋可以张开就把对手连同兵器一并收走，孙悟空请来的天兵、星宿、武当山神将等援军往往刚摆开阵势就被袋子吸入，自然吃亏。\n二者的收服过程分别是：青牛精最后是孙悟空循线索找到其主人太上老君，太上老君下界用咒语和扇子让青牛精现出原形，把金刚琢套在牛鼻上，将它骑回兜率宫收服；黄眉大王是其主人弥勒佛现身，设下瓜田计策，孙悟空变成西瓜进入黄眉大王腹内折腾让他失去抵抗，弥勒佛趁机用人种袋将他装回收走。",
+              "evidence_uris": [
+                "viking://resources/demos/journey-to-the-west/10-黄眉大王/黄眉大王与小雷音寺.md",
+                "viking://resources/demos/journey-to-the-west/07-青牛精与金刚琢/青牛精与金刚琢.md"
+              ]
+            },
+            "usage": {
+              "input_tokens": 1400,
+              "output_tokens": 920,
+              "total_tokens": 2320
+            },
+            "calls": [
+              {
+                "attempt": 1,
+                "usage": {
+                  "input_tokens": 1400,
+                  "output_tokens": 920,
+                  "total_tokens": 2320
+                },
+                "finish_reason": "stop",
+                "latency_seconds": 20.996
+              }
+            ],
+            "finish_reason": "stop",
+            "protocol_errors": [],
+            "latency_seconds": 20.996
+          },
+          "retrieval": {
+            "kind": "resource",
+            "query": "青牛精和黄眉大王为什么能让孙悟空请来的帮手也吃亏？他们最后分别是怎么被收服的？",
+            "find": {
+              "candidates": [
+                {
+                  "uri": "viking://resources/demos/journey-to-the-west/10-黄眉大王/黄眉大王与小雷音寺.md",
+                  "score": 0.62830389
+                },
+                {
+                  "uri": "viking://resources/demos/journey-to-the-west/07-青牛精与金刚琢/青牛精与金刚琢.md",
+                  "score": 0.62040001
+                },
+                {
+                  "uri": "viking://resources/demos/journey-to-the-west/04-金角银角/金角大王与银角大王.md",
+                  "score": 0.5233016
+                },
+                {
+                  "uri": "viking://resources/demos/journey-to-the-west/12-狮驼岭/狮驼岭三魔.md",
+                  "score": 0.52053952
+                },
+                {
+                  "uri": "viking://resources/demos/journey-to-the-west/06-通天河金鱼精/通天河金鱼精.md",
+                  "score": 0.46767011
+                }
+              ],
+              "telemetry": {
+                "id": "tm_1bc1db9b320f4beaac64a08aa1d999bc",
+                "summary": {
+                  "operation": "search.find",
+                  "status": "ok",
+                  "duration_ms": 786.419,
+                  "tokens": {
+                    "total": 45,
+                    "embedding": {
+                      "total": 45
+                    },
+                    "stages": {
+                      "embed_query": {
+                        "embedding": {
+                          "total": 45
+                        }
+                      }
+                    }
+                  },
+                  "vector": {
+                    "searches": 1,
+                    "scored": 10,
+                    "returned": 5,
+                    "scanned": 10,
+                    "scan_reason": ""
+                  },
+                  "search": {
+                    "embed_query": {
+                      "duration_ms": 778.557
+                    },
+                    "vector_retrieval": {
+                      "duration_ms": 6.473
+                    }
+                  }
+                }
+              },
+              "telemetry_tokens": 45,
+              "latency_seconds": 0.794,
+              "errors": []
+            },
+            "selector": {
+              "selected_uris": [
+                "viking://resources/demos/journey-to-the-west/10-黄眉大王/黄眉大王与小雷音寺.md",
+                "viking://resources/demos/journey-to-the-west/07-青牛精与金刚琢/青牛精与金刚琢.md"
+              ],
+              "selection_source": "model_selector",
+              "model_call": {
+                "data": {
+                  "selected_uris": [
+                    "viking://resources/demos/journey-to-the-west/10-黄眉大王/黄眉大王与小雷音寺.md",
+                    "viking://resources/demos/journey-to-the-west/07-青牛精与金刚琢/青牛精与金刚琢.md"
+                  ],
+                  "reason": "两个选中文件分别对应黄眉大王、青牛精的专属章节，包含二者的能力法宝设定、对战孙悟空及其帮手的相关情节，以及各自最终的收服过程，完全覆盖问题所需信息，其余候选文件内容与该问题无关。"
+                },
+                "usage": {
+                  "input_tokens": 425,
+                  "output_tokens": 472,
+                  "total_tokens": 897
+                },
+                "calls": [
+                  {
+                    "attempt": 1,
+                    "usage": {
+                      "input_tokens": 425,
+                      "output_tokens": 472,
+                      "total_tokens": 897
+                    },
+                    "finish_reason": "stop",
+                    "latency_seconds": 11.597
+                  }
+                ],
+                "finish_reason": "stop",
+                "protocol_errors": [],
+                "latency_seconds": 11.597
+              },
+              "protocol_errors": []
+            },
+            "reads": [
+              {
+                "uri": "viking://resources/demos/journey-to-the-west/10-黄眉大王/黄眉大王与小雷音寺.md",
+                "status": "ok",
+                "characters": 858,
+                "estimated_content_tokens": 1251,
+                "links_before": 6,
+                "links_after": 0,
+                "links_stripped": 6,
+                "latency_seconds": 0.092,
+                "delivered": true,
+                "budget_rejected": false
+              },
+              {
+                "uri": "viking://resources/demos/journey-to-the-west/07-青牛精与金刚琢/青牛精与金刚琢.md",
+                "status": "ok",
+                "characters": 914,
+                "estimated_content_tokens": 1313,
+                "links_before": 5,
+                "links_after": 0,
+                "links_stripped": 5,
+                "latency_seconds": 0.072,
+                "delivered": true,
+                "budget_rejected": false
+              }
+            ],
+            "successful_ov_read_calls": 2,
+            "unique_files_read": 2,
+            "documents_delivered": 2,
+            "delivered_uris": [
+              "viking://resources/demos/journey-to-the-west/10-黄眉大王/黄眉大王与小雷音寺.md",
+              "viking://resources/demos/journey-to-the-west/07-青牛精与金刚琢/青牛精与金刚琢.md"
+            ],
+            "retrieved_payload_estimated_tokens": 2654,
+            "payload_serialization": "canonical_compact_json",
+            "budget_rejections": [],
+            "errors": [],
+            "latency_seconds": 12.556
+          }
+        }
+      },
+      "arm_metrics": {
+        "C_closed_book": {
+          "ark_usage": {
+            "input_tokens": 118,
+            "output_tokens": 1154,
+            "total_tokens": 1272
+          },
+          "ov_find_tokens": 0,
+          "arm_equivalent_total_tokens": 1272,
+          "find_calls": 0,
+          "successful_ov_read_calls": 0,
+          "unique_files_read": 0,
+          "documents_delivered": 0,
+          "retrieved_payload_estimated_tokens": 0,
+          "budget_rejections": 0,
+          "latency_seconds": 28.436,
+          "errors": []
+        },
+        "W_wiki_only": {
+          "ark_usage": {
+            "input_tokens": 1521,
+            "output_tokens": 2458,
+            "total_tokens": 3979
+          },
+          "ov_find_tokens": 45,
+          "arm_equivalent_total_tokens": 4024,
+          "find_calls": 1,
+          "successful_ov_read_calls": 4,
+          "unique_files_read": 4,
+          "documents_delivered": 4,
+          "retrieved_payload_estimated_tokens": 1568,
+          "budget_rejections": 0,
+          "latency_seconds": 58.335,
+          "errors": []
+        },
+        "WF_wiki_then_resource": {
+          "ark_usage": {
+            "input_tokens": 1521,
+            "output_tokens": 2458,
+            "total_tokens": 3979
+          },
+          "ov_find_tokens": 45,
+          "arm_equivalent_total_tokens": 4024,
+          "find_calls": 1,
+          "successful_ov_read_calls": 4,
+          "unique_files_read": 4,
+          "documents_delivered": 4,
+          "retrieved_payload_estimated_tokens": 1568,
+          "budget_rejections": 0,
+          "latency_seconds": 58.335,
+          "errors": []
+        },
+        "R_resource_only": {
+          "ark_usage": {
+            "input_tokens": 1825,
+            "output_tokens": 1392,
+            "total_tokens": 3217
+          },
+          "ov_find_tokens": 45,
+          "arm_equivalent_total_tokens": 3262,
+          "find_calls": 1,
+          "successful_ov_read_calls": 2,
+          "unique_files_read": 2,
+          "documents_delivered": 2,
+          "retrieved_payload_estimated_tokens": 2654,
+          "budget_rejections": 0,
+          "latency_seconds": 33.552,
+          "errors": []
+        }
+      },
+      "judge": {
+        "runs": [
+          {
+            "repeat": 1,
+            "blind_labels": {
+              "A": "W_wiki_only",
+              "B": "R_resource_only",
+              "C": "C_closed_book",
+              "D": "WF_wiki_then_resource"
+            },
+            "scores": {
+              "W_wiki_only": {
+                "criteria": [
+                  {
+                    "index": 1,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 2,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 3,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 4,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 5,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 6,
+                    "awarded": 0
+                  }
+                ],
+                "score": 4,
+                "critical_error_indices": []
+              },
+              "R_resource_only": {
+                "criteria": [
+                  {
+                    "index": 1,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 2,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 3,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 4,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 5,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 6,
+                    "awarded": 2
+                  }
+                ],
+                "score": 8,
+                "critical_error_indices": []
+              },
+              "C_closed_book": {
+                "criteria": [
+                  {
+                    "index": 1,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 2,
+                    "awarded": 1
+                  },
+                  {
+                    "index": 3,
+                    "awarded": 1
+                  },
+                  {
+                    "index": 4,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 5,
+                    "awarded": 1
+                  },
+                  {
+                    "index": 6,
+                    "awarded": 1
+                  }
+                ],
+                "score": 8,
+                "critical_error_indices": []
+              },
+              "WF_wiki_then_resource": {
+                "criteria": [
+                  {
+                    "index": 1,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 2,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 3,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 4,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 5,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 6,
+                    "awarded": 0
+                  }
+                ],
+                "score": 4,
+                "critical_error_indices": []
+              }
+            },
+            "model_call": {
+              "data": {
+                "A": {
+                  "criteria": [
+                    {
+                      "index": 1,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 2,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 3,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 4,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 5,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 6,
+                      "awarded": 0
+                    }
+                  ],
+                  "score": 4,
+                  "critical_error_indices": []
+                },
+                "B": {
+                  "criteria": [
+                    {
+                      "index": 1,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 2,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 3,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 4,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 5,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 6,
+                      "awarded": 2
+                    }
+                  ],
+                  "score": 8,
+                  "critical_error_indices": []
+                },
+                "C": {
+                  "criteria": [
+                    {
+                      "index": 1,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 2,
+                      "awarded": 1
+                    },
+                    {
+                      "index": 3,
+                      "awarded": 1
+                    },
+                    {
+                      "index": 4,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 5,
+                      "awarded": 1
+                    },
+                    {
+                      "index": 6,
+                      "awarded": 1
+                    }
+                  ],
+                  "score": 8,
+                  "critical_error_indices": []
+                },
+                "D": {
+                  "criteria": [
+                    {
+                      "index": 1,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 2,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 3,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 4,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 5,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 6,
+                      "awarded": 0
+                    }
+                  ],
+                  "score": 4,
+                  "critical_error_indices": []
+                }
+              },
+              "usage": {
+                "input_tokens": 1565,
+                "output_tokens": 3559,
+                "total_tokens": 5124
+              },
+              "calls": [
+                {
+                  "attempt": 1,
+                  "usage": {
+                    "input_tokens": 1565,
+                    "output_tokens": 3559,
+                    "total_tokens": 5124
+                  },
+                  "finish_reason": "stop",
+                  "latency_seconds": 78.979
+                }
+              ],
+              "finish_reason": "stop",
+              "protocol_errors": [],
+              "latency_seconds": 78.979
+            }
+          },
+          {
+            "repeat": 2,
+            "blind_labels": {
+              "A": "R_resource_only",
+              "B": "C_closed_book",
+              "C": "WF_wiki_then_resource",
+              "D": "W_wiki_only"
+            },
+            "scores": {
+              "R_resource_only": {
+                "criteria": [
+                  {
+                    "index": 1,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 2,
+                    "awarded": 1
+                  },
+                  {
+                    "index": 3,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 4,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 5,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 6,
+                    "awarded": 2
+                  }
+                ],
+                "score": 9,
+                "critical_error_indices": []
+              },
+              "C_closed_book": {
+                "criteria": [
+                  {
+                    "index": 1,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 2,
+                    "awarded": 1
+                  },
+                  {
+                    "index": 3,
+                    "awarded": 1
+                  },
+                  {
+                    "index": 4,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 5,
+                    "awarded": 1
+                  },
+                  {
+                    "index": 6,
+                    "awarded": 1
+                  }
+                ],
+                "score": 8,
+                "critical_error_indices": []
+              },
+              "WF_wiki_then_resource": {
+                "criteria": [
+                  {
+                    "index": 1,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 2,
+                    "awarded": 1
+                  },
+                  {
+                    "index": 3,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 4,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 5,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 6,
+                    "awarded": 0
+                  }
+                ],
+                "score": 5,
+                "critical_error_indices": []
+              },
+              "W_wiki_only": {
+                "criteria": [
+                  {
+                    "index": 1,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 2,
+                    "awarded": 1
+                  },
+                  {
+                    "index": 3,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 4,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 5,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 6,
+                    "awarded": 0
+                  }
+                ],
+                "score": 5,
+                "critical_error_indices": []
+              }
+            },
+            "model_call": {
+              "data": {
+                "A": {
+                  "criteria": [
+                    {
+                      "index": 1,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 2,
+                      "awarded": 1
+                    },
+                    {
+                      "index": 3,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 4,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 5,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 6,
+                      "awarded": 2
+                    }
+                  ],
+                  "score": 9,
+                  "critical_error_indices": []
+                },
+                "B": {
+                  "criteria": [
+                    {
+                      "index": 1,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 2,
+                      "awarded": 1
+                    },
+                    {
+                      "index": 3,
+                      "awarded": 1
+                    },
+                    {
+                      "index": 4,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 5,
+                      "awarded": 1
+                    },
+                    {
+                      "index": 6,
+                      "awarded": 1
+                    }
+                  ],
+                  "score": 8,
+                  "critical_error_indices": []
+                },
+                "C": {
+                  "criteria": [
+                    {
+                      "index": 1,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 2,
+                      "awarded": 1
+                    },
+                    {
+                      "index": 3,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 4,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 5,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 6,
+                      "awarded": 0
+                    }
+                  ],
+                  "score": 5,
+                  "critical_error_indices": []
+                },
+                "D": {
+                  "criteria": [
+                    {
+                      "index": 1,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 2,
+                      "awarded": 1
+                    },
+                    {
+                      "index": 3,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 4,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 5,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 6,
+                      "awarded": 0
+                    }
+                  ],
+                  "score": 5,
+                  "critical_error_indices": []
+                }
+              },
+              "usage": {
+                "input_tokens": 1565,
+                "output_tokens": 2757,
+                "total_tokens": 4322
+              },
+              "calls": [
+                {
+                  "attempt": 1,
+                  "usage": {
+                    "input_tokens": 1565,
+                    "output_tokens": 2757,
+                    "total_tokens": 4322
+                  },
+                  "finish_reason": "stop",
+                  "latency_seconds": 56.984
+                }
+              ],
+              "finish_reason": "stop",
+              "protocol_errors": [],
+              "latency_seconds": 56.984
+            }
+          },
+          {
+            "repeat": 3,
+            "blind_labels": {
+              "A": "C_closed_book",
+              "B": "WF_wiki_then_resource",
+              "C": "W_wiki_only",
+              "D": "R_resource_only"
+            },
+            "scores": {
+              "C_closed_book": {
+                "criteria": [
+                  {
+                    "index": 1,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 2,
+                    "awarded": 1
+                  },
+                  {
+                    "index": 3,
+                    "awarded": 1
+                  },
+                  {
+                    "index": 4,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 5,
+                    "awarded": 1
+                  },
+                  {
+                    "index": 6,
+                    "awarded": 1
+                  }
+                ],
+                "score": 8,
+                "critical_error_indices": []
+              },
+              "WF_wiki_then_resource": {
+                "criteria": [
+                  {
+                    "index": 1,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 2,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 3,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 4,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 5,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 6,
+                    "awarded": 0
+                  }
+                ],
+                "score": 4,
+                "critical_error_indices": []
+              },
+              "W_wiki_only": {
+                "criteria": [
+                  {
+                    "index": 1,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 2,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 3,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 4,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 5,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 6,
+                    "awarded": 0
+                  }
+                ],
+                "score": 4,
+                "critical_error_indices": []
+              },
+              "R_resource_only": {
+                "criteria": [
+                  {
+                    "index": 1,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 2,
+                    "awarded": 1
+                  },
+                  {
+                    "index": 3,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 4,
+                    "awarded": 2
+                  },
+                  {
+                    "index": 5,
+                    "awarded": 0
+                  },
+                  {
+                    "index": 6,
+                    "awarded": 2
+                  }
+                ],
+                "score": 9,
+                "critical_error_indices": []
+              }
+            },
+            "model_call": {
+              "data": {
+                "A": {
+                  "criteria": [
+                    {
+                      "index": 1,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 2,
+                      "awarded": 1
+                    },
+                    {
+                      "index": 3,
+                      "awarded": 1
+                    },
+                    {
+                      "index": 4,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 5,
+                      "awarded": 1
+                    },
+                    {
+                      "index": 6,
+                      "awarded": 1
+                    }
+                  ],
+                  "score": 8,
+                  "critical_error_indices": []
+                },
+                "B": {
+                  "criteria": [
+                    {
+                      "index": 1,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 2,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 3,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 4,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 5,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 6,
+                      "awarded": 0
+                    }
+                  ],
+                  "score": 4,
+                  "critical_error_indices": []
+                },
+                "C": {
+                  "criteria": [
+                    {
+                      "index": 1,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 2,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 3,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 4,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 5,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 6,
+                      "awarded": 0
+                    }
+                  ],
+                  "score": 4,
+                  "critical_error_indices": []
+                },
+                "D": {
+                  "criteria": [
+                    {
+                      "index": 1,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 2,
+                      "awarded": 1
+                    },
+                    {
+                      "index": 3,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 4,
+                      "awarded": 2
+                    },
+                    {
+                      "index": 5,
+                      "awarded": 0
+                    },
+                    {
+                      "index": 6,
+                      "awarded": 2
+                    }
+                  ],
+                  "score": 9,
+                  "critical_error_indices": []
+                }
+              },
+              "usage": {
+                "input_tokens": 1565,
+                "output_tokens": 4358,
+                "total_tokens": 5923
+              },
+              "calls": [
+                {
+                  "attempt": 1,
+                  "usage": {
+                    "input_tokens": 1565,
+                    "output_tokens": 4358,
+                    "total_tokens": 5923
+                  },
+                  "finish_reason": "stop",
+                  "latency_seconds": 94.757
+                }
+              ],
+              "finish_reason": "stop",
+              "protocol_errors": [],
+              "latency_seconds": 94.757
+            }
+          }
+        ],
+        "aggregate": {
+          "C_closed_book": {
+            "score": 8.0,
+            "correct": true,
+            "critical_free_judges": 3,
+            "criterion_awards": [
+              2,
+              1,
+              1,
+              2,
+              1,
+              1
+            ],
+            "judge_scores": [
+              8.0,
+              8.0,
+              8.0
+            ]
+          },
+          "W_wiki_only": {
+            "score": 4.0,
+            "correct": false,
+            "critical_free_judges": 3,
+            "criterion_awards": [
+              2,
+              0,
+              0,
+              2,
+              0,
+              0
+            ],
+            "judge_scores": [
+              4.0,
+              5.0,
+              4.0
+            ]
+          },
+          "WF_wiki_then_resource": {
+            "score": 4.0,
+            "correct": false,
+            "critical_free_judges": 3,
+            "criterion_awards": [
+              2,
+              0,
+              0,
+              2,
+              0,
+              0
+            ],
+            "judge_scores": [
+              4.0,
+              5.0,
+              4.0
+            ]
+          },
+          "R_resource_only": {
+            "score": 9.0,
+            "correct": true,
+            "critical_free_judges": 3,
+            "criterion_awards": [
+              2,
+              1,
+              2,
+              2,
+              0,
+              2
+            ],
+            "judge_scores": [
+              8.0,
+              9.0,
+              9.0
+            ]
+          }
+        },
+        "usage": {
+          "input_tokens": 4695,
+          "output_tokens": 10674,
+          "total_tokens": 15369
+        },
+        "manual_audit_flags": [
+          {
+            "arm": "C_closed_book",
+            "reasons": [
+              "borderline_score_7_to_9"
+            ]
+          },
+          {
+            "arm": "R_resource_only",
+            "reasons": [
+              "borderline_score_7_to_9"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "source_after": {
+    "resource": {
+      "files": 41,
+      "composite_sha256": "0f0ec4db642fa540da840229b66d2141638b2c45f6b5f4a655b679d599bc5bf4"
+    },
+    "wiki": {
+      "files": 51,
+      "composite_sha256": "7aef447716d59d1d6e7619e6a5feff5161b48bb2a1e616b14953d1f33fc40701"
+    }
+  },
+  "summary": {
+    "all_questions": {
+      "question_count": 2,
+      "arms": {
+        "C_closed_book": {
+          "mean_score_out_of_10": 7.0,
+          "correct_answers": 1,
+          "accuracy": 0.5,
+          "atomic_fact_accuracy": 0.7,
+          "successful_ov_read_calls": 0,
+          "unique_file_reads_sum": 0,
+          "documents_delivered": 0,
+          "retrieved_payload_estimated_tokens": 0,
+          "ark_input_tokens": 224,
+          "ark_output_tokens": 1591,
+          "ark_total_tokens": 1815,
+          "ov_find_tokens": 0,
+          "arm_equivalent_total_tokens": 1815,
+          "latency_seconds": 41.869,
+          "error_count": 0,
+          "cost_per_correct_answer_tokens": 1815.0
+        },
+        "W_wiki_only": {
+          "mean_score_out_of_10": 3.0,
+          "correct_answers": 0,
+          "accuracy": 0.0,
+          "atomic_fact_accuracy": 0.3,
+          "successful_ov_read_calls": 7,
+          "unique_file_reads_sum": 7,
+          "documents_delivered": 7,
+          "retrieved_payload_estimated_tokens": 2628,
+          "ark_input_tokens": 2681,
+          "ark_output_tokens": 4904,
+          "ark_total_tokens": 7585,
+          "ov_find_tokens": 78,
+          "arm_equivalent_total_tokens": 7663,
+          "latency_seconds": 116.109,
+          "error_count": 0,
+          "cost_per_correct_answer_tokens": null
+        },
+        "WF_wiki_then_resource": {
+          "mean_score_out_of_10": 7.0,
+          "correct_answers": 1,
+          "accuracy": 0.5,
+          "atomic_fact_accuracy": 0.7,
+          "successful_ov_read_calls": 8,
+          "unique_file_reads_sum": 8,
+          "documents_delivered": 8,
+          "retrieved_payload_estimated_tokens": 3998,
+          "ark_input_tokens": 3987,
+          "ark_output_tokens": 6095,
+          "ark_total_tokens": 10082,
+          "ov_find_tokens": 112,
+          "arm_equivalent_total_tokens": 10194,
+          "latency_seconds": 148.117,
+          "error_count": 0,
+          "cost_per_correct_answer_tokens": 10194.0
+        },
+        "R_resource_only": {
+          "mean_score_out_of_10": 9.5,
+          "correct_answers": 2,
+          "accuracy": 1.0,
+          "atomic_fact_accuracy": 0.95,
+          "successful_ov_read_calls": 3,
+          "unique_file_reads_sum": 3,
+          "documents_delivered": 3,
+          "retrieved_payload_estimated_tokens": 4024,
+          "ark_input_tokens": 2996,
+          "ark_output_tokens": 2484,
+          "ark_total_tokens": 5480,
+          "ov_find_tokens": 78,
+          "arm_equivalent_total_tokens": 5558,
+          "latency_seconds": 61.5,
+          "error_count": 0,
+          "cost_per_correct_answer_tokens": 2779.0
+        }
+      },
+      "comparisons": {
+        "W_minus_C": {
+          "mean_score_delta": -4.0,
+          "paired_wins": 0,
+          "paired_ties": 0,
+          "paired_losses": 2
+        },
+        "W_minus_R": {
+          "mean_score_delta": -6.5,
+          "paired_wins": 0,
+          "paired_ties": 0,
+          "paired_losses": 2
+        },
+        "WF_minus_W": {
+          "mean_score_delta": 4.0,
+          "paired_wins": 1,
+          "paired_ties": 1,
+          "paired_losses": 0
+        },
+        "WF_minus_R": {
+          "mean_score_delta": -2.5,
+          "paired_wins": 0,
+          "paired_ties": 1,
+          "paired_losses": 1
+        }
+      },
+      "fallback": {
+        "used_questions": 1,
+        "used_question_ids": [
+          "NQ04"
+        ],
+        "rate": 0.5,
+        "gate_vs_wiki_correctness": {
+          "true_positive_ids": [
+            "NQ04"
+          ],
+          "false_negative_ids": [
+            "NQ10"
+          ],
+          "false_positive_ids": [],
+          "true_negative_ids": []
+        },
+        "preregistered_expectation_vs_gate": {
+          "expected_need_and_fallback_ids": [
+            "NQ04"
+          ],
+          "expected_need_without_fallback_ids": [],
+          "expected_sufficient_but_fallback_ids": [],
+          "expected_sufficient_no_fallback_ids": [
+            "NQ10"
+          ]
+        }
+      }
+    },
+    "retrieval_needed_question_ids": [
+      "NQ04"
+    ],
+    "retrieval_needed": {
+      "question_count": 1,
+      "arms": {
+        "C_closed_book": {
+          "mean_score_out_of_10": 6.0,
+          "correct_answers": 0,
+          "accuracy": 0.0,
+          "atomic_fact_accuracy": 0.6,
+          "successful_ov_read_calls": 0,
+          "unique_file_reads_sum": 0,
+          "documents_delivered": 0,
+          "retrieved_payload_estimated_tokens": 0,
+          "ark_input_tokens": 106,
+          "ark_output_tokens": 437,
+          "ark_total_tokens": 543,
+          "ov_find_tokens": 0,
+          "arm_equivalent_total_tokens": 543,
+          "latency_seconds": 13.433,
+          "error_count": 0,
+          "cost_per_correct_answer_tokens": null
+        },
+        "W_wiki_only": {
+          "mean_score_out_of_10": 2.0,
+          "correct_answers": 0,
+          "accuracy": 0.0,
+          "atomic_fact_accuracy": 0.2,
+          "successful_ov_read_calls": 3,
+          "unique_file_reads_sum": 3,
+          "documents_delivered": 3,
+          "retrieved_payload_estimated_tokens": 1060,
+          "ark_input_tokens": 1160,
+          "ark_output_tokens": 2446,
+          "ark_total_tokens": 3606,
+          "ov_find_tokens": 33,
+          "arm_equivalent_total_tokens": 3639,
+          "latency_seconds": 57.774,
+          "error_count": 0,
+          "cost_per_correct_answer_tokens": null
+        },
+        "WF_wiki_then_resource": {
+          "mean_score_out_of_10": 10.0,
+          "correct_answers": 1,
+          "accuracy": 1.0,
+          "atomic_fact_accuracy": 1.0,
+          "successful_ov_read_calls": 4,
+          "unique_file_reads_sum": 4,
+          "documents_delivered": 4,
+          "retrieved_payload_estimated_tokens": 2430,
+          "ark_input_tokens": 2466,
+          "ark_output_tokens": 3637,
+          "ark_total_tokens": 6103,
+          "ov_find_tokens": 67,
+          "arm_equivalent_total_tokens": 6170,
+          "latency_seconds": 89.782,
+          "error_count": 0,
+          "cost_per_correct_answer_tokens": 6170.0
+        },
+        "R_resource_only": {
+          "mean_score_out_of_10": 10.0,
+          "correct_answers": 1,
+          "accuracy": 1.0,
+          "atomic_fact_accuracy": 1.0,
+          "successful_ov_read_calls": 1,
+          "unique_file_reads_sum": 1,
+          "documents_delivered": 1,
+          "retrieved_payload_estimated_tokens": 1370,
+          "ark_input_tokens": 1171,
+          "ark_output_tokens": 1092,
+          "ark_total_tokens": 2263,
+          "ov_find_tokens": 33,
+          "arm_equivalent_total_tokens": 2296,
+          "latency_seconds": 27.948,
+          "error_count": 0,
+          "cost_per_correct_answer_tokens": 2296.0
+        }
+      },
+      "comparisons": {
+        "W_minus_C": {
+          "mean_score_delta": -4.0,
+          "paired_wins": 0,
+          "paired_ties": 0,
+          "paired_losses": 1
+        },
+        "W_minus_R": {
+          "mean_score_delta": -8.0,
+          "paired_wins": 0,
+          "paired_ties": 0,
+          "paired_losses": 1
+        },
+        "WF_minus_W": {
+          "mean_score_delta": 8.0,
+          "paired_wins": 1,
+          "paired_ties": 0,
+          "paired_losses": 0
+        },
+        "WF_minus_R": {
+          "mean_score_delta": 0.0,
+          "paired_wins": 0,
+          "paired_ties": 1,
+          "paired_losses": 0
+        }
+      },
+      "fallback": {
+        "used_questions": 1,
+        "used_question_ids": [
+          "NQ04"
+        ],
+        "rate": 1.0,
+        "gate_vs_wiki_correctness": {
+          "true_positive_ids": [
+            "NQ04"
+          ],
+          "false_negative_ids": [],
+          "false_positive_ids": [],
+          "true_negative_ids": []
+        },
+        "preregistered_expectation_vs_gate": {
+          "expected_need_and_fallback_ids": [
+            "NQ04"
+          ],
+          "expected_need_without_fallback_ids": [],
+          "expected_sufficient_but_fallback_ids": [],
+          "expected_sufficient_no_fallback_ids": []
+        }
+      }
+    },
+    "judge_usage": {
+      "input_tokens": 10304,
+      "output_tokens": 21825,
+      "total_tokens": 32129
+    },
+    "observed_unique_run_tokens_excluding_judge": 17567,
+    "all_experiment_tokens_including_judge": 49696,
+    "manual_audit_flag_count": 2,
+    "claim_scope": "exploratory paired evaluation on the frozen 13-document Demo corpus"
+  },
+  "run_completed_at": "2026-07-17T07:41:41.605618+00:00"
+}
