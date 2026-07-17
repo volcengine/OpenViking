@@ -29,10 +29,14 @@ use crate::git::{
     object_store::ObjectStore,
     ref_store::RefStore,
     types::{
-        CommitRequest, CommitResponse, IndexEntry, RestoreRequest, RestoreResponse, ShowRequest,
-        ShowResponse,
+        CommitRequest, CommitResponse, IndexEntry, LogEntry, LogRequest, RestoreRequest,
+        RestoreResponse, ShowRequest, ShowResponse,
     },
 };
+
+const MAX_LOG_COMMITS_SCANNED: usize = 1_000;
+const MAX_LOG_FILTER_PATHS: usize = 32;
+const MAX_LOG_PATH_DEPTH: usize = 64;
 
 /// `GitService` orchestrates the full commit pipeline against a `FileSystem`
 /// (the working tree), an `ObjectStore`, and a `RefStore`. An optional
@@ -821,6 +825,99 @@ impl GitService {
         }
     }
 
+    /// Walk commit history newest-first, optionally returning only commits
+    /// that changed at least one requested path relative to their first parent.
+    ///
+    /// `limit` counts returned commits, not commits inspected. With `paths`
+    /// set, traversal continues through unrelated commits until `limit`
+    /// matching commits are collected or history ends. Filtered traversal
+    /// returns `GitError::LogScanLimitExceeded` when history remains after
+    /// 1,000 candidate commits.
+    pub async fn log(&self, mut req: LogRequest) -> Result<Vec<LogEntry>, GitError> {
+        validate_account_id(&req.account)?;
+        req.paths = normalize_log_paths(req.paths)?;
+        if req.limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        self.log_with_scan_limit(req, MAX_LOG_COMMITS_SCANNED).await
+    }
+
+    async fn log_with_scan_limit(
+        &self,
+        req: LogRequest,
+        max_commits_scanned: usize,
+    ) -> Result<Vec<LogEntry>, GitError> {
+        debug_assert!(max_commits_scanned > 0);
+
+        let mut next_oid = Some(
+            resolve_ref(
+                self.ref_store.as_ref(),
+                self.object_store.as_ref(),
+                &req.account,
+                &req.branch,
+            )
+            .await?,
+        );
+        let filtered_paths = req.paths.as_deref();
+        let mut next_meta: Option<CommitMeta> = None;
+        let mut scanned = 0usize;
+        let mut out = Vec::new();
+
+        while let Some(commit_oid) = next_oid {
+            let meta = match next_meta.take() {
+                Some(meta) => meta,
+                None => {
+                    load_commit_meta(self.object_store.as_ref(), &req.account, &commit_oid).await?
+                }
+            };
+            let parent_oid = meta.parents.first().copied();
+
+            let parent_meta = match (filtered_paths, parent_oid) {
+                (Some(_), Some(parent_oid)) => Some(
+                    load_commit_meta(self.object_store.as_ref(), &req.account, &parent_oid).await?,
+                ),
+                _ => None,
+            };
+
+            let include = match filtered_paths {
+                None => true,
+                Some(paths) => {
+                    scanned += 1;
+                    commit_touches_any_path(
+                        self.object_store.as_ref(),
+                        &req.account,
+                        meta.tree,
+                        parent_meta.as_ref().map(|parent| parent.tree),
+                        paths,
+                    )
+                    .await?
+                }
+            };
+
+            next_oid = parent_oid;
+            next_meta = parent_meta;
+
+            if include {
+                out.push(log_entry_from_meta(commit_oid, meta));
+                if out.len() >= req.limit {
+                    return Ok(out);
+                }
+            }
+
+            if filtered_paths.is_some() && scanned >= max_commits_scanned && next_oid.is_some() {
+                return Err(GitError::LogScanLimitExceeded {
+                    scanned,
+                    max_scanned: max_commits_scanned,
+                    matched: out.len(),
+                    requested: req.limit,
+                });
+            }
+        }
+
+        Ok(out)
+    }
+
     /// Restore a subtree at `project_dir` to the state it had in `source_commit`,
     /// producing a new commit whose parent is the **current HEAD** (not
     /// `source_commit`). HEAD always moves forward.
@@ -1305,6 +1402,89 @@ async fn load_commit_meta(
         committer: actor_from_signature_ref(&parsed.committer),
         message: parsed.message.to_string(),
     })
+}
+
+fn log_entry_from_meta(oid: ObjectId, meta: CommitMeta) -> LogEntry {
+    LogEntry {
+        oid,
+        tree: meta.tree,
+        parents: meta.parents,
+        author: meta.author,
+        committer: meta.committer,
+        message: meta.message,
+    }
+}
+
+fn normalize_log_paths(paths: Option<Vec<String>>) -> Result<Option<Vec<String>>, GitError> {
+    let Some(mut paths) = paths else {
+        return Ok(None);
+    };
+
+    for path in &paths {
+        validate_relative_path(path)?;
+    }
+
+    let mut seen = HashSet::new();
+    paths.retain(|path| seen.insert(path.clone()));
+
+    if paths.len() > MAX_LOG_FILTER_PATHS {
+        return Err(GitError::TooManyLogPaths {
+            count: paths.len(),
+            limit: MAX_LOG_FILTER_PATHS,
+        });
+    }
+
+    for path in &paths {
+        let depth = path.split('/').count();
+        if depth > MAX_LOG_PATH_DEPTH {
+            return Err(GitError::LogPathTooDeep {
+                path: path.clone(),
+                depth,
+                limit: MAX_LOG_PATH_DEPTH,
+            });
+        }
+    }
+
+    Ok((!paths.is_empty()).then_some(paths))
+}
+
+async fn commit_touches_any_path(
+    store: &dyn ObjectStore,
+    account: &str,
+    current_tree: ObjectId,
+    parent_tree: Option<ObjectId>,
+    paths: &[String],
+) -> Result<bool, GitError> {
+    let mut current_cache = crate::git::tree_builder::TreeLookupCache::new();
+    let mut parent_cache = crate::git::tree_builder::TreeLookupCache::new();
+
+    for path in paths {
+        let current = crate::git::tree_builder::lookup_cached(
+            store,
+            account,
+            current_tree,
+            path,
+            &mut current_cache,
+        )
+        .await?;
+        let parent = match parent_tree {
+            Some(tree) => {
+                crate::git::tree_builder::lookup_cached(
+                    store,
+                    account,
+                    tree,
+                    path,
+                    &mut parent_cache,
+                )
+                .await?
+            }
+            None => None,
+        };
+        if current != parent {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Resolve an abbreviated commit OID (4–39 hex chars) by walking the parent
@@ -2986,7 +3166,217 @@ mod tests {
         }
     }
 
-    // ── 9: show ────────────────────────────────────────────────────────
+    // ── 9: log path filtering ─────────────────────────────────────────
+    #[test]
+    fn test_normalize_log_paths_rejects_more_than_32_unique_paths() {
+        let paths = (0..=MAX_LOG_FILTER_PATHS)
+            .map(|index| format!("resources/docs/{index}.md"))
+            .collect();
+
+        let err = normalize_log_paths(Some(paths)).unwrap_err();
+        assert!(matches!(
+            err,
+            GitError::TooManyLogPaths {
+                count: 33,
+                limit: MAX_LOG_FILTER_PATHS,
+            }
+        ));
+    }
+
+    #[test]
+    fn test_normalize_log_paths_deduplicates_before_counting() {
+        let paths = vec!["resources/docs/a.md".to_string(); MAX_LOG_FILTER_PATHS + 1];
+
+        let normalized = normalize_log_paths(Some(paths)).unwrap().unwrap();
+        assert_eq!(normalized, vec!["resources/docs/a.md"]);
+    }
+
+    #[test]
+    fn test_normalize_log_paths_enforces_64_component_depth() {
+        let accepted = std::iter::repeat_n("segment", MAX_LOG_PATH_DEPTH)
+            .collect::<Vec<_>>()
+            .join("/");
+        let rejected = std::iter::repeat_n("segment", MAX_LOG_PATH_DEPTH + 1)
+            .collect::<Vec<_>>()
+            .join("/");
+
+        assert_eq!(
+            normalize_log_paths(Some(vec![accepted.clone()]))
+                .unwrap()
+                .unwrap(),
+            vec![accepted]
+        );
+
+        let err = normalize_log_paths(Some(vec![rejected.clone()])).unwrap_err();
+        assert!(matches!(
+            err,
+            GitError::LogPathTooDeep {
+                path,
+                depth: 65,
+                limit: MAX_LOG_PATH_DEPTH,
+            } if path == rejected
+        ));
+    }
+
+    #[test]
+    fn test_normalize_log_paths_preserves_unfiltered_semantics() {
+        assert!(normalize_log_paths(None).unwrap().is_none());
+        assert!(normalize_log_paths(Some(Vec::new())).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_log_with_paths_returns_matching_commits_up_to_limit() {
+        let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct");
+        vfs.put("resources/target.md", b"v1");
+        vfs.put("resources/other.md", b"other-v1");
+        let c1 = make_commit(&svc, "acct", "main", "target root").await;
+
+        vfs.put("resources/other.md", b"other-v2");
+        let _c2 = make_commit(&svc, "acct", "main", "unrelated").await;
+
+        vfs.put("resources/target.md", b"v2");
+        let c3 = make_commit(&svc, "acct", "main", "target edit").await;
+
+        vfs.put("resources/docs/readme.md", b"docs");
+        let c4 = make_commit(&svc, "acct", "main", "docs edit").await;
+
+        let log = svc
+            .log(crate::git::types::LogRequest {
+                account: "acct".to_string(),
+                branch: "main".to_string(),
+                limit: 2,
+                paths: Some(vec![
+                    "resources/target.md".to_string(),
+                    "resources/docs".to_string(),
+                ]),
+            })
+            .await
+            .unwrap();
+
+        let oids: Vec<ObjectId> = log.into_iter().map(|entry| entry.oid).collect();
+        assert_eq!(oids, vec![c4, c3], "limit counts matching commits only");
+
+        let log = svc
+            .log(crate::git::types::LogRequest {
+                account: "acct".to_string(),
+                branch: "main".to_string(),
+                limit: 10,
+                paths: Some(vec!["resources/target.md".to_string()]),
+            })
+            .await
+            .unwrap();
+        let oids: Vec<ObjectId> = log.into_iter().map(|entry| entry.oid).collect();
+        assert_eq!(oids, vec![c3, c1]);
+    }
+
+    #[tokio::test]
+    async fn test_log_with_empty_paths_is_unfiltered() {
+        let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct");
+        vfs.put("resources/first.md", b"v1");
+        let c1 = make_commit(&svc, "acct", "main", "first").await;
+        vfs.put("resources/second.md", b"v2");
+        let c2 = make_commit(&svc, "acct", "main", "second").await;
+
+        let log = svc
+            .log(crate::git::types::LogRequest {
+                account: "acct".to_string(),
+                branch: "main".to_string(),
+                limit: 10,
+                paths: Some(Vec::new()),
+            })
+            .await
+            .unwrap();
+
+        let oids: Vec<ObjectId> = log.into_iter().map(|entry| entry.oid).collect();
+        assert_eq!(oids, vec![c2, c1]);
+    }
+
+    #[tokio::test]
+    async fn test_filtered_log_errors_when_uninspected_history_remains() {
+        let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct_log_budget");
+        vfs.put("resources/target.md", b"target");
+        make_commit(&svc, "acct_log_budget", "main", "target root").await;
+        vfs.put("resources/other.md", b"v1");
+        make_commit(&svc, "acct_log_budget", "main", "unrelated one").await;
+        vfs.put("resources/other.md", b"v2");
+        make_commit(&svc, "acct_log_budget", "main", "unrelated two").await;
+
+        let err = svc
+            .log_with_scan_limit(
+                LogRequest {
+                    account: "acct_log_budget".into(),
+                    branch: "main".into(),
+                    limit: 1,
+                    paths: Some(vec!["resources/target.md".into()]),
+                },
+                2,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            GitError::LogScanLimitExceeded {
+                scanned: 2,
+                max_scanned: 2,
+                matched: 0,
+                requested: 1,
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_filtered_log_accepts_match_on_scan_boundary() {
+        let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct_log_match");
+        vfs.put("resources/seed.md", b"seed");
+        make_commit(&svc, "acct_log_match", "main", "seed").await;
+        vfs.put("resources/target.md", b"target");
+        let target_commit = make_commit(&svc, "acct_log_match", "main", "target").await;
+        vfs.put("resources/other.md", b"other");
+        make_commit(&svc, "acct_log_match", "main", "unrelated").await;
+
+        let log = svc
+            .log_with_scan_limit(
+                LogRequest {
+                    account: "acct_log_match".into(),
+                    branch: "main".into(),
+                    limit: 1,
+                    paths: Some(vec!["resources/target.md".into()]),
+                },
+                2,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].oid, target_commit);
+    }
+
+    #[tokio::test]
+    async fn test_filtered_log_returns_complete_empty_history_at_scan_boundary() {
+        let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct_log_complete");
+        vfs.put("resources/other.md", b"v1");
+        make_commit(&svc, "acct_log_complete", "main", "one").await;
+        vfs.put("resources/other.md", b"v2");
+        make_commit(&svc, "acct_log_complete", "main", "two").await;
+
+        let log = svc
+            .log_with_scan_limit(
+                LogRequest {
+                    account: "acct_log_complete".into(),
+                    branch: "main".into(),
+                    limit: 1,
+                    paths: Some(vec!["resources/never-created.md".into()]),
+                },
+                2,
+            )
+            .await
+            .unwrap();
+
+        assert!(log.is_empty());
+    }
+
+    // ── 10: show ───────────────────────────────────────────────────────
     #[tokio::test]
     async fn test_show_commit_meta_by_oid() {
         let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct");
@@ -4991,6 +5381,55 @@ mod tests {
             oid: &ObjectId,
         ) -> std::result::Result<bool, ObjectStoreError> {
             self.inner.exists(account, oid).await
+        }
+    }
+
+    #[tokio::test]
+    async fn test_filtered_log_reads_each_commit_object_at_most_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let object_store = Arc::new(GetSpyObjectStore {
+            inner: LocalObjectStore::new(dir.path()),
+            gets: std::sync::Mutex::new(Vec::new()),
+        });
+        let ref_store = Arc::new(LocalRefStore::new(dir.path()));
+        let vfs = MockVfs::new("acct_log_reads");
+        let svc = GitService::new(
+            vfs.clone() as Arc<dyn FileSystem>,
+            object_store.clone() as Arc<dyn ObjectStore>,
+            ref_store as Arc<dyn RefStore>,
+        );
+
+        let mut commits = Vec::new();
+        for version in 1..=4 {
+            let content = format!("v{version}");
+            vfs.put("resources/other.md", content.as_bytes());
+            commits.push(
+                make_commit(&svc, "acct_log_reads", "main", &format!("commit {version}")).await,
+            );
+        }
+        object_store.reset();
+
+        let err = svc
+            .log_with_scan_limit(
+                LogRequest {
+                    account: "acct_log_reads".into(),
+                    branch: "main".into(),
+                    limit: 1,
+                    paths: Some(vec!["resources/never-created.md".into()]),
+                },
+                3,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            GitError::LogScanLimitExceeded { scanned: 3, .. }
+        ));
+
+        let commit_gets: usize = commits.iter().map(|oid| object_store.count_gets(oid)).sum();
+        assert_eq!(commit_gets, 4, "three candidates plus one parent lookahead");
+        for oid in commits {
+            assert_eq!(object_store.count_gets(&oid), 1, "commit {oid} was re-read");
         }
     }
 

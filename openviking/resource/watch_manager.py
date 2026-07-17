@@ -598,52 +598,6 @@ class WatchManager:
                 )
         return plan
 
-    async def plan_move_tasks_under_uri_internal(
-        self,
-        old_uri: str,
-        new_uri: str,
-    ) -> Dict[str, str]:
-        """Return the watch-task URI rewrite plan for a resource move.
-
-        This is an internal lifecycle hook used before moving resources so URI
-        conflicts can fail the move before any resource state is changed.
-        """
-        async with self._lock:
-            return self._plan_move_tasks_under_uri_unlocked(old_uri, new_uri)
-
-    async def move_tasks_under_uri_internal(
-        self,
-        old_uri: str,
-        new_uri: str,
-    ) -> List[WatchTask]:
-        """Rewrite watch-task target URIs after a resource move."""
-        async with self._lock:
-            plan = self._plan_move_tasks_under_uri_unlocked(old_uri, new_uri)
-            if not plan:
-                return []
-
-            for task_id in plan:
-                task = self._tasks[task_id]
-                if task.to_uri:
-                    self._uri_to_task.pop(task.to_uri, None)
-
-            updated: List[WatchTask] = []
-            for task_id, target_uri in plan.items():
-                task = self._tasks[task_id]
-                old_parent = _parent_uri(task.to_uri or "")
-                task.to_uri = target_uri
-                if task.parent_uri is not None and task.parent_uri == old_parent:
-                    task.parent_uri = _parent_uri(target_uri)
-                self._uri_to_task[target_uri] = task_id
-                updated.append(task)
-
-            await self._save_tasks()
-            logger.info(
-                f"[WatchManager] Rewrote {len(updated)} watch task target URI(s) "
-                f"under {old_uri} to {new_uri}"
-            )
-            return updated
-
     async def sync_tasks_with_resource_move_internal(
         self,
         old_uri: str,
@@ -907,19 +861,3 @@ class WatchManager:
                     continue
                 next_times.append(task.next_execution_time)
             return min(next_times) if next_times else None
-
-    async def clear_all_tasks(self) -> int:
-        """Clear all tasks (for testing purposes).
-
-        Returns:
-            Number of tasks cleared
-        """
-        async with self._lock:
-            count = len(self._tasks)
-            self._tasks.clear()
-            self._uri_to_task.clear()
-
-            await self._save_tasks()
-
-            logger.info(f"[WatchManager] Cleared {count} tasks")
-            return count

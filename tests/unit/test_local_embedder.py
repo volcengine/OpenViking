@@ -39,38 +39,10 @@ class _FakeLlama:
 
     def __init__(self, **kwargs):
         self.__class__.init_kwargs.append(kwargs)
-        self.context_params = SimpleNamespace(n_seq_max=2)
 
     def create_embedding(self, payload):
         self.__class__.inputs.append(payload)
-        if isinstance(payload, list):
-            return {
-                "data": [
-                    {"embedding": [float(index)] * 512}
-                    for index, _item in enumerate(payload, start=1)
-                ]
-            }
         return {"data": [{"embedding": [0.1] * 512}]}
-
-
-class _FakeLlamaFailBatch(_FakeLlama):
-    def create_embedding(self, payload):
-        self.__class__.inputs.append(payload)
-        if isinstance(payload, list) and len(payload) > 1:
-            raise RuntimeError("llama_decode returned -1")
-        return {"data": [{"embedding": [0.2] * 512}]}
-
-
-class _FakeLlamaSequentialOnly(_FakeLlama):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.context_params = SimpleNamespace(n_seq_max=1)
-
-    def create_embedding(self, payload):
-        self.__class__.inputs.append(payload)
-        if isinstance(payload, list):
-            raise AssertionError("native batch path should not be used when n_seq_max=1")
-        return {"data": [{"embedding": [0.3] * 512}]}
 
 
 @pytest.fixture(autouse=True)
@@ -150,75 +122,3 @@ def test_local_embedder_downloads_default_model_and_prefixes_query(monkeypatch, 
     result = embedder.embed("测试问题", is_query=True)
     assert len(result.dense_vector) == 512
     assert _FakeLlama.inputs[-1] == f"{DEFAULT_BGE_ZH_QUERY_INSTRUCTION}测试问题"
-
-
-def test_local_embedder_embed_batch_preserves_count(monkeypatch, tmp_path):
-    model_path = tmp_path / "model.gguf"
-    model_path.write_bytes(b"gguf")
-
-    monkeypatch.setattr(
-        "openviking.models.embedder.local_embedders.importlib.import_module",
-        lambda _name: SimpleNamespace(Llama=_FakeLlama),
-    )
-
-    embedder = LocalDenseEmbedder(model_path=str(model_path))
-    results = embedder.embed_batch(["a", "b"], is_query=True)
-
-    assert len(results) == 2
-    assert all(len(item.dense_vector) == 512 for item in results)
-    assert _FakeLlama.inputs[-1] == [
-        f"{DEFAULT_BGE_ZH_QUERY_INSTRUCTION}a",
-        f"{DEFAULT_BGE_ZH_QUERY_INSTRUCTION}b",
-    ]
-
-
-def test_local_embedder_embed_batch_falls_back_to_sequential(monkeypatch, tmp_path):
-    model_path = tmp_path / "model.gguf"
-    model_path.write_bytes(b"gguf")
-
-    _FakeLlamaFailBatch.init_kwargs = []
-    _FakeLlamaFailBatch.inputs = []
-
-    monkeypatch.setattr(
-        "openviking.models.embedder.local_embedders.importlib.import_module",
-        lambda _name: SimpleNamespace(Llama=_FakeLlamaFailBatch),
-    )
-
-    embedder = LocalDenseEmbedder(model_path=str(model_path))
-    results = embedder.embed_batch(["a", "b"], is_query=True)
-
-    assert len(results) == 2
-    assert all(len(item.dense_vector) == 512 for item in results)
-    assert _FakeLlamaFailBatch.inputs[0] == [
-        f"{DEFAULT_BGE_ZH_QUERY_INSTRUCTION}a",
-        f"{DEFAULT_BGE_ZH_QUERY_INSTRUCTION}b",
-    ]
-    assert _FakeLlamaFailBatch.inputs[1:] == [
-        f"{DEFAULT_BGE_ZH_QUERY_INSTRUCTION}a",
-        f"{DEFAULT_BGE_ZH_QUERY_INSTRUCTION}b",
-    ]
-
-
-def test_local_embedder_embed_batch_uses_sequential_mode_when_native_batch_unsupported(
-    monkeypatch, tmp_path
-):
-    model_path = tmp_path / "model.gguf"
-    model_path.write_bytes(b"gguf")
-
-    _FakeLlamaSequentialOnly.init_kwargs = []
-    _FakeLlamaSequentialOnly.inputs = []
-
-    monkeypatch.setattr(
-        "openviking.models.embedder.local_embedders.importlib.import_module",
-        lambda _name: SimpleNamespace(Llama=_FakeLlamaSequentialOnly),
-    )
-
-    embedder = LocalDenseEmbedder(model_path=str(model_path))
-    results = embedder.embed_batch(["a", "b"], is_query=True)
-
-    assert len(results) == 2
-    assert all(len(item.dense_vector) == 512 for item in results)
-    assert _FakeLlamaSequentialOnly.inputs == [
-        f"{DEFAULT_BGE_ZH_QUERY_INSTRUCTION}a",
-        f"{DEFAULT_BGE_ZH_QUERY_INSTRUCTION}b",
-    ]

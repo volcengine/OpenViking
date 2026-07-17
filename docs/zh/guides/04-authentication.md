@@ -270,8 +270,9 @@ Trusted 模式规则：
 
 - 普通数据访问不需要先注册 user key，也不依赖 user key 分发流程
 - 租户级请求必须包含 `X-OpenViking-Account` 和 `X-OpenViking-User`
+- 受信上游也可以发送 `X-OpenViking-Role: user` 或 `X-OpenViking-Role: admin` 断言请求角色。该请求头只有在配置了 `root_api_key` 且请求携带匹配 API Key 时才会生效。`root` 不是允许的断言值；ROOT 只保留给已校验的 Admin API 回退路径
 - `/api/v1/admin/*` 是特例：当请求携带已配置的 `root_api_key` 时，trusted 模式会将请求视为 ROOT。显式 account/user header 只有在完整且与目标 URL 匹配时才允许
-- 普通 trusted 数据 API 的角色通过在 APIKeyManager 中查找 account/user 确定。如果用户存在，使用其配置的角色；否则默认为 `USER`
+- 普通 trusted 数据 API 的角色优先使用经过授权的 `X-OpenViking-Role`；未提供该请求头时，通过在 APIKeyManager 中查找 account/user 确定。如果用户存在，使用其配置的角色；否则默认为 `USER`
 - trusted 身份完全来自请求头，而不是 user key；如果同时配置了 `root_api_key`，它表示“这个上游是被允许的 trusted 调用方”
 - 如果同时配置了 `root_api_key`，每个请求仍然必须带匹配的 API Key
 - 只应部署在受信网络边界之后，或由身份注入网关统一转发
@@ -340,7 +341,7 @@ client = ov.SyncHTTPClient(
 | ADMIN | 所属 account | 常规操作 + 管理所属 account 的用户 |
 | USER | 所属 account | 常规操作（ls、read、find、sessions 等） |
 
-在 `trusted` 模式下，普通租户请求默认会解析为 `USER`；如果该 account/user 已注册更高角色，则使用注册角色。对于 Admin 路由，在没有显式身份时还支持 trusted ROOT 回退。
+在 `trusted` 模式下，普通租户请求默认会解析为 `USER`；如果该 account/user 已注册更高角色，或网关在携带已配置 root API key 的请求中断言 `X-OpenViking-Role: admin`，则使用更高角色。`X-OpenViking-Role: root` 会被拒绝。对于 Admin 路由，在没有显式身份时还支持 trusted ROOT 回退。
 
 ## 无需认证的端点
 

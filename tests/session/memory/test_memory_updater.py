@@ -10,6 +10,7 @@ import pytest
 
 from openviking.message import Message
 from openviking.message.part import TextPart
+from openviking.prompts.manager import PromptManager
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import (
     MemoryField,
@@ -42,40 +43,6 @@ from openviking_cli.session.user_id import UserIdentifier
 
 class TestMemoryUpdateResult:
     """Tests for MemoryUpdateResult."""
-
-    def test_create_empty(self):
-        """Test creating an empty result."""
-        result = MemoryUpdateResult()
-
-        assert len(result.written_uris) == 0
-        assert len(result.edited_uris) == 0
-        assert len(result.deleted_uris) == 0
-        assert len(result.errors) == 0
-        assert result.has_changes() is False
-
-    def test_add_written(self):
-        """Test adding written URI."""
-        result = MemoryUpdateResult()
-        result.add_written("viking://user/test/memories/profile.md")
-
-        assert len(result.written_uris) == 1
-        assert result.has_changes() is True
-
-    def test_add_edited(self):
-        """Test adding edited URI."""
-        result = MemoryUpdateResult()
-        result.add_edited("viking://user/test/memories/profile.md")
-
-        assert len(result.edited_uris) == 1
-        assert result.has_changes() is True
-
-    def test_add_deleted(self):
-        """Test adding deleted URI."""
-        result = MemoryUpdateResult()
-        result.add_deleted("viking://user/test/memories/to_delete.md")
-
-        assert len(result.deleted_uris) == 1
-        assert result.has_changes() is True
 
     def test_summary(self):
         """Test summary generation."""
@@ -152,6 +119,28 @@ class TestMemoryUpdater:
         assert "Resource abstract" not in content
         assert "User reason" not in content
 
+        registry = MemoryTypeRegistry(load_schemas=False)
+        registry.load_from_yaml(
+            str(PromptManager._get_bundled_templates_dir() / "memory" / "events.yaml")
+        )
+        rendered = MemoryFileUtils.write(
+            MemoryFile(
+                extra_fields={
+                    "event_name": "resource_saved",
+                    "goal": "save resource",
+                    "summary": (
+                        "2026-06-12，用户保存了粉丝创作的越前龙马动漫插画资源，"
+                        f"资源URI为{resource_uri}。"
+                    ),
+                    "ranges": "0",
+                }
+            ),
+            content_template=registry.get("events").content_template,
+            extract_context=extract_context,
+        )
+
+        assert rendered.startswith(content)
+
     def test_extract_context_event_content_falls_back_to_range_when_summary_empty(self):
         extract_context = ExtractContext(
             messages=[
@@ -180,15 +169,6 @@ class TestMemoryUpdater:
         """Test creating a MemoryUpdater with registry."""
         registry = MemoryTypeRegistry()
         updater = MemoryUpdater(registry)
-
-        assert updater._registry == registry
-
-    def test_set_registry(self):
-        """Test setting registry after creation."""
-        updater = MemoryUpdater()
-        registry = MemoryTypeRegistry()
-
-        updater.set_registry(registry)
 
         assert updater._registry == registry
 

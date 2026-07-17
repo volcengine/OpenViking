@@ -70,6 +70,7 @@ class QueueManager:
     EMBEDDING = "Embedding"
     SEMANTIC = "Semantic"
     EXTERNAL_PARSE = "ExternalParse"
+    SESSION_COMMIT = "SessionCommit"
 
     def __init__(
         self,
@@ -156,7 +157,7 @@ class QueueManager:
 
         if queue.name == self.EMBEDDING:
             max_concurrent = self._max_concurrent_embedding
-        elif queue.name == self.EXTERNAL_PARSE:
+        elif queue.name in {self.EXTERNAL_PARSE, self.SESSION_COMMIT}:
             max_concurrent = self._max_concurrent_external_parse
         else:
             max_concurrent = self._max_concurrent_semantic
@@ -335,7 +336,8 @@ class QueueManager:
                     name,
                     enqueue_hook=enqueue_hook,
                     dequeue_handler=dequeue_handler,
-                    propagate_model_request_context=name == self.EXTERNAL_PARSE,
+                    propagate_model_request_context=name
+                    in {self.EXTERNAL_PARSE, self.SESSION_COMMIT},
                 )
             if self._started:
                 self._start_queue_worker(self._queues[name])

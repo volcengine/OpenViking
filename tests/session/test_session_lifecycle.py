@@ -3,6 +3,8 @@
 
 """Session lifecycle tests"""
 
+import re
+
 from openviking import AsyncOpenViking
 from openviking.session import Session
 
@@ -16,7 +18,7 @@ class TestSessionCreate:
 
         assert session is not None
         assert session.session_id is not None
-        assert len(session.session_id) > 0
+        assert re.fullmatch(r"\d{8}-\d{6}-[0-9a-f]{16}", session.session_id)
 
     async def test_create_with_id(self, client: AsyncOpenViking):
         """Test creating session with specified ID"""

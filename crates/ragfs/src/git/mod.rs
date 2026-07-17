@@ -49,8 +49,8 @@ pub use ref_store::RefStore;
 pub use service::GitService;
 pub use tree_builder::{flatten, lookup, TreeEditor};
 pub use types::{
-    Actor, CommitRequest, CommitResponse, IndexEntry, RestoreDiff, RestoreRequest,
-    RestoreResponse, RestoreWritebackPartial, ShowRequest, ShowResponse,
+    Actor, CommitRequest, CommitResponse, IndexEntry, LogEntry, LogRequest, RestoreDiff,
+    RestoreRequest, RestoreResponse, RestoreWritebackPartial, ShowRequest, ShowResponse,
 };
 
 // Re-exports from backends

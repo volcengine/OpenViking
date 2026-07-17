@@ -54,10 +54,6 @@ class LockManager:
         self._running = False
 
     @property
-    def redo_log(self) -> RedoLog:
-        return self._redo_log
-
-    @property
     def redo_recovery_enabled(self) -> bool:
         return self._redo_recovery_enabled
 

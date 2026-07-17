@@ -531,13 +531,14 @@ export class OpenVikingClient {
   /** Rebuild indexes for a URI. */
   reindex(
     uri: string,
-    options: { mode?: string; wait?: boolean } = {},
+    options: { mode?: string; wait?: boolean; dryRun?: boolean } = {},
   ): Promise<JsonObject> {
     return this.request("POST", "/api/v1/content/reindex", {
       body: {
         uri: normalizeURI(uri),
         mode: options.mode ?? "vectors_only",
         wait: options.wait ?? true,
+        dry_run: options.dryRun ?? false,
       },
     });
   }
@@ -857,9 +858,9 @@ export class OpenVikingClient {
     );
   }
   /** Return snapshot history from newest to oldest. */
-  gitLog(branch = "main", limit = 20): Promise<JsonObject[]> {
+  gitLog(branch = "main", limit = 20, paths?: string[]): Promise<JsonObject[]> {
     return this.request("GET", "/api/v1/snapshot/log", {
-      query: { branch, limit },
+      query: { branch, limit, paths },
     });
   }
   /** Return the account `.ovgitignore` content. */

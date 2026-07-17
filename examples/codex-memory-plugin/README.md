@@ -154,7 +154,7 @@ Earlier plugin versions configured tuning fields under a `codex` block in `~/.op
       │                 │                │                   │
       │             ┌───▼────────────────▼───────────────────▼──┐
       └────────────►│        OpenViking REST API                │
-                    │ /api/v1/search/search                      │
+                    │ /api/v1/search/{recall,search}             │
                     │ /api/v1/sessions [+/{id}/{messages,commit}]│
                     │ /api/v1/content/read                      │
                     └─────────────────┬─────────────────────────┘
@@ -192,7 +192,7 @@ On `resume`, the script skips commit/sweep. If local state has no live `ovSessio
 
 ### Auto-recall (every UserPromptSubmit)
 
-`auto-recall.mjs` reads `prompt` and `session_id` from stdin, derives the long-lived OpenViking session id (`cx-<safe-session-id>`) directly from the Codex session id (no plugin state read, so a corrupt state file can't crash recall), calls `/api/v1/search/search` with that `session_id`, ranks results, reads full content for top-ranked leaves, and emits:
+`auto-recall.mjs` reads `prompt` and `session_id` from stdin. It first asks `/api/v1/search/recall` for bounded, type-quota candidates and passes those entries through the same relevance compressor used by the fallback path. If that endpoint is unavailable, the hook derives the long-lived OpenViking session id (`cx-<safe-session-id>`) directly from the Codex session id (no plugin state read, so a corrupt state file can't crash recall), calls `/api/v1/search/search` with that `session_id`, ranks results, and reads full content for top-ranked leaves before compression.
 
 ```json
 { "hookSpecificOutput": { "hookEventName": "UserPromptSubmit", "additionalContext": "<openviking-context source=\"auto-recall\" format=\"digest\">\nOpenViking memory digest:\n- ...\n</openviking-context>" } }

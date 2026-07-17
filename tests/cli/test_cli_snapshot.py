@@ -12,14 +12,27 @@ from conftest import ov
 pytestmark = pytest.mark.cli_remote
 
 
-def _commit(message: str):
+def _create_file(uri: str, content: str):
+    """Create a file without waiting for unrelated semantic processing."""
+    return ov(
+        ["write", uri, "--content", content, "--mode", "create", "-o", "json"],
+        timeout=60,
+    )
+
+
+def _commit(message: str, paths=None):
     """Helper: take a snapshot, return the full envelope dict.
 
     Retries briefly on transient server busy errors.
     """
+    args = ["snapshot", "commit", "-m", message]
+    if paths:
+        args.extend(["--paths", ",".join(paths)])
+    args.extend(["-o", "json"])
+
     r = None
     for _attempt in range(5):
-        r = ov(["snapshot", "commit", "-m", message, "-o", "json"], timeout=120)
+        r = ov(args, timeout=120)
         if r["exit_code"] == 0:
             break
         if "busy" in r["stderr"].lower() or "internal" in r["stderr"].lower():
@@ -39,14 +52,18 @@ class TestSnapshotCommit:
         assert "commit_oid" in result, f"expected commit_oid in result, got {result}"
         assert isinstance(result["commit_oid"], str) and len(result["commit_oid"]) >= 12
 
-    def test_commit_human_prints_short_oid(self, test_pack_uri):
+    def test_commit_human_prints_result_table(self, test_pack_uri):
         msg = f"cli-test human {uuid.uuid4().hex[:6]}"
         r = ov(["snapshot", "commit", "-m", msg], timeout=120)
         assert r["exit_code"] == 0, f"snapshot commit failed: {r['stderr'][:300]}"
         out = r["stdout"]
-        assert re.match(
-            r"^(Created [0-9a-f]{12}|No changes)", out
-        ), f"unexpected commit stdout: {out[:200]}"
+        assert re.search(r"(?m)^result\s+(created|noop)$", out), (
+            f"expected result row in commit output: {out[:200]}"
+        )
+        oid_match = re.search(r"(?m)^commit_oid\s+([0-9a-f]+)$", out)
+        assert oid_match and len(oid_match.group(1)) >= 12, (
+            f"expected commit_oid row in commit output: {out[:200]}"
+        )
 
 
 class TestSnapshotLog:
@@ -86,6 +103,48 @@ class TestSnapshotLog:
         assert len(result) >= 1
         first = result[0]
         assert "oid" in first and "message" in first
+
+    def test_log_filters_paths(self):
+        suffix = uuid.uuid4().hex[:8]
+        base_uri = f"viking://resources/cli_log_paths_{suffix}"
+        target_uri = f"{base_uri}/a.md"
+        directory_uri = f"{base_uri}/docs"
+        child_uri = f"{directory_uri}/guide.md"
+        unrelated_uri = f"viking://resources/cli_log_paths_other_{suffix}.md"
+
+        write = _create_file(target_uri, "target")
+        assert write["exit_code"] == 0, f"target write failed: {write['stderr'][:300]}"
+        target_commit = _commit("cli log paths: add target", paths=[target_uri])
+
+        write = _create_file(unrelated_uri, "unrelated")
+        assert write["exit_code"] == 0, f"unrelated write failed: {write['stderr'][:300]}"
+        _commit("cli log paths: add unrelated", paths=[unrelated_uri])
+
+        write = _create_file(child_uri, "guide")
+        assert write["exit_code"] == 0, f"directory child write failed: {write['stderr'][:300]}"
+        directory_commit = _commit("cli log paths: add directory child", paths=[child_uri])
+
+        result = ov(
+            [
+                "snapshot",
+                "log",
+                "--limit",
+                "2",
+                "--paths",
+                f"{target_uri},{directory_uri}",
+                "-o",
+                "json",
+            ],
+            timeout=60,
+        )
+
+        assert result["exit_code"] == 0, f"snapshot log failed: {result['stderr'][:300]}"
+        assert result["json"] is not None and result["json"].get("ok") is True
+        history = result["json"]["result"]
+        assert [item["oid"] for item in history] == [
+            directory_commit["commit_oid"],
+            target_commit["commit_oid"],
+        ]
 
 
 class TestSnapshotShow:

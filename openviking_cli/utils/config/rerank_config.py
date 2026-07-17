@@ -47,6 +47,15 @@ class RerankConfig(BaseModel):
         default=0.1, description="Relevance threshold (score > threshold is relevant)"
     )
 
+    max_input_tokens: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Maximum estimated raw-text tokens for each query-document pair sent to "
+            "the rerank provider; 0 disables truncation"
+        ),
+    )
+
     model_config = {"extra": "forbid"}
 
     def _effective_provider(self) -> Optional[str]:
@@ -63,6 +72,9 @@ class RerankConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_provider_fields(self) -> "RerankConfig":
+        if 0 < self.max_input_tokens < 128:
+            raise ValueError("Rerank max_input_tokens must be 0 or at least 128")
+
         provider = self._effective_provider()
         if provider and provider not in ["vikingdb", "cohere", "openai", "litellm"]:
             raise ValueError(

@@ -66,21 +66,6 @@ from openviking_cli.utils.logger import init_otel_log_handler_from_server_config
 logger = get_logger(__name__)
 
 
-def _on_deferred_init_done(task):
-    if task.cancelled():
-        logger.warning("Deferred initialization cancelled")
-        return
-
-    exc = task.exception()
-    if exc is None:
-        return
-
-    logger.error(
-        "Deferred initialization failed, exiting",
-        exc_info=(type(exc), exc, exc.__traceback__),
-    )
-    os._exit(1)
-
 
 async def _initialize_auth_plugin(
     app: FastAPI,
@@ -223,19 +208,29 @@ def create_app(
 
     model_config = get_openviking_config()
     dynamic_request_header_names = collect_dynamic_request_header_names(model_config)
+    usage_reporter_unset = object()
+    usage_reporter = usage_reporter_unset
 
-    def _configure_session_tool_outputs(service_obj) -> None:  # noqa: ANN001
+    def _get_usage_reporter():  # noqa: ANN202
+        nonlocal usage_reporter
+        if usage_reporter is usage_reporter_unset:
+            from openviking.usage_reporter.config import build_usage_reporter
+
+            usage_reporter = build_usage_reporter(config.usage_reporter)
+        return usage_reporter
+
+    def _configure_session_runtime(service_obj) -> None:  # noqa: ANN001
         sessions = getattr(service_obj, "sessions", None)
-        setter = getattr(sessions, "set_tool_output_externalization_config", None)
-        if callable(setter):
-            setter(config.tool_output_externalization)
+        tool_output_setter = getattr(sessions, "set_tool_output_externalization_config", None)
+        if callable(tool_output_setter):
+            tool_output_setter(config.tool_output_externalization)
+
+        usage_reporter_setter = getattr(sessions, "set_usage_reporter", None)
+        if callable(usage_reporter_setter):
+            usage_reporter_setter(_get_usage_reporter())
 
     if service is not None:
-        _configure_session_tool_outputs(service)
-
-    async def _deferred_init(service, app, config):
-        """Retained for tests that validate deferred-init callback behavior."""
-        await _initialize_runtime_state(app, service, config)
+        _configure_session_runtime(service)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -246,7 +241,7 @@ def create_app(
             service = OpenVikingService()
 
         assert service is not None
-        _configure_session_tool_outputs(service)
+        _configure_session_runtime(service)
         set_service(service)
 
         from openviking.metrics.global_api import (
@@ -327,6 +322,8 @@ def create_app(
                 logger.warning(f"OpenVikingService close cancelled during shutdown: {e}")
             except Exception as e:
                 logger.warning(f"OpenVikingService close failed during shutdown: {e}")
+        if usage_reporter is not usage_reporter_unset and usage_reporter is not None:
+            await usage_reporter.close()
 
     app = FastAPI(
         title="OpenViking API",

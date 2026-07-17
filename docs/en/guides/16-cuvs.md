@@ -89,7 +89,16 @@ Explicit `backend: "cuvs"` continues to use cuVS for supported dense queries.
 mutations are coalesced for `auto_rebuild_debounce_ms`, and a worker builds the
 new immutable GPU snapshot without holding the cross-backend mutation lock.
 The 500 ms default avoids rebuilding most intermediate batches during normal
-ingestion; use a larger value for bulk loads with longer gaps between batches.
+interactive ingestion. For a known multi-call bulk load, wrap all writes in
+`async with backend.bulk_ingest(ctx=ctx):`: native visibility and persistence
+still advance per call, while derived GPU maintenance is deferred until the
+outermost scope exits and then scheduled once. This scope is a maintenance hint,
+not a transaction or atomicity boundary; exiting it schedules the rebuild but
+does not itself wait for GPU readiness. The vector backend benchmark adds that
+explicit readiness wait before timing search. Changing the debounce remains
+useful for callers that cannot identify a bulk-load boundary. Auto remains
+opt-in; with Auto/background rebuild disabled, the scope is a no-op for derived
+maintenance and native CPU behavior and dtype are unchanged.
 Queries use the current native index while the snapshot is dirty, so GPU build
 time does not become request queue time. The worker installs the new label
 layout and GPU snapshot atomically only if its record generation is still

@@ -142,6 +142,7 @@ class BaseClient(ABC):
         uri: str,
         mode: str = "vectors_only",
         wait: bool = True,
+        dry_run: bool = False,
     ) -> Dict[str, Any]:
         """Reindex semantic/vector artifacts for a URI."""
         ...
@@ -588,6 +589,7 @@ class BaseClient(ABC):
         *,
         branch: str = "main",
         limit: int = 20,
+        paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Walk back along parents[0] up to limit commits."""
 

@@ -13,7 +13,12 @@ from typing import Annotated, Any, Dict, List, Optional, Tuple, Type, Union
 from pydantic import BaseModel, Field, WithJsonSchema, create_model
 from pydantic.config import ConfigDict
 
-from openviking.session.memory.dataclass import DeleteId, FaultTolerantBaseModel, MemoryTypeSchema, WikiLink
+from openviking.session.memory.dataclass import (
+    DeleteId,
+    FaultTolerantBaseModel,
+    MemoryTypeSchema,
+    WikiLink,
+)
 from openviking.session.memory.memory_isolation_handler import RoleScope
 from openviking.session.memory.merge_op import MergeOp, MergeOpFactory
 from openviking.session.memory.merge_op.base import FieldType, get_python_type_for_field
@@ -51,7 +56,6 @@ class SchemaModelGenerator:
         self._template_context = dict(template_context or {})
         self._model_cache: Dict[str, Type[BaseModel]] = {}
         self._flat_data_models: Dict[str, Type[BaseModel]] = {}
-        self._union_model: Optional[Type[BaseModel]] = None
         self._operations_model: Optional[Type[BaseModel]] = None
 
     def _render_description(self, description: str) -> str:
@@ -171,54 +175,6 @@ class SchemaModelGenerator:
         for memory_type in self.schemas:
             models[memory_type.memory_type] = self.create_flat_data_model(memory_type)
         return models
-
-    def create_discriminated_union_model(self) -> Type[BaseModel]:
-        """
-        Create a unified MemoryData model with discriminator support.
-
-        The model uses 'memory_type' as the discriminator field to
-        determine which fields model to use.
-
-        Returns:
-            Unified Pydantic model with discriminator (a wrapper model containing the union)
-        """
-        if self._union_model is not None:
-            return self._union_model
-
-        # Generate all flat data models first (including disabled for completeness)
-        self.generate_all_models(include_disabled=True)
-
-        # Build the annotated union with discriminator - only use enabled types
-        if not self.schemas:
-            raise ValueError("No memory types in schemas")
-
-        # Create union of flat data models
-        enabled_memory_types = self.schemas
-        flat_model_union_types = tuple(
-            self._flat_data_models[mt.memory_type] for mt in enabled_memory_types
-        )
-
-        if flat_model_union_types:
-            FlatDataUnion = Union[tuple(flat_model_union_types)]  # type: ignore
-        else:
-            # Fallback if no types are enabled
-            class GenericMemoryData(BaseModel):
-                """Generic memory data (fallback)."""
-
-                memory_type: str = Field(..., description="Memory type identifier")
-
-            FlatDataUnion = GenericMemoryData  # type: ignore
-
-        # Wrap the union in a BaseModel for JSON schema generation
-        class MemoryDataWrapper(BaseModel):
-            """Wrapper model for memory data union."""
-
-            data: FlatDataUnion = Field(..., description="Memory data")  # type: ignore
-
-            model_config = ConfigDict(extra="forbid")
-
-        self._union_model = MemoryDataWrapper
-        return self._union_model
 
     def create_structured_operations_model(self, role_scope: Optional[RoleScope] = None) -> Type[BaseModel]:
         """
@@ -356,21 +312,6 @@ class SchemaModelGenerator:
 
         self._operations_model = StructuredMemoryOperations
         return self._operations_model
-
-    def get_llm_json_schema(self, role_scope: Optional[RoleScope] = None) -> Dict[str, Any]:
-        """Get the JSON schema for the structured LLM operations model."""
-        return self.create_structured_operations_model(role_scope).model_json_schema()
-
-    def get_memory_data_json_schema(self) -> Dict[str, Any]:
-        """
-        Get the JSON schema just for the flat memory data union.
-
-        Returns:
-            JSON schema for MemoryData
-        """
-        memory_model = self.create_discriminated_union_model()
-        return memory_model.model_json_schema()
-
 
 class SchemaPromptGenerator:
     """
