@@ -256,7 +256,12 @@ def main():
         # Determine if bot logging should be enabled
         enable_bot_logging = args.enable_bot_logging
         if enable_bot_logging is None:
-            enable_bot_logging = args.with_bot
+            # Reaching this block means bot integration is enabled, either by
+            # ``--with-bot`` or by ``server.with_bot`` in ov.conf.  Default
+            # logging must not depend only on which activation surface was
+            # used, otherwise config-enabled gateways silently lose their
+            # child-process diagnostics.
+            enable_bot_logging = True
         bot_log_dir = args.bot_log_dir or _resolve_default_bot_log_dir(args.config)
         # Start vikingbot gateway if --with-bot is set
         bot_process = _start_vikingbot_gateway(

@@ -430,6 +430,479 @@ def test_auto_cuvs_falls_back_then_retries_when_memory_is_available(monkeypatch)
         collection.close()
 
 
+def test_auto_cuvs_background_memory_fallback_does_not_busy_loop(monkeypatch):
+    class CountingMemoryRuntime(MemoryAwareFakeCuVSRuntime):
+        def __init__(self):
+            super().__init__("inner_product", free_memory_bytes=31)
+            self.memory_info_count = 0
+            self.memory_checked = threading.Event()
+
+        def memory_info(self):
+            self.memory_info_count += 1
+            self.memory_checked.set()
+            return super().memory_info()
+
+    runtime = CountingMemoryRuntime()
+    monkeypatch.setattr(
+        cuvs_index,
+        "_CuVSRuntime",
+        lambda _algorithm, _metric, _build_params, _search_params, _dtype: runtime,
+    )
+    collection = get_or_create_local_collection(
+        meta_data={
+            "CollectionName": "auto_cuvs_memory_backoff",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+            ],
+        },
+        config={
+            "dense_search": {
+                "backend": "auto_cuvs",
+                "algorithm": "brute_force",
+                "filter_cache_size": 0,
+                "auto_memory_reserve_mb": 0,
+                "auto_memory_safety_factor": 1.0,
+                "auto_background_rebuild": True,
+                "auto_rebuild_debounce_ms": 0,
+            }
+        },
+    )
+    try:
+        index = collection.create_index(
+            "default",
+            {
+                "IndexName": "default",
+                "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
+            },
+        )
+        assert index.wait_for_background_rebuild(timeout=5)
+
+        collection.upsert_data(
+            [
+                {"id": "first", "vector": [1.0, 0.0, 0.0, 0.0]},
+                {"id": "second", "vector": [0.0, 1.0, 0.0, 0.0]},
+            ]
+        )
+        assert runtime.memory_checked.wait(timeout=5)
+        assert index._dense_rebuild_completed.wait(timeout=5)
+        with index._dense_rebuild_state_lock:
+            assert index._dense_rebuild_memory_blocked
+            index._dense_rebuild_memory_retry_not_before = float("inf")
+        memory_checks_after_failure = runtime.memory_info_count
+
+        assert not index.wait_for_background_rebuild(timeout=0.1)
+        assert runtime.memory_info_count == memory_checks_after_failure
+        assert runtime.build_count == 0
+
+        runtime.free_memory_bytes = 32
+        with index._dense_rebuild_state_lock:
+            index._dense_rebuild_memory_retry_not_before = 0.0
+        result = collection.search_by_vector(
+            "default",
+            dense_vector=[1.0, 0.0, 0.0, 0.0],
+            limit=1,
+        )
+        assert [item.id for item in result.data] == ["first"]
+        assert index.wait_for_background_rebuild(timeout=5)
+        result = collection.search_by_vector(
+            "default",
+            dense_vector=[1.0, 0.0, 0.0, 0.0],
+            limit=1,
+        )
+        assert [item.id for item in result.data] == ["first"]
+        assert runtime.build_count == 1
+        assert runtime.search_count == 1
+    finally:
+        collection.close()
+
+
+def test_auto_cuvs_bulk_ingest_defers_nested_rebuild_and_routes_native(monkeypatch):
+    class BuildStartedRuntime(MemoryAwareFakeCuVSRuntime):
+        def __init__(self):
+            super().__init__("inner_product", free_memory_bytes=1 << 20)
+            self.build_started = threading.Event()
+
+        def build(self, dataset):
+            self.build_started.set()
+            return super().build(dataset)
+
+    runtime = BuildStartedRuntime()
+    monkeypatch.setattr(
+        cuvs_index,
+        "_CuVSRuntime",
+        lambda _algorithm, _metric, _build_params, _search_params, _dtype: runtime,
+    )
+    collection = get_or_create_local_collection(
+        meta_data={
+            "CollectionName": "auto_cuvs_bulk_ingest",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+            ],
+        },
+        config={
+            "dense_search": {
+                "backend": "auto_cuvs",
+                "algorithm": "brute_force",
+                "filter_cache_size": 0,
+                "auto_memory_reserve_mb": 0,
+                "auto_memory_safety_factor": 1.0,
+                "auto_background_rebuild": True,
+                "auto_rebuild_debounce_ms": 100,
+            }
+        },
+    )
+    try:
+        index = collection.create_index(
+            "default",
+            {
+                "IndexName": "default",
+                "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
+            },
+        )
+        assert index.wait_for_background_rebuild(timeout=5)
+        assert runtime.build_count == 0
+
+        collection.begin_bulk_ingest()
+        try:
+            collection.upsert_data([{"id": "first", "vector": [1.0, 0.0, 0.0, 0.0]}])
+            # The scope remains open for longer than the normal debounce, but
+            # no partial GPU index should be published.
+            assert not runtime.build_started.wait(timeout=0.25)
+
+            collection.begin_bulk_ingest()
+            try:
+                collection.upsert_data([{"id": "second", "vector": [0.0, 1.0, 0.0, 0.0]}])
+                assert not runtime.build_started.wait(timeout=0.25)
+            finally:
+                collection.end_bulk_ingest()
+
+            # Ending the inner scope must not resume rebuilds early. Dirty
+            # reads stay correct by using the continuously updated native index.
+            assert not runtime.build_started.wait(timeout=0.25)
+            inner_collection = collection._Collection__collection
+            inner_collection._rebuild_index("default", index)
+            replacement_index = collection.get_index("default")
+            assert replacement_index is not index
+            assert index._dense_rebuild_thread is None
+            assert replacement_index._dense_rebuild_thread is not None
+            assert not runtime.build_started.wait(timeout=0.25)
+            result = collection.search_by_vector(
+                "default",
+                dense_vector=[0.0, 1.0, 0.0, 0.0],
+                limit=1,
+            )
+            assert [item.id for item in result.data] == ["second"]
+            assert runtime.search_count == 0
+        finally:
+            collection.end_bulk_ingest()
+
+        assert runtime.build_started.wait(timeout=1)
+        assert replacement_index.wait_for_background_rebuild(timeout=5)
+        assert runtime.build_count == 1
+    finally:
+        collection.close()
+
+
+def test_index_install_keeps_post_publication_worker_failures_out_of_commit_result(monkeypatch):
+    collection = get_or_create_local_collection(
+        meta_data={
+            "CollectionName": "replacement_worker_failure",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+            ],
+        }
+    )
+    inner_collection = collection._Collection__collection
+    old_index = object()
+    replacement_index = object()
+    calls = []
+    inner_collection.indexes.set("default", old_index)
+
+    def failing_stop(index):
+        calls.append(("stop", index))
+        raise RuntimeError("injected stop failure")
+
+    def tracked_start(index):
+        calls.append(("start", index))
+
+    monkeypatch.setattr(inner_collection, "_stop_index_background_rebuild", failing_stop)
+    monkeypatch.setattr(inner_collection, "_start_index_background_rebuild", tracked_start)
+    try:
+        expected_generation = inner_collection._index_mutation_barrier.snapshot_generation()
+        assert inner_collection._install_index(
+            "default",
+            replacement_index,
+            expected_generation=expected_generation,
+            expected_replaced=old_index,
+            start_background_rebuild=True,
+        )
+        assert inner_collection.indexes.get("default") is replacement_index
+        assert calls == [("stop", old_index), ("start", replacement_index)]
+    finally:
+        # Plain objects intentionally stand in for index lifecycle hooks above.
+        inner_collection.indexes.clear()
+        collection.close()
+
+
+def test_auto_cuvs_stop_before_deferred_worker_start_is_durable(monkeypatch):
+    runtime = MemoryAwareFakeCuVSRuntime("inner_product", free_memory_bytes=1 << 20)
+    monkeypatch.setattr(
+        cuvs_index,
+        "_CuVSRuntime",
+        lambda _algorithm, _metric, _build_params, _search_params, _dtype: runtime,
+    )
+    collection = get_or_create_local_collection(
+        meta_data={
+            "CollectionName": "auto_cuvs_deferred_worker_retirement",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+            ],
+        },
+        config={
+            "dense_search": {
+                "backend": "auto_cuvs",
+                "algorithm": "brute_force",
+                "auto_memory_reserve_mb": 0,
+                "auto_memory_safety_factor": 1.0,
+                "auto_background_rebuild": True,
+            }
+        },
+    )
+    inner_collection = collection._Collection__collection
+    index = inner_collection._new_index(
+        "default",
+        {
+            "IndexName": "default",
+            "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
+        },
+        [],
+        defer_dense_rebuild_start=True,
+    )
+    try:
+        assert index._dense_rebuild_thread is None
+        assert not index._dense_rebuild_stop.is_set()
+
+        inner_collection._stop_index_background_rebuild(index)
+        inner_collection._start_index_background_rebuild(index)
+
+        assert index._dense_rebuild_stop.is_set()
+        assert index._dense_rebuild_thread is None
+        assert runtime.build_count == 0
+    finally:
+        index.close()
+        collection.close()
+
+
+def test_auto_cuvs_rebuild_discards_snapshot_stale_after_concurrent_write(monkeypatch):
+    runtime = MemoryAwareFakeCuVSRuntime("inner_product", free_memory_bytes=1 << 20)
+    monkeypatch.setattr(
+        cuvs_index,
+        "_CuVSRuntime",
+        lambda _algorithm, _metric, _build_params, _search_params, _dtype: runtime,
+    )
+    collection = get_or_create_local_collection(
+        meta_data={
+            "CollectionName": "auto_cuvs_stale_collection_rebuild",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+            ],
+        },
+        config={
+            "dense_search": {
+                "backend": "auto_cuvs",
+                "algorithm": "brute_force",
+                "filter_cache_size": 0,
+                "auto_memory_reserve_mb": 0,
+                "auto_memory_safety_factor": 1.0,
+                "auto_background_rebuild": True,
+                "auto_rebuild_debounce_ms": 10,
+            }
+        },
+    )
+    rebuild_thread = None
+    writer_thread = None
+    allow_rebuild = threading.Event()
+    allow_index_update = threading.Event()
+    try:
+        original_index = collection.create_index(
+            "default",
+            {
+                "IndexName": "default",
+                "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
+            },
+        )
+        assert original_index.wait_for_background_rebuild(timeout=5)
+
+        collection.begin_bulk_ingest()
+        try:
+            collection.upsert_data([{"id": "before", "vector": [1.0, 0.0, 0.0, 0.0]}])
+            inner_collection = collection._Collection__collection
+            original_new_index = inner_collection._new_index
+            original_install_index = inner_collection._install_index
+            original_upsert_data = original_index.upsert_data
+            snapshot_captured = threading.Event()
+            store_committed = threading.Event()
+            publication_attempted = threading.Event()
+            writer_errors = []
+
+            def delayed_new_index(*args, **kwargs):
+                snapshot_captured.set()
+                assert allow_rebuild.wait(timeout=5)
+                return original_new_index(*args, **kwargs)
+
+            def delayed_index_update(delta_list):
+                store_committed.set()
+                assert allow_index_update.wait(timeout=5)
+                return original_upsert_data(delta_list)
+
+            def tracked_install(*args, **kwargs):
+                publication_attempted.set()
+                return original_install_index(*args, **kwargs)
+
+            def write_after_snapshot():
+                try:
+                    collection.upsert_data([{"id": "kept", "vector": [0.0, 1.0, 0.0, 0.0]}])
+                except BaseException as exc:
+                    writer_errors.append(exc)
+
+            monkeypatch.setattr(inner_collection, "_new_index", delayed_new_index)
+            monkeypatch.setattr(inner_collection, "_install_index", tracked_install)
+            monkeypatch.setattr(original_index, "upsert_data", delayed_index_update)
+            rebuild_thread = threading.Thread(
+                target=inner_collection._rebuild_index,
+                args=("default", original_index),
+            )
+            rebuild_thread.start()
+            assert snapshot_captured.wait(timeout=5)
+
+            # This batch commits after the replacement's Store snapshot. The
+            # old index receives it; the stale replacement must not retire that
+            # only searchable copy.
+            writer_thread = threading.Thread(target=write_after_snapshot)
+            writer_thread.start()
+            assert store_committed.wait(timeout=5)
+            allow_rebuild.set()
+            assert publication_attempted.wait(timeout=5)
+            assert rebuild_thread.is_alive()
+            assert collection.get_index("default") is original_index
+
+            allow_index_update.set()
+            writer_thread.join(timeout=5)
+            rebuild_thread.join(timeout=5)
+            assert not writer_thread.is_alive()
+            assert not rebuild_thread.is_alive()
+            assert writer_errors == []
+            assert collection.get_index("default") is original_index
+
+            fetched = collection.fetch_data(["before", "kept"])
+            assert [item.id for item in fetched.items] == ["before", "kept"]
+            result = collection.search_by_vector(
+                "default",
+                dense_vector=[0.0, 1.0, 0.0, 0.0],
+                limit=1,
+            )
+            assert [item.id for item in result.data] == ["kept"]
+            assert runtime.search_count == 0
+        finally:
+            allow_rebuild.set()
+            allow_index_update.set()
+            if writer_thread is not None:
+                writer_thread.join(timeout=5)
+            if rebuild_thread is not None:
+                rebuild_thread.join(timeout=5)
+            collection.end_bulk_ingest()
+
+        assert original_index.wait_for_background_rebuild(timeout=5)
+        result = collection.search_by_vector(
+            "default",
+            dense_vector=[0.0, 1.0, 0.0, 0.0],
+            limit=1,
+        )
+        assert [item.id for item in result.data] == ["kept"]
+        assert runtime.search_count == 1
+    finally:
+        collection.close()
+
+
+def test_auto_cuvs_bulk_ingest_delete_all_replacement_stays_suspended(monkeypatch):
+    class BuildStartedRuntime(MemoryAwareFakeCuVSRuntime):
+        def __init__(self):
+            super().__init__("inner_product", free_memory_bytes=1 << 20)
+            self.build_started = threading.Event()
+
+        def build(self, dataset):
+            self.build_started.set()
+            return super().build(dataset)
+
+    runtime = BuildStartedRuntime()
+    monkeypatch.setattr(
+        cuvs_index,
+        "_CuVSRuntime",
+        lambda _algorithm, _metric, _build_params, _search_params, _dtype: runtime,
+    )
+    collection = get_or_create_local_collection(
+        meta_data={
+            "CollectionName": "auto_cuvs_bulk_ingest_delete_all",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+            ],
+        },
+        config={
+            "dense_search": {
+                "backend": "auto_cuvs",
+                "algorithm": "brute_force",
+                "filter_cache_size": 0,
+                "auto_memory_reserve_mb": 0,
+                "auto_memory_safety_factor": 1.0,
+                "auto_background_rebuild": True,
+                "auto_rebuild_debounce_ms": 100,
+            }
+        },
+    )
+    try:
+        original_index = collection.create_index(
+            "default",
+            {
+                "IndexName": "default",
+                "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
+            },
+        )
+        assert original_index.wait_for_background_rebuild(timeout=5)
+
+        collection.begin_bulk_ingest()
+        try:
+            collection.upsert_data([{"id": "removed", "vector": [1.0, 0.0, 0.0, 0.0]}])
+            collection.delete_all_data()
+            replacement_index = collection.get_index("default")
+            assert replacement_index is not original_index
+
+            collection.upsert_data([{"id": "kept", "vector": [0.0, 1.0, 0.0, 0.0]}])
+            # delete_all_data replaces the index while the scope is active.
+            # The replacement must inherit suspension for longer than debounce.
+            assert not runtime.build_started.wait(timeout=0.25)
+            result = collection.search_by_vector(
+                "default",
+                dense_vector=[0.0, 1.0, 0.0, 0.0],
+                limit=1,
+            )
+            assert [item.id for item in result.data] == ["kept"]
+            assert runtime.search_count == 0
+        finally:
+            collection.end_bulk_ingest()
+
+        assert runtime.build_started.wait(timeout=1)
+        assert replacement_index.wait_for_background_rebuild(timeout=5)
+        assert runtime.build_count == 1
+    finally:
+        collection.close()
+
+
 def test_auto_cuvs_selective_first_query_skips_gpu_build(monkeypatch):
     runtimes = []
     dense_search_calls = 0
