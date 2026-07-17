@@ -49,7 +49,7 @@ class ReplayRunner:
                 result=result,
                 unconsumed_records=session.unconsumed_records,
             )
-        except BaseException as error:
+        except Exception as error:
             return ReplayResult(
                 outcome="raised",
                 exception=error,

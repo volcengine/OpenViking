@@ -89,3 +89,25 @@ def test_replay_command_prints_runner_result_without_normal_trace_tree(
     assert output["outcome"] == "returned"
     assert output["result"] == encode_value({"fresh": True})
     assert output["unconsumed_mock_records"] == []
+
+
+def test_replay_command_exits_nonzero_for_replay_failure(
+    debug_trace_module, monkeypatch, capsys
+) -> None:
+    class FailingRunner:
+        async def run(self, _entry, _mock_records):
+            return ReplayResult(
+                outcome="raised",
+                exception=RuntimeError("missing historical evidence"),
+            )
+
+    monkeypatch.setattr(debug_trace_module, "fetch_trace", lambda _trace_id: _trace())
+    monkeypatch.setattr(debug_trace_module, "ReplayRunner", FailingRunner)
+
+    with pytest.raises(SystemExit) as error:
+        debug_trace_module.main(["0" * 32, "--replay", "test.entry"])
+
+    assert error.value.code == 1
+    output = json.loads(capsys.readouterr().out)
+    assert output["outcome"] == "raised"
+    assert output["exception"]["message"] == "missing historical evidence"

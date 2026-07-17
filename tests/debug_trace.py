@@ -439,6 +439,8 @@ def main(argv: list[str] | None = None):
             ],
         }
         print(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True))
+        if result.outcome == "raised":
+            raise SystemExit(1)
         return
 
     traces = data.get("data", [])
