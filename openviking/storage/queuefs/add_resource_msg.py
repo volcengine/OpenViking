@@ -33,12 +33,16 @@ class AddResourceMsg:
     allow_local_path_resolution: bool = True
     enforce_public_remote_targets: bool = False
     args: Dict[str, Any] = field(default_factory=dict)
+    lock_handoff_retry: int = 0
     source_name: Optional[str] = None
     watch_interval: float = 0
     skip_watch_management: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        if self.prepared is not None:
+            data["args"] = {}
+        return data
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "AddResourceMsg":
@@ -48,6 +52,14 @@ class AddResourceMsg:
         path = data.get("path")
         root_uri = data.get("root_uri")
         prepared = data.get("prepared") if isinstance(data.get("prepared"), dict) else None
+        args = dict(data.get("args", {})) if isinstance(data.get("args"), dict) else {}
+        legacy_retry = args.pop("_lock_handoff_retry", 0)
+        try:
+            lock_handoff_retry = max(0, int(data.get("lock_handoff_retry", legacy_retry) or 0))
+        except (TypeError, ValueError):
+            lock_handoff_retry = 0
+        if prepared is not None:
+            args.clear()
         if not task_id or (not path and not prepared) or not root_uri:
             missing = []
             if not task_id:
@@ -90,7 +102,8 @@ class AddResourceMsg:
             create_parent=bool(data.get("create_parent", False)),
             allow_local_path_resolution=bool(data.get("allow_local_path_resolution", True)),
             enforce_public_remote_targets=bool(data.get("enforce_public_remote_targets", False)),
-            args=data.get("args") if isinstance(data.get("args"), dict) else {},
+            args=args,
+            lock_handoff_retry=lock_handoff_retry,
             source_name=data.get("source_name"),
             prepared=prepared,
             watch_interval=float(data.get("watch_interval", 0) or 0),

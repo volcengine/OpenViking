@@ -366,8 +366,6 @@ class ResourceService:
         """Execute one durable add-resource job inside its QueueFS consumer."""
         resource_lock = resource_lock or NO_LOCK
         if msg.prepared is None:
-            processor_args = dict(msg.args)
-            processor_args.pop("_lock_handoff_retry", None)
             return await self.add_resource(
                 path=msg.path,
                 ctx=ctx,
@@ -392,7 +390,7 @@ class ResourceService:
                 directly_upload_media=msg.directly_upload_media,
                 preserve_structure=msg.preserve_structure,
                 create_parent=msg.create_parent,
-                args=processor_args,
+                args=msg.args,
             )
 
         telemetry_id = get_current_telemetry().telemetry_id
@@ -408,7 +406,6 @@ class ResourceService:
                 resource_lock=resource_lock,
                 summarize=msg.summarize,
                 build_index=msg.build_index,
-                **msg.args,
             )
             await request_wait_tracker.wait_for_request(
                 telemetry_id,
@@ -997,7 +994,6 @@ class ResourceService:
                     create_parent=bool(kwargs.get("create_parent", False)),
                     allow_local_path_resolution=allow_local_path_resolution,
                     enforce_public_remote_targets=enforce_public_remote_targets,
-                    args=self._sanitize_watch_processor_kwargs(normalized_args.processor_kwargs),
                     source_name=kwargs.get("source_name"),
                     skip_watch_management=True,
                 )

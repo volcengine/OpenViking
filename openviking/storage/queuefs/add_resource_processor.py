@@ -52,18 +52,13 @@ class AddResourceProcessor(DequeueHandlerBase):
                 raise handoff_error
 
     async def _requeue_lock_handoff(self, msg: AddResourceMsg, exc: Exception) -> bool:
-        retry_key = "_lock_handoff_retry"
-        try:
-            retry_count = int(msg.args.get(retry_key, 0) or 0)
-        except (TypeError, ValueError):
-            retry_count = 0
-        if retry_count >= 2:
+        if msg.lock_handoff_retry >= 2:
             return False
 
         from openviking.storage.queuefs import QueueManager, get_queue_manager
 
         payload = msg.to_dict()
-        payload["args"] = dict(msg.args, **{retry_key: retry_count + 1})
+        payload["lock_handoff_retry"] = msg.lock_handoff_retry + 1
         await get_queue_manager().enqueue(QueueManager.ADD_RESOURCE, payload)
         logger.warning(
             "[AddResource] Requeued task %s after lock handoff failure: %s",
