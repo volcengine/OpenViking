@@ -533,6 +533,12 @@ const zhCN = {
     },
     filePreview: {
       cancel: '取消',
+      delete: '删除',
+      deleteConfirmDescription: '确定永久删除 {{name}} 吗？此操作无法撤销。',
+      deleteConfirmTitle: '删除这个文件？',
+      deleteFailed: '删除文件失败：{{message}}',
+      deleteSuccess: '已删除 {{name}}',
+      deleting: '正在删除...',
       edit: '编辑',
       emptyFile: '(空文件)',
       emptyPrompt: '选择文件后在这里预览',

@@ -178,6 +178,8 @@ export function useInvalidateVikingFs() {
       queryClient.invalidateQueries({
         queryKey: uri ? ['viking-file-read', uri] : ['viking-file-read'],
       }),
+    removePreview: (uri: string) =>
+      queryClient.removeQueries({ queryKey: ['viking-file-read', uri] }),
   }
 }
 

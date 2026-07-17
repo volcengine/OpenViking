@@ -4,9 +4,20 @@ import { useQuery } from '@tanstack/react-query'
 import hljs from 'highlight.js/lib/core'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { X, Pencil, Save, XCircle, Loader2 } from 'lucide-react'
+import { X, Pencil, Save, XCircle, Loader2, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '#/components/ui/alert-dialog'
 import { Button } from '#/components/ui/button'
 import { ScrollArea } from '#/components/ui/scroll-area'
 import { client } from '#/gen/ov-client/client.gen'
@@ -16,7 +27,11 @@ import type { GetContentDownloadData } from '#/gen/ov-client/types.gen'
 import type { ContentDownloadQuery } from '@ov-server/api/v1/content'
 
 import { formatSize, normalizeReadContent } from '../-lib/normalize'
-import { fetchDirectoryLevelContent, saveFileContent } from '../-lib/api'
+import {
+  deleteFile,
+  fetchDirectoryLevelContent,
+  saveFileContent,
+} from '../-lib/api'
 import {
   useVikingFilePreview,
   useInvalidateVikingFs,
@@ -1048,8 +1063,11 @@ export function FilePreview({
   >(new Set(['abstract', 'overview']))
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const editorRef = useRef<CodeEditorHandle>(null)
-  const { invalidatePreview } = useInvalidateVikingFs()
+  const { invalidateList, invalidatePreview, invalidateTree, removePreview } =
+    useInvalidateVikingFs()
 
   const canEdit =
     !file?.isDir &&
@@ -1062,6 +1080,7 @@ export function FilePreview({
   useEffect(() => {
     setMarkdownMode('preview')
     setEditing(false)
+    setDeleteDialogOpen(false)
     setActiveDirectoryLevels(new Set(['abstract', 'overview']))
   }, [file?.uri])
 
@@ -1190,6 +1209,30 @@ export function FilePreview({
     }
   }
 
+  const handleDelete = async () => {
+    if (!file || file.isDir) return
+    setDeleting(true)
+    try {
+      await deleteFile(file.uri)
+      removePreview(file.uri)
+      await Promise.all([
+        invalidateList(dirnameVikingUri(file.uri)),
+        invalidateTree(),
+      ])
+      setDeleteDialogOpen(false)
+      toast.success(t('filePreview.deleteSuccess', { name: file.name }))
+      onClose()
+    } catch (error) {
+      const message =
+        error && typeof error === 'object' && 'message' in error
+          ? String(error.message)
+          : String(error)
+      toast.error(t('filePreview.deleteFailed', { message }))
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   if (!file) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
@@ -1251,16 +1294,29 @@ export function FilePreview({
                 </Button>
               </div>
             ) : (
-              canEdit && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setEditing(true)}
-                >
-                  <Pencil className="mr-1 size-3.5" />
-                  {t('filePreview.edit')}
-                </Button>
-              )
+              <div className="flex items-center gap-1">
+                {canEdit ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setEditing(true)}
+                  >
+                    <Pencil className="mr-1 size-3.5" />
+                    {t('filePreview.edit')}
+                  </Button>
+                ) : null}
+                {!file.isDir ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-destructive hover:text-destructive"
+                    onClick={() => setDeleteDialogOpen(true)}
+                  >
+                    <Trash2 className="mr-1 size-3.5" />
+                    {t('filePreview.delete')}
+                  </Button>
+                ) : null}
+              </div>
             )}
           </div>
           {showCloseButton ? (
@@ -1547,6 +1603,40 @@ export function FilePreview({
           </div>
         </ScrollArea>
       )}
+      <AlertDialog
+        open={deleteDialogOpen}
+        onOpenChange={(open) => {
+          if (!deleting) setDeleteDialogOpen(open)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t('filePreview.deleteConfirmTitle')}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('filePreview.deleteConfirmDescription', { name: file.name })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>
+              {t('filePreview.cancel')}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={deleting}
+              onClick={() => void handleDelete()}
+            >
+              {deleting ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Trash2 className="size-4" />
+              )}
+              {deleting ? t('filePreview.deleting') : t('filePreview.delete')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
