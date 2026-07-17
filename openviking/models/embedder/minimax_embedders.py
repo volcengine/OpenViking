@@ -11,7 +11,7 @@ from urllib3.util.retry import Retry
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
-from openviking.utils.request_headers import get_static_extra_headers, resolve_extra_headers
+from openviking.utils.request_headers import resolve_extra_headers
 from openviking_cli.utils.logger import default_logger as logger
 
 
@@ -65,9 +65,7 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
         self.document_param = document_param
         self._dimension = dimension
 
-        # Get group_id from extra_headers if present, since MiniMax API may require it
         self.extra_headers = dict(extra_headers or {})
-        self.group_id = self._extract_group_id(get_static_extra_headers(self.extra_headers))
 
         if not self.api_key:
             raise ValueError("api_key is required for MiniMax embedder")

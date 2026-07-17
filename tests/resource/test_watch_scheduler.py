@@ -3,8 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
-from openviking.resource.watch_manager import WatchManager
+from openviking.resource.watch_manager import WatchManager, WatchTask
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.service.resource_service import ResourceService
 
@@ -114,32 +113,21 @@ class TestWatchSchedulerResourceExistence:
         manager.update_execution_time.assert_awaited_once_with(task.task_id)
 
     @pytest.mark.asyncio
-    async def test_periodic_execution_uses_configured_model_auth(self):
-        vlm = LiteLLMVLMProvider(
-            {
-                "provider": "litellm",
-                "model": "openai/gpt-test",
-                "api_key": "configured-key",
-                "extra_headers": {
-                    "Authorization": "@request.header.Authorization",
-                    "X-Static": "fixed",
-                },
-            }
+    async def test_periodic_execution_runs_due_task_through_resource_service(self):
+        task = WatchTask(task_id="periodic-task", path=__file__)
+        resource_service = SimpleNamespace(
+            add_resource=AsyncMock(return_value={"root_uri": "viking://resources/test"})
         )
-        model_calls = []
-        scheduler = WatchScheduler(resource_service=ResourceService(), check_interval=1)
+        scheduler = WatchScheduler(resource_service=resource_service, check_interval=1)
         scheduler._watch_manager = SimpleNamespace(
-            get_due_tasks=AsyncMock(
-                return_value=[SimpleNamespace(task_id="periodic-task")]
-            ),
+            get_due_tasks=AsyncMock(return_value=[task]),
+            update_execution_time=AsyncMock(),
         )
-
-        async def capture_model_call(_task):
-            model_calls.append(vlm._build_text_kwargs(prompt="periodic watch"))
-
-        scheduler._execute_task = capture_model_call
 
         await scheduler._check_and_execute_due_tasks()
 
-        assert model_calls[0]["api_key"] == "configured-key"
-        assert model_calls[0]["extra_headers"] == {"X-Static": "fixed"}
+        resource_service.add_resource.assert_awaited_once()
+        call_kwargs = resource_service.add_resource.await_args.kwargs
+        assert call_kwargs["path"] == __file__
+        assert call_kwargs["skip_watch_management"] is True
+        scheduler._watch_manager.update_execution_time.assert_awaited_once_with(task.task_id)

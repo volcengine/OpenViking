@@ -57,11 +57,9 @@ def test_binding_uses_lowercase_immutable_snapshots_and_resets_nested_contexts()
 
         assert resolve_extra_headers(configured) == {
             "Authorization": "Bearer outer",
-            "X-Forwarded-Tenant": "",
         }
         assert resolve_dynamic_extra_headers(configured) == {
             "Authorization": "Bearer outer",
-            "X-Forwarded-Tenant": "",
         }
 
         with bind_request_headers({"X-Tenant": "inner"}):
@@ -133,6 +131,13 @@ def test_rfc_token_source_header_names_are_supported() -> None:
 
     with bind_request_headers({source_name: "value"}):
         assert resolve_dynamic_extra_headers(configured) == {"X-Target": "value"}
+
+
+def test_present_empty_source_header_is_forwarded() -> None:
+    configured = {"X-Target": "@request.header.X-Source"}
+
+    with bind_request_headers({"X-Source": ""}):
+        assert resolve_dynamic_extra_headers(configured) == {"X-Target": ""}
 
 
 def test_collect_dynamic_sources_from_nested_model_configs() -> None:

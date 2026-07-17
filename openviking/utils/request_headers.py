@@ -63,8 +63,9 @@ def resolve_dynamic_extra_headers(
     resolved: dict[str, str] = {}
     for target, value in configured.items():
         source = _request_header_source(value)
-        if source is not None:
-            resolved[target] = snapshot.get(source.lower(), "")
+        source_key = source.lower() if source is not None else None
+        if source_key is not None and source_key in snapshot:
+            resolved[target] = snapshot[source_key]
     return resolved
 
 

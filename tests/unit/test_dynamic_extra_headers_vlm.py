@@ -89,6 +89,28 @@ async def test_litellm_resolves_headers_without_logging_secrets(monkeypatch) -> 
     assert "request-secret" not in trace_output
 
 
+async def test_litellm_uses_api_key_when_dynamic_header_source_is_missing(monkeypatch) -> None:
+    completion = AsyncMock(return_value=_completion_response())
+    monkeypatch.setattr(litellm_vlm, "acompletion", completion)
+    vlm = LiteLLMVLMProvider(
+        {
+            "provider": "litellm",
+            "api_key": "configured-key",
+            "model": "openai/gpt-test",
+            "extra_headers": {
+                "Authorization": "@request.header.Authorization",
+                "X-Static": "fixed",
+            },
+        }
+    )
+
+    assert await vlm.get_completion_async("periodic watch") == "ok"
+
+    call_kwargs = completion.call_args.kwargs
+    assert call_kwargs["api_key"] == "configured-key"
+    assert call_kwargs["extra_headers"] == {"X-Static": "fixed"}
+
+
 async def test_volcengine_resolves_headers_for_each_request() -> None:
     client = MagicMock()
     client.chat.completions.create = AsyncMock(return_value=_completion_response())

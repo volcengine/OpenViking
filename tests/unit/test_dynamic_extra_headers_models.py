@@ -163,6 +163,23 @@ def test_minimax_resolves_dynamic_group_id_as_query_parameter():
     assert configured["GroupId"] == "@request.header.X-Group-Id"
 
 
+def test_minimax_falls_back_to_api_key_when_dynamic_authorization_is_missing():
+    response = MagicMock()
+    response.json.return_value = {"base_resp": {"status_code": 0}, "vectors": [[0.1, 0.2]]}
+    embedder = MinimaxDenseEmbedder(
+        api_key="fallback-key",
+        dimension=2,
+        extra_headers={"Authorization": "@request.header.Authorization"},
+    )
+    embedder.session.post = MagicMock(return_value=response)
+
+    with bind_request_headers({"X-Unrelated": "value"}):
+        embedder.embed("text")
+
+    request = embedder.session.post.call_args.kwargs
+    assert request["headers"]["Authorization"] == "Bearer fallback-key"
+
+
 def test_openai_rerank_resolves_headers_for_each_send():
     response = MagicMock()
     response.json.return_value = {"results": [{"index": 0, "relevance_score": 0.9}]}

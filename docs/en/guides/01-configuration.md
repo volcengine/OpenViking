@@ -683,7 +683,7 @@ Common use cases:
 }
 ```
 
-This syntax is available to VLM/query planner, embedding, and rerank providers that support `extra_headers`. A literal value such as `"primary"` is always sent as configured. During a user-triggered HTTP operation, dynamic headers follow the operation into background tasks and the ExternalParse, Semantic, and Embedding queues. If a referenced source header is absent from that request, the outbound header is sent with an empty value rather than falling back to the server identity.
+This syntax is available to VLM/query planner, embedding, and rerank providers that support `extra_headers`. A literal value such as `"primary"` is always sent as configured. During a user-triggered HTTP operation, dynamic headers follow the operation into background tasks and the ExternalParse, Semantic, and Embedding queues. If a referenced source header is absent from that request, the dynamic outbound header is omitted. For example, when a dynamic `Authorization` source is absent, the model client uses the configured `api_key`.
 
 Only request headers explicitly referenced by dynamic values are handed off. QueueFS persists those selected values with the queued operation until it is acknowledged, allowing processing to continue across worker threads, server workers, and restarts. When forwarding credentials such as `Authorization`, restrict access to the QueueFS backend and protect its storage at rest. Autonomous work without an originating HTTP request, including periodic watch executions, does not retain a user's request headers; dynamic entries are omitted and the configured `api_key` and fixed headers are used. A watch triggered manually through the HTTP API uses the headers from that trigger request for that execution only.
 

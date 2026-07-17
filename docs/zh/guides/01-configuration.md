@@ -651,7 +651,7 @@ LiteLLM 的 Bedrock bearer-token API-key 鉴权，请设置 `forward_api_key=tru
 }
 ```
 
-该语法适用于支持 `extra_headers` 的 VLM/query planner、embedding 和 rerank provider。`"primary"` 这类普通字符串始终按固定值发送。对于用户通过 HTTP 发起的操作，动态请求头会随本次操作传递到后台 task，以及 ExternalParse、Semantic 和 Embedding 队列。如果该请求缺少已声明的来源头，对应出站请求头会发送空值，不会回退为服务器身份。
+该语法适用于支持 `extra_headers` 的 VLM/query planner、embedding 和 rerank provider。`"primary"` 这类普通字符串始终按固定值发送。对于用户通过 HTTP 发起的操作，动态请求头会随本次操作传递到后台 task，以及 ExternalParse、Semantic 和 Embedding 队列。如果该请求缺少已声明的来源头，对应动态请求头会被省略；例如动态 `Authorization` 缺失时，模型客户端会使用配置文件中的 `api_key`。
 
 系统只会传递动态配置明确引用的来源请求头。QueueFS 会将这些筛选后的值随队列任务持久化到任务被确认完成，从而支持跨 worker 线程、服务 worker 和重启继续处理。转发 `Authorization` 等凭证时，应限制 QueueFS 后端的访问权限，并对其存储进行静态加密保护。周期性 watch 等没有来源 HTTP 请求的自主后台任务不会保存用户请求头；此时动态项会被省略，并使用配置文件中的 `api_key` 和固定请求头。通过 HTTP API 手动触发 watch 时，仅本次执行使用该触发请求携带的动态头。
 

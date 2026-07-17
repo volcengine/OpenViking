@@ -116,7 +116,7 @@ async def test_model_queue_restores_context_and_strips_internal_payload() -> Non
     assert get_request_headers_snapshot() is None
 
 
-async def test_request_bound_empty_headers_do_not_use_no_context_fallback() -> None:
+async def test_request_bound_empty_headers_omit_dynamic_headers() -> None:
     handler = _CapturingHandler()
     queue = _queue("Embedding", handler)
     queued = _queued_context({})
@@ -125,7 +125,7 @@ async def test_request_bound_empty_headers_do_not_use_no_context_fallback() -> N
     await queue.process_dequeued(queued)
 
     assert handler.snapshot == {}
-    assert handler.resolved == {"Authorization": "", "X-Upstream-Tenant": ""}
+    assert handler.resolved == {}
 
 
 async def test_invalid_persisted_context_fails_closed_without_blocking_message() -> None:
@@ -137,7 +137,7 @@ async def test_invalid_persisted_context_fails_closed_without_blocking_message()
     await queue.process_dequeued(queued)
 
     assert handler.snapshot == {}
-    assert handler.resolved == {"Authorization": "", "X-Upstream-Tenant": ""}
+    assert handler.resolved == {}
     assert MODEL_REQUEST_CONTEXT_KEY not in json.loads(handler.data["data"])
 
 
