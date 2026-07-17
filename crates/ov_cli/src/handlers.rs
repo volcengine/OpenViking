@@ -13,6 +13,8 @@ use crate::tui;
 use colored::Colorize;
 use serde_json::{Map, Value};
 
+const TRUSTED_ROLE_HEADER: &str = "X-OpenViking-Role";
+
 pub async fn handle_add_resource(
     mut path: String,
     to: Option<String>,
@@ -1253,7 +1255,7 @@ pub async fn handle_reindex(
     dry_run: bool,
     ctx: CliContext,
 ) -> Result<()> {
-    let client = ctx.get_client();
+    let client = reindex_client(&ctx);
     commands::content::reindex(
         &client,
         &uri,
@@ -1264,6 +1266,18 @@ pub async fn handle_reindex(
         ctx.compact,
     )
     .await
+}
+
+fn reindex_client(ctx: &CliContext) -> client::HttpClient {
+    if ctx.sudo {
+        // In trusted mode, the root key authenticates the upstream but ordinary
+        // content routes still derive authorization from the asserted role.
+        // Reindex needs ADMIN privileges, while ROOT remains reserved for the
+        // server's validated /api/v1/admin fallback.
+        ctx.get_client_with_extra_header(TRUSTED_ROLE_HEADER, "admin")
+    } else {
+        ctx.get_client()
+    }
 }
 
 pub async fn handle_get(uri: String, local_path: String, ctx: CliContext) -> Result<()> {
@@ -1740,5 +1754,85 @@ mod config_switch_prompt_tests {
             }
         }
         output
+    }
+}
+
+#[cfg(test)]
+mod reindex_client_tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::output::OutputFormat;
+    use std::collections::HashMap;
+
+    fn context(config: Config, sudo: bool) -> CliContext {
+        CliContext::from_config(
+            config,
+            OutputFormat::Json,
+            true,
+            None,
+            None,
+            None,
+            sudo,
+            None,
+            None,
+            None,
+        )
+    }
+
+    #[test]
+    fn sudo_reindex_asserts_admin_role_with_root_key() {
+        let mut extra_headers = HashMap::new();
+        extra_headers.insert("x-openviking-role".to_string(), "user".to_string());
+        extra_headers.insert("X-Custom-Header".to_string(), "custom".to_string());
+        let config = Config {
+            api_key: Some("user-key".to_string()),
+            root_api_key: Some("root-key".to_string()),
+            account: Some("acme".to_string()),
+            user: Some("alice".to_string()),
+            extra_headers: Some(extra_headers),
+            ..Config::default()
+        };
+
+        let headers = reindex_client(&context(config, true)).build_headers();
+
+        assert_eq!(
+            headers
+                .get("X-API-Key")
+                .and_then(|value| value.to_str().ok()),
+            Some("root-key")
+        );
+        assert_eq!(
+            headers
+                .get(TRUSTED_ROLE_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some("admin")
+        );
+        assert_eq!(
+            headers
+                .get("X-Custom-Header")
+                .and_then(|value| value.to_str().ok()),
+            Some("custom")
+        );
+    }
+
+    #[test]
+    fn regular_reindex_does_not_inject_role_assertion() {
+        let config = Config {
+            api_key: Some("user-key".to_string()),
+            root_api_key: Some("root-key".to_string()),
+            account: Some("acme".to_string()),
+            user: Some("alice".to_string()),
+            ..Config::default()
+        };
+
+        let headers = reindex_client(&context(config, false)).build_headers();
+
+        assert_eq!(
+            headers
+                .get("X-API-Key")
+                .and_then(|value| value.to_str().ok()),
+            Some("user-key")
+        );
+        assert!(headers.get(TRUSTED_ROLE_HEADER).is_none());
     }
 }

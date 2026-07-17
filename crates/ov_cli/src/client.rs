@@ -143,6 +143,11 @@ impl HttpClient {
         self.base.actor_peer_id()
     }
 
+    #[cfg(test)]
+    pub(crate) fn build_headers(&self) -> reqwest::header::HeaderMap {
+        self.base.build_headers()
+    }
+
     pub fn api_key(&self) -> Option<&str> {
         self.base.api_key()
     }
