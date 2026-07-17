@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from openviking.storage import VikingDBManager
     from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
     from openviking.storage.viking_fs import VikingFS
+    from openviking.usage_reporter import UsageReporter
 
 logger = get_logger(__name__)
 
@@ -362,6 +363,7 @@ class Session:
         session_uri: Optional[str] = None,
         auto_commit_threshold: int = 8000,
         tool_output_externalization_config: Optional[ToolOutputExternalizationConfig] = None,
+        usage_reporter: Optional["UsageReporter"] = None,
     ):
         self._viking_fs = viking_fs
         self._vikingdb_manager = vikingdb_manager
@@ -391,6 +393,7 @@ class Session:
             if tool_output_externalization_config is not None
             else ToolOutputExternalizationConfig()
         )
+        self._usage_reporter = usage_reporter
 
         logger.info(f"Session created: {self.session_id} for user {self.user}")
 
@@ -1299,6 +1302,28 @@ class Session:
             memory_policy=msg.memory_policy,
         )
 
+    async def _run_usage_reporting(
+        self,
+        *,
+        task_id: str,
+        archive_uri: str,
+        messages: List[Message],
+    ) -> list[Any]:
+        reporter = getattr(self, "_usage_reporter", None)
+        if reporter is None:
+            return []
+
+        from openviking.usage_reporter import UsageContext
+
+        context = UsageContext(
+            account_id=self.ctx.account_id,
+            user_id=self.ctx.user.user_id,
+            session_id=self.session_id,
+            archive_uri=archive_uri,
+            task_id=task_id,
+        )
+        return await reporter.extract_and_report(messages=messages, context=context)
+
     @tracer("session.commit.phase2", ignore_result=True, ignore_args=True)
     async def _run_memory_extraction(
         self,
@@ -1319,6 +1344,7 @@ class Session:
         request_wait_tracker = get_request_wait_tracker()
 
         memories_extracted: Dict[str, int] = {}
+        usage_events_extracted = 0
         extracted_skill_results: list[dict] = []
         active_count_updated = 0
         memory_diff_uri: Optional[str] = None
@@ -1348,6 +1374,13 @@ class Session:
                         else ""
                     )
                     extraction_messages = await self._hydrate_tool_outputs_for_extraction(messages)
+                    usage_events_extracted = len(
+                        await self._run_usage_reporting(
+                            task_id=task_id,
+                            archive_uri=archive_uri,
+                            messages=extraction_messages,
+                        )
+                    )
 
                     async def _run_archive_summary() -> None:
                         if not working_memory_enabled:
@@ -1646,6 +1679,7 @@ class Session:
                     for item in extracted_skill_results
                     if isinstance(item, dict) and (item.get("uri") or item.get("root_uri"))
                 ],
+                "usage_events_extracted": usage_events_extracted,
                 "active_count_updated": active_count_updated,
                 "token_usage": {
                     "llm": dict(self._meta.llm_token_usage),

@@ -44,6 +44,7 @@ DIR_VECTOR_DATASET_URL = "https://github.com/KurtPatrickHere/dir-vector-dataset"
 DEFAULT_DIR_VECTOR_DATASETS = ("wiki", "arxiv")
 PROGRESS_INTERVAL_SECONDS = 5.0
 DIR_VECTOR_QUERY_SCOPES = ("dataset", "derived_gt_lca_v1")
+DERIVED_INDEX_READY_TIMEOUT_SECONDS = 600.0
 
 
 PROFILE_DEFAULTS: dict[str, dict[str, Any]] = {
@@ -1196,6 +1197,30 @@ async def run_search_phase(
     return events, validation_errors, quality
 
 
+async def wait_for_auto_derived_index(
+    backend: VikingVectorIndexBackend,
+    *,
+    timeout: float = DERIVED_INDEX_READY_TIMEOUT_SECONDS,
+) -> bool:
+    """Wait for Auto's background GPU snapshot before timed search phases."""
+
+    def wait() -> bool:
+        adapter = backend._shared_adapter
+        collection = adapter.get_collection()
+        index = collection.get_index(adapter.index_name)
+        if index is None:
+            raise RuntimeError(f"benchmark index not found: {adapter.index_name}")
+        wait_for_rebuild = getattr(index, "wait_for_background_rebuild", None)
+        if not callable(wait_for_rebuild):
+            raise RuntimeError("Auto backend does not expose background rebuild readiness")
+        return bool(wait_for_rebuild(timeout=timeout))
+
+    ready = await asyncio.to_thread(wait)
+    if not ready:
+        raise TimeoutError(f"Auto derived index was not ready within {timeout:.0f}s")
+    return True
+
+
 def result_hits_ground_truth(rows: list[dict[str, Any]], ground_truth_ids: list[str]) -> bool:
     returned_ids = {str(row.get("id")) for row in rows if row.get("id") is not None}
     return any(str(item) in returned_ids for item in ground_truth_ids)
@@ -1306,28 +1331,29 @@ async def run_benchmark_async(options: BenchOptions) -> RunResult:
         progress(f"ingest: start batch_size={batch_size}")
         ingest_started_at = time.perf_counter()
         last_ingest_reported_at = 0.0
-        for batch in batched(workload.records(), batch_size):
-            if len(fetch_ids) < 20:
-                fetch_ids.extend(str(row["id"]) for row in batch[: 20 - len(fetch_ids)])
-            event, ids = await async_timed_event(
-                "ingest",
-                "upsert_rows_batch",
-                lambda batch=batch: upsert_records(backend, ctx, batch),
-                count=len(batch),
-            )
-            events.append(event)
-            if not event.success:
-                validation_errors.append(event.error or "upsert_rows_batch failed")
-                break
-            inserted += len(ids or [])
-            last_ingest_reported_at = progress_count(
-                "ingest",
-                inserted,
-                workload.expected_rows,
-                ingest_started_at,
-                last_ingest_reported_at,
-                force=inserted == workload.expected_rows,
-            )
+        async with backend.bulk_ingest(ctx=ctx):
+            for batch in batched(workload.records(), batch_size):
+                if len(fetch_ids) < 20:
+                    fetch_ids.extend(str(row["id"]) for row in batch[: 20 - len(fetch_ids)])
+                event, ids = await async_timed_event(
+                    "ingest",
+                    "upsert_rows_batch",
+                    lambda batch=batch: upsert_records(backend, ctx, batch),
+                    count=len(batch),
+                )
+                events.append(event)
+                if not event.success:
+                    validation_errors.append(event.error or "upsert_rows_batch failed")
+                    break
+                inserted += len(ids or [])
+                last_ingest_reported_at = progress_count(
+                    "ingest",
+                    inserted,
+                    workload.expected_rows,
+                    ingest_started_at,
+                    last_ingest_reported_at,
+                    force=inserted == workload.expected_rows,
+                )
 
     if options.mode != "read-only" and inserted == 0:
         validation_errors.append("no records inserted")
@@ -1362,6 +1388,33 @@ async def run_benchmark_async(options: BenchOptions) -> RunResult:
             quality,
             kept_collection=kept_collection,
         )
+
+    cuvs_config = getattr(vectordb_config, "cuvs", None)
+    auto_background_enabled = bool(
+        cuvs_config is not None
+        and getattr(cuvs_config, "auto_enable", False)
+        and getattr(cuvs_config, "auto_background_rebuild", False)
+    )
+    if auto_background_enabled:
+        progress("prepare: wait for Auto derived index")
+        event, _ = await async_timed_event(
+            "prepare",
+            "wait_for_auto_derived_index",
+            lambda: wait_for_auto_derived_index(backend),
+        )
+        events.append(event)
+        if not event.success:
+            validation_errors.append(event.error or "Auto derived index readiness failed")
+            await close_backend(backend)
+            return finalize_result(
+                options,
+                workload,
+                collection_name,
+                events,
+                validation_errors,
+                quality,
+                kept_collection=True,
+            )
 
     if options.mode == "read-only":
         fetch_ids = sample_record_ids(workload, 20)

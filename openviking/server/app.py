@@ -202,14 +202,29 @@ def create_app(
 
     validate_server_config(config)
 
-    def _configure_session_tool_outputs(service_obj) -> None:  # noqa: ANN001
+    usage_reporter_unset = object()
+    usage_reporter = usage_reporter_unset
+
+    def _get_usage_reporter():  # noqa: ANN202
+        nonlocal usage_reporter
+        if usage_reporter is usage_reporter_unset:
+            from openviking.usage_reporter.config import build_usage_reporter
+
+            usage_reporter = build_usage_reporter(config.usage_reporter)
+        return usage_reporter
+
+    def _configure_session_runtime(service_obj) -> None:  # noqa: ANN001
         sessions = getattr(service_obj, "sessions", None)
-        setter = getattr(sessions, "set_tool_output_externalization_config", None)
-        if callable(setter):
-            setter(config.tool_output_externalization)
+        tool_output_setter = getattr(sessions, "set_tool_output_externalization_config", None)
+        if callable(tool_output_setter):
+            tool_output_setter(config.tool_output_externalization)
+
+        usage_reporter_setter = getattr(sessions, "set_usage_reporter", None)
+        if callable(usage_reporter_setter):
+            usage_reporter_setter(_get_usage_reporter())
 
     if service is not None:
-        _configure_session_tool_outputs(service)
+        _configure_session_runtime(service)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -220,7 +235,7 @@ def create_app(
             service = OpenVikingService()
 
         assert service is not None
-        _configure_session_tool_outputs(service)
+        _configure_session_runtime(service)
         set_service(service)
 
         from openviking.metrics.global_api import (
@@ -301,6 +316,8 @@ def create_app(
                 logger.warning(f"OpenVikingService close cancelled during shutdown: {e}")
             except Exception as e:
                 logger.warning(f"OpenVikingService close failed during shutdown: {e}")
+        if usage_reporter is not usage_reporter_unset and usage_reporter is not None:
+            await usage_reporter.close()
 
     app = FastAPI(
         title="OpenViking API",

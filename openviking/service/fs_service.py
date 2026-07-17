@@ -668,10 +668,15 @@ class FSService:
         *,
         branch: str = "main",
         limit: int = 20,
+        paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Forward to VikingFS.log. Walks parents[0] up to limit commits."""
         viking_fs = self._ensure_initialized()
-        return await viking_fs.log(branch=branch, limit=limit, ctx=ctx)
+        if paths is not None:
+            paths = [validate_viking_uri(path, field_name="paths") for path in paths]
+            if not paths:
+                paths = None
+        return await viking_fs.log(branch=branch, limit=limit, paths=paths, ctx=ctx)
 
     async def get_gitignore(self, *, ctx: RequestContext) -> str:
         """Forward to VikingFS.get_gitignore. Returns the account .ovgitignore

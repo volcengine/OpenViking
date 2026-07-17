@@ -1610,11 +1610,21 @@ impl HttpClient {
         self.post("/api/v1/snapshot/restore", req).await
     }
 
-    pub async fn snapshot_log(&self, branch: &str, limit: u32) -> Result<Value> {
-        let params = vec![
+    pub async fn snapshot_log(
+        &self,
+        branch: &str,
+        limit: u32,
+        paths: Option<&[String]>,
+    ) -> Result<Value> {
+        let mut params = vec![
             ("branch".to_string(), branch.to_string()),
             ("limit".to_string(), limit.to_string()),
         ];
+        if let Some(paths) = paths {
+            for path in paths {
+                params.push(("paths".to_string(), path.to_string()));
+            }
+        }
         self.get("/api/v1/snapshot/log", &params).await
     }
 
