@@ -81,7 +81,7 @@ class TestMemoryUpdater:
         assert unsplit_context.messages[0] is messages[0]
 
     @pytest.mark.asyncio
-    async def test_v2_updater_writes_resource_overview_to_entity_link(self, monkeypatch):
+    async def test_v2_updater_rejects_resource_overview_graph_link(self, monkeypatch):
         monkeypatch.setattr(
             "openviking.session.memory.merge_op.link_merge.wiki_links_enabled",
             lambda: True,
@@ -127,9 +127,10 @@ class TestMemoryUpdater:
 
         overview = MemoryFileUtils.read(files[overview_uri], uri=overview_uri)
         entity = MemoryFileUtils.read(files[entity_uri], uri=entity_uri)
-        assert overview.links[0]["to_uri"] == entity_uri
-        assert entity.backlinks[0]["from_uri"] == overview_uri
-        assert set(result.edited_uris) == {overview_uri, entity_uri}
+        assert overview.links == []
+        assert entity.backlinks == []
+        assert result.edited_uris == []
+        mock_viking_fs.write_file.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_v2_updater_bypasses_wiki_checks_when_links_are_disabled(self, monkeypatch):

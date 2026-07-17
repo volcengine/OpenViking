@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """
 Memory graph generator — builds a self-contained D3.js force-directed HTML graph
-from links stored in MEMORY_FIELDS across memory and resource Wiki spaces.
+from memory metadata links and visible Resource overview links.
 
 Usage:
     graph = MemoryGraph(viking_fs)
@@ -12,9 +12,16 @@ Usage:
 
 import hashlib
 import json
+import re
 from typing import Any, Dict, List
+from urllib.parse import unquote
 
-from openviking.core.namespace import canonicalize_uri, context_type_for_uri
+from openviking.core.namespace import (
+    canonicalize_uri,
+    context_type_for_uri,
+    is_content_root_uri,
+    uri_parts,
+)
 from openviking.server.identity import RequestContext
 from openviking.session.memory.merge_op.link_merge import wiki_links_enabled
 from openviking.session.memory.utils.link_renderer import LinkRenderer
@@ -24,6 +31,8 @@ from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+_MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\((?P<target>(?:[^()\n]|\([^()\n]*\))+?)\)")
 
 # Memory type → color mapping
 TYPE_COLORS = {
@@ -45,6 +54,44 @@ def _color_for_link_type(link_type: str) -> str:
     digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
     hue = int(digest[:8], 16) % 360
     return f"hsl({hue}, 72%, 58%)"
+
+
+def _resolve_markdown_target(source_uri: str, target: str) -> str:
+    target = target.strip()
+    if target.startswith("<") and target.endswith(">"):
+        target = target[1:-1]
+    target = unquote(target.split("#", 1)[0].split("?", 1)[0])
+    if target.startswith("viking://"):
+        return "viking://" + "/".join(uri_parts(target))
+    if not target or "://" in target or target.startswith("/"):
+        return ""
+
+    parts = uri_parts(source_uri)[:-1]
+    for part in target.split("/"):
+        if not part or part == ".":
+            continue
+        if part == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(part)
+    return "viking://" + "/".join(parts)
+
+
+def _resource_entity_targets(content: str, source_uri: str) -> List[str]:
+    targets = []
+    for match in _MARKDOWN_LINK_RE.finditer(content or ""):
+        try:
+            target_uri = _resolve_markdown_target(source_uri, match.group("target"))
+            if not target_uri or context_type_for_uri(target_uri) != "memory":
+                continue
+            parts = uri_parts(target_uri)
+            memories_index = parts.index("memories")
+        except (TypeError, ValueError):
+            continue
+        if len(parts) > memories_index + 1 and parts[memories_index + 1] == "entities":
+            targets.append(target_uri)
+    return list(dict.fromkeys(targets))
 
 
 class MemoryGraph:
@@ -115,6 +162,9 @@ class MemoryGraph:
                         entry.get("rel_path", "") == ".overview.md"
                         or entry.get("rel_path", "").endswith("/.overview.md")
                     )
+                    and not is_content_root_uri(
+                        entry["uri"].rsplit("/", 1)[0], ctx, kind="resource"
+                    )
                 ]
             else:
                 md_uris = [
@@ -138,7 +188,10 @@ class MemoryGraph:
                     logger.error(f"Failed to read/parse {uri}: {e}")
                     raise
 
-                if resource_wiki_space and not mf.links:
+                resource_entity_targets = (
+                    _resource_entity_targets(mf.content, uri) if resource_wiki_space else []
+                )
+                if resource_wiki_space and not resource_entity_targets:
                     continue
 
                 inferred_memory_type = (
@@ -152,7 +205,9 @@ class MemoryGraph:
                 if resource_wiki_space:
                     label = f"{uri.rstrip('/').rsplit('/', 2)[-2]}-Summary"
 
-                rendered_content = LinkRenderer.render_links(mf.content or "", uri, mf.links)
+                rendered_content = mf.content or ""
+                if not resource_wiki_space:
+                    rendered_content = LinkRenderer.render_links(mf.content or "", uri, mf.links)
 
                 nodes[uri] = {
                     "id": uri,
@@ -165,23 +220,35 @@ class MemoryGraph:
                     "content_truncated": self._is_content_truncated(rendered_content),
                 }
 
-                for link_data in mf.links:
-                    if not isinstance(link_data, dict):
-                        continue
-                    to_uri = link_data.get("to_uri", "")
-                    if not to_uri:
-                        continue
-                    from_uri = canonicalize_uri(link_data.get("from_uri") or uri, ctx)
-                    to_uri = canonicalize_uri(to_uri, ctx)
-                    edges.append(
-                        {
-                            "source": from_uri,
-                            "target": to_uri,
-                            "link_type": link_data.get("link_type", "related_to"),
-                            "weight": float(link_data.get("weight", 1.0)),
-                            "description": link_data.get("description", ""),
-                        }
-                    )
+                if resource_wiki_space:
+                    for to_uri in resource_entity_targets:
+                        edges.append(
+                            {
+                                "source": uri,
+                                "target": canonicalize_uri(to_uri, ctx),
+                                "link_type": "related_to",
+                                "weight": 1.0,
+                                "description": "",
+                            }
+                        )
+                else:
+                    for link_data in mf.links:
+                        if not isinstance(link_data, dict):
+                            continue
+                        to_uri = link_data.get("to_uri", "")
+                        if not to_uri:
+                            continue
+                        from_uri = canonicalize_uri(link_data.get("from_uri") or uri, ctx)
+                        to_uri = canonicalize_uri(to_uri, ctx)
+                        edges.append(
+                            {
+                                "source": from_uri,
+                                "target": to_uri,
+                                "link_type": link_data.get("link_type", "related_to"),
+                                "weight": float(link_data.get("weight", 1.0)),
+                                "description": link_data.get("description", ""),
+                            }
+                        )
 
         seen = set()
         unique_edges = []

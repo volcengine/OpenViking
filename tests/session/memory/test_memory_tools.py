@@ -136,6 +136,35 @@ class TestMemoryTools:
         assert result["content"] == "2\tline2"
 
     @pytest.mark.asyncio
+    async def test_read_tool_does_not_expose_page_id_for_evidence_context(self):
+        class FailingPageIdMap:
+            def get_page_id(self, uri):
+                raise AssertionError(f"unexpected page_id registration for {uri}")
+
+        class MockVikingFS:
+            async def read_file(self, uri, ctx=None, **kwargs):
+                return "# Evidence"
+
+        tool_ctx = ToolContext(
+            viking_fs=MockVikingFS(),
+            request_ctx=RequestContext(
+                user=UserIdentifier.the_default_user(),
+                role=Role.USER,
+            ),
+            read_file_contents={},
+            page_id_map=FailingPageIdMap(),
+            page_id_uri_filter=lambda uri: False,
+        )
+
+        result = await MemoryReadTool().execute(
+            tool_ctx,
+            uri="viking://resources/docs/.overview.md",
+        )
+
+        assert "page_id" not in result
+        assert result["content"] == "1\t# Evidence"
+
+    @pytest.mark.asyncio
     async def test_read_tool_warns_when_offset_is_past_end_of_file(self):
         class MockPageIdMap:
             def get_page_id(self, uri):

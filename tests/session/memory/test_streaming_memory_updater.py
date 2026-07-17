@@ -391,7 +391,7 @@ async def test_streaming_memory_updater_fast_path_filters_links(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_streaming_memory_updater_applies_link_only_resource_wiki_request(monkeypatch):
+async def test_streaming_memory_updater_rejects_link_only_resource_wiki_request(monkeypatch):
     monkeypatch.setattr(
         "openviking.session.memory.streaming_memory_updater.wiki_links_enabled",
         lambda: True,
@@ -448,10 +448,10 @@ async def test_streaming_memory_updater_applies_link_only_resource_wiki_request(
     overview = MemoryFileUtils.read(fs.files[overview_uri], uri=overview_uri)
     entity = MemoryFileUtils.read(fs.files[entity_uri], uri=entity_uri)
     assert result.metadata["flush_reason"] == "link_only"
-    assert len(result.operations.resolved_links) == 1
-    assert overview.links[0]["to_uri"] == entity_uri
-    assert entity.backlinks[0]["from_uri"] == overview_uri
-    assert set(result.apply_result.edited_uris) == {overview_uri, entity_uri}
+    assert result.operations.resolved_links == []
+    assert overview.links == []
+    assert entity.backlinks == []
+    assert result.apply_result.edited_uris == []
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -21,16 +20,13 @@ from openviking.core.namespace import (
 from openviking.core.peer_id import normalize_peer_id
 from openviking.message.part import ContextPart, TextPart
 from openviking.server.identity import RequestContext
-from openviking.session.memory.dataclass import MemoryFile, StoredLink
-from openviking.session.memory.memory_updater import MemoryUpdateResult, write_stored_links
-from openviking.session.memory.merge_op.link_merge import (
-    is_allowed_wiki_link,
-    wiki_links_enabled,
-)
+from openviking.service.wiki_link_render_service import WikiLinkRenderService
+from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.memory.memory_updater import MemoryUpdateResult
+from openviking.session.memory.merge_op.link_merge import wiki_links_enabled
 from openviking.session.memory.session_extract_context_provider import (
     RESOURCE_WIKI_EXTRACTION_HEADER,
 )
-from openviking.session.memory.utils.link_renderer import LinkRenderer
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.resource_refs import (
     content_references_resource,
@@ -49,6 +45,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 _RESOURCE_REASON_SESSION_ID = "__openviking_resource_reason__"
+_RESOURCE_WIKI_SESSION_ID = "__openviking_wiki__"
 _RESOURCE_REASON_MEMORY_TYPES = ["entities", "events", "preferences"]
 _RESOURCE_DELETION_MEMORY_TYPES = ["entities", "preferences"]
 _RESOURCE_WIKI_MEMORY_TYPES = ["entities"]
@@ -143,6 +140,7 @@ class ResourceMemoryLinkService:
         self._viking_fs = viking_fs
         self._session_service = session_service
         self._reason_session_lock = asyncio.Lock()
+        self._wiki_render_lock = asyncio.Lock()
 
     def set_dependencies(
         self,
@@ -264,25 +262,7 @@ class ResourceMemoryLinkService:
             return {"status": "skipped", "reason": "overview_unavailable"}
 
         overview = MemoryFileUtils.read(overview_raw, uri=overview_uri)
-        kept_links = [
-            link
-            for link in overview.links
-            if not is_allowed_wiki_link(
-                str(link.get("from_uri", "")),
-                str(link.get("to_uri", "")),
-                str(link.get("link_type", "")),
-                ctx=ctx,
-            )
-        ]
-        stale_links_removed = len(overview.links) - len(kept_links)
-        if stale_links_removed:
-            overview.content = LinkRenderer.strip_all_links(overview.content)
-            overview.links = kept_links
-            await self._get_viking_fs().write_file(
-                overview_uri,
-                MemoryFileUtils.write(overview),
-                ctx=ctx,
-            )
+        stale_links_removed = len(overview.links) + len(overview.backlinks)
 
         removed_backlinks = await self._remove_stale_resource_wiki_backlinks(
             ctx=ctx,
@@ -306,85 +286,26 @@ class ResourceMemoryLinkService:
             target_peer_id=target_peer_id,
             timeout=timeout,
         )
-        await self._link_resource_overview_to_extracted_entities(
-            ctx=ctx,
-            overview_uri=overview_uri,
-            commit_result=result,
-        )
+        wiki_pages_root = self._wiki_pages_root_for_resource(ctx, canonical_resource_uri)
+        async with self._wiki_render_lock:
+            rendering = await WikiLinkRenderService(self._get_viking_fs()).render(
+                ctx=ctx,
+                resource_uri=canonical_resource_uri,
+                wiki_pages_root=wiki_pages_root,
+            )
         result["overview_uri"] = overview_uri
         result["stale_links_removed"] = stale_links_removed
         result["stale_backlinks_removed"] = removed_backlinks
+        result["sidecar_rendering"] = rendering
         return result
 
-    async def _link_resource_overview_to_extracted_entities(
-        self,
-        *,
-        ctx: RequestContext,
-        overview_uri: str,
-        commit_result: Dict[str, Any],
-    ) -> None:
-        """Ensure the source overview links to every entity changed by this extraction."""
-        if not wiki_links_enabled():
-            return
-
-        task_result = (commit_result.get("commit_task") or {}).get("result") or {}
-        memory_diff_uri = task_result.get("memory_diff_uri")
-        if not memory_diff_uri:
-            return
-
-        viking_fs = self._get_viking_fs()
-        try:
-            raw_diff = await viking_fs.read_file(memory_diff_uri, ctx=ctx)
-            memory_diff = json.loads(raw_diff) if isinstance(raw_diff, str) else raw_diff
-            overview_raw = await viking_fs.read_file(overview_uri, ctx=ctx)
-        except Exception as exc:
-            logger.warning("Failed to read resource Wiki extraction result: %s", exc)
-            return
-        if not isinstance(memory_diff, dict):
-            return
-
-        operations = memory_diff.get("operations") or {}
-        if not isinstance(operations, dict):
-            return
-        entity_uris = list(
-            dict.fromkeys(
-                str(item.get("uri"))
-                for operation in ("adds", "updates")
-                for item in operations.get(operation, [])
-                if isinstance(item, dict)
-                and item.get("memory_type") == "entities"
-                and item.get("uri")
-                and is_allowed_wiki_link(overview_uri, str(item.get("uri")), ctx=ctx)
-            )
-        )
-        if not entity_uris:
-            return
-
-        overview = MemoryFileUtils.read(overview_raw, uri=overview_uri)
-        linked_targets = {
-            str(link.get("to_uri"))
-            for link in overview.links
-            if str(link.get("from_uri")) == overview_uri
-        }
-        plain_content = LinkRenderer.strip_all_links(overview.content)
-        created_at = datetime.now(timezone.utc).isoformat()
-        links = []
-        for entity_uri in entity_uris:
-            if entity_uri in linked_targets:
-                continue
-            entity_name = entity_uri.rsplit("/", 1)[-1].removesuffix(".md")
-            links.append(
-                StoredLink(
-                    from_uri=overview_uri,
-                    to_uri=entity_uri,
-                    link_type="related_to",
-                    weight=1.0,
-                    match_text=entity_name if entity_name in plain_content else None,
-                    created_at=created_at,
-                )
-            )
-        if links:
-            await write_stored_links(links, ctx, viking_fs)
+    @staticmethod
+    def _wiki_pages_root_for_resource(ctx: RequestContext, resource_uri: str) -> str:
+        root = canonical_user_root(ctx)
+        target_peer_id = _resource_reason_peer_id(ctx, resource_uri)
+        if target_peer_id:
+            root = f"{root}/peers/{target_peer_id}"
+        return f"{root}/memories/entities"
 
     async def on_resource_deleted(
         self,
@@ -462,7 +383,7 @@ class ResourceMemoryLinkService:
         target_peer_id: Optional[str],
         timeout: Optional[float],
     ) -> Dict[str, Any]:
-        session_id = _RESOURCE_REASON_SESSION_ID
+        session_id = _RESOURCE_WIKI_SESSION_ID
         async with self._reason_session_lock:
             session = await self._session_service.get(session_id, ctx, auto_create=True)
             session.meta.memory_policy = memory_policy
@@ -518,8 +439,8 @@ class ResourceMemoryLinkService:
     def _build_resource_wiki_message() -> str:
         return (
             f"{RESOURCE_WIKI_EXTRACTION_HEADER}\n"
-            "Extract durable memories from the provided source and link its source page "
-            "to related pages when meaningful."
+            "Extract durable memories from the provided context. Create links only between "
+            "memory pages when meaningful."
         )
 
     @staticmethod

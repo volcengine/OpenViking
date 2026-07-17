@@ -244,13 +244,11 @@ async def test_collect_graph_data_includes_linked_resource_overview(monkeypatch)
     overview_uri = f"{resource_root}/.overview.md"
     memory_root = "viking://user/alice/memories"
     entity_uri = f"{memory_root}/entities/projects/openviking.md"
-    overview_content = f"""# OpenViking
+    overview_content = """# OpenViking
 
-OpenViking is a memory system.
+This overview links to [OpenViking](../../user/alice/memories/entities/projects/openviking.md).
 
-<!-- MEMORY_FIELDS
-{{"links": [{{"from_uri": "{overview_uri}", "to_uri": "{entity_uri}", "link_type": "related_to", "match_text": "OpenViking"}}]}}
--->"""
+External [documentation](https://example.com) is not a graph edge."""
     entity_content = """# OpenViking
 
 <!-- MEMORY_FIELDS
@@ -276,6 +274,7 @@ OpenViking is a memory system.
     resource_node = next(node for node in nodes if node["uri"] == overview_uri)
     assert resource_node["memory_type"] == "resource"
     assert resource_node["label"] == "docs-Summary"
+    assert "<!-- MEMORY_FIELDS" not in resource_node["content_full"]
     assert mock_fs.tree.await_args_list[0].kwargs["show_all_hidden"] is True
     assert mock_fs.tree.await_args_list[1].kwargs["show_all_hidden"] is False
     assert edges == [
@@ -287,3 +286,81 @@ OpenViking is a memory system.
             "description": "",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_collect_graph_data_excludes_resource_root_summary(monkeypatch):
+    resource_root = "viking://resources"
+    root_overview_uri = f"{resource_root}/.overview.md"
+    child_overview_uri = f"{resource_root}/docs/.overview.md"
+    entity_uri = "viking://user/alice/memories/entities/projects/openviking.md"
+    overview_content = "[OpenViking](../../user/alice/memories/entities/projects/openviking.md)"
+    entity_content = """# OpenViking
+
+<!-- MEMORY_FIELDS
+{"memory_type": "entities"}
+-->"""
+    mock_fs = MagicMock()
+    mock_fs.tree = AsyncMock(
+        side_effect=[
+            [
+                _file_entry(root_overview_uri, ".overview.md"),
+                _file_entry(child_overview_uri, "docs/.overview.md"),
+            ],
+            [_file_entry(entity_uri, "entities/projects/openviking.md")],
+        ]
+    )
+    mock_fs.read_file = AsyncMock(side_effect=[overview_content, entity_content])
+    monkeypatch.setattr(
+        "openviking.session.memory.graph_view.wiki_links_enabled",
+        lambda: True,
+    )
+
+    graph = MemoryGraph(viking_fs=mock_fs)
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+    nodes, edges = await graph._collect_graph_data(
+        [resource_root, "viking://user/alice/memories"], ctx
+    )
+
+    assert {node["uri"] for node in nodes} == {child_overview_uri, entity_uri}
+    assert all(node["label"] != "resources-Summary" for node in nodes)
+    assert edges[0]["source"] == child_overview_uri
+
+
+@pytest.mark.asyncio
+async def test_resource_overview_ignores_memory_fields_links(monkeypatch):
+    resource_root = "viking://resources/docs"
+    overview_uri = f"{resource_root}/.overview.md"
+    memory_root = "viking://user/alice/memories"
+    entity_uri = f"{memory_root}/entities/projects/openviking.md"
+    overview_content = f"""# OpenViking
+
+No visible entity link.
+
+<!-- MEMORY_FIELDS
+{{"links": [{{"from_uri": "{overview_uri}", "to_uri": "{entity_uri}"}}]}}
+-->"""
+    entity_content = """# OpenViking
+
+<!-- MEMORY_FIELDS
+{"memory_type": "entities"}
+-->"""
+    mock_fs = MagicMock()
+    mock_fs.tree = AsyncMock(
+        side_effect=[
+            [_file_entry(overview_uri, ".overview.md")],
+            [_file_entry(entity_uri, "entities/projects/openviking.md")],
+        ]
+    )
+    mock_fs.read_file = AsyncMock(side_effect=[overview_content, entity_content])
+    monkeypatch.setattr(
+        "openviking.session.memory.graph_view.wiki_links_enabled",
+        lambda: True,
+    )
+
+    graph = MemoryGraph(viking_fs=mock_fs)
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+    nodes, edges = await graph._collect_graph_data([resource_root, memory_root], ctx)
+
+    assert [node["uri"] for node in nodes] == [entity_uri]
+    assert edges == []

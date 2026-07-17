@@ -296,6 +296,9 @@ class TestPageIdInstruction:
         assert "For new items, assign a unique page_id >= 100." in system_content
         assert "When editing an existing item, reuse its existing page_id." in system_content
         assert "Link fields" not in system_content
+        assert "evidence only" not in system_content
+        assert "Treat the source file or document only as evidence" not in system_content
+        assert "current memory policy" not in system_content
         assert "## Resource Wiki Extraction" not in system_content
         assert ".overview.md" not in system_content
         assert "Entity pages" not in system_content
@@ -369,6 +372,9 @@ class TestPageIdInstruction:
         assert "Link fields `f` and `t` must reference these page_id values." in system_content
         assert "each visible line is prefixed with `line_number<TAB>`" in system_content
         assert "meaningful and clear from the provided context" in system_content
+        assert "Context without an exposed page_id is evidence only" in system_content
+        assert "Treat the source file or document only as evidence" in system_content
+        assert "allowed by the current memory policy" in system_content
         assert ".overview.md" not in system_content
         assert "Entity pages" not in system_content
         assert "non-entity memories" not in system_content

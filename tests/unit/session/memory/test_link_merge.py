@@ -34,7 +34,7 @@ class TestWikiLinkDirection:
     @pytest.mark.parametrize(
         ("from_uri", "to_uri", "allowed"),
         [
-            (overview, entity, True),
+            (overview, entity, False),
             (entity, overview, False),
             ("viking://user/alice/resources/docs/page.md", entity, False),
             ("viking://resources/docs/.overview.md", entity, False),
@@ -59,7 +59,7 @@ class TestWikiLinkDirection:
             "references_resource",
         )
 
-    def test_global_resource_targets_request_users_entities(self):
+    def test_resource_pages_are_never_graph_endpoints(self):
         overview = "viking://resources/docs/.overview.md"
         alice_ctx = SimpleNamespace(
             user=SimpleNamespace(user_id="alice"),
@@ -75,9 +75,9 @@ class TestWikiLinkDirection:
         )
         peer_entity = "viking://user/alice/peers/bob/memories/entities/openviking.md"
 
-        assert is_allowed_wiki_link(overview, self.entity, ctx=alice_ctx)
+        assert not is_allowed_wiki_link(overview, self.entity, ctx=alice_ctx)
         assert not is_allowed_wiki_link(overview, self.entity, ctx=bob_ctx)
-        assert is_allowed_wiki_link(overview, peer_entity, ctx=peer_ctx)
+        assert not is_allowed_wiki_link(overview, peer_entity, ctx=peer_ctx)
         assert not is_allowed_wiki_link(overview, self.entity, ctx=peer_ctx)
 
 

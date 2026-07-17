@@ -443,8 +443,17 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             default_search_uris=default_search_uris,
             read_file_contents=self._read_file_contents,
             page_id_map=extract_context.page_id_map,
+            page_id_uri_filter=self.is_linkable_uri,
         )
         return tool_ctx
+
+    @staticmethod
+    def is_linkable_uri(uri: str) -> bool:
+        """Only persisted memory pages can be relation endpoints."""
+        try:
+            return context_type_for_uri(uri) == "memory"
+        except (TypeError, ValueError):
+            return False
 
     @staticmethod
     def _is_expected_read_not_found(error: Any) -> bool:
@@ -454,7 +463,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         return error_text == "not_found" or error_text.startswith("File not found")
 
     async def read_file(self, uri: str) -> Optional[Dict]:
-        """Read a file via MemoryReadTool (auto-registers page_id, fills read_file_contents)."""
+        """Read a file and expose a page_id only when it is a linkable memory page."""
         read_tool = get_tool("read")
         if not read_tool:
             return None

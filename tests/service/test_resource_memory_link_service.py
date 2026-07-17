@@ -12,6 +12,7 @@ from openviking.message.part import ContextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_memory_link_service import (
     _RESOURCE_REASON_SESSION_ID,
+    _RESOURCE_WIKI_SESSION_ID,
     ResourceMemoryLinkService,
 )
 from openviking.session.memory.dataclass import MemoryFile
@@ -32,6 +33,18 @@ class _FakeVikingFS:
 
     async def write_file(self, uri, content, ctx=None):
         self.store[uri] = content
+
+    async def glob(self, pattern, uri="viking://", node_limit=None, ctx=None):
+        del pattern, node_limit, ctx
+        prefix = uri.rstrip("/") + "/"
+        matches = [
+            item_uri
+            for item_uri in self.store
+            if item_uri.startswith(prefix)
+            and item_uri.endswith(".md")
+            and not item_uri.rsplit("/", 1)[-1].startswith(".")
+        ]
+        return {"matches": matches, "count": len(matches)}
 
     async def rm(self, uri, recursive=False, ctx=None, lock_handle=None):
         self.rm_calls.append((uri, recursive))
@@ -428,8 +441,9 @@ async def test_resource_wiki_commits_entities_only_and_cleans_old_backlinks(
     )
 
     assert result["status"] == "success"
+    assert result["session_id"] == _RESOURCE_WIKI_SESSION_ID
     assert result["overview_uri"] == overview_uri
-    assert result["stale_links_removed"] == 1
+    assert result["stale_links_removed"] == 2
     assert result["stale_backlinks_removed"] == 1
     assert session_service.session.meta.memory_policy == {
         "self": {"enabled": True},
@@ -440,8 +454,8 @@ async def test_resource_wiki_commits_entities_only_and_cleans_old_backlinks(
     parts = session_service.session.messages[0]["parts"]
     assert parts[0].text == (
         "## Resource Wiki Extraction\n"
-        "Extract durable memories from the provided source and link its source page "
-        "to related pages when meaningful."
+        "Extract durable memories from the provided context. Create links only between "
+        "memory pages when meaningful."
     )
     assert ".overview.md" not in parts[0].text
     assert "entity" not in parts[0].text.lower()
@@ -449,14 +463,19 @@ async def test_resource_wiki_commits_entities_only_and_cleans_old_backlinks(
     assert parts[1].uri == overview_uri
     entity = MemoryFileUtils.read(fs.store[entity_uri], uri=entity_uri)
     overview = MemoryFileUtils.read(fs.store[overview_uri], uri=overview_uri)
-    assert overview.links == [other_user_link]
-    assert "[OpenViking]" not in overview.content
-    assert "[OtherWiki]" in overview.content
+    assert overview.links == []
+    assert "<!-- MEMORY_FIELDS" not in fs.store[overview_uri]
+    assert "[OpenViking](../../user/alice/memories/entities/projects/openviking.md)" in (
+        overview.content
+    )
+    assert "[OtherWiki]" not in overview.content
     assert entity.backlinks == []
 
 
 @pytest.mark.asyncio
-async def test_resource_wiki_links_every_entity_changed_by_its_commit(request_context, monkeypatch):
+async def test_resource_wiki_renders_names_from_the_full_entity_directory(
+    request_context, monkeypatch
+):
     resource_uri = "viking://resources/星尘计划"
     overview_uri = f"{resource_uri}/.overview.md"
     memory_diff_uri = "viking://user/alice/sessions/wiki/history/archive_001/memory_diff.json"
@@ -465,15 +484,6 @@ async def test_resource_wiki_links_every_entity_changed_by_its_commit(request_co
     technology_uri = "viking://user/alice/memories/entities/technology/星晶.md"
     event_uri = "viking://user/alice/memories/events/2141.md"
     other_user_entity_uri = "viking://user/bob/memories/entities/project/其他项目.md"
-    model_link = {
-        "from_uri": overview_uri,
-        "to_uri": project_uri,
-        "link_type": "related_to",
-        "weight": 0.8,
-        "match_text": "星尘计划",
-        "description": "",
-        "created_at": "2026-07-15T00:00:00+00:00",
-    }
     fs = _FakeVikingFS(
         {
             overview_uri: MemoryFileUtils.write(
@@ -529,12 +539,6 @@ async def test_resource_wiki_links_every_entity_changed_by_its_commit(request_co
 
     async def fake_commit_memory_message(**kwargs):
         captured_abstracts.append(kwargs["parts"][1].abstract)
-        overview = MemoryFileUtils.read(fs.store[overview_uri], uri=overview_uri)
-        overview.links = [model_link]
-        await fs.write_file(overview_uri, MemoryFileUtils.write(overview))
-        project = MemoryFileUtils.read(fs.store[project_uri], uri=project_uri)
-        project.backlinks = [model_link]
-        await fs.write_file(project_uri, MemoryFileUtils.write(project))
         return {
             "status": "success",
             "commit_task": {"result": {"memory_diff_uri": memory_diff_uri}},
@@ -550,19 +554,18 @@ async def test_resource_wiki_links_every_entity_changed_by_its_commit(request_co
     assert result["status"] == "success"
     assert captured_abstracts == ["# 星尘计划\n星尘计划由天穹财团发起。"]
     overview = MemoryFileUtils.read(fs.store[overview_uri], uri=overview_uri)
-    links_by_target = {link["to_uri"]: link for link in overview.links}
-    assert set(links_by_target) == {project_uri, organization_uri, technology_uri}
-    assert links_by_target[project_uri]["match_text"] == "星尘计划"
-    assert links_by_target[organization_uri]["match_text"] == "天穹财团"
-    assert links_by_target[technology_uri]["match_text"] is None
-    assert len([link for link in overview.links if link["to_uri"] == project_uri]) == 1
-    assert "[星尘计划]" in overview.content
-    assert "[天穹财团]" in overview.content
-    assert len(MemoryFileUtils.read(fs.store[project_uri], uri=project_uri).backlinks) == 1
-    assert (
-        len(MemoryFileUtils.read(fs.store[organization_uri], uri=organization_uri).backlinks) == 1
+    assert overview.links == []
+    assert "<!-- MEMORY_FIELDS" not in fs.store[overview_uri]
+    assert "[星尘计划](../../user/alice/memories/entities/project/星尘计划.md)" in (
+        overview.content
     )
-    assert len(MemoryFileUtils.read(fs.store[technology_uri], uri=technology_uri).backlinks) == 1
+    assert "[天穹财团](../../user/alice/memories/entities/organization/天穹财团.md)" in (
+        overview.content
+    )
+    assert "[星晶]" not in overview.content
+    assert MemoryFileUtils.read(fs.store[project_uri], uri=project_uri).backlinks == []
+    assert MemoryFileUtils.read(fs.store[organization_uri], uri=organization_uri).backlinks == []
+    assert MemoryFileUtils.read(fs.store[technology_uri], uri=technology_uri).backlinks == []
 
 
 @pytest.mark.asyncio

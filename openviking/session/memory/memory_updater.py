@@ -568,6 +568,24 @@ class MemoryUpdater:
                 f"Cannot apply operations: missing resolved URIs for {', '.join(missing)}"
             )
 
+        # Reject disallowed graph endpoints before links can reach either side of an upsert.
+        from openviking.session.memory.merge_op.link_merge import (
+            is_allowed_wiki_link,
+            wiki_links_enabled,
+        )
+
+        if wiki_links_enabled():
+            operations.resolved_links = [
+                link
+                for link in operations.resolved_links
+                if is_allowed_wiki_link(
+                    link.from_uri,
+                    link.to_uri,
+                    link.link_type,
+                    ctx=ctx,
+                )
+            ]
+
         # Distribute resolved_links to corresponding upsert operations
         self._distribute_links_to_operations(operations)
 
@@ -870,38 +888,26 @@ class MemoryUpdater:
 
         from openviking.session.memory.merge_op.link_merge import is_allowed_wiki_link
 
-        writable_resource_sources = {
-            link.from_uri
+        resolved_links = [
+            link
             for link in resolved_links
-            if context_type_for_uri(link.from_uri) == "resource"
-            and is_allowed_wiki_link(
+            if is_allowed_wiki_link(
                 link.from_uri,
                 link.to_uri,
                 link.link_type,
                 ctx=ctx,
             )
-        }
-        resource_wiki_endpoints = {
-            uri
-            for link in resolved_links
-            if link.from_uri in writable_resource_sources
-            for uri in (link.from_uri, link.to_uri)
-        }
+        ]
+        if not resolved_links:
+            return
         non_memory_endpoints = {
             uri
             for link in resolved_links
             for uri in (link.from_uri, link.to_uri)
             if context_type_for_uri(uri) != "memory"
-        } - writable_resource_sources
+        }
         skip = upserted_uris | (deleted_uris or set()) | non_memory_endpoints
-        updated_uris = await write_stored_links(resolved_links, ctx, viking_fs, skip_uris=skip)
-        for uri in updated_uris:
-            if (
-                uri in resource_wiki_endpoints
-                and uri not in result.written_uris
-                and uri not in result.edited_uris
-            ):
-                result.add_edited(uri)
+        await write_stored_links(resolved_links, ctx, viking_fs, skip_uris=skip)
 
     async def _inherit_deleted_link_relations(
         self,

@@ -219,7 +219,10 @@ class ExtractLoop:
         if self._link_enabled:
             link_rules = """
 ## Link Rules
+- Treat the source file or document only as evidence; extract durable information about the subjects described in its content, not about the file or document itself.
 - Link fields `f` and `t` must reference these page_id values.
+- Context without an exposed page_id is evidence only and cannot be a link endpoint.
+- Link endpoints must be memory items allowed by the current memory policy.
 - Only create links when the relationship is meaningful and clear from the provided context. Do NOT force links between unrelated items.
 """
         messages.append(
@@ -246,8 +249,10 @@ The final output of the model must strictly follow the JSON Schema format shown 
         tool_call_messages = await self.context_provider.prefetch()
         messages.extend(tool_call_messages)
 
+        is_linkable_uri = getattr(self.context_provider, "is_linkable_uri", lambda _uri: True)
         for uri in self.context_provider.read_file_contents:
-            self._extract_context.page_id_map.get_page_id(uri)
+            if is_linkable_uri(uri):
+                self._extract_context.page_id_map.get_page_id(uri)
 
         while iteration < max_iterations:
             iteration += 1
@@ -327,9 +332,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
             if self._format_retry_count == 0:
                 self._format_retry_count += 1
                 max_iterations += 1
-                retry_reason = (
-                    "refusal_text" if failure_kind == "refusal_text" else "format_retry"
-                )
+                retry_reason = "refusal_text" if failure_kind == "refusal_text" else "format_retry"
                 tracer.info(f"Extended max_iterations to {max_iterations} for {retry_reason}")
                 self._add_format_error_message(messages)
 
@@ -500,7 +503,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     break
 
         return resolved, raw_links
-
 
     def _normalize_delete_ids(self, raw_delete_ids: List[Any]) -> List[DeleteId]:
         delete_ids: List[DeleteId] = []

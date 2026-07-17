@@ -201,7 +201,10 @@ class MemoryReadTool(MemoryTool):
             for hidden_field in _LLM_HIDDEN_MEMORY_FIELDS:
                 llm_result.pop(hidden_field, None)
             # Annotate with page_id for link extraction
-            if ctx and ctx.page_id_map:
+            page_id_allowed = ctx and (
+                ctx.page_id_uri_filter is None or bool(ctx.page_id_uri_filter(uri))
+            )
+            if page_id_allowed and ctx.page_id_map:
                 page_id = ctx.page_id_map.get_page_id(uri)
                 if page_id is not None:
                     llm_result["page_id"] = page_id

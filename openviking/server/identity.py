@@ -124,6 +124,7 @@ class ToolContext:
     transaction_handle: Optional[Any] = None
     read_file_contents: Optional[Any] = None  # 用于记录已读取的文件内容
     page_id_map: Optional[Any] = None  # PageIdMap for annotating read results
+    page_id_uri_filter: Optional[Any] = None  # Optional predicate for linkable page URIs
 
     @property
     def user(self):

@@ -130,6 +130,8 @@ class TestProviderInstruction:
         provider._append_structured_read_result.assert_awaited_once()
         assert provider._append_structured_read_result.call_args.kwargs["call_id"] == 0
         assert provider._append_structured_read_result.call_args.kwargs["file_uri"] == overview_uri
+        assert not provider.is_linkable_uri(overview_uri)
+        assert provider.is_linkable_uri("viking://user/alice/memories/entities/openviking.md")
         assert RESOURCE_WIKI_EXTRACTION_HEADER not in provider.instruction()
         assert "Extract durable, named entities" not in provider.instruction()
 
