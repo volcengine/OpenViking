@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -200,9 +201,17 @@ async def test_train_from_extracted_case_memories_submits_streaming_rollout(monk
             )
         ]
 
+    fake_fs = SimpleNamespace(
+        _uri_to_path=lambda uri, ctx=None: uri.removeprefix("viking://"),
+        ls=AsyncMock(return_value=[]),
+        read_file=AsyncMock(side_effect=FileNotFoundError),
+    )
+    no_op_lease = SimpleNamespace(handle=object(), close=AsyncMock())
+    monkeypatch.setattr("openviking.session.compressor_v3.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr("openviking.session.compressor_v3.get_lock_manager", lambda: object())
     monkeypatch.setattr(
-        "openviking.session.compressor_v3.get_viking_fs",
-        lambda: SimpleNamespace(ls=AsyncMock(return_value=[])),
+        "openviking.session.compressor_v3.OwnedLockLease",
+        SimpleNamespace(acquire_exact_paths=AsyncMock(return_value=no_op_lease)),
     )
     monkeypatch.setattr(
         "openviking.session.compressor_v3.get_streaming_policy_trainer",
@@ -989,8 +998,12 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
             del ctx
             return self.files[uri]
 
-        async def write_file(self, uri, content, ctx=None):
+        def _uri_to_path(self, uri, ctx=None):
             del ctx
+            return uri.removeprefix("viking://")
+
+        async def write_file(self, uri, content, ctx=None, lock_handle=None):
+            del ctx, lock_handle
             self.files[uri] = content
 
         async def ls(self, uri, output="original", ctx=None):
@@ -1079,7 +1092,13 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
         ]
 
     fs = FakeFS()
+    no_op_lease = SimpleNamespace(handle=object(), close=AsyncMock())
     monkeypatch.setattr("openviking.session.compressor_v3.get_viking_fs", lambda: fs)
+    monkeypatch.setattr("openviking.session.compressor_v3.get_lock_manager", lambda: object())
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.OwnedLockLease",
+        SimpleNamespace(acquire_exact_paths=AsyncMock(return_value=no_op_lease)),
+    )
     monkeypatch.setattr(
         "openviking.session.compressor_v3.get_streaming_policy_trainer",
         AsyncMock(return_value=FakeTrainer()),
@@ -1125,6 +1144,108 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
     assert any(link["from_uri"] == case_uri for link in traj_file.backlinks)
     exp_file = MemoryFileUtils.read(fs.files[exp_uri], uri=exp_uri)
     assert any(link["from_uri"] == case_uri for link in exp_file.backlinks)
+
+
+@pytest.mark.asyncio
+async def test_render_case_links_serializes_concurrent_updates(monkeypatch):
+    from openviking.session import compressor_v3
+
+    case_uri = "viking://user/u/memories/cases/cancel_all_flights.md"
+    exp_a = "viking://user/u/memories/experiences/check_insurance.md"
+    exp_b = "viking://user/u/memories/experiences/check_all_reservations.md"
+
+    class FakeFS:
+        def __init__(self):
+            self.files = {
+                case_uri: MemoryFileUtils.write(
+                    MemoryFile(
+                        uri=case_uri,
+                        memory_type="cases",
+                        extra_fields={
+                            "memory_type": "cases",
+                            "case_name": "cancel_all_flights",
+                        },
+                    )
+                )
+            }
+            self.read_count = 0
+            self.second_read_started = asyncio.Event()
+
+        def _uri_to_path(self, uri, ctx=None):
+            del ctx
+            return uri.removeprefix("viking://")
+
+        async def read_file(self, uri, ctx=None):
+            del ctx
+            snapshot = self.files[uri]
+            self.read_count += 1
+            if self.read_count == 1:
+                try:
+                    await asyncio.wait_for(self.second_read_started.wait(), timeout=0.05)
+                except TimeoutError:
+                    pass
+            else:
+                self.second_read_started.set()
+            return snapshot
+
+        async def write_file(self, uri, content, ctx=None, lock_handle=None):
+            del ctx, lock_handle
+            self.files[uri] = content
+
+    class FakeHandle:
+        def __init__(self, handle_id):
+            self.id = handle_id
+            self.locks = []
+
+    class FakeLockManager:
+        def __init__(self):
+            self._lock = asyncio.Lock()
+            self._handles = {}
+            self._path_lock = SimpleNamespace(_lock_expire=300.0)
+            self.timeouts = []
+
+        def create_handle(self):
+            handle = FakeHandle(f"handle-{len(self._handles) + 1}")
+            self._handles[handle.id] = handle
+            return handle
+
+        async def acquire_exact_path_batch(self, handle, paths, timeout=None):
+            self.timeouts.append(timeout)
+            await self._lock.acquire()
+            handle.locks.extend(paths)
+            return True
+
+        def get_handle(self, handle_id):
+            return self._handles.get(handle_id)
+
+        async def release(self, handle):
+            handle.locks.clear()
+            self._handles.pop(handle.id, None)
+            self._lock.release()
+
+    fs = FakeFS()
+    lock_manager = FakeLockManager()
+    monkeypatch.setattr(compressor_v3, "get_lock_manager", lambda: lock_manager, raising=False)
+
+    links = [
+        StoredLink(from_uri=case_uri, to_uri=exp_a, link_type="related_to", weight=1.0),
+        StoredLink(from_uri=case_uri, to_uri=exp_b, link_type="related_to", weight=1.0),
+    ]
+    await asyncio.gather(
+        *[
+            compressor_v3._render_case_links_from_template(
+                case_uri=case_uri,
+                links=[link],
+                ctx=_ctx(),
+                viking_fs=fs,
+            )
+            for link in links
+        ]
+    )
+
+    case_file = MemoryFileUtils.read(fs.files[case_uri], uri=case_uri)
+    assert {link["to_uri"] for link in case_file.links} == {exp_a, exp_b}
+    assert lock_manager.timeouts == [None, None]
 
 
 def test_training_messages_after_case_spec_filters_legacy_embedded_evaluation_message():

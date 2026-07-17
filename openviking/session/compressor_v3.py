@@ -70,6 +70,7 @@ from openviking.session.train import (
     get_streaming_policy_trainer,
     make_streaming_policy_trainer_key,
 )
+from openviking.storage.transaction import OwnedLockLease, get_lock_manager
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
@@ -1593,26 +1594,36 @@ async def _render_case_links_from_template(
 ) -> None:
     if not links:
         return
-    try:
-        raw = await viking_fs.read_file(case_uri, ctx=ctx)
-    except Exception as exc:
-        tracer.error(f"Failed to read case memory for link rendering {case_uri}: {exc}")
-        return
-
-    mf = MemoryFileUtils.read(raw or "", uri=case_uri)
-    from openviking.session.memory.merge_op.link_merge import merge_links
-
-    merged_links = merge_links(mf.links, [link.model_dump() for link in links])
-    if merged_links != mf.links:
-        mf.links = merged_links
-
-    schema = create_default_registry().get(_CASES_MEMORY_TYPE)
-    content_template = schema.content_template if schema is not None else None
-    await viking_fs.write_file(
-        case_uri,
-        MemoryFileUtils.write(mf, content_template=content_template),
-        ctx=ctx,
+    lock_path = viking_fs._uri_to_path(case_uri, ctx=ctx)
+    lock_lease = await OwnedLockLease.acquire_exact_paths(
+        get_lock_manager(),
+        [lock_path],
+        timeout=None,
     )
+    try:
+        try:
+            raw = await viking_fs.read_file(case_uri, ctx=ctx)
+        except Exception as exc:
+            tracer.error(f"Failed to read case memory for link rendering {case_uri}: {exc}")
+            return
+
+        mf = MemoryFileUtils.read(raw or "", uri=case_uri)
+        from openviking.session.memory.merge_op.link_merge import merge_links
+
+        merged_links = merge_links(mf.links, [link.model_dump() for link in links])
+        if merged_links != mf.links:
+            mf.links = merged_links
+
+        schema = create_default_registry().get(_CASES_MEMORY_TYPE)
+        content_template = schema.content_template if schema is not None else None
+        await viking_fs.write_file(
+            case_uri,
+            MemoryFileUtils.write(mf, content_template=content_template),
+            ctx=ctx,
+            lock_handle=lock_lease.handle,
+        )
+    finally:
+        await lock_lease.close()
 
 
 def _gradient_memory_type(gradient: Any) -> str:
