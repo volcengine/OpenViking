@@ -1,0 +1,26 @@
+openviking/parse/parsers/media/image.py
+  s_08e67d2663ddb2::t_20ea2ed2555445 13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "d36c3beedfd7364ddbe9b10eb632bdf9fb585834",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_08e67d2663ddb2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f65ea-1138-7483-95f8-4868dafa9a9f",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

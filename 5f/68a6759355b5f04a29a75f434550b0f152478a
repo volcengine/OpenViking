@@ -1,0 +1,28 @@
+openviking/session/memory/memory_updater.py
+  s_2a13b3f66957cf::t_d524d5fe472d8d 13,55-73,166,170-174,176-177,181-183,191,193-197,200-202,205,210,221-230,354-485,540,546-550,552-625
+tests/session/memory/test_memory_updater.py
+  s_2a13b3f66957cf::t_a43e2d978e1398 13,83-158
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "5f68a6759355b5f04a29a75f434550b0f152478a",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_2a13b3f66957cf": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6a50-3e79-7352-962b-6112159dca8f",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
