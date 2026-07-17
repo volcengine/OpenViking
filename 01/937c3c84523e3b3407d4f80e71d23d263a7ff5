@@ -1,0 +1,63 @@
+openviking/server/identity.py
+  s_4aca62282d9aa4::t_053cd7e67f835e 127
+openviking/service/resource_memory_link_service.py
+  s_15a66c16119a70::t_e98ac604408d78 23-26,48,143,265,289-295,299,302-308,386,442-443
+openviking/service/wiki_link_render_service.py
+  s_4aca62282d9aa4::t_5eab86e13f375e 1-373
+openviking/session/memory/extract_loop.py
+  s_4aca62282d9aa4::t_cbbab1c1b2f12a 222,224-225,252,254-255,335
+openviking/session/memory/graph_view.py
+  s_4aca62282d9aa4::t_905ec4ce70bc10 5,15,17,19-24,35-36,59-96,165-167,191-194,208-210,223-251
+openviking/session/memory/memory_updater.py
+  s_4aca62282d9aa4::t_9d59f577566c20 571-588,891-892,894,900-902,908,910
+openviking/session/memory/merge_op/link_merge.py
+  s_4aca62282d9aa4::t_7b28345b447fed 14,44,52-53,59
+openviking/session/memory/session_extract_context_provider.py
+  s_4aca62282d9aa4::t_c623d1aa11f96e 446,450-457,466
+openviking/session/memory/tools.py
+  s_4aca62282d9aa4::t_2087b67231a131 204-207
+tests/service/test_resource_memory_link_service.py
+  s_15a66c16119a70::t_4b1be0c35bce82 15,37-48,444,446,457-458,466-471,476-478,557-563,565-568
+tests/service/test_wiki_link_render_service.py
+  s_4aca62282d9aa4::t_56c1006e746df5 1-152
+tests/session/memory/test_graph_view_collect.py
+  s_4aca62282d9aa4::t_1a99575f0cea49 247,249,251,277,289-366
+tests/session/memory/test_memory_react_system_prompt.py
+  s_4aca62282d9aa4::t_3f95053c1a2955 133-134
+tests/session/memory/test_memory_tools.py
+  s_4aca62282d9aa4::t_fc5fb5a45c76fc 138-166
+tests/session/memory/test_memory_updater.py
+  s_4aca62282d9aa4::t_8ca249ffc8937f 84,130-133
+tests/session/memory/test_streaming_memory_updater.py
+  s_4aca62282d9aa4::t_08ad8af6e916c0 394,451-454
+tests/unit/session/memory/test_extract_loop_match_text.py
+  s_4aca62282d9aa4::t_4d599be66768db 299-301,375-377
+tests/unit/session/memory/test_link_merge.py
+  s_4aca62282d9aa4::t_0ff772365fa311 37,62,78,80
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "01937c3c84523e3b3407d4f80e71d23d263a7ff5",
+  "prompts": {},
+  "sessions": {
+    "s_15a66c16119a70": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6b0b-7039-78d3-8c50-e83d8429bbbc",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    },
+    "s_4aca62282d9aa4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f699b-899b-76d0-ad8a-1f2cfde0ea28",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
