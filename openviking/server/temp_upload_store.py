@@ -26,16 +26,6 @@ from openviking_cli.utils.config.open_viking_config import get_openviking_config
 _CHUNK_SIZE = 1024 * 1024
 
 
-def _valid_sha256(value: Any) -> bool:
-    if not isinstance(value, str) or len(value) != 64:
-        return False
-    try:
-        int(value, 16)
-    except ValueError:
-        return False
-    return value == value.lower()
-
-
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as source:
@@ -317,9 +307,7 @@ class TempUploadStore:
         meta = _read_upload_meta(meta_path)
         original_filename = (meta.get("original_filename") or None) if meta else None
         source_size = resolved_path.stat().st_size
-        source_sha256 = meta.get("sha256") if meta else None
-        if not _valid_sha256(source_sha256):
-            source_sha256 = _sha256_file(resolved_path)
+        source_sha256 = _sha256_file(resolved_path)
         return ResolvedTempUpload(
             mode="local",
             temp_file_id=temp_file_id,
@@ -376,12 +364,8 @@ class TempUploadStore:
                     os.unlink(temp_path)
                 raise
 
-            source_sha256 = meta.get("sha256")
-            if not _valid_sha256(source_sha256):
-                source_sha256 = hashlib.sha256(content).hexdigest()
-            source_size = meta.get("size")
-            if not isinstance(source_size, int) or isinstance(source_size, bool):
-                source_size = len(content)
+            source_sha256 = hashlib.sha256(content).hexdigest()
+            source_size = len(content)
             return ResolvedTempUpload(
                 mode="shared",
                 temp_file_id=temp_file_id,
