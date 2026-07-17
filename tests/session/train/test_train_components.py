@@ -6,10 +6,9 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from test_fakes import fake_request_context
+from test_fakes import fake_request_context, render_experience_fields
 
 from openviking.session.memory.dataclass import MemoryFile, StoredLink
-from openviking.session.memory.experience_sections import render_experience_sections
 from openviking.session.memory.merge_op.base import SearchReplaceBlock, StrPatch
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.train import (
@@ -391,7 +390,7 @@ async def test_memory_file_policy_updater_applies_experience_section_patches_bef
     name = "先执行合格航班取消"
     uri = f"viking://user/u/memories/experiences/{name}.md"
     original_fields = _experience_fields("old reminder")
-    original_content = render_experience_sections(original_fields)
+    original_content = render_experience_fields(original_fields)
     policy_set = ExperienceSet(
         root_uri="viking://user/u/memories/experiences",
         policies=[
@@ -437,7 +436,7 @@ async def test_memory_file_policy_updater_applies_experience_section_patches_bef
                 target_name=name,
                 target_uri=uri,
                 before_content=original_content,
-                after_content=render_experience_sections({**original_fields, **patch_fields}),
+                after_content=render_experience_fields({**original_fields, **patch_fields}),
                 base_version=1,
                 confidence=0.8,
                 links=[],
@@ -654,7 +653,7 @@ async def test_patch_merge_policy_optimizer_runs_patch_merge_extract_loop(monkey
     assert plan.items[0].kind == "upsert"
     assert plan.items[0].target_uri == policy_set.policies[0].uri
     assert plan.items[0].before_content == "content"
-    assert plan.items[0].after_content == render_experience_sections(
+    assert plan.items[0].after_content == render_experience_fields(
         _experience_fields("merged content")
     )
     assert [link.to_uri for link in plan.items[0].links] == [
@@ -1114,7 +1113,7 @@ async def test_patch_merge_policy_optimizer_runs_llm_for_single_patch(monkeypatc
 
     assert captured["constructed"] is True
     assert plan.metadata["patch_gradient_count"] == 1
-    assert plan.items[0].after_content == render_experience_sections(
+    assert plan.items[0].after_content == render_experience_fields(
         _experience_fields("merged update")
     )
 
@@ -1150,8 +1149,10 @@ async def test_patch_merge_instruction_requires_structured_experience_fields(mon
         PatchMergePolicyOptimizerContext(request_context=fake_request_context()),
     )
 
-    assert "preserve the four structured fields" in captured["instruction"]
-    assert "`situation`, `reminder`, `procedure`, and `anti_pattern`" in captured["instruction"]
+    assert (
+        "preserve the `experiences` schema's structured content fields" in captured["instruction"]
+    )
+    assert "`situation`, `reminder`, `procedure`, `anti_pattern`" in captured["instruction"]
     assert "canonical value/source-field" in captured["instruction"]
 
 
@@ -1216,7 +1217,7 @@ async def test_patch_merge_post_plan_retry_includes_latest_draft(monkeypatch):
 
     assert captured["decision"].retry is True
     assert captured["decision"].include_latest_draft is True
-    assert "Populate the structured `situation`" in captured["decision"].instruction
+    assert "Populate the schema's structured content fields" in captured["decision"].instruction
 
 
 def test_experience_memory_schema_is_skill_readable_without_trigger_fields():
@@ -1256,7 +1257,7 @@ def test_experience_content_template_renders_skill_readable_markdown_only():
         ),
         "anti_pattern": ("- Do not refund without eligibility.\n- Preserve eligible refunds."),
     }
-    body = render_experience_sections(fields)
+    body = render_experience_fields(fields)
     rendered = MemoryFileUtils.write(
         MemoryFile(
             uri="viking://user/u/memories/experiences/refund.md",
@@ -1299,7 +1300,7 @@ async def test_memory_file_policy_updater_persists_skill_experience_from_merge_f
         "procedure": "- Before booking: compare the candidate with retrieved bookings.",
         "anti_pattern": "- Do not create a duplicate booking.",
     }
-    body = render_experience_sections(fields)
+    body = render_experience_fields(fields)
     plan = PolicyUpdatePlan(
         items=[
             PolicyPlanItem(

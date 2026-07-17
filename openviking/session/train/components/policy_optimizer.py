@@ -10,16 +10,14 @@ from typing import Any
 
 from openviking.message import Message
 from openviking.server.identity import RequestContext
-from openviking.session.memory.dataclass import MemoryFile, StoredLink
-from openviking.session.memory.experience_sections import (
-    EXPERIENCE_SECTION_FIELDS,
-    experience_section_fields,
-    render_experience_sections,
-    resolve_experience_section_fields,
-)
+from openviking.session.memory.dataclass import MemoryFile, MemoryTypeSchema, StoredLink
 from openviking.session.memory.extract_loop import ExtractLoop, PostValidationRetryDecision
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
-from openviking.session.memory.memory_updater import ExtractContext
+from openviking.session.memory.memory_type_registry import (
+    MemoryTypeRegistry,
+    create_default_registry,
+)
+from openviking.session.memory.memory_updater import ExtractContext, render_operation_after_file
 from openviking.session.memory.patch_merge_context_provider import (
     PatchMergeContextProvider,
     PatchMergePatch,
@@ -59,6 +57,18 @@ class PatchMergePolicyOptimizer:
     viking_fs: Any = None
     vlm: Any = None
     memory_type: str = "experiences"
+    registry: MemoryTypeRegistry | None = None
+
+    def _get_registry(self) -> MemoryTypeRegistry:
+        if self.registry is None:
+            self.registry = create_default_registry()
+        return self.registry
+
+    def _get_schema(self) -> MemoryTypeSchema:
+        schema = self._get_registry().get(self.memory_type)
+        if schema is None or not schema.enabled:
+            raise ValueError(f"Memory schema not found or disabled: {self.memory_type}")
+        return schema
 
     @tracer(
         "train.policy_optimizer.patch_merge.plan",
@@ -98,6 +108,7 @@ class PatchMergePolicyOptimizer:
             gradients=patch_gradients,
             policy_set=policy_set,
             memory_type=self.memory_type,
+            schema=self._get_schema(),
         )
         _log_merge_output(
             target="all",
@@ -147,8 +158,12 @@ class PatchMergePolicyOptimizer:
         provider = PatchMergeContextProvider(
             memory_type=self.memory_type,
             required_file_uris=_required_file_uris(gradients, policy_set),
-            patches=[_gradient_to_merge_patch(gradient) for gradient in gradients],
+            patches=[
+                _gradient_to_merge_patch(gradient, schema=self._get_schema())
+                for gradient in gradients
+            ],
         )
+        provider._registry = self._get_registry()
         provider._ctx = context.request_context
         provider._viking_fs = viking_fs
         provider._extract_context = extract_context
@@ -189,6 +204,7 @@ class PatchMergePolicyOptimizer:
                 gradients=gradients,
                 policy_set=policy_set,
                 memory_type=self.memory_type,
+                schema=self._get_schema(),
             )
             _, report = await gate_runner.filter_plan(
                 items,
@@ -408,7 +424,11 @@ def _links_to_dicts(links: list[StoredLink] | None) -> list[dict[str, Any]]:
     return [link.model_dump() for link in links or []]
 
 
-def _gradient_to_merge_patch(gradient: SemanticGradient) -> PatchMergePatch:
+def _gradient_to_merge_patch(
+    gradient: SemanticGradient,
+    *,
+    schema: MemoryTypeSchema,
+) -> PatchMergePatch:
     return PatchMergePatch(
         before_file=gradient.before_file,
         after_file=gradient.after_file,
@@ -417,28 +437,19 @@ def _gradient_to_merge_patch(gradient: SemanticGradient) -> PatchMergePatch:
             "rationale": gradient.rationale,
             "links": _links_to_dicts(gradient.links),
             "confidence": gradient.confidence,
-            "gradient_metadata": _compact_gradient_metadata(gradient.metadata),
+            "gradient_metadata": _compact_gradient_metadata(gradient.metadata, schema=schema),
         },
     )
 
 
-def _operation_content(
-    fields: dict[str, Any],
+def _compact_gradient_metadata(
+    metadata: dict[str, Any],
     *,
-    memory_type: str,
-    base_fields: dict[str, Any] | None = None,
-) -> str:
-    if memory_type == "experiences":
-        return render_experience_sections(
-            resolve_experience_section_fields(fields, base_fields=base_fields)
-        )
-    return str(fields.get("content") or "")
-
-
-def _compact_gradient_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    schema: MemoryTypeSchema,
+) -> dict[str, Any]:
     compact = dict(metadata)
     memory_fields = compact.get("memory_fields")
-    hidden_content_fields = {"content", *EXPERIENCE_SECTION_FIELDS}
+    hidden_content_fields = {"content", *schema.content_field_names()}
     if isinstance(memory_fields, dict) and hidden_content_fields.intersection(memory_fields):
         compact["memory_fields"] = {
             key: value for key, value in memory_fields.items() if key not in hidden_content_fields
@@ -503,6 +514,7 @@ def _operations_to_plan_items(
     gradients: list[SemanticGradient],
     policy_set: PolicySet,
     memory_type: str,
+    schema: MemoryTypeSchema,
 ) -> list[PolicyPlanItem]:
     items: list[PolicyPlanItem] = []
     source_links_by_target = _source_trajectory_links_by_target(gradients, policy_set)
@@ -511,7 +523,11 @@ def _operations_to_plan_items(
     confidence = max(confidence_values) if confidence_values else None
     name_field = _name_field_for_memory_type(memory_type)
 
-    upsert_output_count = _upsert_output_count(operations, memory_type=memory_type)
+    upsert_output_count = _upsert_output_count(
+        operations,
+        memory_type=memory_type,
+        schema=schema,
+    )
     replacement_source_uris_by_target = _replacement_source_uris_by_target(operations)
     upsert_target_uris: set[str] = set()
     for op in getattr(operations, "upsert_operations", []) or []:
@@ -519,14 +535,10 @@ def _operations_to_plan_items(
             continue
         fields = dict(getattr(op, "memory_fields", {}) or {})
         old_file = getattr(op, "old_memory_file_content", None)
-        base_fields = dict(getattr(old_file, "extra_fields", {}) or {})
-        if memory_type == "experiences" and not any(experience_section_fields(fields).values()):
+        after_file = render_operation_after_file(op, schema=schema)
+        if not _memory_file_has_schema_content(after_file, schema=schema):
             continue
-        after_content = _operation_content(
-            fields,
-            memory_type=memory_type,
-            base_fields=base_fields,
-        )
+        after_content = after_file.content
         if not after_content.strip():
             continue
         target_name = str(
@@ -896,27 +908,36 @@ def _superseded_source_trajectory_links(
     return _source_trajectory_links_from_experience(superseded_policy)
 
 
-def _upsert_output_count(operations: Any, *, memory_type: str) -> int:
+def _upsert_output_count(
+    operations: Any,
+    *,
+    memory_type: str,
+    schema: MemoryTypeSchema,
+) -> int:
     count = 0
     for op in getattr(operations, "upsert_operations", []) or []:
         if getattr(op, "memory_type", None) != memory_type:
             continue
-        fields = dict(getattr(op, "memory_fields", {}) or {})
-        old_file = getattr(op, "old_memory_file_content", None)
-        base_fields = dict(getattr(old_file, "extra_fields", {}) or {})
-        if memory_type == "experiences":
-            has_content = any(experience_section_fields(fields).values())
-        else:
-            has_content = bool(
-                _operation_content(
-                    fields,
-                    memory_type=memory_type,
-                    base_fields=base_fields,
-                ).strip()
-            )
-        if has_content:
+        after_file = render_operation_after_file(op, schema=schema)
+        if _memory_file_has_schema_content(after_file, schema=schema):
             count += 1
     return count
+
+
+def _memory_file_has_schema_content(
+    memory_file: MemoryFile,
+    *,
+    schema: MemoryTypeSchema,
+) -> bool:
+    for field_name in schema.content_field_names():
+        value = (
+            memory_file.content
+            if field_name == "content"
+            else memory_file.extra_fields.get(field_name)
+        )
+        if str(value or "").strip():
+            return True
+    return False
 
 
 def _replacement_source_uris_by_target(operations: Any) -> dict[str, list[str]]:

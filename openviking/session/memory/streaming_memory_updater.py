@@ -38,15 +38,16 @@ from openviking.session.memory.memory_updater import (
     MemoryUpdater,
     MemoryUpdateResult,
     remap_stored_links,
+    render_operation_after_file,
+    render_operation_after_file_content,
     write_stored_links,
 )
-from openviking.session.memory.merge_op import MergeOpFactory
 from openviking.session.memory.patch_merge_context_provider import (
     PatchMergeContextProvider,
     PatchMergePatch,
 )
 from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
-from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils, next_memory_version
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.streaming_batcher import (
     StreamingBatcher,
     StreamingBatcherConfig,
@@ -955,86 +956,6 @@ def operation_to_patch(
     return PatchMergePatch(
         before_file=old_file,
         after_file=after_file,
-    )
-
-
-def render_operation_after_file(
-    op: ResolvedOperation,
-    *,
-    schema: MemoryTypeSchema,
-    extract_context: ExtractContext,
-) -> MemoryFile:
-    after_content = render_operation_after_file_content(
-        op,
-        schema=schema,
-        extract_context=extract_context,
-    )
-    return MemoryFileUtils.read(after_content, uri=_first_uri(getattr(op, "uris", []) or []))
-
-
-def render_operation_after_file_content(
-    op: ResolvedOperation,
-    *,
-    schema: MemoryTypeSchema,
-    extract_context: ExtractContext,
-) -> str:
-    old_content = getattr(op, "old_memory_file_content", None)
-    metadata: dict[str, Any] = dict(getattr(op, "memory_fields", {}) or {})
-    source_extraction_id = source_extraction_id_for_operation(op)
-    if source_extraction_id:
-        metadata["source_extraction_id"] = source_extraction_id
-    source_trace_id = source_trace_id_for_operation(op)
-    if source_trace_id:
-        metadata["last_update_trace_id"] = source_trace_id
-    for field_def in schema.fields:
-        if field_def.name not in metadata:
-            continue
-        if old_content is None:
-            current_value = None
-        elif field_def.name == "content":
-            current_value = old_content.plain_content()
-        else:
-            current_value = old_content.extra_fields.get(field_def.name)
-        try:
-            metadata[field_def.name] = MergeOpFactory.from_field(field_def).apply(
-                current_value,
-                metadata[field_def.name],
-            )
-        except Exception as exc:
-            logger.debug(
-                "Failed to preview memory patch field: memory_type=%s field=%s",
-                op.memory_type,
-                field_def.name,
-                exc_info=True,
-            )
-            tracer.info(
-                "[streaming_memory_updater] skipping preview field update after merge_op failure "
-                f"memory_type={op.memory_type} field={field_def.name} error={exc}"
-            )
-            if current_value is None:
-                metadata.pop(field_def.name, None)
-            else:
-                metadata[field_def.name] = current_value
-
-    if old_content and old_content.extra_fields:
-        schema_field_names = {field.name for field in schema.fields} | {"content", "memory_type"}
-        for key, value in old_content.extra_fields.items():
-            if key not in schema_field_names and key not in metadata and value is not None:
-                metadata[key] = value
-    metadata["version"] = next_memory_version(old_content)
-    metadata.setdefault("memory_type", op.memory_type)
-    mf = MemoryFile.from_parsed(uri=_first_uri(op.uris), parsed=dict(metadata))
-    return MemoryFileUtils.write(
-        mf,
-        content_template=schema.content_template,
-        extract_context=extract_context,
-        persist_content=_schema_should_persist_content(schema),
-    )
-
-
-def _schema_should_persist_content(schema: MemoryTypeSchema) -> bool:
-    return bool(getattr(schema, "content_template", None)) and any(
-        getattr(field, "name", None) == "content" for field in getattr(schema, "fields", [])
     )
 
 

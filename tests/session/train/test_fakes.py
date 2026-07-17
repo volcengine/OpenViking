@@ -4,8 +4,23 @@
 from __future__ import annotations
 
 import threading
+from functools import cache
 from types import SimpleNamespace
 from typing import Any
+
+from openviking.session.memory.memory_type_registry import create_default_registry
+from openviking.session.memory.utils.template_utils import TemplateUtils
+
+
+@cache
+def _experience_content_template() -> str:
+    schema = create_default_registry().get("experiences")
+    assert schema is not None and schema.content_template
+    return schema.content_template
+
+
+def render_experience_fields(fields: dict[str, Any]) -> str:
+    return TemplateUtils.render(_experience_content_template(), fields)
 
 
 class InMemoryAGFS:

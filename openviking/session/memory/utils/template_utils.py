@@ -12,6 +12,11 @@ from jinja2 import meta
 
 class TemplateUtils:
     @staticmethod
+    def variables(template: str) -> set[str]:
+        parsed_template = jinja2.Environment(autoescape=False).parse(template)
+        return meta.find_undeclared_variables(parsed_template)
+
+    @staticmethod
     def render(
         template: str,
         fields: Mapping[str, Any],
@@ -38,11 +43,5 @@ class TemplateUtils:
         *,
         ignored_variables: Iterable[str] | None = None,
     ) -> set[str]:
-        parsed_template = jinja2.Environment(autoescape=False).parse(template)
         ignored = set(ignored_variables or ())
-        return (
-            meta.find_undeclared_variables(parsed_template)
-            - set(fields)
-            - ignored
-            - {"extract_context"}
-        )
+        return TemplateUtils.variables(template) - set(fields) - ignored - {"extract_context"}

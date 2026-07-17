@@ -91,9 +91,8 @@ def test_agent_experience_instruction_preserves_coupled_scope_repairs():
     assert "`Does not apply when` must describe a task-pattern mismatch" in instruction
     assert "canonical runtime value field" in instruction
     assert 'other", "remaining", "those"' in instruction
-    assert "## Situation" in instruction
-    assert "- `situation`: only the `## Situation` bullet body" in instruction
-    assert "storage template adds the four Markdown headings" in instruction
+    assert "`situation`, `reminder`, `procedure`, `anti_pattern`" in instruction
+    assert "storage template defines the Markdown structure and order" in instruction
     assert "Authoritative outcome evidence" in instruction
     assert "smallest conflicting policy interpretation" in instruction
     assert "preserve non-conflicting constraints and object boundaries" in instruction
@@ -101,6 +100,34 @@ def test_agent_experience_instruction_preserves_coupled_scope_repairs():
     assert "The experience itself must not" in instruction
     assert "mention the evaluator" in instruction
     assert "evaluation metadata, hidden checks" in instruction
+
+
+def test_agent_experience_instruction_lists_custom_template_content_fields():
+    from openviking.session.memory.dataclass import MemoryField, MemoryTypeSchema
+    from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+    from openviking.session.memory.merge_op.base import FieldType
+
+    schema = MemoryTypeSchema(
+        memory_type="experiences",
+        fields=[
+            MemoryField(name="experience_name", field_type=FieldType.STRING),
+            MemoryField(name="situation", field_type=FieldType.STRING),
+            MemoryField(name="evidence", field_type=FieldType.STRING),
+        ],
+        content_template="## Situation\n{{ situation }}\n\n## Evidence\n{{ evidence }}",
+    )
+    registry = MemoryTypeRegistry(load_schemas=False)
+    registry.register(schema)
+    provider = AgentExperienceContextProvider(
+        trajectory_summary="scope failure",
+        trajectory_uri="viking://user/u/memories/trajectories/scope_failure.md",
+    )
+    provider._registry = registry
+
+    instruction = provider.instruction()
+
+    assert "`situation`, `evidence`" in instruction
+    assert "`reminder`" not in instruction
 
 
 def test_experience_schema_action_benefit_rule_requires_authoritative_evidence():

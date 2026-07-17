@@ -383,6 +383,14 @@ class AgentExperienceContextProvider(SessionExtractContextProvider):
         from openviking.session.train.gates import default_experience_gate_contract
 
         output_language = self._output_language
+        schema = self._get_registry().get("experiences")
+        content_field_names = schema.content_field_names() if schema is not None else ()
+        content_fields = ", ".join(f"`{name}`" for name in content_field_names)
+        situation_guidance = ""
+        if "situation" in content_field_names:
+            situation_guidance = """The skill loader uses the rendered `situation` field as the
+applicability snippet. It must clearly say when the experience applies, when it does not apply,
+and which runtime source binds the rule. """
         return f"""You are a memory extraction agent. Distill reusable failure-repair experiences from failed or partially failed agent execution trajectories.
 
 You are given:
@@ -408,17 +416,11 @@ Output experience entries ONLY when a reusable runtime reminder would prevent or
 
 Each entry:
 - `experience_name`: new or existing experience name
-- `situation`: only the `## Situation` bullet body
-- `reminder`: only the `## Reminder` bullet body
-- `procedure`: only the `## Procedure` bullet body
-- `anti_pattern`: only the `## Anti-pattern` bullet body
+- Populate every structured content field declared by the schema: {content_fields}
 - `supersedes`: older `experience_name` replaced by a genuinely broader/corrected one; otherwise empty
 
-The storage template adds the four Markdown headings in a fixed order. Do not include headings
-inside field values. The skill loader shows the rendered `## Situation` as the applicability
-snippet and may then load the whole rendered experience with `read_experience`. Therefore
-`situation` must clearly say when the experience applies, when it does not apply, and which
-runtime source binds the rule. Do not output `trigger_code`; it is not used by the skill loader.
+The storage template defines the Markdown structure and order. Do not include headings inside
+field values. {situation_guidance}Do not output `trigger_code`; it is not used by the skill loader.
 
 The system handles create vs update automatically:
 - Same `experience_name` as an existing one → update it in place
@@ -446,19 +448,19 @@ The system handles create vs update automatically:
 - For communication, totals, counts, lists, or summaries, bind the answer to the user-requested scope, frozen record/set membership, included/excluded records, source field, derivation, later-write effect, selected object, or policy gate.
 - For information/aggregate/list/summary/value requests, preserve the user-requested source scope at the moment the request is made. Later write actions may create a second "post-action/current remaining state" scope, but they must not silently replace the original requested scope.
 - If user wording is ambiguous between an original requested set and a post-action remaining/current-state set, write the experience so the future agent gives both scopes with explicit labels instead of only the narrower post-action scope.
-- Do not treat relative words like "other", "remaining", "those", "the rest", "其他", or "剩余" as explicit exclusions when the user is also discussing writes. They are ambiguous unless the user's own wording says to exclude a named object or semantic role; in ambiguous cases, `Scope ambiguity` must name both scopes.
+- Do not treat relative words like "other", "remaining", "those", "the rest", "其他", or "剩余" as explicit exclusions when the user is also discussing writes. They are ambiguous unless the user's own wording says to exclude a named object or semantic role; in ambiguous cases, the structured content must name both scopes.
 - Do not exclude records from a request-time information/aggregate/list/summary/value merely because they are later modified, canceled, upgraded, consumed, split, or otherwise changed. Exclude them only when the user's own wording explicitly excluded that semantic role from the earlier information request.
-- If later writes affect records that could belong to a requested information/list/aggregate value, `Scope ambiguity` must name both the original request-time scope and the post-action/current remaining scope; do not write none/无.
+- If later writes affect records that could belong to a requested information/list/aggregate value, the structured content must name both the original request-time scope and the post-action/current remaining scope; do not write none/无.
 - For total cost, paid amount, balance, refund, or similar monetary aggregates, bind the answer to the canonical runtime value field when one exists: explicit total/paid/charged/order/payment-history amount fields beat reconstructed lower-level unit/segment/item price sums. Use line items only when no canonical total exists, or as a cross-check. If those values differ, the experience must tell the future agent which source field to prefer. Do not name lower-level price fields as the primary source when a record-level total/paid/charged amount is available in runtime evidence.
 - `Does not apply when` must describe a task-pattern mismatch, not a temporal stage. Do not write conditions such as "still reading", "before final response", "before writes complete", or "not yet at final_response"; the skill loader may read the experience at task start even when it applies at a later boundary.
 - If a loaded existing experience encodes the misleading rule that later-modified/canceled/upgraded records should be removed from an earlier requested aggregate, update that experience instead of creating a competing memory.
 - Do not encode dataset-specific values, IDs, amounts, or domain names in the reusable rule; express the lesson as source-scope binding, freeze point, included/excluded object roles, and later-write effect.
-- Preserve correct near-misses: `## Situation`/`## Anti-pattern` must say when NOT to apply the experience.
+- Preserve correct near-misses: the applicability and anti-pattern content must say when NOT to apply the experience.
 - Avoid evaluator/control-plane wording such as evaluation, evaluator, communicate_checks, action_checks, db_check, reward, rubric, 评估, 奖励. Rewrite into runtime facts.
 - Keep it concise, imperative, and machine-readable. No raw IDs, hidden answers, policy dumps, or full task paths.
 - Use the same language for all `experience_name` values.
 
-{default_experience_gate_contract()}
+{default_experience_gate_contract(schema)}
 - Do NOT use `delete_ids`; use `supersedes` instead.
 - Follow field descriptions in the schema.
 - Output JSON only. Do not call any tools.

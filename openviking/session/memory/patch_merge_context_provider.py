@@ -10,7 +10,6 @@ from typing import Any
 
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryFile, MemoryTypeSchema
-from openviking.session.memory.experience_sections import EXPERIENCE_SECTION_FIELDS
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
@@ -132,6 +131,14 @@ class PatchMergeContextProvider(SessionExtractContextProvider):
 
     def instruction(self) -> str:
         output_language = self._output_language
+        schema = self._get_registry().get(self.memory_type)
+        content_fields = schema.content_field_names() if schema is not None else ()
+        structured_fields = ", ".join(f"`{name}`" for name in content_fields)
+        experience_guidance = ""
+        if self.memory_type == "experiences":
+            experience_guidance = """Preserve source-binding, applicability, scope ambiguity,
+canonical value/source-field rules, and anti-patterns from the strongest patches.
+"""
         return f"""You are a memory patch merge agent.
 
 You are given original memory files and structured memory-file field diffs. Merge them by producing final memory operations that follow the provided JSON schema.
@@ -149,11 +156,10 @@ variants. For new segments, use singular snake_case for English and one concise
 canonical term for Chinese; e.g. book not books, 书籍 not 书/图书. If a loser URI
 is an existing file, put it in delete_ids; if it is only a new proposal, omit it.
 
-When merging `experiences`, every upsert must preserve the four structured fields:
-`situation`, `reminder`, `procedure`, and `anti_pattern`. Put only section bullet bodies
-in those fields; the storage template adds the Markdown headings in a fixed order.
-Preserve source-binding, applicability, scope ambiguity, canonical value/source-field
-rules, and anti-patterns from the strongest patches.
+Every upsert must preserve the `{self.memory_type}` schema's structured content fields:
+{structured_fields}. Put only content bodies in those fields; the storage template adds the
+Markdown structure.
+{experience_guidance}
 """
 
     def get_tools(self) -> list[str]:
@@ -180,7 +186,10 @@ rules, and anti-patterns from the strongest patches.
         messages.append(
             {
                 "role": "user",
-                "content": _render_field_diff_patches(self.patches),
+                "content": _render_field_diff_patches(
+                    self.patches,
+                    schema=self._get_registry().get(self.memory_type),
+                ),
             }
         )
         return messages
@@ -234,22 +243,32 @@ rules, and anti-patterns from the strongest patches.
         return [render_template(schema.directory, {"user_space": user_id})]
 
 
-def _render_field_diff_patches(patches: list[PatchMergePatch]) -> str:
+def _render_field_diff_patches(
+    patches: list[PatchMergePatch],
+    *,
+    schema: MemoryTypeSchema | None = None,
+) -> str:
     if not patches:
         return "# Memory File Patches\n\nNo patches provided."
     rendered = [
-        _render_one_field_diff_patch(index, patch) for index, patch in enumerate(patches, start=1)
+        _render_one_field_diff_patch(index, patch, schema=schema)
+        for index, patch in enumerate(patches, start=1)
     ]
     return "# Memory File Patches\n\n" + "\n\n".join(rendered).rstrip()
 
 
-def _render_one_field_diff_patch(index: int, patch: PatchMergePatch) -> str:
+def _render_one_field_diff_patch(
+    index: int,
+    patch: PatchMergePatch,
+    *,
+    schema: MemoryTypeSchema | None = None,
+) -> str:
     lines = [f"Patch {index}"]
     if patch.metadata:
         compact_metadata = _compact_patch_metadata(patch.metadata)
         if compact_metadata:
             lines.append(f"  meta: {_compact_value(compact_metadata)}")
-    field_diffs = _field_diffs(patch.before_file, patch.after_file)
+    field_diffs = _field_diffs(patch.before_file, patch.after_file, schema=schema)
     if not field_diffs:
         lines.append("  (no changes)")
         return "\n".join(lines)
@@ -263,9 +282,16 @@ def _render_one_field_diff_patch(index: int, patch: PatchMergePatch) -> str:
     return "\n".join(lines)
 
 
-def _field_diffs(before_file: MemoryFile | None, after_file: MemoryFile) -> list[tuple[str, str]]:
-    before_fields = _memory_file_fields(before_file) if before_file is not None else {}
-    after_fields = _memory_file_fields(after_file)
+def _field_diffs(
+    before_file: MemoryFile | None,
+    after_file: MemoryFile,
+    *,
+    schema: MemoryTypeSchema | None = None,
+) -> list[tuple[str, str]]:
+    before_fields = (
+        _memory_file_fields(before_file, schema=schema) if before_file is not None else {}
+    )
+    after_fields = _memory_file_fields(after_file, schema=schema)
     diffs: list[tuple[str, str]] = []
     for field_name in sorted(set(before_fields) | set(after_fields)):
         before_value = before_fields.get(field_name)
@@ -282,16 +308,20 @@ def _field_diffs(before_file: MemoryFile | None, after_file: MemoryFile) -> list
     return diffs
 
 
-def _memory_file_fields(file: MemoryFile) -> dict[str, Any]:
+def _memory_file_fields(
+    file: MemoryFile,
+    *,
+    schema: MemoryTypeSchema | None = None,
+) -> dict[str, Any]:
     fields = dict(file.extra_fields or {})
     for hidden_field in _SYSTEM_HIDDEN_FIELDS:
         fields.pop(hidden_field, None)
     if file.memory_type is not None:
         fields["memory_type"] = file.memory_type
-    has_experience_sections = file.memory_type == "experiences" and any(
-        fields.get(name) for name in EXPERIENCE_SECTION_FIELDS
+    has_structured_content = bool(schema) and any(
+        fields.get(name) for name in schema.content_field_names() if name != "content"
     )
-    if file.content and not has_experience_sections:
+    if file.content and not has_structured_content:
         fields["content"] = file.content
     if file.links:
         fields["links"] = file.links

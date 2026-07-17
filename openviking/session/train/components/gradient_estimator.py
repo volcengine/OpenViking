@@ -12,14 +12,14 @@ from openviking.server.identity import RequestContext
 from openviking.session.memory.agent_experience_context_provider import (
     AgentExperienceContextProvider,
 )
-from openviking.session.memory.dataclass import MemoryFile, StoredLink
-from openviking.session.memory.experience_sections import (
-    experience_section_fields,
-    render_experience_sections,
-    resolve_experience_section_fields,
-)
+from openviking.session.memory.dataclass import MemoryTypeSchema, StoredLink
 from openviking.session.memory.extract_loop import ExtractLoop, PostValidationRetryDecision
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
+from openviking.session.memory.memory_type_registry import (
+    MemoryTypeRegistry,
+    create_default_registry,
+)
+from openviking.session.memory.memory_updater import render_operation_after_file
 from openviking.session.train.components import (
     experience_replay_codecs as _experience_replay_codecs,  # noqa: F401
 )
@@ -123,6 +123,18 @@ class ExperienceGradientEstimator:
 
     viking_fs: Any = None
     vlm: Any = None
+    registry: MemoryTypeRegistry | None = None
+
+    def _get_registry(self) -> MemoryTypeRegistry:
+        if self.registry is None:
+            self.registry = create_default_registry()
+        return self.registry
+
+    def _get_experience_schema(self) -> MemoryTypeSchema:
+        schema = self._get_registry().get("experiences")
+        if schema is None or not schema.enabled:
+            raise ValueError("Memory schema not found or disabled: experiences")
+        return schema
 
     @tracer(
         "train.gradient_estimator.experience.estimate",
@@ -206,6 +218,7 @@ class ExperienceGradientEstimator:
                 trajectory=request.trajectory,
                 analysis=analysis,
                 experience_set=request.experience_set,
+                schema=self._get_experience_schema(),
             )
         finally:
             request.diagnostics.update(
@@ -242,6 +255,7 @@ class ExperienceGradientEstimator:
             if value:
                 provider_kwargs[key] = value
         provider = AgentExperienceContextProvider(**provider_kwargs)
+        provider._registry = self._get_registry()
         if hasattr(provider, "get_extract_context"):
             extract_context = provider.get_extract_context()
         else:
@@ -273,6 +287,7 @@ class ExperienceGradientEstimator:
                     trajectory=trajectory,
                     analysis=analysis_obj,
                     experience_set=experience_set,
+                    schema=self._get_experience_schema(),
                 )
                 _, report = await _evaluate_experience_gradients(
                     gradients=gradients,
@@ -572,26 +587,26 @@ def _operations_to_gradients(
     trajectory: Trajectory,
     analysis: RolloutAnalysis,
     experience_set: ExperienceSet,
+    schema: MemoryTypeSchema,
 ) -> list[PatchSemanticGradient]:
     gradients: list[PatchSemanticGradient] = []
+    content_field_names = schema.content_field_names()
     for op in getattr(operations, "upsert_operations", []) or []:
         if getattr(op, "memory_type", None) != "experiences":
             continue
         fields = dict(getattr(op, "memory_fields", {}) or {})
-        section_fields = experience_section_fields(fields)
-        if not any(section_fields.values()):
+        after_file = render_operation_after_file(op, schema=schema)
+        if not any(
+            str(
+                after_file.content if name == "content" else after_file.extra_fields.get(name) or ""
+            ).strip()
+            for name in content_field_names
+        ):
             continue
 
         old_file = getattr(op, "old_memory_file_content", None)
-        target_name = str(fields.get("experience_name") or _fallback_experience_name(op))
         target_uri = first_uri(getattr(op, "uris", []) or [])
         base_version = _base_version(old_file, target_uri, experience_set)
-        after_file = _operation_after_file(
-            fields=fields,
-            target_name=target_name,
-            target_uri=target_uri,
-            old_file=old_file,
-        )
 
         gradients.append(
             PatchSemanticGradient(
@@ -647,33 +662,6 @@ def _trajectory_training_category(
     if trajectory.retrieval_anchor:
         return str(trajectory.retrieval_anchor)
     return str(trajectory.name)
-
-
-def _operation_after_file(
-    *,
-    fields: dict[str, Any],
-    target_name: str,
-    target_uri: str | None,
-    old_file: MemoryFile | None,
-) -> MemoryFile:
-    extra_fields = dict(getattr(old_file, "extra_fields", {}) or {})
-    resolved_sections = resolve_experience_section_fields(fields, base_fields=extra_fields)
-    extra_fields.pop("constraint", None)
-    extra_fields.pop("content", None)
-    for key, value in fields.items():
-        if key != "content" and key not in resolved_sections:
-            extra_fields[key] = value
-    extra_fields.update(resolved_sections)
-    extra_fields["memory_type"] = "experiences"
-    extra_fields["experience_name"] = target_name
-    return MemoryFile(
-        uri=target_uri,
-        content=render_experience_sections(resolved_sections),
-        links=list(getattr(old_file, "links", []) or []),
-        backlinks=list(getattr(old_file, "backlinks", []) or []),
-        memory_type="experiences",
-        extra_fields=extra_fields,
-    )
 
 
 def _fallback_experience_name(op: Any) -> str:

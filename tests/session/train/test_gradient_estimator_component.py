@@ -7,10 +7,10 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
+from test_fakes import render_experience_fields
 
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import MemoryFile
-from openviking.session.memory.experience_sections import render_experience_sections
 from openviking.session.train import (
     CriterionResult,
     Experience,
@@ -301,7 +301,7 @@ async def test_experience_gradient_estimator_converts_experience_operations():
     assert gradient.base_version == 7
     assert gradient.before_file is old_file
     assert "## Situation" in gradient.after_file.content
-    assert gradient.after_file.content == render_experience_sections(
+    assert gradient.after_file.content == render_experience_fields(
         _duplicate_booking_experience_fields()
     )
     assert gradient.after_file.extra_fields["situation"].startswith("- Applies when:")
@@ -319,6 +319,45 @@ async def test_experience_gradient_estimator_converts_experience_operations():
     assert gradient.metadata["rubric_passed"] is False
     assert gradient.metadata["training_category"] == "booking"
     assert len(estimator.calls) == 1
+
+
+def test_operations_to_gradients_render_custom_template_content_field():
+    from openviking.session.memory.dataclass import MemoryField, MemoryTypeSchema
+    from openviking.session.memory.merge_op.base import FieldType
+
+    schema = MemoryTypeSchema(
+        memory_type="experiences",
+        fields=[
+            MemoryField(name="experience_name", field_type=FieldType.STRING),
+            MemoryField(name="situation", field_type=FieldType.STRING),
+            MemoryField(name="evidence", field_type=FieldType.STRING),
+        ],
+        content_template="## Situation\n{{ situation }}\n\n## Evidence\n{{ evidence }}",
+    )
+    operation = SimpleNamespace(
+        memory_type="experiences",
+        memory_fields={
+            "experience_name": "scope_binding",
+            "situation": "request-time scope",
+            "evidence": "retrieved records",
+        },
+        uris=["viking://user/u/memories/experiences/scope_binding.md"],
+        old_memory_file_content=None,
+    )
+    analysis = _analysis(passed=False, outcome="failure")
+
+    gradients = gradient_estimator_module._operations_to_gradients(
+        operations=SimpleNamespace(upsert_operations=[operation]),
+        trajectory=analysis.trajectories[0],
+        analysis=analysis,
+        experience_set=_experience_set(),
+        schema=schema,
+    )
+
+    assert gradients[0].after_file.content == (
+        "## Situation\nrequest-time scope\n\n## Evidence\nretrieved records"
+    )
+    assert gradients[0].after_file.extra_fields["evidence"] == "retrieved records"
 
 
 @pytest.mark.asyncio

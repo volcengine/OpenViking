@@ -15,10 +15,10 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
-from openviking.session.memory.experience_sections import (
-    EXPERIENCE_SECTION_FIELDS,
-    experience_section_fields,
-    render_experience_sections,
+from openviking.session.memory.dataclass import MemoryTypeSchema
+from openviking.session.memory.memory_type_registry import (
+    MemoryTypeRegistry,
+    create_default_registry,
 )
 from openviking.session.train.domain import PolicyPlanItem, PolicySet, RolloutAnalysis, Trajectory
 from openviking.session.train.interfaces import SemanticGradient
@@ -274,10 +274,25 @@ def default_policy_gate_runner() -> GateRunner:
     )
 
 
-def default_experience_gate_contract() -> str:
+def default_experience_gate_contract(schema: MemoryTypeSchema | None = None) -> str:
     """Prompt-facing contract enforced by the default experience gates."""
 
-    return """## Gate Contract (enforced)
+    if schema is None:
+        schema = create_default_registry().get("experiences")
+    content_field_names = schema.content_field_names() if schema is not None else ()
+    content_fields = ", ".join(f"`{name}`" for name in content_field_names)
+    situation_contract = ""
+    if "situation" in content_field_names:
+        situation_contract = """- `situation` must state applicability, non-applicability, and the runtime
+  source binding that lets a future agent decide whether to read/apply the
+  experience without executing trigger_code.
+- `Does not apply when` must describe a task-pattern mismatch, not a temporal
+  stage such as "still reading/writing", "before final_response", or "before
+  writes complete"; the skill loader may read the experience before the later
+  boundary where it becomes actionable.
+"""
+
+    return f"""## Gate Contract (enforced)
 Your experience output will be rejected unless every experience satisfies these gates:
 
 1. Causal eligibility
@@ -293,16 +308,9 @@ Your experience output will be rejected unless every experience satisfies these 
 - Do not output experiences for Outcome=success.
 
 2. Structured skill-loader fields
-- Experience output must populate the `situation`, `reminder`, `procedure`, and
-  `anti_pattern` fields. The storage template renders their Markdown headings.
-- `situation` must state applicability, non-applicability, and the runtime
-  source binding that lets a future agent decide whether to read/apply the
-  experience without executing trigger_code.
-- `Does not apply when` must describe a task-pattern mismatch, not a temporal
-  stage such as "still reading/writing", "before final_response", or "before
-  writes complete"; the skill loader may read the experience before the later
-  boundary where it becomes actionable.
-- For information/aggregate/list/summary/value requests affected by later
+- Experience output must populate the schema's structured content fields: {content_fields}.
+  The storage template renders their Markdown structure and order.
+{situation_contract}- For information/aggregate/list/summary/value requests affected by later
   writes, the experience must preserve the original request-time scope and
   label any post-action/current remaining scope separately.
 - Relative wording such as "other", "remaining", "those", "其他", or "剩余" is
@@ -453,15 +461,28 @@ class ExperienceFieldSemanticsGate:
 
     mode: GateMode = "enforce"
     name: str = "experience_field_semantics"
+    registry: MemoryTypeRegistry | None = None
 
     def applies_to(self, target: GateTarget) -> bool:
         return target.memory_type == "experiences" and target.after_content.strip() != ""
 
     async def evaluate(self, target: GateTarget) -> GateDecision | None:
-        fields = experience_section_fields(_experience_structured_fields(target))
-        missing = [name for name in EXPERIENCE_SECTION_FIELDS if not fields[name]]
-        situation = fields["situation"]
-        content = render_experience_sections(fields)
+        registry = self.registry or create_default_registry()
+        self.registry = registry
+        schema = registry.get("experiences")
+        if schema is None or not schema.enabled:
+            raise ValueError("Memory schema not found or disabled: experiences")
+        content_field_names = schema.content_field_names()
+        structured_fields = _experience_structured_fields(target)
+        fields = {
+            name: str(
+                target.after_content if name == "content" else structured_fields.get(name) or ""
+            ).strip()
+            for name in content_field_names
+        }
+        missing = [name for name in content_field_names if not fields[name]]
+        situation = fields.get("situation", "")
+        content = target.after_content
         situation_lower = situation.lower()
         source_binding_terms = (
             "source binding",
@@ -482,10 +503,17 @@ class ExperienceFieldSemanticsGate:
             "确认",
             "政策",
         )
-        has_source_binding = any(term in situation_lower for term in source_binding_terms)
+        has_situation_field = "situation" in content_field_names
+        has_source_binding = not has_situation_field or any(
+            term in situation_lower for term in source_binding_terms
+        )
         applicability_terms = ("applies when", "does not apply", "适用", "不适用")
-        has_applicability = any(term in situation_lower for term in applicability_terms)
-        temporal_non_applicability = _temporal_non_applicability_terms(situation)
+        has_applicability = not has_situation_field or any(
+            term in situation_lower for term in applicability_terms
+        )
+        temporal_non_applicability = (
+            _temporal_non_applicability_terms(situation) if has_situation_field else []
+        )
         relative_scope_ambiguity = _experience_relative_write_scope_ambiguity_issue(content)
         line_item_money_source = _experience_line_item_money_source_issue(content)
         if (
@@ -513,12 +541,17 @@ class ExperienceFieldSemanticsGate:
             },
             retriable=True,
             repair_prompt=(
-                "Populate the structured `situation`, `reminder`, `procedure`, and "
-                "`anti_pattern` fields without Markdown headings. In `situation`, state "
-                "applies-when, does-not-apply-when, and the runtime source binding used to "
-                "decide applicability. `Does not apply when` must be a task-pattern "
-                "mismatch, not a temporal stage such as still reading/writing or before "
-                "final_response. If relative wording such as other/remaining/其他/剩余 appears "
+                "Populate the schema's structured content fields without Markdown headings: "
+                f"{', '.join(f'`{name}`' for name in content_field_names)}. "
+                + (
+                    "In `situation`, state applies-when, does-not-apply-when, and the runtime "
+                    "source binding used to decide applicability. `Does not apply when` must "
+                    "be a task-pattern mismatch, not a temporal stage such as still reading/"
+                    "writing or before final_response. "
+                    if has_situation_field
+                    else ""
+                )
+                + "If relative wording such as other/remaining/其他/剩余 appears "
                 "while writes such as cancel/upgrade/modify are also discussed, `Scope ambiguity` "
                 "must label both the request-time scope and the post-action/current remaining "
                 "scope instead of none. For monetary totals/paid/refund/balance values, bind "

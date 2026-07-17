@@ -11,16 +11,16 @@ from typing import Any
 
 from openviking.session.memory.dataclass import (
     MemoryFile,
+    MemoryTypeSchema,
     ResolvedOperation,
     ResolvedOperations,
     StoredLink,
 )
-from openviking.session.memory.experience_sections import (
-    EXPERIENCE_SECTION_FIELDS,
-    resolve_experience_section_fields,
+from openviking.session.memory.memory_type_registry import (
+    MemoryTypeRegistry,
+    create_default_registry,
 )
-from openviking.session.memory.memory_type_registry import create_default_registry
-from openviking.session.memory.memory_updater import MemoryUpdater
+from openviking.session.memory.memory_updater import MemoryUpdater, resolve_memory_fields
 from openviking.session.train.domain import (
     Policy,
     PolicyApplyResult,
@@ -44,6 +44,7 @@ class DryRunPolicyUpdater:
     """
 
     simulate: bool = True
+    registry: MemoryTypeRegistry | None = None
 
     @tracer("train.policy_updater.dry_run.apply", ignore_result=True, ignore_args=True)
     async def apply(
@@ -57,7 +58,11 @@ class DryRunPolicyUpdater:
         del transaction_handle
         del context
         updated_policy_set = (
-            _apply_items_to_snapshot(plan.items, policy_set)
+            _apply_items_to_snapshot(
+                plan.items,
+                policy_set,
+                registry=self.registry or create_default_registry(),
+            )
             if self.simulate and plan.items
             else policy_set
         )
@@ -85,6 +90,7 @@ class MemoryFilePolicyUpdater:
 
     viking_fs: Any = None
     vikingdb: Any = None
+    registry: MemoryTypeRegistry | None = None
 
     @tracer("train.policy_updater.memory_file.apply", ignore_result=True, ignore_args=True)
     async def apply(
@@ -99,14 +105,20 @@ class MemoryFilePolicyUpdater:
         if viking_fs is None:
             raise RuntimeError("VikingFS is required to apply policy update plans")
 
-        updated_policy_set = _apply_items_to_snapshot(plan.items, policy_set)
+        registry = self.registry or create_default_registry()
+        updated_policy_set = _apply_items_to_snapshot(
+            plan.items,
+            policy_set,
+            registry=registry,
+        )
         operations, preflight_errors = _plan_to_resolved_operations(
             plan=plan,
             policy_set=policy_set,
             updated_policy_set=updated_policy_set,
+            registry=registry,
         )
         updater = MemoryUpdater(
-            registry=create_default_registry(),
+            registry=registry,
             vikingdb=self.vikingdb,
             transaction_handle=transaction_handle,
         )
@@ -134,13 +146,26 @@ class MemoryFilePolicyUpdater:
         )
 
 
-def _policy_body_metadata(policy: Policy, *, memory_type: str | None = None) -> dict[str, Any]:
-    if (memory_type or policy.metadata.get("memory_type") or "experiences") == "experiences":
-        return resolve_experience_section_fields(policy.metadata)
+def _policy_body_metadata(
+    policy: Policy,
+    *,
+    schema: MemoryTypeSchema | None = None,
+) -> dict[str, Any]:
+    if schema is not None and schema.content_template:
+        return {
+            name: policy.content if name == "content" else policy.metadata.get(name)
+            for name in schema.content_field_names()
+            if name == "content" or policy.metadata.get(name) is not None
+        }
     return {"content": policy.content}
 
 
-def _apply_items_to_snapshot(items: list[PolicyPlanItem], policy_set: PolicySet) -> PolicySet:
+def _apply_items_to_snapshot(
+    items: list[PolicyPlanItem],
+    policy_set: PolicySet,
+    *,
+    registry: MemoryTypeRegistry,
+) -> PolicySet:
     policies_by_uri = {policy.uri: policy for policy in policy_set.policies}
     result = list(policy_set.policies)
 
@@ -184,22 +209,23 @@ def _apply_items_to_snapshot(items: list[PolicyPlanItem], policy_set: PolicySet)
         )
         metadata = dict(existing.metadata) if existing is not None else {}
         patch_fields = _metadata_patch_fields(item)
-        if (item.memory_type or "experiences") == "experiences":
-            section_updates = resolve_experience_section_fields(
+        memory_type = item.memory_type or "experiences"
+        schema = registry.get(memory_type)
+        if schema is not None:
+            metadata = resolve_memory_fields(
                 patch_fields,
-                base_fields=metadata,
+                schema=schema,
+                old_file=MemoryFile(
+                    content=existing.content if existing is not None else "",
+                    memory_type=memory_type,
+                    extra_fields=metadata,
+                )
+                if existing is not None
+                else None,
             )
-            metadata.update(
-                {
-                    key: value
-                    for key, value in patch_fields.items()
-                    if key not in EXPERIENCE_SECTION_FIELDS
-                }
-            )
-            metadata.update(section_updates)
         else:
             metadata.update(patch_fields)
-        metadata.setdefault("memory_type", item.memory_type or "experiences")
+        metadata.setdefault("memory_type", memory_type)
         metadata["experience_name"] = item.target_name
         if (item.memory_type or "experiences") == "experiences":
             metadata.pop("trigger_code", None)
@@ -270,6 +296,7 @@ def _plan_to_resolved_operations(
     plan: PolicyUpdatePlan,
     policy_set: PolicySet,
     updated_policy_set: PolicySet,
+    registry: MemoryTypeRegistry,
 ) -> tuple[ResolvedOperations, list[str]]:
     upserts: list[ResolvedOperation] = []
     deletes: list[MemoryFile] = []
@@ -312,7 +339,10 @@ def _plan_to_resolved_operations(
                 else None,
                 memory_fields={
                     **dict(updated.metadata),
-                    **_policy_body_metadata(updated, memory_type=item.memory_type),
+                    **_policy_body_metadata(
+                        updated,
+                        schema=registry.get(item.memory_type or "experiences"),
+                    ),
                     "memory_type": item.memory_type or "experiences",
                     "experience_name": updated.name,
                     "status": updated.status,

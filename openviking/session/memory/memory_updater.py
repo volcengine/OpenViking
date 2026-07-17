@@ -22,6 +22,7 @@ from openviking.message.part import TextPart
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import (
     MemoryFile,
+    MemoryTypeSchema,
     ResolvedOperation,
     ResolvedOperations,
     StoredLink,
@@ -161,6 +162,113 @@ def _operation_trace_id(op: ResolvedOperation) -> str | None:
 def _schema_should_persist_content(schema: Any) -> bool:
     return bool(getattr(schema, "content_template", None)) and any(
         getattr(field, "name", None) == "content" for field in getattr(schema, "fields", [])
+    )
+
+
+def resolve_memory_fields(
+    fields: Dict[str, Any],
+    *,
+    schema: MemoryTypeSchema,
+    old_file: MemoryFile | None = None,
+    uri: str | None = None,
+) -> Dict[str, Any]:
+    """Apply schema merge operations and preserve fields not changed by a patch."""
+    incoming = dict(fields or {})
+    resolved = dict(getattr(old_file, "extra_fields", {}) or {})
+    schema_field_names = {field.name for field in schema.fields}
+    resolved.update(
+        {key: value for key, value in incoming.items() if key not in schema_field_names}
+    )
+
+    for field in schema.fields:
+        if old_file is None:
+            current_value = None
+        elif field.name == "content":
+            current_value = old_file.plain_content()
+        else:
+            current_value = old_file.extra_fields.get(field.name)
+
+        if field.name not in incoming:
+            if current_value is not None:
+                resolved[field.name] = current_value
+            continue
+
+        try:
+            resolved[field.name] = MergeOpFactory.from_field(field).apply(
+                current_value,
+                incoming[field.name],
+            )
+        except Exception as exc:
+            if uri is None:
+                tracer.info(
+                    "[memory_updater] Skipping preview field update after merge_op failure: "
+                    f"memory_type={schema.memory_type}, field={field.name}, error={exc}"
+                )
+            else:
+                tracer.info(
+                    "[memory_updater] Skipping field update after merge_op failure: "
+                    f"uri={uri}, field={field.name}, error={exc}"
+                )
+            if current_value is None:
+                resolved.pop(field.name, None)
+            else:
+                resolved[field.name] = current_value
+
+    return resolved
+
+
+def render_operation_after_file(
+    op: ResolvedOperation,
+    *,
+    schema: MemoryTypeSchema,
+    extract_context: Any = None,
+) -> MemoryFile:
+    """Render the post-operation MemoryFile using the registered schema template."""
+    rendered = render_operation_after_file_content(
+        op,
+        schema=schema,
+        extract_context=extract_context,
+    )
+    old_file = getattr(op, "old_memory_file_content", None)
+    uri = op.uris[0] if op.uris else getattr(old_file, "uri", None)
+    return MemoryFileUtils.read(rendered, uri=uri)
+
+
+def render_operation_after_file_content(
+    op: ResolvedOperation,
+    *,
+    schema: MemoryTypeSchema,
+    extract_context: Any = None,
+) -> str:
+    """Serialize the post-operation memory file using the registered schema template."""
+    old_file = getattr(op, "old_memory_file_content", None)
+    metadata = resolve_memory_fields(
+        dict(getattr(op, "memory_fields", {}) or {}),
+        schema=schema,
+        old_file=old_file,
+    )
+    source = getattr(op, "source", None)
+    source_extraction_id = getattr(source, "extraction_id", None) if source else None
+    if source_extraction_id:
+        metadata["source_extraction_id"] = str(source_extraction_id)
+    source_trace_id = _operation_trace_id(op)
+    if source_trace_id:
+        metadata["last_update_trace_id"] = source_trace_id
+    metadata["version"] = next_memory_version(old_file)
+    metadata.setdefault("memory_type", op.memory_type)
+    if old_file is not None:
+        if old_file.links and "links" not in metadata:
+            metadata["links"] = list(old_file.links)
+        if old_file.backlinks and "backlinks" not in metadata:
+            metadata["backlinks"] = list(old_file.backlinks)
+
+    uri = op.uris[0] if op.uris else getattr(old_file, "uri", None)
+    memory_file = MemoryFile.from_parsed(uri=uri, parsed=metadata)
+    return MemoryFileUtils.write(
+        memory_file,
+        content_template=schema.content_template,
+        extract_context=extract_context,
+        persist_content=_schema_should_persist_content(schema),
     )
 
 
@@ -1008,7 +1116,17 @@ class MemoryUpdater:
             if old_content is None:
                 old_content = resolved_op.old_memory_file_content
 
-            metadata: Dict[str, Any] = dict(resolved_op.memory_fields)
+            metadata = resolve_memory_fields(
+                dict(resolved_op.memory_fields),
+                schema=schema,
+                old_file=old_content,
+                uri=uri,
+            )
+            if (
+                schema.memory_type == "experiences"
+                and "trigger_code" not in resolved_op.memory_fields
+            ):
+                metadata.pop("trigger_code", None)
             source = getattr(resolved_op, "source", None)
             source_extraction_id = getattr(source, "extraction_id", None) if source else None
             if source_extraction_id:
@@ -1016,45 +1134,6 @@ class MemoryUpdater:
             source_trace_id = _operation_trace_id(resolved_op)
             if source_trace_id:
                 metadata["last_update_trace_id"] = source_trace_id
-            # Process fields defined in schema (apply merge_op)
-            for field in schema.fields:
-                if field.name in resolved_op.memory_fields:
-                    patch_value = resolved_op.memory_fields[field.name]
-                    # Get current value for this URI
-                    if old_content is None:
-                        current_value = None
-                    else:
-                        if field.name == "content":
-                            current_value = old_content.plain_content()
-                        else:
-                            current_value = old_content.extra_fields.get(field.name)
-                    # Use merge_op to process field value
-                    merge_op = MergeOpFactory.from_field(field)
-                    try:
-                        new_value = merge_op.apply(current_value, patch_value)
-                    except Exception as e:
-                        tracer.info(
-                            f"[memory_updater] Skipping field update after merge_op failure: uri={uri}, field={field.name}, error={e}"
-                        )
-                        if current_value is None:
-                            metadata.pop(field.name, None)
-                        else:
-                            metadata[field.name] = current_value
-                        continue
-                    metadata[field.name] = new_value
-
-            # Preserve system-managed metadata from the old file that is not
-            # covered by the schema. These fields are written by the system,
-            # never by the LLM, so they would be silently dropped on every
-            # Update without this copy.
-            if old_content and old_content.extra_fields:
-                schema_field_names = {f.name for f in schema.fields} | {"content", "memory_type"}
-                for key, val in old_content.extra_fields.items():
-                    if schema.memory_type == "experiences" and key == "trigger_code":
-                        continue
-                    if key not in schema_field_names and key not in metadata and val is not None:
-                        metadata[key] = val
-
             metadata["version"] = next_memory_version(old_content)
 
             # Handle links/backlinks fields: merge with existing

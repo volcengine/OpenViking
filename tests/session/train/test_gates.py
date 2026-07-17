@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 import pytest
+from test_fakes import render_experience_fields
 
 from openviking.session.memory.dataclass import MemoryFile, StoredLink
-from openviking.session.memory.experience_sections import render_experience_sections
 from openviking.session.train.domain import (
     CriterionResult,
     ExperienceSet,
@@ -167,7 +167,7 @@ def _set_experience_fields(
         "procedure": procedure,
         "anti_pattern": anti_pattern,
     }
-    item.after_content = render_experience_sections(fields)
+    item.after_content = render_experience_fields(fields)
     item.metadata.setdefault("merge_memory_fields", {}).update(fields)
 
 
@@ -309,6 +309,38 @@ async def test_skill_readability_gate_requires_situation_source_binding():
     assert decision.action == "reject"
     assert decision.gate_name == "experience_field_semantics"
     assert decision.evidence["has_source_binding"] is False
+
+
+@pytest.mark.asyncio
+async def test_field_semantics_gate_requires_custom_template_content_fields():
+    from openviking.session.memory.dataclass import MemoryField, MemoryTypeSchema
+    from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+    from openviking.session.memory.merge_op.base import FieldType
+
+    item = _plan_item()
+    target = GateTarget(
+        stage="post_plan",
+        memory_type="experiences",
+        target_kind="plan_item",
+        plan_item=item,
+        analysis=None,
+        trajectory=_trajectory(),
+        policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
+    )
+    content_fields = ["situation", "reminder", "procedure", "anti_pattern", "evidence"]
+    schema = MemoryTypeSchema(
+        memory_type="experiences",
+        fields=[MemoryField(name=name, field_type=FieldType.STRING) for name in content_fields],
+        content_template="\n".join(f"## {name}\n{{{{ {name} }}}}" for name in content_fields),
+    )
+    registry = MemoryTypeRegistry(load_schemas=False)
+    registry.register(schema)
+
+    decision = await ExperienceFieldSemanticsGate(registry=registry).evaluate(target)
+
+    assert decision is not None
+    assert decision.evidence["missing_fields"] == ["evidence"]
+    assert "`evidence`" in decision.repair_prompt
 
 
 @pytest.mark.asyncio
