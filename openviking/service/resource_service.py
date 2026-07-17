@@ -214,6 +214,19 @@ class ResourceService:
                         "watch_interval > 0 requires a stable target URI. "
                         "Pass 'to' explicitly, or add a resource type that returns root_uri."
                     )
+                if processor_kwargs.get("temp_file_id"):
+                    # An uploaded source is a one-time snapshot: the staged upload is
+                    # consumed at ingest, so a watch task recorded against it would
+                    # re-process the frozen snapshot every interval — silently ignoring
+                    # all edits to the client-side source — instead of watching anything
+                    # live. Reject at creation instead of pretending to watch.
+                    raise InvalidArgumentError(
+                        "watch_interval > 0 is not supported for uploaded content: an "
+                        "upload is consumed as a one-time snapshot at ingest, so the "
+                        "watch would re-process stale content forever. Watch a URL / "
+                        "sitemap / RSS source instead, or re-add the resource when the "
+                        "source changes."
+                    )
                 try:
                     sanitized = self._sanitize_watch_processor_kwargs(processor_kwargs)
                     if watch_auth_state is not None:
@@ -651,6 +664,18 @@ class ResourceService:
         self._ensure_initialized()
         normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
         kwargs.update(normalized_args.processor_kwargs)
+        if watch_interval > 0 and kwargs.get("temp_file_id"):
+            # Fail fast, before any ingestion: an uploaded source is a one-time
+            # snapshot, so a watch on it can never observe the live source (see the
+            # matching guard in _manage_watch_if_needed, the watch-creation choke
+            # point that protects all other call paths).
+            raise InvalidArgumentError(
+                "watch_interval > 0 is not supported for uploaded content: an "
+                "upload is consumed as a one-time snapshot at ingest, so the "
+                "watch would re-process stale content forever. Watch a URL / "
+                "sitemap / RSS source instead, or re-add the resource when the "
+                "source changes."
+            )
         if not to and not parent:
             from openviking.server.dependencies import get_server_config
 
