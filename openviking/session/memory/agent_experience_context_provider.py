@@ -12,16 +12,20 @@ source_trajectories as grounding material.
 
 from typing import Any, Dict, List, Optional
 
-from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.memory.experience_evidence import (
+    COMPARISON_TRAJ_INJECT_TOP_K,
+    SEARCH_TOP_K,
+    ExperienceEvidenceBundle,
+    ExperienceEvidenceLoader,
+    ExperienceEvidenceQuery,
+)
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
 from openviking.session.memory.tools import add_tool_call_pair_to_messages
-from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.template_utils import TemplateUtils
-from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
 
@@ -30,30 +34,6 @@ logger = get_logger(__name__)
 
 EXPERIENCE_MEMORY_TYPE = "experiences"
 TRAJECTORY_MEMORY_TYPE = "trajectories"
-SEARCH_TOP_K = 5
-SOURCE_TRAJ_TOP_K = 3  # only attach source_trajectories for the top-3 candidates
-MAX_SOURCE_TRAJS = 3  # max trajectories to load per experience
-COMPARISON_TRAJ_TOP_K = 6  # peer trajectories to compare before experience writing
-MAX_COMPARISON_TRAJ_CHARS = 6000
-
-
-def _is_success_trajectory(item: Dict[str, Any]) -> bool:
-    return str(item.get("outcome") or "").strip().lower() == "success"
-
-
-def _comparison_trajectory_sort_key(item: Dict[str, Any]) -> tuple[int, str]:
-    outcome = str(item.get("outcome") or "").strip().lower()
-    outcome_rank = {"success": 0, "partial": 1, "failure": 2, "unfinished": 3}.get(
-        outcome,
-        4,
-    )
-    uri = str(item.get("uri") or "")
-    return outcome_rank, uri
-
-
-def _is_directory_not_found_error(exc: Exception) -> bool:
-    message = str(exc).lower()
-    return "directory not found" in message or "not_found" in message
 
 
 class AgentExperienceContextProvider(SessionExtractContextProvider):
@@ -70,6 +50,7 @@ class AgentExperienceContextProvider(SessionExtractContextProvider):
         case_uri: str = "",
         case_name: str = "",
         task_signature: str = "",
+        evidence_loader: ExperienceEvidenceLoader | None = None,
     ):
         super().__init__(messages=messages, latest_archive_overview=latest_archive_overview)
         self.trajectory_summary = trajectory_summary
@@ -77,6 +58,7 @@ class AgentExperienceContextProvider(SessionExtractContextProvider):
         self.case_uri = str(case_uri or "")
         self.case_name = str(case_name or "")
         self.task_signature = str(task_signature or "")
+        self._evidence_loader = evidence_loader
         self.prefetched_uris: List[str] = []
         self.prefetched_comparison_trajectories: List[Dict[str, Any]] = []
 
@@ -199,163 +181,6 @@ All memory content must be written in {output_language}.
             {"user_space": user_space},
         )
 
-    async def _search_comparison_trajectories(
-        self,
-        *,
-        trajectory_dir: str,
-        viking_fs: VikingFS,
-        ctx: RequestContext,
-    ) -> List[Dict[str, Any]]:
-        if not trajectory_dir or not viking_fs:
-            return []
-
-        results: List[Dict[str, Any]] = []
-        seen = {self.trajectory_uri}
-
-        linked_uris = await self._case_linked_trajectory_uris(viking_fs=viking_fs, ctx=ctx)
-        if linked_uris is not None:
-            linked_results = [
-                result
-                for result in await self._load_comparison_trajectory_results(
-                    linked_uris,
-                    viking_fs=viking_fs,
-                    ctx=ctx,
-                    seen=seen,
-                )
-                if _is_success_trajectory(result)
-            ]
-            linked_results.sort(key=_comparison_trajectory_sort_key)
-            return linked_results[:COMPARISON_TRAJ_TOP_K]
-
-        candidate_uris = await self.search_files(
-            query=self.trajectory_summary[:500] or "trajectory",
-            search_uris=[trajectory_dir],
-            limit=COMPARISON_TRAJ_TOP_K + 2,
-        )
-        semantic_results = [
-            result
-            for result in await self._load_comparison_trajectory_results(
-                candidate_uris,
-                viking_fs=viking_fs,
-                ctx=ctx,
-                seen=seen,
-            )
-            if _is_success_trajectory(result)
-        ]
-        for result in semantic_results:
-            results.append(result)
-            if len(results) >= COMPARISON_TRAJ_TOP_K:
-                break
-        return results
-
-    async def _case_linked_trajectory_uris(
-        self,
-        *,
-        viking_fs: VikingFS,
-        ctx: RequestContext,
-    ) -> Optional[List[str]]:
-        case_uri = await self._resolve_case_uri(viking_fs=viking_fs, ctx=ctx)
-        if not case_uri:
-            return None
-        try:
-            raw = await viking_fs.read_file(case_uri, ctx=ctx) or ""
-            case_file = MemoryFileUtils.read(raw, uri=case_uri)
-        except Exception as e:
-            tracer.error(f"Failed to read case memory for trajectory comparison {case_uri}: {e}")
-            return []
-
-        uris: List[str] = []
-        for link in list(case_file.links or []) + list(case_file.backlinks or []):
-            from_uri = str(link.get("from_uri") if isinstance(link, dict) else link.from_uri)
-            to_uri = str(link.get("to_uri") if isinstance(link, dict) else link.to_uri)
-            for uri in (to_uri, from_uri):
-                if "/memories/trajectories/" in uri and uri not in uris:
-                    uris.append(uri)
-        return uris
-
-    async def _resolve_case_uri(
-        self,
-        *,
-        viking_fs: VikingFS,
-        ctx: RequestContext,
-    ) -> str:
-        if self.case_uri:
-            return self.case_uri
-        try:
-            raw = await viking_fs.read_file(self.trajectory_uri, ctx=ctx) or ""
-            trajectory_file = MemoryFileUtils.read(raw, uri=self.trajectory_uri)
-        except Exception:
-            return ""
-        fields = dict(trajectory_file.extra_fields or {})
-        uri = str(fields.get("case_uri") or "")
-        if uri:
-            return uri
-        for link in list(trajectory_file.backlinks or []) + list(trajectory_file.links or []):
-            from_uri = str(link.get("from_uri") if isinstance(link, dict) else link.from_uri)
-            to_uri = str(link.get("to_uri") if isinstance(link, dict) else link.to_uri)
-            for candidate in (from_uri, to_uri):
-                if "/memories/cases/" in candidate:
-                    return candidate
-        return ""
-
-    async def _load_comparison_trajectory_results(
-        self,
-        candidate_uris: List[str],
-        *,
-        viking_fs: VikingFS,
-        ctx: RequestContext,
-        seen: set[str],
-    ) -> List[Dict[str, Any]]:
-        results: List[Dict[str, Any]] = []
-        for uri in candidate_uris:
-            if not uri or uri in seen:
-                continue
-            seen.add(uri)
-            try:
-                raw = await viking_fs.read_file(uri, ctx=ctx) or ""
-                mf = MemoryFileUtils.read(raw, uri=uri)
-            except Exception as e:
-                tracer.error(f"Failed to read comparison trajectory {uri}: {e}")
-                continue
-            if mf.memory_type and mf.memory_type != TRAJECTORY_MEMORY_TYPE:
-                continue
-            content = str(mf.content or "")
-            if len(content) > MAX_COMPARISON_TRAJ_CHARS:
-                content = content[: MAX_COMPARISON_TRAJ_CHARS - 20].rstrip() + "\n...<truncated>"
-            result = mf.to_metadata()
-            result["content"] = content
-            result["uri"] = uri
-            results.append(result)
-        return results
-
-    async def _load_source_trajectories(
-        self,
-        exp_uri: str,
-        links: List[Dict],
-        viking_fs: VikingFS,
-        ctx: RequestContext,
-    ) -> List[Dict]:
-        """Load the most recent source trajectories for a candidate experience from its links."""
-        uris = [
-            link.get("to_uri", "")
-            for link in (links or [])
-            if link.get("link_type") == "derived_from" and link.get("to_uri", "")
-        ]
-
-        recent_uris = uris[-MAX_SOURCE_TRAJS:]
-        results = []
-        for uri in recent_uris:
-            try:
-                raw = await viking_fs.read_file(uri, ctx=ctx) or ""
-                mf = MemoryFileUtils.read(raw, uri=uri)
-                result = mf.to_metadata()
-                result["content"] = mf.content
-                result["uri"] = uri
-                results.append(result)
-            except Exception as e:
-                tracer.error(f"Failed to read source trajectory {uri}: {e}")
-        return results
-
     def _build_context_result(
         self,
         *,
@@ -381,43 +206,22 @@ All memory content must be written in {output_language}.
             return []
 
         ctx = self._ctx
-        viking_fs = self._viking_fs
+        query = ExperienceEvidenceQuery(
+            trajectory_summary=self.trajectory_summary,
+            trajectory_uri=self.trajectory_uri,
+            experience_dir=self._render_experience_dir(ctx),
+            trajectory_dir=self._render_trajectory_dir(ctx),
+            case_uri=self.case_uri,
+            case_name=self.case_name,
+            task_signature=self.task_signature,
+        )
+        loader = self._evidence_loader or ExperienceEvidenceLoader(self._viking_fs)
+        bundle = await loader.load(query, ctx)
+        return self._render_evidence_bundle(bundle)
 
-        experience_dir = self._render_experience_dir(ctx)
-        trajectory_dir = self._render_trajectory_dir(ctx)
-
-        candidate_uris: List[str] = []
-        if experience_dir and viking_fs:
-            candidate_uris = await self.search_files(
-                query=self.trajectory_summary[:500] or "experience",
-                search_uris=[experience_dir],
-                limit=SEARCH_TOP_K,
-            )
-
-            if not candidate_uris:
-                try:
-                    entries = await viking_fs.ls(experience_dir, output="original", ctx=ctx)
-                    fallback_uris: List[str] = []
-                    for entry in entries or []:
-                        uri = str(entry.get("uri", "")) if isinstance(entry, dict) else ""
-                        name = str(entry.get("name", "")) if isinstance(entry, dict) else ""
-                        if not uri.endswith(".md"):
-                            continue
-                        if name in {".overview.md", ".abstract.md"}:
-                            continue
-                        if uri.endswith("/.overview.md") or uri.endswith("/.abstract.md"):
-                            continue
-                        fallback_uris.append(uri)
-                    candidate_uris = fallback_uris[:SEARCH_TOP_K]
-                except AGFSNotFoundError:
-                    candidate_uris = []
-                except FileNotFoundError:
-                    candidate_uris = []
-                except Exception as e:
-                    if _is_directory_not_found_error(e):
-                        candidate_uris = []
-                    else:
-                        tracer.error(f"Failed to list experiences in {experience_dir}: {e}")
+    def _render_evidence_bundle(self, bundle: ExperienceEvidenceBundle) -> List[Dict]:
+        self.prefetched_uris = []
+        self.prefetched_comparison_trajectories = []
 
         prefetch_messages: List[Dict[str, Any]] = [self._build_conversation_message()]
         add_tool_call_pair_to_messages(
@@ -436,67 +240,62 @@ All memory content must be written in {output_language}.
         )
         call_id_seq = 0
 
-        comparison_trajectories = await self._search_comparison_trajectories(
-            trajectory_dir=trajectory_dir,
-            viking_fs=viking_fs,
-            ctx=ctx,
-        )
-        self.prefetched_comparison_trajectories = list(comparison_trajectories)
-        for comparison_idx, comparison_result in enumerate(comparison_trajectories):
-            comparison_uri = comparison_result["uri"]
+        comparison_trajectories = bundle.comparison_trajectories[:COMPARISON_TRAJ_INJECT_TOP_K]
+        for comparison_idx, comparison_evidence in enumerate(comparison_trajectories):
+            comparison_file = comparison_evidence.memory_file
+            comparison_uri = str(comparison_file.uri or "")
+            comparison_result = self._build_context_result(
+                uri=comparison_uri,
+                context_role="comparison_trajectory",
+                memory_file=comparison_file,
+            )
+            self.prefetched_comparison_trajectories.append(comparison_result)
             add_tool_call_pair_to_messages(
                 messages=prefetch_messages,
                 call_id=f"comparison-{comparison_idx}",
                 tool_name="read",
                 params={"uri": comparison_uri},
-                result=self._build_context_result(
-                    uri=comparison_uri,
-                    context_role="comparison_trajectory",
-                    result=comparison_result,
-                ),
+                result=comparison_result,
             )
 
-        for idx, exp_uri in enumerate(candidate_uris):
-            result = await self.read_file(exp_uri)
-            if result is None:
+        for idx, candidate in enumerate(bundle.candidates):
+            memory_file = candidate.memory_file
+            exp_uri = str(memory_file.uri or "")
+            if not exp_uri:
                 continue
-
             self.prefetched_uris.append(exp_uri)
-            mf = self._read_file_contents.get(exp_uri)
-            if not mf:
-                continue
+            self._read_file_contents[exp_uri] = memory_file
+            page_id = self.get_extract_context().page_id_map.get_page_id(exp_uri)
+            result = self._build_context_result(
+                uri=exp_uri,
+                context_role="candidate_experience",
+                memory_file=memory_file,
+            )
+            result["page_id"] = page_id
 
             add_tool_call_pair_to_messages(
                 messages=prefetch_messages,
                 call_id=call_id_seq,
                 tool_name="read",
                 params={"uri": exp_uri},
-                result=self._build_context_result(
-                    uri=exp_uri,
-                    context_role="candidate_experience",
-                    result=result,
-                    memory_file=mf,
-                ),
+                result=result,
             )
             call_id_seq += 1
 
-            if idx < SOURCE_TRAJ_TOP_K and viking_fs:
-                source_trajs = await self._load_source_trajectories(
-                    exp_uri, mf.links, viking_fs, ctx
+            for source_idx, source_evidence in enumerate(candidate.source_trajectories):
+                source_file = source_evidence.memory_file
+                source_uri = str(source_file.uri or "")
+                add_tool_call_pair_to_messages(
+                    messages=prefetch_messages,
+                    call_id=f"source-{idx}-{source_idx}",
+                    tool_name="read",
+                    params={"uri": source_uri},
+                    result=self._build_context_result(
+                        uri=source_uri,
+                        context_role="candidate_source_trajectory",
+                        memory_file=source_file,
+                    ),
                 )
-                for source_idx, source_result in enumerate(source_trajs):
-                    source_uri = source_result["uri"]
-                    add_tool_call_pair_to_messages(
-                        messages=prefetch_messages,
-                        call_id=f"source-{idx}-{source_idx}",
-                        tool_name="read",
-                        params={"uri": source_uri},
-                        result=self._build_context_result(
-                            uri=source_uri,
-                            context_role="candidate_source_trajectory",
-                            result=source_result,
-                        ),
-                    )
 
         prefetch_messages.append(
             {

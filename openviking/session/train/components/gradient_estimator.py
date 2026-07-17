@@ -21,7 +21,15 @@ from openviking.session.memory.experience_sections import (
 )
 from openviking.session.memory.extract_loop import ExtractLoop, PostValidationRetryDecision
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
-from openviking.session.train.domain import ExperienceSet, RolloutAnalysis, Trajectory
+from openviking.session.train.components import (
+    experience_replay_codecs as _experience_replay_codecs,  # noqa: F401
+)
+from openviking.session.train.domain import (
+    ExperienceSet,
+    RolloutAnalysis,
+    RubricEvaluation,
+    Trajectory,
+)
 from openviking.session.train.gates import (
     ExperienceRootCausePreventionGate,
     GateDecision,
@@ -33,7 +41,8 @@ from openviking.session.train.gates import (
 from openviking.session.train.gradients import PatchSemanticGradient
 from openviking.session.train.utils import first_uri, safe_int
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.telemetry import tracer
+from openviking.telemetry import replay, tracer
+from openviking.telemetry.replay.models import EncodedValue, ReplayCodecError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
@@ -50,6 +59,62 @@ class ExperienceGradientContext:
     messages: list[Message]
     strict_extract_errors: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ExperienceGradientEstimateRequest:
+    """Serializable input for one trajectory's experience-gradient replay entry."""
+
+    trajectory: Trajectory
+    messages: list[Message]
+    evaluation: RubricEvaluation
+    experience_set: ExperienceSet
+    request_context: RequestContext
+    case_uri: str = ""
+    case_name: str = ""
+    task_signature: str = ""
+    diagnostics: dict[str, Any] = field(default_factory=dict)
+
+
+def _encoded_request_field(payload: dict[str, Any], name: str) -> EncodedValue:
+    value = payload.get(name)
+    if not isinstance(value, dict):
+        raise ReplayCodecError(f"Experience replay request is missing encoded field {name!r}")
+    return value
+
+
+@replay.codec(
+    ExperienceGradientEstimateRequest,
+    name="openviking.train.experience_gradient_estimate_request",
+)
+class ExperienceGradientEstimateRequestReplayCodec:
+    @staticmethod
+    def encode(value: ExperienceGradientEstimateRequest, encode):
+        return {
+            "trajectory": encode(value.trajectory),
+            "messages": encode(value.messages),
+            "evaluation": encode(value.evaluation),
+            "experience_set": encode(value.experience_set),
+            "request_context": encode(value.request_context),
+            "case_uri": encode(value.case_uri),
+            "case_name": encode(value.case_name),
+            "task_signature": encode(value.task_signature),
+            "diagnostics": encode(value.diagnostics),
+        }
+
+    @staticmethod
+    def decode(payload, decode):
+        return ExperienceGradientEstimateRequest(
+            trajectory=decode(_encoded_request_field(payload, "trajectory")),
+            messages=decode(_encoded_request_field(payload, "messages")),
+            evaluation=decode(_encoded_request_field(payload, "evaluation")),
+            experience_set=decode(_encoded_request_field(payload, "experience_set")),
+            request_context=decode(_encoded_request_field(payload, "request_context")),
+            case_uri=decode(_encoded_request_field(payload, "case_uri")),
+            case_name=decode(_encoded_request_field(payload, "case_name")),
+            task_signature=decode(_encoded_request_field(payload, "task_signature")),
+            diagnostics=decode(_encoded_request_field(payload, "diagnostics")),
+        )
 
 
 @dataclass(slots=True)
@@ -79,33 +144,85 @@ class ExperienceGradientEstimator:
             raise ValueError("ExperienceGradientContext.request_context is required")
 
         extract_context = _context_with_analysis_messages(context, analysis)
+        requests = [
+            ExperienceGradientEstimateRequest(
+                trajectory=trajectory,
+                messages=list(extract_context.messages),
+                evaluation=analysis.evaluation,
+                experience_set=experience_set,
+                request_context=extract_context.request_context,
+                case_uri=_trajectory_or_analysis_metadata(trajectory, analysis, "case_uri"),
+                case_name=_trajectory_or_analysis_metadata(trajectory, analysis, "case_name"),
+                task_signature=_trajectory_or_analysis_metadata(
+                    trajectory, analysis, "task_signature"
+                ),
+            )
+            for trajectory in analysis.trajectories
+            if _should_update_experience_from_trajectory(trajectory)
+        ]
 
-        async def estimate_one(trajectory: Trajectory) -> list[PatchSemanticGradient]:
-            if not _should_update_experience_from_trajectory(trajectory):
-                return []
-            extract_context.metadata["current_analysis"] = analysis
-            extract_context.metadata["current_experience_set"] = experience_set
+        async def estimate_one(
+            request: ExperienceGradientEstimateRequest,
+        ) -> list[PatchSemanticGradient]:
             try:
-                operations = await self._run_extract_loop(trajectory, extract_context)
+                return await self.estimate_trajectory_gradients(request)
             except Exception:
                 logger.exception("Experience gradient estimation failed")
                 if context.strict_extract_errors:
                     raise
                 return []
+
+        gradient_batches = await asyncio.gather(*(estimate_one(request) for request in requests))
+        for request in requests:
+            _merge_diagnostics(context.metadata, request.diagnostics)
+            _merge_diagnostics(analysis.metadata, request.diagnostics)
+        return [gradient for batch in gradient_batches for gradient in batch]
+
+    @replay.entry("memory.experience.estimate_gradients")
+    async def estimate_trajectory_gradients(
+        self,
+        request: ExperienceGradientEstimateRequest,
+    ) -> list[PatchSemanticGradient]:
+        analysis_metadata = {
+            key: value
+            for key, value in {
+                "case_uri": request.case_uri,
+                "case_name": request.case_name,
+                "task_signature": request.task_signature,
+            }.items()
+            if value
+        }
+        analysis = RolloutAnalysis(
+            evaluation=request.evaluation,
+            trajectories=[request.trajectory],
+            metadata=analysis_metadata,
+        )
+        context = ExperienceGradientContext(
+            request_context=request.request_context,
+            messages=list(request.messages),
+            metadata={
+                "current_analysis": analysis,
+                "current_experience_set": request.experience_set,
+            },
+        )
+        try:
+            operations = await self._run_extract_loop(request.trajectory, context)
             if operations is None:
                 return []
-            gradients = _operations_to_gradients(
+            return _operations_to_gradients(
                 operations=operations,
-                trajectory=trajectory,
+                trajectory=request.trajectory,
                 analysis=analysis,
-                experience_set=experience_set,
+                experience_set=request.experience_set,
             )
-            return gradients
-
-        gradient_batches = await asyncio.gather(
-            *(estimate_one(trajectory) for trajectory in analysis.trajectories)
-        )
-        return [gradient for batch in gradient_batches for gradient in batch]
+        finally:
+            request.diagnostics.update(
+                {
+                    key: value
+                    for key, value in context.metadata.items()
+                    if key not in {"current_analysis", "current_experience_set"}
+                }
+            )
 
     @tracer(
         "train.gradient_estimator.experience.extract_loop",
@@ -232,6 +349,11 @@ class ExperienceGradientEstimator:
         operations, _ = await orchestrator.run()
         _sync_prefetched_comparison_trajectories(provider, trajectory)
         return operations
+
+
+@replay.component(ExperienceGradientEstimator)
+def _current_experience_gradient_estimator() -> ExperienceGradientEstimator:
+    return ExperienceGradientEstimator()
 
 
 def _sync_prefetched_comparison_trajectories(
@@ -456,6 +578,16 @@ def _context_with_analysis_messages(
         strict_extract_errors=context.strict_extract_errors,
         metadata=dict(context.metadata),
     )
+
+
+def _merge_diagnostics(target: dict[str, Any], diagnostics: dict[str, Any]) -> None:
+    for key, value in diagnostics.items():
+        if isinstance(value, list):
+            target.setdefault(key, []).extend(value)
+        elif isinstance(value, dict):
+            target.setdefault(key, {}).update(value)
+        else:
+            target[key] = value
 
 
 def _operations_to_gradients(

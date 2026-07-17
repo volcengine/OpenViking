@@ -132,6 +132,45 @@ def test_case_experience_links_require_policy_root_uri():
         )
 
 
+def test_case_trajectory_link_types_encode_outcome():
+    from openviking.session.compressor_v3 import _case_trajectory_links
+
+    case_uri = "viking://user/u/memories/cases/case.md"
+    trajectories = [
+        SimpleNamespace(
+            uri=f"viking://user/u/memories/trajectories/{outcome}.md",
+            outcome=outcome,
+        )
+        for outcome in ("success", "failure", "partial", "unfinished", "unknown")
+    ]
+    trajectories.extend(
+        [
+            SimpleNamespace(
+                uri="viking://user/u/memories/trajectories/invalid.md",
+                outcome="invalid",
+            ),
+            SimpleNamespace(
+                uri="viking://user/u/memories/trajectories/missing.md",
+            ),
+        ]
+    )
+
+    links = _case_trajectory_links(
+        analysis=SimpleNamespace(trajectories=trajectories),
+        case_uri=case_uri,
+    )
+
+    assert [link.link_type for link in links] == [
+        "successful_trajectory",
+        "failed_trajectory",
+        "partial_trajectory",
+        "unfinished_trajectory",
+        "unknown_trajectory",
+        "unknown_trajectory",
+        "unknown_trajectory",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_train_from_extracted_case_memories_submits_streaming_rollout(monkeypatch):
     submitted_gradients = []
@@ -1120,7 +1159,7 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
     case_file = MemoryFileUtils.read(fs.files[case_uri], uri=case_uri)
     assert any(
         link["to_uri"] == traj_uri
-        and link["link_type"] == "related_to"
+        and link["link_type"] == "successful_trajectory"
         and link.get("match_text") is None
         and link.get("description") == ""
         for link in case_file.links
@@ -1246,6 +1285,130 @@ async def test_render_case_links_serializes_concurrent_updates(monkeypatch):
     case_file = MemoryFileUtils.read(fs.files[case_uri], uri=case_uri)
     assert {link["to_uri"] for link in case_file.links} == {exp_a, exp_b}
     assert lock_manager.timeouts == [None, None]
+
+
+@pytest.mark.asyncio
+async def test_render_case_link_retention_keeps_newest_trajectory_links(monkeypatch):
+    from openviking.session import compressor_v3
+
+    case_uri = "viking://user/u/memories/cases/bounded.md"
+
+    def stored_link(to_uri: str, link_type: str, created_at: str) -> dict:
+        return StoredLink(
+            from_uri=case_uri,
+            to_uri=to_uri,
+            link_type=link_type,
+            weight=1.0,
+            created_at=created_at,
+        ).model_dump()
+
+    success_times = [
+        "2026-07-17T00:00:00Z",
+        "2026-07-17T02:00:00Z",
+        "2026-07-17T02:00:00Z",
+        "2026-07-17T03:00:00Z",
+        "2026-07-17T04:00:00Z",
+        "2026-07-17T05:00:00Z",
+        "2026-07-17T06:00:00Z",
+    ]
+    success_uris = [
+        f"viking://user/u/memories/trajectories/success_{index}.md" for index in range(7)
+    ]
+    non_success_types = [
+        "failed_trajectory",
+        "partial_trajectory",
+        "unfinished_trajectory",
+        "unknown_trajectory",
+        "failed_trajectory",
+        "partial_trajectory",
+        "unfinished_trajectory",
+    ]
+    non_success_uris = [
+        f"viking://user/u/memories/trajectories/non_success_{index}.md" for index in range(7)
+    ]
+    experience_uris = [
+        f"viking://user/u/memories/experiences/experience_{index}.md" for index in range(3)
+    ]
+    unrelated_uri = "viking://user/u/memories/entities/topic.md"
+    legacy_trajectory_uri = "viking://user/u/memories/trajectories/legacy.md"
+    initial_links = [
+        *[
+            stored_link(uri, "successful_trajectory", success_times[index])
+            for index, uri in enumerate(success_uris)
+        ],
+        *[
+            stored_link(uri, non_success_types[index], f"2026-07-17T0{index}:30:00Z")
+            for index, uri in enumerate(non_success_uris)
+        ],
+        *[stored_link(uri, "related_to", "") for uri in experience_uris],
+        stored_link(unrelated_uri, "related_to", ""),
+        stored_link(legacy_trajectory_uri, "related_to", ""),
+    ]
+
+    class FakeFS:
+        def __init__(self):
+            self.files = {
+                case_uri: MemoryFileUtils.write(
+                    MemoryFile(
+                        uri=case_uri,
+                        memory_type="cases",
+                        links=initial_links,
+                        extra_fields={"memory_type": "cases", "case_name": "bounded"},
+                    )
+                )
+            }
+
+        def _uri_to_path(self, uri, ctx=None):
+            del ctx
+            return uri.removeprefix("viking://")
+
+        async def read_file(self, uri, ctx=None):
+            del ctx
+            return self.files[uri]
+
+        async def write_file(self, uri, content, ctx=None, lock_handle=None):
+            del ctx, lock_handle
+            self.files[uri] = content
+
+    fs = FakeFS()
+    no_op_lease = SimpleNamespace(handle=object(), close=AsyncMock())
+    monkeypatch.setattr(compressor_v3, "get_lock_manager", lambda: object())
+    monkeypatch.setattr(
+        compressor_v3.OwnedLockLease,
+        "acquire_exact_paths",
+        AsyncMock(return_value=no_op_lease),
+    )
+
+    await compressor_v3._render_case_links_from_template(
+        case_uri=case_uri,
+        links=[
+            StoredLink(
+                from_uri=case_uri,
+                to_uri=experience_uris[-1],
+                link_type="related_to",
+                weight=1.0,
+            )
+        ],
+        ctx=_ctx(),
+        viking_fs=fs,
+    )
+
+    case_file = MemoryFileUtils.read(fs.files[case_uri], uri=case_uri)
+    success_links = [
+        link for link in case_file.links if link["link_type"] == "successful_trajectory"
+    ]
+    non_success_links = [
+        link for link in case_file.links if link["link_type"] in set(non_success_types)
+    ]
+    experience_links = [
+        link for link in case_file.links if "/memories/experiences/" in link["to_uri"]
+    ]
+
+    assert [link["to_uri"] for link in success_links] == list(reversed(success_uris[2:]))
+    assert [link["to_uri"] for link in non_success_links] == list(reversed(non_success_uris[2:]))
+    assert {link["to_uri"] for link in experience_links} == set(experience_uris)
+    assert unrelated_uri in {link["to_uri"] for link in case_file.links}
+    assert legacy_trajectory_uri not in {link["to_uri"] for link in case_file.links}
 
 
 def test_training_messages_after_case_spec_filters_legacy_embedded_evaluation_message():

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -17,10 +18,32 @@ from openviking.session.memory.agent_trajectory_context_provider import (
     AgentTrajectoryContextProvider,
 )
 from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.memory.experience_evidence import (
+    CandidateExperienceEvidence,
+    ExperienceEvidenceBundle,
+    TrajectoryEvidence,
+)
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
 from openviking_cli.session.user_id import UserIdentifier
+
+
+@pytest.fixture(autouse=True)
+def _drain_background_tasks():
+    """These isolated provider tests do not need the session integration client."""
+    yield
+
+
+def _ctx() -> RequestContext:
+    return RequestContext(
+        user=UserIdentifier(account_id="acc", user_id="user_1"),
+        role=Role.USER,
+    )
+
+
+def _loader(bundle: ExperienceEvidenceBundle):
+    return SimpleNamespace(load=AsyncMock(return_value=bundle))
 
 
 def test_create_tool_context_uses_extract_context_page_id_map():
@@ -98,18 +121,14 @@ def test_experience_schema_action_benefit_rule_requires_authoritative_evidence()
 
 @pytest.mark.asyncio
 async def test_agent_experience_prefetch_starts_with_conversation_and_new_trajectory_read():
+    evidence_loader = _loader(ExperienceEvidenceBundle())
     provider = AgentExperienceContextProvider(
         messages=[],
         trajectory_summary="album release party discussion",
         trajectory_uri="viking://user/user_sample_9/memories/trajectories/album_release_party_discussion.md",
+        evidence_loader=evidence_loader,
     )
-    provider._ctx = RequestContext(
-        user=UserIdentifier(account_id="acc", user_id="user_1"),
-        role=Role.USER,
-    )
-    provider._viking_fs = AsyncMock()
-    provider._transaction_handle = None
-    provider.search_files = AsyncMock(return_value=[])
+    provider._ctx = _ctx()
 
     with patch(
         "openviking.session.memory.agent_experience_context_provider.add_tool_call_pair_to_messages"
@@ -125,314 +144,90 @@ async def test_agent_experience_prefetch_starts_with_conversation_and_new_trajec
     assert add_tool_call_pair.call_args_list[0].kwargs["result"]["uri"] == provider.trajectory_uri
     assert messages[-1]["role"] == "user"
     assert "candidate_experience" in messages[-1]["content"]
+    evidence_loader.load.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_agent_experience_prefetch_includes_structured_read_results():
+async def test_agent_experience_prefetch_renders_candidate_without_content_and_populates_reads():
+    experience_uri = (
+        "viking://user/user_sample_9/memories/experiences/"
+        "personal_experience_sharing_conversation_flow.md"
+    )
+    candidate_file = MemoryFile(
+        uri=experience_uri,
+        content="line one\nline two",
+        memory_type="experiences",
+        extra_fields={
+            "experience_name": "personal_experience_sharing_conversation_flow",
+            "situation": "- Applies when: the user shares a personal experience.",
+            "reminder": "- Acknowledge the experience before changing topics.",
+            "procedure": "- Before replying: identify the user's main point.",
+            "anti_pattern": "- Do not ignore the shared experience.",
+        },
+    )
     provider = AgentExperienceContextProvider(
         messages=[],
         trajectory_summary="album release party discussion",
-        trajectory_uri="viking://user/user_sample_9/memories/trajectories/album_release_party_discussion.md",
+        trajectory_uri="viking://user/user_sample_9/memories/trajectories/current.md",
+        evidence_loader=_loader(
+            ExperienceEvidenceBundle(
+                candidates=[CandidateExperienceEvidence(memory_file=candidate_file)]
+            )
+        ),
     )
-    provider._ctx = RequestContext(
-        user=UserIdentifier(account_id="acc", user_id="user_1"),
-        role=Role.USER,
-    )
-    provider._viking_fs = AsyncMock()
-    provider._transaction_handle = None
-
-    provider.search_files = AsyncMock(
-        return_value=[
-            "viking://user/user_sample_9/memories/experiences/personal_experience_sharing_conversation_flow.md"
-        ]
-    )
-
-    read_result = {
-        "experience_name": "personal_experience_sharing_conversation_flow",
-        "content": "1 | line one\n2 | line two",
-        "page_id": 1,
-        "memory_type": "experiences",
-    }
-    provider.read_file = AsyncMock(return_value=read_result)
-    provider._read_file_contents = {
-        "viking://user/user_sample_9/memories/experiences/personal_experience_sharing_conversation_flow.md": MemoryFile(
-            uri="viking://user/user_sample_9/memories/experiences/personal_experience_sharing_conversation_flow.md",
-            content="line one\nline two",
-            memory_type="experiences",
-            extra_fields={
-                "experience_name": "personal_experience_sharing_conversation_flow",
-                "page_id": 1,
-                "situation": "- Applies when: the user shares a personal experience.",
-                "reminder": "- Acknowledge the experience before changing topics.",
-                "procedure": "- Before replying: identify the user's main point.",
-                "anti_pattern": "- Do not ignore the shared experience.",
-            },
-            links=[],
-        )
-    }
+    provider._ctx = _ctx()
 
     with patch(
         "openviking.session.memory.agent_experience_context_provider.add_tool_call_pair_to_messages"
     ) as add_tool_call_pair:
-        messages = await provider.prefetch()
+        await provider.prefetch()
 
-    assert any(msg.get("role") == "user" for msg in messages)
-    assert add_tool_call_pair.call_count == 2
-    assert (
-        add_tool_call_pair.call_args_list[1].kwargs["result"]["context_role"]
-        == "candidate_experience"
-    )
-    assert add_tool_call_pair.call_args_list[1].kwargs["result"]["page_id"] == 1
     candidate = add_tool_call_pair.call_args_list[1].kwargs["result"]
+    assert candidate["context_role"] == "candidate_experience"
+    assert candidate["page_id"] == 1
     assert candidate["situation"].startswith("- Applies when:")
     assert "content" not in candidate
+    assert provider.read_file_contents[experience_uri] == candidate_file
 
 
 @pytest.mark.asyncio
-async def test_agent_experience_prefetch_missing_experience_dir_returns_empty_candidates():
+async def test_agent_experience_prefetch_injects_only_two_newest_comparisons():
+    comparison_uris = [
+        f"viking://user/user_1/memories/trajectories/success_{index}.md"
+        for index in range(5, 0, -1)
+    ]
+    bundle = ExperienceEvidenceBundle(
+        comparison_trajectories=[
+            TrajectoryEvidence(
+                MemoryFile(
+                    uri=uri,
+                    content=f"# success {index}",
+                    memory_type="trajectories",
+                    extra_fields={"outcome": "success"},
+                )
+            )
+            for index, uri in enumerate(comparison_uris)
+        ]
+    )
     provider = AgentExperienceContextProvider(
         messages=[],
-        trajectory_summary="new execution",
-        trajectory_uri="viking://user/user_1/memories/trajectories/new_execution.md",
+        trajectory_summary="failed execution",
+        trajectory_uri="viking://user/user_1/memories/trajectories/current_failure.md",
+        evidence_loader=_loader(bundle),
     )
-    provider._ctx = RequestContext(
-        user=UserIdentifier(account_id="acc", user_id="user_1"),
-        role=Role.USER,
+    provider._ctx = _ctx()
+
+    with patch(
+        "openviking.session.memory.agent_experience_context_provider.add_tool_call_pair_to_messages"
+    ) as add_tool_call_pair:
+        await provider.prefetch()
+
+    comparison_results = [
+        call.kwargs["result"]
+        for call in add_tool_call_pair.call_args_list
+        if call.kwargs["result"]["context_role"] == "comparison_trajectory"
+    ]
+    assert [item["uri"] for item in comparison_results] == comparison_uris[:2]
+    assert [item["uri"] for item in provider.prefetched_comparison_trajectories] == (
+        comparison_uris[:2]
     )
-    provider._viking_fs = AsyncMock()
-    provider._viking_fs.ls = AsyncMock(
-        side_effect=Exception("Directory not found: viking://user/user_1/memories/experiences")
-    )
-    provider._transaction_handle = None
-    provider.search_files = AsyncMock(return_value=[])
-
-    with (
-        patch(
-            "openviking.session.memory.agent_experience_context_provider.tracer.error"
-        ) as tracer_error,
-        patch(
-            "openviking.session.memory.agent_experience_context_provider.add_tool_call_pair_to_messages"
-        ) as add_tool_call_pair,
-    ):
-        messages = await provider.prefetch()
-
-    assert messages[-1]["role"] == "user"
-    assert add_tool_call_pair.call_count == 1
-    tracer_error.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_agent_experience_comparison_prefers_case_linked_success_trajectories():
-    case_uri = "viking://user/user_1/memories/cases/tau2_airline_train_5.md"
-    current_uri = "viking://user/user_1/memories/trajectories/current_failure.md"
-    success_uri = "viking://user/user_1/memories/trajectories/same_case_success.md"
-    failure_uri = "viking://user/user_1/memories/trajectories/same_case_failure.md"
-    semantic_uri = "viking://user/user_1/memories/trajectories/semantic_only.md"
-
-    def raw(memory_file: MemoryFile) -> str:
-        from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
-
-        return MemoryFileUtils.write(memory_file)
-
-    files = {
-        case_uri: raw(
-            MemoryFile(
-                uri=case_uri,
-                content="# tau2_airline_train_5",
-                memory_type="cases",
-                extra_fields={"case_name": "tau2_airline_train_5"},
-                links=[
-                    {
-                        "from_uri": case_uri,
-                        "to_uri": failure_uri,
-                        "link_type": "related_to",
-                        "weight": 1.0,
-                    },
-                    {
-                        "from_uri": case_uri,
-                        "to_uri": success_uri,
-                        "link_type": "related_to",
-                        "weight": 1.0,
-                    },
-                ],
-            )
-        ),
-        success_uri: raw(
-            MemoryFile(
-                uri=success_uri,
-                content="# success\n- Outcome: success\n- Communication: total 1628",
-                memory_type="trajectories",
-                extra_fields={"trajectory_name": "success", "outcome": "success"},
-            )
-        ),
-        failure_uri: raw(
-            MemoryFile(
-                uri=failure_uri,
-                content="# failure\n- Outcome: partial\n- Communication: total 708",
-                memory_type="trajectories",
-                extra_fields={"trajectory_name": "failure", "outcome": "partial"},
-            )
-        ),
-        semantic_uri: raw(
-            MemoryFile(
-                uri=semantic_uri,
-                content="# semantic\n- Outcome: partial",
-                memory_type="trajectories",
-                extra_fields={"trajectory_name": "semantic", "outcome": "partial"},
-            )
-        ),
-    }
-
-    provider = AgentExperienceContextProvider(
-        messages=[],
-        trajectory_summary="other upcoming total cost failure",
-        trajectory_uri=current_uri,
-        case_uri=case_uri,
-    )
-    provider.search_files = AsyncMock(return_value=[semantic_uri])
-    viking_fs = AsyncMock()
-    viking_fs.read_file = AsyncMock(side_effect=lambda uri, ctx=None: files[uri])
-    ctx = RequestContext(user=UserIdentifier(account_id="acc", user_id="user_1"), role=Role.USER)
-
-    results = await provider._search_comparison_trajectories(
-        trajectory_dir="viking://user/user_1/memories/trajectories",
-        viking_fs=viking_fs,
-        ctx=ctx,
-    )
-
-    assert [item["uri"] for item in results] == [success_uri]
-    assert results[0]["outcome"] == "success"
-
-
-@pytest.mark.asyncio
-async def test_agent_experience_comparison_resolves_case_from_trajectory_backlink():
-    case_uri = "viking://user/user_1/memories/cases/tau2_airline_train_5.md"
-    current_uri = "viking://user/user_1/memories/trajectories/current_failure.md"
-    success_uri = "viking://user/user_1/memories/trajectories/same_case_success.md"
-
-    def raw(memory_file: MemoryFile) -> str:
-        from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
-
-        return MemoryFileUtils.write(memory_file)
-
-    files = {
-        current_uri: raw(
-            MemoryFile(
-                uri=current_uri,
-                content="# current",
-                memory_type="trajectories",
-                extra_fields={"trajectory_name": "current", "outcome": "partial"},
-                backlinks=[
-                    {
-                        "from_uri": case_uri,
-                        "to_uri": current_uri,
-                        "link_type": "related_to",
-                        "weight": 1.0,
-                    }
-                ],
-            )
-        ),
-        case_uri: raw(
-            MemoryFile(
-                uri=case_uri,
-                content="# tau2_airline_train_5",
-                memory_type="cases",
-                extra_fields={"case_name": "tau2_airline_train_5"},
-                links=[
-                    {
-                        "from_uri": case_uri,
-                        "to_uri": success_uri,
-                        "link_type": "related_to",
-                        "weight": 1.0,
-                    }
-                ],
-            )
-        ),
-        success_uri: raw(
-            MemoryFile(
-                uri=success_uri,
-                content="# success\n- Outcome: success",
-                memory_type="trajectories",
-                extra_fields={"trajectory_name": "success", "outcome": "success"},
-            )
-        ),
-    }
-
-    provider = AgentExperienceContextProvider(
-        messages=[],
-        trajectory_summary="other upcoming total cost failure",
-        trajectory_uri=current_uri,
-    )
-    provider.search_files = AsyncMock(return_value=[])
-    viking_fs = AsyncMock()
-    viking_fs.read_file = AsyncMock(side_effect=lambda uri, ctx=None: files[uri])
-    ctx = RequestContext(user=UserIdentifier(account_id="acc", user_id="user_1"), role=Role.USER)
-
-    results = await provider._search_comparison_trajectories(
-        trajectory_dir="viking://user/user_1/memories/trajectories",
-        viking_fs=viking_fs,
-        ctx=ctx,
-    )
-
-    assert [item["uri"] for item in results] == [success_uri]
-
-
-@pytest.mark.asyncio
-async def test_agent_experience_comparison_does_not_semantic_fallback_without_case_success():
-    case_uri = "viking://user/user_1/memories/cases/tau2_airline_train_5.md"
-    current_uri = "viking://user/user_1/memories/trajectories/current_failure.md"
-    failure_uri = "viking://user/user_1/memories/trajectories/same_case_failure.md"
-
-    def raw(memory_file: MemoryFile) -> str:
-        from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
-
-        return MemoryFileUtils.write(memory_file)
-
-    files = {
-        case_uri: raw(
-            MemoryFile(
-                uri=case_uri,
-                content="# tau2_airline_train_5",
-                memory_type="cases",
-                extra_fields={"case_name": "tau2_airline_train_5"},
-                links=[
-                    {
-                        "from_uri": case_uri,
-                        "to_uri": failure_uri,
-                        "link_type": "related_to",
-                        "weight": 1.0,
-                    }
-                ],
-            )
-        ),
-        failure_uri: raw(
-            MemoryFile(
-                uri=failure_uri,
-                content="# failure\n- Outcome: partial",
-                memory_type="trajectories",
-                extra_fields={"trajectory_name": "failure", "outcome": "partial"},
-            )
-        ),
-    }
-
-    provider = AgentExperienceContextProvider(
-        messages=[],
-        trajectory_summary="other upcoming total cost failure",
-        trajectory_uri=current_uri,
-        case_uri=case_uri,
-    )
-    provider.search_files = AsyncMock(
-        return_value=["viking://user/user_1/memories/trajectories/semantic_success.md"]
-    )
-    viking_fs = AsyncMock()
-    viking_fs.read_file = AsyncMock(side_effect=lambda uri, ctx=None: files[uri])
-    ctx = RequestContext(user=UserIdentifier(account_id="acc", user_id="user_1"), role=Role.USER)
-
-    results = await provider._search_comparison_trajectories(
-        trajectory_dir="viking://user/user_1/memories/trajectories",
-        viking_fs=viking_fs,
-        ctx=ctx,
-    )
-
-    assert results == []
-    provider.search_files.assert_not_awaited()

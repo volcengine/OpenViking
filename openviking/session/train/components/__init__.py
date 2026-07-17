@@ -5,6 +5,7 @@
 from openviking.session.train.components.case_loader import ListCaseLoader
 from openviking.session.train.components.gradient_estimator import (
     ExperienceGradientContext,
+    ExperienceGradientEstimateRequest,
     ExperienceGradientEstimator,
 )
 from openviking.session.train.components.memory_store import ExperienceSetLoader, SkillSetLoader
@@ -49,6 +50,7 @@ __all__ = [
     "PatchMergePolicyOptimizer",
     "ListCaseLoader",
     "ExperienceGradientEstimator",
+    "ExperienceGradientEstimateRequest",
     "ExperienceGradientContext",
     "TrajectoryRolloutAnalyzer",
     "TrajectoryAnalyzerContext",

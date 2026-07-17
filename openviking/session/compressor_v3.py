@@ -83,6 +83,23 @@ _TRAINING_CASE_SPEC_PROTOCOL = "openviking.batch_train.case_spec.v1"
 _TRAINING_CASE_SPEC_HEADER = "# OpenViking Batch Training CaseSpec v1"
 _TRAINING_FAST_PATH_MEMORY_TYPES = frozenset({"cases", "trajectories", "experiences"})
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
+_TRAJECTORY_LINK_TYPE_BY_OUTCOME = {
+    "success": "successful_trajectory",
+    "failure": "failed_trajectory",
+    "partial": "partial_trajectory",
+    "unfinished": "unfinished_trajectory",
+    "unknown": "unknown_trajectory",
+}
+_CASE_TRAJECTORY_LINK_LIMIT = 5
+_SUCCESS_TRAJECTORY_LINK_TYPES = frozenset({"successful_trajectory"})
+_NON_SUCCESS_TRAJECTORY_LINK_TYPES = frozenset(
+    {
+        "failed_trajectory",
+        "partial_trajectory",
+        "unfinished_trajectory",
+        "unknown_trajectory",
+    }
+)
 
 
 class SessionCompressorV3:
@@ -1505,11 +1522,16 @@ def _case_trajectory_links(
             _stored_link(
                 from_uri=case_uri,
                 target_uri=uri,
-                link_type="related_to",
+                link_type=_trajectory_link_type(getattr(trajectory, "outcome", None)),
                 description="",
             )
         )
     return links
+
+
+def _trajectory_link_type(outcome: object) -> str:
+    normalized = str(outcome or "").strip().lower()
+    return _TRAJECTORY_LINK_TYPE_BY_OUTCOME.get(normalized, "unknown_trajectory")
 
 
 def _case_experience_links_via_trajectories(
@@ -1610,7 +1632,9 @@ async def _render_case_links_from_template(
         mf = MemoryFileUtils.read(raw or "", uri=case_uri)
         from openviking.session.memory.merge_op.link_merge import merge_links
 
-        merged_links = merge_links(mf.links, [link.model_dump() for link in links])
+        merged_links = _retain_case_links(
+            merge_links(mf.links, [link.model_dump() for link in links])
+        )
         if merged_links != mf.links:
             mf.links = merged_links
 
@@ -1624,6 +1648,35 @@ async def _render_case_links_from_template(
         )
     finally:
         await lock_lease.close()
+
+
+def _retain_case_links(links: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    successful: list[dict[str, Any]] = []
+    non_successful: list[dict[str, Any]] = []
+    retained: list[dict[str, Any]] = []
+
+    for link in links:
+        target_uri = str(link.get("to_uri") or "")
+        if "/memories/trajectories/" not in target_uri:
+            retained.append(link)
+            continue
+
+        link_type = str(link.get("link_type") or "")
+        if link_type in _SUCCESS_TRAJECTORY_LINK_TYPES:
+            successful.append(link)
+        elif link_type in _NON_SUCCESS_TRAJECTORY_LINK_TYPES:
+            non_successful.append(link)
+
+    def recency_key(link: dict[str, Any]) -> tuple[str, str]:
+        return str(link.get("created_at") or ""), str(link.get("to_uri") or "")
+
+    successful.sort(key=recency_key, reverse=True)
+    non_successful.sort(key=recency_key, reverse=True)
+    return [
+        *retained,
+        *successful[:_CASE_TRAJECTORY_LINK_LIMIT],
+        *non_successful[:_CASE_TRAJECTORY_LINK_LIMIT],
+    ]
 
 
 def _gradient_memory_type(gradient: Any) -> str:

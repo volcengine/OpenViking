@@ -8,12 +8,16 @@ from types import SimpleNamespace
 
 import pytest
 
+from openviking.message import Message
+from openviking.message.part import TextPart
+from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.experience_sections import render_experience_sections
 from openviking.session.train import (
     CriterionResult,
     Experience,
     ExperienceGradientContext,
+    ExperienceGradientEstimateRequest,
     ExperienceGradientEstimator,
     ExperienceSet,
     RolloutAnalysis,
@@ -22,6 +26,13 @@ from openviking.session.train import (
 )
 from openviking.session.train.components import gradient_estimator as gradient_estimator_module
 from openviking.session.train.gates import GateDecision, GateReport
+from openviking_cli.session.user_id import UserIdentifier
+
+
+@pytest.fixture(autouse=True)
+def _drain_background_tasks():
+    """These isolated component tests do not need the session integration client."""
+    yield
 
 
 class FakeExperienceGradientEstimator(ExperienceGradientEstimator):
@@ -99,7 +110,10 @@ def _experience_set() -> ExperienceSet:
 
 
 def _context() -> ExperienceGradientContext:
-    return ExperienceGradientContext(request_context=SimpleNamespace(), messages=[])
+    return ExperienceGradientContext(
+        request_context=RequestContext(UserIdentifier("account", "user"), Role.USER),
+        messages=[],
+    )
 
 
 def _rejected_gate_report(
@@ -122,6 +136,75 @@ def _rejected_gate_report(
             )
         ],
     )
+
+
+class RecordingEntryEstimator(ExperienceGradientEstimator):
+    def __init__(self, *, error: Exception | None = None):
+        super().__init__()
+        self.error = error
+        self.requests: list[ExperienceGradientEstimateRequest] = []
+
+    async def estimate_trajectory_gradients(self, request):
+        self.requests.append(request)
+        await asyncio.sleep(0)
+        if self.error is not None:
+            raise self.error
+        return [request.trajectory.uri]
+
+
+@pytest.mark.asyncio
+async def test_experience_gradient_estimator_schedules_isolated_per_trajectory_requests():
+    analysis = _analysis(passed=False, outcome="failure")
+    analysis.trajectories.extend(
+        [
+            Trajectory(
+                name="partial",
+                uri="viking://user/u/memories/trajectories/partial.md",
+                content="partial",
+                outcome="partial",
+                retrieval_anchor="Stage: tool",
+                metadata={"case_uri": "viking://user/u/memories/cases/case-1.md"},
+            ),
+            Trajectory(
+                name="success",
+                uri="viking://user/u/memories/trajectories/success.md",
+                content="success",
+                outcome="success",
+                retrieval_anchor="Stage: final",
+            ),
+        ]
+    )
+    context = _context()
+    context.messages = [Message(id="m1", role="user", parts=[TextPart(text="original")])]
+    analysis.metadata["rollout_messages"] = [
+        Message(id="m2", role="user", parts=[TextPart(text="rollout")])
+    ]
+    estimator = RecordingEntryEstimator()
+
+    gradients = await estimator.estimate(analysis, _experience_set(), context)
+
+    assert gradients == [analysis.trajectories[0].uri, analysis.trajectories[1].uri]
+    assert [request.trajectory for request in estimator.requests] == analysis.trajectories[:2]
+    assert all(
+        request.messages == analysis.metadata["rollout_messages"] for request in estimator.requests
+    )
+    assert estimator.requests[0] is not estimator.requests[1]
+    assert estimator.requests[1].case_uri == "viking://user/u/memories/cases/case-1.md"
+    assert "current_analysis" not in context.metadata
+
+
+@pytest.mark.asyncio
+async def test_experience_gradient_estimator_keeps_outer_error_policy():
+    analysis = _analysis(passed=False, outcome="failure")
+
+    tolerant = RecordingEntryEstimator(error=RuntimeError("extract failed"))
+    assert await tolerant.estimate(analysis, _experience_set(), _context()) == []
+
+    strict_context = _context()
+    strict_context.strict_extract_errors = True
+    strict = RecordingEntryEstimator(error=RuntimeError("extract failed"))
+    with pytest.raises(RuntimeError, match="extract failed"):
+        await strict.estimate(analysis, _experience_set(), strict_context)
 
 
 def test_experience_post_validation_decision_handles_pass_retry_and_discard():
@@ -325,7 +408,7 @@ async def test_experience_gradient_estimator_skips_empty_content_and_handles_ext
     assert await estimator.estimate(analysis, _experience_set(), _context()) == []
 
     strict_context = ExperienceGradientContext(
-        request_context=SimpleNamespace(),
+        request_context=_context().request_context,
         messages=[],
         strict_extract_errors=True,
     )

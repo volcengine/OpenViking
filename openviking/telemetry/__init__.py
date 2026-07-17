@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """OpenViking telemetry runtime and operation telemetry helpers."""
 
+from . import replay
 from . import tracer as tracer_module
 from .context import (
     bind_telemetry,
@@ -27,6 +28,7 @@ __all__ = [
     "get_telemetry_runtime",
     "normalize_telemetry_request",
     "register_telemetry",
+    "replay",
     "resolve_telemetry",
     "set_telemetry_runtime",
     "start_current_span",

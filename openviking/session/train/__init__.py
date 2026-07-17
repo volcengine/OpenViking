@@ -20,6 +20,7 @@ from openviking.session.train.components.event_recorder import (
 )
 from openviking.session.train.components.gradient_estimator import (
     ExperienceGradientContext,
+    ExperienceGradientEstimateRequest,
     ExperienceGradientEstimator,
 )
 from openviking.session.train.components.memory_store import ExperienceSetLoader, SkillSetLoader
@@ -127,6 +128,7 @@ __all__ = [
     "StreamingPolicyTrainer",
     "BatchPolicyTrainer",
     "ExperienceGradientEstimator",
+    "ExperienceGradientEstimateRequest",
     "ExperienceGradientContext",
     "TrajectoryRolloutAnalyzer",
     "TrajectoryAnalyzerContext",
