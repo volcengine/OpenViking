@@ -8,6 +8,7 @@ from openviking.message import Message
 from openviking.message.part import ContextPart, ImagePart, TextPart, ToolPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import MemoryFile, StoredLink
+from openviking.session.memory.merge_op.base import SearchReplaceBlock, StrPatch
 
 # Importing this module is the explicit registration point for experience replay codecs.
 from openviking.session.train.components import experience_replay_codecs  # noqa: F401, E402
@@ -184,6 +185,36 @@ def test_memory_file_link_and_gradient_codecs_round_trip() -> None:
     assert _round_trip(before_file) == before_file
     assert _round_trip(link) == link
     assert _round_trip(gradient) == gradient
+
+
+def test_gradient_codec_preserves_unregistered_pydantic_metadata() -> None:
+    after_file = MemoryFile(
+        uri="viking://user/u/memories/experiences/cancel_eligible.md",
+        content="after",
+        memory_type="experiences",
+    )
+    patch = StrPatch(
+        blocks=[
+            SearchReplaceBlock(
+                search="Do not cancel without a refund.",
+                replace="Treat cancellation eligibility separately from refund eligibility.",
+            )
+        ]
+    )
+    gradient = PatchSemanticGradient(
+        before_file=None,
+        after_file=after_file,
+        base_version=None,
+        rationale="correct cancellation behavior",
+        links=[],
+        confidence=0.9,
+        metadata={"resolved_operation": {"content": patch}},
+    )
+
+    decoded = _round_trip(gradient)
+
+    assert decoded == gradient
+    assert isinstance(decoded.metadata["resolved_operation"]["content"], StrPatch)
 
 
 def test_nested_domain_metadata_rejects_unknown_runtime_objects() -> None:

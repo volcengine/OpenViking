@@ -6,7 +6,9 @@ import json
 from dataclasses import dataclass
 
 import pytest
+from pydantic import BaseModel, Field
 
+from openviking.server.models import ErrorInfo, Response
 from openviking.telemetry import replay
 from openviking.telemetry.replay import (
     MockRecord,
@@ -17,6 +19,10 @@ from openviking.telemetry.replay import (
     decode_value,
     encode_value,
 )
+
+
+class AliasedReplayPayload(BaseModel):
+    value: int = Field(alias="wire_value")
 
 
 def test_registered_codec_round_trips_nested_metadata() -> None:
@@ -42,6 +48,36 @@ def test_registered_codec_round_trips_nested_metadata() -> None:
 def test_unknown_runtime_object_is_not_stringified() -> None:
     with pytest.raises(ReplayCodecError, match="No replay codec"):
         encode_value(object())
+
+
+def test_unregistered_pydantic_model_preserves_python_values_in_any_fields() -> None:
+    value = Response(status="ok", result={"coordinates": (12.5, 48.2)})
+
+    decoded = decode_value(encode_value(value))
+
+    assert decoded == value
+    assert isinstance(decoded.result["coordinates"], tuple)
+
+
+def test_unregistered_pydantic_model_preserves_nested_models_in_any_fields() -> None:
+    value = Response(
+        status="ok",
+        result=ErrorInfo(code="REPLAY_FAILED", message="failed", details={"retry": False}),
+    )
+
+    decoded = decode_value(encode_value(value))
+
+    assert decoded == value
+    assert isinstance(decoded.result, ErrorInfo)
+
+
+def test_unregistered_pydantic_model_uses_validation_aliases() -> None:
+    value = AliasedReplayPayload(wire_value=7)
+
+    encoded = encode_value(value)
+
+    assert decode_value(encoded["data"]) == {"wire_value": 7}
+    assert decode_value(encoded) == value
 
 
 def test_dict_keys_must_be_strings() -> None:

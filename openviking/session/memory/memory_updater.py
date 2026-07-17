@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:
@@ -344,21 +345,36 @@ class ExtractContext:
                         continue
         return datetime.now().strftime("%Y%m%d%H%M%S")
 
-    def get_session_timestamp(self) -> str:
-        """取对话第一条消息的时间戳（YYYYMMDDHHMMSS），用于文件名唯一化。
-
-        Fallback 到 datetime.now() 以保证总是返回非空字符串。
-        """
-        from datetime import datetime
-
+    def _get_session_datetime(self) -> datetime:
+        """取对话第一条有效消息的时间，fallback 到当前时间。"""
         for msg in self.messages:
             created_at = getattr(msg, "created_at", None)
             if created_at:
                 try:
-                    return datetime.fromisoformat(created_at).strftime("%Y%m%d%H%M%S")
+                    return datetime.fromisoformat(created_at)
                 except (ValueError, TypeError):
                     continue
-        return datetime.now().strftime("%Y%m%d%H%M%S")
+        return datetime.now()
+
+    def get_session_year(self) -> str:
+        """取对话第一条有效消息的年份（YYYY）。"""
+        return self._get_session_datetime().strftime("%Y")
+
+    def get_session_month(self) -> str:
+        """取对话第一条有效消息的月份（MM）。"""
+        return self._get_session_datetime().strftime("%m")
+
+    def get_session_day(self) -> str:
+        """取对话第一条有效消息的日期（DD）。"""
+        return self._get_session_datetime().strftime("%d")
+
+    def get_session_time(self) -> str:
+        """取对话第一条有效消息的时间（HHMMSS）。"""
+        return self._get_session_datetime().strftime("%H%M%S")
+
+    def get_session_timestamp(self) -> str:
+        """取对话第一条有效消息的紧凑时间戳（YYYYMMDDHHMMSS）。"""
+        return self._get_session_datetime().strftime("%Y%m%d%H%M%S")
 
     def get_event_content(
         self, ranges_str: str, summary: str | None, ratio_threshold: float = 0.2

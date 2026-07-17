@@ -7,14 +7,16 @@ import pytest
 
 from openviking.message import Message
 from openviking.message.part import TextPart
+from openviking.prompts.manager import PromptManager
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import MemoryFile, MemoryTypeSchema, ResolvedOperation
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
+from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.memory_updater import ExtractContext, MessageRange
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
-from openviking.session.memory.utils import MemoryFileUtils
+from openviking.session.memory.utils import MemoryFileUtils, generate_uri
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -72,6 +74,26 @@ def test_message_range_accepts_extended_fractional_seconds():
 
     assert msg_range._first_message_time() == "2026-04-17"
     assert msg_range._first_message_time_with_weekday() == "2026-04-17 (Friday)"
+
+
+def test_trajectory_uri_uses_session_date_directories_and_time_suffix():
+    extract_context = ExtractContext([_message(created_at="2024-05-15T15:00:00+08:00")])
+    memory_dir = PromptManager._get_bundled_templates_dir() / "memory"
+    registry = MemoryTypeRegistry(load_schemas=False)
+    registry.load_from_yaml(str(memory_dir / "trajectories.yaml"))
+    schema = registry.get("trajectories")
+    assert schema is not None
+
+    uri = generate_uri(
+        schema,
+        {"trajectory_name": "航班取消资格判断与操作"},
+        user_space="default",
+        extract_context=extract_context,
+    )
+
+    assert uri == (
+        "viking://user/default/memories/trajectories/2024/05/15/航班取消资格判断与操作_150000.md"
+    )
 
 
 def test_message_range_uses_peer_id_when_present():
