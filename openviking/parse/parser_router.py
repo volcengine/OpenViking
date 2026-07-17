@@ -45,11 +45,11 @@ class ParserRouter:
         except Exception:
             return False
 
-        parser_api = getattr(ov_config, "parser_api", None)
-        if not parser_api or not getattr(parser_api, "enable", False):
+        parser_api = ov_config.parser_api
+        if not parser_api.enable:
             return False
 
-        if getattr(parser_api, "enable_feishu_url", False):
+        if parser_api.enable_feishu_url:
             try:
                 from openviking.parse.accessors.feishu_accessor import FeishuAccessor
 
@@ -59,8 +59,7 @@ class ParserRouter:
                 pass
 
         ext = self._extract_extension(source_path)
-        extensions = getattr(parser_api, "extensions", None) or []
-        return ext in extensions
+        return ext in parser_api.extensions
 
     def _extract_extension(self, source_path: Union[str, Path]) -> str:
         source = str(source_path)

@@ -104,6 +104,21 @@ def _understanding_api_for_parse() -> UnderstandingAPI:
     return api
 
 
+def test_single_zip_root_name_repairs_utf8_name_without_flag(tmp_path: Path):
+    zip_path = tmp_path / "result.zip"
+    member_name = "真实文档标题/0.md"
+    placeholder = "x" * len(member_name.encode("utf-8"))
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr(placeholder, "content")
+
+    archive = zip_path.read_bytes()
+    placeholder_bytes = placeholder.encode("ascii")
+    assert archive.count(placeholder_bytes) == 2
+    zip_path.write_bytes(archive.replace(placeholder_bytes, member_name.encode("utf-8")))
+
+    assert UnderstandingAPI._single_zip_root_name(zip_path) == "真实文档标题"
+
+
 @pytest.mark.asyncio
 async def test_feishu_parse_sends_uat_and_uses_artifact_root(tmp_path: Path):
     zip_path = tmp_path / "result.zip"
@@ -380,6 +395,7 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(monk
     )
 
     assert initial_result == {"status": "success", "task_id": "task-1"}
+    assert task_tracker.create.await_args.kwargs["resource_id"] is None
     parser_router.submit_url.assert_awaited_once_with(
         source,
         feishu_access_token="u-secret",
@@ -450,6 +466,9 @@ async def test_external_parse_worker_defers_target_and_expands_prepared_response
     task_tracker.complete.assert_awaited_once()
     completed_result = task_tracker.complete.await_args.args[1]
     assert completed_result["root_uri"] == "viking://resources/真实文档标题"
+    assert task_tracker.complete.await_args.kwargs["resource_id"] == (
+        "viking://resources/真实文档标题"
+    )
 
 
 @pytest.mark.asyncio

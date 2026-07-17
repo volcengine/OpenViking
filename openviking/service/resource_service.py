@@ -816,7 +816,7 @@ class ResourceService:
                 try:
                     task = await task_tracker.create(
                         "add_resource",
-                        resource_id=root_uri,
+                        resource_id=None if defer_target_resolution else root_uri,
                         account_id=ctx.account_id,
                         user_id=ctx.user.user_id,
                     )

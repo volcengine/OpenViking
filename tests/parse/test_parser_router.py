@@ -5,7 +5,11 @@ from openviking.parse.parser_router import ParserRouter
 
 def test_should_use_understanding_api_for_signed_video_url(monkeypatch):
     config = SimpleNamespace(
-        parser_api=SimpleNamespace(enable=True, extensions=["mp4"]),
+        parser_api=SimpleNamespace(
+            enable=True,
+            enable_feishu_url=False,
+            extensions=["mp4"],
+        ),
     )
     monkeypatch.setattr(
         "openviking_cli.utils.config.open_viking_config.get_openviking_config",

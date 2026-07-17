@@ -82,6 +82,7 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                 result,
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
+                resource_id=result.get("root_uri"),
             )
             self.report_success()
         except Exception as exc:
@@ -328,6 +329,7 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                     result,
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
+                    resource_id=result.get("root_uri"),
                 )
                 self.report_success()
                 return None

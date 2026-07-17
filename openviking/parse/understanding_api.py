@@ -35,7 +35,7 @@ from openviking.parse.parsers.media.constants import (
     VIDEO_EXTENSIONS,
 )
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.utils.zip_safe import safe_extract_zip
+from openviking.utils.zip_safe import normalize_zip_filenames, safe_extract_zip
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -222,7 +222,7 @@ class UnderstandingAPI(BaseParser):
         return result
 
     async def submit_url(self, source: str, **kwargs) -> str:
-        """Submit a URL before queueing so credentials are not persisted in queue payloads."""
+        """Submit a URL without persisting its credentials in a queue payload."""
         if not isinstance(source, str) or not source.startswith(("http://", "https://")):
             raise ValueError("UnderstandingAPI URL submission requires an http(s) URL")
 
@@ -400,6 +400,7 @@ class UnderstandingAPI(BaseParser):
     def _single_zip_root_name(zip_path: Path) -> Optional[str]:
         roots = set()
         with zipfile.ZipFile(zip_path, "r") as zf:
+            normalize_zip_filenames(zf)
             for info in zf.infolist():
                 raw_name = info.filename.rstrip("/")
                 if not raw_name:
