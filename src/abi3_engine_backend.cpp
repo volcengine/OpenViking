@@ -1179,6 +1179,79 @@ PyObject* build_filter_result(const vdb::FilterResult& result) {
   return payload;
 }
 
+PyObject* build_packed_filter_result(const vdb::FilterResult& result) {
+  PyObject* payload = PyDict_New();
+  if (payload == nullptr) {
+    return nullptr;
+  }
+
+  if (result.bitset_words.size() >
+      static_cast<size_t>(PY_SSIZE_T_MAX) / sizeof(uint32_t)) {
+    Py_DECREF(payload);
+    PyErr_SetString(PyExc_OverflowError, "Packed filter bitmap is too large");
+    return nullptr;
+  }
+
+  // Encode explicitly instead of exposing the host byte order. This ABI is
+  // consumed with NumPy dtype "<u4" before the bitmap is copied to a device.
+  const Py_ssize_t packed_size = static_cast<Py_ssize_t>(
+      result.bitset_words.size() * sizeof(uint32_t));
+  PyObject* bitset_words_le =
+      PyBytes_FromStringAndSize(nullptr, packed_size);
+  if (bitset_words_le == nullptr) {
+    Py_DECREF(payload);
+    return nullptr;
+  }
+  char* packed_words = PyBytes_AsString(bitset_words_le);
+  if (packed_words == nullptr) {
+    Py_DECREF(bitset_words_le);
+    Py_DECREF(payload);
+    return nullptr;
+  }
+  auto pack_words = [&]() {
+    for (size_t index = 0; index < result.bitset_words.size(); ++index) {
+      const uint32_t word = result.bitset_words[index];
+      const size_t offset = index * sizeof(uint32_t);
+      packed_words[offset] = static_cast<char>(word & 0xffU);
+      packed_words[offset + 1] = static_cast<char>((word >> 8U) & 0xffU);
+      packed_words[offset + 2] = static_cast<char>((word >> 16U) & 0xffU);
+      packed_words[offset + 3] = static_cast<char>((word >> 24U) & 0xffU);
+    }
+  };
+  if (result.bitset_words.size() >= 256) {
+    call_without_gil(pack_words);
+  } else {
+    pack_words();
+  }
+
+  PyObject* eligible_count =
+      PyLong_FromUnsignedLongLong(result.eligible_count);
+  PyObject* native_filter_token =
+      PyLong_FromUnsignedLongLong(result.native_filter_token);
+  if (eligible_count == nullptr || native_filter_token == nullptr) {
+    Py_XDECREF(eligible_count);
+    Py_DECREF(bitset_words_le);
+    Py_XDECREF(native_filter_token);
+    Py_DECREF(payload);
+    return nullptr;
+  }
+
+  if (PyDict_SetItemString(payload, "eligible_count", eligible_count) < 0 ||
+      PyDict_SetItemString(payload, "bitset_words_le", bitset_words_le) < 0 ||
+      PyDict_SetItemString(payload, "native_filter_token",
+                           native_filter_token) < 0) {
+    Py_DECREF(eligible_count);
+    Py_DECREF(bitset_words_le);
+    Py_DECREF(native_filter_token);
+    Py_DECREF(payload);
+    return nullptr;
+  }
+  Py_DECREF(eligible_count);
+  Py_DECREF(bitset_words_le);
+  Py_DECREF(native_filter_token);
+  return payload;
+}
+
 PyObject* build_state_result(const vdb::StateResult& result) {
   PyObject* payload = PyDict_New();
   if (payload == nullptr) {
@@ -1403,6 +1476,28 @@ PyObject* py_index_engine_evaluate_filter(PyObject*, PyObject* args) {
   }
 }
 
+PyObject* py_index_engine_evaluate_filter_packed(PyObject*, PyObject* args) {
+  PyObject* capsule = nullptr;
+  const char* dsl = nullptr;
+  if (!PyArg_ParseTuple(args, "Os", &capsule, &dsl)) {
+    return nullptr;
+  }
+
+  auto* engine = capsule_to_ptr<vdb::IndexEngine>(capsule, kIndexCapsuleName);
+  if (engine == nullptr) {
+    return nullptr;
+  }
+
+  try {
+    const vdb::FilterResult result =
+        call_without_gil([&]() { return engine->evaluate_filter(dsl); });
+    return build_packed_filter_result(result);
+  } catch (const std::exception& exc) {
+    raise_runtime_error(exc.what());
+    return nullptr;
+  }
+}
+
 PyObject* py_index_engine_evaluate_filter_cached(PyObject*, PyObject* args) {
   PyObject* capsule = nullptr;
   const char* dsl = nullptr;
@@ -1429,6 +1524,33 @@ PyObject* py_index_engine_evaluate_filter_cached(PyObject*, PyObject* args) {
   }
 }
 
+PyObject* py_index_engine_evaluate_filter_cached_packed(PyObject*,
+                                                        PyObject* args) {
+  PyObject* capsule = nullptr;
+  const char* dsl = nullptr;
+  unsigned long long max_cached_candidates = 0;
+  if (!PyArg_ParseTuple(args, "OsK", &capsule, &dsl,
+                        &max_cached_candidates)) {
+    return nullptr;
+  }
+
+  auto* engine = capsule_to_ptr<vdb::IndexEngine>(capsule, kIndexCapsuleName);
+  if (engine == nullptr) {
+    return nullptr;
+  }
+
+  try {
+    const vdb::FilterResult result = call_without_gil([&]() {
+      return engine->evaluate_filter(
+          dsl, static_cast<uint64_t>(max_cached_candidates));
+    });
+    return build_packed_filter_result(result);
+  } catch (const std::exception& exc) {
+    raise_runtime_error(exc.what());
+    return nullptr;
+  }
+}
+
 PyObject* py_index_engine_evaluate_filter_for_routing(PyObject*,
                                                       PyObject* args) {
   PyObject* capsule = nullptr;
@@ -1449,6 +1571,32 @@ PyObject* py_index_engine_evaluate_filter_for_routing(PyObject*,
           dsl, static_cast<uint64_t>(native_threshold));
     });
     return build_filter_result(result);
+  } catch (const std::exception& exc) {
+    raise_runtime_error(exc.what());
+    return nullptr;
+  }
+}
+
+PyObject* py_index_engine_evaluate_filter_for_routing_packed(
+    PyObject*, PyObject* args) {
+  PyObject* capsule = nullptr;
+  const char* dsl = nullptr;
+  unsigned long long native_threshold = 0;
+  if (!PyArg_ParseTuple(args, "OsK", &capsule, &dsl, &native_threshold)) {
+    return nullptr;
+  }
+
+  auto* engine = capsule_to_ptr<vdb::IndexEngine>(capsule, kIndexCapsuleName);
+  if (engine == nullptr) {
+    return nullptr;
+  }
+
+  try {
+    const vdb::FilterResult result = call_without_gil([&]() {
+      return engine->evaluate_filter_for_routing(
+          dsl, static_cast<uint64_t>(native_threshold));
+    });
+    return build_packed_filter_result(result);
   } catch (const std::exception& exc) {
     raise_runtime_error(exc.what());
     return nullptr;
@@ -1792,12 +1940,21 @@ PyMethodDef kModuleMethods[] = {
      METH_VARARGS, "Register an external label order for scalar filters."},
     {"_index_engine_evaluate_filter", py_index_engine_evaluate_filter,
      METH_VARARGS, "Evaluate a scalar filter in an external label order."},
+    {"_index_engine_evaluate_filter_packed",
+     py_index_engine_evaluate_filter_packed, METH_VARARGS,
+     "Evaluate a scalar filter and return little-endian packed words."},
     {"_index_engine_evaluate_filter_cached",
      py_index_engine_evaluate_filter_cached, METH_VARARGS,
      "Evaluate and optionally retain a native scalar filter bitmap."},
+    {"_index_engine_evaluate_filter_cached_packed",
+     py_index_engine_evaluate_filter_cached_packed, METH_VARARGS,
+     "Evaluate and retain a filter while returning packed words."},
     {"_index_engine_evaluate_filter_for_routing",
      py_index_engine_evaluate_filter_for_routing, METH_VARARGS,
      "Evaluate a scalar filter for an adaptive native/GPU route decision."},
+    {"_index_engine_evaluate_filter_for_routing_packed",
+     py_index_engine_evaluate_filter_for_routing_packed, METH_VARARGS,
+     "Route a scalar filter while returning little-endian packed words."},
     {"_index_engine_dump", py_index_engine_dump, METH_VARARGS,
      "Dump index state to disk."},
     {"_index_engine_get_state", py_index_engine_get_state, METH_VARARGS,

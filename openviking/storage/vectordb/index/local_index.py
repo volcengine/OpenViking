@@ -294,6 +294,36 @@ class IndexEngineProxy:
         )
         return result.bitset_words, result.eligible_count, result.native_filter_token
 
+    def evaluate_filter_packed(
+        self,
+        filters: Dict[str, Any],
+        max_cached_candidates: int = 0,
+    ) -> Tuple[Union[List[int], bytes], int, int]:
+        """Evaluate a cuVS filter using packed words when the engine supports it."""
+
+        if not self.index_engine:
+            raise RuntimeError("Index engine not initialized")
+        result = self.index_engine.evaluate_filter_packed(
+            json.dumps(filters),
+            max_cached_candidates=max_cached_candidates,
+        )
+        return result.bitset_words, result.eligible_count, result.native_filter_token
+
+    def evaluate_filter_for_routing_packed(
+        self,
+        filters: Dict[str, Any],
+        native_threshold: int,
+    ) -> Tuple[Union[List[int], bytes], int, int]:
+        """Evaluate a cuVS route using packed words when available."""
+
+        if not self.index_engine:
+            raise RuntimeError("Index engine not initialized")
+        result = self.index_engine.evaluate_filter_for_routing_packed(
+            json.dumps(filters),
+            native_threshold=native_threshold,
+        )
+        return result.bitset_words, result.eligible_count, result.native_filter_token
+
     def drop(self):
         """Release the index engine resources.
 
@@ -1007,20 +1037,22 @@ class LocalIndex(IIndex):
                 if telemetry.route_reason == "pending":
                     telemetry.route_reason = "native_fallback"
 
-    def _evaluate_cuvs_filter(self, filters: Dict[str, Any]) -> Tuple[List[int], int, int]:
+    def _evaluate_cuvs_filter(
+        self, filters: Dict[str, Any]
+    ) -> Tuple[Union[List[int], bytes], int, int]:
         if self.dense_search is None or self.engine_proxy is None:
             raise RuntimeError("cuVS filter evaluation requires an initialized index")
-        return self.engine_proxy.evaluate_filter(
+        return self.engine_proxy.evaluate_filter_packed(
             filters,
             max_cached_candidates=self.dense_search.native_filter_threshold(filters),
         )
 
     def _evaluate_cuvs_filter_for_routing(
         self, filters: Dict[str, Any]
-    ) -> Tuple[List[int], int, int]:
+    ) -> Tuple[Union[List[int], bytes], int, int]:
         if self.dense_search is None or self.engine_proxy is None:
             raise RuntimeError("cuVS filter evaluation requires an initialized index")
-        return self.engine_proxy.evaluate_filter_for_routing(
+        return self.engine_proxy.evaluate_filter_for_routing_packed(
             filters,
             native_threshold=self.dense_search.native_filter_threshold(filters),
         )

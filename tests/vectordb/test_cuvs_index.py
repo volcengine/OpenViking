@@ -622,6 +622,84 @@ def test_cuvs_rebuild_objects_are_released_on_the_captured_device():
     assert runtime.current_device == 9
 
 
+def test_prepared_filter_lru_and_close_release_on_captured_device():
+    class DeviceOwnedFilter:
+        def __init__(self, runtime, name, values):
+            self.runtime = runtime
+            self.name = name
+            self.values = values
+
+        def __getitem__(self, index):
+            return self.values[index]
+
+        def __del__(self):
+            self.runtime.released.append((self.name, self.runtime.current_device))
+
+    class LifecycleRuntime(FakeCuVSRuntime):
+        def __init__(self):
+            super().__init__()
+            self.current_device = 9
+            self.prepared_count = 0
+            self.released = []
+
+        def device_scope(self):
+            runtime = self
+
+            class DeviceContext:
+                def __enter__(self):
+                    self.previous = runtime.current_device
+                    runtime.current_device = 3
+
+                def __exit__(self, _exc_type, _exc, _traceback):
+                    runtime.current_device = self.previous
+
+            return DeviceContext()
+
+        def prepare_filter_words(self, words):
+            with self.device_scope():
+                self.prepared_count += 1
+                values = tuple(bool(words[0] & (1 << row)) for row in range(2))
+                return DeviceOwnedFilter(self, f"filter-{self.prepared_count}", values)
+
+        def close(self):
+            assert self.current_device == 3
+            super().close()
+
+    runtime = LifecycleRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"filter_cache_size": 1},
+        runtime=runtime,
+    )
+    index.add_candidates(
+        [
+            candidate(1, [1.0, 0.0], account_id="a"),
+            candidate(2, [0.0, 1.0], account_id="b"),
+        ]
+    )
+
+    def resolve(filters):
+        return ([0b01], 1) if filters["conds"][0] == "a" else ([0b10], 1)
+
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    filter_b = {"op": "must", "field": "account_id", "conds": ["b"]}
+
+    def registrar(_labels):
+        return None
+
+    assert index.search([1.0, 0.0], 1, filter_a, resolve, registrar)[0] == [1]
+    assert runtime.released == []
+    assert index.search([0.0, 1.0], 1, filter_b, resolve, registrar)[0] == [2]
+    assert runtime.released == [("filter-1", 3)]
+
+    index.close()
+    assert runtime.released == [("filter-1", 3), ("filter-2", 3)]
+    assert runtime.current_device == 9
+
+
 def test_inflight_snapshot_is_released_on_captured_device_after_replacement():
     class DeviceOwned:
         def __init__(self, runtime, name):
@@ -948,6 +1026,363 @@ def test_cuvs_gpu_search_gate_serializes_kernels_by_default():
 
     assert runtime.peak_active == 1
     assert max(item.queue_ms for item in telemetry) > 0
+    assert max(item.gpu_gate_queue_ms for item in telemetry) > 0
+    assert all(item.queue_ms >= item.gpu_gate_queue_ms for item in telemetry)
+
+
+def test_native_filter_resolution_runs_before_gpu_search_admission():
+    class BlockingRuntime(FakeCuVSRuntime):
+        def __init__(self):
+            super().__init__()
+            self.block_next = False
+            self.search_started = threading.Event()
+            self.resume_search = threading.Event()
+
+        def search(self, index, query, limit, mask):
+            if self.block_next:
+                self.block_next = False
+                self.search_started.set()
+                assert self.resume_search.wait(timeout=5)
+            return super().search(index, query, limit, mask)
+
+    runtime = BlockingRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={},
+        runtime=runtime,
+    )
+    index.add_candidates([candidate(1, [1.0, 0.0], account_id="a")])
+    assert index.search([1.0, 0.0], 1, None)[0] == [1]
+
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    resolver_ran = threading.Event()
+    telemetry = CuVSSearchTelemetry(algorithm="brute_force", auto_mode=False)
+
+    def resolve(_filters):
+        resolver_ran.set()
+        return [0b1], 1
+
+    runtime.block_next = True
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        occupying = executor.submit(index.search, [1.0, 0.0], 1, None)
+        assert runtime.search_started.wait(timeout=5)
+        filtered = executor.submit(
+            index.search,
+            [1.0, 0.0],
+            1,
+            filter_a,
+            resolve,
+            lambda _labels: None,
+            telemetry,
+        )
+        # The resolver is host work and must complete while the sole GPU
+        # admission permit is still occupied by the first search.
+        assert resolver_ran.wait(timeout=5)
+        runtime.resume_search.set()
+        assert occupying.result(timeout=5)[0] == [1]
+        assert filtered.result(timeout=5)[0] == [1]
+
+    assert telemetry.gpu_gate_queue_ms > 0
+    assert telemetry.queue_ms >= telemetry.gpu_gate_queue_ms
+
+
+def test_explicit_same_filter_host_resolution_is_singleflight():
+    class WordPreparingRuntime(FakeCuVSRuntime):
+        def __init__(self):
+            super().__init__()
+            self.prepare_filter_words_count = 0
+
+        def prepare_filter_words(self, words):
+            self.prepare_filter_words_count += 1
+            return (bool(words[0] & 1),)
+
+    runtime = WordPreparingRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"filter_cache_size": 2},
+        runtime=runtime,
+    )
+    index.add_candidates([candidate(1, [1.0, 0.0], account_id="a")])
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    start = threading.Barrier(2)
+    resolver_started = threading.Event()
+    release_resolver = threading.Event()
+    resolver_calls = 0
+
+    def resolve(_filters):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        resolver_started.set()
+        assert release_resolver.wait(timeout=5)
+        return [0b1], 1
+
+    def invoke():
+        start.wait(timeout=5)
+        return index.search(
+            [1.0, 0.0],
+            1,
+            filter_a,
+            resolve,
+            lambda _labels: None,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(invoke) for _ in range(2)]
+        assert resolver_started.wait(timeout=5)
+        wait_for_preflight_participants(index, 2)
+        release_resolver.set()
+        assert [future.result(timeout=5)[0] for future in futures] == [[1], [1]]
+
+    assert resolver_calls == 1
+    assert runtime.prepare_filter_words_count == 1
+    assert not index._preflight_flights
+
+
+def test_mutation_discards_host_filter_resolved_for_old_generation():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"filter_cache_size": 2},
+        runtime=runtime,
+    )
+    index.add_candidates([candidate(1, [1.0, 0.0], account_id="old")])
+    filter_new = {"op": "must", "field": "account_id", "conds": ["new"]}
+    resolver_started = threading.Event()
+    release_resolver = threading.Event()
+    resolver_calls = 0
+    registered_layouts = []
+
+    def resolve(_filters):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        if resolver_calls == 1:
+            resolver_started.set()
+            assert release_resolver.wait(timeout=5)
+            return [0b0], 0
+        return [0b10], 1
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            index.search,
+            [0.0, 1.0],
+            1,
+            filter_new,
+            resolve,
+            lambda labels: registered_layouts.append(list(labels)),
+        )
+        assert resolver_started.wait(timeout=5)
+        index.add_candidates([candidate(2, [0.0, 1.0], account_id="new")])
+        release_resolver.set()
+        assert future.result(timeout=5)[0] == [2]
+
+    assert resolver_calls == 2
+    assert registered_layouts == [[1], [1, 2]]
+    assert runtime.build_count == 1
+
+
+def test_close_during_host_filter_resolution_rejects_search_before_gpu_admission():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={},
+        runtime=runtime,
+    )
+    index.add_candidates([candidate(1, [1.0, 0.0], account_id="a")])
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    resolver_started = threading.Event()
+    release_resolver = threading.Event()
+
+    def resolve(_filters):
+        resolver_started.set()
+        assert release_resolver.wait(timeout=5)
+        return [0b1], 1
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            index.search,
+            [1.0, 0.0],
+            1,
+            filter_a,
+            resolve,
+            lambda _labels: None,
+        )
+        assert resolver_started.wait(timeout=5)
+        index.close()
+        release_resolver.set()
+        with pytest.raises(RuntimeError, match="dense index is closed"):
+            future.result(timeout=5)
+
+    assert runtime.build_count == 0
+    assert runtime.closed
+
+
+def test_close_while_warmed_filter_waits_for_gpu_gate_does_not_borrow_device_cache():
+    class BlockingWordRuntime(FakeCuVSRuntime):
+        def __init__(self):
+            super().__init__()
+            self.block_next = False
+            self.search_started = threading.Event()
+            self.resume_search = threading.Event()
+
+        def prepare_filter_words(self, words):
+            return (bool(words[0] & 1),)
+
+        def search(self, index, query, limit, mask):
+            if self.block_next:
+                self.block_next = False
+                self.search_started.set()
+                assert self.resume_search.wait(timeout=5)
+            return super().search(index, query, limit, mask)
+
+    runtime = BlockingWordRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={},
+        runtime=runtime,
+    )
+    index.add_candidates([candidate(1, [1.0, 0.0], account_id="a")])
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+
+    def resolver(_filters):
+        return [0b1], 1
+
+    def registrar(_labels):
+        return None
+
+    assert index.search([1.0, 0.0], 1, filter_a, resolver, registrar)[0] == [1]
+
+    host_prepared = threading.Event()
+    original_prepare = index._prepare_host_filter
+
+    def observe_prepare(*args, **kwargs):
+        prepared = original_prepare(*args, **kwargs)
+        host_prepared.set()
+        return prepared
+
+    index._prepare_host_filter = observe_prepare
+    runtime.block_next = True
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        occupying = executor.submit(index.search, [1.0, 0.0], 1, None)
+        assert runtime.search_started.wait(timeout=5)
+        waiting = executor.submit(
+            index.search,
+            [1.0, 0.0],
+            1,
+            filter_a,
+            resolver,
+            registrar,
+        )
+        assert host_prepared.wait(timeout=5)
+
+        closing = executor.submit(index.close)
+        deadline = time.monotonic() + 5
+        while not index._closed and time.monotonic() < deadline:
+            time.sleep(0.001)
+        assert index._closed
+
+        runtime.resume_search.set()
+        assert occupying.result(timeout=5)[0] == [1]
+        with pytest.raises(RuntimeError, match="dense index is closed"):
+            waiting.result(timeout=5)
+        closing.result(timeout=5)
+
+    assert runtime.closed
+
+
+def test_device_cache_eviction_before_admission_uses_one_in_gate_fallback():
+    class WordPreparingRuntime(FakeCuVSRuntime):
+        def __init__(self):
+            super().__init__()
+            self.prepare_filter_words_count = 0
+
+        def prepare_filter_words(self, words):
+            self.prepare_filter_words_count += 1
+            return tuple(bool(words[0] & (1 << row)) for row in range(2))
+
+    runtime = WordPreparingRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"filter_cache_size": 1, "max_concurrent_gpu_searches": 2},
+        runtime=runtime,
+    )
+    index.add_candidates(
+        [
+            candidate(1, [1.0, 0.0], account_id="a"),
+            candidate(2, [0.0, 1.0], account_id="b"),
+        ]
+    )
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    filter_b = {"op": "must", "field": "account_id", "conds": ["b"]}
+    resolver_calls = {"a": 0, "b": 0}
+
+    def resolve(filters):
+        account_id = filters["conds"][0]
+        resolver_calls[account_id] += 1
+        return ([0b01], 1) if account_id == "a" else ([0b10], 1)
+
+    def registrar(_labels):
+        return None
+
+    # Warm A so the delayed search below initially observes a device-cache hit.
+    assert index.search([1.0, 0.0], 1, filter_a, resolve, registrar)[0] == [1]
+    assert resolver_calls == {"a": 1, "b": 0}
+
+    a_host_prepared = threading.Event()
+    release_a = threading.Event()
+    original_prepare = index._prepare_host_filter
+
+    def pause_a_after_host_prepare(filters, *args, **kwargs):
+        prepared = original_prepare(filters, *args, **kwargs)
+        if filters == filter_a:
+            a_host_prepared.set()
+            assert release_a.wait(timeout=5)
+        return prepared
+
+    index._prepare_host_filter = pause_a_after_host_prepare
+    eviction_telemetry = CuVSSearchTelemetry(algorithm="brute_force", auto_mode=False)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        delayed_a = executor.submit(
+            index.search,
+            [1.0, 0.0],
+            1,
+            filter_a,
+            resolve,
+            registrar,
+            eviction_telemetry,
+        )
+        assert a_host_prepared.wait(timeout=5)
+
+        # Materializing B evicts A from the size-one device LRU after A's host
+        # context was captured but before A consumes an admission permit.
+        assert index.search([0.0, 1.0], 1, filter_b, resolve, registrar)[0] == [2]
+        release_a.set()
+        assert delayed_a.result(timeout=5)[0] == [1]
+
+    # A resolves once to warm and exactly once in the admitted eviction
+    # fallback; it does not loop under alternating hot-key churn.
+    assert resolver_calls == {"a": 2, "b": 1}
+    assert runtime.prepare_filter_words_count == 3
+    assert eviction_telemetry.filter_cache_hit is False
+    assert eviction_telemetry.filter_cache_eviction_fallback is True
+    assert eviction_telemetry.as_dict()["filter_cache_eviction_fallback"] is True
 
 
 def test_inflight_search_keeps_immutable_snapshot_during_rebuild():
