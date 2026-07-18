@@ -536,6 +536,13 @@ def _operations_to_plan_items(
         fields = dict(getattr(op, "memory_fields", {}) or {})
         old_file = getattr(op, "old_memory_file_content", None)
         after_file = render_operation_after_file(op, schema=schema)
+        plan_fields = dict(fields)
+        for field_name in schema.content_field_names():
+            if field_name == "content":
+                continue
+            plan_fields.pop(field_name, None)
+            if field_name in after_file.extra_fields:
+                plan_fields[field_name] = after_file.extra_fields[field_name]
         if not _memory_file_has_schema_content(after_file, schema=schema):
             continue
         after_content = after_file.content
@@ -581,7 +588,7 @@ def _operations_to_plan_items(
                 metadata={
                     "rationale": "PatchMergeContextProvider merged semantic gradients via ExtractLoop.",
                     "merge_gradient_count": len(gradients),
-                    "merge_memory_fields": fields,
+                    "merge_memory_fields": plan_fields,
                     "superseded_experience_uris": [policy.uri for policy in superseded_policies],
                 },
             )

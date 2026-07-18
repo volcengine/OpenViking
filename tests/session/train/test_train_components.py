@@ -668,6 +668,71 @@ async def test_patch_merge_policy_optimizer_runs_patch_merge_extract_loop(monkey
 
 
 @pytest.mark.asyncio
+async def test_patch_merge_plan_gate_validates_resolved_experience_fields():
+    from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
+    from openviking.session.memory.memory_type_registry import create_default_registry
+    from openviking.session.train.components.policy_optimizer import _operations_to_plan_items
+
+    policy_set = _experience_set()
+    policy = policy_set.policies[0]
+    original_fields = _experience_fields("old reminder")
+    old_file = MemoryFile(
+        uri=policy.uri,
+        content=render_experience_fields(original_fields),
+        memory_type="experiences",
+        extra_fields={
+            "memory_type": "experiences",
+            "experience_name": policy.name,
+            "version": policy.version,
+            **original_fields,
+        },
+    )
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                old_memory_file_content=old_file,
+                memory_fields={
+                    "experience_name": policy.name,
+                    "situation": StrPatch(
+                        blocks=[
+                            SearchReplaceBlock(
+                                search="the tested operation reaches its decision boundary",
+                                replace="the tested cancellation reaches its decision boundary",
+                            )
+                        ]
+                    ),
+                },
+                memory_type="experiences",
+                uris=[policy.uri],
+            )
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+    schema = create_default_registry().get("experiences")
+    assert schema is not None
+
+    items = _operations_to_plan_items(
+        operations=operations,
+        gradients=[],
+        policy_set=policy_set,
+        memory_type="experiences",
+        schema=schema,
+    )
+    allowed, report = await GateRunner([ExperienceFieldSemanticsGate()]).filter_plan(
+        items,
+        analyses=[],
+        policy_set=policy_set,
+    )
+
+    assert allowed == items
+    assert report.rejected_count == 0
+    assert items[0].metadata["merge_memory_fields"]["situation"] == (
+        original_fields["situation"].replace("tested operation", "tested cancellation")
+    )
+
+
+@pytest.mark.asyncio
 async def test_patch_merge_policy_optimizer_merges_all_patch_gradients_once(monkeypatch):
     from openviking.session.memory.dataclass import (
         ResolvedOperation,
