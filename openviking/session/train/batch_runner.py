@@ -6,8 +6,9 @@ import inspect
 import json
 import os
 import shutil
+import subprocess
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -47,7 +48,14 @@ from openviking.session.train.domain import (
 from openviking.session.train.pipeline import OfflinePolicyOptimizationPipeline
 from openviking.telemetry import tracer
 from openviking_cli.client.http import AsyncHTTPClient
+from openviking_cli.utils.config.config_loader import load_json_config, resolve_config_path
+from openviking_cli.utils.config.consts import DEFAULT_OV_CONF, OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+
+_BASELINE_CACHE_VERSION = 2
+_BASELINE_CACHE_SCHEMA = "openviking.benchmark.baseline.v2"
+_BASELINE_CACHE_DEFAULT_TTL_SECONDS = 7 * 24 * 60 * 60
+_UNKNOWN_IDENTITY = "unknown"
 
 
 @dataclass(slots=True)
@@ -75,6 +83,7 @@ class BatchTrainEvalConfig:
     eval_index: int | str | list[int] | tuple[int, ...] | None = None
     benchmark_service_url: str | None = None
     baseline_force_recompute: bool = False
+    baseline_cache_ttl_seconds: int = _BASELINE_CACHE_DEFAULT_TTL_SECONDS
     skip_baseline_eval: bool = False
     eval_each_epoch: bool = False
     eval_split: str | None = "test"
@@ -123,6 +132,8 @@ class BatchTrainEvalConfig:
             raise ValueError("train_trials must be > 0")
         if self.benchmark_service_url is not None and not self.benchmark_service_url.strip():
             raise ValueError("benchmark_service_url must not be empty")
+        if self.baseline_cache_ttl_seconds <= 0:
+            raise ValueError("baseline_cache_ttl_seconds must be > 0")
         if self.keep_recent_results < 0:
             raise ValueError("keep_recent_results must be >= 0")
         if not str(self.result_dir_name or "").strip():
@@ -202,6 +213,9 @@ class BatchTrainEvalReport:
     baseline_cache_path: str | None = None
     baseline_cache_hit: bool = False
     baseline_force_recompute: bool = False
+    baseline_cache_schema: str = _BASELINE_CACHE_SCHEMA
+    baseline_cache_identity: dict[str, Any] | None = None
+    baseline_cache_ttl_seconds: int = _BASELINE_CACHE_DEFAULT_TTL_SECONDS
     skip_final_eval: bool = False
     final_eval_source: str | None = None
 
@@ -242,6 +256,9 @@ class BatchTrainEvalReport:
             "baseline_cache_path": self.baseline_cache_path,
             "baseline_cache_hit": self.baseline_cache_hit,
             "baseline_force_recompute": self.baseline_force_recompute,
+            "baseline_cache_schema": self.baseline_cache_schema,
+            "baseline_cache_identity": self.baseline_cache_identity,
+            "baseline_cache_ttl_seconds": self.baseline_cache_ttl_seconds,
             "skip_final_eval": self.skip_final_eval,
             "final_eval_source": self.final_eval_source,
         }
@@ -312,7 +329,9 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             latest_pointer_path=_latest_rollouts_path(config),
         )
         remote_executor = getattr(pipeline, "rollout_executor", None)
-        if isinstance(remote_executor, (RemoteRolloutExecutor, CachedEpochZeroTrainRolloutExecutor)):
+        if isinstance(
+            remote_executor, (RemoteRolloutExecutor, CachedEpochZeroTrainRolloutExecutor)
+        ):
             remote_executor.on_rollout_complete = (
                 rollout_artifact_recorder.record_rollout_completion
             )
@@ -361,7 +380,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
                 baseline_eval = baseline_result.metadata["report"]
             else:
                 assert baseline_cache_path is not None
-                baseline_eval = _load_baseline_cache(baseline_cache_path)
+                baseline_eval = _load_baseline_cache(baseline_cache_path, config=config)
                 if baseline_eval is not None:
                     _print_baseline_cache_hit(baseline_eval, baseline_cache_path)
 
@@ -481,6 +500,8 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             ),
             baseline_cache_hit=baseline_cache_hit,
             baseline_force_recompute=config.baseline_force_recompute,
+            baseline_cache_identity=_baseline_cache_identity(config),
+            baseline_cache_ttl_seconds=config.baseline_cache_ttl_seconds,
             skip_final_eval=config.skip_final_eval,
             final_eval_source=final_eval_source,
         )
@@ -595,7 +616,7 @@ async def _load_or_run_baseline_eval(
 ) -> tuple[Any | None, bool]:
     cache_path = _baseline_cache_path(config)
     if not config.baseline_force_recompute:
-        cached_report = _load_baseline_cache(cache_path)
+        cached_report = _load_baseline_cache(cache_path, config=config)
         if cached_report is not None:
             await event_recorder.record(
                 "baseline_cache_hit",
@@ -642,8 +663,11 @@ def _write_baseline_cache(
     *,
     config: BatchTrainEvalConfig,
 ) -> None:
+    created_at = _utc_now()
+    expires_at = created_at + timedelta(seconds=config.baseline_cache_ttl_seconds)
     payload = {
-        "cache_version": 1,
+        "cache_version": _BASELINE_CACHE_VERSION,
+        "schema_version": _BASELINE_CACHE_SCHEMA,
         "cache_key": _baseline_cache_key(config),
         "dataset": config.dataset,
         "domain": config.domain,
@@ -652,22 +676,64 @@ def _write_baseline_cache(
         "trials": config.trials,
         "max_iterations": config.max_iterations,
         "keep_default_tools": config.keep_default_tools,
-        "created_at": datetime.now().isoformat(),
+        "manifest": {
+            **_baseline_cache_identity(config),
+            "created_at": _format_utc_timestamp(created_at),
+            "expires_at": _format_utc_timestamp(expires_at),
+            "reuse_scope": "baseline_reference_only",
+        },
         "report": report,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp_path = path.with_suffix(f"{path.suffix}.tmp")
+    temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp_path.replace(path)
 
 
-def _load_baseline_cache(path: Path) -> dict[str, Any] | None:
+def _load_baseline_cache(
+    path: Path,
+    *,
+    config: BatchTrainEvalConfig,
+    now: datetime | None = None,
+) -> dict[str, Any] | None:
     if not path.exists():
         return None
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if payload.get("cache_version") != 1:
-        raise ValueError(f"unsupported baseline cache version in {path}")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("cache_version") != _BASELINE_CACHE_VERSION:
+        return None
+    if payload.get("schema_version") != _BASELINE_CACHE_SCHEMA:
+        return None
+    if payload.get("cache_key") != _baseline_cache_key(config):
+        return None
+    manifest = payload.get("manifest")
+    if not isinstance(manifest, dict):
+        return None
+    expected_identity = _baseline_cache_identity(config)
+    if not _baseline_cache_identity_is_usable(expected_identity):
+        return None
+    if any(manifest.get(key) != value for key, value in expected_identity.items()):
+        return None
+    created_at = _parse_utc_timestamp(manifest.get("created_at"))
+    expires_at = _parse_utc_timestamp(manifest.get("expires_at"))
+    observed_at = now or _utc_now()
+    if observed_at.tzinfo is None:
+        observed_at = observed_at.replace(tzinfo=timezone.utc)
+    else:
+        observed_at = observed_at.astimezone(timezone.utc)
+    if created_at is None or expires_at is None:
+        return None
+    if created_at > observed_at or expires_at <= created_at or expires_at <= observed_at:
+        return None
+    if manifest.get("reuse_scope") != "baseline_reference_only":
+        return None
     report = payload.get("report")
     if not isinstance(report, dict):
-        raise ValueError(f"baseline cache file has no report: {path}")
+        return None
     return {
         **report,
         "baseline_cache_hit": True,
@@ -1014,19 +1080,171 @@ def _train_rollout_cache_key_prefix(config: BatchTrainEvalConfig) -> str:
 
 def _baseline_cache_key(config: BatchTrainEvalConfig) -> str:
     payload = {
-        "dataset": config.dataset,
-        "domain": config.domain,
-        "split": config.eval_split,
-        "eval_index": _index_payload(config.eval_index),
-        "trials": config.trials,
-        "max_iterations": config.max_iterations,
-        "keep_default_tools": config.keep_default_tools,
+        "cache_version": _BASELINE_CACHE_VERSION,
+        **_baseline_cache_identity(config),
     }
     stable = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     digest = sha256(stable.encode("utf-8")).hexdigest()[:16]
     index = _index_label(config.eval_index)
     split = _cache_slug(str(config.eval_split or "none"))
     return f"{_cache_slug(config.domain)}_{split}_index-{index}_trials-{config.trials}_{digest}"
+
+
+def _baseline_cache_identity(config: BatchTrainEvalConfig) -> dict[str, Any]:
+    return {
+        "openviking_revision": _openviking_revision(),
+        "benchmark_runtime_identity": _benchmark_runtime_identity(config),
+        "effective_config_digest": _effective_config_digest(config),
+        "dataset_selection_digest": _dataset_selection_digest(config),
+    }
+
+
+def _baseline_cache_identity_is_usable(identity: dict[str, Any]) -> bool:
+    revision = identity.get("openviking_revision")
+    runtime = identity.get("benchmark_runtime_identity")
+    return bool(
+        revision
+        and revision != _UNKNOWN_IDENTITY
+        and isinstance(runtime, dict)
+        and runtime.get("provider")
+        and runtime.get("identity_digest")
+        and runtime.get("identity_digest") != _UNKNOWN_IDENTITY
+        and identity.get("effective_config_digest")
+        and identity.get("dataset_selection_digest")
+    )
+
+
+def _benchmark_runtime_identity(config: BatchTrainEvalConfig) -> dict[str, str]:
+    service_url = str(config.benchmark_service_url or "").strip().rstrip("/")
+    return {
+        "provider": "remote_benchmark_service",
+        "identity_digest": _stable_digest(service_url) if service_url else _UNKNOWN_IDENTITY,
+    }
+
+
+def _effective_config_digest(config: BatchTrainEvalConfig) -> str:
+    config_file_payload: Any = {"source": "none"}
+    should_resolve_config = bool(
+        config.config_path or config.server_url is None or config.api_key is None
+    )
+    if should_resolve_config:
+        path = resolve_config_path(config.config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
+        if path is None:
+            config_file_payload = {"source": "missing"}
+        else:
+            try:
+                config_file_payload = _redact_config_value(load_json_config(path))
+            except (OSError, UnicodeError, ValueError):
+                config_file_payload = {"source": "unreadable"}
+    payload = {
+        "batch": {
+            "trials": config.trials,
+            "max_iterations": config.max_iterations,
+            "keep_default_tools": config.keep_default_tools,
+            "baseline_cache_ttl_seconds": config.baseline_cache_ttl_seconds,
+        },
+        "openviking_server_identity_digest": (
+            _stable_digest(str(config.server_url).strip().rstrip("/"))
+            if config.server_url
+            else _UNKNOWN_IDENTITY
+        ),
+        "config": config_file_payload,
+    }
+    return _stable_digest(payload)
+
+
+def _dataset_selection_digest(config: BatchTrainEvalConfig) -> str:
+    return _stable_digest(
+        {
+            "dataset": config.dataset,
+            "domain": config.domain,
+            "split": config.eval_split,
+            "eval_index": _index_payload(config.eval_index),
+        }
+    )
+
+
+def _redact_config_value(value: Any, *, key: str = "") -> Any:
+    if _is_sensitive_config_key(key):
+        return "<redacted>"
+    if isinstance(value, dict):
+        return {
+            str(item_key): _redact_config_value(item_value, key=str(item_key))
+            for item_key, item_value in sorted(value.items(), key=lambda item: str(item[0]))
+        }
+    if isinstance(value, list):
+        return [_redact_config_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_redact_config_value(item) for item in value]
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    return str(value)
+
+
+def _is_sensitive_config_key(key: str) -> bool:
+    normalized = str(key).strip().lower().replace("-", "_")
+    tokens = {token for token in normalized.split("_") if token}
+    collapsed = normalized.replace("_", "")
+    return bool(
+        tokens.intersection({"password", "secret", "token", "credential", "authorization"})
+        or normalized in {"ak", "sk", "key"}
+        or normalized.endswith("_key")
+        or any(marker in collapsed for marker in ("apikey", "accesskey", "privatekey", "authtoken"))
+    )
+
+
+def _stable_digest(value: Any) -> str:
+    stable = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return sha256(stable.encode("utf-8")).hexdigest()
+
+
+def _openviking_revision() -> str:
+    explicit = str(os.environ.get("OPENVIKING_BENCHMARK_REVISION") or "").strip()
+    if explicit:
+        return explicit
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=_repo_root(),
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout.strip()
+        if not head:
+            return _UNKNOWN_IDENTITY
+        diff = subprocess.run(
+            ["git", "diff", "--binary", "HEAD"],
+            cwd=_repo_root(),
+            check=True,
+            capture_output=True,
+            timeout=10,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return _UNKNOWN_IDENTITY
+    if diff:
+        return f"{head}+dirty.{sha256(diff).hexdigest()[:16]}"
+    return head
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _format_utc_timestamp(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _parse_utc_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
 
 
 def _index_payload(indices: list[int] | None) -> int | list[int] | None:

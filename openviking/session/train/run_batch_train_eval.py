@@ -43,10 +43,18 @@ def parse_args() -> argparse.Namespace:
         help="Max seconds to wait for each OpenViking session.commit task. Default waits indefinitely.",
     )
     parser.add_argument("--config", default=None, help="ov.conf path (optional)")
-    parser.add_argument("--server-url", default=None, help="OpenViking server URL. Defaults to ov.conf/ovcli.conf")
-    parser.add_argument("--api-key", default=None, help="OpenViking API key. Defaults to ov.conf/ovcli.conf")
-    parser.add_argument("--account-id", default="default", help="OpenViking trusted account id. Default: default")
-    parser.add_argument("--user-id", default="default", help="OpenViking trusted user id. Default: default")
+    parser.add_argument(
+        "--server-url", default=None, help="OpenViking server URL. Defaults to ov.conf/ovcli.conf"
+    )
+    parser.add_argument(
+        "--api-key", default=None, help="OpenViking API key. Defaults to ov.conf/ovcli.conf"
+    )
+    parser.add_argument(
+        "--account-id", default="default", help="OpenViking trusted account id. Default: default"
+    )
+    parser.add_argument(
+        "--user-id", default="default", help="OpenViking trusted user id. Default: default"
+    )
     parser.add_argument("--output", default=None, help="JSON report output path")
     parser.add_argument(
         "--events-output",
@@ -89,9 +97,14 @@ def parse_args() -> argparse.Namespace:
         "--force-baseline-recompute",
         action="store_true",
         help=(
-            "Recompute the cached pre-training baseline instead of reusing an "
-            "existing cache file."
+            "Recompute the cached pre-training baseline instead of reusing an existing cache file."
         ),
+    )
+    parser.add_argument(
+        "--baseline-cache-ttl-seconds",
+        type=int,
+        default=7 * 24 * 60 * 60,
+        help="Maximum baseline cache age in seconds (default: 604800 / 7 days).",
     )
     parser.add_argument(
         "--skip-baseline-eval",
@@ -209,6 +222,7 @@ async def main_async() -> int:
             eval_index=_parse_indices_arg(args.eval_index),
             benchmark_service_url=args.benchmark_service_url,
             baseline_force_recompute=args.force_baseline_recompute,
+            baseline_cache_ttl_seconds=args.baseline_cache_ttl_seconds,
             eval_each_epoch=args.eval_each_epoch,
             skip_final_eval=args.skip_final_eval,
             skip_baseline_eval=args.skip_baseline_eval,

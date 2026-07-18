@@ -3,11 +3,14 @@
 
 from __future__ import annotations
 
+import json
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from openviking.session.train.batch_runner import (
     BatchTrainEvalConfig,
     CachedEpochZeroTrainRolloutExecutor,
+    _baseline_cache_identity,
     _baseline_cache_key,
     _clean_result_dir,
     _load_baseline_cache,
@@ -87,7 +90,10 @@ def test_baseline_cache_key_depends_on_trials_eval_index_and_split():
     )
 
 
-def test_baseline_cache_round_trips_report(tmp_path: Path):
+def test_baseline_cache_round_trips_report(tmp_path: Path, monkeypatch):
+    import openviking.session.train.batch_runner as batch_runner
+
+    monkeypatch.setattr(batch_runner, "_openviking_revision", lambda: "revision-a")
     cache_path = tmp_path / "baseline.json"
     config = BatchTrainEvalConfig(
         dataset="tau2",
@@ -106,12 +112,132 @@ def test_baseline_cache_round_trips_report(tmp_path: Path):
     }
 
     _write_baseline_cache(cache_path, report, config=config)
-    loaded = _load_baseline_cache(cache_path)
+    loaded = _load_baseline_cache(cache_path, config=config)
 
     assert loaded is not None
     assert loaded["baseline_cache_hit"] is True
     assert loaded["baseline_cache_path"] == str(cache_path)
     assert loaded["accuracy"] == 1.0
+
+    payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    assert payload["cache_version"] == 2
+    assert payload["schema_version"] == "openviking.benchmark.baseline.v2"
+    assert payload["manifest"]["openviking_revision"] == "revision-a"
+    assert payload["manifest"]["reuse_scope"] == "baseline_reference_only"
+    assert payload["manifest"]["benchmark_runtime_identity"]["provider"] == (
+        "remote_benchmark_service"
+    )
+
+
+def test_baseline_cache_redacts_config_secrets_before_digest(tmp_path: Path, monkeypatch):
+    import openviking.session.train.batch_runner as batch_runner
+
+    monkeypatch.setattr(batch_runner, "_openviking_revision", lambda: "revision-a")
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "vlm": {"model": "model-a", "api_key": "secret-value"},
+                "server": {"root_api_key": "root-secret", "port": 1933},
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = BatchTrainEvalConfig(
+        dataset="tau2",
+        domain="airline",
+        config_path=str(config_path),
+        benchmark_service_url="http://127.0.0.1:1944",
+    )
+    cache_path = tmp_path / "baseline.json"
+
+    _write_baseline_cache(cache_path, {"accuracy": 1.0}, config=config)
+
+    serialized = cache_path.read_text(encoding="utf-8")
+    assert "secret-value" not in serialized
+    assert "root-secret" not in serialized
+    assert _load_baseline_cache(cache_path, config=config) is not None
+
+    original_digest = _baseline_cache_identity(config)["effective_config_digest"]
+    config_path.write_text(
+        json.dumps(
+            {
+                "vlm": {"model": "model-a", "api_key": "new-secret"},
+                "server": {"root_api_key": "new-root-secret", "port": 1933},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert _baseline_cache_identity(config)["effective_config_digest"] == original_digest
+    assert _load_baseline_cache(cache_path, config=config) is not None
+
+    config_path.write_text(
+        json.dumps(
+            {
+                "vlm": {"model": "model-b", "api_key": "new-secret"},
+                "server": {"root_api_key": "new-root-secret", "port": 1933},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert _load_baseline_cache(cache_path, config=config) is None
+
+
+def test_baseline_cache_fails_closed_on_revision_expiry_and_legacy_payload(
+    tmp_path: Path, monkeypatch
+):
+    import openviking.session.train.batch_runner as batch_runner
+
+    revision = {"value": "revision-a"}
+    monkeypatch.setattr(batch_runner, "_openviking_revision", lambda: revision["value"])
+    config = BatchTrainEvalConfig(
+        dataset="tau2",
+        domain="airline",
+        benchmark_service_url="http://127.0.0.1:1944",
+        baseline_cache_ttl_seconds=60,
+    )
+    cache_path = tmp_path / "baseline.json"
+    _write_baseline_cache(cache_path, {"accuracy": 1.0}, config=config)
+    payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    created_at = datetime.fromisoformat(payload["manifest"]["created_at"].replace("Z", "+00:00"))
+
+    assert (
+        _load_baseline_cache(
+            cache_path,
+            config=config,
+            now=created_at + timedelta(seconds=59),
+        )
+        is not None
+    )
+    assert (
+        _load_baseline_cache(
+            cache_path,
+            config=config,
+            now=created_at + timedelta(seconds=60),
+        )
+        is None
+    )
+
+    revision["value"] = "revision-b"
+    assert _load_baseline_cache(cache_path, config=config) is None
+
+    cache_path.write_text(
+        json.dumps({"cache_version": 1, "report": {"accuracy": 1.0}}),
+        encoding="utf-8",
+    )
+    assert _load_baseline_cache(cache_path, config=config) is None
+    cache_path.write_text("{not-json", encoding="utf-8")
+    assert _load_baseline_cache(cache_path, config=config) is None
+
+
+def test_baseline_cache_identity_rejects_unknown_runtime(monkeypatch):
+    import openviking.session.train.batch_runner as batch_runner
+
+    monkeypatch.setattr(batch_runner, "_openviking_revision", lambda: "revision-a")
+    config = BatchTrainEvalConfig(dataset="tau2", domain="airline")
+    identity = _baseline_cache_identity(config)
+
+    assert identity["benchmark_runtime_identity"]["identity_digest"] == "unknown"
 
 
 def test_clean_result_preserves_baseline_cache(tmp_path: Path, monkeypatch):
@@ -217,6 +343,18 @@ def test_keep_recent_results_must_be_non_negative():
             domain="airline",
             benchmark_service_url="http://127.0.0.1:1944",
             keep_recent_results=-1,
+        )
+
+
+def test_baseline_cache_ttl_must_be_positive():
+    import pytest
+
+    with pytest.raises(ValueError, match="baseline_cache_ttl_seconds must be > 0"):
+        BatchTrainEvalConfig(
+            dataset="tau2",
+            domain="airline",
+            benchmark_service_url="http://127.0.0.1:1944",
+            baseline_cache_ttl_seconds=0,
         )
 
 
