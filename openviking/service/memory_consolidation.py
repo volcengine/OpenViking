@@ -20,6 +20,8 @@ from openviking.session.memory.utils.memory_file_utils import (
     memory_version_from_fields,
 )
 
+EXACT_DUPLICATE_CONSOLIDATOR_VERSION = "exact-normalized-v1"
+
 
 class ConsolidationSource(BaseModel):
     """One memory file already enumerated inside an explicit scope."""
@@ -39,7 +41,8 @@ class ExactDuplicateMember(BaseModel):
 class ExactDuplicateGroup(BaseModel):
     """One deterministic exact/normalized duplicate group."""
 
-    canonical_uri: str
+    candidate_id: str
+    canonical: ExactDuplicateMember
     duplicates: list[ExactDuplicateMember]
     normalized_sha256: str
     reason: str = "normalized content is identical"
@@ -48,6 +51,8 @@ class ExactDuplicateGroup(BaseModel):
 class ExactDuplicateDryRunPlan(BaseModel):
     """A read-only consolidation preview for one user and memory type."""
 
+    schema_version: str = "memory_consolidation_dry_run_plan_v1"
+    consolidator_version: str = EXACT_DUPLICATE_CONSOLIDATOR_VERSION
     scope_uri: str
     memory_type: str
     revision: str
@@ -66,9 +71,44 @@ def _sha256(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def _identity_payload(raw_content: str, *, uri: str) -> tuple[str, str, int]:
+    """Return a conservative identity digest plus persisted revision evidence.
+
+    The persisted version is excluded from identity because it protects plan
+    freshness rather than describing memory meaning.  All other metadata,
+    including links and backlinks, remains in the digest so a dry-run never
+    proposes collapsing memories whose relationships differ.
+    """
+
+    memory_file = MemoryFileUtils.read(raw_content, uri=uri)
+    metadata = memory_file.model_dump(
+        mode="json",
+        exclude={"uri", "content"},
+    )
+    extra_fields = dict(metadata.get("extra_fields") or {})
+    version = memory_version_from_fields(extra_fields)
+    extra_fields.pop("version", None)
+    metadata["extra_fields"] = extra_fields
+    identity = {
+        "content": _normalized_content(memory_file.content),
+        "metadata": metadata,
+    }
+    return (
+        _sha256(json.dumps(identity, sort_keys=True, separators=(",", ":"))),
+        _sha256(raw_content),
+        version,
+    )
+
+
 def _validate_scope(scope_uri: str, memory_type: str) -> str:
     normalized_scope = scope_uri.rstrip("/")
-    if not memory_type or MemoryUpdater.memory_type_from_uri(normalized_scope) != memory_type:
+    parts = [part for part in normalized_scope.split("/") if part]
+    if (
+        not memory_type
+        or MemoryUpdater.memory_type_from_uri(normalized_scope) != memory_type
+        or len(parts) < 2
+        or parts[-2:] != ["memories", memory_type]
+    ):
         raise ValueError("scope_uri must identify exactly one memories/<memory_type> directory")
     return normalized_scope
 
@@ -106,12 +146,14 @@ def build_exact_duplicate_dry_run_plan(
         if memory_file.memory_type and memory_file.memory_type != memory_type:
             raise ValueError(f"source metadata has a different memory type: {source.uri}")
 
-        normalized = _normalized_content(memory_file.content)
-        normalized_sha256 = _sha256(normalized)
+        normalized_sha256, content_sha256, version = _identity_payload(
+            source.raw_content,
+            uri=source.uri,
+        )
         member = ExactDuplicateMember(
             uri=source.uri,
-            version=memory_version_from_fields(memory_file.extra_fields),
-            content_sha256=_sha256(source.raw_content),
+            version=version,
+            content_sha256=content_sha256,
         )
         members_by_hash.setdefault(normalized_sha256, []).append(member)
 
@@ -120,16 +162,27 @@ def build_exact_duplicate_dry_run_plan(
         members.sort(key=lambda item: item.uri)
         if len(members) < 2:
             continue
+        candidate_payload = {
+            "consolidator_version": EXACT_DUPLICATE_CONSOLIDATOR_VERSION,
+            "normalized_sha256": normalized_sha256,
+            "uris": [member.uri for member in members],
+        }
         groups.append(
             ExactDuplicateGroup(
-                canonical_uri=members[0].uri,
+                candidate_id=(
+                    "exact:"
+                    + _sha256(json.dumps(candidate_payload, sort_keys=True, separators=(",", ":")))
+                ),
+                canonical=members[0],
                 duplicates=members[1:],
                 normalized_sha256=normalized_sha256,
             )
         )
-    groups.sort(key=lambda group: group.canonical_uri)
+    groups.sort(key=lambda group: group.canonical.uri)
 
     revision_payload = {
+        "schema_version": "memory_consolidation_dry_run_plan_v1",
+        "consolidator_version": EXACT_DUPLICATE_CONSOLIDATOR_VERSION,
         "scope_uri": normalized_scope,
         "memory_type": memory_type,
         "sources": [
