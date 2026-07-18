@@ -1,9 +1,9 @@
 """Deterministic, read-only planning for existing-memory consolidation.
 
-This module intentionally does not read from VikingFS or apply any mutations.
-Callers must enumerate one explicit user/type scope and pass the resulting
-files in.  Keeping the planner pure makes the first consolidation slice safe
-to preview and straightforward to protect with a revision check later.
+The planner itself is pure, while the adapter below reads one explicit,
+authorized user/type scope from VikingFS.  Neither path applies mutations.
+Keeping planning deterministic makes this first slice safe to preview and
+straightforward to protect with a revision check later.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import unicodedata
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
@@ -19,6 +20,10 @@ from openviking.session.memory.utils.memory_file_utils import (
     MemoryFileUtils,
     memory_version_from_fields,
 )
+
+if TYPE_CHECKING:
+    from openviking.server.identity import RequestContext
+    from openviking.service.fs_service import FSService
 
 EXACT_DUPLICATE_CONSOLIDATOR_VERSION = "exact-normalized-v1"
 
@@ -204,4 +209,48 @@ def build_exact_duplicate_dry_run_plan(
         revision=revision,
         scanned_files=len(sources),
         groups=groups,
+    )
+
+
+async def build_exact_duplicate_dry_run_plan_from_fs(
+    *,
+    fs_service: "FSService",
+    ctx: "RequestContext",
+    scope_uri: str,
+    memory_type: str,
+    node_limit: int = 5000,
+) -> ExactDuplicateDryRunPlan:
+    """Enumerate one authorized memory-type scope and return a read-only manifest."""
+
+    normalized_scope = _validate_scope(scope_uri, memory_type)
+    entries = await fs_service.ls(
+        normalized_scope,
+        ctx=ctx,
+        recursive=True,
+        output="original",
+        show_all_hidden=True,
+        node_limit=node_limit,
+        level_limit=32,
+    )
+    if len(entries) >= node_limit:
+        raise ValueError("scope scan reached node_limit; narrow the scope or raise the limit")
+
+    source_uris = sorted(
+        str(entry.get("uri") or "")
+        for entry in entries
+        if entry.get("isDir") is False
+        and str(entry.get("uri") or "").endswith(".md")
+        and not str(entry.get("uri") or "").endswith(("/.abstract.md", "/.overview.md"))
+    )
+    sources: list[ConsolidationSource] = []
+    for uri in source_uris:
+        raw_content = await fs_service.read(uri, ctx=ctx)
+        if not isinstance(raw_content, str):
+            raise ValueError(f"memory source is not text: {uri}")
+        sources.append(ConsolidationSource(uri=uri, raw_content=raw_content))
+
+    return build_exact_duplicate_dry_run_plan(
+        scope_uri=normalized_scope,
+        memory_type=memory_type,
+        sources=sources,
     )
