@@ -100,6 +100,20 @@ def _extract_azure_devops_ssh_repo_parts(path_parts: list[str]) -> Optional[list
     return repo_parts
 
 
+def _extract_gitlab_repo_parts(path_parts: list[str]) -> Optional[list[str]]:
+    """Return GitLab repository path parts, including nested namespaces.
+
+    A two-segment ``group/repo`` path is unambiguous. Longer GitLab paths are
+    accepted only when they use the explicit clone URL suffix (``.git``), so
+    ordinary project pages are not mistaken for repositories.
+    """
+    if len(path_parts) < 2 or "-" in path_parts:
+        return None
+    if len(path_parts) == 2 or path_parts[-1].endswith(".git"):
+        return path_parts
+    return None
+
+
 def _is_azure_devops_browse_url(query: str) -> bool:
     """Return True for Azure DevOps repo browsing URLs like ?path=/README.md."""
     return "path" in parse_qs(query, keep_blank_values=True)
@@ -131,6 +145,13 @@ def parse_code_hosting_url(url: str) -> Optional[str]:
                 return "/".join(
                     _sanitize_segment(part.removesuffix(".git")) for part in azure_repo_parts
                 )
+        config = get_openviking_config()
+        if host_part in config.code.gitlab_domains:
+            gitlab_repo_parts = _extract_gitlab_repo_parts(path_parts)
+            if gitlab_repo_parts:
+                return "/".join(
+                    _sanitize_segment(part.removesuffix(".git")) for part in gitlab_repo_parts
+                )
         if len(path_parts) < 2:
             return None
         # Take only first 2 segments (consistent with HTTP branch)
@@ -156,6 +177,18 @@ def parse_code_hosting_url(url: str) -> Optional[str]:
             return "/".join(
                 _sanitize_segment(part.removesuffix(".git")) for part in azure_repo_parts
             )
+        return None
+
+    config = get_openviking_config()
+    if _domain_matches(parsed, config.code.gitlab_domains):
+        gitlab_repo_parts = _extract_gitlab_repo_parts(path_parts)
+        if gitlab_repo_parts:
+            return "/".join(
+                _sanitize_segment(part.removesuffix(".git")) for part in gitlab_repo_parts
+            )
+        # Preserve the historical group/repo result for GitLab browsing URLs.
+        if len(path_parts) >= 2:
+            return "/".join(_sanitize_segment(part) for part in path_parts[:2])
         return None
 
     # For code hosting URLs with org/repo structure
@@ -289,7 +322,8 @@ def is_git_repo_url(url: str) -> bool:
         parsed = urlparse(url)
         if not _domain_matches(parsed, all_domains):
             return False
-        path_parts = [p for p in parsed.path.split("/") if p]
+        raw_path_parts = [p for p in parsed.path.split("/") if p]
+        path_parts = [p.removesuffix(".git") for p in raw_path_parts]
         # Strip .git suffix from last part for counting
         if path_parts and path_parts[-1].endswith(".git"):
             path_parts[-1] = path_parts[-1][:-4]
@@ -300,6 +334,12 @@ def is_git_repo_url(url: str) -> bool:
                 if _is_azure_devops_browse_url(parsed.query):
                     return False
                 return True
+
+        if _domain_matches(parsed, config.code.gitlab_domains):
+            if _extract_gitlab_repo_parts(raw_path_parts) is not None:
+                return True
+            # Preserve support for the historical two-part GitLab tree form.
+            return len(path_parts) == 4 and path_parts[2] == "tree"
 
         non_repo_paths = {
             "blob",

@@ -8,7 +8,9 @@ This is the DataAccessor layer extracted from CodeRepositoryParser.
 """
 
 import asyncio
+import base64
 import os
+import re
 import shutil
 import stat
 import tempfile
@@ -22,6 +24,7 @@ from openviking.utils import is_github_url, is_gitlab_url, parse_code_hosting_ur
 from openviking.utils.code_hosting_utils import (
     _domain_matches,
     _extract_azure_devops_repo_parts,
+    _extract_gitlab_repo_parts,
     is_code_hosting_url,
     is_git_repo_url,
     validate_git_ssh_uri,
@@ -97,6 +100,7 @@ class GitAccessor(DataAccessor):
             LocalResource pointing to the local directory
         """
         source_str = str(source)
+        public_source = self._redact_url_credentials(source_str)
         temp_local_dir = None
         branch = kwargs.get("branch") or kwargs.get("ref")
         commit = kwargs.get("commit")
@@ -195,14 +199,17 @@ class GitAccessor(DataAccessor):
             return LocalResource(
                 path=local_dir,
                 source_type=SourceType.GIT,
-                original_source=source_str,  # Full original URL (critical for TreeBuilder!)
+                original_source=public_source,
                 meta=meta,
                 is_temporary=True,
             )
 
         except Exception as e:
+            public_error = self._redact_credentials_in_text(str(e))
             logger.error(
-                f"[GitAccessor] Failed to access git repository {source}: {e}", exc_info=True
+                f"[GitAccessor] Failed to access git repository {public_source}: {public_error}",
+                # A traceback can repeat credential-bearing exception text.
+                exc_info=public_source == source_str,
             )
             # Clean up on error
             if temp_local_dir and os.path.exists(temp_local_dir):
@@ -282,11 +289,29 @@ class GitAccessor(DataAccessor):
                 if azure_repo_parts:
                     base_parts = path_parts[: len(azure_repo_parts) + 1]
 
-            if _domain_matches(parsed, config.code.github_domains + config.code.gitlab_domains):
+            if _domain_matches(parsed, config.code.github_domains):
                 base_parts = path_parts[:2]
+            elif _domain_matches(parsed, config.code.gitlab_domains):
+                gitlab_repo_parts = _extract_gitlab_repo_parts(path_parts)
+                base_parts = gitlab_repo_parts or path_parts[:2]
             base_path = "/" + "/".join(base_parts)
             return parsed._replace(path=base_path, query="", fragment="").geturl()
         return url
+
+    @staticmethod
+    def _redact_url_credentials(url: str) -> str:
+        """Remove URL userinfo before storing or logging a repository source."""
+        if not url.startswith(("http://", "https://", "git://", "ssh://")):
+            return url
+        parsed = urlparse(url)
+        if "@" not in parsed.netloc:
+            return url
+        return parsed._replace(netloc=parsed.netloc.rsplit("@", 1)[-1]).geturl()
+
+    @staticmethod
+    def _redact_credentials_in_text(text: str) -> str:
+        """Remove HTTP/Git/SSH URL userinfo embedded in diagnostic text."""
+        return re.sub(r"(?P<scheme>(?:https?|git|ssh)://)[^/@\s]+@", r"\g<scheme>", text)
 
     def _get_repo_name(self, url: str) -> str:
         """Get repository name with organization for GitHub/GitLab URLs.
@@ -337,7 +362,8 @@ class GitAccessor(DataAccessor):
                 user_msg = (
                     "Git command failed: authentication error. Check your SSH keys or credentials."
                 )
-            logger.warning(f"[GitAccessor] {user_msg} Details: {error_msg}")
+            public_error = self._redact_credentials_in_text(error_msg)
+            logger.warning(f"[GitAccessor] {user_msg} Details: {public_error}")
             raise RuntimeError(user_msg)
         return stdout.decode().strip()
 
@@ -368,7 +394,8 @@ class GitAccessor(DataAccessor):
     ) -> str:
         """Clone a git repository into target_dir; return the repo name."""
         name = self._get_repo_name(url)
-        logger.info(f"[GitAccessor] Cloning {url} to {target_dir}...")
+        public_url = self._redact_url_credentials(url)
+        logger.info(f"[GitAccessor] Cloning {public_url} to {target_dir}...")
 
         clone_args = [
             "git",
@@ -414,13 +441,13 @@ class GitAccessor(DataAccessor):
                     )
                     ok = await self._has_commit(target_dir, commit)
                     if not ok:
-                        raise RuntimeError(f"Failed to fetch commit {commit} from {url}")
+                        raise RuntimeError(f"Failed to fetch commit {commit} from {public_url}")
             await self._run_git(["git", "-C", target_dir, "checkout", commit])
 
-        # Add .git_source_repo marker file with original URL (for consistency)
+        # Add a marker with the credential-free source URL.
         def _write_marker():
             marker_file = Path(target_dir) / ".git_source_repo"
-            marker_file.write_text(url, encoding="utf-8")
+            marker_file.write_text(public_url, encoding="utf-8")
 
         await asyncio.to_thread(_write_marker)
 
@@ -510,10 +537,10 @@ class GitAccessor(DataAccessor):
 
         content_dir = await asyncio.to_thread(_find_content_dir)
 
-        # Add .git_source_repo marker file with original URL
+        # Add a marker with the credential-free source URL.
         def _write_marker():
             marker_file = content_dir / ".git_source_repo"
-            marker_file.write_text(repo_url, encoding="utf-8")
+            marker_file.write_text(self._redact_url_credentials(repo_url), encoding="utf-8")
 
         await asyncio.to_thread(_write_marker)
 
@@ -529,20 +556,27 @@ class GitAccessor(DataAccessor):
         """Download a GitLab repo as a ZIP archive and extract it."""
         repo_name = self._get_repo_name(repo_url)
 
-        # Build archive URL from owner/repo path components.
-        # GitLab archive URL format: https://gitlab.com/{owner}/{repo}/-/archive/{ref}/{repo}-{ref}.zip
+        # Build archive URL from all namespace/repo path components.
+        # GitLab archive URL format:
+        # https://gitlab.com/{namespace}/{repo}/-/archive/{ref}/{repo}-{ref}.zip
         parsed = urlparse(repo_url)
         path_parts = [p for p in parsed.path.split("/") if p]
-        owner = path_parts[0]
-        repo_raw = path_parts[1]
+        repo_parts = _extract_gitlab_repo_parts(path_parts)
+        if repo_parts is None:
+            raise ValueError("Invalid GitLab repository URL")
+        repo_raw = repo_parts[-1]
         # Strip .git suffix for the archive URL
         repo_slug = repo_raw[:-4] if repo_raw.endswith(".git") else repo_raw
+        project_path = "/".join([*repo_parts[:-1], repo_slug])
 
-        ref = branch or "HEAD"
-        # GitLab uses the format: /{owner}/{repo}/-/archive/{ref}/{repo}-{ref}.zip
-        zip_url = f"{parsed.scheme}://{parsed.netloc}/{owner}/{repo_slug}/-/archive/{ref}/{repo_slug}-{ref}.zip"
+        ref = quote(branch or "HEAD", safe="")
+        zip_url = (
+            f"{parsed.scheme}://{parsed.netloc}/{project_path}/-/archive/"
+            f"{ref}/{repo_slug}-{ref}.zip"
+        )
+        public_zip_url = self._redact_url_credentials(zip_url)
 
-        logger.info(f"[GitAccessor] Downloading GitLab ZIP: {zip_url}")
+        logger.info(f"[GitAccessor] Downloading GitLab ZIP: {public_zip_url}")
 
         zip_path = os.path.join(target_dir, "_archive.zip")
         extract_dir = os.path.join(target_dir, "_extracted")
@@ -551,15 +585,20 @@ class GitAccessor(DataAccessor):
         # Download (blocking HTTP; run in thread pool)
         def _download() -> None:
             headers = {"User-Agent": "OpenViking"}
+            if parsed.username is not None and parsed.password is not None:
+                credentials = f"{unquote(parsed.username)}:{unquote(parsed.password)}"
+                encoded = base64.b64encode(credentials.encode()).decode()
+                headers["Authorization"] = f"Basic {encoded}"
 
-            req = urllib.request.Request(zip_url, headers=headers)
+            req = urllib.request.Request(public_zip_url, headers=headers)
             with urllib.request.urlopen(req, timeout=1800) as resp, open(zip_path, "wb") as f:
                 shutil.copyfileobj(resp, f)
 
         try:
             await asyncio.to_thread(_download)
         except Exception as exc:
-            raise RuntimeError(f"Failed to download GitLab ZIP {zip_url}: {exc}")
+            public_error = self._redact_credentials_in_text(str(exc))
+            raise RuntimeError(f"Failed to download GitLab ZIP {public_zip_url}: {public_error}")
 
         # Safe extraction with Zip Slip validation (non-blocking)
         def _extract_zip():
@@ -603,10 +642,10 @@ class GitAccessor(DataAccessor):
 
         content_dir = await asyncio.to_thread(_find_content_dir)
 
-        # Add .git_source_repo marker file with original URL
+        # Add a marker with the credential-free source URL.
         def _write_marker():
             marker_file = content_dir / ".git_source_repo"
-            marker_file.write_text(repo_url, encoding="utf-8")
+            marker_file.write_text(self._redact_url_credentials(repo_url), encoding="utf-8")
 
         await asyncio.to_thread(_write_marker)
 

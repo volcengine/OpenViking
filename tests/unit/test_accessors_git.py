@@ -84,6 +84,7 @@ class TestGitAccessor:
             "https://github.com/volcengine/OpenViking.git",
             "https://gitlab.com/org/repo",
             "http://github.com/org/repo",
+            "https://oauth2:secret@gitlab.com/group/subgroup/repo.git",
         ],
     )
     def test_can_handle_github_http_url(self, accessor: GitAccessor, source: str) -> None:
@@ -121,6 +122,18 @@ class TestGitAccessor:
         assert (
             accessor._normalize_repo_url("ssh://git@github.com:443/volcengine/OpenViking/tree/main")
             == "ssh://git@github.com:443/volcengine/OpenViking"
+        )
+
+    def test_normalize_gitlab_nested_namespace_with_oauth(self, accessor: GitAccessor) -> None:
+        assert (
+            accessor._normalize_repo_url("https://oauth2:secret@gitlab.com/group/subgroup/repo.git")
+            == "https://oauth2:secret@gitlab.com/group/subgroup/repo.git"
+        )
+
+    def test_redact_url_credentials(self, accessor: GitAccessor) -> None:
+        source = "https://oauth2:secret@gitlab.com/group/subgroup/repo.git"
+        assert (
+            accessor._redact_url_credentials(source) == "https://gitlab.com/group/subgroup/repo.git"
         )
 
     @pytest.mark.parametrize(
@@ -162,6 +175,50 @@ class TestGitAccessor:
         clone_args = run_git.await_args.args[0]
         assert "--no-recurse-submodules" in clone_args
         assert "--recursive" not in clone_args
+
+    async def test_git_clone_marker_does_not_store_oauth_credentials(
+        self, accessor: GitAccessor, tmp_path: Path
+    ) -> None:
+        source = "https://oauth2:secret@gitlab.com/group/subgroup/repo.git"
+        with patch.object(accessor, "_run_git", new_callable=AsyncMock):
+            await accessor._git_clone(source, str(tmp_path))
+
+        assert (tmp_path / ".git_source_repo").read_text(encoding="utf-8") == (
+            "https://gitlab.com/group/subgroup/repo.git"
+        )
+
+    async def test_access_does_not_propagate_oauth_credentials(
+        self, accessor: GitAccessor, tmp_path: Path
+    ) -> None:
+        source = "https://oauth2:secret@gitlab.com/group/subgroup/repo.git"
+        with (
+            patch("tempfile.mkdtemp", return_value=str(tmp_path)),
+            patch.object(
+                accessor,
+                "_gitlab_zip_download",
+                new=AsyncMock(return_value=(tmp_path, "group/subgroup/repo")),
+            ),
+        ):
+            resource = await accessor.access(source)
+
+        assert resource.original_source == "https://gitlab.com/group/subgroup/repo.git"
+
+    async def test_gitlab_archive_preserves_nested_namespace_and_redacts_errors(
+        self, accessor: GitAccessor, tmp_path: Path
+    ) -> None:
+        source = "https://oauth2:secret@gitlab.com/group/subgroup/repo.git"
+        with patch(
+            "openviking.parse.accessors.git_accessor.urllib.request.urlopen",
+            side_effect=OSError("failed https://oauth2:secret@gitlab.com/group/subgroup/repo.git"),
+        ) as urlopen:
+            with pytest.raises(RuntimeError) as exc_info:
+                await accessor._gitlab_zip_download(source, "main", str(tmp_path))
+
+        request = urlopen.call_args.args[0]
+        assert request.full_url.endswith("/group/subgroup/repo/-/archive/main/repo-main.zip")
+        assert "oauth2:secret@" not in request.full_url
+        assert request.get_header("Authorization") == "Basic b2F1dGgyOnNlY3JldA=="
+        assert "oauth2:secret@" not in str(exc_info.value)
 
     async def test_github_archive_encodes_fragment_in_ref(
         self, accessor: GitAccessor, tmp_path: Path
