@@ -80,12 +80,13 @@ fields:
       - Reads: <read tools, queries, and returned object scope>
       - Agent-stated decisions: <important decisions explicitly stated by the agent; do not correct them>
       - Writes: <write tools, arguments, observed results, or none>
-      - Communication: <user-visible information actually communicated or omitted>
+      - Communication: <user-visible information actually communicated, or none>
       - Termination: <done, handoff, unfinished, and observed side effects>
 
       ## Injected Experience Evidence
       - Loaded: <deterministically supplied reminder IDs/names, or none>
-      - Observable use: <behavior visibly followed, ignored, or contradicted; facts only, no quality label>
+      - Observed behavior after injection: <reads, writes, agent-stated decisions, and user-visible
+        statements that actually occurred after loading, or none>
 
       ## Uncertainty
       - <facts the rollout does not establish and competing factual readings, or none>
@@ -100,6 +101,8 @@ fields:
       - Put only fields actually present in tool results under Observed fields. If the agent relied
         on a hypothetical or absent field, put it under Missing fields.
       - Agent-stated decisions report what the agent explicitly believed; they are not truth claims.
+      - Never label injected experiences as followed, ignored, contradicted, helpful, misleading,
+        遵循、忽略、违反、有帮助、误导, or infer that the experience caused the observed behavior.
       - Distinguish information/read scope from mutation/write scope without deciding which was correct.
       - For aggregate/value requests, preserve request-time object membership, later changes, source
         fields, and calculations as separate facts.

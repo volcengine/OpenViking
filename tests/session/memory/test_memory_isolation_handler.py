@@ -334,6 +334,63 @@ class TestCalculateMemoryUris:
     """Tests for calculate_memory_uris (integration with URI generation)."""
 
     @patch("openviking.session.memory.memory_isolation_handler.generate_uri")
+    def test_add_only_duplicate_uris_are_reserved_in_request_order(self, mock_generate_uri):
+        from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperation
+
+        canonical = "viking://user/user_a/memories/events/name.md"
+        mock_generate_uri.return_value = canonical
+        extract_ctx = create_mock_extract_context([create_message("user")])
+        handler = MemoryIsolationHandler(create_ctx(), extract_ctx)
+        schema = MemoryTypeSchema(
+            memory_type="events",
+            filename_template="{{ event_name }}.md",
+            directory="viking://user/{{ user_space }}/memories/events",
+            operation_mode="add_only",
+        )
+        first = ResolvedOperation(
+            memory_fields={"event_name": "name"},
+            memory_type="events",
+            uris=[],
+        )
+        second = ResolvedOperation(
+            memory_fields={"event_name": "name"},
+            memory_type="events",
+            uris=[],
+        )
+
+        first_uris = handler.calculate_memory_uris(schema, first, extract_ctx)
+        second_uris = handler.calculate_memory_uris(schema, second, extract_ctx)
+
+        assert first_uris == [canonical]
+        assert second_uris == ["viking://user/user_a/memories/events/name_2.md"]
+        assert first.add_only_uri_bases == {canonical: canonical}
+        assert second.add_only_uri_bases == {second_uris[0]: canonical}
+        assert "add_only_uri_bases" not in second.model_dump()
+
+    @patch("openviking.session.memory.memory_isolation_handler.generate_uri")
+    def test_upsert_duplicate_uris_are_not_reserved(self, mock_generate_uri):
+        from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperation
+
+        canonical = "viking://user/user_a/memories/preferences/name.md"
+        mock_generate_uri.return_value = canonical
+        extract_ctx = create_mock_extract_context([create_message("user")])
+        handler = MemoryIsolationHandler(create_ctx(), extract_ctx)
+        schema = MemoryTypeSchema(
+            memory_type="preferences",
+            filename_template="{{ topic }}.md",
+            directory="viking://user/{{ user_space }}/memories/preferences",
+            operation_mode="upsert",
+        )
+        first = ResolvedOperation(memory_fields={"topic": "name"}, memory_type="preferences", uris=[])
+        second = ResolvedOperation(memory_fields={"topic": "name"}, memory_type="preferences", uris=[])
+
+        first_uris = handler.calculate_memory_uris(schema, first, extract_ctx)
+        second_uris = handler.calculate_memory_uris(schema, second, extract_ctx)
+
+        assert first_uris == [canonical]
+        assert second_uris == [canonical]
+
+    @patch("openviking.session.memory.memory_isolation_handler.generate_uri")
     def test_calculate_memory_uris_single_user(self, mock_generate_uri):
         """Test calculate_memory_uris with a single user."""
         mock_generate_uri.return_value = "viking://user/user_a/memories/preferences"

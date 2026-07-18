@@ -14,6 +14,33 @@ from openviking.session.memory.utils.model import model_to_dict
 from openviking.session.memory.utils.template_utils import TemplateUtils
 
 
+def numbered_uri(canonical_uri: str, ordinal: int) -> str:
+    """Return the ordinal filename for an append-only canonical URI."""
+    if ordinal < 1:
+        raise ValueError("ordinal must be at least 1")
+    if ordinal == 1:
+        return canonical_uri
+
+    directory, separator, filename = canonical_uri.rpartition("/")
+    stem, dot, extension = filename.rpartition(".")
+    if dot and stem:
+        numbered_filename = f"{stem}_{ordinal}.{extension}"
+    else:
+        numbered_filename = f"{filename}_{ordinal}"
+    return f"{directory}{separator}{numbered_filename}"
+
+
+def reserve_numbered_uri(canonical_uri: str, occupied: Set[str]) -> str:
+    """Reserve and return the first unoccupied numbered URI."""
+    ordinal = 1
+    while True:
+        candidate = numbered_uri(canonical_uri, ordinal)
+        if candidate not in occupied:
+            occupied.add(candidate)
+            return candidate
+        ordinal += 1
+
+
 def render_template(
     template: str,
     fields: Dict[str, Any],

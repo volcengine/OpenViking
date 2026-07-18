@@ -9,7 +9,11 @@ from openviking.core.peer_id import safe_peer_id
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperation
 from openviking.session.memory.memory_updater import ExtractContext
-from openviking.session.memory.utils.uri import generate_uri, render_template
+from openviking.session.memory.utils.uri import (
+    generate_uri,
+    render_template,
+    reserve_numbered_uri,
+)
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -59,6 +63,7 @@ class MemoryIsolationHandler:
         self.allow_self = bool(allow_self)
         self.allowed_peer_ids = peer_ids
         self.allow_peer = bool(peer_ids)
+        self._add_only_uri_reservations: Set[str] = set()
 
     def prepare_messages(self) -> None:
         """No-op hook kept for the extraction pipeline."""
@@ -230,7 +235,7 @@ class MemoryIsolationHandler:
             return []
 
         # 文件
-        uris = set()
+        canonical_uris: List[str] = []
         user_space = user_id
         base_fields = dict(operation.memory_fields)
         for target_id in target_ids:
@@ -241,15 +246,26 @@ class MemoryIsolationHandler:
             else:
                 target_user_space = peer_user_space(user_space, target_id)
                 fields["peer_id"] = target_id
-            uris.add(
-                generate_uri(
-                    memory_type=memory_type_schema,
-                    fields=fields,
-                    user_space=target_user_space,
-                    extract_context=extract_context,
-                )
+            canonical_uri = generate_uri(
+                memory_type=memory_type_schema,
+                fields=fields,
+                user_space=target_user_space,
+                extract_context=extract_context,
             )
+            if canonical_uri not in canonical_uris:
+                canonical_uris.append(canonical_uri)
 
         if has_ranges:
             operation.memory_fields.pop("peer_id", None)
-        return list(uris)
+        if memory_type_schema.operation_mode != "add_only":
+            return canonical_uris
+
+        reserved_uris = []
+        for canonical_uri in canonical_uris:
+            candidate_uri = reserve_numbered_uri(
+                canonical_uri,
+                self._add_only_uri_reservations,
+            )
+            reserved_uris.append(candidate_uri)
+            operation.add_only_uri_bases[candidate_uri] = canonical_uri
+        return reserved_uris

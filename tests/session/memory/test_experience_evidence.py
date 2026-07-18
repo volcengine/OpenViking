@@ -34,15 +34,19 @@ def _raw(memory_file: MemoryFile) -> str:
     return MemoryFileUtils.write(memory_file)
 
 
-def _query(*, case_uri: str = "") -> ExperienceEvidenceQuery:
+def _query(
+    *,
+    case_uri: str = "",
+    loaded_experience_uris: list[str] | None = None,
+) -> ExperienceEvidenceQuery:
     return ExperienceEvidenceQuery(
         trajectory_summary="duplicate booking failure",
         trajectory_uri="viking://user/user/memories/trajectories/current.md",
-        experience_dir="viking://user/user/memories/experiences",
         trajectory_dir="viking://user/user/memories/trajectories",
         case_uri=case_uri,
         case_name="case-1",
         task_signature="book-flight",
+        loaded_experience_uris=list(loaded_experience_uris or []),
     )
 
 
@@ -72,6 +76,62 @@ def test_experience_evidence_bundle_codec_round_trips_raw_ordered_evidence() -> 
     assert decode_value(encode_value(bundle)) == bundle
 
 
+def test_experience_evidence_query_codec_round_trips_loaded_experience_uris() -> None:
+    query = _query(loaded_experience_uris=["viking://user/user/memories/experiences/loaded.md"])
+
+    assert decode_value(encode_value(query)) == query
+
+
+@pytest.mark.asyncio
+async def test_loader_unions_case_linked_and_loaded_candidates_with_uri_deduplication() -> None:
+    case_uri = "viking://user/user/memories/cases/case-1.md"
+    case_first_uri = "viking://user/user/memories/experiences/case-first.md"
+    shared_uri = "viking://user/user/memories/experiences/shared.md"
+    loaded_only_uri = "viking://user/user/memories/experiences/loaded-only.md"
+    case = MemoryFile(
+        uri=case_uri,
+        content="case",
+        memory_type="cases",
+        links=[
+            {"from_uri": case_uri, "to_uri": case_first_uri, "link_type": "related_to"},
+            {"from_uri": case_uri, "to_uri": shared_uri, "link_type": "related_to"},
+        ],
+    )
+    files = {
+        case_uri: _raw(case),
+        **{
+            uri: _raw(
+                MemoryFile(
+                    uri=uri,
+                    content=uri,
+                    memory_type="experiences",
+                    extra_fields={"experience_name": uri.rsplit("/", 1)[-1][:-3]},
+                )
+            )
+            for uri in (case_first_uri, shared_uri, loaded_only_uri)
+        },
+    }
+    viking_fs = AsyncMock()
+    viking_fs.read_file = AsyncMock(side_effect=lambda uri, ctx=None: files[uri])
+    loader = ExperienceEvidenceLoader(viking_fs)
+
+    bundle = await loader.load(
+        _query(
+            case_uri=case_uri,
+            loaded_experience_uris=[shared_uri, loaded_only_uri, loaded_only_uri],
+        ),
+        _ctx(),
+    )
+
+    assert [item.memory_file.uri for item in bundle.candidates] == [
+        case_first_uri,
+        shared_uri,
+        loaded_only_uri,
+    ]
+    viking_fs.search.assert_not_awaited()
+    viking_fs.ls.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_loader_returns_candidates_without_loading_source_trajectories() -> None:
     experience_uri = "viking://user/user/memories/experiences/avoid_duplicate.md"
@@ -89,9 +149,11 @@ async def test_loader_returns_candidates_without_loading_source_trajectories() -
     viking_fs = AsyncMock()
     viking_fs.read_file = AsyncMock(side_effect=lambda uri, ctx=None: files[uri])
     loader = ExperienceEvidenceLoader(viking_fs)
-    loader._search_uris = AsyncMock(side_effect=[[experience_uri], []])
 
-    bundle = await loader.load(_query(), _ctx())
+    bundle = await loader.load(
+        _query(loaded_experience_uris=[experience_uri]),
+        _ctx(),
+    )
 
     assert [item.memory_file.uri for item in bundle.candidates] == [experience_uri]
     assert not hasattr(bundle.candidates[0], "source_trajectories")
@@ -127,41 +189,36 @@ async def test_loader_does_not_semantically_fallback_when_case_is_unresolved() -
     viking_fs.ls = AsyncMock(return_value=[])
     viking_fs.read_file = AsyncMock(side_effect=lambda uri, ctx=None: files[uri])
     loader = ExperienceEvidenceLoader(viking_fs)
-    loader._search_uris = AsyncMock(side_effect=[[], [unrelated_success_uri]])
 
     bundle = await loader.load(_query(), _ctx())
 
+    assert bundle.candidates == []
     assert bundle.comparison_trajectories == []
-    assert loader._search_uris.await_count == 1
+    viking_fs.search.assert_not_awaited()
+    viking_fs.ls.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_loader_uses_directory_fallback_and_ignores_internal_files() -> None:
-    experience_uri = "viking://user/user/memories/experiences/fallback.md"
+async def test_loader_does_not_scan_experience_directory_without_candidates() -> None:
+    current_uri = _query().trajectory_uri
     viking_fs = AsyncMock()
-    viking_fs.ls = AsyncMock(
-        return_value=[
-            {"name": ".overview.md", "uri": "viking://ignored/.overview.md"},
-            {"name": "fallback.md", "uri": experience_uri},
-            {"name": "folder", "uri": "viking://ignored/folder"},
-        ]
-    )
     viking_fs.read_file = AsyncMock(
         return_value=_raw(
             MemoryFile(
-                uri=experience_uri,
-                content="fallback",
-                memory_type="experiences",
-                extra_fields={"experience_name": "fallback"},
+                uri=current_uri,
+                content="current failure",
+                memory_type="trajectories",
+                extra_fields={"outcome": "failure"},
             )
         )
     )
     loader = ExperienceEvidenceLoader(viking_fs)
-    loader._search_uris = AsyncMock(side_effect=[[], []])
 
     bundle = await loader.load(_query(), _ctx())
 
-    assert [item.memory_file.uri for item in bundle.candidates] == [experience_uri]
+    assert bundle.candidates == []
+    viking_fs.search.assert_not_awaited()
+    viking_fs.ls.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -229,7 +286,6 @@ async def test_loader_prefers_case_linked_successes_in_reverse_link_recency() ->
     viking_fs = AsyncMock()
     viking_fs.read_file = AsyncMock(side_effect=lambda uri, ctx=None: files[uri])
     loader = ExperienceEvidenceLoader(viking_fs)
-    loader._search_uris = AsyncMock(return_value=[])
 
     bundle = await loader.load(_query(case_uri=case_uri), _ctx())
 
@@ -244,7 +300,6 @@ async def test_loader_prefers_case_linked_successes_in_reverse_link_recency() ->
         case_uri,
         *reversed(success_uris),
     ]
-    loader._search_uris.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -287,7 +342,6 @@ async def test_loader_resolves_case_uri_from_current_trajectory_backlink() -> No
     viking_fs = AsyncMock()
     viking_fs.read_file = AsyncMock(side_effect=lambda uri, ctx=None: files[uri])
     loader = ExperienceEvidenceLoader(viking_fs)
-    loader._search_uris = AsyncMock(return_value=[])
 
     bundle = await loader.load(_query(), _ctx())
 

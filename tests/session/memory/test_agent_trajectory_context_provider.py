@@ -64,6 +64,14 @@ def test_trajectory_schema_is_factual_and_has_no_experience_effect_labels():
     ):
         assert required in content_description
     assert "exactly one trajectory operation" in content_description.lower()
+    assert "- Observed behavior after injection:" in content_description
+    assert (
+        "- Communication: <user-visible information actually communicated, or none>"
+        in content_description
+    )
+    assert "followed, ignored, contradicted, helpful, misleading" in content_description
+    assert "遵循、忽略、违反、有帮助、误导" in content_description
+    assert "- Observable use:" not in content_description
     for forbidden in (
         "Correct Work To Preserve",
         "Observed Problem",

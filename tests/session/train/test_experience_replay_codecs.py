@@ -259,6 +259,10 @@ def test_experience_gradient_request_codec_round_trips_complete_entry_input() ->
         case_uri="viking://user/u/memories/cases/case-1.md",
         case_name="case-1",
         task_signature="book-flight",
+        loaded_experience_uris=[
+            "viking://user/u/memories/experiences/loaded-one.md",
+            "viking://user/u/memories/experiences/loaded-two.md",
+        ],
         diagnostics={"attempt": 0},
     )
 

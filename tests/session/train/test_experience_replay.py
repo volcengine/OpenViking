@@ -54,6 +54,7 @@ def _request() -> ExperienceGradientEstimateRequest:
         case_uri="viking://user/user/memories/cases/case-1.md",
         case_name="case-1",
         task_signature="book-flight",
+        loaded_experience_uris=["viking://user/user/memories/experiences/existing.md"],
     )
 
 
@@ -64,15 +65,16 @@ def _evidence_query(request: ExperienceGradientEstimateRequest) -> ExperienceEvi
         case_uri=request.case_uri,
         case_name=request.case_name,
         task_signature=request.task_signature,
+        loaded_experience_uris=request.loaded_experience_uris,
     )
     return ExperienceEvidenceQuery(
         trajectory_summary=request.trajectory.content,
         trajectory_uri=request.trajectory.uri,
-        experience_dir=provider._render_experience_dir(request.request_context),
         trajectory_dir=provider._render_trajectory_dir(request.request_context),
         case_uri=request.case_uri,
         case_name=request.case_name,
         task_signature=request.task_signature,
+        loaded_experience_uris=request.loaded_experience_uris,
     )
 
 

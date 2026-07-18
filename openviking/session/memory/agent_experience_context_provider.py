@@ -3,8 +3,8 @@
 """
 Agent Experience Context Provider - Phase 2 of agent-scope memory extraction.
 
-Given a new trajectory summary from Phase 1, search for candidate experiences and
-let the LLM decide whether to update an existing one, create a new one, or do nothing.
+Given a new trajectory summary from Phase 1, load deterministic candidate experiences
+and let the LLM decide whether to update an existing one, create a new one, or do nothing.
 
 No tool calls — the current trajectory, exact-case successful comparisons, and
 existing experience candidates are prefetched.
@@ -13,13 +13,12 @@ existing experience candidates are prefetched.
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from openviking.pyagfs.exceptions import AGFSNotFoundError
-from openviking.server.identity import RequestContext, ToolContext
+from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
-from openviking.session.memory.tools import add_tool_call_pair_to_messages, get_tool
+from openviking.session.memory.tools import add_tool_call_pair_to_messages
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking.storage.viking_fs import VikingFS
@@ -28,7 +27,6 @@ from openviking.telemetry.replay.models import EncodedValue, ReplayCodecError
 
 EXPERIENCE_MEMORY_TYPE = "experiences"
 TRAJECTORY_MEMORY_TYPE = "trajectories"
-SEARCH_TOP_K = 5
 COMPARISON_TRAJ_TOP_K = 6
 COMPARISON_TRAJ_INJECT_TOP_K = 2
 MAX_COMPARISON_TRAJ_CHARS = 6000
@@ -38,11 +36,11 @@ MAX_COMPARISON_TRAJ_CHARS = 6000
 class ExperienceEvidenceQuery:
     trajectory_summary: str
     trajectory_uri: str
-    experience_dir: str
     trajectory_dir: str
     case_uri: str = ""
     case_name: str = ""
     task_signature: str = ""
+    loaded_experience_uris: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -75,11 +73,11 @@ class ExperienceEvidenceQueryReplayCodec:
         return {
             "trajectory_summary": encode(value.trajectory_summary),
             "trajectory_uri": encode(value.trajectory_uri),
-            "experience_dir": encode(value.experience_dir),
             "trajectory_dir": encode(value.trajectory_dir),
             "case_uri": encode(value.case_uri),
             "case_name": encode(value.case_name),
             "task_signature": encode(value.task_signature),
+            "loaded_experience_uris": encode(value.loaded_experience_uris),
         }
 
     @staticmethod
@@ -87,11 +85,11 @@ class ExperienceEvidenceQueryReplayCodec:
         return ExperienceEvidenceQuery(
             trajectory_summary=decode(_encoded(payload, "trajectory_summary")),
             trajectory_uri=decode(_encoded(payload, "trajectory_uri")),
-            experience_dir=decode(_encoded(payload, "experience_dir")),
             trajectory_dir=decode(_encoded(payload, "trajectory_dir")),
             case_uri=decode(_encoded(payload, "case_uri")),
             case_name=decode(_encoded(payload, "case_name")),
             task_signature=decode(_encoded(payload, "task_signature")),
+            loaded_experience_uris=decode(_encoded(payload, "loaded_experience_uris")),
         )
 
 
@@ -161,50 +159,19 @@ class ExperienceEvidenceLoader:
     ) -> ExperienceEvidenceBundle:
         if self._viking_fs is None:
             raise RuntimeError("VikingFS is required for experience evidence loading")
-        candidate_uris = await self._candidate_uris(query, ctx)
+        case_file = await self._load_case_file(query, ctx)
+        candidate_uris = _unique_experience_uris(
+            [
+                *_case_linked_experience_uris(case_file),
+                *query.loaded_experience_uris,
+            ]
+        )
         candidates = await self._load_candidates(candidate_uris, ctx)
-        comparisons = await self._load_comparison_trajectories(query, ctx)
+        comparisons = await self._load_comparison_trajectories(query, case_file, ctx)
         return ExperienceEvidenceBundle(
             candidates=candidates,
             comparison_trajectories=comparisons,
         )
-
-    async def _candidate_uris(
-        self,
-        query: ExperienceEvidenceQuery,
-        ctx: RequestContext,
-    ) -> list[str]:
-        if not query.experience_dir:
-            return []
-        candidate_uris = await self._search_uris(
-            query.trajectory_summary[:500] or "experience",
-            [query.experience_dir],
-            SEARCH_TOP_K,
-            ctx,
-        )
-        if candidate_uris:
-            return candidate_uris
-        try:
-            entries = await self._viking_fs.ls(query.experience_dir, output="original", ctx=ctx)
-        except (AGFSNotFoundError, FileNotFoundError):
-            return []
-        except Exception as error:
-            if _is_directory_not_found_error(error):
-                return []
-            tracer.error(f"Failed to list experiences in {query.experience_dir}: {error}")
-            return []
-        fallback_uris = []
-        for entry in entries or []:
-            uri = str(entry.get("uri", "")) if isinstance(entry, dict) else ""
-            name = str(entry.get("name", "")) if isinstance(entry, dict) else ""
-            if not uri.endswith(".md"):
-                continue
-            if name in {".overview.md", ".abstract.md"}:
-                continue
-            if uri.endswith("/.overview.md") or uri.endswith("/.abstract.md"):
-                continue
-            fallback_uris.append(uri)
-        return fallback_uris[:SEARCH_TOP_K]
 
     async def _load_candidates(
         self,
@@ -216,48 +183,34 @@ class ExperienceEvidenceLoader:
             memory_file = await self._read_memory_file(uri, ctx)
             if memory_file is None:
                 continue
+            if memory_file.memory_type and memory_file.memory_type != EXPERIENCE_MEMORY_TYPE:
+                continue
             candidates.append(CandidateExperienceEvidence(memory_file=memory_file))
         return candidates
 
     async def _load_comparison_trajectories(
         self,
         query: ExperienceEvidenceQuery,
+        case_file: MemoryFile | None,
         ctx: RequestContext,
     ) -> list[TrajectoryEvidence]:
         if not query.trajectory_dir:
             return []
         seen = {query.trajectory_uri}
-        linked_uris = await self._case_linked_trajectory_uris(query, ctx)
-        if linked_uris is None:
-            return []
+        linked_uris = _case_linked_trajectory_uris(case_file)
         results = await self._read_trajectory_evidence(linked_uris, seen, ctx)
         successes = [item for item in results if _is_success_trajectory(item.memory_file)]
         return successes[:COMPARISON_TRAJ_TOP_K]
 
-    async def _case_linked_trajectory_uris(
+    async def _load_case_file(
         self,
         query: ExperienceEvidenceQuery,
         ctx: RequestContext,
-    ) -> list[str] | None:
+    ) -> MemoryFile | None:
         case_uri = await self._resolve_case_uri(query, ctx)
         if not case_uri:
             return None
-        case_file = await self._read_memory_file(case_uri, ctx)
-        if case_file is None:
-            return []
-        recency_by_uri: dict[str, tuple[str, str]] = {}
-        for link in list(case_file.links or []) + list(case_file.backlinks or []):
-            if str(link.get("link_type") or "") != "successful_trajectory":
-                continue
-            created_at = str(link.get("created_at") or "")
-            for uri in (str(link.get("to_uri") or ""), str(link.get("from_uri") or "")):
-                if "/memories/trajectories/" not in uri:
-                    continue
-                recency = (created_at, uri)
-                previous = recency_by_uri.get(uri)
-                if previous is None or recency > previous:
-                    recency_by_uri[uri] = recency
-        return [uri for _, uri in sorted(recency_by_uri.values(), reverse=True)]
+        return await self._read_memory_file(case_uri, ctx)
 
     async def _resolve_case_uri(
         self,
@@ -316,36 +269,49 @@ class ExperienceEvidenceLoader:
             tracer.error(f"Failed to read experience evidence {uri}: {error}")
             return None
 
-    async def _search_uris(
-        self,
-        query: str,
-        search_uris: list[str],
-        limit: int,
-        ctx: RequestContext,
-    ) -> list[str]:
-        search_tool = get_tool("search")
-        if search_tool is None:
-            return []
-        tool_context = ToolContext(
-            viking_fs=self._viking_fs,
-            request_ctx=ctx,
-            default_search_uris=search_uris,
-        )
-        result = await search_tool.execute(ctx=tool_context, query=query, limit=limit)
-        if isinstance(result, list):
-            return [str(item.get("uri")) for item in result if item.get("uri")]
-        if isinstance(result, dict):
-            return [str(item.get("uri")) for item in result.get("memories", []) if item.get("uri")]
-        return []
-
 
 def _is_success_trajectory(memory_file: MemoryFile) -> bool:
     return str((memory_file.extra_fields or {}).get("outcome") or "").strip().lower() == "success"
 
 
-def _is_directory_not_found_error(error: Exception) -> bool:
-    message = str(error).lower()
-    return "directory not found" in message or "not_found" in message
+def _case_linked_experience_uris(case_file: MemoryFile | None) -> list[str]:
+    if case_file is None:
+        return []
+    return _unique_experience_uris(_linked_uris(case_file))
+
+
+def _case_linked_trajectory_uris(case_file: MemoryFile | None) -> list[str]:
+    if case_file is None:
+        return []
+    recency_by_uri: dict[str, tuple[str, str]] = {}
+    for link in list(case_file.links or []) + list(case_file.backlinks or []):
+        if str(link.get("link_type") or "") != "successful_trajectory":
+            continue
+        created_at = str(link.get("created_at") or "")
+        for uri in _link_uris(link):
+            if "/memories/trajectories/" not in uri:
+                continue
+            recency = (created_at, uri)
+            previous = recency_by_uri.get(uri)
+            if previous is None or recency > previous:
+                recency_by_uri[uri] = recency
+    return [uri for _, uri in sorted(recency_by_uri.values(), reverse=True)]
+
+
+def _linked_uris(memory_file: MemoryFile) -> list[str]:
+    return [
+        uri
+        for link in list(memory_file.links or []) + list(memory_file.backlinks or [])
+        for uri in _link_uris(link)
+    ]
+
+
+def _link_uris(link: dict[str, Any]) -> list[str]:
+    return [str(link.get(key) or "") for key in ("to_uri", "from_uri")]
+
+
+def _unique_experience_uris(uris: list[str]) -> list[str]:
+    return list(dict.fromkeys(uri for uri in uris if "/memories/experiences/" in str(uri or "")))
 
 
 class AgentExperienceContextProvider(SessionExtractContextProvider):
@@ -359,6 +325,7 @@ class AgentExperienceContextProvider(SessionExtractContextProvider):
         case_uri: str = "",
         case_name: str = "",
         task_signature: str = "",
+        loaded_experience_uris: list[str] | None = None,
         evidence_loader: ExperienceEvidenceLoader | None = None,
     ):
         self.trajectory_summary = trajectory_summary
@@ -367,6 +334,7 @@ class AgentExperienceContextProvider(SessionExtractContextProvider):
         self.case_uri = str(case_uri or "")
         self.case_name = str(case_name or "")
         self.task_signature = str(task_signature or "")
+        self.loaded_experience_uris = list(loaded_experience_uris or [])
         self._evidence_loader = evidence_loader
         self.prefetched_uris: List[str] = []
         self.prefetched_comparison_trajectories: List[Dict[str, Any]] = []
@@ -397,7 +365,8 @@ and which runtime source binds the rule. """
 
 - One failed or partial `new_trajectory`
 - Up to two successful `comparison_trajectory` records from the exact same case
-- Up to {SEARCH_TOP_K} relevant `candidate_experience` memories
+- Existing `candidate_experience` memories linked to the exact case or actually loaded in the
+  failed rollout
 
 The successful trajectory is reference evidence: it shows what differed, but the output must say
 what experience should be added or adjusted for the failed case. Trajectories are factual evidence;
@@ -517,11 +486,11 @@ All memory content must be written in {output_language}.
         query = ExperienceEvidenceQuery(
             trajectory_summary=self.trajectory_summary,
             trajectory_uri=self.trajectory_uri,
-            experience_dir=self._render_experience_dir(ctx),
             trajectory_dir=self._render_trajectory_dir(ctx),
             case_uri=self.case_uri,
             case_name=self.case_name,
             task_signature=self.task_signature,
+            loaded_experience_uris=self.loaded_experience_uris,
         )
         loader = self._evidence_loader or ExperienceEvidenceLoader(self._viking_fs)
         bundle = await loader.load(query, ctx)

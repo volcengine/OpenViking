@@ -185,6 +185,37 @@ async def test_experience_gradient_estimator_schedules_isolated_per_trajectory_r
 
 
 @pytest.mark.asyncio
+async def test_experience_gradient_estimator_records_deduplicated_loaded_experience_uris():
+    analysis = _analysis(passed=False, outcome="failure")
+    analysis.metadata["rollout_messages"] = [
+        SimpleNamespace(
+            content=(
+                "<experience_reminder>"
+                "<experience_name>case rule</experience_name>"
+                "<experience_uri>viking://user/u/memories/experiences/case-rule.md</experience_uri>"
+                "</experience_reminder>"
+                "<experience_reminder>"
+                "<experience_name>case rule duplicate</experience_name>"
+                "<experience_uri>viking://user/u/memories/experiences/case-rule.md</experience_uri>"
+                "</experience_reminder>"
+                "<experience_reminder>"
+                "<experience_name>loaded only</experience_name>"
+                "<experience_uri>viking://user/u/memories/experiences/loaded-only.md</experience_uri>"
+                "</experience_reminder>"
+            )
+        )
+    ]
+    estimator = RecordingEntryEstimator()
+
+    await estimator.estimate(analysis, _experience_set(), _context())
+
+    assert estimator.requests[0].loaded_experience_uris == [
+        "viking://user/u/memories/experiences/case-rule.md",
+        "viking://user/u/memories/experiences/loaded-only.md",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_experience_gradient_estimator_keeps_outer_error_policy():
     analysis = _analysis(passed=False, outcome="failure")
 
@@ -483,6 +514,7 @@ async def test_experience_gradient_estimator_runs_extract_loop(monkeypatch):
     assert captured["provider_kwargs"] == {
         "trajectory_summary": analysis.trajectories[0].content,
         "trajectory_uri": analysis.trajectories[0].uri,
+        "loaded_experience_uris": [],
     }
     assert captured["request_context"] is context.request_context
     assert captured["allowed_memory_types"] == {"experiences"}

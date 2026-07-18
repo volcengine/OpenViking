@@ -303,6 +303,7 @@ class ResolvedOperation(BaseModel):
     memory_fields: Dict
     memory_type: str  # The memory type (e.g., 'tools', 'skills', 'events')
     uris: List[str]
+    add_only_uri_bases: Dict[str, str] = Field(default_factory=dict, exclude=True, repr=False)
     page_id: Optional[int] = None  # Temporary page_id for link resolution (not persisted)
     source: Optional[MemoryOperationSource] = None
 

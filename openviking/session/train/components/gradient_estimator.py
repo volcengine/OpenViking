@@ -12,6 +12,9 @@ from openviking.server.identity import RequestContext
 from openviking.session.memory.agent_experience_context_provider import (
     AgentExperienceContextProvider,
 )
+from openviking.session.memory.agent_trajectory_context_provider import (
+    extract_injected_experience_reminders,
+)
 from openviking.session.memory.dataclass import MemoryTypeSchema, StoredLink
 from openviking.session.memory.extract_loop import ExtractLoop, PostValidationRetryDecision
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
@@ -71,6 +74,7 @@ class ExperienceGradientEstimateRequest:
     case_uri: str = ""
     case_name: str = ""
     task_signature: str = ""
+    loaded_experience_uris: list[str] = field(default_factory=list)
     diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
@@ -96,6 +100,7 @@ class ExperienceGradientEstimateRequestReplayCodec:
             "case_uri": encode(value.case_uri),
             "case_name": encode(value.case_name),
             "task_signature": encode(value.task_signature),
+            "loaded_experience_uris": encode(value.loaded_experience_uris),
             "diagnostics": encode(value.diagnostics),
         }
 
@@ -109,6 +114,9 @@ class ExperienceGradientEstimateRequestReplayCodec:
             case_uri=decode(_encoded_request_field(payload, "case_uri")),
             case_name=decode(_encoded_request_field(payload, "case_name")),
             task_signature=decode(_encoded_request_field(payload, "task_signature")),
+            loaded_experience_uris=decode(
+                _encoded_request_field(payload, "loaded_experience_uris")
+            ),
             diagnostics=decode(_encoded_request_field(payload, "diagnostics")),
         )
 
@@ -162,6 +170,7 @@ class ExperienceGradientEstimator:
                 task_signature=_trajectory_or_analysis_metadata(
                     trajectory, analysis, "task_signature"
                 ),
+                loaded_experience_uris=_loaded_experience_uris(analysis),
             )
             for trajectory in analysis.trajectories
             if _should_update_experience_from_trajectory(trajectory)
@@ -198,6 +207,7 @@ class ExperienceGradientEstimator:
             }.items()
             if value
         }
+        analysis_metadata["loaded_experience_uris"] = list(request.loaded_experience_uris)
         analysis = RolloutAnalysis(
             evaluation=request.evaluation,
             trajectories=[request.trajectory],
@@ -255,6 +265,9 @@ class ExperienceGradientEstimator:
             value = _trajectory_or_analysis_metadata(trajectory, analysis_obj, key)
             if value:
                 provider_kwargs[key] = value
+        provider_kwargs["loaded_experience_uris"] = list(
+            dict(getattr(analysis_obj, "metadata", {}) or {}).get("loaded_experience_uris", [])
+        )
         provider = AgentExperienceContextProvider(**provider_kwargs)
         provider._registry = self._get_registry()
         if hasattr(provider, "get_extract_context"):
@@ -504,6 +517,18 @@ def _trajectory_or_analysis_metadata(
         if key == "task_signature":
             return str(getattr(case, "task_signature", "") or "")
     return ""
+
+
+def _loaded_experience_uris(analysis: RolloutAnalysis) -> list[str]:
+    messages = dict(getattr(analysis, "metadata", {}) or {}).get("rollout_messages") or []
+    reminders = extract_injected_experience_reminders(messages)
+    return list(
+        dict.fromkeys(
+            str(reminder.get("experience_uri") or "")
+            for reminder in reminders
+            if reminder.get("experience_uri")
+        )
+    )
 
 
 def _experience_extract_gate_runner(vlm: Any) -> GateRunner:

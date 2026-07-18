@@ -20,6 +20,7 @@ from openviking.session.memory.utils import (
     validate_uri_template,
 )
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.memory.utils.uri import numbered_uri, reserve_numbered_uri
 
 
 def test_format_messages_renders_readable_roles_and_tool_exchange() -> None:
@@ -231,6 +232,46 @@ class TestUriGeneration:
         )
 
         assert validate_uri_template(memory_type) is False
+
+
+class TestNumberedUri:
+    def test_preserves_canonical_then_inserts_suffix_before_extension(self):
+        canonical = "viking://user/default/memories/events/name.md"
+
+        assert numbered_uri(canonical, 1) == canonical
+        assert numbered_uri(canonical, 2) == (
+            "viking://user/default/memories/events/name_2.md"
+        )
+        assert numbered_uri(canonical, 3) == (
+            "viking://user/default/memories/events/name_3.md"
+        )
+
+    def test_treats_existing_digit_suffix_as_literal_stem(self):
+        assert numbered_uri("viking://user/default/release_2.md", 2) == (
+            "viking://user/default/release_2_2.md"
+        )
+
+    def test_supports_filename_without_extension(self):
+        assert numbered_uri("viking://user/default/name", 2) == (
+            "viking://user/default/name_2"
+        )
+
+    def test_rejects_non_positive_ordinal(self):
+        with pytest.raises(ValueError, match="ordinal must be at least 1"):
+            numbered_uri("viking://user/default/name.md", 0)
+
+    def test_reserves_first_available_number_without_cap(self):
+        canonical = "viking://user/default/name.md"
+        occupied = {
+            canonical,
+            "viking://user/default/name_2.md",
+            "viking://user/default/name_3.md",
+        }
+
+        reserved = reserve_numbered_uri(canonical, occupied)
+
+        assert reserved == "viking://user/default/name_4.md"
+        assert reserved in occupied
 
     def test_validate_uri_template_no_directory_or_filename(self):
         """Test validating with neither directory nor filename."""
