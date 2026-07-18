@@ -54,13 +54,31 @@ class PowerPointParser(BaseParser):
         if path.exists():
             import pptx
 
-            markdown_content = await asyncio.to_thread(self._convert_to_markdown, path, pptx)
+            from openviking_cli.utils.storage import get_storage
+
+            storage = get_storage()
+            resource_name = kwargs.get("resource_name") or kwargs.get("source_name") or path.stem
+
+            markdown_content = await asyncio.to_thread(
+                self._convert_to_markdown, path, pptx, resource_name, storage
+            )
             result = await self._md_parser.parse_content(
-                markdown_content, source_path=str(path), instruction=instruction, **kwargs
+                markdown_content,
+                source_path=str(path),
+                resource_name=kwargs.get("resource_name"),
+                source_name=kwargs.get("source_name"),
+                instruction=instruction,
+                base_dir=path.parent,
+                # Embedded presentation images are extracted through the shared
+                # storage helper, so constrain MarkdownParser to that media root.
+                allowed_media_dirs=[storage.media_dir],
             )
         else:
             result = await self._md_parser.parse_content(
-                str(source), instruction=instruction, **kwargs
+                str(source),
+                instruction=instruction,
+                resource_name=kwargs.get("resource_name"),
+                source_name=kwargs.get("source_name"),
             )
         result.source_format = "pptx"
         result.parser_name = "PowerPointParser"
@@ -75,11 +93,19 @@ class PowerPointParser(BaseParser):
         result.parser_name = "PowerPointParser"
         return result
 
-    def _convert_to_markdown(self, path: Path, pptx) -> str:
-        """Convert PowerPoint presentation to Markdown string."""
+    def _convert_to_markdown(
+        self, path: Path, pptx, resource_name: Optional[str] = None, storage=None
+    ) -> str:
+        """Convert PowerPoint presentation to Markdown string.
+
+        Embedded picture shapes are persisted through the shared media storage
+        helper and referenced inline. MarkdownParser then validates and ingests
+        those local files using its existing confined-media path.
+        """
         prs = pptx.Presentation(path)
         markdown_parts = []
         slide_count = len(prs.slides)
+        image_counter = [0]
 
         for idx, slide in enumerate(prs.slides, 1):
             slide_parts = []
@@ -89,7 +115,9 @@ class PowerPointParser(BaseParser):
             if title:
                 slide_parts.append(f"### {title}")
 
-            content = self._extract_slide_content(slide)
+            content = self._extract_slide_content(
+                slide, resource_name=resource_name, storage=storage, image_counter=image_counter
+            )
             if content:
                 slide_parts.append(content)
 
@@ -113,17 +141,28 @@ class PowerPointParser(BaseParser):
                     return shape.text.strip()
         return ""
 
-    def _extract_slide_content(self, slide) -> str:
+    def _extract_slide_content(
+        self, slide, resource_name=None, storage=None, image_counter=None
+    ) -> str:
         """Extract content from slide shapes."""
-        from pptx.enum.shapes import PP_PLACEHOLDER
+        from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
 
         content_parts = []
+        image_counter = image_counter if image_counter is not None else [0]
 
         for shape in slide.shapes:
             if shape.is_placeholder:
                 ph_type = shape.placeholder_format.type
                 if ph_type in (PP_PLACEHOLDER.TITLE, PP_PLACEHOLDER.CENTER_TITLE):
                     continue
+
+            if getattr(shape, "shape_type", None) == MSO_SHAPE_TYPE.PICTURE:
+                image_md = self._convert_picture(
+                    shape, resource_name=resource_name, storage=storage, image_counter=image_counter
+                )
+                if image_md:
+                    content_parts.append(image_md)
+                continue
 
             if hasattr(shape, "text") and shape.text.strip():
                 if shape.has_table:
@@ -134,6 +173,25 @@ class PowerPointParser(BaseParser):
                         content_parts.append(text)
 
         return "\n\n".join(content_parts)
+
+    def _convert_picture(self, shape, resource_name, storage, image_counter) -> str:
+        """Persist one embedded picture and return its confined Markdown reference."""
+        if storage is None:
+            return ""
+
+        try:
+            image = shape.image
+            image_counter[0] += 1
+            filename = f"image{image_counter[0]}"
+            extension = f".{image.ext}" if image.ext else ".png"
+            image_path = storage.save_image(
+                resource_name, image.blob, filename=filename, extension=extension
+            )
+            rel_path = image_path.relative_to(storage.media_dir)
+            return f"![{filename}]({rel_path})"
+        except Exception as e:
+            logger.warning(f"[PowerPointParser] Failed to save embedded picture: {e}")
+            return ""
 
     def _convert_table(self, table) -> str:
         """Convert PowerPoint table to markdown format."""
