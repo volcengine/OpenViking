@@ -144,18 +144,35 @@ class RelationEntry:
     uris: List[str]
     reason: str = ""
     created_at: str = field(default_factory=get_current_timestamp)
+    source: str = "manual"
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        data: Dict[str, Any] = {
             "id": self.id,
             "uris": self.uris,
             "reason": self.reason,
             "created_at": self.created_at,
         }
+        # Keep the persisted shape byte-compatible for existing manual links.
+        # Generated producers opt into the additional provenance fields.
+        if self.source != "manual":
+            data["source"] = self.source
+        if self.metadata:
+            data["metadata"] = self.metadata
+        return data
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> "RelationEntry":
-        return RelationEntry(**data)
+        metadata = data.get("metadata")
+        return RelationEntry(
+            id=str(data["id"]),
+            uris=[str(uri) for uri in data.get("uris", [])],
+            reason=str(data.get("reason") or ""),
+            created_at=str(data.get("created_at") or get_current_timestamp()),
+            source=str(data.get("source") or "manual"),
+            metadata=dict(metadata) if isinstance(metadata, dict) else {},
+        )
 
 
 # ========== Singleton Pattern ==========
@@ -1969,7 +1986,12 @@ class VikingFS:
         for entry in entries:
             for u in entry.uris:
                 if self._is_accessible(u, self._ctx_or_default(ctx)):
-                    result.append({"uri": u, "reason": entry.reason})
+                    relation: Dict[str, Any] = {"uri": u, "reason": entry.reason}
+                    if entry.source != "manual":
+                        relation["source"] = entry.source
+                    if entry.metadata:
+                        relation["metadata"] = entry.metadata
+                    result.append(relation)
         return result
 
     async def find(
@@ -2238,6 +2260,99 @@ class VikingFS:
 
         await self._write_relation_table(from_path, entries, ctx=ctx)
         logger.debug(f"[VikingFS] Created link: {from_uri} -> {uris}")
+
+    async def replace_generated_relations(
+        self,
+        from_uri: str,
+        producer: str,
+        relations: List[Dict[str, Any]],
+        ctx: Optional[RequestContext] = None,
+    ) -> Dict[str, Any]:
+        """Replace the complete relation set owned by one automatic producer.
+
+        Manual links and relations from other producers are preserved. Calling
+        this method again with the same candidates is idempotent; passing an
+        empty list removes only this producer's previous output. This gives
+        parse-time extractors an update/delete contract without conflating
+        generated edges with user-authored links.
+        """
+        producer = (producer or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", producer):
+            raise InvalidArgumentError(
+                "producer must be 1-64 characters using letters, numbers, '.', '_', or '-'"
+            )
+        if not isinstance(relations, list):
+            raise InvalidArgumentError("relations must be a list")
+
+        self._ensure_mutable_access(from_uri, ctx)
+        source = f"generated:{producer}"
+        normalized: Dict[str, Dict[str, Any]] = {}
+        for candidate in relations:
+            if not isinstance(candidate, dict):
+                raise InvalidArgumentError("each generated relation must be an object")
+            target_uri = candidate.get("uri")
+            if not isinstance(target_uri, str) or not target_uri.strip():
+                raise InvalidArgumentError("each generated relation requires a non-empty uri")
+            target_uri = target_uri.strip()
+            if target_uri == from_uri:
+                continue
+            self._ensure_access(target_uri, ctx)
+            metadata = candidate.get("metadata")
+            if metadata is not None and not isinstance(metadata, dict):
+                raise InvalidArgumentError("generated relation metadata must be an object")
+            try:
+                json.dumps(metadata or {})
+            except (TypeError, ValueError) as exc:
+                raise InvalidArgumentError(
+                    "generated relation metadata must be JSON serializable"
+                ) from exc
+            normalized[target_uri] = {
+                "reason": str(candidate.get("reason") or ""),
+                "metadata": dict(metadata or {}),
+            }
+
+        from_path = self._uri_to_path(from_uri, ctx=ctx)
+        entries = await self._read_relation_table(from_path, ctx=ctx)
+        owned = [entry for entry in entries if entry.source == source]
+        preserved = [entry for entry in entries if entry.source != source]
+        previous_by_uri = {uri: entry for entry in owned for uri in entry.uris}
+
+        generated: List[RelationEntry] = []
+        updated = 0
+        for target_uri in sorted(normalized):
+            candidate = normalized[target_uri]
+            previous = previous_by_uri.get(target_uri)
+            if previous is not None:
+                created_at = previous.created_at
+                if (
+                    previous.reason != candidate["reason"]
+                    or previous.metadata != candidate["metadata"]
+                ):
+                    updated += 1
+            else:
+                created_at = get_current_timestamp()
+            digest = hashlib.sha256(f"{source}\0{target_uri}".encode("utf-8")).hexdigest()[:16]
+            generated.append(
+                RelationEntry(
+                    id=f"generated_{digest}",
+                    uris=[target_uri],
+                    reason=candidate["reason"],
+                    created_at=created_at,
+                    source=source,
+                    metadata=candidate["metadata"],
+                )
+            )
+
+        await self._write_relation_table(from_path, preserved + generated, ctx=ctx)
+        previous_targets = set(previous_by_uri)
+        current_targets = set(normalized)
+        return {
+            "source": source,
+            "created": len(current_targets - previous_targets),
+            "updated": updated,
+            "removed": len(previous_targets - current_targets),
+            "total": len(current_targets),
+        }
 
     async def unlink(
         self,
