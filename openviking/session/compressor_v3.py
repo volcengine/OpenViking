@@ -353,6 +353,8 @@ class SessionCompressorV3:
         )
         case_result = _applied_memory_result(case_write)
         contexts = _contexts_from_update_result(case_result)
+        control_and_rollout_messages = messages[1:]
+        rollout_evaluation = _outcome_evaluation_from_messages(control_and_rollout_messages)
         training_messages = _training_messages_after_case_spec(messages)
         train_result = await self.train_from_extracted_cases(
             cases=[case],
@@ -363,7 +365,7 @@ class SessionCompressorV3:
             archive_uri=archive_uri,
             strict_extract_errors=strict_extract_errors,
             collect_memory_diff=True,
-            rollout_evaluation=_outcome_evaluation_from_messages(training_messages),
+            rollout_evaluation=rollout_evaluation,
         )
         await self._write_final_memory_diff(
             archive_uri=archive_uri,
@@ -606,7 +608,6 @@ class SessionCompressorV3:
                 request_context=ctx,
                 strict_extract_errors=strict_extract_errors,
                 include_session_skills=skill_enabled,
-                inject_evaluation_feedback=not _has_outcome_evaluation_message(messages),
             )
             exp_trainer = await get_streaming_policy_trainer(
                 key=make_streaming_policy_trainer_key(
@@ -990,21 +991,17 @@ def _message_text(message: Message) -> str:
 
 
 def _training_messages_after_case_spec(messages: list[Message]) -> list[Message]:
-    """Return rollout/evaluation messages after CaseSpec.
+    """Return real rollout messages after the CaseSpec control message.
 
-    Filter legacy tau2 embedded evaluation text messages so the fast path uses
-    the canonical OpenViking OutcomeEvaluation message only once.
+    Evaluation messages are parsed separately into ``RubricEvaluation`` and
+    must never become trajectory evidence for the extraction LLM.
     """
     return [
-        message for message in messages[1:] if not _is_embedded_rollout_evaluation_message(message)
+        message
+        for message in messages[1:]
+        if not _is_embedded_rollout_evaluation_message(message)
+        and not _message_text(message).strip().startswith(_OUTCOME_EVALUATION_HEADER)
     ]
-
-
-def _has_outcome_evaluation_message(messages: list[Message]) -> bool:
-    return any(
-        _message_text(message).strip().startswith(_OUTCOME_EVALUATION_HEADER)
-        for message in messages
-    )
 
 
 def _outcome_evaluation_from_messages(messages: list[Message]) -> RubricEvaluation | None:

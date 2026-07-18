@@ -22,7 +22,9 @@ from openviking.session.train.gates import (
     ExperienceRuntimeWordingGate,
     ExperienceToolAlignmentGate,
     ExperienceTriggerRuntimeGate,
+    GateReport,
     GateTarget,
+    build_gate_retry_instruction,
     default_experience_gate_contract,
     default_policy_gate_runner,
 )
@@ -206,6 +208,37 @@ def _gradient_target(
         policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
     )
     return target, gate
+
+
+def _add_structured_behavior_evidence(target: GateTarget) -> None:
+    assert target.analysis is not None
+    target.analysis.evaluation.metadata["evaluation_result"] = {
+        "action_checks": [
+            {
+                "action": {
+                    "name": "cancel_reservation",
+                    "arguments": {"reservation_id": "MSJ4OA"},
+                },
+                "action_match": False,
+                "tool_type": "write",
+            },
+            {
+                "action": {
+                    "name": "get_reservation_details",
+                    "arguments": {"reservation_id": "MSJ4OA"},
+                },
+                "action_match": True,
+                "tool_type": "read",
+            },
+        ],
+        "communicate_checks": [
+            {
+                "info": "confirm the cancellation result",
+                "met": False,
+            }
+        ],
+        "db_check": {"db_match": False},
+    }
 
 
 def test_default_policy_gate_runner_uses_deterministic_experience_gates_only():
@@ -843,6 +876,71 @@ async def test_experience_root_cause_prevention_gate_allows_preventive_experienc
     assert "preserve non-conflicting constraints and object" in prompt
     assert "Tau2 evaluator authority" not in prompt
     assert "must not mention the evaluator" in prompt
+
+
+@pytest.mark.asyncio
+async def test_experience_root_cause_prevention_gate_anchors_structured_evaluator_behavior():
+    target, gate = _gradient_target(
+        '{"pass": true, "root_cause_quality": "sufficient", '
+        '"reason": "the proposal implements the fixed behavior", '
+        '"expected_behavior_change": "cancel the required reservation", '
+        '"repair_prompt": "", "risks": []}'
+    )
+    _add_structured_behavior_evidence(target)
+    stored_content = target.after_content
+
+    decision = await gate.evaluate(target)
+
+    assert decision is None
+    prompt = gate.vlm.calls[0]["prompt"]
+    assert "## Fixed authoritative behavior delta" in prompt
+    assert '- Required missing action: cancel_reservation({"reservation_id":"MSJ4OA"})' in prompt
+    assert (
+        '- Preserve matched action: get_reservation_details({"reservation_id":"MSJ4OA"})' in prompt
+    )
+    assert "- Required missing communication: confirm the cancellation result" in prompt
+    assert "Do not re-decide whether this behavior is correct" in prompt
+    assert "Base-policy wording cannot reverse" in prompt
+    assert target.after_content == stored_content
+
+
+@pytest.mark.asyncio
+async def test_experience_root_cause_prevention_gate_anchors_retry_instruction():
+    target, gate = _gradient_target(
+        '{"pass": false, "root_cause_quality": "unsupported", '
+        '"reason": "base policy does not support cancellation", '
+        '"expected_behavior_change": "", '
+        '"repair_prompt": "Restore base policy and remove the cancellation requirement.", '
+        '"risks": []}'
+    )
+    _add_structured_behavior_evidence(target)
+
+    decision = await gate.evaluate(target)
+
+    assert decision is not None
+    assert decision.action == "reject"
+    assert decision.retriable is True
+    assert "Fixed authoritative behavior delta (must preserve)" in decision.repair_prompt
+    assert 'cancel_reservation({"reservation_id":"MSJ4OA"})' in decision.repair_prompt
+    assert "must not remove, reverse, weaken, or condition away" in decision.repair_prompt
+    assert "Restore base policy" not in decision.repair_prompt
+    assert decision.reason == "experience does not safely encode fixed authoritative behavior"
+    assert decision.evidence["gate_model_reason"] == "base policy does not support cancellation"
+    assert decision.evidence["anchored_repair"] is True
+    assert (
+        'cancel_reservation({"reservation_id":"MSJ4OA"})'
+        in decision.evidence["authoritative_behavior_anchor"]
+    )
+    retry_instruction = build_gate_retry_instruction(
+        GateReport(
+            stage="post_gradient",
+            rejected_count=1,
+            decisions=[decision],
+        )
+    )
+    assert "base policy does not support cancellation" not in retry_instruction
+    assert "Restore base policy" not in retry_instruction
+    assert 'cancel_reservation({"reservation_id":"MSJ4OA"})' in retry_instruction
 
 
 @pytest.mark.asyncio

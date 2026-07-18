@@ -1,8 +1,8 @@
 memory_type: experiences
 description: |
   A generalizable, reusable failure-repair experience distilled from agent execution.
-  It is read by the skill experience loader, so the content must expose clear applicability,
-  the minimal corrective reminder, and anti-patterns. It is not a full workflow or a case log.
+  It exposes clear applicability, one corrective reminder, a short procedure, and anti-patterns.
+  It is not a full workflow, success summary, or case log.
 
 directory: "viking://user/{{ user_space }}/memories/experiences"
 filename_template: "{{ experience_name }}.md"
@@ -26,7 +26,7 @@ fields:
   - name: experience_name
     type: string
     description: |
-      Name the generalizable failure-repair pattern, not the specific instance.
+      Name the generalizable failure-repair pattern, not the case.
       Must be written in {{ language }}.
       {% if language == 'en' %}Use lowercase snake_case, max 5 words.{% else %}Use a concise noun phrase, max 15 characters.{% endif %}
       Good: "booking_duplicate_handling", "missing_total_cost", "汇总费用遗漏".
@@ -35,133 +35,44 @@ fields:
   - name: situation
     type: string
     description: |
-      Write only the bullet body for `## Situation`; the storage template adds the heading.
-      Content must be written in {{ language }}. Keep tool names, schema fields, Python
-      identifiers, and quoted runtime values unchanged. Use exactly these four bullets:
-      - Applies when: <runtime-visible task/user/tool-result situation where this lesson matters>
-      - Does not apply when: <closest nearby but non-applicable task pattern; do not use
-        temporal stage wording such as before final_response or while still reading/writing>
-      - Source binding: <which user request scope, confirmed object, retrieved record/set,
-        source field, policy gate, calculation, or candidate message content supplies the rule>
-      - Scope ambiguity: <if an information/list/aggregate request could mean both the
-        originally requested set and a later post-action/current-state set, state both
-        scopes and how to label them; otherwise none>
-
+      Write only the bullet body for `## Situation`; the template adds the heading.
+      Content must be written in {{ language }}. Keep real tool names, schema fields, identifiers,
+      and quoted enum values unchanged. Use exactly these four bullets:
+      - Applies when: <runtime-visible task/user/tool-result condition>
+      - Does not apply when: <closest non-applicable task pattern, never a temporal stage>
+      - Source binding: <user scope, confirmed object, record/set, field, policy text, or calculation>
+      - Scope ambiguity: <both labeled scopes when ambiguity is evidenced; otherwise none>
     merge_op: patch
 
   - name: reminder
     type: string
     description: |
-      Write only the bullet body for `## Reminder`; the storage template adds the heading.
+      Write only the bullet body for `## Reminder`; the template adds the heading.
       Content must be written in {{ language }}.
-      - <one sentence root-cause lesson that changes the next agent behavior>
-
+      - <one imperative root-cause lesson describing the minimal behavior change>
     merge_op: patch
 
   - name: procedure
     type: string
     description: |
-      Write only the bullet body for `## Procedure`; the storage template adds the heading.
-      Content must be written in {{ language }}. Use concise ordered boundary checks:
-      - Before/when <candidate action or communication boundary>: <check the decisive runtime fact>
-      - If <bad condition>: <block/change exactly one argument, ask/read one missing fact,
-        or include one required user-visible fact>
+      Write only the bullet body for `## Procedure`; the template adds the heading.
+      Content must be written in {{ language }}. Use exactly these boundary checks:
+      - Before/when <action or communication boundary>: <inspect the decisive runtime fact>
+      - If <bad condition>: <block/change one argument, read/ask one fact, or communicate one fact>
       - Else: <proceed without rewriting unrelated workflow steps>
-
     merge_op: patch
 
   - name: anti_pattern
     type: string
     description: |
-      Write only the bullet body for `## Anti-pattern`; the storage template adds the heading.
-      Content must be written in {{ language }}.
-      - Do not <the tempting wrong behavior that caused the failure>
-      - Preserve <the nearest correct behavior/object/action that must not be blocked>
+      Write only the bullet body for `## Anti-pattern`; the template adds the heading.
+      Content must be written in {{ language }}. Use exactly these bullets:
+      - Do not <the tempting wrong behavior>
+      - Preserve <the nearest correct behavior/object/action>
 
-      Apply these rules across all four section fields:
-      Rules:
-      - Failure repair only. Do not output generic positive workflows, full SOPs, success-path
-        summaries, or case transcripts.
-      - One experience covers one reusable root failure pattern. Split unrelated failures; keep
-        coupled communication/action scope together only when the same ambiguity causes both.
-      - Focus on the first materially outcome-changing mistake and the minimal prevention or
-        recovery action at that boundary.
-      - Treat trajectory memories as factual evidence, not authoritative conclusions.
-        Prefer their `Timeline`, `Outcome Checks`, `Observed Problem`, `Value/Scope Trace/Evidence`,
-        `Source Field Trace/Evidence`, and `Raw Evidence` when inferring a repair.
-      - When both successful and non-successful trajectories are available for the same or
-        similar task pattern, compare them before writing an experience: find which
-        user-visible value, included/excluded record set, source field, label, confirmation,
-        or write argument appears in successful traces and is missing/different in failures.
-      - Do not copy any trajectory wording directly into an experience. Re-check the original
-        runtime evidence, injected experience effects, existing experiences, and these rules
-        before writing an injectable reminder.
-      - For non-success trajectories, create or update an experience only when the evidence
-        supports a narrow runtime reminder that would likely prevent or recover from the first
-        materially outcome-changing mistake.
-      - For successful, case-specific, already-covered, unsupported, or not-preventable failures,
-        output no experience changes.
-      - If a loaded experience was causal and marked over-broad, misleading, or too weak, update
-        that existing experience; otherwise do not patch irrelevant loaded experiences.
-      - Do not mention evaluator/control-plane terms such as evaluation, evaluator,
-        communicate_checks, action_checks, db_check, reward, rubric, 评估, or 奖励 in runtime
-        content. Rewrite them into runtime facts: user request, retrieved records, source fields,
-        policy gate, calculation, or required user-visible message.
-      - Preserve object boundaries. A user's yes to the agent's over-broad proposal is not proof
-        that the user independently requested extra objects/actions.
-      - For communication failures, bind required facts to their source: requested scope, frozen
-        record/set membership, included/excluded records, source field, derivation, later-write
-        effect, selected object, or policy gate. Avoid vague reminders like "include all required
-        information".
-      - For information, aggregate, list, summary, or value requests, preserve the user-requested
-        source scope at the moment the request is made. Later write actions may create a second
-        "post-action/current remaining state" scope, but they must not silently replace the
-        original requested scope.
-      - If the user's wording is ambiguous between the original requested set and a post-action
-        remaining/current-state set, the experience should instruct the future agent to include
-        both scopes with explicit labels, not only the narrower post-action scope.
-      - Do not treat relative words like "other", "remaining", "those", "the rest", "其他", or
-        "剩余" as explicit exclusions when the user is also discussing writes. They are ambiguous
-        unless the user's own wording says to exclude a named object or semantic role (for example
-        "except/excluding X"). In ambiguous cases, `Scope ambiguity` must name both scopes.
-      - Do not exclude records from a request-time information/aggregate/list/summary/value
-        merely because they are later modified, canceled, upgraded, consumed, split, or otherwise
-        changed. Exclude them only when the user's own wording explicitly excluded that semantic
-        role from the earlier information request.
-      - If later writes affect records that could belong to a requested information/list/aggregate
-        value, `Scope ambiguity` must name both the original request-time scope and the
-        post-action/current remaining scope; do not write none/无.
-      - For total cost, paid amount, balance, refund, or similar monetary aggregates, bind the
-        answer to the canonical runtime value field when one exists: explicit total/paid/charged/
-        order/payment-history amount fields beat a reconstructed line-item sum. Use line items
-        only when no canonical total exists, or as a cross-check. If those values differ, the
-        experience must tell the future agent which source field to prefer.
-      - State when the scope is frozen, the semantic roles included/excluded, the source fields
-        used for derivation, and whether later writes change the previously requested scope.
-      - `Does not apply when` must describe a task-pattern mismatch, not the current temporal
-        stage. Do not write conditions such as "still reading", "before final response", "before
-        writes complete", or "not yet at the final_response"; the skill loader may read the
-        experience at task start even when the reminder applies at a later boundary.
-      - If a loaded existing experience encodes the misleading rule that later-modified/canceled/
-        upgraded records should be removed from an earlier requested aggregate, update that
-        experience instead of creating a competing memory.
-      - Do not encode dataset-specific values, IDs, amounts, or domain names in the reusable rule;
-        express the lesson as source-scope binding, freeze point, included/excluded object roles,
-        and later-write effect.
-      - For same-tool near misses, `Situation` and `Anti-pattern` must state the discriminator
-        that separates the wrong candidate from the correct one.
-      - Keep the experience concise: no setup chatter, no policy dumps, no full paths, no raw IDs,
-        no hidden answers. Use semantic roles instead of case literals.
-      - Use imperative, machine-readable bullets. No introductory or closing paragraphs.
-      - For policy/eligibility failures, distinguish *action eligibility* (whether the
-        write may be executed) from *benefit eligibility* (whether a refund,
-        compensation, coverage, or other benefit applies) only when source,
-        comparison, or authoritative outcome evidence demonstrates that the target
-        behavior requires the action despite the unavailable benefit. A user's
-        willingness to forgo the benefit is relevant evidence, but is not sufficient
-        by itself to prove that the action is allowed. When separation is supported,
-        encode the minimal runtime discriminator and behavior change without exposing
-        evaluator terms. When the evidence shows that benefit eligibility is a true
-        prerequisite for the action, preserve that gate instead of weakening it.
-
+      For policy/eligibility repairs, distinguish action eligibility from benefit eligibility only
+      when comparison or authoritative outcome evidence demonstrates the separation. A user's
+      willingness to forgo a benefit is relevant but is not sufficient by itself to prove an action
+      is allowed. If runtime evidence makes benefit eligibility a real prerequisite, preserve that
+      gate instead of weakening it.
     merge_op: patch

@@ -72,7 +72,7 @@ def test_user_memory_provider_splits_but_trajectory_provider_keeps_messages_whol
     assert trajectory_provider.get_extract_context().messages[0] is messages[0]
 
 
-def test_agent_experience_instruction_preserves_coupled_scope_repairs():
+def test_agent_experience_instruction_owns_closed_world_comparison_workflow():
     provider = AgentExperienceContextProvider(
         trajectory_summary="scope and communication failure",
         trajectory_uri="viking://user/user_1/memories/trajectories/scope_failure.md",
@@ -80,17 +80,14 @@ def test_agent_experience_instruction_preserves_coupled_scope_repairs():
 
     instruction = provider.instruction()
 
-    assert "coupled rule" in instruction
-    assert (
-        "answer the information obligation without expanding the write/action scope" in instruction
-    )
-    assert "agent-proposed broader plan" in instruction
-    assert "State the behavior delta" in instruction
+    assert "exact same case" in instruction
+    assert "runtime-observable discriminator" in instruction
+    assert "successful trajectory is reference evidence" in instruction
+    assert "cancellation_allowed" in instruction
+    assert "Update" in instruction
+    assert "Create" in instruction
+    assert "Skip" in instruction
     assert "Do not output `trigger_code`" in instruction
-    assert "later modified, canceled, upgraded" in instruction
-    assert "`Does not apply when` must describe a task-pattern mismatch" in instruction
-    assert "canonical runtime value field" in instruction
-    assert 'other", "remaining", "those"' in instruction
     assert "`situation`, `reminder`, `procedure`, `anti_pattern`" in instruction
     assert "storage template defines the Markdown structure and order" in instruction
     assert "Authoritative outcome evidence" in instruction
@@ -100,6 +97,16 @@ def test_agent_experience_instruction_preserves_coupled_scope_repairs():
     assert "The experience itself must not" in instruction
     assert "mention the evaluator" in instruction
     assert "evaluation metadata, hidden checks" in instruction
+    for removed_section in (
+        "Timeline",
+        "Outcome Checks",
+        "Observed Problem",
+        "Value/Scope Trace/Evidence",
+        "Source Field Trace/Evidence",
+        "Raw Evidence",
+        "injected experience effects",
+    ):
+        assert removed_section not in instruction
 
 
 def test_agent_experience_instruction_lists_custom_template_content_fields():
@@ -140,6 +147,8 @@ def test_experience_schema_action_benefit_rule_requires_authoritative_evidence()
     assert "is not sufficient by itself" in description
     assert "preserve that gate instead of weakening it" in description
     assert "refund ineligibility as cancellation ineligibility" not in description
+    assert "When both successful and non-successful trajectories" not in description
+    assert "Value/Scope Trace/Evidence" not in description
 
 
 @pytest.mark.asyncio
@@ -165,6 +174,10 @@ async def test_agent_experience_prefetch_starts_with_new_trajectory_without_conv
     assert add_tool_call_pair.call_args_list[0].kwargs["result"]["uri"] == provider.trajectory_uri
     assert messages[-1]["role"] == "user"
     assert "candidate_experience" in messages[-1]["content"]
+    assert "Update" in messages[-1]["content"]
+    assert "Create" in messages[-1]["content"]
+    assert "Skip" in messages[-1]["content"]
+    assert "Replace" not in messages[-1]["content"]
     evidence_loader.load.assert_awaited_once()
 
 

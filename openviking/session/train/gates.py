@@ -11,6 +11,7 @@ decision is about expected behavioral impact rather than static shape.
 from __future__ import annotations
 
 import ast
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
@@ -630,6 +631,7 @@ class ExperienceRootCausePreventionGate:
         )
 
     async def evaluate(self, target: GateTarget) -> GateDecision | None:
+        authoritative_behavior_anchor = _authoritative_behavior_anchor(target.analysis)
         prompt = _experience_root_cause_prevention_prompt(
             target,
             max_policy_chars=self.max_policy_chars,
@@ -676,6 +678,10 @@ class ExperienceRootCausePreventionGate:
             "expected_behavior_change": result["expected_behavior_change"],
             "risks": result["risks"],
         }
+        if authoritative_behavior_anchor:
+            evidence["authoritative_behavior_anchor"] = authoritative_behavior_anchor
+            evidence["anchored_repair"] = not result["pass"]
+            evidence["gate_model_reason"] = result["reason"]
         if result["pass"]:
             if result["risks"]:
                 return GateDecision(
@@ -689,18 +695,26 @@ class ExperienceRootCausePreventionGate:
         return GateDecision(
             gate_name=self.name,
             action="reject",
-            reason=result["reason"] or "experience does not pass counterfactual prevention review",
+            reason=(
+                "experience does not safely encode fixed authoritative behavior"
+                if authoritative_behavior_anchor
+                else result["reason"] or "experience does not pass counterfactual prevention review"
+            ),
             evidence=evidence,
             retriable=True,
             repair_prompt=(
-                result["repair_prompt"]
-                or "Rewrite or remove this experience. The repaired experience must be supported "
-                "by the source trajectory, trigger before the first preventable wrong decision, "
-                "state the narrow runtime rule that replaces the mistaken decision rule, preserve "
-                "any coupled communication/action-scope distinction needed to prevent recurrence, "
-                "avoid temporal `Does not apply when` clauses that block skill loading, "
-                "and explain what future behavior changes so the next similar session succeeds "
-                "without blocking nearby correct behavior."
+                _anchored_experience_repair_prompt(authoritative_behavior_anchor)
+                if authoritative_behavior_anchor
+                else (
+                    result["repair_prompt"]
+                    or "Rewrite or remove this experience. The repaired experience must be supported "
+                    "by the source trajectory, trigger before the first preventable wrong decision, "
+                    "state the narrow runtime rule that replaces the mistaken decision rule, preserve "
+                    "any coupled communication/action-scope distinction needed to prevent recurrence, "
+                    "avoid temporal `Does not apply when` clauses that block skill loading, "
+                    "and explain what future behavior changes so the next similar session succeeds "
+                    "without blocking nearby correct behavior."
+                )
             ),
         )
 
@@ -1006,6 +1020,29 @@ def _experience_root_cause_prevention_prompt(
     comparison_content = _comparison_trajectory_context(trajectory)
     trajectory_uri = trajectory.uri if trajectory is not None else ""
     trajectory_outcome = trajectory.outcome if trajectory is not None else ""
+    authoritative_behavior_anchor = _authoritative_behavior_anchor(analysis)
+    authoritative_behavior_section = (
+        f"""## Fixed authoritative behavior delta
+
+The structured evaluation has already settled the following reward-relevant behavior
+for this extraction and every retry:
+
+{authoritative_behavior_anchor}
+
+Do not re-decide whether this behavior is correct. Base-policy wording cannot reverse,
+remove, weaken, or condition away this fixed delta. Override only the smallest conflicting
+policy interpretation and preserve all non-conflicting constraints. Comparison trajectories
+may show how to realize the behavior, but they cannot override it.
+
+Your responsibility is to validate how safely and narrowly the proposed experience encodes
+the fixed behavior. You may reject missing behavior change, non-runtime triggers, over-broad
+applicability or object scope, blocked preservation-set actions, or evaluator/case leakage.
+Any repair may narrow Situation, applicability, object scope, or source binding, but must not
+reverse or omit the fixed behavior delta.
+"""
+        if authoritative_behavior_anchor
+        else ""
+    )
 
     return f"""You are a senior counterfactual failure diagnostician for agent experience extraction.
 
@@ -1024,8 +1061,11 @@ by that evidence. The experience itself must not mention the evaluator, evaluati
 metadata, hidden checks, expected actions, or reward; it must express the lesson using
 only observable user requests, tool results, runtime facts, and actions.
 
+{authoritative_behavior_section}
+
 Main question:
-If this exact experience had been injected before the source trajectory's first
+With any fixed authoritative behavior delta treated as non-negotiable, if this exact
+experience had been injected before the source trajectory's first
 preventable wrong decision, would it change the future agent's behavior enough
 for the next similar session to succeed, without breaking nearby correct cases?
 
@@ -1176,6 +1216,103 @@ def _evaluation_summary(analysis: RolloutAnalysis | None) -> str:
                 if key in eval_result:
                     lines.append(f"{key}={_preview_text(str(eval_result[key]), limit=1000)}")
     return "\n".join(lines)
+
+
+def _authoritative_behavior_anchor(analysis: RolloutAnalysis | None) -> str:
+    if analysis is None or analysis.evaluation is None:
+        return ""
+    metadata = getattr(analysis.evaluation, "metadata", None)
+    if not isinstance(metadata, dict):
+        return ""
+    evaluation_result = metadata.get("evaluation_result")
+    if not isinstance(evaluation_result, dict):
+        return ""
+
+    missing_actions: list[str] = []
+    matched_actions: list[str] = []
+    action_checks = evaluation_result.get("action_checks")
+    if isinstance(action_checks, list):
+        for item in action_checks[:20]:
+            if not isinstance(item, dict):
+                continue
+            action_match = item.get("action_match")
+            if not isinstance(action_match, bool):
+                continue
+            action = item.get("action")
+            if not isinstance(action, dict):
+                continue
+            action_name = str(action.get("name") or "").strip()
+            if not action_name:
+                continue
+            formatted_action = _format_authoritative_action(
+                action_name,
+                action.get("arguments"),
+            )
+            if action_match:
+                matched_actions.append(formatted_action)
+            else:
+                missing_actions.append(formatted_action)
+
+    missing_communications: list[str] = []
+    communicate_checks = evaluation_result.get("communicate_checks")
+    if isinstance(communicate_checks, list):
+        for item in communicate_checks[:20]:
+            if not isinstance(item, dict) or item.get("met") is not False:
+                continue
+            info = item.get("info")
+            if info is None:
+                continue
+            text = _preview_text(str(info).strip(), limit=500)
+            if text:
+                missing_communications.append(text)
+
+    if not missing_actions and not matched_actions and not missing_communications:
+        return ""
+
+    lines = [
+        *(f"- Required missing action: {action}" for action in missing_actions),
+        *(f"- Preserve matched action: {action}" for action in matched_actions),
+        *(
+            f"- Required missing communication: {communication}"
+            for communication in missing_communications
+        ),
+    ]
+    db_check = evaluation_result.get("db_check")
+    db_match = db_check.get("db_match") if isinstance(db_check, dict) else None
+    if missing_actions:
+        lines.append(
+            "- Failure boundary: add the missing required action while preserving matched actions."
+        )
+    elif db_match is True and missing_communications:
+        lines.append(
+            "- Failure boundary: database/actions already match; repair user-visible communication only."
+        )
+    elif db_match is False:
+        lines.append(
+            "- Failure boundary: database state does not match; preserve matched actions while "
+            "repairing the remaining action scope."
+        )
+    return _preview_text("\n".join(lines), limit=4000)
+
+
+def _format_authoritative_action(name: str, arguments: Any) -> str:
+    try:
+        payload = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    except (TypeError, ValueError):
+        payload = str(arguments)
+    return f"{name}({_preview_text(payload, limit=500)})"
+
+
+def _anchored_experience_repair_prompt(anchor: str) -> str:
+    return f"""Fixed authoritative behavior delta (must preserve):
+{anchor}
+
+Rewrite only the rejected experience. It must cause the fixed behavior at the earliest
+preventable decision boundary and preserve every matched action. Narrow Situation,
+applicability, object scope, or runtime source binding and remove unsupported generalization
+as needed. You must not remove, reverse, weaken, or condition away any fixed behavior.
+Do not mention evaluation, evaluator metadata, hidden checks, expected actions, or reward in
+the experience. If these constraints cannot be satisfied, output no experience change."""
 
 
 def _normalize_experience_prevention_result(parsed: dict[str, Any]) -> dict[str, Any]:

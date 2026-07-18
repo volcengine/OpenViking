@@ -20,6 +20,7 @@ from openviking.session.train.components.trajectory_analyzer import (
     TrajectoryAnalyzerContext,
     TrajectoryRolloutAnalyzer,
     _evaluation_from_trajectories,
+    _trajectory_validation_retry_instruction,
 )
 
 
@@ -128,6 +129,23 @@ def test_trajectory_evaluation_fallback_treats_failure_as_failed():
     assert evaluation.score == 0.0
 
 
+def test_trajectory_validation_retry_requests_only_factual_sections():
+    instruction = _trajectory_validation_retry_instruction(
+        [SimpleNamespace(target_name="task", reason="invalid", details="section")]
+    )
+
+    for required in ("User Evidence", "Runtime Evidence", "Execution", "Uncertainty"):
+        assert required in instruction
+    for forbidden in (
+        "correct work to preserve",
+        "observed problem",
+        "value/scope evidence",
+        "source-field evidence",
+        "raw evidence",
+    ):
+        assert forbidden not in instruction.lower()
+
+
 @pytest.mark.asyncio
 async def test_trajectory_rollout_analyzer_extracts_and_persists_trajectory(monkeypatch):
     from openviking.session.train.components import trajectory_analyzer as module
@@ -158,6 +176,8 @@ async def test_trajectory_rollout_analyzer_extracts_and_persists_trajectory(monk
     assert len(fs.writes) == 1
     assert fs.writes[0][0] == "viking://user/u/memories/trajectories/task_20260607120000.md"
     assert '"case_name": "case"' in fs.writes[0][1]
+    assert "## Outcome Evidence" in fs.writes[0][1]
+    assert "- Passed: unknown" in fs.writes[0][1]
     assert len(analysis.trajectories) == 1
     traj = analysis.trajectories[0]
     assert traj.name == "task"
@@ -200,19 +220,16 @@ async def test_trajectory_rollout_analyzer_evaluates_before_extracting_trajector
     assert analysis.evaluation.metadata == {"source": "fake"}
     created_loop = FakeExtractLoop.created[0]
     provider = created_loop.kwargs["context_provider"]
-    assert len(provider.messages) == 2
+    assert len(provider.messages) == 1
     assert provider.messages[0] is rollout.messages[0]
-    feedback_message = provider.messages[1]
-    assert feedback_message.role == "user"
-    assert "[Rollout Evaluation]" in feedback_message.content
-    assert "score: 0.25" in feedback_message.content
-    assert "task failed" in feedback_message.content
-    assert "missing confirmation" in feedback_message.content
-    assert analysis.metadata["extraction_message_count"] == 2
+    assert analysis.metadata["extraction_message_count"] == 1
+    assert analysis.trajectories[0].outcome == "failure"
+    assert "- Outcome: failure" in analysis.trajectories[0].content
+    assert "- Passed: false" in analysis.trajectories[0].content
 
 
 @pytest.mark.asyncio
-async def test_trajectory_rollout_analyzer_records_injected_experience_feedback(monkeypatch):
+async def test_trajectory_rollout_analyzer_does_not_write_experience_feedback(monkeypatch):
     from openviking.session.train.components import trajectory_analyzer as module
 
     class FeedbackExtractLoop(FakeExtractLoop):
@@ -226,9 +243,6 @@ async def test_trajectory_rollout_analyzer_records_injected_experience_feedback(
                                 "trajectory_name": "task",
                                 "outcome": "failure",
                                 "retrieval_anchor": "Stage: final",
-                                "experience_effects": (
-                                    '{"positive_ids":[],"negative_ids":["E1"],"weak_ids":[]}'
-                                ),
                                 "content": "# task\nbody",
                             },
                             memory_type="trajectories",
@@ -246,13 +260,14 @@ async def test_trajectory_rollout_analyzer_records_injected_experience_feedback(
     FakeExtractLoop.created.clear()
     fs = FakeVikingFS()
     exp_uri = "viking://user/u/memories/experiences/payment_guard.md"
-    fs.files[exp_uri] = (
+    original_experience = (
         "experience\n\n"
         "<!-- MEMORY_FIELDS\n"
         '{"memory_type":"experiences","experience_name":"payment_guard",'
         '"trigger_code":"def should_trigger(ctx):\\n    return True\\n"}\n'
         "-->"
     )
+    fs.files[exp_uri] = original_experience
     monkeypatch.setattr(module, "ExtractLoop", FeedbackExtractLoop)
     monkeypatch.setattr(module, "get_viking_fs", lambda: fs)
 
@@ -272,7 +287,5 @@ async def test_trajectory_rollout_analyzer_records_injected_experience_feedback(
 
     analysis = await analyzer.analyze(rollout, context)
 
-    assert analysis.metadata["experience_feedback_stats"]["updated_uris"] == [exp_uri]
-    written = fs.files[exp_uri]
-    assert '"feedback_stats"' in written
-    assert '"negative_count": 1' in written
+    assert "experience_feedback_stats" not in analysis.metadata
+    assert fs.files[exp_uri] == original_experience

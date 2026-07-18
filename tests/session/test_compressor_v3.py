@@ -369,11 +369,9 @@ async def test_train_from_extracted_multiple_case_memories_analyzes_bound_rollou
         criterion_results=[],
         metadata={"source": "tau2"},
     )
-    outcome_message = _outcome_evaluation_message(failed_evaluation)
-
     result = await compressor.train_from_extracted_cases(
         cases=[case_a, case_b],
-        messages=[*rollout_messages, outcome_message],
+        messages=rollout_messages,
         ctx=_ctx(),
         session_id="s1",
         rollout_evaluation=failed_evaluation,
@@ -386,14 +384,14 @@ async def test_train_from_extracted_multiple_case_memories_analyzes_bound_rollou
         "case_b",
     ]
     assert [rollout.messages for rollout in seen_rollouts] == [
-        [*rollout_messages, outcome_message],
-        [*rollout_messages, outcome_message],
+        rollout_messages,
+        rollout_messages,
     ]
     assert [rollout.evaluation for rollout in seen_rollouts] == [
         failed_evaluation,
         failed_evaluation,
     ]
-    assert all(context.inject_evaluation_feedback is False for context in seen_contexts)
+    assert all(not hasattr(context, "inject_evaluation_feedback") for context in seen_contexts)
 
 
 @pytest.mark.asyncio
@@ -701,7 +699,23 @@ async def test_v3_training_case_spec_fast_path_propagates_canonical_failed_evalu
     assert evaluation.score == 0.0
     assert evaluation.criterion_results == failed_evaluation.criterion_results
     assert evaluation.metadata == {"source": "tau2"}
-    assert trained[0]["messages"] == [*_messages(), outcome_message]
+    assert trained[0]["messages"] == _messages()
+
+
+def test_outcome_evaluation_message_contains_only_canonical_payload():
+    evaluation = RubricEvaluation(
+        passed=False,
+        score=0.0,
+        criterion_results=[],
+        metadata={"source": "tau2"},
+    )
+
+    text = _outcome_evaluation_message(evaluation).content
+
+    assert text.startswith("# OpenViking OutcomeEvaluation\n\n```json")
+    assert "Tau2 Evaluation Semantics" not in text
+    assert "Derived Evaluation Verdict" not in text
+    assert "Evaluation Interpretation" not in text
 
 
 @pytest.mark.asyncio
@@ -881,7 +895,13 @@ async def test_v3_fast_path_writes_final_memory_diff_with_case_traj_and_exp(monk
         "trajectories",
     ]
     assert [item["memory_type"] for item in diff["operations"]["updates"]] == ["experiences"]
-    assert diff["summary"] == {"total_adds": 2, "total_updates": 1, "total_deletes": 0}
+    assert diff["summary"] == {
+        "total_adds": 2,
+        "total_updates": 1,
+        "total_deletes": 0,
+        "total_post_validation_retries": 0,
+        "total_gate_rejections": 0,
+    }
 
 
 @pytest.mark.asyncio
@@ -953,7 +973,13 @@ async def test_v3_builds_training_memory_diff_from_streaming_result(monkeypatch)
         archive_uri=archive_uri,
     )
 
-    assert diff["summary"] == {"total_adds": 1, "total_updates": 1, "total_deletes": 0}
+    assert diff["summary"] == {
+        "total_adds": 1,
+        "total_updates": 1,
+        "total_deletes": 0,
+        "total_post_validation_retries": 0,
+        "total_gate_rejections": 0,
+    }
     assert diff["operations"]["adds"][0]["memory_type"] == "trajectories"
     update = diff["operations"]["updates"][0]
     assert update["memory_type"] == "experiences"
@@ -1050,7 +1076,13 @@ async def test_v3_training_memory_diff_filters_batch_items_by_current_analysis_t
         archive_uri=archive_uri,
     )
 
-    assert diff["summary"] == {"total_adds": 2, "total_updates": 0, "total_deletes": 0}
+    assert diff["summary"] == {
+        "total_adds": 2,
+        "total_updates": 0,
+        "total_deletes": 0,
+        "total_post_validation_retries": 0,
+        "total_gate_rejections": 0,
+    }
     assert [op["uri"] for op in diff["operations"]["adds"]] == [traj_a, exp_a]
 
 
@@ -1493,7 +1525,7 @@ async def test_render_case_link_retention_keeps_newest_trajectory_links(monkeypa
     assert legacy_trajectory_uri not in {link["to_uri"] for link in case_file.links}
 
 
-def test_training_messages_after_case_spec_filters_legacy_embedded_evaluation_message():
+def test_training_messages_after_case_spec_filters_all_evaluation_control_messages():
     from openviking.session.compressor_v3 import _training_messages_after_case_spec
 
     case_spec = _case_spec_message()
@@ -1513,9 +1545,9 @@ def test_training_messages_after_case_spec_filters_legacy_embedded_evaluation_me
         parts=[TextPart(text="# OpenViking OutcomeEvaluation")],
     )
 
-    assert _training_messages_after_case_spec(
-        [case_spec, *rollout_messages, legacy_eval, outcome_eval]
-    ) == [
-        *rollout_messages,
-        outcome_eval,
-    ]
+    assert (
+        _training_messages_after_case_spec(
+            [case_spec, *rollout_messages, legacy_eval, outcome_eval]
+        )
+        == rollout_messages
+    )

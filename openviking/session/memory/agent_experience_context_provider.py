@@ -391,77 +391,70 @@ class AgentExperienceContextProvider(SessionExtractContextProvider):
             situation_guidance = """The skill loader uses the rendered `situation` field as the
 applicability snippet. It must clearly say when the experience applies, when it does not apply,
 and which runtime source binds the rule. """
-        return f"""You are a memory extraction agent. Distill reusable failure-repair experiences from failed or partially failed agent execution trajectories.
+        return f"""You are a memory extraction agent. Distill a minimal reusable failure repair.
 
-You are given:
-- A new trajectory to learn from
-- Optional successful `comparison_trajectory` records from the exact same case
-- Up to {SEARCH_TOP_K} relevant existing experiences for update and deduplication
+## Inputs
 
-Source and comparison trajectories are evidence only. Do NOT copy or modify trajectory text in the output.
+- One failed or partial `new_trajectory`
+- Up to two successful `comparison_trajectory` records from the exact same case
+- Up to {SEARCH_TOP_K} relevant `candidate_experience` memories
+
+The successful trajectory is reference evidence: it shows what differed, but the output must say
+what experience should be added or adjusted for the failed case. Trajectories are factual evidence;
+do not copy or modify them.
 
 ## Authoritative outcome evidence
 
-When the training context includes authoritative evaluation or outcome evidence supplied by the
-training pipeline, that evidence defines the target behavior. If it conflicts with base-policy
-wording, override only the smallest conflicting policy interpretation needed to explain the
-required outcome; preserve non-conflicting constraints and object boundaries. Infer the reusable
-runtime behavior required by that evidence. The experience itself must not mention the evaluator,
-evaluation metadata, hidden checks, expected actions, or reward; rewrite the lesson using only
-observable user requests, tool results, runtime facts, and actions.
+System-generated Outcome Evidence defines which state, action, or communication changed the
+result. If it conflicts with base-policy wording, override only the smallest conflicting policy interpretation
+needed to explain the required outcome; preserve non-conflicting constraints and object boundaries.
+The experience itself must not mention the evaluator, evaluation metadata, hidden checks, expected
+actions, reward, or rubric. Rewrite the lesson using runtime-visible facts.
 
-## What to output
+## Comparison workflow
 
-Output experience entries ONLY when a reusable runtime reminder would prevent or recover from the first materially outcome-changing mistake. Do not write full workflows, success-path SOPs, case logs, or generic advice.
+1. Align the same behavior boundary in the failed and successful trajectories.
+2. Compare user scope, objects, observed fields and values, agent-stated decisions, tool actions
+   and arguments, communication, and final state.
+3. Use Outcome Evidence to identify the smallest difference that changed the result.
+4. Infer the minimum runtime-observable discriminator a future agent can actually inspect.
+5. Classify a candidate experience as correct-but-ignored, too weak, misleading, or irrelevant.
+6. Choose Update, Create, or Skip.
 
-Each entry:
-- `experience_name`: new or existing experience name
-- Populate every structured content field declared by the schema: {content_fields}
-- `supersedes`: older `experience_name` replaced by a genuinely broader/corrected one; otherwise empty
+## Closed-world evidence
+
+- Use only user statements, tool results, schema fields, values, and policy text observed in the
+  failed or successful trajectories.
+- Never invent a flag or field such as `cancellation_allowed` or another `*_allowed` field that
+  was not present in runtime evidence.
+- Generalize case IDs, but preserve decisive real schema field names and enum categories.
+- If Outcome Evidence requires an action but neither trajectory exposes an observable condition
+  for choosing it, do not guess a business rule; choose Skip.
+- Preserve the original user-requested object and action boundaries. An agent-proposed expansion
+  followed by user agreement is not an independently requested new scope.
+
+## Decision and output
+
+- Update when an existing experience is misleading or its applicability/reminder is too weak.
+- Create when no relevant experience covers a supported, reusable prevention or recovery.
+- Skip when an existing experience is already correct but was ignored, or when the failure is
+  case-specific, unsupported, random, already covered, or not preventable by a runtime reminder.
+- Emit one experience for one behavior delta: block/change one action or argument, read/ask for
+  one missing fact, or include one source-bound fact in communication. Do not write a full SOP.
+
+Each entry must provide:
+- `experience_name`: an existing name for Update or a new name for Create
+- Every structured content field declared by the schema: {content_fields}
+- `supersedes`: an older experience name only when the corrected experience genuinely replaces it
 
 The storage template defines the Markdown structure and order. Do not include headings inside
 field values. {situation_guidance}Do not output `trigger_code`; it is not used by the skill loader.
 
-The system handles create vs update automatically:
-- Same `experience_name` as an existing one → update it in place
-- New `experience_name` → create a new experience
-- `supersedes` set → delete the old experience and inherit its history
-
-## Decision rules
-
-- Existing experience is correct but the agent ignored it → skip unless its wording/applicability is too weak to guide skill loading.
-- Existing experience is misleading, over-broad, too weak, or caused the bad path → update it, primarily by sharpening `## Situation`, `## Procedure`, and `## Anti-pattern`.
-- No relevant experience exists and the failure has a reusable preventive repair → create a new experience.
-- The failure is successful, case-specific, unsupported, random, already solved by available tool facts, or not preventable by a runtime reminder → output no changes.
-- If the failure came from agent-initiated scope expansion, do not treat the user's later yes/confirmation to the agent's over-broad proposal as a clean user-initiated request. Preserve the original user-requested write/action scope unless the user independently requested a new object/action in their own words.
-- If tool/action/DB checks passed but required user-visible communication failed, create/update a communication-boundary experience. Generalize the omitted literal into its semantic role: total cost, identifier, policy explanation, next step, etc.
-- Treat trajectory memories as factual evidence, not authoritative conclusions. Use their `Timeline`, `Outcome Checks`, `Observed Problem`, `Value/Scope Trace/Evidence`, `Source Field Trace/Evidence`, and `Raw Evidence` to infer the reusable repair.
-- When successful trajectories are available for the same case, compare them with the failed trajectory before writing an experience: identify which user-visible value, included/excluded record set, source field, label, confirmation, or write argument appears in successful traces and is missing/different in the failure.
-- Do not copy trajectory wording directly into an experience. Re-check the original runtime evidence, injected experience effects, existing experiences, and this gate contract before writing an injectable reminder.
-- A failed or partial trajectory does not require an experience update. Create/update only when the evidence supports a narrow runtime reminder that would likely prevent or recover from the first materially outcome-changing mistake.
-
-## Writing rules
-
-- One distinct root failure pattern → one experience. Split unrelated failures; keep a coupled rule for communication/action scope when the same ambiguity causes both, so the future agent can answer the information obligation without expanding the write/action scope.
-- State the behavior delta: block a write, change one argument, ask/read one missing fact, or include one requested source-bound fact in communication.
-- Preserve object boundaries. A user's yes to an agent-proposed broader plan is not independent evidence for extra objects/actions.
-- For communication, totals, counts, lists, or summaries, bind the answer to the user-requested scope, frozen record/set membership, included/excluded records, source field, derivation, later-write effect, selected object, or policy gate.
-- For information/aggregate/list/summary/value requests, preserve the user-requested source scope at the moment the request is made. Later write actions may create a second "post-action/current remaining state" scope, but they must not silently replace the original requested scope.
-- If user wording is ambiguous between an original requested set and a post-action remaining/current-state set, write the experience so the future agent gives both scopes with explicit labels instead of only the narrower post-action scope.
-- Do not treat relative words like "other", "remaining", "those", "the rest", "其他", or "剩余" as explicit exclusions when the user is also discussing writes. They are ambiguous unless the user's own wording says to exclude a named object or semantic role; in ambiguous cases, the structured content must name both scopes.
-- Do not exclude records from a request-time information/aggregate/list/summary/value merely because they are later modified, canceled, upgraded, consumed, split, or otherwise changed. Exclude them only when the user's own wording explicitly excluded that semantic role from the earlier information request.
-- If later writes affect records that could belong to a requested information/list/aggregate value, the structured content must name both the original request-time scope and the post-action/current remaining scope; do not write none/无.
-- For total cost, paid amount, balance, refund, or similar monetary aggregates, bind the answer to the canonical runtime value field when one exists: explicit total/paid/charged/order/payment-history amount fields beat reconstructed lower-level unit/segment/item price sums. Use line items only when no canonical total exists, or as a cross-check. If those values differ, the experience must tell the future agent which source field to prefer. Do not name lower-level price fields as the primary source when a record-level total/paid/charged amount is available in runtime evidence.
-- `Does not apply when` must describe a task-pattern mismatch, not a temporal stage. Do not write conditions such as "still reading", "before final response", "before writes complete", or "not yet at final_response"; the skill loader may read the experience at task start even when it applies at a later boundary.
-- If a loaded existing experience encodes the misleading rule that later-modified/canceled/upgraded records should be removed from an earlier requested aggregate, update that experience instead of creating a competing memory.
-- Do not encode dataset-specific values, IDs, amounts, or domain names in the reusable rule; express the lesson as source-scope binding, freeze point, included/excluded object roles, and later-write effect.
-- Preserve correct near-misses: the applicability and anti-pattern content must say when NOT to apply the experience.
-- Avoid evaluator/control-plane wording such as evaluation, evaluator, communicate_checks, action_checks, db_check, reward, rubric, 评估, 奖励. Rewrite into runtime facts.
-- Keep it concise, imperative, and machine-readable. No raw IDs, hidden answers, policy dumps, or full task paths.
-- Use the same language for all `experience_name` values.
+The system applies same-name entries as updates and new names as creates. Use `supersedes` instead
+of `delete_ids`. Keep content concise, imperative, free of case IDs and hidden answers, and use the
+same language for all `experience_name` values.
 
 {default_experience_gate_contract(schema)}
-- Do NOT use `delete_ids`; use `supersedes` instead.
 - Follow field descriptions in the schema.
 - Output JSON only. Do not call any tools.
 
@@ -606,7 +599,7 @@ All memory content must be written in {output_language}.
                         "Treat `new_trajectory` as the new execution to incorporate.",
                         "Treat `comparison_trajectory` as factual peer evidence for comparing success and failure paths; do not modify it directly.",
                         "Treat `candidate_experience` as existing memories you may update, replace, or skip.",
-                        "Based on the above, decide whether to **Update**, **Replace**, **Create**, or **Skip** a failure-repair experience. Output JSON only.",
+                        "Based on the above, decide whether to **Update**, **Create**, or **Skip** a failure-repair experience. Output JSON only.",
                         "Only reusable failure patterns should produce entries; successful or unrelated intents should produce no experience changes.",
                     ]
                 ),

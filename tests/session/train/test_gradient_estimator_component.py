@@ -625,7 +625,14 @@ async def test_post_validation_trace_records_root_cause_rejection(monkeypatch):
                 gate_name="experience_root_cause_prevention",
                 action="reject",
                 reason="runtime source binding is missing",
-                evidence={"root_cause_quality": "missing_source_binding"},
+                evidence={
+                    "root_cause_quality": "missing_source_binding",
+                    "gate_model_reason": "source binding is too broad",
+                    "authoritative_behavior_anchor": (
+                        '- Required missing action: cancel_reservation({"reservation_id":"MSJ4OA"})'
+                    ),
+                    "anchored_repair": True,
+                },
                 retriable=True,
                 repair_prompt="bind the reminder to visible tool results",
             )
@@ -671,6 +678,11 @@ async def test_post_validation_trace_records_root_cause_rejection(monkeypatch):
         "gate.decision.0.retriable": True,
         "gate.decision.0.repair_prompt": "bind the reminder to visible tool results",
         "gate.decision.0.root_cause_quality": "missing_source_binding",
+        "gate.decision.0.gate_model_reason": "source binding is too broad",
+        "gate.decision.0.authoritative_behavior_anchor": (
+            '- Required missing action: cancel_reservation({"reservation_id":"MSJ4OA"})'
+        ),
+        "gate.decision.0.anchored_repair": True,
     }
 
 

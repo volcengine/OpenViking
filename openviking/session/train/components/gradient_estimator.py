@@ -458,6 +458,20 @@ def _set_post_validation_trace_attributes(span: Any, report: GateReport) -> None
         root_cause_quality = decision.evidence.get("root_cause_quality")
         if root_cause_quality:
             span.set_attribute(f"{prefix}.root_cause_quality", str(root_cause_quality))
+        gate_model_reason = decision.evidence.get("gate_model_reason")
+        if gate_model_reason:
+            span.set_attribute(f"{prefix}.gate_model_reason", str(gate_model_reason))
+        authoritative_behavior_anchor = decision.evidence.get("authoritative_behavior_anchor")
+        if authoritative_behavior_anchor:
+            span.set_attribute(
+                f"{prefix}.authoritative_behavior_anchor",
+                str(authoritative_behavior_anchor),
+            )
+        if "anchored_repair" in decision.evidence:
+            span.set_attribute(
+                f"{prefix}.anchored_repair",
+                bool(decision.evidence["anchored_repair"]),
+            )
 
 
 def _analysis_from_context_metadata_optional(

@@ -1,12 +1,10 @@
 memory_type: trajectories
 description: |
-  Extract a compact factual execution record from an agent trajectory.
+  Extract a compact factual execution record from one agent rollout.
 
-  A trajectory memory is evidence for later experience extraction, not an experience and not
-  a final root-cause judgment. Preserve what happened, what was requested, what was read,
-  what was written/communicated, what succeeded, what failed, and which runtime facts are
-  uncertain. Do not propose injectable reminders, do not write production experience content,
-  and do not recommend create/update/delete operations for experiences.
+  A trajectory is evidence for later comparison. It records what the user requested, what the
+  runtime exposed, what the agent said and did, and what remained uncertain. It does not diagnose
+  root cause, judge an injected experience, or propose a future experience.
 
 embedding_template: |-
   {{ trajectory_name }}
@@ -23,21 +21,18 @@ fields:
   - name: trajectory_name
     type: string
     description: |
-      Name the observed boundary or failure/success pattern, not the final lesson.
+      Name the observed execution boundary or behavior pattern, not a lesson or diagnosis.
       Must be written in {{ language }}.
       {% if language == 'en' %}Use lowercase snake_case, max 6 words.{% else %}Use a concise noun phrase, max 18 characters.{% endif %}
-      Good: "aggregate_scope_observed", "wrong_value_source", "confirmation_scope_trace", "总费用范围记录".
+      Good: "aggregate_scope_observed", "confirmation_scope_trace", "取消范围执行记录".
     merge_op: immutable
 
   - name: outcome
     type: string
     description: |
       Use exactly one of: success, failure, partial, unfinished, unknown.
-      success means the task's required state/actions and required communication were completed.
-      failure means a material requirement failed.
-      partial means some important work succeeded but one material requirement failed.
-      unfinished means the task stopped before the necessary terminal action/answer.
-      unknown means the evidence is insufficient.
+      Describe only the apparent rollout outcome. When authoritative evaluation exists, the
+      training pipeline overwrites this field deterministically before persistence.
     merge_op: immutable
 
   - name: retrieval_anchor
@@ -48,149 +43,68 @@ fields:
       "Stage: <opening|after_read|before_confirmation|before_write|after_write|final_response|terminal_handoff>; Boundary: <observed runtime boundary>; Capability: <read|write|policy|calculation|communication|handoff>; Target: <semantic object/value role>; Outcome: <success|failure|partial|unfinished|unknown>."
 
       Generalize identifiers, names, exact amounts, dates, task numbers, and raw payload values.
-      Anchor on the observed boundary where later experience extraction should inspect evidence.
-    merge_op: immutable
-
-  - name: experience_effects
-    type: string
-    description: |
-      Machine-readable JSON object about injected experience reminders observed in this run.
-      Output ONLY a valid compact JSON object, not markdown and not a code block.
-
-      Required shape:
-      {"positive_ids":["E1"],"negative_ids":[],"weak_ids":[]}
-
-      If no experience reminder was injected, output exactly:
-      {"positive_ids":[],"negative_ids":[],"weak_ids":[]}
-
-      positive_ids: injected experiences that appeared necessary/helpful in the observed run.
-      negative_ids: injected experiences that appeared misleading or over-broad in the observed run.
-      weak_ids: injected experiences that were relevant but insufficient in the observed run.
-      Use only IDs from the injected list. Do not invent IDs. If unsure, leave the arrays empty.
+      Anchor on the observed boundary that a later failed-versus-successful comparison should inspect.
     merge_op: immutable
 
   - name: content
     type: string
     description: |
-      Write in {{ language }}. Keep raw tool names, schema keys, and quoted runtime values unchanged.
+      Write in {{ language }}. Keep tool names, schema keys, and quoted runtime values unchanged.
 
-      You are producing a compact factual trace for downstream experience extraction. Your job is
-      to preserve enough runtime evidence for a later extractor to compare multiple trajectories
-      and decide the true reusable experience. Do not decide the final experience here.
+      Produce a compact factual record of ONE rollout. Preserve enough evidence for a later
+      extractor that can see both failed and successful trajectories. Do not perform that
+      comparison or decide the reusable lesson here.
 
-      ## Do NOT output
-      - No `Counterfactual Ideal Experience` section.
-      - No `Runtime experience content`.
-      - No `Experience Repair Signal`.
-      - No `Recommended operation`, `New experience action`, `Selected candidate`, or C1/C2/C3.
-      - No instructions that should be injected into a future agent.
-      - No broad advice such as "check all requirements" or "include all information".
-      - No `Diagnostic Hints` section.
-      - No `Ambiguous references` field or verdict such as `Ambiguous references: none`.
+      Return exactly one trajectory operation for the rollout. Do not split phases, decisions,
+      objects, or behavior boundaries into separate trajectory files.
 
-      ## What to preserve
-      Preserve concrete runtime evidence, especially:
-      - user request and confirmations that created obligations;
-      - retrieved records, candidate objects, policy facts, source fields, and calculations;
-      - read/discovery scope versus mutation/write scope;
-      - communication obligations and final user-visible content;
-      - observed object/value/scope/source-field differences;
-      - correct actions/messages that should be preserved;
-      - uncertainty and competing interpretations.
-
-      ## Output Format
-      When a policy or eligibility judgment determined or contributed to the
-      outcome, additionally preserve the distinction between **action
-      eligibility** (whether the agent is permitted to execute a write or
-      mutation) and **benefit eligibility** (whether a refund, compensation, or
-      coverage applies after execution). Record the runtime fields, policy
-      conditions, and user statements that determined each dimension separately.
-      If the user explicitly accepted no refund/benefit, record that acceptance.
-      Do not infer from that acceptance alone that action and benefit eligibility
-      are separate; preserve the evidence that establishes or refutes separation.
-      If the agent conflated the two dimensions (e.g., refused a write because a
-      benefit was unavailable), record which dimension the agent used and which
-      it should have used.
-
-      Output exactly ONE markdown record with the labels below. Do not add extra top-level sections.
+      Output exactly ONE markdown record with these sections and no additional top-level sections:
 
       # <trajectory_name>
       - Outcome: <success|failure|partial|unfinished|unknown>
-      - Domain: <task/tool domain>
-      - User Goal: <generalized user goal, no task id>
-      - Injected Experiences:
-        - Loaded: <semantic names or none>
-        - Helpful: <which loaded reminders appeared helpful, or none>
-        - Misleading: <which loaded reminders appeared misleading/over-broad, or none>
-        - Insufficient: <which loaded reminders were relevant but incomplete, or none>
-      - Timeline:
-        - User request: <relevant user wording and obligations, generalized>
-        - Reads: <important read tools and semantic records/fields retrieved>
-        - Decisions: <important branch/calculation/scope/object decisions the agent made>
-        - Writes: <write tools called, target object roles, whether observed correct/incorrect/unknown>
-        - Communication: <user-visible answer/summary/value/list given or omitted>
-        - Termination: <done/handoff/unfinished and any side effects>
-      - Outcome Checks:
-        - Required state/actions: <passed|failed|partial|unknown; evidence in runtime terms>
-        - Required communication: <passed|failed|partial|unknown; evidence in runtime terms>
-        - Other required effects: <passed|failed|partial|unknown|none>
-      - Correct Work To Preserve:
-        - <correct reads/actions/messages/policy branches that later experience extraction should not block, or none>
-      - Observed Problem:
-        - Failure type: <wrong_arguments|wrong_object|wrong_policy_branch|missing_confirmation|missing_communication|premature_write|extra_write|premature_done|tool_error|calculation_error|scope_substitution|wrong_source_field|none|unknown>
-        - First observed divergence: <earliest observable boundary where behavior diverged, or none/unknown>
-        - Candidate bad behavior: <tool/action/message/calculation shape that appears risky, or none>
-      - What was missing/wrong: <runtime fact, object binding, value, policy gate, confirmation, or communication that differed, or none. If the failure involves a policy or eligibility judgment, include the specific runtime field values and policy conditions from the conversation that determined the expected vs. actual outcome, not just that an action was missing>
-        Distinguish action eligibility (may the agent perform the write?) from
-        benefit eligibility (does a refund/compensation apply after?). Record
-        which dimension the agent used, which it should have used, whether the
-        user explicitly accepted no refund/benefit, which policy conditions were
-        checked vs. skipped, and the specific runtime fields that determined each.
-        Do not treat willingness to forgo a benefit as sufficient proof that the
-        action is allowed.
-      - Value/Scope Evidence:
-        - Requested value/list/summary role: <semantic role, or none>
-        - Request boundary/timing: <when the user asked relative to reads/writes/communications, or unknown>
-        - Request wording with relative terms: <short exact wording containing other/remaining/those/其他/剩余, or none>
-        - Relative words observed: <raw relative words observed, or none>
-        - Visible records before later writes: <records/roles visible at that boundary, with evidence, or unknown>
-        - Records later written/changed: <records/roles later modified/canceled/upgraded/consumed, or none>
-        - Records in agent calculation/answer: <records/roles actually included or omitted in the user-visible answer, or unknown>
-        - Records after later writes: <post-action/current remaining records/roles if visible, or unknown>
-        - Explicit exclusions by exact user wording: <quote exact exclusion words from user, or none; do not infer from relative words alone>
-      - Source Field Evidence:
-        - User-requested value source wording: <exact source/value wording from user, or none>
-        - Outcome-mentioned missing/present value: <value/semantic fact the runtime outcome says was missing or present, or none/unknown>
-        - Agent-used source fields: <runtime fields or derivation actually used, or none/unknown>
-        - Canonical value fields observed: <explicit total/paid/charged/order/payment amount fields if present, or none/unknown>
-        - Line-item derivation observed: <line-item formula if used or available, or none/unknown>
-        - Observed difference: <omitted value, different included records, different source field, calculation mismatch, none, or unknown>
-      - Raw Evidence:
-        - User/request snippets: <short relevant snippets or none>
-        - Tool/result snippets: <short relevant snippets, field names, IDs/values only as evidence, or none>
-        - Final message snippets: <short relevant snippets or none>
-      - Result: <concise final outcome and side effects>
+      - User Goal: <concise goal, without task id>
 
-      ## Rules
-      - Be factual and compact. Prefer evidence over interpretation.
-      - Do not hide uncertainty. If the trace does not prove the expected scope/source field,
-        write unknown/uncertain instead of inventing a root cause.
-      - Do not generalize IDs, dates, names, or exact amounts into rules. Exact literals may appear
-        only under `Raw Evidence` when they are needed to audit the trace.
-      - Distinguish information/read scope from mutation/write scope. Extra records read for
-        discovery or communication do not become write targets unless user wording confirms that.
-      - For value/aggregate/list/summary requests, record the exact request wording, relative
-        words observed, visible records before writes, records later changed, records included in
-        the answer, records after writes, and explicit exclusion quotes separately. Do not decide
-        whether a relative word is truly ambiguous or not; preserve evidence for downstream
-        comparison.
-      - For monetary/value answers, record both canonical fields and line-item derivations if
-        visible. Do not decide here which one should be the final reusable rule unless the runtime
-        evidence directly shows the agent used a different source than the requested value.
-      - If the run succeeded, record the successful path facts that distinguish it from failures
-        (especially included records, communicated values, labels, and source fields); do not
-        produce a success-path SOP or an injectable reminder.
-      - If an injected experience was misleading, record how it influenced observed behavior; do
-        not rewrite the experience here.
+      ## User Evidence
+      - Requests: <user-requested information/actions and their object scope, or none>
+      - Confirmations: <user confirmations in their own words, or none>
+      - Explicit exclusions: <only exclusions stated by the user, or none>
+
+      ## Runtime Evidence
+      - Relevant objects: <objects/records actually returned, including IDs needed for same-case alignment>
+      - Observed fields: <real field names and values present in tool results>
+      - Observed policy text: <policy text actually present in the rollout, or none>
+      - Value sources/calculation: <source fields and calculations actually used or available, or none>
+      - Missing fields: <fields the agent referenced but no tool result exposed, or none>
+
+      ## Execution
+      - Reads: <read tools, queries, and returned object scope>
+      - Agent-stated decisions: <important decisions explicitly stated by the agent; do not correct them>
+      - Writes: <write tools, arguments, observed results, or none>
+      - Communication: <user-visible information actually communicated or omitted>
+      - Termination: <done, handoff, unfinished, and observed side effects>
+
+      ## Injected Experience Evidence
+      - Loaded: <deterministically supplied reminder IDs/names, or none>
+      - Observable use: <behavior visibly followed, ignored, or contradicted; facts only, no quality label>
+
+      ## Uncertainty
+      - <facts the rollout does not establish and competing factual readings, or none>
+
+      Rules:
+      - Be factual and compact. Do not infer root cause, expected behavior, or a corrective rule.
+      - Do not output an Outcome Evidence section; the training pipeline appends it deterministically.
+      - Do not propose create/update/delete/replace/skip operations for experiences.
+      - Do not write counterfactuals, recommendations, reminders, procedures, anti-patterns, or SOPs.
+      - Preserve IDs, dates, amounts, exact enum values, and raw schema fields when they are needed
+        to align this rollout with another trajectory from the same case.
+      - Put only fields actually present in tool results under Observed fields. If the agent relied
+        on a hypothetical or absent field, put it under Missing fields.
+      - Agent-stated decisions report what the agent explicitly believed; they are not truth claims.
+      - Distinguish information/read scope from mutation/write scope without deciding which was correct.
+      - For aggregate/value requests, preserve request-time object membership, later changes, source
+        fields, and calculations as separate facts.
+      - For successful runs, preserve the executed path and outcome facts, but do not turn them into
+        a success-path workflow.
+      - If evidence is absent or conflicting, write unknown instead of filling the gap.
 
     merge_op: patch

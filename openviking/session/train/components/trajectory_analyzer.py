@@ -9,12 +9,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from openviking.core.context import Context
-from openviking.message import Message, TextPart
+from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
 from openviking.session.memory.agent_trajectory_context_provider import (
     AgentTrajectoryContextProvider,
-    extract_injected_experience_reminders,
 )
 from openviking.session.memory.dataclass import (
     MemoryFile,
@@ -28,9 +27,7 @@ from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.skill.session_skill_context_provider import (
     SESSION_SKILL_MEMORY_TYPE,
 )
-from openviking.session.train.components.experience_feedback import (
-    record_experience_feedback_stats,
-)
+from openviking.session.train.components.trajectory_outcome import attach_outcome_evidence
 from openviking.session.train.domain import (
     CriterionResult,
     Rollout,
@@ -65,7 +62,6 @@ class TrajectoryAnalyzerContext:
     strict_extract_errors: bool = False
     latest_archive_overview: str = ""
     evaluator_context: Any = None
-    inject_evaluation_feedback: bool = True
     include_session_skills: bool = False
 
 
@@ -93,14 +89,11 @@ class TrajectoryRolloutAnalyzer:
             raise ValueError("TrajectoryAnalyzerContext.request_context is required")
 
         evaluation = await self._evaluate_rollout(rollout, context)
-        extraction_messages = _messages_with_evaluation_feedback(
-            rollout.messages,
-            evaluation=evaluation,
-            enabled=evaluation is not None and context.inject_evaluation_feedback,
-        )
+        extraction_messages = list(rollout.messages)
         result = await self.extract_trajectory_memories(
             messages=extraction_messages,
             ctx=context.request_context,
+            evaluation=evaluation,
             strict_extract_errors=context.strict_extract_errors,
             latest_archive_overview=context.latest_archive_overview,
             include_session_skills=context.include_session_skills,
@@ -119,11 +112,6 @@ class TrajectoryRolloutAnalyzer:
             trajectory_uris,
             ctx=context.request_context,
         )
-        experience_feedback_stats = await self._record_experience_feedback_stats(
-            trajectories=trajectories,
-            messages=extraction_messages,
-            ctx=context.request_context,
-        )
         evaluation = evaluation or _evaluation_from_trajectories(trajectories)
         return RolloutAnalysis(
             evaluation=evaluation,
@@ -137,7 +125,6 @@ class TrajectoryRolloutAnalyzer:
                 "case_name": getattr(rollout.case, "name", ""),
                 "task_signature": getattr(rollout.case, "task_signature", ""),
                 "extraction_message_count": len(extraction_messages),
-                "experience_feedback_stats": experience_feedback_stats,
             },
         )
 
@@ -157,6 +144,7 @@ class TrajectoryRolloutAnalyzer:
         *,
         messages: list[Message],
         ctx: RequestContext | None,
+        evaluation: RubricEvaluation | None = None,
         strict_extract_errors: bool = False,
         latest_archive_overview: str = "",
         include_session_skills: bool = False,
@@ -184,6 +172,7 @@ class TrajectoryRolloutAnalyzer:
             provider=provider,
             messages=messages,
             ctx=ctx,
+            evaluation=evaluation,
             strict_extract_errors=strict_extract_errors,
             include_session_skills=include_session_skills,
             case_name=case_name,
@@ -200,6 +189,7 @@ class TrajectoryRolloutAnalyzer:
         provider: AgentTrajectoryContextProvider,
         messages: list[Message],
         ctx: RequestContext,
+        evaluation: RubricEvaluation | None,
         strict_extract_errors: bool,
         include_session_skills: bool = False,
         case_name: str = "",
@@ -276,6 +266,7 @@ class TrajectoryRolloutAnalyzer:
             )
 
             _ensure_trajectory_case_name(traj_ops, case_name=case_name)
+            traj_ops = attach_outcome_evidence(traj_ops, evaluation)
 
             memory_result = await self._apply_trajectory_operations(
                 operations=traj_ops,
@@ -369,32 +360,6 @@ class TrajectoryRolloutAnalyzer:
             )
         return trajectories
 
-    async def _record_experience_feedback_stats(
-        self,
-        *,
-        trajectories: list[Trajectory],
-        messages: list[Message],
-        ctx: RequestContext,
-    ) -> dict[str, Any]:
-        injected_reminders = extract_injected_experience_reminders(messages)
-        if not trajectories or not injected_reminders:
-            return {"updated_uris": [], "skipped_uris": [], "errors": []}
-        try:
-            result = await record_experience_feedback_stats(
-                trajectories=trajectories,
-                injected_reminders=injected_reminders,
-                viking_fs=self.viking_fs or get_viking_fs(),
-                ctx=ctx,
-            )
-        except Exception as exc:  # pragma: no cover - defensive; stats must not fail analysis
-            logger.warning("Failed to record experience feedback stats: %s", exc, exc_info=True)
-            return {"updated_uris": [], "skipped_uris": [], "errors": [str(exc)]}
-        return {
-            "updated_uris": list(result.updated_uris),
-            "skipped_uris": list(result.skipped_uris),
-            "errors": list(result.errors),
-        }
-
 
 def _trajectory_validation_issues(operations: Any) -> list[_TrajectoryValidationIssue]:
     issues: list[_TrajectoryValidationIssue] = []
@@ -450,8 +415,9 @@ def _trajectory_validation_retry_instruction(issues: list[_TrajectoryValidationI
             "",
             "Required repair:",
             "- Do not output Counterfactual Ideal Experience, Runtime experience content, Experience Repair Signal, Diagnostic Hints, Recommended operation, Selected candidate, or C1/C2/C3 sections.",
-            "- Do not output an Ambiguous references field or a verdict such as 'Ambiguous references: none'. Record request wording with relative terms, relative words observed, visible records before writes, records later changed, records included in the answer, records after writes, exact explicit-exclusion quotes, raw evidence, and uncertainty instead.",
-            "- Record observed execution facts only: timeline, outcome checks, correct work to preserve, observed problem, value/scope evidence, source-field evidence, raw evidence, and uncertainty.",
+            "- Do not output an Outcome Evidence section; the training pipeline appends it deterministically.",
+            "- Record observed facts only under User Evidence, Runtime Evidence, Execution, Injected Experience Evidence, and Uncertainty.",
+            "- Put fields present in tool results under Observed fields and agent-referenced absent fields under Missing fields. Do not infer root cause, expected behavior, or corrective experience content.",
             "Output ONLY the complete JSON object as an instance of OUTPUT_SCHEMA; "
             "do not output the OUTPUT_SCHEMA definition itself.",
         ]
@@ -538,44 +504,6 @@ def _ensure_trajectory_case_name(operations: ResolvedOperations, *, case_name: s
         fields = getattr(op, "memory_fields", None)
         if isinstance(fields, dict):
             fields["case_name"] = case_name
-
-
-def _messages_with_evaluation_feedback(
-    messages: list[Message],
-    *,
-    evaluation: RubricEvaluation | None,
-    enabled: bool,
-) -> list[Message]:
-    result = list(messages)
-    if not enabled or evaluation is None:
-        return result
-    result.append(_evaluation_feedback_message(evaluation))
-    return result
-
-
-def _evaluation_feedback_message(evaluation: RubricEvaluation) -> Message:
-    lines = [
-        "[Rollout Evaluation]",
-        f"passed: {evaluation.passed}",
-        f"score: {evaluation.score}",
-    ]
-    criterion_lines: list[str] = []
-    evidence_lines: list[str] = []
-    for criterion in evaluation.criterion_results:
-        criterion_lines.append(
-            f"- {criterion.criterion_name}: passed={criterion.passed}, score={criterion.score}"
-        )
-        criterion_lines.extend(f"  feedback: {item}" for item in criterion.feedback)
-        evidence_lines.extend(criterion.evidence)
-    if criterion_lines:
-        lines.extend(["", "criteria:", *criterion_lines])
-    if evidence_lines:
-        lines.extend(["", "evidence:", *[f"- {item}" for item in dict.fromkeys(evidence_lines)]])
-    return Message(
-        id="rollout-evaluation-feedback",
-        role="user",
-        parts=[TextPart(text="\n".join(lines))],
-    )
 
 
 def _split_operations_by_type(

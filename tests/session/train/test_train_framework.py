@@ -2358,7 +2358,7 @@ async def test_session_commit_policy_trainer_filters_legacy_embedded_evaluation_
 
 
 @pytest.mark.asyncio
-async def test_session_commit_policy_trainer_adds_tau2_evaluation_semantics():
+async def test_session_commit_policy_trainer_sends_canonical_evaluation_payload_only():
     from openviking.message import ToolPart
     from openviking.session.train import SessionCommitPolicyTrainer
 
@@ -2429,12 +2429,9 @@ async def test_session_commit_policy_trainer_adds_tau2_evaluation_semantics():
     committed_messages = client.messages[commit_result["session_id"]]
     last_text = committed_messages[-1]["parts"][0]["text"]
     assert "# OpenViking OutcomeEvaluation" in last_text
-    assert "## Tau2 Evaluation Semantics" in last_text
-    assert "action_checks[].action_match=true" in last_text
-    assert "Treat it as correct and required" in last_text
-    assert "## Derived Evaluation Verdict" in last_text
-    assert "Required actions matched (preservation set; do not block these):" in last_text
+    assert "## Tau2 Evaluation Semantics" not in last_text
+    assert "## Derived Evaluation Verdict" not in last_text
     assert "update_reservation_flights" in last_text
-    assert "action_match=true | tool_type=write" in last_text
-    assert "first repair boundary should be communicate_with_user / final response" in last_text
-    assert "Do not learn any experience that blocks or discourages" in last_text
+    assert '"action_match": true' in last_text
+    assert '"tool_type": "write"' in last_text
+    assert '"met": false' in last_text

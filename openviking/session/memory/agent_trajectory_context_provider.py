@@ -187,9 +187,9 @@ def render_injected_experience_context(reminders: List[Dict[str, str]]) -> str:
         return ""
     lines = [
         "## Deterministic Injected Experience Reminders",
-        "The following experience reminders were extracted deterministically from the rollout.",
-        "Use only these IDs in the trajectory `experience_effects` field's "
-        "`positive_ids`, `negative_ids`, and `weak_ids` arrays.",
+        "The following experience reminders were actually loaded in this rollout.",
+        "Use these IDs and names only under `Injected Experience Evidence` to record loaded "
+        "reminders and observable rollout behavior. Do not grade reminder quality.",
     ]
     for item in reminders:
         lines.append(
@@ -198,11 +198,8 @@ def render_injected_experience_context(reminders: List[Dict[str, str]]) -> str:
             f"uri={item.get('experience_uri') or '<unknown>'}; "
             f"triggered_before={item.get('triggered_before_tool') or 'unknown'}"
         )
-    lines.extend(
-        [
-            'If this list is present, output only these IDs (for example `"E1"`) in the '
-            "`experience_effects` ID lists; do not invent additional experience IDs.",
-        ]
+    lines.append(
+        "Do not invent additional experience IDs or infer effects not visible in the rollout."
     )
     return "\n".join(lines)
 

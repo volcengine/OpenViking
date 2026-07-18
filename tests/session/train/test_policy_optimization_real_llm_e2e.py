@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 
 import pytest
 from test_fakes import InMemoryVikingFS
@@ -12,9 +11,11 @@ from test_fakes import InMemoryVikingFS
 from openviking.message import Message
 from openviking.models.vlm.llm import parse_json_from_response
 from openviking.server.config import load_server_config
+from openviking.server.identity import RequestContext, Role
 from openviking.session.train import (
     Case,
     ContentHashPolicySnapshotter,
+    CriterionResult,
     ExperienceGradientContext,
     ExperienceSetLoader,
     ListCaseLoader,
@@ -23,16 +24,19 @@ from openviking.session.train import (
     PatchMergePolicyOptimizer,
     PatchMergePolicyOptimizerContext,
     PipelineContext,
+    RolloutAnalysis,
     Rubric,
     RubricCriterion,
+    RubricEvaluation,
     SingleTurnLLMRolloutExecutor,
+    Trajectory,
     TrajectoryAnalyzerContext,
-    TrajectoryRolloutAnalyzer,
 )
 from openviking.session.train.components.gradient_estimator import ExperienceGradientEstimator
 from openviking.storage.transaction import init_lock_manager, reset_lock_manager
 from openviking.telemetry import start_current_span, tracer
 from openviking.telemetry.tracer import init_tracer_from_server_config
+from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import get_openviking_config
 
 
@@ -534,9 +538,7 @@ def _print_iterative_real_llm_summary(
     tracer.info("\n".join(lines), console=True)
 
 
-def _patch_experience_prefetch(
-    monkeypatch, fs: InMemoryVikingFS, experience_uri: str
-) -> None:
+def _patch_experience_prefetch(monkeypatch, fs: InMemoryVikingFS, experience_uri: str) -> None:
     async def search_files(self, query, search_uris=None, limit=5):
         return [experience_uri]
 
@@ -605,9 +607,9 @@ async def _run_policy_optimization_pipeline_real_config_llm_e2e_writes_updated_e
     )
     reset_lock_manager()
     init_lock_manager(fs.agfs, redo_recovery_enabled=False)
-    request_context = SimpleNamespace(
-        user=SimpleNamespace(account_id="default", user_id="u"),
-        account_id="default",
+    request_context = RequestContext(
+        user=UserIdentifier(account_id="default", user_id="u"),
+        role=Role.ROOT,
     )
     policy_set = await ExperienceSetLoader(viking_fs=fs).load(root, ctx=request_context)
     vlm = get_openviking_config().vlm
@@ -672,14 +674,10 @@ async def _run_policy_optimization_pipeline_real_config_llm_e2e_writes_updated_e
     assert trajectory_content.strip()
     assert gradient.after_file.plain_content().strip()
     assert all(epoch.apply_result.errors == [] for epoch in result.epochs)
-    written_uris = [
-        uri for epoch in result.epochs for uri in epoch.apply_result.written_uris
-    ]
+    written_uris = [uri for epoch in result.epochs for uri in epoch.apply_result.written_uris]
     assert experience_uri in written_uris
     assert result.plan.metadata["optimizer"] == "patch_merge"
-    assert any(
-        epoch.plan.metadata.get("optimizer") == "patch_merge" for epoch in result.epochs
-    )
+    assert any(epoch.plan.metadata.get("optimizer") == "patch_merge" for epoch in result.epochs)
     assert len(result.epochs) == 4
     assert result.evaluation_passes == []
     assert final_evaluation.metadata["score"] > result.metadata["first_score"]
@@ -715,40 +713,88 @@ async def test_experience_gradient_estimator_real_config_llm_generates_gradient(
             ),
             trajectory_uri: (
                 "# 重复预订处理轨迹\n"
-                "用户要求取消重复预订。助手先核验两笔预订是否确实重复，"
-                "然后只取消重复的那一笔，避免误取消原始有效预订。\n\n"
+                "用户明确要求取消经核验确认的重复预订。助手识别出重复项，"
+                "但只向用户解释结果，没有执行取消操作。\n\n"
                 "<!-- MEMORY_FIELDS\n"
                 '{"memory_type":"trajectories","trajectory_name":"duplicate_booking_case",'
-                '"outcome":"success","retrieval_anchor":"阶段：最终处理；能力：重复预订处理"}\n'
+                '"outcome":"failure","retrieval_anchor":"阶段：最终处理；能力：重复预订处理"}\n'
                 "-->"
             ),
         }
     )
     reset_lock_manager()
     init_lock_manager(fs.agfs, redo_recovery_enabled=False)
-    request_context = SimpleNamespace(
-        user=SimpleNamespace(account_id="default", user_id="u"),
-        account_id="default",
+    request_context = RequestContext(
+        user=UserIdentifier(account_id="default", user_id="u"),
+        role=Role.ROOT,
     )
     policy_set = await ExperienceSetLoader(viking_fs=fs).load(root, ctx=request_context)
 
     _patch_experience_prefetch(monkeypatch, fs, experience_uri)
 
-    rollout_executor = SingleTurnLLMRolloutExecutor(
-        vlm=get_openviking_config().vlm,
-        thinking=False,
+    evaluation = RubricEvaluation(
+        passed=False,
+        score=0.0,
+        criterion_results=[
+            CriterionResult(
+                criterion_name="cancel_duplicate_booking",
+                passed=False,
+                score=0.0,
+                feedback=["未取消经核验确认的重复预订。"],
+                evidence=["最终回复仅说明了重复项，没有执行取消操作。"],
+            )
+        ],
     )
-    analyzer = TrajectoryRolloutAnalyzer(viking_fs=fs)
-    snapshotter = ContentHashPolicySnapshotter()
-    snapshot_id = await snapshotter.snapshot(policy_set)
-    rollouts = await rollout_executor.execute(
-        [_case()],
-        policy_set,
-        SimpleNamespace(policy_snapshot_id=snapshot_id, metadata={}),
+    trajectory_content = (
+        "# 重复预订处理轨迹\n"
+        "- Outcome: failure\n"
+        "- User Goal: 取消经核验确认的重复预订\n\n"
+        "## User Evidence\n"
+        "- Requests: 取消经核验确认的重复预订\n"
+        "- Confirmations: 用户已在原始请求中明确要求取消\n"
+        "- Explicit exclusions: 不取消非重复预订\n\n"
+        "## Runtime Evidence\n"
+        "- Relevant objects: 一笔原始预订和一笔重复预订\n"
+        "- Observed fields: booking_id, status, created_at\n"
+        "- Observed policy text: none\n"
+        "- Value sources/calculation: 通过记录字段核验重复关系\n"
+        "- Missing fields: none\n\n"
+        "## Execution\n"
+        "- Reads: 读取两笔预订并确认重复关系\n"
+        "- Agent-stated decisions: 应取消较晚创建的重复预订\n"
+        "- Writes: none\n"
+        "- Communication: 仅说明重复关系，没有执行取消\n"
+        "- Termination: unfinished\n\n"
+        "## Injected Experience Evidence\n"
+        "- Loaded: booking_duplicate_handling v1 [production]\n"
+        "- Observable use: 只识别重复关系，没有执行用户要求的取消\n\n"
+        "## Uncertainty\n"
+        "- none\n\n"
+        "## Outcome Evidence\n"
+        "- Passed: false\n"
+        "- Database state: 重复预订仍为 confirmed\n"
+        "- Matched actions: 已识别重复预订\n"
+        "- Missing or mismatched actions: 未取消重复预订\n"
+        "- Communication present: 已说明重复关系\n"
+        "- Communication missing: none\n"
+        "- Final state: 重复预订未取消\n"
     )
-    analysis = await analyzer.analyze(
-        rollouts[0],
-        TrajectoryAnalyzerContext(request_context=request_context),
+    analysis = RolloutAnalysis(
+        evaluation=evaluation,
+        trajectories=[
+            Trajectory(
+                name="duplicate_booking_case",
+                uri=trajectory_uri,
+                content=trajectory_content,
+                outcome="failure",
+                retrieval_anchor="Stage: final_response; Boundary: duplicate cancellation; Outcome: failure",
+                metadata={"case_name": "complex_duplicate_booking_case"},
+            )
+        ],
+        metadata={
+            "case_name": "complex_duplicate_booking_case",
+            "task_signature": "complex_booking_duplicate",
+        },
     )
 
     estimator = ExperienceGradientEstimator(
@@ -764,7 +810,7 @@ async def test_experience_gradient_estimator_real_config_llm_generates_gradient(
     assert gradients
     gradient = gradients[0]
     _print_real_llm_e2e_summary(
-        assistant_text=analysis.metadata["rollout_messages"][1].content,
+        assistant_text="已识别重复预订，但没有执行取消操作。",
         trajectory_content=analysis.trajectories[0].content,
         gradient=gradient,
     )

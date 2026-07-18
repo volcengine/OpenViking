@@ -10,6 +10,7 @@ from typing import Any
 
 from openviking.session.memory.memory_type_registry import create_default_registry
 from openviking.session.memory.utils.template_utils import TemplateUtils
+from openviking_cli.exceptions import NotFoundError
 
 
 @cache
@@ -216,8 +217,26 @@ class InMemoryVikingFS:
             if path.startswith(prefix) and "/" not in path.removeprefix(prefix)
         ]
 
+    async def search(self, query: str, target_uri="", limit: int = 10, ctx=None):
+        del query, ctx
+        roots = target_uri if isinstance(target_uri, list) else [target_uri]
+        uris = [
+            uri
+            for uri in sorted(self.files)
+            if any(uri.startswith(str(root).rstrip("/") + "/") for root in roots if root)
+        ][:limit]
+        payload = {
+            "memories": [{"uri": uri, "score": 1.0} for uri in uris],
+            "resources": [],
+            "skills": [],
+        }
+        return SimpleNamespace(to_dict=lambda: payload)
+
     async def read_file(self, uri: str, ctx=None):
-        return self.files[uri]
+        try:
+            return self.files[uri]
+        except KeyError as error:
+            raise NotFoundError(uri, "file") from error
 
     async def write_file(self, uri: str, content: str, ctx=None):
         self.files[uri] = content
