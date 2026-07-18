@@ -56,10 +56,15 @@ try:
         ReplyMessageRequestBody,
     )
 
+    # The ws client schedules all of its internal tasks on this module-level
+    # event loop; we rebind it per connection generation (see _ws_thread_main).
+    from lark_oapi.ws import client as lark_ws_client_module
+
     FEISHU_AVAILABLE = True
 except ImportError:
     FEISHU_AVAILABLE = False
     lark = None
+    lark_ws_client_module = None
     Emoji = None
     GetImageRequest = None
     GetUserRequest = None
@@ -103,12 +108,25 @@ class FeishuChannel(BaseChannel):
         "EatingFood",
     ]
 
+    # WebSocket supervision tuning. The lark-oapi ws client can end up with a
+    # permanently dead connection while its blocking start() call keeps running
+    # (its reconnect task dies silently), so we watch connection health from the
+    # outside and force a full client rebuild when it stays down too long.
+    _WS_HEALTH_CHECK_INTERVAL_SEC = 15
+    _WS_UNHEALTHY_RESTART_SEC = 60
+    _WS_RESTART_DELAY_SEC = 5
+    _WS_THREAD_JOIN_TIMEOUT_SEC = 10
+
     def __init__(self, config: FeishuChannelConfig, bus: MessageBus, **kwargs):
         super().__init__(config, bus, **kwargs)
         self.config: FeishuChannelConfig = config
         self._client: Any = None
         self._ws_client: Any = None
         self._ws_thread: threading.Thread | None = None
+        self._ws_loop: asyncio.AbstractEventLoop | None = None
+        self._ws_generation: int = 0
+        self._ws_state_lock = threading.Lock()
+        self._ws_unhealthy_since: float | None = None
         self._processed_message_ids: OrderedDict[str, None] = OrderedDict()  # Ordered dedup cache
         self._loop: asyncio.AbstractEventLoop | None = None
         self._tenant_access_token: str | None = None
@@ -249,6 +267,35 @@ class FeishuChannel(BaseChannel):
 
         return "group"  # 失败默认普通群
 
+    def _build_rest_client(self) -> Any:
+        """Build the Lark REST client used for sending messages."""
+        return (
+            lark.Client.builder()
+            .app_id(self.config.app_id)
+            .app_secret(self.config.app_secret)
+            .log_level(lark.LogLevel.INFO)
+            .build()
+        )
+
+    def _build_ws_client(self) -> Any:
+        """Build a fresh Lark WebSocket client with the event handler registered."""
+        # Create event handler (only register message receive, ignore other events)
+        event_handler = (
+            lark.EventDispatcherHandler.builder(
+                self.config.encrypt_key or "",
+                self.config.verification_token or "",
+            )
+            .register_p2_im_message_receive_v1(self._on_message_sync)
+            .build()
+        )
+
+        return lark.ws.Client(
+            self.config.app_id,
+            self.config.app_secret,
+            event_handler=event_handler,
+            log_level=lark.LogLevel.INFO,
+        )
+
     async def start(self) -> None:
         """Start the Feishu bot with WebSocket long connection."""
         if not FEISHU_AVAILABLE:
@@ -265,65 +312,226 @@ class FeishuChannel(BaseChannel):
         self._loop = asyncio.get_running_loop()
 
         # Create Lark client for sending messages
-        self._client = (
-            lark.Client.builder()
-            .app_id(self.config.app_id)
-            .app_secret(self.config.app_secret)
-            .log_level(lark.LogLevel.INFO)
-            .build()
-        )
+        self._client = self._build_rest_client()
 
-        # Create event handler (only register message receive, ignore other events)
-        event_handler = (
-            lark.EventDispatcherHandler.builder(
-                self.config.encrypt_key or "",
-                self.config.verification_token or "",
-            )
-            .register_p2_im_message_receive_v1(self._on_message_sync)
-            .build()
-        )
-
-        # Create WebSocket client for long connection
-        self._ws_client = lark.ws.Client(
-            self.config.app_id,
-            self.config.app_secret,
-            event_handler=event_handler,
-            log_level=lark.LogLevel.INFO,
-        )
-
-        # Start WebSocket client in a separate thread with reconnect loop
-        def run_ws():
-            while self._running:
-                try:
-                    self._ws_client.start()
-                except Exception as e:
-                    logger.exception(f"Feishu WebSocket error: {e}")
-                if self._running:
-                    import time
-
-                    time.sleep(5)
-
-        self._ws_thread = threading.Thread(target=run_ws, daemon=True)
-        self._ws_thread.start()
+        with self._ws_state_lock:
+            self._ws_generation += 1
+        self._spawn_ws_thread()
 
         logger.info("Feishu bot started with WebSocket long connection")
         logger.info("No public IP required - using WebSocket to receive events")
 
-        # Keep running until stopped
-        while self._running:
-            await asyncio.sleep(1)
+        # Supervise the connection until stopped; the SDK's own reconnect can
+        # die silently while its start() call keeps blocking, so an external
+        # watchdog is required to keep the bot responsive indefinitely.
+        await self._ws_watchdog()
 
     async def stop(self) -> None:
         """Stop the Feishu bot."""
         self._running = False
-        if self._ws_client:
+        with self._ws_state_lock:
+            self._ws_generation += 1  # tells the ws thread to exit its retry loop
+            client, ws_loop, thread = self._ws_client, self._ws_loop, self._ws_thread
+            self._ws_client = None
+            self._ws_loop = None
+            self._ws_thread = None
+        self._neutralize_ws_client(client, ws_loop)
+        if thread is not None and thread.is_alive():
             try:
-                # Try to close the WebSocket connection gracefully
-                if hasattr(self._ws_client, "close"):
-                    self._ws_client.close()
-            except Exception as e:
-                logger.debug(f"Error closing WebSocket client: {e}")
+                await asyncio.get_running_loop().run_in_executor(
+                    None, thread.join, self._WS_THREAD_JOIN_TIMEOUT_SEC
+                )
+            except RuntimeError:
+                thread.join(self._WS_THREAD_JOIN_TIMEOUT_SEC)
         logger.info("Feishu bot stopped")
+
+    def _spawn_ws_thread(self) -> None:
+        """Spawn the WebSocket thread for the current generation."""
+        generation = self._ws_generation
+        self._ws_thread = threading.Thread(
+            target=self._ws_thread_main,
+            args=(generation,),
+            name=f"feishu-ws-{generation}",
+            daemon=True,
+        )
+        self._ws_thread.start()
+
+    def _ws_thread_main(self, generation: int) -> None:
+        """
+        Run WebSocket client generations until stopped or superseded.
+
+        Each iteration builds a fresh event loop and a fresh ws client, so a
+        poisoned client (dead reconnect task, leaked internal lock, thread stuck
+        in a blocking call) can always be replaced with a clean one.
+        """
+        while self._running and generation == self._ws_generation:
+            ws_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(ws_loop)
+            try:
+                client = self._build_ws_client()
+            except Exception:
+                logger.exception("Failed to build Feishu WebSocket client")
+                ws_loop.close()
+                if self._running and generation == self._ws_generation:
+                    time.sleep(self._WS_RESTART_DELAY_SEC)
+                continue
+
+            with self._ws_state_lock:
+                if generation != self._ws_generation:
+                    ws_loop.close()
+                    return
+                self._ws_client = client
+                self._ws_loop = ws_loop
+
+            # The SDK schedules all its internal tasks on the module-level
+            # `loop` global; rebind it so this generation runs on its own loop
+            # even if a previous generation's loop is wedged in a blocked call.
+            if lark_ws_client_module is not None and hasattr(lark_ws_client_module, "loop"):
+                lark_ws_client_module.loop = ws_loop
+
+            try:
+                # Blocks until the loop is stopped (forced restart) or a
+                # connection error escapes the SDK.
+                client.start()
+            except Exception as e:
+                if self._running and generation == self._ws_generation:
+                    logger.warning(f"Feishu WebSocket exited: {e}")
+            finally:
+                self._cleanup_ws_loop(client, ws_loop)
+
+            if self._running and generation == self._ws_generation:
+                logger.info(
+                    f"Restarting Feishu WebSocket connection in {self._WS_RESTART_DELAY_SEC}s"
+                )
+                time.sleep(self._WS_RESTART_DELAY_SEC)
+
+    async def _shutdown_ws_client(self, client: Any) -> None:
+        """Close a ws client's underlying connection, bypassing its internal
+        lock (which can be left permanently held by SDK bugs)."""
+        conn = getattr(client, "_conn", None)
+        try:
+            client._conn = None
+        except Exception:
+            pass
+        if conn is not None:
+            try:
+                await asyncio.wait_for(conn.close(), timeout=5)
+            except Exception:
+                pass
+
+    def _cleanup_ws_loop(self, client: Any, ws_loop: asyncio.AbstractEventLoop) -> None:
+        """Best-effort close of the connection and event loop of a finished generation."""
+        try:
+            ws_loop.run_until_complete(self._shutdown_ws_client(client))
+        except Exception:
+            pass
+        try:
+            pending = asyncio.all_tasks(ws_loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                ws_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        except Exception:
+            pass
+        try:
+            ws_loop.close()
+        except Exception:
+            pass
+
+    def _neutralize_ws_client(
+        self, client: Any, ws_loop: asyncio.AbstractEventLoop | None
+    ) -> None:
+        """Disable a ws client generation so it cannot reconnect, and stop its loop
+        so the blocking start() call in its thread returns."""
+        if client is not None:
+            try:
+                client._auto_reconnect = False
+            except Exception:
+                pass
+        if ws_loop is not None and not ws_loop.is_closed():
+            if client is not None:
+                try:
+                    asyncio.run_coroutine_threadsafe(self._shutdown_ws_client(client), ws_loop)
+                except Exception:
+                    pass
+            try:
+                ws_loop.call_soon_threadsafe(ws_loop.stop)
+            except Exception:
+                pass
+
+    def _ws_conn_alive(self) -> bool:
+        """Check whether the current ws generation has a live connection."""
+        with self._ws_state_lock:
+            client = self._ws_client
+        conn = getattr(client, "_conn", None) if client is not None else None
+        if conn is None:
+            return False
+        # websockets legacy protocol exposes a bool `closed` property
+        closed = getattr(conn, "closed", None)
+        if isinstance(closed, bool):
+            return not closed
+        # websockets asyncio implementation exposes a `state` enum
+        state = getattr(conn, "state", None)
+        if state is not None:
+            return getattr(state, "name", "OPEN") == "OPEN"
+        return True
+
+    async def _restart_ws_client(self, reason: str) -> None:
+        """Force a full rebuild of the ws client in a fresh thread and event loop."""
+        logger.warning(f"Restarting Feishu WebSocket client: {reason}")
+        with self._ws_state_lock:
+            self._ws_generation += 1
+            client, ws_loop, old_thread = self._ws_client, self._ws_loop, self._ws_thread
+            self._ws_client = None
+            self._ws_loop = None
+        self._neutralize_ws_client(client, ws_loop)
+        if old_thread is not None and old_thread.is_alive():
+            await asyncio.get_running_loop().run_in_executor(
+                None, old_thread.join, self._WS_THREAD_JOIN_TIMEOUT_SEC
+            )
+            if old_thread.is_alive():
+                logger.warning(
+                    "Previous Feishu WebSocket thread did not exit in time; "
+                    "abandoning it (likely stuck in a blocking call)"
+                )
+        self._ws_unhealthy_since = None
+        if self._running:  # stop() may have raced with this restart
+            self._spawn_ws_thread()
+
+    async def _ws_watchdog(self) -> None:
+        """
+        Supervise the WebSocket connection until the channel stops.
+
+        Gives the SDK's own auto-reconnect a grace period, then forces a clean
+        client rebuild if the connection stays down (or the ws thread dies).
+        """
+        while self._running:
+            await asyncio.sleep(self._WS_HEALTH_CHECK_INTERVAL_SEC)
+            if not self._running:
+                break
+
+            thread = self._ws_thread
+            if thread is not None and not thread.is_alive():
+                await self._restart_ws_client("WebSocket thread exited unexpectedly")
+                continue
+
+            if self._ws_conn_alive():
+                if self._ws_unhealthy_since is not None:
+                    logger.info("Feishu WebSocket connection recovered")
+                    self._ws_unhealthy_since = None
+                continue
+
+            now = time.monotonic()
+            if self._ws_unhealthy_since is None:
+                self._ws_unhealthy_since = now
+                logger.warning(
+                    "Feishu WebSocket connection is down; waiting for SDK auto-reconnect"
+                )
+            elif now - self._ws_unhealthy_since >= self._WS_UNHEALTHY_RESTART_SEC:
+                await self._restart_ws_client(
+                    f"connection down for {int(now - self._ws_unhealthy_since)}s "
+                    "and SDK auto-reconnect did not recover"
+                )
 
     def _add_reaction_sync(self, message_id: str, emoji_type: str) -> None:
         """Sync helper for adding reaction (runs in thread pool)."""
@@ -675,6 +883,8 @@ class FeishuChannel(BaseChannel):
         """
         if self._loop and self._loop.is_running():
             asyncio.run_coroutine_threadsafe(self._on_message(data), self._loop)
+        else:
+            logger.warning("Dropping Feishu message: channel event loop is not running")
 
     async def _download_and_save_image(self, image_key: str, message_id: str) -> str | None:
         """Download single Feishu image and save to local, return file path or None if failed."""
