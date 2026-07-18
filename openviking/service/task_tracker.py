@@ -21,7 +21,8 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from functools import wraps
+from typing import Any, Callable, Coroutine, Dict, List, Optional, TypeVar, cast
 from uuid import uuid4
 
 from openviking.service.task_store import TaskStore
@@ -131,6 +132,21 @@ def _sanitize_task_result(result: Any) -> Any:
 
 # ── TaskTracker ──
 
+_AsyncTaskTrackerMethod = TypeVar(
+    "_AsyncTaskTrackerMethod",
+    bound=Callable[..., Coroutine[Any, Any, Any]],
+)
+
+
+def _on_owner_loop(method: _AsyncTaskTrackerMethod) -> _AsyncTaskTrackerMethod:
+    """Run an async TaskTracker method on the tracker's owner event loop."""
+
+    @wraps(method)
+    async def wrapper(self: "TaskTracker", *args: Any, **kwargs: Any) -> Any:
+        return await self._run_on_owner_loop(method, *args, **kwargs)
+
+    return cast(_AsyncTaskTrackerMethod, wrapper)
+
 
 class TaskTracker:
     """Async task tracker with persistent storage and a process-local cache.
@@ -148,6 +164,8 @@ class TaskTracker:
         self._store = store
         self._tasks: Dict[str, TaskRecord] = {}
         self._lock = threading.Lock()
+        self._owner_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._owner_loop_lock = threading.Lock()
         self._async_lock = asyncio.Lock()
         self._cleanup_task: Optional[asyncio.Task] = None
         logger.info(
@@ -158,12 +176,47 @@ class TaskTracker:
 
     # ── Lifecycle ──
 
+    def bind_to_current_loop(self) -> None:
+        """Bind async task operations to the current running event loop."""
+        current_loop = asyncio.get_running_loop()
+        with self._owner_loop_lock:
+            if self._owner_loop is None:
+                self._owner_loop = current_loop
+            elif self._owner_loop is not current_loop:
+                raise RuntimeError("TaskTracker is already bound to a different event loop")
+
+    async def _run_on_owner_loop(
+        self,
+        method: Callable[..., Coroutine[Any, Any, Any]],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        current_loop = asyncio.get_running_loop()
+        with self._owner_loop_lock:
+            if self._owner_loop is None:
+                self._owner_loop = current_loop
+            owner_loop = self._owner_loop
+
+        if current_loop is owner_loop:
+            return await method(self, *args, **kwargs)
+        if owner_loop.is_closed() or not owner_loop.is_running():
+            raise RuntimeError("TaskTracker owner event loop is not running")
+
+        operation = method(self, *args, **kwargs)
+        try:
+            submitted = asyncio.run_coroutine_threadsafe(operation, owner_loop)
+        except BaseException:
+            operation.close()
+            raise
+        return await asyncio.wrap_future(submitted)
+
     def start_cleanup_loop(self) -> None:
         """Start the background TTL cleanup coroutine.
 
         Safe to call multiple times; subsequent calls are no-ops.
         Must be called from within a running event loop.
         """
+        self.bind_to_current_loop()
         if self._cleanup_task is not None and not self._cleanup_task.done():
             return
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
@@ -171,6 +224,7 @@ class TaskTracker:
 
     def stop_cleanup_loop(self) -> None:
         """Cancel the background cleanup task. Safe to call if not started."""
+        self.bind_to_current_loop()
         if self._cleanup_task is not None and not self._cleanup_task.done():
             self._cleanup_task.cancel()
             logger.debug("[TaskTracker] Cleanup loop stopped")
@@ -185,6 +239,7 @@ class TaskTracker:
             except Exception:
                 logger.exception("[TaskTracker] Cleanup error")
 
+    @_on_owner_loop
     async def _evict_expired(self) -> None:
         """Remove expired tasks and enforce MAX_TASKS."""
         now = time.time()
@@ -233,6 +288,7 @@ class TaskTracker:
 
     # ── CRUD ──
 
+    @_on_owner_loop
     async def create(
         self,
         task_type: str,
@@ -275,6 +331,7 @@ class TaskTracker:
         )
         return self._copy(task)
 
+    @_on_owner_loop
     async def create_if_no_running(
         self,
         task_type: str,
@@ -323,6 +380,7 @@ class TaskTracker:
         )
         return self._copy(task)
 
+    @_on_owner_loop
     async def start(
         self,
         task_id: str,
@@ -342,6 +400,7 @@ class TaskTracker:
                 with self._lock:
                     self._tasks[task.task_id] = task
 
+    @_on_owner_loop
     async def update_stage(
         self,
         task_id: str,
@@ -359,6 +418,7 @@ class TaskTracker:
                 with self._lock:
                     self._tasks[task.task_id] = task
 
+    @_on_owner_loop
     async def complete(
         self,
         task_id: str,
@@ -379,6 +439,7 @@ class TaskTracker:
                     self._tasks[task.task_id] = task
         logger.info("[TaskTracker] Task %s completed", task_id)
 
+    @_on_owner_loop
     async def fail(
         self,
         task_id: str,
@@ -399,6 +460,7 @@ class TaskTracker:
                     self._tasks[task.task_id] = task
         logger.warning("[TaskTracker] Task %s failed: %s", task_id, _sanitize_error(error))
 
+    @_on_owner_loop
     async def get(
         self,
         task_id: str,
@@ -418,6 +480,7 @@ class TaskTracker:
                 return None
             return self._copy(task)
 
+    @_on_owner_loop
     async def list_tasks(
         self,
         task_type: Optional[str] = None,
@@ -447,6 +510,7 @@ class TaskTracker:
         tasks.sort(key=lambda t: t.created_at, reverse=True)
         return tasks[:limit]
 
+    @_on_owner_loop
     async def has_running(
         self,
         task_type: str,

@@ -3,8 +3,11 @@
 
 """Unit tests for TaskTracker."""
 
+import asyncio
 import json
 import time
+from copy import deepcopy
+from dataclasses import asdict
 
 import pytest
 
@@ -111,6 +114,28 @@ class _FakeAgfsExistingDir(_FakeAgfs):
         return {"message": "created", "mode": mode}
 
 
+class _BlockingTaskStore:
+    def __init__(self):
+        self.tasks = {}
+        self.create_started = asyncio.Event()
+        self.release_create = asyncio.Event()
+
+    async def create(self, task):
+        self.create_started.set()
+        await self.release_create.wait()
+        self.tasks[task.task_id] = deepcopy(task)
+
+    async def update(self, task):
+        self.tasks[task.task_id] = deepcopy(task)
+
+    async def get(self, task_id, *, account_id=None, user_id=None):
+        task = self.tasks.get(task_id)
+        return asdict(task) if task is not None else None
+
+    async def list(self, account_id, *, user_id=None):
+        return [asdict(task) for task in self.tasks.values()]
+
+
 # ── Basic CRUD ──
 
 
@@ -184,6 +209,69 @@ async def test_fail_task(tracker: TaskTracker):
 
 async def test_get_nonexistent_returns_none(tracker: TaskTracker):
     assert await tracker.get("does-not-exist") is None
+
+
+async def test_operations_from_different_event_loops_are_serialized():
+    store = _BlockingTaskStore()
+    tracker = TaskTracker(store=store)
+    owner_loop = asyncio.get_running_loop()
+    create_call = asyncio.create_task(
+        tracker.create("add_resource", resource_id="resource-1", **_owner_kwargs())
+    )
+    await store.create_started.wait()
+
+    main_loop_waiter = asyncio.create_task(tracker.get("missing"))
+    await asyncio.sleep(0)
+
+    def get_from_worker_loop():
+        async def run():
+            worker_call = asyncio.create_task(tracker.get("missing"))
+            await asyncio.sleep(0)
+            owner_loop.call_soon_threadsafe(store.release_create.set)
+            return await worker_call
+
+        return asyncio.run(run())
+
+    worker_loop_call = asyncio.to_thread(get_from_worker_loop)
+
+    created, main_result, worker_result = await asyncio.gather(
+        create_call,
+        main_loop_waiter,
+        worker_loop_call,
+    )
+
+    assert created.resource_id == "resource-1"
+    assert main_result is None
+    assert worker_result is None
+
+
+async def test_call_fails_promptly_after_owner_loop_is_closed():
+    tracker = TaskTracker(store=PersistentTaskStore(_FakeAgfs()))
+
+    def bind_then_close_loop():
+        return asyncio.run(tracker.get("missing"))
+
+    assert await asyncio.to_thread(bind_then_close_loop) is None
+
+    with pytest.raises(RuntimeError, match="owner event loop is not running"):
+        await tracker.get("missing")
+
+
+async def test_cleanup_lifecycle_rejects_different_event_loop():
+    tracker = TaskTracker(store=PersistentTaskStore(_FakeAgfs()))
+    tracker.start_cleanup_loop()
+
+    def stop_from_worker_loop():
+        async def run():
+            tracker.stop_cleanup_loop()
+
+        asyncio.run(run())
+
+    try:
+        with pytest.raises(RuntimeError, match="already bound to a different event loop"):
+            await asyncio.to_thread(stop_from_worker_loop)
+    finally:
+        tracker.stop_cleanup_loop()
 
 
 # ── List / Filter ──
