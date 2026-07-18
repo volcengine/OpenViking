@@ -592,6 +592,89 @@ async def test_post_validation_gate_sees_prefetched_comparison_trajectories(monk
 
 
 @pytest.mark.asyncio
+async def test_post_validation_trace_records_root_cause_rejection(monkeypatch):
+    spans = []
+
+    class RecordingSpan:
+        def __init__(self, name):
+            self.name = name
+            self.attributes = {}
+
+        def __enter__(self):
+            spans.append(self)
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def set_attribute(self, key, value):
+            self.attributes[key] = value
+
+    monkeypatch.setattr(
+        gradient_estimator_module.tracer,
+        "start_as_current_span",
+        classmethod(lambda _cls, name, **_kwargs: RecordingSpan(name)),
+    )
+
+    report = GateReport(
+        stage="post_gradient",
+        evaluated_count=1,
+        rejected_count=1,
+        decisions=[
+            GateDecision(
+                gate_name="experience_root_cause_prevention",
+                action="reject",
+                reason="runtime source binding is missing",
+                evidence={"root_cause_quality": "missing_source_binding"},
+                retriable=True,
+                repair_prompt="bind the reminder to visible tool results",
+            )
+        ],
+    )
+
+    async def reject_gradients(**kwargs):
+        return [], report
+
+    monkeypatch.setattr(
+        gradient_estimator_module,
+        "_evaluate_experience_gradients",
+        reject_gradients,
+    )
+
+    (
+        result,
+        traced_report,
+    ) = await gradient_estimator_module._evaluate_experience_gradients_with_trace(
+        gradients=[],
+        analysis=_analysis(passed=False, outcome="failure"),
+        experience_set=_experience_set(),
+        semantic_vlm=SimpleNamespace(),
+        retry_count=2,
+    )
+
+    assert result == []
+    assert traced_report is report
+    assert len(spans) == 1
+    assert spans[0].name == "train.gradient_estimator.experience.post_validation"
+    assert spans[0].attributes == {
+        "gate.retry_count": 2,
+        "gate.stage": "post_gradient",
+        "gate.evaluated_count": 1,
+        "gate.allowed_count": 0,
+        "gate.rejected_count": 1,
+        "gate.warning_count": 0,
+        "gate.outcome": "rejected",
+        "gate.decision_count": 1,
+        "gate.decision.0.name": "experience_root_cause_prevention",
+        "gate.decision.0.action": "reject",
+        "gate.decision.0.reason": "runtime source binding is missing",
+        "gate.decision.0.retriable": True,
+        "gate.decision.0.repair_prompt": "bind the reminder to visible tool results",
+        "gate.decision.0.root_cause_quality": "missing_source_binding",
+    }
+
+
+@pytest.mark.asyncio
 async def test_post_validation_hook_discards_when_gate_evaluation_raises(monkeypatch):
     analysis = _analysis(passed=False, outcome="failure")
     context = _context()

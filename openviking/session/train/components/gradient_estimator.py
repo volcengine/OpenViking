@@ -290,11 +290,12 @@ class ExperienceGradientEstimator:
                     experience_set=experience_set,
                     schema=self._get_experience_schema(),
                 )
-                _, report = await _evaluate_experience_gradients(
+                _, report = await _evaluate_experience_gradients_with_trace(
                     gradients=gradients,
                     analysis=analysis_obj,
                     experience_set=experience_set,
                     semantic_vlm=vlm,
+                    retry_count=retry_count,
                 )
             except Exception as exc:
                 logger.exception("Experience post-validation failed; discarding draft")
@@ -407,6 +408,56 @@ async def _evaluate_experience_gradients(
         analyses=[analysis],
         policy_set=experience_set,
     )
+
+
+async def _evaluate_experience_gradients_with_trace(
+    *,
+    gradients: list[PatchSemanticGradient],
+    analysis: RolloutAnalysis,
+    experience_set: ExperienceSet,
+    semantic_vlm: Any,
+    retry_count: int,
+) -> tuple[list[PatchSemanticGradient], GateReport]:
+    with tracer.start_as_current_span(
+        "train.gradient_estimator.experience.post_validation"
+    ) as span:
+        span.set_attribute("gate.retry_count", retry_count)
+        result, report = await _evaluate_experience_gradients(
+            gradients=gradients,
+            analysis=analysis,
+            experience_set=experience_set,
+            semantic_vlm=semantic_vlm,
+        )
+        _set_post_validation_trace_attributes(span, report)
+        return result, report
+
+
+def _set_post_validation_trace_attributes(span: Any, report: GateReport) -> None:
+    span.set_attribute("gate.stage", report.stage)
+    span.set_attribute("gate.evaluated_count", report.evaluated_count)
+    span.set_attribute("gate.allowed_count", report.allowed_count)
+    span.set_attribute("gate.rejected_count", report.rejected_count)
+    span.set_attribute("gate.warning_count", report.warning_count)
+    if report.rejected_count:
+        outcome = "rejected"
+    elif report.warning_count:
+        outcome = "allowed_with_warning"
+    elif report.allowed_count:
+        outcome = "allowed"
+    else:
+        outcome = "empty"
+    span.set_attribute("gate.outcome", outcome)
+    span.set_attribute("gate.decision_count", len(report.decisions))
+    for index, decision in enumerate(report.decisions):
+        prefix = f"gate.decision.{index}"
+        span.set_attribute(f"{prefix}.name", decision.gate_name)
+        span.set_attribute(f"{prefix}.action", decision.action)
+        span.set_attribute(f"{prefix}.reason", decision.reason)
+        span.set_attribute(f"{prefix}.retriable", decision.retriable)
+        span.set_attribute(f"{prefix}.repair_prompt", decision.repair_prompt)
+        root_cause_quality = decision.evidence.get("root_cause_quality")
+        if root_cause_quality:
+            span.set_attribute(f"{prefix}.root_cause_quality", str(root_cause_quality))
 
 
 def _analysis_from_context_metadata_optional(

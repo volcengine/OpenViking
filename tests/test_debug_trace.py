@@ -111,3 +111,18 @@ def test_replay_command_exits_nonzero_for_replay_failure(
     output = json.loads(capsys.readouterr().out)
     assert output["outcome"] == "raised"
     assert output["exception"]["message"] == "missing historical evidence"
+
+
+def test_extract_tags_preserves_gate_decision_details(debug_trace_module) -> None:
+    reason = "missing observable runtime source binding; " * 20
+    span = {
+        "tags": [
+            _tag("gate.decision.0.reason", reason),
+            _tag("ordinary.attribute", reason),
+        ]
+    }
+
+    tags = debug_trace_module.extract_tags(span)
+
+    assert tags["gate.decision.0.reason"] == reason
+    assert tags["ordinary.attribute"].endswith("...")

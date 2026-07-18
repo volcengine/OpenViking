@@ -217,7 +217,8 @@ def extract_tags(span: dict) -> dict:
             # Allow longer values for error-related fields
             max_len = (
                 2000
-                if key.startswith("error.") or key in ("exception.stacktrace", "exception.message")
+                if key.startswith(("error.", "gate."))
+                or key in ("exception.stacktrace", "exception.message")
                 else 200
             )
             if len(value) > max_len:
