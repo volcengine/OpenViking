@@ -48,6 +48,7 @@ from openviking_cli.utils.config import get_openviking_config
 logger = get_logger(__name__)
 
 _EXPERIENCE_POST_VALIDATION_MAX_RETRIES = 2
+_REPLAY_VIKING_FS_PLACEHOLDER = object()
 
 
 @dataclass(slots=True)
@@ -359,7 +360,7 @@ class ExperienceGradientEstimator:
 
 @replay.component(ExperienceGradientEstimator)
 def _current_experience_gradient_estimator() -> ExperienceGradientEstimator:
-    return ExperienceGradientEstimator()
+    return ExperienceGradientEstimator(viking_fs=_REPLAY_VIKING_FS_PLACEHOLDER)
 
 
 def _sync_prefetched_comparison_trajectories(

@@ -17,7 +17,6 @@ from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.train.components import gradient_estimator as gradient_estimator_module
 from openviking.session.train.components.gradient_estimator import (
     ExperienceGradientEstimateRequest,
-    ExperienceGradientEstimator,
 )
 from openviking.session.train.domain import PolicySet, RubricEvaluation, Trajectory
 from openviking.session.train.gates import GateDecision, GateReport
@@ -202,11 +201,15 @@ async def test_replay_uses_historical_evidence_but_reruns_extraction_and_gate(
         "_evaluate_experience_gradients",
         fake_gate,
     )
-    estimator = ExperienceGradientEstimator(viking_fs=object(), vlm=fake_vlm)
+    monkeypatch.setattr(
+        gradient_estimator_module,
+        "get_openviking_config",
+        lambda: SimpleNamespace(
+            vlm=SimpleNamespace(get_vlm_instance=lambda: fake_vlm),
+        ),
+    )
 
-    result = await ReplayRunner(
-        component_providers={ExperienceGradientEstimator: lambda: estimator}
-    ).run(entry_record, [mock_record])
+    result = await ReplayRunner().run(entry_record, [mock_record])
 
     assert result.outcome == "returned"
     assert result.exception is None
