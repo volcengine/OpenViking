@@ -27,20 +27,21 @@ runs configured memory extraction, but skips the archive summary.
 
 | Group | Types | Target |
 | --- | --- | --- |
-| Long-term memory extraction | Enabled registry schemas with `stage: user` | Self and peer |
-| Execution memory extraction | Execution-derived schemas, currently `trajectories`, `experiences` | Self only |
-| Session skills | `SESSION_SKILL_MEMORY_TYPE` output | Self only |
+| User-memory extraction | Enabled registry schemas with `stage: user`, including `cases` | Self and peer, subject to schema policy |
+| Case-driven training | `trajectories`, `experiences` | Self only |
+| Executable session skills | Optional output of case-driven training | Self only |
 
 Memory schemas default to `stage: user` and `peer_enabled: true`. Set
-`stage: agent` for schemas that are extracted only by the execution-memory
-providers. Set `peer_enabled: false` for user-stage schemas that should ignore
-`peer_id` and `ranges` peer targets and remain under the current user space
-(for example `cases`).
+`peer_enabled: false` for user-stage schemas that should ignore `peer_id` and
+`ranges` peer targets and remain under the current user space (for example
+`cases`). Execution-derived types are not exposed to the ordinary user-memory
+extractor.
 
-Trajectory/experience extraction is controlled by `memory_types`: omitted or
-`null` allows both, while an explicit list must include those names. Session
-skill extraction also requires self memory to be enabled and only runs when the
-execution memory extraction phase has work.
+`SessionCompressorV3.extract_long_term_memories` is the only public extraction
+entry. It trains trajectories, experiences, and optional executable session
+skills only when ordinary extraction produces at least one case. An explicit
+execution-only `memory_types` policy does not invoke ordinary extraction, so it
+cannot create a case and does not trigger training.
 
 ## Commit Flow
 
@@ -52,13 +53,14 @@ Implemented in `openviking/session/session.py`:
 4. If peer memory is enabled, collect safe `message.peer_id` values from the
    archived batch into `allowed_peer_ids`.
 5. Start archive summary generation.
-6. If long-term memory extraction is enabled and allowed by `memory_types`, call
-   `SessionCompressorV2.extract_long_term_memories` once with the full archived
+6. Remove execution-derived types from the schema whitelist passed to ordinary
+   extraction. If enabled user-memory types remain, call
+   `SessionCompressorV3.extract_long_term_memories` once with the full archived
    batch, `allow_self_memory`, and `allowed_peer_ids`.
-7. If trajectory/experience extraction has work, call
-   `SessionCompressorV2.extract_execution_memories` once with the full archived
-   batch. When session skill extraction is enabled, it runs inside this execution
-   phase instead of starting a separate phase by itself.
+7. V3 applies ordinary memory operations and collects extracted `cases`. When
+   at least one case exists, V3 runs streaming training for trajectories and
+   experiences and, when enabled, an executable session skill. With no case,
+   all three training outputs are skipped.
 
 The current flow does not build separate buckets such as
 `self_identity_messages`, `self_experience_messages`,
@@ -99,8 +101,9 @@ are initialized only when `allow_self_memory` is true.
 
 ## Practical Invariants
 
-- Long-term extraction sees the full archived batch once.
+- V3 user-memory extraction sees the full archived batch once.
 - The extractor may emit self and peer operations in the same response.
 - Final write targets are decided per operation by the isolation handler.
 - Peer writes require safe peer IDs observed in the archived batch.
-- `trajectories`, `experiences`, and session skills never write peer memory.
+- `trajectories`, `experiences`, and executable session skills are trained only
+  from an extracted case and never write peer memory.

@@ -143,7 +143,7 @@ Unfinished tasks
 
 ## Memory Extraction
 
-### 8 Categories
+### Categories
 
 | Category | Belongs to | Description | Mergeable |
 |----------|------------|-------------|-----------|
@@ -153,8 +153,6 @@ Unfinished tasks
 | **events** | user | Events/decisions | ❌ |
 | **cases** | agent | Problem + solution | ❌ |
 | **patterns** | agent | Reusable patterns | ✅ |
-| **tools** | agent | Tool usage knowledge and best practices | ✅ |
-| **skills** | agent | Skill execution knowledge and workflow strategies | ✅ |
 
 ### Extraction Flow
 
@@ -255,9 +253,7 @@ viking://user/memories/
 
 viking://user/memories/
 ├── cases/
-├── patterns/
-├── tools/
-└── skills/
+└── patterns/
 ```
 
 `viking://user/sessions/{session_id}` is accepted as a short form relative to

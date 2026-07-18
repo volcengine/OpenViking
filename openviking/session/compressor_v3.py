@@ -71,7 +71,7 @@ from openviking.session.train import (
     make_streaming_policy_trainer_key,
 )
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.telemetry import tracer
+from openviking.telemetry import get_current_telemetry, tracer
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
@@ -82,6 +82,32 @@ _TRAINING_CASE_SPEC_PROTOCOL = "openviking.batch_train.case_spec.v1"
 _TRAINING_CASE_SPEC_HEADER = "# OpenViking Batch Training CaseSpec v1"
 _TRAINING_FAST_PATH_MEMORY_TYPES = frozenset({"cases", "trajectories", "experiences"})
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
+
+
+def _initialize_extraction_telemetry() -> None:
+    telemetry = get_current_telemetry()
+    for name in (
+        "memory.extract.candidates.total",
+        "memory.extract.candidates.standard",
+        "memory.extract.candidates.tool_skill",
+        "memory.extract.created",
+        "memory.extract.merged",
+        "memory.extract.deleted",
+        "memory.extract.skipped",
+    ):
+        telemetry.set(name, 0)
+
+
+def _report_extraction_telemetry(result: Any) -> None:
+    telemetry = get_current_telemetry()
+    telemetry.set(
+        "memory.extract.candidates.total",
+        len(result.written_uris) + len(result.edited_uris),
+    )
+    telemetry.set("memory.extract.created", len(result.written_uris))
+    telemetry.set("memory.extract.merged", len(result.edited_uris))
+    telemetry.set("memory.extract.deleted", len(result.deleted_uris))
+    telemetry.set("memory.extract.skipped", len(result.errors))
 
 
 async def _commit_experience_snapshot(
@@ -150,18 +176,20 @@ class SessionCompressorV3:
         latest_archive_overview: str = "",
         isolation_handler: Optional[MemoryIsolationHandler] = None,
         transaction_handle=None,
+        context_provider: Optional[SessionExtractContextProvider] = None,
     ) -> ExtractLoop:
         config = get_openviking_config()
         vlm = config.vlm.get_vlm_instance()
         viking_fs = get_viking_fs()
-        context_provider = SessionExtractContextProvider(
-            messages=messages,
-            latest_archive_overview=latest_archive_overview,
-            isolation_handler=isolation_handler,
-            ctx=ctx,
-            viking_fs=viking_fs,
-            transaction_handle=transaction_handle,
-        )
+        if context_provider is None:
+            context_provider = SessionExtractContextProvider(
+                messages=messages,
+                latest_archive_overview=latest_archive_overview,
+                isolation_handler=isolation_handler,
+                ctx=ctx,
+                viking_fs=viking_fs,
+                transaction_handle=transaction_handle,
+            )
         return ExtractLoop(
             vlm=vlm,
             viking_fs=viking_fs,
@@ -293,52 +321,61 @@ class SessionCompressorV3:
         allowed_peer_ids: Optional[set[str]] = None,
     ):
         message_list = list(messages)
-        fast_path_case = _training_case_from_first_message(message_list, allowed_memory_types)
-        if fast_path_case is not None:
-            return await self._commit_training_case_fast_path(
-                case=fast_path_case,
+        fast_path_case = _training_case_from_first_message(
+            message_list,
+            allowed_memory_types,
+        )
+        try:
+            if fast_path_case is not None:
+                return await self._commit_training_case_fast_path(
+                    case=fast_path_case,
+                    messages=message_list,
+                    ctx=ctx,
+                    session_id=session_id,
+                    archive_uri=archive_uri or "",
+                    strict_extract_errors=strict_extract_errors,
+                )
+
+            result = await self._extract_user_memories(
+                messages=message_list,
+                user=user,
+                session_id=session_id,
+                ctx=ctx,
+                strict_extract_errors=strict_extract_errors,
+                latest_archive_overview=latest_archive_overview,
+                archive_uri=archive_uri,
+                allowed_memory_types=allowed_memory_types,
+                allow_self_memory=allow_self_memory,
+                allowed_peer_ids=allowed_peer_ids,
+            )
+            train_result = await self.train_from_extracted_cases(
+                cases=result.cases,
                 messages=message_list,
                 ctx=ctx,
+                case_uri_by_name=getattr(result, "case_uri_by_name", {}),
                 session_id=session_id,
                 archive_uri=archive_uri or "",
                 strict_extract_errors=strict_extract_errors,
+                collect_memory_diff=True,
             )
-
-        result = await self._extract_user_memories(
-            messages=message_list,
-            user=user,
-            session_id=session_id,
-            ctx=ctx,
-            strict_extract_errors=strict_extract_errors,
-            latest_archive_overview=latest_archive_overview,
-            archive_uri=archive_uri,
-            allowed_memory_types=allowed_memory_types,
-            allow_self_memory=allow_self_memory,
-            allowed_peer_ids=allowed_peer_ids,
-        )
-        train_result = await self.train_from_extracted_cases(
-            cases=result.cases,
-            messages=message_list,
-            ctx=ctx,
-            case_uri_by_name=getattr(result, "case_uri_by_name", {}),
-            session_id=session_id,
-            archive_uri=archive_uri or "",
-            strict_extract_errors=strict_extract_errors,
-            collect_memory_diff=True,
-        )
-        await self._write_final_memory_diff(
-            archive_uri=archive_uri or "",
-            ctx=ctx,
-            memory_diffs=[
-                getattr(result, "memory_diff", None),
-                train_result.get("memory_diff"),
-            ],
-        )
-        return _v3_extraction_response(
-            contexts=result.contexts,
-            train_result=train_result,
-            archive_uri=archive_uri or "",
-        )
+            await self._write_final_memory_diff(
+                archive_uri=archive_uri or "",
+                ctx=ctx,
+                memory_diffs=[
+                    getattr(result, "memory_diff", None),
+                    train_result.get("memory_diff"),
+                ],
+            )
+            return _v3_extraction_response(
+                contexts=result.contexts,
+                train_result=train_result,
+                archive_uri=archive_uri or "",
+            )
+        except Exception:
+            if strict_extract_errors:
+                raise
+            logger.warning("V3 memory extraction failed; returning empty result", exc_info=True)
+            return {"contexts": [], "session_skills": []}
 
     async def _commit_training_case_fast_path(
         self,
@@ -479,6 +516,8 @@ class SessionCompressorV3:
             logger.warning("No RequestContext provided, skipping v3 memory extraction")
             return _V3ExtractionResult()
 
+        _initialize_extraction_telemetry()
+
         try:
             viking_fs = get_viking_fs()
         except Exception:
@@ -487,9 +526,21 @@ class SessionCompressorV3:
 
         registry = create_default_registry()
         if allow_self_memory:
-            await registry.initialize_memory_files(ctx)
+            await registry.initialize_memory_files(
+                ctx,
+                allowed_memory_types=allowed_memory_types,
+            )
 
-        extract_context = ExtractContext(messages)
+        context_provider = SessionExtractContextProvider(
+            messages=messages,
+            latest_archive_overview=latest_archive_overview,
+            isolation_handler=None,
+            ctx=ctx,
+            viking_fs=viking_fs,
+            transaction_handle=None,
+        )
+        await context_provider.prepare_extraction_messages()
+        extract_context = context_provider.get_extract_context()
         isolation_handler = MemoryIsolationHandler(
             ctx,
             extract_context,
@@ -498,6 +549,7 @@ class SessionCompressorV3:
             allowed_peer_ids=allowed_peer_ids,
         )
         isolation_handler.prepare_messages()
+        context_provider._isolation_handler = isolation_handler
 
         orchestrator = self._get_or_create_react(
             ctx=ctx,
@@ -505,6 +557,7 @@ class SessionCompressorV3:
             latest_archive_overview=latest_archive_overview,
             isolation_handler=isolation_handler,
             transaction_handle=None,
+            context_provider=context_provider,
         )
         operations, _tools_used = await orchestrator.run()
         if operations is None:
@@ -543,6 +596,7 @@ class SessionCompressorV3:
 
         result = update_result.apply_result
         patch_operations = update_result.operations
+        _report_extraction_telemetry(result)
 
         memory_diff = None
         if archive_uri and viking_fs and result is not None:

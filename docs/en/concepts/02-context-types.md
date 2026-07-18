@@ -52,7 +52,7 @@ Memories are divided into user memories and Agent memories, representing learned
 - **Dynamic updates**: Continuously updated from interactions by Agent
 - **Personalized**: Learned for specific users and stable peers
 
-### 8 Categories
+### Categories
 
 | Category | Location | Description | Update Strategy |
 |----------|----------|-------------|-----------------|
@@ -62,8 +62,6 @@ Memories are divided into user memories and Agent memories, representing learned
 | **events** | `user/memories/events/` | Event records (decisions, milestones) | ❌ No update |
 | **trajectories** | `user/memories/trajectories/` | Reusable operation contracts | ❌ No update |
 | **experiences** | `user/memories/experiences/` | Reusable execution insights | ✅ Mergeable |
-| **tools** | `user/memories/tools/` | Tool usage knowledge and best practices | ✅ Mergeable |
-| **skills** | `user/memories/skills/` | Skill execution knowledge and workflow strategies | ✅ Mergeable |
 
 ### Usage
 

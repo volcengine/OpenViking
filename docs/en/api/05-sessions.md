@@ -1538,8 +1538,6 @@ An empty `memory_diff.json` (all counts zero) is written when long-term memory e
 | events | `user/memories/events/` | Significant events |
 | trajectories | `user/memories/trajectories/` | Reusable operation contracts |
 | experiences | `user/memories/experiences/` | Reusable execution insights |
-| tools | `user/memories/tools/` | Tool usage knowledge and best practices |
-| skills | `user/memories/skills/` | Skill execution knowledge and workflow strategies |
 
 ---
 

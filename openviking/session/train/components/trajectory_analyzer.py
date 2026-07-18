@@ -62,8 +62,8 @@ class TrajectoryRolloutAnalyzer:
     """Analyze rollouts by extracting persistent trajectory memory files.
 
     This implementation owns the trajectory extraction/apply flow directly.  It
-    intentionally does not depend on SessionCompressorV2/V3, and it only exposes
-    the trajectory memory schema to ExtractLoop.
+    intentionally does not depend on a compressor implementation, and it only
+    exposes the trajectory memory schema to ExtractLoop.
     """
 
     viking_fs: Any = None

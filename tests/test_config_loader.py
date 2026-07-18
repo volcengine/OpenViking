@@ -6,6 +6,7 @@ import logging
 from logging.handlers import QueueHandler
 
 import pytest
+from pydantic import ValidationError
 
 from openviking_cli.utils.config import (
     OPENVIKING_CONFIG_ENV,
@@ -202,6 +203,16 @@ def test_openviking_config_ignores_deprecated_memory_version(monkeypatch):
         assert config.memory.version == "v3"
 
     OpenVikingConfigSingleton.reset_instance()
+
+
+def test_memory_config_rejects_removed_v2_lock_fields():
+    from openviking_cli.utils.config.memory_config import MemoryConfig
+
+    assert MemoryConfig(version="v2").version == "v3"
+    with pytest.raises(ValidationError):
+        MemoryConfig(v2_lock_max_retries=1)
+    with pytest.raises(ValidationError):
+        MemoryConfig(v2_lock_retry_interval_seconds=0.1)
 
 
 def test_openviking_config_ignores_deprecated_agent_memory_enabled(monkeypatch):

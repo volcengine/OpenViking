@@ -1,17 +1,17 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 """
-Test for memory_diff.json generation in SessionCompressorV2.
+Test for memory_diff.json generation in SessionCompressorV3.
 
 Verifies that memory_diff.json is correctly written to the archive directory
 containing adds, updates, and deletes.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from openviking.session.compressor_v2 import SessionCompressorV2
+from openviking.session.compressor_v3 import SessionCompressorV3
 from openviking.session.memory.dataclass import MemoryFile, ResolvedOperation, ResolvedOperations
 from openviking.session.memory.memory_updater import MemoryUpdateResult
 from openviking.storage.viking_fs import VikingFS
@@ -39,25 +39,8 @@ class TestMemoryDiffArchive:
 
     @pytest.fixture
     def compressor(self):
-        """Create SessionCompressorV2 instance."""
-        with patch("openviking.session.compressor_v2.get_viking_fs"):
-            with patch("openviking.session.compressor_v2.MemoryUpdater"):
-                compressor = SessionCompressorV2(vikingdb=MagicMock())
-                return compressor
-
-    @pytest.mark.asyncio
-    async def test_get_memory_type_from_uri(self, compressor):
-        """Test memory type extraction from URI."""
-        # Test identity.md
-        assert compressor._get_memory_type_from_uri("memory/user/test/identity.md") == "identity"
-
-        # Test context/project.md
-        assert (
-            compressor._get_memory_type_from_uri("memory/user/test/context/project.md") == "project"
-        )
-
-        # Test unknown path
-        assert compressor._get_memory_type_from_uri("memory/user/test/unknown/path") == "unknown"
+        """Create SessionCompressorV3 instance."""
+        return SessionCompressorV3(vikingdb=MagicMock(), rollout_analyzer=MagicMock())
 
     @pytest.mark.asyncio
     async def test_build_memory_diff_add(self, compressor, mock_viking_fs, mock_ctx):
@@ -68,24 +51,20 @@ class TestMemoryDiffArchive:
         ]
 
         operations = ResolvedOperations(
-            upsert_operations=[],
+            upsert_operations=[
+                ResolvedOperation(
+                    uris=["memory/user/test/identity.md"],
+                    memory_type="identity",
+                    memory_fields={},
+                    old_memory_file_content=None,
+                )
+            ],
             delete_file_contents=[],
             errors=[],
         )
 
-        # Track call count - first call for each uri is existence check
-        call_count = 0
-
         async def mock_read(uri, ctx=None):
-            nonlocal call_count
-            call_count += 1
-            # First call per URI: existence check - raise to indicate file doesn't exist (add)
-            # Second call: read actual content for "after" field
-            # Since there's only 1 uri, call 1 = existence (raise), call 2 = read after
-            if call_count == 1:
-                raise Exception("File not found")
-            else:
-                return "# Identity\n\nTest identity content"
+            return "# Identity\n\nTest identity content"
 
         mock_viking_fs.read_file.side_effect = mock_read
 

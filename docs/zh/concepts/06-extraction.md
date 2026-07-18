@@ -226,8 +226,12 @@ await client.add_skill({
 # 记忆从会话自动提取
 await session.commit()
 
-# 流程: SessionCompressorV2 → ExtractLoop → MemoryUpdater → SemanticQueue
+# 流程: SessionCompressorV3 → ExtractLoop → MemoryUpdater → SemanticQueue
 ```
+
+V3 只提供一个提取入口。它先提取启用的用户记忆 schema（包括 `cases`）；
+只有本次提取实际产生至少一个 case，才会继续训练 trajectory、experience，
+以及可选的可执行 session skill。没有 case 的会话不会生成这些执行派生记忆。
 
 ## 相关文档
 

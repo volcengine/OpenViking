@@ -52,7 +52,7 @@ results = client.find(
 - **动态更新：**由 Agent 从交互中持续更新
 - **个性化：**针对特定用户和稳定 peer 学习记录
 
-### 8 种分类
+### 记忆分类
 
 | 分类 | 位置 | 说明 | 更新策略 |
 |------|------|------|----------|
@@ -62,8 +62,6 @@ results = client.find(
 | **events** | `user/memories/events/` | 事件记录（决策、里程碑） | ❌ 不更新 |
 | **trajectories** | `user/memories/trajectories/` | 可复用的操作契约 | ❌ 不更新 |
 | **experiences** | `user/memories/experiences/` | 可复用的执行经验 | ✅ 可合并 |
-| **tools** | `user/memories/tools/` | 工具使用经验与最佳实践 | ✅ 可合并 |
-| **skills** | `user/memories/skills/` | 技能执行经验与工作流策略 | ✅ 可合并 |
 
 ### 使用
 
