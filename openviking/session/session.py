@@ -6,6 +6,7 @@ Session as Context: Sessions integrated into L0/L1/L2 system.
 """
 
 import asyncio
+import os
 import json
 import re
 from dataclasses import dataclass, field
@@ -1334,6 +1335,8 @@ class Session:
         first_message_id: str,
         last_message_id: str,
         memory_policy: Optional[Dict[str, Any]],
+        *,
+        skip_previous_archive_check: bool = False,
     ) -> None:
         """Phase 2: Extract memories, write relations, enqueue — runs in background."""
         from openviking.service.task_tracker import get_task_tracker
@@ -1352,7 +1355,8 @@ class Session:
         archive_index = self._archive_index_from_uri(archive_uri)
 
         try:
-            await self._wait_for_previous_archive_done(archive_index)
+            if not skip_previous_archive_check:
+                await self._wait_for_previous_archive_done(archive_index)
 
             await tracker.start(
                 task_id,
@@ -2002,6 +2006,74 @@ class Session:
                 continue
 
         return messages
+
+    async def retry_archive_extraction(
+        self, archive_index: int
+    ) -> Dict[str, Any]:
+        """Retry Phase 2 memory extraction for a previously-failed archive.
+
+        Re-reads messages from the archive's messages.jsonl, deletes the
+        .failed.json marker, and re-runs _run_memory_extraction in the
+        background. Returns a task_id that can be polled via GET /tasks/{id}.
+
+        Args:
+            archive_index: Numeric archive index (e.g. 4 for archive_004).
+
+        Returns:
+            Dict with status, task_id, archive_uri, message_count.
+        """
+        from openviking.service.task_tracker import get_task_tracker
+
+        archive_uri = f"{self._session_uri}/history/archive_{archive_index:03d}"
+
+        messages = await self._read_archive_messages(archive_uri)
+        if not messages:
+            raise ValueError(f"No messages found in archive at {archive_uri}")
+
+        # Delete .failed.json to reset state
+        failed_path = os.path.join(
+            self._data_root,
+            self.ctx.account_id,
+            self.ctx.user.user_id,
+            "sessions",
+            self.session_id,
+            "history",
+            f"archive_{archive_index:03d}",
+            ".failed.json",
+        )
+        if os.path.exists(failed_path):
+            os.remove(failed_path)
+            logger.info(f"[retry] Deleted .failed.json: {failed_path}")
+
+        # Create task and run Phase 2 in background
+        task_id = str(uuid4())
+        tracker = get_task_tracker()
+        await tracker.create(
+            "archive_retry",
+            resource_id=f"{self.session_id}:archive_{archive_index:03d}",
+            account_id=self.ctx.account_id,
+            user_id=self.ctx.user.user_id,
+        )
+
+        asyncio.create_task(
+            self._run_memory_extraction(
+                task_id=task_id,
+                archive_uri=archive_uri,
+                messages=messages,
+                usage_records=[],
+                first_message_id=messages[0].id,
+                last_message_id=messages[-1].id,
+                memory_policy=None,
+                skip_previous_archive_check=True,
+            )
+        )
+
+        return {
+            "status": "retrying",
+            "task_id": task_id,
+            "archive_uri": archive_uri,
+            "message_count": len(messages),
+        }
 
     async def _get_latest_completed_archive_summary(
         self,

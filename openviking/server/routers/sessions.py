@@ -421,6 +421,36 @@ async def extract_session(
     return Response(status="ok", result=_to_jsonable(result))
 
 
+@router.post("/{session_id}/archives/{archive_id}/retry")
+async def retry_archive_session(
+    session_id: str = Path(..., description="Session ID"),
+    archive_id: str = Path(..., description="Archive ID (e.g. '4' for archive_004)"),
+    body: CommitRequest = Body(default_factory=CommitRequest),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Retry Phase 2 memory extraction for a failed archive.
+
+    Re-reads messages from the archive's messages.jsonl, and re-runs memory
+    extraction as a background task. Returns a task_id for polling via
+    ``GET /tasks/{task_id}``.
+
+    The target archive must exist and contain a messages.jsonl. If a
+    ``.failed.json`` marker exists at the archive path, it is deleted before
+    re-running.
+    """
+    service = get_service()
+    execution = await run_operation(
+        operation="session.archive.retry",
+        telemetry=body.telemetry,
+        fn=lambda: service.sessions.retry_archive(session_id, archive_id, _ctx),
+    )
+    return Response(
+        status="ok",
+        result=execution.result,
+        telemetry=execution.telemetry,
+    ).model_dump(exclude_none=True)
+
+
 @router.post("/{session_id}/messages")
 async def add_message(
     request: AddMessageRequest,
