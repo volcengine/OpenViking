@@ -168,7 +168,7 @@ class UnderstandingAPI(BaseParser):
         result = ParseResult(
             root=root_node,
             source_path=url or source_str,
-            source_format=doc_type,
+            source_format=content_type if content_type != "text" else doc_type,
             temp_dir_path=temp_dir_path,
             parser_name="UnderstandingAPI",
             meta=task_meta,

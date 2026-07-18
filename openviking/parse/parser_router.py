@@ -13,7 +13,10 @@ from urllib.parse import urlparse
 if TYPE_CHECKING:
     from openviking.parse.accessors.base import LocalResource
 
+from openviking.parse.accessors.base import SourceType
 from openviking.parse.base import ParseResult
+from openviking.parse.parsers.constants import CODE_EXTENSIONS
+from openviking.parse.parsers.media.constants import MEDIA_EXTENSIONS
 from openviking.parse.registry import ParserRegistry
 from openviking_cli.utils.logger import get_logger
 
@@ -65,8 +68,9 @@ class ParserRouter:
         Parse with ParserRegistry or UnderstandingAPI based on the routing decision.
         """
         source_path = self._extract_source_path(source)
+        prefer_local_code = self._is_local_code_media_conflict(source, source_path)
 
-        if self.should_use_understanding_api(source_path):
+        if self.should_use_understanding_api(source_path) and not prefer_local_code:
             display = source_path
             if isinstance(source_path, str) and source_path.startswith(("http://", "https://")):
                 display = "<url>"
@@ -83,7 +87,39 @@ class ParserRouter:
             except Exception:
                 display = "<path>"
             logger.info(f"[ParserRouter] Using internal ParserRegistry for {display}")
+
+            media_parser_name = self._explicit_remote_media_parser(source, source_path)
+            if media_parser_name:
+                parser = self._parser_registry.get_parser(media_parser_name)
+                if parser is not None:
+                    return await parser.parse(source_path, **kwargs)
+
             return await self._parser_registry.parse(source_path, **kwargs)
+
+    def _is_local_code_media_conflict(
+        self,
+        source: Union[str, Path, "LocalResource"],
+        source_path: Union[str, Path],
+    ) -> bool:
+        """Whether a local file extension should prefer code over media."""
+        if getattr(source, "source_type", None) != SourceType.LOCAL:
+            return False
+        ext = Path(source_path).suffix.lower()
+        return ext in CODE_EXTENSIONS and ext in MEDIA_EXTENSIONS
+
+    def _explicit_remote_media_parser(
+        self,
+        source: Union[str, Path, "LocalResource"],
+        source_path: Union[str, Path],
+    ) -> str | None:
+        """Restore media routing for an accessor-confirmed ambiguous HTTP file."""
+        if getattr(source, "source_type", None) != SourceType.HTTP:
+            return None
+        ext = Path(source_path).suffix.lower()
+        if ext not in CODE_EXTENSIONS or ext not in MEDIA_EXTENSIONS:
+            return None
+        url_type = getattr(source, "meta", {}).get("url_type")
+        return "video" if url_type == "download_video" else None
 
     def _extract_source_path(self, source: Union[str, Path, "LocalResource"]) -> Union[str, Path]:
         """Extract a filesystem path from the source."""

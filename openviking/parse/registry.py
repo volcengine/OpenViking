@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
 from openviking.parse.base import ParseResult
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.parse.parsers.constants import CODE_EXTENSIONS
 from openviking.parse.parsers.directory import DirectoryParser
 from openviking.parse.parsers.epub import EPubParser
 from openviking.parse.parsers.excel import ExcelParser
@@ -22,6 +23,7 @@ from openviking.parse.parsers.html import HTMLParser
 from openviking.parse.parsers.legacy_doc import LegacyDocParser
 from openviking.parse.parsers.markdown import MarkdownParser
 from openviking.parse.parsers.media import AudioParser, ImageParser, VideoParser
+from openviking.parse.parsers.media.constants import MEDIA_EXTENSIONS
 from openviking.parse.parsers.pdf import PDFParser
 from openviking.parse.parsers.powerpoint import PowerPointParser
 from openviking.parse.parsers.text import TextParser
@@ -196,12 +198,26 @@ class ParserRegistry:
         """
         path = Path(path)
         ext = path.suffix.lower()
+
+        # Some extensions are inherently ambiguous.  In particular, ``.ts``
+        # means TypeScript for local files but MPEG transport stream for media
+        # URLs.  Local registry calls do not carry HTTP content metadata, so
+        # prefer the documented code/text fallback here.  ParserRouter restores
+        # the media parser when an accessor explicitly classified a remote
+        # resource as media.
+        if ext in CODE_EXTENSIONS and ext in MEDIA_EXTENSIONS:
+            return None
+
         parser_name = self._extension_map.get(ext)
 
         if parser_name:
             return self._parsers.get(parser_name)
 
         return None
+
+    def get_parser(self, name: str) -> Optional[BaseParser]:
+        """Return a registered parser by name."""
+        return self._parsers.get(name)
 
     async def parse(self, source: Union[str, Path], **kwargs) -> ParseResult:
         """

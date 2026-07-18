@@ -28,7 +28,7 @@ from openviking.parse.parsers.media.utils import (
     generate_audio_summary,
     generate_image_summary,
     generate_video_summary,
-    get_media_type,
+    get_resource_media_type,
 )
 from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext, Role
@@ -1141,7 +1141,7 @@ class SemanticProcessor(DequeueHandlerBase):
         """
         file_name = file_path.split("/")[-1]
         llm_sem = llm_sem or asyncio.Semaphore(self.max_concurrent_llm)
-        media_type = get_media_type(file_name, None)
+        media_type = get_resource_media_type(file_path)
         if media_type == "image":
             return await generate_image_summary(file_path, file_name, llm_sem, ctx=ctx)
         elif media_type == "audio":

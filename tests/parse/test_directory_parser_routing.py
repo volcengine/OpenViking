@@ -85,6 +85,7 @@ def tmp_all_parsers(tmp_path: Path) -> Path:
                 app.py            -> text-fallback (is_text_file)
                 engine.cc         -> text-fallback
                 main.js           -> text-fallback
+                app.ts            -> text-fallback (not MPEG-TS video)
                 style.css         -> text-fallback
             config/
                 settings.yaml     -> text-fallback
@@ -115,6 +116,7 @@ def tmp_all_parsers(tmp_path: Path) -> Path:
     (tmp_path / "code" / "app.py").write_text("print(1)", encoding="utf-8")
     (tmp_path / "code" / "engine.cc").write_text("int main() { return 0; }", encoding="utf-8")
     (tmp_path / "code" / "main.js").write_text("console.log(1)", encoding="utf-8")
+    (tmp_path / "code" / "app.ts").write_text("const answer = 42", encoding="utf-8")
     (tmp_path / "code" / "style.css").write_text("body{}", encoding="utf-8")
 
     (tmp_path / "config").mkdir()
@@ -168,7 +170,16 @@ class TestParserSelection:
     # Extensions that are *processable* (via is_text_file) but have no
     # dedicated parser in the registry – they fall back to TextParser at
     # parse-time via ``ParserRegistry.parse``.
-    TEXT_FALLBACK_EXTENSIONS = {".py", ".cc", ".js", ".css", ".yaml", ".json", ".toml"}
+    TEXT_FALLBACK_EXTENSIONS = {
+        ".py",
+        ".cc",
+        ".js",
+        ".ts",
+        ".css",
+        ".yaml",
+        ".json",
+        ".toml",
+    }
 
     def test_dedicated_parsers_resolve(self, registry: ParserRegistry) -> None:
         """get_parser_for_file returns the correct class for each extension."""

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from openviking.core.path_variables import CalendarVariableProvider
+from openviking.parse.parsers.constants import CODE_EXTENSIONS
 from openviking.prompts import render_prompt
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.utils.config import get_openviking_config
@@ -68,6 +69,10 @@ def get_media_type(source_path: Optional[str], source_format: Optional[str]) -> 
 
     if source_path:
         ext = Path(source_path).suffix.lower()
+        # A parser-provided non-media format is stronger evidence when a file
+        # extension is also a documented code extension (currently ``.ts``).
+        if source_format and ext in CODE_EXTENSIONS:
+            return None
         if ext in IMAGE_EXTENSIONS:
             return "image"
         elif ext in AUDIO_EXTENSIONS:
@@ -75,6 +80,29 @@ def get_media_type(source_path: Optional[str], source_format: Optional[str]) -> 
         elif ext in VIDEO_EXTENSIONS:
             return "video"
 
+    return None
+
+
+def get_resource_media_type(resource_uri: str) -> Optional[str]:
+    """Determine media type for a file already stored in OpenViking.
+
+    Ambiguous code/media extensions are media only inside the corresponding
+    generated media namespace.  This keeps TypeScript files in repositories on
+    the AST/text summary path while preserving MPEG-TS resources under
+    ``viking://resources/video/...``.
+    """
+    media_type = get_media_type(resource_uri, None)
+    if not media_type:
+        return None
+
+    ext = Path(resource_uri).suffix.lower()
+    if ext not in CODE_EXTENSIONS:
+        return media_type
+
+    media_dir = {"image": "images", "audio": "audio", "video": "video"}[media_type]
+    normalized_uri = resource_uri.replace("\\", "/")
+    if normalized_uri.startswith(f"viking://resources/{media_dir}/"):
+        return media_type
     return None
 
 
