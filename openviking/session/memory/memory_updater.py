@@ -10,6 +10,8 @@ to the storage system.
 from __future__ import annotations
 
 import re
+import secrets
+import string
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
@@ -52,6 +54,7 @@ from openviking_cli.utils import VikingURI, get_logger
 logger = get_logger(__name__)
 
 _MEMORY_ABSTRACT_MAX_BYTES = 50_000
+_RANDOM_SUFFIX_ALPHABET = string.digits + string.ascii_letters
 _EXTRACTION_CHUNK_MIN_CHARS = 100
 _EXTRACTION_CHUNK_BOUNDARY_RE = re.compile(r"(\n+|[。！？；!?;]+|(?<!\d)\.(?!\d))")
 _RESOURCE_ADDITION_FIELD_RE = re.compile(
@@ -483,6 +486,10 @@ class ExtractContext:
     def get_session_timestamp(self) -> str:
         """取对话第一条有效消息的紧凑时间戳（YYYYMMDDHHMMSS）。"""
         return self._get_session_datetime().strftime("%Y%m%d%H%M%S")
+
+    def get_random_suffix(self, length: int) -> str:
+        """Return a random Base62 suffix with the requested length."""
+        return "".join(secrets.choice(_RANDOM_SUFFIX_ALPHABET) for _ in range(length))
 
     def get_event_content(
         self, ranges_str: str, summary: str | None, ratio_threshold: float = 0.2

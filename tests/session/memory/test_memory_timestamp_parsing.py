@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import string
 from types import SimpleNamespace
 
 import pytest
@@ -76,8 +77,18 @@ def test_message_range_accepts_extended_fractional_seconds():
     assert msg_range._first_message_time_with_weekday() == "2026-04-17 (Friday)"
 
 
-def test_trajectory_uri_uses_stable_session_timestamp_interface():
-    extract_context = SimpleNamespace(get_session_timestamp=lambda: "20240515150000")
+def test_extract_context_random_suffix_uses_requested_base62_length():
+    suffix = ExtractContext([]).get_random_suffix(2)
+
+    assert len(suffix) == 2
+    assert set(suffix) <= set(string.ascii_letters + string.digits)
+
+
+def test_trajectory_uri_uses_short_random_suffix():
+    extract_context = SimpleNamespace(
+        get_session_timestamp=lambda: "20240515150000",
+        get_random_suffix=lambda length: "A7",
+    )
     memory_dir = PromptManager._get_bundled_templates_dir() / "memory"
     registry = MemoryTypeRegistry(load_schemas=False)
     registry.load_from_yaml(str(memory_dir / "trajectories.yaml"))
@@ -92,7 +103,7 @@ def test_trajectory_uri_uses_stable_session_timestamp_interface():
     )
 
     assert uri == (
-        "viking://user/default/memories/trajectories/2024/05/15/航班取消资格判断与操作_150000.md"
+        "viking://user/default/memories/trajectories/2024/05/15/航班取消资格判断与操作_rA7.md"
     )
 
 
