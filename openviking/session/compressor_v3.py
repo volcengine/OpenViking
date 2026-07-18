@@ -47,6 +47,7 @@ from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import generate_uri
 from openviking.session.train import (
     Case,
+    CriterionResult,
     ExperienceGradientContext,
     ExperienceGradientEstimator,
     ExperienceSetLoader,
@@ -62,6 +63,7 @@ from openviking.session.train import (
     RolloutTrainingResult,
     Rubric,
     RubricCriterion,
+    RubricEvaluation,
     SkillPolicyUpdater,
     SkillSetLoader,
     StreamingPolicyTrainerConfig,
@@ -81,6 +83,7 @@ logger = get_logger(__name__)
 _CASES_MEMORY_TYPE = "cases"
 _TRAINING_CASE_SPEC_PROTOCOL = "openviking.batch_train.case_spec.v1"
 _TRAINING_CASE_SPEC_HEADER = "# OpenViking Batch Training CaseSpec v1"
+_OUTCOME_EVALUATION_HEADER = "# OpenViking OutcomeEvaluation"
 _TRAINING_FAST_PATH_MEMORY_TYPES = frozenset({"cases", "trajectories", "experiences"})
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
 _TRAJECTORY_LINK_TYPE_BY_OUTCOME = {
@@ -350,15 +353,17 @@ class SessionCompressorV3:
         )
         case_result = _applied_memory_result(case_write)
         contexts = _contexts_from_update_result(case_result)
+        training_messages = _training_messages_after_case_spec(messages)
         train_result = await self.train_from_extracted_cases(
             cases=[case],
-            messages=_training_messages_after_case_spec(messages),
+            messages=training_messages,
             ctx=ctx,
             case_uri_by_name={case.name: _first_context_uri(contexts)},
             session_id=session_id,
             archive_uri=archive_uri,
             strict_extract_errors=strict_extract_errors,
             collect_memory_diff=True,
+            rollout_evaluation=_outcome_evaluation_from_messages(training_messages),
         )
         await self._write_final_memory_diff(
             archive_uri=archive_uri,
@@ -570,6 +575,7 @@ class SessionCompressorV3:
         archive_uri: str = "",
         strict_extract_errors: bool = False,
         collect_memory_diff: bool = False,
+        rollout_evaluation: RubricEvaluation | None = None,
     ) -> dict[str, Any]:
         if not messages or ctx is None:
             return {"case_count": 0, "submitted": 0, "reason": "missing_messages_or_ctx"}
@@ -600,6 +606,7 @@ class SessionCompressorV3:
                 request_context=ctx,
                 strict_extract_errors=strict_extract_errors,
                 include_session_skills=skill_enabled,
+                inject_evaluation_feedback=not _has_outcome_evaluation_message(messages),
             )
             exp_trainer = await get_streaming_policy_trainer(
                 key=make_streaming_policy_trainer_key(
@@ -675,6 +682,7 @@ class SessionCompressorV3:
                     case=case,
                     messages=list(messages),
                     policy_snapshot_id=policy_snapshot_id,
+                    evaluation=rollout_evaluation,
                 )
                 # Analyze once — trajectories + skill patches co-extracted
                 analysis = await self.rollout_analyzer.analyze(rollout, analysis_context)
@@ -990,6 +998,61 @@ def _training_messages_after_case_spec(messages: list[Message]) -> list[Message]
     return [
         message for message in messages[1:] if not _is_embedded_rollout_evaluation_message(message)
     ]
+
+
+def _has_outcome_evaluation_message(messages: list[Message]) -> bool:
+    return any(
+        _message_text(message).strip().startswith(_OUTCOME_EVALUATION_HEADER)
+        for message in messages
+    )
+
+
+def _outcome_evaluation_from_messages(messages: list[Message]) -> RubricEvaluation | None:
+    outcome_messages = [
+        message
+        for message in messages
+        if _message_text(message).strip().startswith(_OUTCOME_EVALUATION_HEADER)
+    ]
+    if not outcome_messages:
+        return None
+    if len(outcome_messages) != 1:
+        raise ValueError("Training fast path requires exactly one OutcomeEvaluation message")
+
+    text = _message_text(outcome_messages[0]).strip()
+    match = _JSON_FENCE_RE.search(text)
+    raw_payload = (
+        match.group(1).strip() if match else text.removeprefix(_OUTCOME_EVALUATION_HEADER).strip()
+    )
+    if not raw_payload:
+        raise ValueError("OutcomeEvaluation payload is empty")
+    try:
+        payload = JsonUtils.loads(raw_payload)
+    except Exception as exc:
+        raise ValueError("OutcomeEvaluation payload is not valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("OutcomeEvaluation payload must be a JSON object")
+
+    raw_evaluation = payload.get("evaluation")
+    if raw_evaluation is None:
+        return None
+    if not isinstance(raw_evaluation, dict):
+        raise ValueError("OutcomeEvaluation evaluation must be a JSON object or null")
+    raw_criteria = raw_evaluation.get("criterion_results", [])
+    if not isinstance(raw_criteria, list) or not all(
+        isinstance(item, dict) for item in raw_criteria
+    ):
+        raise ValueError("OutcomeEvaluation criterion_results must be a list of objects")
+    try:
+        return RubricEvaluation(
+            passed=raw_evaluation["passed"],
+            score=float(raw_evaluation["score"]),
+            criterion_results=[CriterionResult(**item) for item in raw_criteria],
+            metadata=dict(raw_evaluation["metadata"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            "OutcomeEvaluation evaluation does not match the canonical schema"
+        ) from exc
 
 
 def _is_embedded_rollout_evaluation_message(message: Message) -> bool:

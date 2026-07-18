@@ -23,6 +23,7 @@ from openviking.session.memory.memory_updater import MemoryUpdateResult
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.train import (
     Case,
+    CriterionResult,
     ExperienceSet,
     PolicyApplyResult,
     PolicyPlanItem,
@@ -36,7 +37,10 @@ from openviking.session.train import (
     StreamingPolicyTrainerConfig,
     Trajectory,
 )
-from openviking.session.train.components.session_commit import _case_spec_message_to_request
+from openviking.session.train.components.session_commit import (
+    _case_spec_message_to_request,
+    _evaluation_message_to_request,
+)
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -303,6 +307,7 @@ async def test_train_from_extracted_case_memories_submits_streaming_rollout(monk
 @pytest.mark.asyncio
 async def test_train_from_extracted_multiple_case_memories_analyzes_bound_rollouts(monkeypatch):
     seen_rollouts = []
+    seen_contexts = []
     rollout_messages = _messages()
 
     class FakeTrainer:
@@ -313,8 +318,8 @@ async def test_train_from_extracted_multiple_case_memories_analyzes_bound_rollou
 
     class FakeAnalyzer:
         async def analyze(self, rollout, context):
-            del context
             seen_rollouts.append(rollout)
+            seen_contexts.append(context)
             return RolloutAnalysis(
                 evaluation=RubricEvaluation(
                     passed=True,
@@ -358,12 +363,20 @@ async def test_train_from_extracted_multiple_case_memories_analyzes_bound_rollou
             max_gradients_per_update=8,
         ),
     )
+    failed_evaluation = RubricEvaluation(
+        passed=False,
+        score=0.0,
+        criterion_results=[],
+        metadata={"source": "tau2"},
+    )
+    outcome_message = _outcome_evaluation_message(failed_evaluation)
 
     result = await compressor.train_from_extracted_cases(
         cases=[case_a, case_b],
-        messages=rollout_messages,
+        messages=[*rollout_messages, outcome_message],
         ctx=_ctx(),
         session_id="s1",
+        rollout_evaluation=failed_evaluation,
     )
 
     assert result["case_count"] == 2
@@ -373,9 +386,14 @@ async def test_train_from_extracted_multiple_case_memories_analyzes_bound_rollou
         "case_b",
     ]
     assert [rollout.messages for rollout in seen_rollouts] == [
-        rollout_messages,
-        rollout_messages,
+        [*rollout_messages, outcome_message],
+        [*rollout_messages, outcome_message],
     ]
+    assert [rollout.evaluation for rollout in seen_rollouts] == [
+        failed_evaluation,
+        failed_evaluation,
+    ]
+    assert all(context.inject_evaluation_feedback is False for context in seen_contexts)
 
 
 @pytest.mark.asyncio
@@ -582,6 +600,21 @@ def _case_spec_message(case: Case | None = None) -> Message:
     )
 
 
+def _outcome_evaluation_message(evaluation: RubricEvaluation) -> Message:
+    rollout = Rollout(
+        case=_training_case(),
+        messages=[],
+        policy_snapshot_id="snapshot-1",
+        evaluation=evaluation,
+    )
+    request = _evaluation_message_to_request(rollout)
+    return Message(
+        id="outcome-evaluation",
+        role=request["role"],
+        parts=[TextPart(text=request["parts"][0]["text"])],
+    )
+
+
 @pytest.mark.asyncio
 async def test_v3_training_case_spec_fast_path_skips_user_memory_extraction_and_strips_control_message():
     case_spec = _case_spec_message()
@@ -620,6 +653,55 @@ async def test_v3_training_case_spec_fast_path_skips_user_memory_extraction_and_
     assert [case.name for case in trained[0]["cases"]] == ["duplicate_booking"]
     assert trained[0]["messages"] == rollout_messages
     assert contexts[0].uri == "viking://user/u/memories/cases/duplicate_booking.md"
+
+
+@pytest.mark.asyncio
+async def test_v3_training_case_spec_fast_path_propagates_canonical_failed_evaluation():
+    failed_evaluation = RubricEvaluation(
+        passed=False,
+        score=0.0,
+        criterion_results=[
+            CriterionResult(
+                criterion_name="tau2_reward",
+                passed=False,
+                score=0.0,
+                feedback=["The task reward was zero."],
+                evidence=["The reservation was not cancelled."],
+                metadata={"reward": 0.0},
+            )
+        ],
+        metadata={"source": "tau2"},
+    )
+    outcome_message = _outcome_evaluation_message(failed_evaluation)
+    trained = []
+    compressor = SessionCompressorV3(vikingdb=None, rollout_analyzer=SimpleNamespace())
+
+    async def fake_write_training_case_memory(**kwargs):
+        del kwargs
+        result = MemoryUpdateResult()
+        result.add_written("viking://user/u/memories/cases/duplicate_booking.md")
+        return result
+
+    async def fake_train_from_extracted_cases(**kwargs):
+        trained.append(kwargs)
+        return {"case_count": 1, "submitted": 1}
+
+    compressor._write_training_case_memory = fake_write_training_case_memory
+    compressor.train_from_extracted_cases = fake_train_from_extracted_cases
+
+    await compressor.extract_long_term_memories(
+        messages=[_case_spec_message(), *_messages(), outcome_message],
+        ctx=_ctx(),
+        session_id="s1",
+        allowed_memory_types={"cases", "trajectories", "experiences"},
+    )
+
+    evaluation = trained[0]["rollout_evaluation"]
+    assert evaluation.passed is False
+    assert evaluation.score == 0.0
+    assert evaluation.criterion_results == failed_evaluation.criterion_results
+    assert evaluation.metadata == {"source": "tau2"}
+    assert trained[0]["messages"] == [*_messages(), outcome_message]
 
 
 @pytest.mark.asyncio

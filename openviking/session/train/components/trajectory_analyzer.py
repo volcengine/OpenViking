@@ -504,20 +504,26 @@ def _contexts_from_memory_result(memory_result: MemoryUpdateResult) -> list[Cont
 
 
 def _evaluation_from_trajectories(trajectories: list[Trajectory]) -> RubricEvaluation:
-    passed = bool(trajectories)
+    passed = bool(trajectories) and all(
+        str(trajectory.outcome).strip().lower() == "success" for trajectory in trajectories
+    )
+    failure_feedback = (
+        ["No trajectory was extracted from the rollout."]
+        if not trajectories
+        else ["At least one extracted trajectory did not have outcome=success."]
+    )
     return RubricEvaluation(
         passed=passed,
         score=1.0 if passed else 0.0,
         criterion_results=[
             CriterionResult(
-                criterion_name="trajectory_extracted",
+                criterion_name="trajectory_outcome",
                 passed=passed,
                 score=1.0 if passed else 0.0,
-                feedback=[] if passed else ["No trajectory was extracted from the rollout."],
+                feedback=[] if passed else failure_feedback,
                 evidence=[trajectory.uri for trajectory in trajectories],
             )
         ],
-        feedback=[] if passed else ["No trajectory was extracted from the rollout."],
         metadata={"trajectory_count": len(trajectories)},
     )
 

@@ -19,6 +19,7 @@ from openviking.session.train import (
 from openviking.session.train.components.trajectory_analyzer import (
     TrajectoryAnalyzerContext,
     TrajectoryRolloutAnalyzer,
+    _evaluation_from_trajectories,
 )
 
 
@@ -111,6 +112,20 @@ def _rollout() -> Rollout:
         ],
         policy_snapshot_id="snapshot",
     )
+
+
+def test_trajectory_evaluation_fallback_treats_failure_as_failed():
+    evaluation = _evaluation_from_trajectories(
+        [
+            SimpleNamespace(
+                uri="viking://user/u/memories/trajectories/failed.md",
+                outcome="failure",
+            )
+        ]
+    )
+
+    assert evaluation.passed is False
+    assert evaluation.score == 0.0
 
 
 @pytest.mark.asyncio
