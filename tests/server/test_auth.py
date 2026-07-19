@@ -277,6 +277,39 @@ async def user_key(auth_app):
 # ---- Basic auth tests ----
 
 
+async def test_api_key_plugin_uses_async_cache_refresh_path():
+    """The current auth plugin must await the multi-instance refresh API."""
+
+    class RefreshOnlyManager:
+        def __init__(self):
+            self.called = False
+
+        async def resolve_with_refresh(self, api_key: str) -> ResolvedIdentity:
+            self.called = True
+            assert api_key == "peer-created-key"
+            return ResolvedIdentity(
+                role=Role.USER,
+                account_id="peer-account",
+                user_id="peer-user",
+            )
+
+        def resolve(self, _api_key: str) -> ResolvedIdentity:
+            raise AssertionError("synchronous resolve bypasses cross-instance refresh")
+
+    manager = RefreshOnlyManager()
+    request = _make_request(
+        "/api/v1/resources",
+        auth_enabled=True,
+        api_key_manager=manager,
+    )
+
+    identity = await resolve_identity(request, x_api_key="peer-created-key")
+
+    assert manager.called is True
+    assert identity.account_id == "peer-account"
+    assert identity.user_id == "peer-user"
+
+
 async def test_health_no_auth_required(auth_client: httpx.AsyncClient):
     """/health should be accessible without any API key."""
     resp = await auth_client.get("/health")

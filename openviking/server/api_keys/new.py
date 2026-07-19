@@ -64,9 +64,7 @@ def generate_api_key(account_id: str, user_id: str, seed: Optional[str] = None) 
     account_segment = _encode_segment(account_id)
     user_segment = _encode_segment(user_id)
     secret = (
-        derive_seeded_api_key_secret(user_id, seed)
-        if seed is not None
-        else secrets.token_hex(32)
+        derive_seeded_api_key_secret(user_id, seed) if seed is not None else secrets.token_hex(32)
     )
     secret_segment = _encode_segment(secret)
     return f"{account_segment}.{user_segment}.{secret_segment}"
@@ -160,6 +158,13 @@ class NewAPIKeyManager:
 
         # Fall back to legacy resolver for legacy keys
         return self._legacy.resolve(api_key)
+
+    async def resolve_with_refresh(self, api_key: str) -> ResolvedIdentity:
+        """Resolve using the legacy manager's bounded refresh contract."""
+        return await self._legacy.resolve_with_refresh(
+            api_key,
+            resolve_callable=self.resolve,
+        )
 
     async def create_account(
         self,
