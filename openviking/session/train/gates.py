@@ -91,6 +91,23 @@ _GATE_POLICY_OVERRIDE_RE = re.compile(
     r"|(?:用户意愿|user\s+intent).{0,40}(?:override|覆盖|优先于)",
     re.IGNORECASE | re.DOTALL,
 )
+_GATE_REFUND_EXCEPTION_RE = re.compile(
+    r"\b(?:even\s+if|even\s+when|despite)\b.{0,40}"
+    r"(?:non[- ]?refundable|no\s+refund|without\s+(?:a\s+)?refund)"
+    r"|即使.{0,40}(?:无法退款|不可退款|不能退款|没有退款|不退款)",
+    re.IGNORECASE | re.DOTALL,
+)
+_GATE_UNCONDITIONAL_UNIVERSAL_WRITE_RE = re.compile(
+    r"\b(?:cancel|cancell|upgrade|modify|change|update|book|reschedule)\w*\b"
+    r".{0,40}\b(?:all|every)\b.{0,40}\b(?:unflown|upcoming|reservations?|records?|items?)\b"
+    r"|\b(?:all|every)\b.{0,40}\b(?:unflown|upcoming|reservations?|records?|items?)\b"
+    r".{0,40}\b(?:cancel|cancell|upgrade|modify|change|update|book|reschedule)\w*\b"
+    r"|(?:取消|升级|修改|变更|更改|预订|改签).{0,40}(?:所有|全部|每个|每一)"
+    r".{0,40}(?:未飞行|即将到来|预订|记录|项目|对象)"
+    r"|(?:所有|全部|每个|每一).{0,40}(?:未飞行|即将到来|预订|记录|项目|对象)"
+    r".{0,40}(?:执行\s*)?(?:cancel_reservation|取消|升级|修改|变更|更改|预订|改签)",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 @dataclass(slots=True)
@@ -657,6 +674,23 @@ class ExperienceRootCausePreventionGate:
         )
 
     async def evaluate(self, target: GateTarget) -> GateDecision | None:
+        if _is_observed_policy_override(target):
+            return GateDecision(
+                gate_name=self.name,
+                action="reject",
+                reason="experience overrides observed policy eligibility with a broader write scope",
+                evidence={
+                    "target_name": target.target_name,
+                    "deterministic_policy_override": True,
+                },
+                retriable=True,
+                repair_prompt=(
+                    "Preserve the observed policy's action-eligibility conditions. User acceptance "
+                    "of no refund or another unavailable benefit does not authorize applying the "
+                    "write to every in-scope object. Bind the action to observable policy branches; "
+                    "if the source does not expose a narrower runtime discriminator, output no change."
+                ),
+            )
         if _is_observed_policy_branch_completion(target):
             return GateDecision(
                 gate_name=self.name,
@@ -1846,6 +1880,26 @@ def _is_observed_policy_branch_completion(target: GateTarget) -> bool:
         and _GATE_EACH_OBJECT_RE.search(procedure)
         and _GATE_WRITE_SCOPE_RE.search(procedure)
         and not _GATE_POLICY_OVERRIDE_RE.search(full_content)
+    )
+
+
+def _is_observed_policy_override(target: GateTarget) -> bool:
+    trajectory = target.trajectory
+    if trajectory is None or "observed policy text:" not in trajectory.content.lower():
+        return False
+
+    fields = _experience_structured_fields(target)
+    situation = str(fields.get("situation") or _markdown_section(target.after_content, "Situation"))
+    reminder = str(fields.get("reminder") or _markdown_section(target.after_content, "Reminder"))
+    procedure = str(fields.get("procedure") or _markdown_section(target.after_content, "Procedure"))
+    actionable_rule = f"{situation}\n{reminder}\n{procedure}"
+
+    if _GATE_POLICY_OVERRIDE_RE.search(actionable_rule):
+        return True
+    return bool(
+        _GATE_REFUND_EXCEPTION_RE.search(actionable_rule)
+        and _GATE_UNCONDITIONAL_UNIVERSAL_WRITE_RE.search(procedure)
+        and not _GATE_ANY_POLICY_BRANCH_RE.search(procedure)
     )
 
 

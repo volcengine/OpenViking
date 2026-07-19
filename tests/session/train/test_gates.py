@@ -948,12 +948,8 @@ async def test_experience_root_cause_prevention_gate_accepts_observed_policy_bra
 
 
 @pytest.mark.asyncio
-async def test_experience_root_cause_prevention_gate_still_reviews_policy_override():
-    target, gate = _gradient_target(
-        '{"pass": false, "root_cause_quality": "unsafe", '
-        '"reason": "user intent cannot override cancellation eligibility", '
-        '"expected_behavior_change": "", "repair_prompt": "remove override", "risks": []}'
-    )
+async def test_experience_root_cause_prevention_gate_rejects_policy_override_without_vlm():
+    target, gate = _gradient_target(RuntimeError("semantic gate must not run"))
     assert target.trajectory is not None
     target.trajectory.content = (
         "## Runtime Evidence\n"
@@ -980,7 +976,44 @@ async def test_experience_root_cause_prevention_gate_still_reviews_policy_overri
 
     assert decision is not None
     assert decision.action == "reject"
-    assert len(gate.vlm.calls) == 1
+    assert decision.retriable is True
+    assert decision.evidence["deterministic_policy_override"] is True
+    assert gate.vlm.calls == []
+
+
+@pytest.mark.asyncio
+async def test_experience_root_cause_prevention_gate_rejects_refund_scope_expansion():
+    target, gate = _gradient_target(RuntimeError("semantic gate must not run"))
+    assert target.trajectory is not None
+    target.trajectory.content = (
+        "## Runtime Evidence\n"
+        "- Observed policy text: cancellation eligibility depends on cabin, booking time, "
+        "airline cancellation, or covered insurance.\n"
+        "## Outcome Evidence\n"
+        "- Missing or mismatched actions: cancel_reservation for one reservation.\n"
+    )
+    fields = {
+        "situation": (
+            "- Applies when: 用户请求取消所有即将到来的航班，且明确表示即使无法退款也希望取消\n"
+            "- Does not apply when: 用户只请求取消特定条件的预订\n"
+            "- Source binding: 用户请求、预订详情和取消政策文本\n"
+            "- Scope ambiguity: none"
+        ),
+        "reminder": "- 确保所有未飞行的预订都被取消，即使不在标准可退款条件内",
+        "procedure": "- 如果用户即使无法退款也希望取消：对所有未飞行预订执行cancel_reservation",
+        "anti_pattern": "- 不要只取消部分未飞行预订",
+    }
+    assert target.gradient is not None
+    target.gradient.after_file.content = render_experience_fields(fields)
+    target.gradient.after_file.extra_fields.update(fields)
+
+    decision = await gate.evaluate(target)
+
+    assert decision is not None
+    assert decision.action == "reject"
+    assert decision.retriable is True
+    assert decision.evidence["deterministic_policy_override"] is True
+    assert gate.vlm.calls == []
 
 
 @pytest.mark.asyncio
