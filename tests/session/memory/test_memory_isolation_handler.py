@@ -108,8 +108,6 @@ class TestGetReadScope:
 
         assert scope.user_ids == ["default_user"]
 
-
-
     def test_get_read_scope_filters_self_sentinel_from_peer_scope(self):
         ctx = create_ctx(user_id="support_bot")
         messages = [create_message("user")]
@@ -381,8 +379,12 @@ class TestCalculateMemoryUris:
             directory="viking://user/{{ user_space }}/memories/preferences",
             operation_mode="upsert",
         )
-        first = ResolvedOperation(memory_fields={"topic": "name"}, memory_type="preferences", uris=[])
-        second = ResolvedOperation(memory_fields={"topic": "name"}, memory_type="preferences", uris=[])
+        first = ResolvedOperation(
+            memory_fields={"topic": "name"}, memory_type="preferences", uris=[]
+        )
+        second = ResolvedOperation(
+            memory_fields={"topic": "name"}, memory_type="preferences", uris=[]
+        )
 
         first_uris = handler.calculate_memory_uris(schema, first, extract_ctx)
         second_uris = handler.calculate_memory_uris(schema, second, extract_ctx)
@@ -573,9 +575,7 @@ class TestCalculateMemoryUris:
 
         uris = handler.calculate_memory_uris(schema, operation, extract_ctx)
 
-        assert uris == [
-            "viking://user/support_bot/peers/web-visitor-bob/memories/preferences"
-        ]
+        assert uris == ["viking://user/support_bot/peers/web-visitor-bob/memories/preferences"]
         assert operation.memory_fields["peer_id"] == "web-visitor-bob"
 
     @patch("openviking.session.memory.memory_isolation_handler.generate_uri")
@@ -616,9 +616,7 @@ class TestCalculateMemoryUris:
 
         uris = handler.calculate_memory_uris(schema, operation, extract_ctx)
 
-        assert uris == [
-            "viking://user/support_bot/peers/web-visitor-alice/memories/preferences"
-        ]
+        assert uris == ["viking://user/support_bot/peers/web-visitor-alice/memories/preferences"]
         assert operation.memory_fields["user_id"] == "support_bot"
         assert operation.memory_fields["peer_id"] == "web-visitor-alice"
 
@@ -663,7 +661,6 @@ class TestCalculateMemoryUris:
         assert uris == ["viking://user/support_bot/peers/web-visitor-bob/memories/preferences"]
         assert operation.memory_fields["user_id"] == "support_bot"
         assert operation.memory_fields["peer_id"] == "web-visitor-bob"
-
 
     @patch("openviking.session.memory.memory_isolation_handler.generate_uri")
     def test_peer_enabled_false_forces_self_scope_and_strips_peer_id(self, mock_generate_uri):
@@ -815,7 +812,5 @@ class TestCalculateMemoryUris:
 
         uris = handler.calculate_memory_uris(schema, operation, extract_ctx)
 
-        assert uris == [
-            "viking://user/support_bot/peers/web-visitor-bob/memories/preferences"
-        ]
+        assert uris == ["viking://user/support_bot/peers/web-visitor-bob/memories/preferences"]
         assert operation.memory_fields["peer_id"] == "web-visitor-bob"

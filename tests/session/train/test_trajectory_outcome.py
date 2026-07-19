@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
+from openviking.session.memory.dataclass import MemoryFile, ResolvedOperation, ResolvedOperations
 from openviking.session.train.components.trajectory_outcome import (
     attach_outcome_evidence,
     render_outcome_evidence,
@@ -168,3 +168,32 @@ def test_attach_outcome_evidence_rejects_llm_owned_section():
 
     with pytest.raises(ValueError, match="must not contain"):
         attach_outcome_evidence(operations, _tau2_evaluation())
+
+
+def test_attach_outcome_evidence_resolves_existing_patch_before_owning_section():
+    old_content = (
+        "# cancellation\n- Outcome: success\n\n## Execution\n- Writes: none\n\n"
+        "## Outcome Evidence\n- Passed: true\n- Final state: passed"
+    )
+    new_content = "# cancellation\n- Outcome: partial\n\n## Execution\n- Writes: handoff"
+    operations = _operations()
+    operation = operations.upsert_operations[0]
+    operation.old_memory_file_content = MemoryFile(
+        uri=operation.uris[0],
+        content=old_content,
+        memory_type="trajectories",
+    )
+    operation.memory_fields["content"] = {
+        "blocks": [{"search": old_content, "replace": new_content}]
+    }
+
+    fields = (
+        attach_outcome_evidence(operations, _tau2_evaluation()).upsert_operations[0].memory_fields
+    )
+
+    assert fields["outcome"] == "failure"
+    assert fields["content"].startswith(
+        "# cancellation\n- Outcome: failure\n\n## Execution\n- Writes: handoff"
+    )
+    assert fields["content"].count("## Outcome Evidence") == 1
+    assert "- Passed: false" in fields["content"]

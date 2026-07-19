@@ -891,7 +891,11 @@ OUTPUT_SCHEMA definition itself.
 
     async def _check_unread_existing_files(self, operations: ResolvedOperations) -> Dict:
         refetch_uris = {}
+        registry = self.context_provider._get_registry()
         for operation in operations.upsert_operations:
+            schema = registry.get(operation.memory_type)
+            if getattr(schema, "operation_mode", None) == "add_only":
+                continue
             for uri in operation.uris:
                 if uri in self.context_provider.read_file_contents:
                     continue

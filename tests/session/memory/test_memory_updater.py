@@ -49,8 +49,10 @@ class _TestTreeLockManager:
         self._locks: dict[str, asyncio.Lock] = {}
         self._owned_paths: dict[str, list[str]] = {}
         self._path_lock = SimpleNamespace(_lock_expire=300.0)
+        self.create_handle_calls = 0
 
     def create_handle(self) -> LockHandle:
+        self.create_handle_calls += 1
         handle = LockHandle()
         self._handles[handle.id] = handle
         return handle
@@ -94,6 +96,15 @@ class _MemoryVikingFS:
         if uri not in self.files:
             raise NotFoundError(uri, "file")
         return self.files[uri]
+
+    async def stat(self, uri: str, ctx=None, skip_count: bool = False) -> dict:
+        del ctx, skip_count
+        await asyncio.sleep(0)
+        if uri in self.read_error_uris:
+            raise PermissionError(f"denied: {uri}")
+        if uri not in self.files:
+            raise NotFoundError(uri, "file")
+        return {"isDir": False}
 
     async def write_file(self, uri: str, content: str, ctx=None, lock_handle=None) -> None:
         del ctx
@@ -153,7 +164,7 @@ class TestMemoryUpdateResult:
         assert "Errors: 0" in summary
 
 
-class TestMemoryUpdater:
+class TestMemoryUpdaterBasics:
     """Tests for MemoryUpdater."""
 
     def test_extract_context_initializes_page_id_map(self):
@@ -497,9 +508,7 @@ class TestAddOnlyUriAllocation:
         canonical_3 = "viking://user/alice/memories/events/name_3.md"
         case_uri = "viking://user/alice/memories/cases/case.md"
         existing_content = MemoryFileUtils.write(MemoryFile(content="existing"))
-        viking_fs = _MemoryVikingFS(
-            {canonical: existing_content, canonical_2: existing_content}
-        )
+        viking_fs = _MemoryVikingFS({canonical: existing_content, canonical_2: existing_content})
         updater = self._updater(viking_fs)
         operation = ResolvedOperation(
             memory_fields={"event_name": "name", "content": "new"},
@@ -646,6 +655,38 @@ class TestAddOnlyUriAllocation:
         assert set(viking_fs.files) == {canonical, canonical_2}
 
     @pytest.mark.asyncio
+    async def test_reuses_outer_transaction_handle_without_releasing_it(self):
+        canonical = "viking://user/alice/memories/events/name.md"
+        viking_fs = _MemoryVikingFS()
+        updater = self._updater(viking_fs)
+        manager = _TestTreeLockManager()
+        outer_handle = manager.create_handle()
+        updater._transaction_handle = outer_handle
+        operations = ResolvedOperations(
+            upsert_operations=[
+                ResolvedOperation(
+                    memory_fields={"event_name": "name", "content": "new"},
+                    memory_type="events",
+                    uris=[canonical],
+                )
+            ],
+            delete_file_contents=[],
+            errors=[],
+        )
+
+        with patch(
+            "openviking.storage.transaction.get_lock_manager",
+            return_value=manager,
+        ):
+            result = await updater.apply_operations(operations, self._ctx())
+
+        assert result.written_uris == [canonical]
+        assert manager.create_handle_calls == 1
+        assert manager.get_handle(outer_handle.id) is outer_handle
+        assert outer_handle.locks == ["/user/alice/memories/events"]
+        await manager.release(outer_handle)
+
+    @pytest.mark.asyncio
     async def test_non_add_only_schema_keeps_canonical_uri(self):
         canonical = "viking://user/alice/memories/events/name.md"
         existing_content = MemoryFileUtils.write(MemoryFile(content="existing"))
@@ -668,6 +709,8 @@ class TestAddOnlyUriAllocation:
         assert result.written_uris == [canonical]
         assert MemoryFileUtils.read(viking_fs.files[canonical]).content == "replacement"
 
+
+class TestMemoryUpdater:
     @pytest.mark.asyncio
     async def test_apply_operations_preserves_pre_resolved_multi_uris_for_new_page_ids(self):
         registry = MagicMock()

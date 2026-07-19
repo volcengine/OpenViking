@@ -12,6 +12,7 @@ from openviking.session.memory.dataclass import (
     MemoryFile,
     MemoryTypeSchema,
     ResolvedOperation,
+    ResolvedOperations,
     WikiLink,
 )
 from openviking.session.memory.extract_loop import ExtractLoop
@@ -81,6 +82,54 @@ class TestResolveOperations:
         assert operation.memory_fields["name"] == "Melanie"
         assert operation.memory_fields["content"] == "new content"
         isolation_handler.calculate_memory_uris.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_add_only_target_does_not_refetch_existing_canonical_uri(self):
+        schema = MemoryTypeSchema(
+            memory_type="trajectories",
+            description="trajectory memory",
+            directory="viking://user/{{ user_space }}/memories/trajectories",
+            filename_template="{{ trajectory_name }}.md",
+            operation_mode="add_only",
+            fields=[
+                MemoryField(
+                    name="trajectory_name",
+                    field_type=FieldType.STRING,
+                    merge_op=MergeOp.IMMUTABLE,
+                ),
+                MemoryField(name="content", field_type=FieldType.STRING, merge_op=MergeOp.PATCH),
+            ],
+        )
+        canonical_uri = "viking://user/alice/memories/trajectories/cancellation.md"
+        context_provider = Mock()
+        context_provider._get_registry.return_value = Mock(get=Mock(return_value=schema))
+        context_provider.read_file_contents = {}
+        context_provider.execute_tool = AsyncMock(return_value={"content": "existing"})
+        loop = ExtractLoop(
+            vlm=Mock(model="test-model"),
+            viking_fs=Mock(),
+            context_provider=context_provider,
+        )
+        operations = ResolvedOperations(
+            upsert_operations=[
+                ResolvedOperation(
+                    memory_fields={
+                        "trajectory_name": "cancellation",
+                        "content": "new rollout",
+                    },
+                    memory_type="trajectories",
+                    uris=[canonical_uri],
+                    page_id=100,
+                )
+            ],
+            delete_file_contents=[],
+            errors=[],
+        )
+
+        refetched = await loop._check_unread_existing_files(operations)
+
+        assert refetched == {}
+        context_provider.execute_tool.assert_not_awaited()
 
     def test_unresolved_page_ids_logs_at_info(self):
         loop = ExtractLoop(vlm=Mock(model="test-model"), viking_fs=Mock(), context_provider=Mock())

@@ -9,11 +9,13 @@ import re
 from typing import Any
 
 from openviking.session.memory.dataclass import ResolvedOperations
+from openviking.session.memory.merge_op import StrPatch, apply_str_patch
 from openviking.session.train.domain import RubricEvaluation
 
 _TRAJECTORY_MEMORY_TYPE = "trajectories"
 _OUTCOME_EVIDENCE_HEADING = "## Outcome Evidence"
 _OUTCOME_LINE_RE = re.compile(r"(?m)^- Outcome:\s*[^\n]*$")
+_OUTCOME_EVIDENCE_SECTION_RE = re.compile(r"(?ms)^## Outcome Evidence[ \t]*\n.*?(?=^##[ \t]|\Z)")
 
 
 def render_outcome_evidence(evaluation: RubricEvaluation | None) -> str:
@@ -90,15 +92,36 @@ def attach_outcome_evidence(
         if operation.memory_type != _TRAJECTORY_MEMORY_TYPE:
             continue
         fields = operation.memory_fields
-        content = str(fields.get("content") or "").rstrip()
+        content, resolved_from_patch = _resolve_trajectory_content(operation)
         if _OUTCOME_EVIDENCE_HEADING in content:
-            raise ValueError("Trajectory LLM content must not contain Outcome Evidence")
+            if not resolved_from_patch:
+                raise ValueError("Trajectory LLM content must not contain Outcome Evidence")
+            content = _OUTCOME_EVIDENCE_SECTION_RE.sub("", content).rstrip()
+            if _OUTCOME_EVIDENCE_HEADING in content:
+                raise ValueError("Trajectory LLM content must not contain Outcome Evidence")
         if evaluation is not None:
             outcome = "success" if evaluation.passed else "failure"
             fields["outcome"] = outcome
             content = _replace_rendered_outcome(content, outcome)
         fields["content"] = f"{content}\n\n{section}" if content else section
     return enriched
+
+
+def _resolve_trajectory_content(operation: Any) -> tuple[str, bool]:
+    raw_content = operation.memory_fields.get("content")
+    old_file = operation.old_memory_file_content
+    if old_file is None or isinstance(raw_content, str):
+        return str(raw_content or "").rstrip(), False
+
+    if isinstance(raw_content, StrPatch):
+        patch = raw_content
+    elif isinstance(raw_content, dict) and "blocks" in raw_content:
+        patch = StrPatch.model_validate(raw_content)
+    else:
+        return str(raw_content or "").rstrip(), False
+
+    content = apply_str_patch(old_file.plain_content(), patch)
+    return content.rstrip(), True
 
 
 def _render_section(

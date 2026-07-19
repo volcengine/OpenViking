@@ -22,6 +22,34 @@ from openviking.session.train.components.trajectory_analyzer import (
     _evaluation_from_trajectories,
     _trajectory_validation_retry_instruction,
 )
+from openviking.storage.transaction.lock_handle import LockHandle
+
+
+class FakeLockManager:
+    def __init__(self):
+        self.handle = LockHandle()
+
+    def create_handle(self):
+        return self.handle
+
+    async def acquire_tree_batch(self, handle, paths):
+        del handle, paths
+        return True
+
+    def get_handle(self, handle_id):
+        return self.handle if handle_id == self.handle.id else None
+
+    async def release(self, handle):
+        del handle
+
+
+@pytest.fixture(autouse=True)
+def _use_fake_lock_manager(monkeypatch):
+    manager = FakeLockManager()
+    monkeypatch.setattr(
+        "openviking.storage.transaction.get_lock_manager",
+        lambda: manager,
+    )
 
 
 class FakeExtractLoop:
@@ -67,7 +95,18 @@ class FakeVikingFS:
     async def read_file(self, uri, ctx=None):
         return self.files[uri]
 
-    async def write_file(self, uri, content, ctx=None):
+    def _uri_to_path(self, uri, ctx=None):
+        del ctx
+        return "/" + uri.removeprefix("viking://")
+
+    async def stat(self, uri, ctx=None, skip_count=False):
+        del ctx, skip_count
+        if uri not in self.files:
+            raise FileNotFoundError(uri)
+        return {"isDir": False}
+
+    async def write_file(self, uri, content, ctx=None, lock_handle=None):
+        del lock_handle
         self.files[uri] = content
         self.writes.append((uri, content, ctx))
 

@@ -233,18 +233,26 @@ class TestUriGeneration:
 
         assert validate_uri_template(memory_type) is False
 
+    def test_validate_uri_template_no_directory_or_filename(self):
+        """Test validating with neither directory nor filename."""
+        memory_type = MemoryTypeSchema(
+            memory_type="test",
+            description="Test memory",
+            directory="",
+            filename_template="",
+            fields=[],
+        )
+
+        assert validate_uri_template(memory_type) is False
+
 
 class TestNumberedUri:
     def test_preserves_canonical_then_inserts_suffix_before_extension(self):
         canonical = "viking://user/default/memories/events/name.md"
 
         assert numbered_uri(canonical, 1) == canonical
-        assert numbered_uri(canonical, 2) == (
-            "viking://user/default/memories/events/name_2.md"
-        )
-        assert numbered_uri(canonical, 3) == (
-            "viking://user/default/memories/events/name_3.md"
-        )
+        assert numbered_uri(canonical, 2) == ("viking://user/default/memories/events/name_2.md")
+        assert numbered_uri(canonical, 3) == ("viking://user/default/memories/events/name_3.md")
 
     def test_treats_existing_digit_suffix_as_literal_stem(self):
         assert numbered_uri("viking://user/default/release_2.md", 2) == (
@@ -252,9 +260,7 @@ class TestNumberedUri:
         )
 
     def test_supports_filename_without_extension(self):
-        assert numbered_uri("viking://user/default/name", 2) == (
-            "viking://user/default/name_2"
-        )
+        assert numbered_uri("viking://user/default/name", 2) == ("viking://user/default/name_2")
 
     def test_rejects_non_positive_ordinal(self):
         with pytest.raises(ValueError, match="ordinal must be at least 1"):
@@ -272,18 +278,6 @@ class TestNumberedUri:
 
         assert reserved == "viking://user/default/name_4.md"
         assert reserved in occupied
-
-    def test_validate_uri_template_no_directory_or_filename(self):
-        """Test validating with neither directory nor filename."""
-        memory_type = MemoryTypeSchema(
-            memory_type="test",
-            description="Test memory",
-            directory="",
-            filename_template="",
-            fields=[],
-        )
-
-        assert validate_uri_template(memory_type) is False
 
 
 class TestUriValidation:

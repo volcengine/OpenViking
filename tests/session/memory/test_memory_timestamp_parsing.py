@@ -84,10 +84,9 @@ def test_extract_context_random_suffix_uses_requested_base62_length():
     assert set(suffix) <= set(string.ascii_letters + string.digits)
 
 
-def test_trajectory_uri_uses_short_random_suffix():
+def test_trajectory_uri_uses_name_inside_session_date_directory():
     extract_context = SimpleNamespace(
         get_session_timestamp=lambda: "20240515150000",
-        get_random_suffix=lambda length: "A7",
     )
     memory_dir = PromptManager._get_bundled_templates_dir() / "memory"
     registry = MemoryTypeRegistry(load_schemas=False)
@@ -103,7 +102,7 @@ def test_trajectory_uri_uses_short_random_suffix():
     )
 
     assert uri == (
-        "viking://user/default/memories/trajectories/2024/05/15/航班取消资格判断与操作_rA7.md"
+        "viking://user/default/memories/trajectories/2024/05/15/航班取消资格判断与操作.md"
     )
 
 

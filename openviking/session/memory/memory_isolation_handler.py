@@ -84,9 +84,7 @@ class MemoryIsolationHandler:
 
     def _first_target_id_in_messages(self) -> Optional[str]:
         targets = [
-            target_id
-            for msg in self._messages()
-            if (target_id := self._message_target_id(msg))
+            target_id for msg in self._messages() if (target_id := self._message_target_id(msg))
         ]
         for target_id in targets:
             if target_id != _SELF_PEER_ID:
