@@ -65,6 +65,32 @@ _GATE_CANONICAL_MONEY_SOURCE_RE = re.compile(
     r"|(?:金额|总额|费用).{0,12}(?:付款|支付|实付|已付|收取|订单|账单)",
     re.IGNORECASE,
 )
+_GATE_POLICY_SOURCE_RE = re.compile(r"\bpolicy\b|政策", re.IGNORECASE)
+_GATE_EXHAUSTIVE_POLICY_BRANCH_RE = re.compile(
+    r"(?:\ball\b|\bevery\b|所有|全部).{0,60}"
+    r"(?:\beligibility\b|\bcriteria\b|\bconditions?\b|\bbranches\b|资格|条件|分支)",
+    re.IGNORECASE | re.DOTALL,
+)
+_GATE_ANY_POLICY_BRANCH_RE = re.compile(
+    r"(?:\bany\b|任一|任何一项).{0,40}"
+    r"(?:\beligibility\b|\bcriterion\b|\bcriteria\b|\bconditions?\b|\bbranches\b|资格|条件|分支)"
+    r"|(?:\beligibility\b|\bcriterion\b|\bcriteria\b|\bconditions?\b|\bbranches\b|资格|条件|分支)"
+    r".{0,40}(?:\bany\b|任一|任何一项)",
+    re.IGNORECASE | re.DOTALL,
+)
+_GATE_EACH_OBJECT_RE = re.compile(
+    r"\b(?:each|every)\b.{0,40}\b(?:record|reservation|item|object)\b"
+    r"|(?:逐一|每个|每条).{0,40}(?:记录|预订|项目|对象)",
+    re.IGNORECASE | re.DOTALL,
+)
+_GATE_POLICY_OVERRIDE_RE = re.compile(
+    r"\bregardless\b.{0,40}\b(?:policy|eligib|condition)"
+    r"|\bwhether\s+or\s+not\b.{0,40}\b(?:policy|eligib|condition)"
+    r"|无论.{0,40}(?:符合|资格|条件|政策)"
+    r"|不符合.{0,40}(?:也|仍然|仍需|仍要|照样).{0,30}(?:取消|升级|修改|变更|更改|写入|预订|改签)"
+    r"|(?:用户意愿|user\s+intent).{0,40}(?:override|覆盖|优先于)",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 @dataclass(slots=True)
@@ -631,6 +657,16 @@ class ExperienceRootCausePreventionGate:
         )
 
     async def evaluate(self, target: GateTarget) -> GateDecision | None:
+        if _is_observed_policy_branch_completion(target):
+            return GateDecision(
+                gate_name=self.name,
+                action="allow",
+                reason="experience deterministically completes all observed policy branches",
+                evidence={
+                    "target_name": target.target_name,
+                    "deterministic_policy_branch_completion": True,
+                },
+            )
         authoritative_behavior_anchor = _authoritative_behavior_anchor(target.analysis)
         prompt = _experience_root_cause_prevention_prompt(
             target,
@@ -1771,15 +1807,46 @@ def _markdown_section(content: str, heading: str) -> str:
 
 def _experience_relative_write_scope_ambiguity_issue(content: str) -> bool:
     text = str(content or "")
+    situation = _markdown_section(text, "Situation")
+    actionable_text = "\n".join(
+        section
+        for section in (
+            situation,
+            _markdown_section(text, "Reminder"),
+            _markdown_section(text, "Procedure"),
+        )
+        if section
+    )
     if not (
-        _GATE_AGGREGATE_TERMS_RE.search(text)
-        and _GATE_RELATIVE_SCOPE_RE.search(text)
-        and _GATE_WRITE_SCOPE_RE.search(text)
+        _GATE_AGGREGATE_TERMS_RE.search(actionable_text)
+        and _GATE_RELATIVE_SCOPE_RE.search(actionable_text)
+        and _GATE_WRITE_SCOPE_RE.search(actionable_text)
     ):
         return False
-    situation = _markdown_section(text, "Situation")
     scope_ambiguity = _field_from_section(situation, "Scope ambiguity").strip().lower()
     return scope_ambiguity in _GATE_NONE_VALUES
+
+
+def _is_observed_policy_branch_completion(target: GateTarget) -> bool:
+    trajectory = target.trajectory
+    if trajectory is None or "observed policy text:" not in trajectory.content.lower():
+        return False
+
+    fields = _experience_structured_fields(target)
+    situation = str(fields.get("situation") or _markdown_section(target.after_content, "Situation"))
+    reminder = str(fields.get("reminder") or _markdown_section(target.after_content, "Reminder"))
+    procedure = str(fields.get("procedure") or _markdown_section(target.after_content, "Procedure"))
+    proposed_rule = f"{reminder}\n{procedure}"
+    full_content = f"{situation}\n{proposed_rule}"
+
+    return bool(
+        _GATE_POLICY_SOURCE_RE.search(situation)
+        and _GATE_EXHAUSTIVE_POLICY_BRANCH_RE.search(proposed_rule)
+        and _GATE_ANY_POLICY_BRANCH_RE.search(procedure)
+        and _GATE_EACH_OBJECT_RE.search(procedure)
+        and _GATE_WRITE_SCOPE_RE.search(procedure)
+        and not _GATE_POLICY_OVERRIDE_RE.search(full_content)
+    )
 
 
 def _experience_line_item_money_source_issue(content: str) -> bool:

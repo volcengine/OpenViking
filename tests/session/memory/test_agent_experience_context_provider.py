@@ -93,12 +93,6 @@ def test_agent_experience_instruction_owns_closed_world_comparison_workflow():
     assert "Authoritative outcome evidence" in instruction
     assert "smallest conflicting policy interpretation" in instruction
     assert "preserve non-conflicting constraints and object boundaries" in instruction
-    assert "proof that a bounded exception exists" in instruction
-    assert "explicit business-policy explanation is not required" in instruction
-    assert "actual runtime-visible facts" in instruction
-    assert "preserve the base policy outside" in instruction
-    assert "same exception pattern" in instruction
-    assert "do not guess a business rule; choose Skip" not in instruction
     assert "Tau2 evaluator authority" not in instruction
     assert "The experience itself must not" in instruction
     assert "mention the evaluator" in instruction

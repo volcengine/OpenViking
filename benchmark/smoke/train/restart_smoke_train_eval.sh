@@ -11,14 +11,17 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SMOKE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${SMOKE_DIR}/../.." && pwd)"
+source "${REPO_ROOT}/openviking/session/train/auto_commit.sh"
+openviking_capture_train_launch_command "$@"
 
 SLOT="0"
+AUTO_COMMIT=false
 declare -a TRAIN_CLI_ARGS=()
 
 usage() {
   cat <<'USAGE'
 Usage:
-  bash benchmark/smoke/train/restart_smoke_train_eval.sh [--slot N] [train/eval args...]
+  bash benchmark/smoke/train/restart_smoke_train_eval.sh [--slot N] [--auto-commit] [train/eval args...]
 
 Launcher options:
   --slot N  Isolated experiment slot. Slot 0 is default. Slot N>0 uses:
@@ -28,6 +31,9 @@ Launcher options:
             OV config     = ~/.openviking_N/ov.conf
             OV data       = ~/.openviking_N/data
             result dir    = result/smoke/train_N
+  --auto-commit
+            Commit pending code changes before launching and annotate that
+            commit with local Git notes as each train/eval stage completes.
 
 All remaining args are passed to benchmark/smoke/train/run_batch_train_eval.sh.
 
@@ -50,6 +56,10 @@ parse_launcher_args() {
         ;;
       --slot=*)
         SLOT="${1#--slot=}"
+        shift 1
+        ;;
+      --auto-commit)
+        AUTO_COMMIT=true
         shift 1
         ;;
       -h|--help)
@@ -372,6 +382,7 @@ run_train_eval() {
 }
 
 main() {
+  openviking_train_auto_commit "${REPO_ROOT}" "smoke train eval"
   start_openviking_server
   start_smoke_service
   run_train_eval "${TRAIN_CLI_ARGS[@]}"

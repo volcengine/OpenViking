@@ -64,6 +64,9 @@ bash benchmark/alfworld/train/restart_alfworld_train_eval.sh \
 The launcher restarts OpenViking, starts the ALFWorld rollout service, waits for
 health checks, and then invokes `benchmark/alfworld/train/run_batch_train_eval.sh`.
 Use `--slot N` before train/eval args for isolated ports/config/data/result dirs.
+Use `--auto-commit` to commit pending changes before launch and append the
+redacted command plus each completed stage summary to `git notes show HEAD`.
+The note and code commit remain local; the launcher does not push either one.
 Slot routing is hermetic: inherited environment variables such as
 `OPENVIKING_PORT`, `OPENVIKING_CONFIG_FILE`, `OPENVIKING_DATA_DIR`,
 `ALFWORLD_SERVICE_PORT`, `RESULT_DIR_NAME`, and `LOG_DIR` do not override the

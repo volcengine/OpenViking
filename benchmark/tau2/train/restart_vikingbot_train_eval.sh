@@ -18,6 +18,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TAU2_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${TAU2_DIR}/../.." && pwd)"
+source "${REPO_ROOT}/openviking/session/train/auto_commit.sh"
+openviking_capture_train_launch_command "$@"
 
 SLOT="0"
 AUTO_COMMIT=false
@@ -37,8 +39,8 @@ Launcher options:
             OV data     = ~/.openviking_N/data
             result dir  = result/tau2/train_N
   --auto-commit
-            Commit pending code changes before launching the run, matching the
-            LoCoMo vikingbot eval helper behavior.
+            Commit pending code changes before launching, then append local Git
+            notes with the command and each completed train/eval stage result.
 
 All remaining args are passed to benchmark/tau2/train/run_batch_train_eval.sh.
 USAGE
@@ -85,24 +87,6 @@ validate_slot() {
     echo "[restart-vikingbot-train] ERROR: --slot must be a non-negative integer, got: ${SLOT}" >&2
     exit 1
   fi
-}
-
-auto_commit_if_requested() {
-  if [[ "${AUTO_COMMIT}" != "true" ]]; then
-    return 0
-  fi
-
-  if [[ -n "$(git -C "${REPO_ROOT}" status --porcelain)" ]]; then
-    local commit_message
-    commit_message="auto-commit before tau2 train eval $(date +%Y%m%d_%H%M%S)"
-    log "[auto-commit] detected pending changes, committing..."
-    git -C "${REPO_ROOT}" add -A
-    git -C "${REPO_ROOT}" commit -m "${commit_message}"
-  else
-    log "[auto-commit] working tree clean, nothing to commit"
-  fi
-
-  log "[auto-commit] current commit: $(git -C "${REPO_ROOT}" rev-parse --short HEAD)"
 }
 
 parse_launcher_args "$@"
@@ -397,7 +381,7 @@ run_train_eval() {
 }
 
 main() {
-  auto_commit_if_requested
+  openviking_train_auto_commit "${REPO_ROOT}" "tau2 train eval"
   start_openviking_server
   start_tau2_service
   run_train_eval "${TRAIN_CLI_ARGS[@]}"

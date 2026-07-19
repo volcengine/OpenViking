@@ -25,6 +25,9 @@ bash benchmark/smoke/train/restart_smoke_train_eval.sh \
 The launcher restarts OpenViking, starts the smoke rollout service, waits for
 health checks, and then invokes `benchmark/smoke/train/run_batch_train_eval.sh`.
 Use `--slot N` before train/eval args for isolated ports/config/data/result dirs.
+Use `--auto-commit` to commit pending changes before launch and append the
+redacted command plus each completed stage summary to `git notes show HEAD`.
+The note and code commit remain local; the launcher does not push either one.
 
 Run the generic train/eval pipeline against it:
 

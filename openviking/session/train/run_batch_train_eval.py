@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -272,6 +273,8 @@ async def main_async() -> int:
             reuse_train_rollout_cache=args.reuse_train_rollout_cache,
             clean_result=args.clean_result,
             keep_recent_results=args.keep_recent_results,
+            git_notes_commit=os.environ.get("OPENVIKING_TRAIN_GIT_NOTES_COMMIT"),
+            git_notes_launch_command=os.environ.get("OPENVIKING_TRAIN_LAUNCH_COMMAND"),
         )
     )
     return 1 if any(epoch.get("errors") for epoch in report.train_epochs) else 0

@@ -454,6 +454,36 @@ async def test_skill_readability_gate_rejects_relative_write_scope_none():
 
 
 @pytest.mark.asyncio
+async def test_skill_readability_gate_ignores_relative_wording_only_in_anti_pattern():
+    item = _plan_item()
+    _set_experience_fields(
+        item,
+        situation=(
+            "- Applies when: user asks to cancel all upcoming reservations.\n"
+            "- Does not apply when: user names specific reservation IDs.\n"
+            "- Source binding: cancellation policy and retrieved reservations.\n"
+            "- Scope ambiguity: none"
+        ),
+        reminder="- Check every policy eligibility branch for every upcoming reservation.",
+        procedure="- If a reservation matches any branch: cancel that reservation.",
+        anti_pattern="- Do not ignore other eligible reservations.",
+    )
+    target = GateTarget(
+        stage="post_plan",
+        memory_type="experiences",
+        target_kind="plan_item",
+        plan_item=item,
+        analysis=None,
+        trajectory=_trajectory_with_repair_signal(action="create"),
+        policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
+    )
+
+    decision = await ExperienceFieldSemanticsGate().evaluate(target)
+
+    assert decision is None
+
+
+@pytest.mark.asyncio
 async def test_skill_readability_gate_rejects_line_item_money_without_canonical_source():
     item = _plan_item()
     _set_experience_fields(
@@ -876,6 +906,81 @@ async def test_experience_root_cause_prevention_gate_allows_preventive_experienc
     assert "preserve non-conflicting constraints and object" in prompt
     assert "Tau2 evaluator authority" not in prompt
     assert "must not mention the evaluator" in prompt
+
+
+@pytest.mark.asyncio
+async def test_experience_root_cause_prevention_gate_accepts_observed_policy_branch_completion():
+    target, gate = _gradient_target(RuntimeError("semantic gate must not run"))
+    assert target.trajectory is not None
+    target.trajectory.content = (
+        "## Runtime Evidence\n"
+        "- Observed policy text: cancellation eligibility includes bookings within 24 hours, "
+        "airline cancellation, business class, or covered insurance.\n"
+        "## Execution\n"
+        "- Agent-stated decisions: treated only business-class reservations as eligible.\n"
+        "## Outcome Evidence\n"
+        "- Missing or mismatched actions: cancel_reservation for one eligible reservation.\n"
+    )
+    fields = {
+        "situation": (
+            "- Applies when: 用户要求取消所有即将到来的预订\n"
+            "- Does not apply when: 用户仅指定特定预订\n"
+            "- Source binding: 已读取的取消政策及每条预订详情\n"
+            "- Scope ambiguity: none"
+        ),
+        "reminder": "- 检查取消政策中的所有资格条件，而不是只检查商务舱",
+        "procedure": (
+            "- 逐一检查每个未飞预订是否符合政策任一资格条件\n"
+            "- 如果符合任一条件：将该预订纳入取消列表并执行取消"
+        ),
+        "anti_pattern": "- 不要只检查部分政策分支",
+    }
+    assert target.gradient is not None
+    target.gradient.after_file.content = render_experience_fields(fields)
+    target.gradient.after_file.extra_fields.update(fields)
+
+    decision = await gate.evaluate(target)
+
+    assert decision is not None
+    assert decision.action == "allow"
+    assert decision.evidence["deterministic_policy_branch_completion"] is True
+    assert gate.vlm.calls == []
+
+
+@pytest.mark.asyncio
+async def test_experience_root_cause_prevention_gate_still_reviews_policy_override():
+    target, gate = _gradient_target(
+        '{"pass": false, "root_cause_quality": "unsafe", '
+        '"reason": "user intent cannot override cancellation eligibility", '
+        '"expected_behavior_change": "", "repair_prompt": "remove override", "risks": []}'
+    )
+    assert target.trajectory is not None
+    target.trajectory.content = (
+        "## Runtime Evidence\n"
+        "- Observed policy text: cancellation requires an eligible policy branch.\n"
+        "## Outcome Evidence\n"
+        "- Missing or mismatched actions: cancel_reservation.\n"
+    )
+    fields = {
+        "situation": (
+            "- Applies when: 用户要求取消所有预订\n"
+            "- Does not apply when: 用户未要求取消\n"
+            "- Source binding: 用户请求文本和取消政策\n"
+            "- Scope ambiguity: none"
+        ),
+        "reminder": "- 检查所有政策资格条件；即使预订不符合条件，也按用户意愿取消",
+        "procedure": "- 逐一检查每个预订是否符合任一资格条件；无论是否符合取消政策，都取消",
+        "anti_pattern": "- 不要让政策资格阻止用户要求的取消",
+    }
+    assert target.gradient is not None
+    target.gradient.after_file.content = render_experience_fields(fields)
+    target.gradient.after_file.extra_fields.update(fields)
+
+    decision = await gate.evaluate(target)
+
+    assert decision is not None
+    assert decision.action == "reject"
+    assert len(gate.vlm.calls) == 1
 
 
 @pytest.mark.asyncio

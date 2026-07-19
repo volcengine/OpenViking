@@ -374,15 +374,11 @@ do not copy or modify them.
 
 ## Authoritative outcome evidence
 
-System-generated Outcome Evidence defines which state, action, or communication changed the result.
-If it conflicts with base-policy wording, the required behavior is proof that a bounded exception exists.
-Override only the smallest conflicting policy interpretation needed to explain the required outcome.
-Also preserve non-conflicting constraints and object boundaries. You must preserve the base policy outside
-that exception. An explicit business-policy explanation is not required. Describe the exception directly
-using the smallest conjunction of actual runtime-visible facts from user statements, tool results,
-object state, and confirmation.
-The experience itself must not mention the evaluator, evaluation metadata, hidden checks,
-expected actions, reward, or rubric.
+System-generated Outcome Evidence defines which state, action, or communication changed the
+result. If it conflicts with base-policy wording, override only the smallest conflicting policy interpretation
+needed to explain the required outcome; preserve non-conflicting constraints and object boundaries.
+The experience itself must not mention the evaluator, evaluation metadata, hidden checks, expected
+actions, reward, or rubric. Rewrite the lesson using runtime-visible facts.
 
 ## Comparison workflow
 
@@ -401,16 +397,14 @@ expected actions, reward, or rubric.
 - Never invent a flag or field such as `cancellation_allowed` or another `*_allowed` field that
   was not present in runtime evidence.
 - Generalize case IDs, but preserve decisive real schema field names and enum categories.
-- If Outcome Evidence conflicts with policy and no explicit business rule explains it, use the
-  smallest actual runtime-visible facts that a future agent can inspect as the exception boundary.
-- Choose Skip only when no future runtime-visible condition can identify the exception.
+- If Outcome Evidence requires an action but neither trajectory exposes an observable condition
+  for choosing it, do not guess a business rule; choose Skip.
 - Preserve the original user-requested object and action boundaries. An agent-proposed expansion
   followed by user agreement is not an independently requested new scope.
 
 ## Decision and output
 
-- Update when an existing experience covers the same exception pattern but is misleading or its
-  applicability/reminder is too weak.
+- Update when an existing experience is misleading or its applicability/reminder is too weak.
 - Create when no relevant experience covers a supported, reusable prevention or recovery.
 - Skip when an existing experience is already correct but was ignored, or when the failure is
   case-specific, unsupported, random, already covered, or not preventable by a runtime reminder.
