@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Shared writeback for semantic sidecar files."""
 
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Dict, Optional
 
 from openviking.server.identity import RequestContext
 from openviking.storage.transaction import NO_LOCK, LockLease
@@ -21,6 +21,7 @@ async def write_semantic_sidecars(
     is_stale: Callable[[], bool],
     lock: LockLease = NO_LOCK,
     log_prefix: str = "[Semantic]",
+    additional_sidecars: Optional[Dict[str, str]] = None,
 ) -> bool:
     if is_stale():
         logger.info("%s Skipping stale semantic write for %s", log_prefix, dir_uri)
@@ -34,18 +35,37 @@ async def write_semantic_sidecars(
 
         lock_manager = get_lock_manager()
     except Exception:
-        await _write_sidecars(viking_fs, dir_uri, overview, abstract, ctx, lock.handle)
+        await _write_sidecars(
+            viking_fs,
+            dir_uri,
+            overview,
+            abstract,
+            ctx,
+            lock.handle,
+            additional_sidecars,
+        )
         return True
 
     lock_paths = [
         viking_fs._uri_to_path(f"{dir_uri}/.overview.md", ctx=ctx),
         viking_fs._uri_to_path(f"{dir_uri}/.abstract.md", ctx=ctx),
     ]
+    lock_paths.extend(
+        viking_fs._uri_to_path(f"{dir_uri}/{name}", ctx=ctx) for name in (additional_sidecars or {})
+    )
     async with LockContext(lock_manager, lock_paths, lock_mode="exact", handle=lock.handle):
         if is_stale():
             logger.info("%s Skipping stale semantic write for %s", log_prefix, dir_uri)
             return False
-        await _write_sidecars(viking_fs, dir_uri, overview, abstract, ctx, lock.handle)
+        await _write_sidecars(
+            viking_fs,
+            dir_uri,
+            overview,
+            abstract,
+            ctx,
+            lock.handle,
+            additional_sidecars,
+        )
         return True
 
 
@@ -56,6 +76,7 @@ async def _write_sidecars(
     abstract: str,
     ctx: Optional[RequestContext],
     lock_handle: Any = None,
+    additional_sidecars: Optional[Dict[str, str]] = None,
 ) -> None:
     # TODO: This must be optimized once pathlock is pushed down into ragfs.
     await viking_fs.write_file(
@@ -70,3 +91,10 @@ async def _write_sidecars(
         ctx=ctx,
         lock_handle=lock_handle,
     )
+    for name, content in (additional_sidecars or {}).items():
+        await viking_fs.write_file(
+            f"{dir_uri}/{name}",
+            content,
+            ctx=ctx,
+            lock_handle=lock_handle,
+        )

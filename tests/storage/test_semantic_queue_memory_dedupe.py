@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for memory-context semantic enqueue deduplication (#769)."""
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -139,8 +140,8 @@ class _FakeVikingFS:
         del ctx
         return f"/fake/{uri.replace('://', '/').strip('/')}"
 
-    async def write_file(self, uri, content, ctx=None):
-        del ctx
+    async def write_file(self, uri, content, ctx=None, lock_handle=None):
+        del ctx, lock_handle
         self.writes.append((uri, content))
 
 
@@ -184,6 +185,7 @@ async def test_stale_memory_semantic_write_is_skipped(monkeypatch):
         overview="old overview",
         abstract="old abstract",
         ctx=None,
+        summary_cache="old cache",
     )
     wrote_latest = await processor._write_memory_directory_semantics(
         msg=latest,
@@ -192,6 +194,7 @@ async def test_stale_memory_semantic_write_is_skipped(monkeypatch):
         overview="latest overview",
         abstract="latest abstract",
         ctx=None,
+        summary_cache="latest cache",
     )
 
     assert not wrote_first
@@ -200,11 +203,13 @@ async def test_stale_memory_semantic_write_is_skipped(monkeypatch):
         [
             "/fake/viking/user/default/memories/preferences/.overview.md",
             "/fake/viking/user/default/memories/preferences/.abstract.md",
+            "/fake/viking/user/default/memories/preferences/.summary_cache.json",
         ]
     ]
     assert viking_fs.writes == [
         ("viking://user/default/memories/preferences/.overview.md", "latest overview"),
         ("viking://user/default/memories/preferences/.abstract.md", "latest abstract"),
+        ("viking://user/default/memories/preferences/.summary_cache.json", "latest cache"),
     ]
 
 
@@ -249,6 +254,82 @@ async def test_memory_directory_summarizes_all_uncached_files(monkeypatch):
     )
 
     assert [item["name"] for item in summaries] == ["first.md", "second.md"]
+
+
+@pytest.mark.asyncio
+async def test_memory_directory_reuses_filename_keyed_summary_cache(monkeypatch):
+    processor = SemanticProcessor(max_concurrent_llm=4)
+    dir_uri = "viking://user/default/memories/preferences"
+    generated = []
+    overview_inputs = []
+    written = []
+
+    class CachedMemoryDirFS(_FakeMemoryDirFS):
+        async def read_file(self, uri, ctx=None):
+            del ctx
+            if uri.endswith("/.summary_cache.json"):
+                return json.dumps(
+                    {
+                        "version": 1,
+                        "entries": {
+                            "first.md": "cached:first.md",
+                            "second.md": "cached:second.md",
+                        },
+                    }
+                )
+            if uri.endswith("/.overview.md"):
+                return ""
+            raise FileNotFoundError(uri)
+
+    async def generate_file_summary(file_path, llm_sem=None, ctx=None):
+        del llm_sem, ctx
+        generated.append(file_path)
+        name = file_path.rsplit("/", 1)[-1]
+        return {"name": name, "summary": f"fresh:{name}"}
+
+    async def generate_overview(dir_uri, file_summaries, children_abstracts, llm_sem=None):
+        del dir_uri, children_abstracts, llm_sem
+        overview_inputs.extend(file_summaries)
+        return "overview"
+
+    async def write_semantics(**kwargs):
+        written.append(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: CachedMemoryDirFS(),
+    )
+    monkeypatch.setattr(processor, "_generate_single_file_summary", generate_file_summary)
+    monkeypatch.setattr(processor, "_generate_overview", generate_overview)
+    monkeypatch.setattr(
+        processor,
+        "_normalize_overview_generation",
+        lambda overview: (overview, "abstract"),
+    )
+    monkeypatch.setattr(processor, "_write_memory_directory_semantics", write_semantics)
+
+    await processor._process_memory_directory(
+        SemanticMsg(
+            uri=dir_uri,
+            context_type="memory",
+            changes={"modified": [f"{dir_uri}/first.md"]},
+            skip_vectorization=True,
+        )
+    )
+
+    assert generated == [f"{dir_uri}/first.md"]
+    assert overview_inputs == [
+        {"name": "first.md", "summary": "fresh:first.md"},
+        {"name": "second.md", "summary": "cached:second.md"},
+    ]
+    assert json.loads(written[0]["summary_cache"]) == {
+        "version": 1,
+        "entries": {
+            "first.md": "fresh:first.md",
+            "second.md": "cached:second.md",
+        },
+    }
 
 
 @pytest.mark.asyncio

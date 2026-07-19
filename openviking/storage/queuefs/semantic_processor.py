@@ -3,6 +3,7 @@
 """SemanticProcessor: Processes messages from SemanticQueue, generates .abstract.md and .overview.md."""
 
 import asyncio
+import json
 import re
 import threading
 from contextlib import nullcontext
@@ -56,6 +57,9 @@ from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+MEMORY_SUMMARY_CACHE_FILENAME = ".summary_cache.json"
+MEMORY_SUMMARY_CACHE_VERSION = 1
 
 
 @dataclass
@@ -566,9 +570,23 @@ class SemanticProcessor(DequeueHandlerBase):
             existing_summaries: Dict[str, str] = {}
             if msg.changes:
                 try:
+                    raw_cache = await viking_fs.read_file(
+                        f"{dir_uri}/{MEMORY_SUMMARY_CACHE_FILENAME}", ctx=ctx
+                    )
+                    existing_summaries.update(self._parse_memory_summary_cache(raw_cache))
+                    if existing_summaries:
+                        logger.info(
+                            f"Loaded {len(existing_summaries)} summaries from memory sidecar cache"
+                        )
+                except Exception as e:
+                    logger.debug(f"No memory summary sidecar found for {dir_uri}: {e}")
+
+                try:
                     old_overview = await viking_fs.read_file(f"{dir_uri}/.overview.md", ctx=ctx)
                     if old_overview:
-                        existing_summaries = self._parse_overview_md(old_overview)
+                        parsed_overview = self._parse_overview_md(old_overview)
+                        for name, summary in parsed_overview.items():
+                            existing_summaries.setdefault(name, summary)
                         logger.info(
                             f"Parsed {len(existing_summaries)} existing summaries from overview.md"
                         )
@@ -646,6 +664,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     await asyncio.gather(*[_gen(i, fp) for i, fp in batch])
 
             completed_summaries = [s for s in file_summaries if s is not None]
+            summary_cache = self._serialize_memory_summary_cache(completed_summaries)
             # Incremental writes carry changes; full rebuild tasks do not.
             if msg.changes:
                 paths_to_vectorize = changed_files
@@ -668,6 +687,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     dir_uri=dir_uri,
                     overview=overview,
                     abstract=abstract,
+                    summary_cache=summary_cache,
                     ctx=ctx,
                     lock=lock,
                 )
@@ -726,6 +746,7 @@ class SemanticProcessor(DequeueHandlerBase):
         overview: str,
         abstract: str,
         ctx: Optional[RequestContext],
+        summary_cache: Optional[str] = None,
         lock: LockLease = NO_LOCK,
     ) -> bool:
         return await write_semantic_sidecars(
@@ -737,6 +758,11 @@ class SemanticProcessor(DequeueHandlerBase):
             is_stale=lambda: is_semantic_msg_stale(msg),
             lock=lock,
             log_prefix="[MemorySemantic]",
+            additional_sidecars=(
+                {MEMORY_SUMMARY_CACHE_FILENAME: summary_cache}
+                if summary_cache is not None
+                else None
+            ),
         )
 
     async def _sync_topdown_recursive(
@@ -1280,6 +1306,38 @@ class SemanticProcessor(DequeueHandlerBase):
             summaries[current_file] = " ".join(current_summary_lines).strip()
 
         return summaries
+
+    def _parse_memory_summary_cache(self, cache_content: str) -> Dict[str, str]:
+        """Parse the deterministic per-file memory summary cache."""
+        if not cache_content:
+            return {}
+        try:
+            payload = json.loads(cache_content)
+        except (TypeError, ValueError):
+            return {}
+        if not isinstance(payload, dict) or payload.get("version") != MEMORY_SUMMARY_CACHE_VERSION:
+            return {}
+        entries = payload.get("entries")
+        if not isinstance(entries, dict):
+            return {}
+        return {
+            name: summary
+            for name, summary in entries.items()
+            if isinstance(name, str) and isinstance(summary, str)
+        }
+
+    def _serialize_memory_summary_cache(self, file_summaries: List[Dict[str, str]]) -> str:
+        """Serialize summaries by exact filename, independent of LLM headings."""
+        entries = {
+            item["name"]: item["summary"]
+            for item in file_summaries
+            if isinstance(item.get("name"), str) and isinstance(item.get("summary"), str)
+        }
+        return json.dumps(
+            {"version": MEMORY_SUMMARY_CACHE_VERSION, "entries": entries},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
 
     async def _generate_overview(
         self,
