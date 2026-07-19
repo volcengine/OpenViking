@@ -44,12 +44,6 @@ from openviking.session.memory.utils.resource_refs import (
 )
 from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking.session.memory.utils.uri import numbered_uri, render_template
-from openviking.storage.errors import LockAcquisitionError
-from openviking.storage.transaction.lock_lease import (
-    BorrowedLockLease,
-    LockLease,
-    OwnedLockLease,
-)
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -975,57 +969,43 @@ class MemoryUpdater:
                 f"Cannot apply operations: missing resolved URIs for {', '.join(missing)}"
             )
 
-        add_only_lease = await self._allocate_add_only_uris(
+        await self._allocate_add_only_uris(
             operations,
             ctx,
             viking_fs,
         )
-        try:
-            # Distribute resolved_links to corresponding upsert operations
-            self._distribute_links_to_operations(operations)
+        # Distribute resolved_links to corresponding upsert operations
+        self._distribute_links_to_operations(operations)
 
-            # Apply unified operations - _apply_edit returns True if edited, False if written
-            for resolved_op in operations.upsert_operations:
-                try:
-                    allocation_error = getattr(
-                        resolved_op,
-                        "_add_only_allocation_error",
-                        None,
-                    )
-                    if allocation_error is not None:
-                        raise allocation_error
-                    schema = self._registry.get(resolved_op.memory_type)
-                    lock_handle = (
-                        add_only_lease.handle
-                        if add_only_lease is not None
-                        and getattr(schema, "operation_mode", None) == "add_only"
-                        else None
-                    )
-                    upsert_kwargs = {"extract_context": extract_context}
-                    if lock_handle is not None:
-                        upsert_kwargs["lock_handle"] = lock_handle
-                    await self._apply_upsert(
-                        resolved_op,
-                        ctx,
-                        **upsert_kwargs,
-                    )
-                    # Add all uris to result (uris is List[str])
-                    if resolved_op.is_edit():
-                        for uri in resolved_op.uris:
-                            result.add_edited(uri)
-                    else:
-                        for uri in resolved_op.uris:
-                            result.add_written(uri)
-                except Exception as e:
-                    tracer.error(
-                        f"Failed to apply operation: op_type={type(resolved_op).__name__}, uris={resolved_op.uris}",
-                        e,
-                    )
+        # Apply unified operations - _apply_edit returns True if edited, False if written
+        for resolved_op in operations.upsert_operations:
+            try:
+                allocation_error = getattr(
+                    resolved_op,
+                    "_add_only_allocation_error",
+                    None,
+                )
+                if allocation_error is not None:
+                    raise allocation_error
+                await self._apply_upsert(
+                    resolved_op,
+                    ctx,
+                    extract_context=extract_context,
+                )
+                # Add all uris to result (uris is List[str])
+                if resolved_op.is_edit():
                     for uri in resolved_op.uris:
-                        result.add_error(uri, e)
-        finally:
-            if add_only_lease is not None:
-                await add_only_lease.close()
+                        result.add_edited(uri)
+                else:
+                    for uri in resolved_op.uris:
+                        result.add_written(uri)
+            except Exception as e:
+                tracer.error(
+                    f"Failed to apply operation: op_type={type(resolved_op).__name__}, uris={resolved_op.uris}",
+                    e,
+                )
+                for uri in resolved_op.uris:
+                    result.add_error(uri, e)
 
         operations.resolved_links = remap_stored_links(
             list(getattr(operations, "resolved_links", []) or []),
@@ -1137,7 +1117,7 @@ class MemoryUpdater:
         operations: ResolvedOperations,
         ctx: RequestContext,
         viking_fs: Any,
-    ) -> LockLease | None:
+    ) -> None:
         add_only_operations = [
             operation
             for operation in operations.upsert_operations
@@ -1145,100 +1125,69 @@ class MemoryUpdater:
             == "add_only"
         ]
         if not add_only_operations:
-            return None
+            return
 
-        lock_paths = []
+        batch_reservations: set[str] = set()
+        uri_remap: Dict[str, str] = {}
         for operation in add_only_operations:
-            for uri in operation.uris:
-                file_path = viking_fs._uri_to_path(uri, ctx=ctx)
-                parent_path = file_path.rpartition("/")[0] or "/"
-                if parent_path not in lock_paths:
-                    lock_paths.append(parent_path)
-
-        from openviking.storage.transaction import get_lock_manager
-
-        lock_manager = get_lock_manager()
-        owns_lock_handle = self._transaction_handle is None
-        lock_handle = self._transaction_handle or lock_manager.create_handle()
-        if not await lock_manager.acquire_tree_batch(lock_handle, lock_paths):
-            if owns_lock_handle:
-                await lock_manager.release(lock_handle)
-            raise LockAcquisitionError(
-                f"Failed to acquire add-only allocation locks for {lock_paths}"
-            )
-        lease = (
-            OwnedLockLease.from_handle(lock_manager, lock_handle)
-            if owns_lock_handle
-            else BorrowedLockLease.from_handle(lock_manager, lock_handle)
-        )
-
-        try:
-            batch_reservations: set[str] = set()
-            uri_remap: Dict[str, str] = {}
-            for operation in add_only_operations:
-                allocated_uris: List[str] = []
-                allocation_bases: Dict[str, str] = {}
-                allocation_error: Exception | None = None
-                for candidate_uri in operation.uris:
-                    canonical_uri = operation.add_only_uri_bases.get(
-                        candidate_uri,
-                        candidate_uri,
-                    )
-                    ordinal = 1
-                    while True:
-                        allocated_uri = numbered_uri(canonical_uri, ordinal)
-                        if allocated_uri in batch_reservations:
-                            ordinal += 1
-                            continue
-                        try:
-                            await viking_fs.stat(
-                                allocated_uri,
-                                ctx=ctx,
-                                skip_count=True,
-                            )
-                        except (NotFoundError, FileNotFoundError, AGFSNotFoundError):
-                            break
-                        except Exception as exc:
-                            allocation_error = exc
-                            break
+            allocated_uris: List[str] = []
+            allocation_bases: Dict[str, str] = {}
+            allocation_error: Exception | None = None
+            for candidate_uri in operation.uris:
+                canonical_uri = operation.add_only_uri_bases.get(
+                    candidate_uri,
+                    candidate_uri,
+                )
+                ordinal = 1
+                while True:
+                    allocated_uri = numbered_uri(canonical_uri, ordinal)
+                    if allocated_uri in batch_reservations:
                         ordinal += 1
-                    if allocation_error is not None:
+                        continue
+                    try:
+                        await viking_fs.stat(
+                            allocated_uri,
+                            ctx=ctx,
+                            skip_count=True,
+                        )
+                    except (NotFoundError, FileNotFoundError, AGFSNotFoundError):
                         break
-                    batch_reservations.add(allocated_uri)
-                    allocated_uris.append(allocated_uri)
-                    allocation_bases[allocated_uri] = canonical_uri
-
+                    except Exception as exc:
+                        allocation_error = exc
+                        break
+                    ordinal += 1
                 if allocation_error is not None:
-                    operation._add_only_allocation_error = allocation_error
-                    continue
+                    break
+                batch_reservations.add(allocated_uri)
+                allocated_uris.append(allocated_uri)
+                allocation_bases[allocated_uri] = canonical_uri
 
-                previous_uris = list(operation.uris)
-                operation.uris = allocated_uris
-                operation.add_only_uri_bases = allocation_bases
-                operation.old_memory_file_content = None
-                for previous_uri, allocated_uri in zip(
-                    previous_uris,
-                    allocated_uris,
-                    strict=True,
-                ):
-                    if previous_uri != allocated_uri:
-                        uri_remap.setdefault(previous_uri, allocated_uri)
+            if allocation_error is not None:
+                operation._add_only_allocation_error = allocation_error
+                continue
 
-            operations.resolved_links = remap_stored_links(
-                list(getattr(operations, "resolved_links", []) or []),
-                uri_remap,
-            )
-            return lease
-        except Exception:
-            await lease.close()
-            raise
+            previous_uris = list(operation.uris)
+            operation.uris = allocated_uris
+            operation.add_only_uri_bases = allocation_bases
+            operation.old_memory_file_content = None
+            for previous_uri, allocated_uri in zip(
+                previous_uris,
+                allocated_uris,
+                strict=True,
+            ):
+                if previous_uri != allocated_uri:
+                    uri_remap.setdefault(previous_uri, allocated_uri)
+
+        operations.resolved_links = remap_stored_links(
+            list(getattr(operations, "resolved_links", []) or []),
+            uri_remap,
+        )
 
     async def _apply_upsert(
         self,
         resolved_op: ResolvedOperation,
         ctx: RequestContext,
         extract_context: Any = None,
-        lock_handle: Any = None,
     ):
         """Apply upsert operation from a flat model."""
         viking_fs = self._get_viking_fs()
@@ -1325,15 +1274,7 @@ class MemoryUpdater:
                 extract_context=extract_context,
                 persist_content=_schema_should_persist_content(schema),
             )
-            if lock_handle is None:
-                await viking_fs.write_file(uri, new_full_content, ctx=ctx)
-            else:
-                await viking_fs.write_file(
-                    uri,
-                    new_full_content,
-                    ctx=ctx,
-                    lock_handle=lock_handle,
-                )
+            await viking_fs.write_file(uri, new_full_content, ctx=ctx)
 
     def _distribute_links_to_operations(self, operations: ResolvedOperations) -> None:
         """Distribute resolved_links to corresponding upsert operations by URI.

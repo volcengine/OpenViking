@@ -5,7 +5,6 @@ Tests for MemoryUpdater.
 """
 
 import asyncio
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -38,44 +37,8 @@ from openviking.session.memory.utils import (
     MemoryFileUtils,
     parse_memory_file_with_fields,
 )
-from openviking.storage.transaction.lock_handle import LockHandle
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
-
-
-class _TestTreeLockManager:
-    def __init__(self):
-        self._handles: dict[str, LockHandle] = {}
-        self._locks: dict[str, asyncio.Lock] = {}
-        self._owned_paths: dict[str, list[str]] = {}
-        self._path_lock = SimpleNamespace(_lock_expire=300.0)
-        self.create_handle_calls = 0
-
-    def create_handle(self) -> LockHandle:
-        self.create_handle_calls += 1
-        handle = LockHandle()
-        self._handles[handle.id] = handle
-        return handle
-
-    def get_handle(self, handle_id: str) -> LockHandle | None:
-        return self._handles.get(handle_id)
-
-    async def acquire_tree_batch(self, handle: LockHandle, paths: list[str], timeout=None) -> bool:
-        del timeout
-        acquired = []
-        for path in sorted(set(paths), key=lambda item: (len(item), item)):
-            lock = self._locks.setdefault(path, asyncio.Lock())
-            await lock.acquire()
-            acquired.append(path)
-            handle.add_lock(path)
-        self._owned_paths[handle.id] = acquired
-        return True
-
-    async def release(self, handle: LockHandle) -> None:
-        for path in reversed(self._owned_paths.pop(handle.id, [])):
-            handle.remove_lock(path)
-            self._locks[path].release()
-        self._handles.pop(handle.id, None)
 
 
 class _MemoryVikingFS:
@@ -528,11 +491,9 @@ class TestAddOnlyUriAllocation:
                 )
             ],
         )
-        lock_manager = _TestTreeLockManager()
-
         with patch(
             "openviking.storage.transaction.get_lock_manager",
-            return_value=lock_manager,
+            side_effect=AssertionError("add_only allocation must not acquire a directory lock"),
         ):
             result = await updater.apply_operations(operations, self._ctx())
 
@@ -546,7 +507,7 @@ class TestAddOnlyUriAllocation:
         assert operations.resolved_links[0].from_uri == canonical_3
         written = MemoryFileUtils.read(viking_fs.files[canonical_3], uri=canonical_3)
         assert written.links[0]["from_uri"] == canonical_3
-        assert viking_fs.write_calls[0][1] is not None
+        assert viking_fs.write_calls[0][1] is None
         assert updater._vectorize_memories.await_args.kwargs["uri_memory_type_map"] == {
             canonical_3: "events"
         }
@@ -577,11 +538,7 @@ class TestAddOnlyUriAllocation:
             errors=[],
         )
 
-        with patch(
-            "openviking.storage.transaction.get_lock_manager",
-            return_value=_TestTreeLockManager(),
-        ):
-            result = await updater.apply_operations(operations, self._ctx())
+        result = await updater.apply_operations(operations, self._ctx())
 
         assert first.uris == [canonical_2]
         assert second.uris == [canonical_3]
@@ -606,11 +563,7 @@ class TestAddOnlyUriAllocation:
             errors=[],
         )
 
-        with patch(
-            "openviking.storage.transaction.get_lock_manager",
-            return_value=_TestTreeLockManager(),
-        ):
-            result = await updater.apply_operations(operations, self._ctx())
+        result = await updater.apply_operations(operations, self._ctx())
 
         assert result.written_uris == []
         assert len(result.errors) == 1
@@ -618,7 +571,7 @@ class TestAddOnlyUriAllocation:
         assert viking_fs.write_calls == []
 
     @pytest.mark.asyncio
-    async def test_concurrent_writers_allocate_distinct_uris(self):
+    async def test_sequential_writers_allocate_distinct_uris(self):
         canonical = "viking://user/alice/memories/events/name.md"
         canonical_2 = "viking://user/alice/memories/events/name_2.md"
         viking_fs = _MemoryVikingFS()
@@ -638,15 +591,8 @@ class TestAddOnlyUriAllocation:
                 errors=[],
             )
 
-        lock_manager = _TestTreeLockManager()
-        with patch(
-            "openviking.storage.transaction.get_lock_manager",
-            return_value=lock_manager,
-        ):
-            first_result, second_result = await asyncio.gather(
-                first_updater.apply_operations(operations("first"), self._ctx()),
-                second_updater.apply_operations(operations("second"), self._ctx()),
-            )
+        first_result = await first_updater.apply_operations(operations("first"), self._ctx())
+        second_result = await second_updater.apply_operations(operations("second"), self._ctx())
 
         assert set(first_result.written_uris + second_result.written_uris) == {
             canonical,
@@ -655,12 +601,11 @@ class TestAddOnlyUriAllocation:
         assert set(viking_fs.files) == {canonical, canonical_2}
 
     @pytest.mark.asyncio
-    async def test_reuses_outer_transaction_handle_without_releasing_it(self):
+    async def test_add_only_write_does_not_use_outer_transaction_handle(self):
         canonical = "viking://user/alice/memories/events/name.md"
         viking_fs = _MemoryVikingFS()
         updater = self._updater(viking_fs)
-        manager = _TestTreeLockManager()
-        outer_handle = manager.create_handle()
+        outer_handle = object()
         updater._transaction_handle = outer_handle
         operations = ResolvedOperations(
             upsert_operations=[
@@ -674,17 +619,10 @@ class TestAddOnlyUriAllocation:
             errors=[],
         )
 
-        with patch(
-            "openviking.storage.transaction.get_lock_manager",
-            return_value=manager,
-        ):
-            result = await updater.apply_operations(operations, self._ctx())
+        result = await updater.apply_operations(operations, self._ctx())
 
         assert result.written_uris == [canonical]
-        assert manager.create_handle_calls == 1
-        assert manager.get_handle(outer_handle.id) is outer_handle
-        assert outer_handle.locks == ["/user/alice/memories/events"]
-        await manager.release(outer_handle)
+        assert viking_fs.write_calls == [(canonical, None)]
 
     @pytest.mark.asyncio
     async def test_non_add_only_schema_keeps_canonical_uri(self):
