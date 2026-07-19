@@ -30,6 +30,11 @@ class DataDirectoryLocked(RuntimeError):
     """Raised when another OpenViking process holds the data directory lock."""
 
 
+def _normalize_lock_path(lock_path: str) -> str:
+    """Return one process-local identity for aliases of the same PID file."""
+    return os.path.realpath(os.path.abspath(lock_path))
+
+
 def _read_pid_file(lock_path: str) -> int:
     """Read PID from lock file. Returns 0 if unreadable."""
     try:
@@ -93,7 +98,7 @@ def release_data_dir_lock(lock_path: str, *, pid: int | None = None) -> None:
     that a replacement process has already acquired.
     """
     owner_pid = os.getpid() if pid is None else pid
-    normalized_path = os.path.abspath(lock_path)
+    normalized_path = _normalize_lock_path(lock_path)
 
     with _LOCK_STATE_GUARD:
         holder_count = _LOCK_REF_COUNTS.get(normalized_path, 0)
@@ -115,8 +120,11 @@ def acquire_data_dir_lock(data_dir: str) -> str:
 
     Raises ``DataDirectoryLocked`` if another live process already holds the
     lock, with a message that explains the situation and suggests HTTP mode.
+    Raises ``OSError`` when the PID file cannot be created or updated; callers
+    must never continue as if an exclusivity lock had been acquired.
     """
-    lock_path = os.path.abspath(os.path.join(data_dir, LOCK_FILENAME))
+    normalized_data_dir = os.path.realpath(os.path.abspath(data_dir))
+    lock_path = _normalize_lock_path(os.path.join(normalized_data_dir, LOCK_FILENAME))
     my_pid = os.getpid()
 
     with _LOCK_STATE_GUARD:
@@ -138,12 +146,12 @@ def acquire_data_dir_lock(data_dir: str) -> str:
         # acquisitions still refresh the file in case an external actor
         # removed it while this process remained alive.
         try:
-            os.makedirs(data_dir, exist_ok=True)
+            os.makedirs(normalized_data_dir, exist_ok=True)
             with open(lock_path, "w") as f:
                 f.write(str(my_pid))
         except OSError as exc:
             logger.warning("Could not write PID lock %s: %s", lock_path, exc)
-            return lock_path
+            raise
 
         _LOCK_REF_COUNTS[lock_path] = _LOCK_REF_COUNTS.get(lock_path, 0) + 1
 

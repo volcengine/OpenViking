@@ -174,6 +174,20 @@ class TestAcquireDataDirLock:
         assert new_dir.exists()
         assert (new_dir / LOCK_FILENAME).exists()
 
+    def test_acquire_write_failure_is_not_reported_as_success(self, tmp_path: Path, monkeypatch):
+        """A failed PID-file write must fail closed instead of claiming exclusivity."""
+
+        def _deny_makedirs(*_args, **_kwargs) -> None:
+            raise PermissionError("read-only workspace")
+
+        workspace = tmp_path / "missing"
+        monkeypatch.setattr(process_lock_module.os, "makedirs", _deny_makedirs)
+
+        with pytest.raises(PermissionError, match="read-only workspace"):
+            acquire_data_dir_lock(str(workspace))
+
+        assert not (workspace / LOCK_FILENAME).exists()
+
     def test_error_message_suggests_http_mode(self, tmp_path: Path):
         """Test error message suggests HTTP mode."""
         (tmp_path / LOCK_FILENAME).write_text("1")
@@ -298,6 +312,25 @@ class TestReleaseDataDirLock:
         release_data_dir_lock(lock_path)
 
         assert not (tmp_path / LOCK_FILENAME).exists()
+
+    def test_symlink_alias_shares_the_same_process_local_refcount(self, tmp_path: Path):
+        """Workspace aliases must not let one service release another's PID lock."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        alias = tmp_path / "workspace-alias"
+        try:
+            alias.symlink_to(workspace, target_is_directory=True)
+        except OSError as exc:
+            pytest.skip(f"directory symlinks are unavailable: {exc}")
+
+        lock_path = acquire_data_dir_lock(str(workspace))
+        assert acquire_data_dir_lock(str(alias)) == lock_path
+
+        release_data_dir_lock(lock_path)
+        assert (workspace / LOCK_FILENAME).read_text() == str(os.getpid())
+
+        release_data_dir_lock(lock_path)
+        assert not (workspace / LOCK_FILENAME).exists()
 
 
 class TestProcessLockIntegration:
