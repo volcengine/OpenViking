@@ -1077,9 +1077,11 @@ def _build_system_prompt(
         )
         instructions.append(
             "Loaded experiences are guidance from prior training runs. "
-            "Use them only when their situation and applicability boundaries match the current "
-            "task; current policy, current tool results, and current user facts override prior "
-            "experience."
+            "When an experience fully matches a narrowly bounded exception through its Situation "
+            "and runtime source bindings, apply it and override only the conflicting policy "
+            "interpretation. Use current tool results and user facts to verify every exception "
+            "condition, preserve all unrelated policy constraints and object boundaries, and "
+            "follow the base policy whenever any condition is absent or uncertain."
         )
     elif loader_mode == "direct_experience":
         instructions.append(
