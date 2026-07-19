@@ -348,8 +348,6 @@ class AgentExperienceContextProvider(SessionExtractContextProvider):
         return resolve_output_language(strip_language_detection_noise(self.trajectory_summary))
 
     def instruction(self) -> str:
-        from openviking.session.train.gates import default_experience_gate_contract
-
         output_language = self._output_language
         schema = self._get_registry().get("experiences")
         content_field_names = schema.content_field_names() if schema is not None else ()
@@ -423,7 +421,6 @@ The system applies same-name entries as updates and new names as creates. Use `s
 of `delete_ids`. Keep content concise, imperative, free of case IDs and hidden answers, and use the
 same language for all `experience_name` values.
 
-{default_experience_gate_contract(schema)}
 - Follow field descriptions in the schema.
 - Output JSON only. Do not call any tools.
 

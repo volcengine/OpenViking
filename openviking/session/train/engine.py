@@ -16,7 +16,6 @@ from openviking.session.train.domain import (
     Rollout,
     RolloutAnalysis,
 )
-from openviking.session.train.gates import default_policy_gate_runner
 from openviking.session.train.interfaces import (
     GradientEstimator,
     PolicyOptimizer,
@@ -79,13 +78,13 @@ class PolicyTrainingEngine:
             ]
         )
         gradients = [gradient for batch in gradient_batches for gradient in batch]
-        gate_runner = ctx.gate_runner or default_policy_gate_runner()
-        gradients, gate_report = await gate_runner.filter_gradients(
-            gradients,
-            analyses=analyses,
-            policy_set=policy_set,
-        )
-        _append_gate_report(ctx, gate_report)
+        if ctx.gate_runner is not None:
+            gradients, gate_report = await ctx.gate_runner.filter_gradients(
+                gradients,
+                analyses=analyses,
+                policy_set=policy_set,
+            )
+            _append_gate_report(ctx, gate_report)
         return gradients
 
     async def plan_and_apply(
@@ -101,30 +100,30 @@ class PolicyTrainingEngine:
             _prepare_optimization_context_for_gates(
                 ctx.optimization_context,
                 analyses=list(analyses or []),
-                gate_runner=ctx.gate_runner or default_policy_gate_runner(),
+                gate_runner=ctx.gate_runner,
             )
             plan = await self.policy_optimizer.plan(
                 gradients,
                 latest_policy_set,
                 ctx.optimization_context,
             )
-            gate_runner = ctx.gate_runner or default_policy_gate_runner()
-            filtered_items, gate_report = await gate_runner.filter_plan(
-                list(plan.items or []),
-                analyses=list(analyses or []),
-                policy_set=latest_policy_set,
-            )
-            _append_gate_report(ctx, gate_report)
-            if len(filtered_items) != len(plan.items or []):
-                plan = PolicyUpdatePlan(
-                    items=filtered_items,
-                    metadata={
-                        **dict(plan.metadata or {}),
-                        "gate_report": gate_report.to_dict(),
-                    },
+            if ctx.gate_runner is not None:
+                filtered_items, gate_report = await ctx.gate_runner.filter_plan(
+                    list(plan.items or []),
+                    analyses=list(analyses or []),
+                    policy_set=latest_policy_set,
                 )
-            elif gate_report.decisions:
-                plan.metadata.setdefault("gate_reports", []).append(gate_report.to_dict())
+                _append_gate_report(ctx, gate_report)
+                if len(filtered_items) != len(plan.items or []):
+                    plan = PolicyUpdatePlan(
+                        items=filtered_items,
+                        metadata={
+                            **dict(plan.metadata or {}),
+                            "gate_report": gate_report.to_dict(),
+                        },
+                    )
+                elif gate_report.decisions:
+                    plan.metadata.setdefault("gate_reports", []).append(gate_report.to_dict())
             apply_result = await self.policy_updater.apply(
                 plan,
                 latest_policy_set,

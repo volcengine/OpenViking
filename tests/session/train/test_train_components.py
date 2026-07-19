@@ -27,7 +27,7 @@ from openviking.session.train import (
 from openviking.session.train.components.trajectory_analyzer import (
     _trajectory_content_validation_issues,
 )
-from openviking.session.train.gates import ExperienceFieldSemanticsGate, GateRunner
+from openviking.session.train.gates import GateDecision, GateRunner
 
 DEFAULT_TRIGGER_CODE = (
     'def should_trigger(ctx):\n    return ctx.get("candidate_tool") == "test_tool"\n'
@@ -668,7 +668,7 @@ async def test_patch_merge_policy_optimizer_runs_patch_merge_extract_loop(monkey
 
 
 @pytest.mark.asyncio
-async def test_patch_merge_plan_gate_validates_resolved_experience_fields():
+async def test_patch_merge_plan_items_resolve_experience_fields():
     from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
     from openviking.session.memory.memory_type_registry import create_default_registry
     from openviking.session.train.components.policy_optimizer import _operations_to_plan_items
@@ -719,14 +719,6 @@ async def test_patch_merge_plan_gate_validates_resolved_experience_fields():
         memory_type="experiences",
         schema=schema,
     )
-    allowed, report = await GateRunner([ExperienceFieldSemanticsGate()]).filter_plan(
-        items,
-        analyses=[],
-        policy_set=policy_set,
-    )
-
-    assert allowed == items
-    assert report.rejected_count == 0
     assert items[0].metadata["merge_memory_fields"]["situation"] == (
         original_fields["situation"].replace("tested operation", "tested cancellation")
     )
@@ -1238,6 +1230,23 @@ async def test_patch_merge_post_plan_retry_includes_latest_draft(monkeypatch):
     )
     captured = {}
 
+    class RejectingGate:
+        name = "test_rejecting_gate"
+        mode = "enforce"
+
+        def applies_to(self, target):
+            return True
+
+        async def evaluate(self, target):
+            return GateDecision(
+                gate_name=self.name,
+                action="reject",
+                reason="test rejection",
+                evidence={"target_name": target.target_name},
+                retriable=True,
+                repair_prompt="Populate the schema's structured content fields.",
+            )
+
     class FakeExtractLoop:
         def __init__(self, **kwargs):
             captured.update(kwargs)
@@ -1276,7 +1285,7 @@ async def test_patch_merge_post_plan_retry_includes_latest_draft(monkeypatch):
         policy_set,
         PatchMergePolicyOptimizerContext(
             request_context=fake_request_context(),
-            gate_runner=GateRunner([ExperienceFieldSemanticsGate()]),
+            gate_runner=GateRunner([RejectingGate()]),
         ),
     )
 

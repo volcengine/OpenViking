@@ -38,7 +38,6 @@ from openviking.session.train.gates import (
     GateReport,
     GateRunner,
     build_gate_retry_instruction,
-    default_policy_gate_runner,
 )
 from openviking.session.train.gradients import PatchSemanticGradient
 from openviking.session.train.utils import first_uri, safe_int
@@ -408,16 +407,10 @@ async def _evaluate_experience_gradients(
     experience_set: ExperienceSet,
     semantic_vlm: Any = None,
 ) -> tuple[list[PatchSemanticGradient], Any]:
-    deterministic_runner = default_policy_gate_runner()
-    gated, report = await deterministic_runner.filter_gradients(
-        list(gradients),
-        analyses=[analysis],
-        policy_set=experience_set,
-    )
-    if semantic_vlm is None or report.rejected_count:
-        return gated, report
+    if semantic_vlm is None:
+        return list(gradients), GateReport(stage="post_gradient")
     return await _experience_extract_gate_runner(semantic_vlm).filter_gradients(
-        gated,
+        list(gradients),
         analyses=[analysis],
         policy_set=experience_set,
     )
