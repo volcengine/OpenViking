@@ -82,7 +82,7 @@ The `viking://session` merged compatibility view is implemented on the server. U
 | Read `viking://session/<session_id>/...` | Supported. New path first, legacy path as fallback. |
 | Write `viking://session/...` | Not supported. New sessions are written to `viking://user/<user_id>/sessions/...`. |
 | `find` / `search` with HTTP SDK `agent_id` | Supported. It searches the selected actor peer view only; old agent data is searched only by true legacy requests that send `X-OpenViking-Agent`. |
-| `remember` / `ov add-memory` with `actor_peer_id` | Messages without an explicit `peer_id` inherit the actor peer, and extracted memories are written under `viking://user/<user_id>/peers/<peer_id>/memories/`. |
+| `remember` / `ov add-memory` with `actor_peer_id` | Messages without an explicit `peer_id` inherit the actor peer, and extracted memories are written under `viking://user/<user_id>/peers/<peer_id>/memories/`. Use `scope="user"` / `--scope user` for an intentional shared-user write. |
 | `find` / `search` body `peer_id` | Not supported. Use `actor_peer_id` or `X-OpenViking-Actor-Peer` for the new peer view. |
 | Configure both `actor_peer_id` and `agent_id` | Not supported. The client/request fails. |
 | Explicit message `peer_id` while using HTTP SDK `agent_id` | Supported. The explicit message `peer_id` wins for that message; legacy fallback applies only when no message `peer_id` is provided. |

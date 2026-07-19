@@ -411,8 +411,15 @@ class StoreMessage(BaseModel):
 
 
 @mcp.tool()
-async def remember(messages: list[StoreMessage]) -> str:
-    """Store information into OpenViking long-term memory. Use when the user says 'remember this', shares preferences, important facts, or decisions worth persisting."""
+async def remember(
+    messages: list[StoreMessage],
+    scope: Literal["peer", "user"] = "peer",
+) -> str:
+    """Store information into OpenViking long-term memory.
+
+    ``scope="peer"`` uses the active actor peer when one is configured.
+    ``scope="user"`` explicitly stores shared user memory instead.
+    """
     import uuid
 
     from openviking.message.part import TextPart
@@ -420,13 +427,25 @@ async def remember(messages: list[StoreMessage]) -> str:
     service = get_service()
     ctx = _get_ctx()
     session_id = f"mcp-store-{uuid.uuid4().hex[:12]}"
-    session = await service.sessions.get(session_id, ctx, auto_create=True)
+    if scope == "user":
+        session = await service.sessions.create(
+            ctx,
+            session_id,
+            memory_policy={
+                "self": {"enabled": True},
+                "peer": {"enabled": False},
+            },
+        )
+        message_peer_id = None
+    else:
+        session = await service.sessions.get(session_id, ctx, auto_create=True)
+        message_peer_id = ctx.actor_peer_id
     for msg in messages:
         if msg.content:
             session.add_message(
                 msg.role,
                 [TextPart(text=msg.content)],
-                peer_id=ctx.actor_peer_id,
+                peer_id=message_peer_id,
             )
     await service.sessions.commit_async(session_id, ctx)
     return f"Stored {len(messages)} message(s) and committed for memory extraction."

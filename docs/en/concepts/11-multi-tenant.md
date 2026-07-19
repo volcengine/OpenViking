@@ -126,7 +126,7 @@ should operate in one peer workspace by default:
 - Empty-target retrieval excludes user-root memories/resources, includes the selected peer's memories/resources, and keeps shared `viking://resources` plus user skills available.
 - When retrieval resolves `viking://user/{user}/peers`, only that peer's memories/resources are selected.
 - Filesystem operations cannot read, list/tree, grep/find/search, write, move, or delete another peer under `viking://user/{user}/peers`.
-- Session messages without an explicit `peer_id` inherit the actor peer, so `remember`, `ov add-memory`, and session commits write extracted memories under that peer. An explicit user-memory target remains available when callers intentionally need the user root.
+- Session messages without an explicit `peer_id` inherit the actor peer, so `remember`, `ov add-memory`, and session commits write extracted memories under that peer. Use MCP `remember(..., scope="user")` or `ov add-memory --scope user ...` to intentionally write shared user memory; explicit user-memory retrieval targets remain available as well.
 - User skills, shared resources, and session ownership are otherwise unchanged.
 - The peer ID must be a safe single path segment, for example `web-visitor-alice`.
 

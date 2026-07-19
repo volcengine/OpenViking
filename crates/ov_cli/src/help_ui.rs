@@ -685,6 +685,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 label: "ov add-memory '{\"role\":\"user\",\"content\":\"remember this\"}'",
                 description: "Add one structured message.",
             },
+            HelpItem {
+                label: "ov add-memory --scope user \"Shared deployment owner is Alice\"",
+                description: "Explicitly store shared user memory while an actor peer is active.",
+            },
         ],
         next_steps: &[HelpItem {
             label: "ov find \"memory topic\"",

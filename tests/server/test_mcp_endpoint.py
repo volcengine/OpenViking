@@ -509,6 +509,48 @@ async def test_store_defaults_messages_to_actor_peer(service, monkeypatch):
     ]
 
 
+async def test_store_user_scope_bypasses_actor_peer(service, monkeypatch):
+    class FakeSession:
+        def __init__(self):
+            self.messages = []
+
+        def add_message(self, role, parts, peer_id=None, created_at=None):
+            self.messages.append((role, parts, peer_id, created_at))
+
+    fake_session = FakeSession()
+    create = AsyncMock(return_value=fake_session)
+    commit = AsyncMock()
+    monkeypatch.setattr(service.sessions, "create", create)
+    monkeypatch.setattr(service.sessions, "commit_async", commit)
+    actor_ctx = RequestContext(
+        user=UserIdentifier("acct", "caller"),
+        role=Role.USER,
+        actor_peer_id="code-agent",
+    )
+    token = _mcp_ctx.set(actor_ctx)
+    try:
+        result = await remember(
+            messages=[StoreMessage(role="user", content="Shared deployment owner")],
+            scope="user",
+        )
+    finally:
+        _mcp_ctx.reset(token)
+
+    assert "stored" in result.lower()
+    create.assert_awaited_once()
+    created_ctx, created_session_id = create.await_args.args
+    assert created_ctx is actor_ctx
+    assert created_session_id.startswith("mcp-store-")
+    assert create.await_args.kwargs == {
+        "memory_policy": {
+            "self": {"enabled": True},
+            "peer": {"enabled": False},
+        }
+    }
+    assert fake_session.messages[0][2] is None
+    commit.assert_awaited_once()
+
+
 async def test_store_skips_empty_message_content(service, monkeypatch):
     class FakeSession:
         def __init__(self):

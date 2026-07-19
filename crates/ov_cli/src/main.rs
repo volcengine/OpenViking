@@ -797,6 +797,9 @@ enum Commands {
         /// or JSON array of such objects for multiple messages.
         #[arg(value_name = "content")]
         content: String,
+        /// Write to the active peer by default, or explicitly to shared user memory.
+        #[arg(long, default_value = "peer", value_parser = ["peer", "user"])]
+        scope: String,
     },
     /// [Data] Privacy config management commands
     Privacy {
@@ -3028,7 +3031,9 @@ async fn main() {
                 recursive,
             } => handlers::handle_set_tags(uri, tags, mode, recursive, ctx).await,
         },
-        Commands::AddMemory { content } => handlers::handle_add_memory(content, ctx).await,
+        Commands::AddMemory { content, scope } => {
+            handlers::handle_add_memory(content, scope, ctx).await
+        }
         Commands::Tui { uri } => handlers::handle_tui(uri, ctx).await,
         Commands::Chat {
             message,
@@ -3341,6 +3346,26 @@ mod tests {
     fn cli_find_and_search_reject_removed_peer_id_flag() {
         assert!(Cli::try_parse_from(["ov", "find", "invoice", "--peer-id", "peer-a"]).is_err());
         assert!(Cli::try_parse_from(["ov", "search", "invoice", "--peer-id", "peer-a"]).is_err());
+    }
+
+    #[test]
+    fn cli_add_memory_parses_explicit_user_scope() {
+        let cli = Cli::try_parse_from([
+            "ov",
+            "add-memory",
+            "--scope",
+            "user",
+            "shared deployment owner",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::AddMemory { content, scope } => {
+                assert_eq!(content, "shared deployment owner");
+                assert_eq!(scope, "user");
+            }
+            _ => panic!("expected add-memory command"),
+        }
     }
 
     #[test]

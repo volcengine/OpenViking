@@ -295,6 +295,19 @@ fn message_body(role: &str, content: &str) -> serde_json::Value {
     })
 }
 
+fn add_memory_session_body(scope: &str) -> serde_json::Value {
+    if scope == "user" {
+        json!({
+            "memory_policy": {
+                "self": {"enabled": true},
+                "peer": {"enabled": false}
+            }
+        })
+    } else {
+        json!({})
+    }
+}
+
 pub async fn add_message(
     client: &HttpClient,
     session_id: &str,
@@ -358,13 +371,16 @@ pub async fn commit_session(
 pub async fn add_memory(
     client: &HttpClient,
     input: &str,
+    scope: &str,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     let messages = parse_messages(input)?;
 
     // 1. Create a new session
-    let session_response: serde_json::Value = client.post("/api/v1/sessions", &json!({})).await?;
+    let session_response: serde_json::Value = client
+        .post("/api/v1/sessions", &add_memory_session_body(scope))
+        .await?;
     let mut profile_lines: Vec<serde_json::Value> = extract_profile_lines(&session_response);
     let session_id = session_response["session_id"].as_str().ok_or_else(|| {
         crate::error::Error::api("Failed to get session_id from new session response".to_string())
@@ -414,7 +430,7 @@ fn url_encode(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_messages, render_session_get_for_table};
+    use super::{add_memory_session_body, parse_messages, render_session_get_for_table};
     use crate::error::Error;
     use serde_json::json;
 
@@ -460,6 +476,20 @@ mod tests {
             rendered,
             Some(["OK", "", "profile", "create session 1ms", "commit 2ms", "",].join("\n"))
         );
+    }
+
+    #[test]
+    fn add_memory_user_scope_sets_session_policy() {
+        assert_eq!(
+            add_memory_session_body("user"),
+            json!({
+                "memory_policy": {
+                    "self": {"enabled": true},
+                    "peer": {"enabled": false}
+                }
+            })
+        );
+        assert_eq!(add_memory_session_body("peer"), json!({}));
     }
 
     #[test]
