@@ -49,7 +49,10 @@ from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.expr import And, PathScope, RawDSL
-from openviking.storage.internal_names import MEMORY_SUMMARY_CACHE_FILENAME, STORAGE_INTERNAL_ENTRY_NAMES
+from openviking.storage.internal_names import (
+    MEMORY_SUMMARY_CACHE_FILENAME,
+    STORAGE_INTERNAL_ENTRY_NAMES,
+)
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.image_search import build_multimodal_embedding_input
 from openviking.utils.time_utils import format_iso8601, get_current_timestamp, parse_iso_datetime

@@ -173,7 +173,7 @@ async def test_stale_memory_semantic_write_is_skipped(monkeypatch):
         dir_uri=first.uri,
         overview="old overview",
         abstract="old abstract",
-        summary_cache=None,
+        summary_cache="old cache",
         ctx=None,
     )
     wrote_latest = await processor._write_memory_directory_semantics(
@@ -182,7 +182,7 @@ async def test_stale_memory_semantic_write_is_skipped(monkeypatch):
         dir_uri=latest.uri,
         overview="latest overview",
         abstract="latest abstract",
-        summary_cache=None,
+        summary_cache="latest cache",
         ctx=None,
     )
 
@@ -192,11 +192,13 @@ async def test_stale_memory_semantic_write_is_skipped(monkeypatch):
         [
             "/fake/viking/user/default/memories/preferences/.overview.md",
             "/fake/viking/user/default/memories/preferences/.abstract.md",
+            "/fake/viking/user/default/memories/preferences/.summary_cache.json",
         ]
     ]
     assert viking_fs.writes == [
         ("viking://user/default/memories/preferences/.overview.md", "latest overview"),
         ("viking://user/default/memories/preferences/.abstract.md", "latest abstract"),
+        ("viking://user/default/memories/preferences/.summary_cache.json", "latest cache"),
     ]
 
 
