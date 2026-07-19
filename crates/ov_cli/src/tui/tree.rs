@@ -271,6 +271,14 @@ impl TreeState {
         }
     }
 
+    pub fn move_cursor_top(&mut self) {
+        self.cursor = 0;
+    }
+
+    pub fn move_cursor_bottom(&mut self) {
+        self.cursor = self.visible.len().saturating_sub(1);
+    }
+
     pub fn selected_uri(&self) -> Option<&str> {
         self.visible.get(self.cursor).map(|r| r.uri.as_str())
     }
