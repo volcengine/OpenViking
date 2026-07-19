@@ -12,7 +12,7 @@ from typing import Callable, List, Optional, Union
 
 from openviking_cli.utils import get_logger
 
-from .base import DataAccessor, LocalResource
+from .base import AccessResult, DataAccessor, LocalResource
 
 logger = get_logger(__name__)
 
@@ -83,6 +83,14 @@ class AccessorRegistry:
             self.register(FeishuAccessor())
         except Exception as e:
             logger.debug(f"[AccessorRegistry] Failed to register FeishuAccessor: {e}")
+
+        # EmailAccessor - handles IMAP mailboxes (imap:// / imaps:// URLs)
+        try:
+            from .email_accessor import EmailAccessor
+
+            self.register(EmailAccessor())
+        except Exception as e:
+            logger.debug(f"[AccessorRegistry] Failed to register EmailAccessor: {e}")
 
         # LocalAccessor - handles local files (lowest priority)
         try:
@@ -174,7 +182,14 @@ class AccessorRegistry:
             logger.debug(
                 f"[AccessorRegistry] Using accessor {accessor.__class__.__name__} for source: {source_str}"
             )
-            return await accessor.access(source, **kwargs)
+            result = await accessor.access(source, **kwargs)
+            # Standard-capable accessors return AccessResult; this convenience
+            # path keeps the classic LocalResource contract for existing
+            # callers. Sync metadata (cursor/doc_ids) consumers must call
+            # accessor.access() directly.
+            if isinstance(result, AccessResult):
+                return result.resource
+            return result
 
         # This should not happen if LocalAccessor is registered
         raise RuntimeError(
