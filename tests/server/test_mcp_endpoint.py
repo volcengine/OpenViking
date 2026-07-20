@@ -120,6 +120,73 @@ async def test_search_respects_min_score(service):
     assert isinstance(result, str)
 
 
+async def test_search_tools_expose_only_context_type_parameter():
+    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+
+    for tool_name in ("find", "search"):
+        properties = tools[tool_name].inputSchema["properties"]
+        assert "context_type" in properties
+        assert "filter" not in properties
+
+
+async def test_tool_schemas_are_portable():
+    """Every advertised schema node must carry an explicit type, with no
+    anyOf/$ref/$defs — strict function-calling APIs (e.g. Gemini's OpenAPI
+    subset) reject schemas that lack these guarantees."""
+
+    def assert_portable(node, path):
+        if not isinstance(node, dict):
+            return
+        assert "anyOf" not in node, f"{path}: anyOf not portable"
+        assert "$ref" not in node, f"{path}: $ref not portable"
+        assert "$defs" not in node, f"{path}: $defs not portable"
+        assert "type" in node, f"{path}: missing explicit type"
+        assert node.get("default", "") is not None, f"{path}: null default"
+        for key, sub in node.get("properties", {}).items():
+            assert_portable(sub, f"{path}.{key}")
+        for key in ("items", "additionalProperties"):
+            if isinstance(node.get(key), dict):
+                assert_portable(node[key], f"{path}.{key}")
+
+    tools = await mcp_endpoint.mcp.list_tools()
+    assert tools
+    for tool in tools:
+        assert_portable(tool.inputSchema, tool.name)
+
+
+def test_portable_schema_collapses_unions():
+    collapsed = mcp_endpoint._portable_schema(
+        {
+            "anyOf": [
+                {"type": "string"},
+                {"items": {"type": "string"}, "type": "array"},
+                {"type": "null"},
+            ],
+            "default": None,
+            "description": "one or many",
+        }
+    )
+    assert collapsed == {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "one or many",
+    }
+
+
+def test_portable_schema_inlines_refs():
+    inlined = mcp_endpoint._portable_schema(
+        {
+            "$defs": {"Item": {"properties": {"name": {"type": "string"}}, "type": "object"}},
+            "items": {"$ref": "#/$defs/Item"},
+            "type": "array",
+        }
+    )
+    assert inlined == {
+        "items": {"properties": {"name": {"type": "string"}}, "type": "object"},
+        "type": "array",
+    }
+
+
 async def test_find_tool_calls_lightweight_find(service, monkeypatch):
     captured = {}
 
@@ -134,6 +201,7 @@ async def test_find_tool_calls_lightweight_find(service, monkeypatch):
         target_uri="viking://resources",
         limit=2,
         min_score=0.2,
+        context_type=["memory", "resource"],
     )
 
     assert result == "No matching context found."
@@ -142,6 +210,11 @@ async def test_find_tool_calls_lightweight_find(service, monkeypatch):
     assert captured["target_uri"] == "viking://resources"
     assert captured["limit"] == 2
     assert captured["score_threshold"] == 0.2
+    assert captured["filter"] == {
+        "op": "must",
+        "field": "context_type",
+        "conds": ["memory", "resource"],
+    }
 
 
 async def test_search_tool_calls_context_aware_search_with_session(service, monkeypatch):
@@ -175,6 +248,7 @@ async def test_search_tool_calls_context_aware_search_with_session(service, monk
         session_id="session-1",
         limit=4,
         min_score=0.1,
+        context_type="skill",
     )
 
     assert result == "No matching context found."
@@ -187,6 +261,11 @@ async def test_search_tool_calls_context_aware_search_with_session(service, monk
     assert captured["session"] == session
     assert captured["limit"] == 4
     assert captured["score_threshold"] == 0.1
+    assert captured["filter"] == {
+        "op": "must",
+        "field": "context_type",
+        "conds": ["skill"],
+    }
 
 
 async def test_recall_tool_returns_type_quota_memory_groups(service, monkeypatch):
@@ -246,6 +325,43 @@ async def test_mcp_middleware_sets_actor_peer_context():
             "/mcp",
             json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
             headers={"X-OpenViking-Actor-Peer": "peer-a"},
+        )
+
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected_api_key"),
+    [
+        ({"X-API-Key": "api-key-secret"}, "api-key-secret"),
+        ({"Authorization": "Bearer bearer-secret"}, "bearer-secret"),
+        ({}, None),
+    ],
+)
+async def test_mcp_middleware_propagates_request_api_key(headers, expected_api_key):
+    async def downstream(scope, receive, send):
+        assert _get_ctx().api_key == expected_api_key
+        response = httpx.Response(200, json={"ok": True})
+        await send(
+            {
+                "type": "http.response.start",
+                "status": response.status_code,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send({"type": "http.response.body", "body": response.content})
+
+    app = FastAPI()
+    app.state.config = SimpleNamespace(get_effective_auth_mode=lambda: AuthMode.DEV)
+    app.state.auth_plugin = DevAuthPlugin()
+    app.routes.append(Route("/mcp", endpoint=_IdentityASGIMiddleware(downstream), methods=["POST"]))
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://ov.test") as client:
+        response = await client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
+            headers=headers,
         )
 
     assert response.status_code == 200
@@ -491,6 +607,40 @@ async def test_add_resource_remote_url_is_ingested(service, monkeypatch):
     assert "Resource added" in result
     assert captured["path"] == "https://example.com/x.md"
     assert captured["enforce_public_remote_targets"] is True
+
+
+async def test_add_resource_remote_async_result_exposes_task_id(service, monkeypatch):
+    async def fake_add_resource(*, path, ctx, **kwargs):
+        return {
+            "status": "accepted",
+            "task_id": "ov-task-123",
+            "connector_task_key": "connector-task-456",
+        }
+
+    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
+
+    result = await add_resource(path="tos://bucket/docs")
+
+    assert "task_id: ov-task-123" in result
+    assert "processing in background" in result
+
+
+async def test_add_resource_remote_parent_is_forwarded(service, monkeypatch):
+    captured = {}
+
+    async def fake_add_resource(*, path, ctx, **kwargs):
+        captured.update(kwargs)
+        return {"task_id": "ov-task-123"}
+
+    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
+
+    await add_resource(
+        path="tos://bucket/docs",
+        parent="viking://resources/imports",
+    )
+
+    assert captured["parent"] == "viking://resources/imports"
+    assert captured["to"] is None
 
 
 async def test_add_resource_temp_file_id_branch_resolves_and_ingests(

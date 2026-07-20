@@ -1159,17 +1159,23 @@ PyObject* build_filter_result(const vdb::FilterResult& result) {
   PyObject* eligible_count =
       PyLong_FromUnsignedLongLong(result.eligible_count);
   PyObject* bitset_words = uint32_vector_to_py(result.bitset_words);
-  if (eligible_count == nullptr || bitset_words == nullptr) {
+  PyObject* native_filter_token =
+      PyLong_FromUnsignedLongLong(result.native_filter_token);
+  if (eligible_count == nullptr || bitset_words == nullptr ||
+      native_filter_token == nullptr) {
     Py_XDECREF(eligible_count);
     Py_XDECREF(bitset_words);
+    Py_XDECREF(native_filter_token);
     Py_DECREF(payload);
     return nullptr;
   }
 
   PyDict_SetItemString(payload, "eligible_count", eligible_count);
   PyDict_SetItemString(payload, "bitset_words", bitset_words);
+  PyDict_SetItemString(payload, "native_filter_token", native_filter_token);
   Py_DECREF(eligible_count);
   Py_DECREF(bitset_words);
+  Py_DECREF(native_filter_token);
   return payload;
 }
 
@@ -1314,6 +1320,40 @@ PyObject* py_index_engine_search(PyObject*, PyObject* args) {
   }
 }
 
+PyObject* py_index_engine_search_with_filter_token(PyObject*, PyObject* args) {
+  PyObject* capsule = nullptr;
+  PyObject* request_obj = nullptr;
+  unsigned long long filter_token = 0;
+  if (!PyArg_ParseTuple(args, "OOK", &capsule, &request_obj,
+                        &filter_token)) {
+    return nullptr;
+  }
+
+  auto* engine = capsule_to_ptr<vdb::IndexEngine>(capsule, kIndexCapsuleName);
+  if (engine == nullptr) {
+    return nullptr;
+  }
+
+  vdb::SearchRequest request;
+  if (!parse_search_request(request_obj, &request)) {
+    return nullptr;
+  }
+
+  try {
+    const auto result = call_without_gil([&]() {
+      return engine->search_with_filter_token(
+          request, static_cast<uint64_t>(filter_token));
+    });
+    if (!result.has_value()) {
+      Py_RETURN_NONE;
+    }
+    return build_search_result(*result);
+  } catch (const std::exception& exc) {
+    raise_runtime_error(exc.what());
+    return nullptr;
+  }
+}
+
 PyObject* py_index_engine_set_filter_layout(PyObject*, PyObject* args) {
   PyObject* capsule = nullptr;
   PyObject* labels_obj = nullptr;
@@ -1356,6 +1396,32 @@ PyObject* py_index_engine_evaluate_filter(PyObject*, PyObject* args) {
   try {
     const vdb::FilterResult result =
         call_without_gil([&]() { return engine->evaluate_filter(dsl); });
+    return build_filter_result(result);
+  } catch (const std::exception& exc) {
+    raise_runtime_error(exc.what());
+    return nullptr;
+  }
+}
+
+PyObject* py_index_engine_evaluate_filter_cached(PyObject*, PyObject* args) {
+  PyObject* capsule = nullptr;
+  const char* dsl = nullptr;
+  unsigned long long max_cached_candidates = 0;
+  if (!PyArg_ParseTuple(args, "OsK", &capsule, &dsl,
+                        &max_cached_candidates)) {
+    return nullptr;
+  }
+
+  auto* engine = capsule_to_ptr<vdb::IndexEngine>(capsule, kIndexCapsuleName);
+  if (engine == nullptr) {
+    return nullptr;
+  }
+
+  try {
+    const vdb::FilterResult result = call_without_gil([&]() {
+      return engine->evaluate_filter(
+          dsl, static_cast<uint64_t>(max_cached_candidates));
+    });
     return build_filter_result(result);
   } catch (const std::exception& exc) {
     raise_runtime_error(exc.what());
@@ -1649,10 +1715,16 @@ PyMethodDef kModuleMethods[] = {
      "Delete data from the index engine."},
     {"_index_engine_search", py_index_engine_search, METH_VARARGS,
      "Search the index engine."},
+    {"_index_engine_search_with_filter_token",
+     py_index_engine_search_with_filter_token, METH_VARARGS,
+     "Search using a retained native scalar filter bitmap."},
     {"_index_engine_set_filter_layout", py_index_engine_set_filter_layout,
      METH_VARARGS, "Register an external label order for scalar filters."},
     {"_index_engine_evaluate_filter", py_index_engine_evaluate_filter,
      METH_VARARGS, "Evaluate a scalar filter in an external label order."},
+    {"_index_engine_evaluate_filter_cached",
+     py_index_engine_evaluate_filter_cached, METH_VARARGS,
+     "Evaluate and optionally retain a native scalar filter bitmap."},
     {"_index_engine_dump", py_index_engine_dump, METH_VARARGS,
      "Dump index state to disk."},
     {"_index_engine_get_state", py_index_engine_get_state, METH_VARARGS,

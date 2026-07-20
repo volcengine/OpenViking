@@ -82,7 +82,9 @@ def test_summarize_files_reports_process_median_and_mad(tmp_path):
 def test_variant_sort_key_orders_backends_and_numeric_itopk():
     keys = [
         ("cuvs_cagra", summary_module.canonical({"itopk_size": 2048})),
+        ("cuvs_cagra_fp16", summary_module.canonical({"itopk_size": 512})),
         ("cuvs_brute_force", summary_module.canonical(None)),
+        ("cuvs_brute_force_fp16", summary_module.canonical(None)),
         ("cuvs_cagra", summary_module.canonical({"itopk_size": 512})),
         ("native", summary_module.canonical(None)),
     ]
@@ -90,8 +92,10 @@ def test_variant_sort_key_orders_backends_and_numeric_itopk():
     assert sorted(keys, key=summary_module.variant_sort_key) == [
         ("native", "null"),
         ("cuvs_brute_force", "null"),
+        ("cuvs_brute_force_fp16", "null"),
         ("cuvs_cagra", '{"itopk_size":512}'),
         ("cuvs_cagra", '{"itopk_size":2048}'),
+        ("cuvs_cagra_fp16", '{"itopk_size":512}'),
     ]
 
 

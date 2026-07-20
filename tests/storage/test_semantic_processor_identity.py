@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for SemanticProcessor identity reconstruction."""
 
+from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
-from openviking.storage.queuefs.understanding_parse_msg import UnderstandingParseMsg
 
 
 def test_ctx_from_semantic_msg_preserves_custom_role():
@@ -56,8 +56,8 @@ def test_ctx_from_semantic_msg_preserves_provider_request_context():
     assert ctx.provider_request_context.get_header("X-Caller-Service-Code") == "talentana"
 
 
-def test_understanding_parse_msg_round_trips_provider_request_context():
-    msg = UnderstandingParseMsg(
+def test_add_resource_msg_round_trips_provider_request_context():
+    msg = AddResourceMsg(
         task_id="task-1",
         path="https://example.com/doc.pdf",
         root_uri="viking://resources/doc",
@@ -72,7 +72,7 @@ def test_understanding_parse_msg_round_trips_provider_request_context():
         },
     )
 
-    restored = UnderstandingParseMsg.from_dict(msg.to_dict())
+    restored = AddResourceMsg.from_dict(msg.to_dict())
 
     assert restored.provider_request_context == {
         "headers": {

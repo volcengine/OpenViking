@@ -196,22 +196,6 @@ openviking/
 | **Ruff** | Linting, 格式化, 导入排序 | `pyproject.toml` |
 | **mypy** | 类型检查 | `pyproject.toml` |
 
-### 自动检查（推荐）
-
-我们使用 [pre-commit](https://pre-commit.com/) 在每次提交前自动运行这些检查。这确保您的代码无需手动努力即可符合标准。
-
-1. **安装 pre-commit**：
-   ```bash
-   pip install pre-commit
-   ```
-
-2. **安装 git hooks**：
-   ```bash
-   pre-commit install
-   ```
-
-现在，当您运行 `git commit` 时，`ruff`（检查和格式化）将自动运行。如果任何检查失败，它可能会自动修复文件。您只需添加更改并再次提交即可。
-
 ### 运行检查
 
 ```bash
@@ -507,8 +491,6 @@ git commit -m "refactor(storage): simplify interface methods"
 
 #### A. 代码检查 (`11. _Lint Checks`)
 运行代码风格检查 (Ruff) 和类型检查 (Mypy) 。无需参数。
-
-> **提示**：建议在本地安装 [pre-commit](https://pre-commit.com/) 以在提交前自动运行这些检查（详见上文[自动检查](#自动检查推荐)章节）。
 
 #### B. 简易测试 (`12. _Test Suite (Lite)`)
 运行快速集成测试，支持自定义矩阵配置。

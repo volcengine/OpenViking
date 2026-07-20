@@ -18,11 +18,16 @@ func (c *Client) Find(ctx context.Context, queryText string, opts *FindOptions) 
 	if opts.NodeLimit != nil {
 		actualLimit = *opts.NodeLimit
 	}
+	imageURL, err := normalizeImageInput(opts.Image)
+	if err != nil {
+		return nil, err
+	}
 	payload := map[string]any{
 		"query":      queryText,
 		"target_uri": normalizeTarget(opts.TargetURI),
 		"limit":      actualLimit,
 	}
+	setString(payload, "image_url", imageURL)
 	setAny(payload, "score_threshold", opts.ScoreThreshold)
 	setAny(payload, "filter", opts.Filter)
 	setAny(payload, "context_type", opts.ContextType)
@@ -34,7 +39,7 @@ func (c *Client) Find(ctx context.Context, queryText string, opts *FindOptions) 
 	}
 	setAny(payload, "telemetry", opts.Telemetry)
 	var result FindResult
-	err := c.doJSON(ctx, http.MethodPost, "/api/v1/search/find", nil, payload, &result)
+	err = c.doJSON(ctx, http.MethodPost, "/api/v1/search/find", nil, payload, &result)
 	return &result, err
 }
 
@@ -51,11 +56,16 @@ func (c *Client) Search(ctx context.Context, queryText string, opts *SearchOptio
 	if opts.NodeLimit != nil {
 		actualLimit = *opts.NodeLimit
 	}
+	imageURL, err := normalizeImageInput(opts.Image)
+	if err != nil {
+		return nil, err
+	}
 	payload := map[string]any{
 		"query":      queryText,
 		"target_uri": normalizeTarget(opts.TargetURI),
 		"limit":      actualLimit,
 	}
+	setString(payload, "image_url", imageURL)
 	setString(payload, "session_id", opts.SessionID)
 	setAny(payload, "score_threshold", opts.ScoreThreshold)
 	setAny(payload, "filter", opts.Filter)
@@ -68,7 +78,7 @@ func (c *Client) Search(ctx context.Context, queryText string, opts *SearchOptio
 	}
 	setAny(payload, "telemetry", opts.Telemetry)
 	var result FindResult
-	err := c.doJSON(ctx, http.MethodPost, "/api/v1/search/search", nil, payload, &result)
+	err = c.doJSON(ctx, http.MethodPost, "/api/v1/search/search", nil, payload, &result)
 	return &result, err
 }
 

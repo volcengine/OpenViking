@@ -159,11 +159,6 @@ class Context:
         """Get image references (data URIs or URLs) for multimodal vectorization."""
         return self.vectorize.images
 
-    def update_activity(self):
-        """Update activity statistics."""
-        self.active_count += 1
-        self.updated_at = datetime.now(timezone.utc)
-
     def to_dict(self) -> Dict[str, Any]:
         """Convert context to dictionary format for storage."""
         created_at_str = format_iso8601(self.created_at) if self.created_at else None

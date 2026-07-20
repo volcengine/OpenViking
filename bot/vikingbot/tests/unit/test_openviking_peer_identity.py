@@ -60,6 +60,147 @@ def test_normalize_session_messages_skips_path_like_peer_ids():
     assert "peer_id" not in normalized[0]
 
 
+def test_normalize_session_messages_emits_tools_before_final_assistant_text():
+    client = _client()
+
+    normalized = client._normalize_session_messages(
+        [
+            {
+                "role": "assistant",
+                "content": "final answer",
+                "timestamp": "2026-07-13T12:00:00Z",
+                "tools_used": [
+                    {
+                        "tool_name": "read_file",
+                        "args": {"path": "README.md"},
+                        "result": "file content",
+                    },
+                    {
+                        "tool_name": "grep",
+                        "args": {"pattern": "TODO"},
+                        "result": "match",
+                    },
+                ],
+            }
+        ]
+    )
+
+    assert len(normalized) == 2
+    assert normalized[0]["role"] == "assistant"
+    assert [part["type"] for part in normalized[0]["parts"]] == ["tool", "tool"]
+    assert [part["tool_name"] for part in normalized[0]["parts"]] == ["read_file", "grep"]
+    assert "content" not in normalized[0]
+    assert normalized[1] == {
+        "role": "assistant",
+        "parts": [{"type": "text", "text": "final answer"}],
+        "created_at": "2026-07-13T12:00:00Z",
+    }
+
+
+def test_normalize_session_messages_preserves_assistant_turn_tool_relationship():
+    client = _client()
+    long_output = "x" * 2500
+
+    normalized = client._normalize_session_messages(
+        [
+            {"role": "user", "content": "compare these", "timestamp": "2026-07-14T10:00:00Z"},
+            {
+                "role": "assistant",
+                "content": "final answer",
+                "timestamp": "2026-07-14T10:00:03Z",
+                "tools_used": [{"tool_name": "legacy", "result": "must not duplicate"}],
+                "agent_turns": [
+                    {
+                        "role": "assistant",
+                        "content": "Let me check these.",
+                        "timestamp": "2026-07-14T10:00:01Z",
+                        "tool_calls": [
+                            {
+                                "tool_call_id": "call-1",
+                                "tool_name": "search",
+                                "args": {"query": "one"},
+                                "result": "result one",
+                            },
+                            {
+                                "tool_call_id": "call-2",
+                                "tool_name": "read_file",
+                                "args": {"path": "a.txt"},
+                                "result": long_output,
+                            },
+                            {
+                                "tool_call_id": "call-3",
+                                "tool_name": "grep",
+                                "args": {"pattern": "three"},
+                                "result": "result three",
+                                "execute_success": False,
+                            },
+                        ],
+                    }
+                ],
+            },
+        ],
+        session_id="session-1",
+    )
+
+    assert len(normalized) == 3
+    assert normalized[0]["role"] == "user"
+    turn = normalized[1]
+    assert turn["role"] == "assistant"
+    assert [part["type"] for part in turn["parts"]] == ["text", "tool", "tool", "tool"]
+    assert turn["parts"][0]["text"] == "Let me check these."
+    assert [part["tool_id"] for part in turn["parts"][1:]] == ["call-1", "call-2", "call-3"]
+    assert [part["tool_name"] for part in turn["parts"][1:]] == [
+        "search",
+        "read_file",
+        "grep",
+    ]
+    assert turn["parts"][2]["tool_output"] == long_output
+    assert turn["parts"][3]["tool_status"] == "error"
+    assert turn["created_at"] == "2026-07-14T10:00:01Z"
+    assert "content" not in normalized[2]
+    assert normalized[2]["parts"] == [{"type": "text", "text": "final answer"}]
+    assert all(
+        part.get("tool_name") != "legacy"
+        for message in normalized
+        for part in message.get("parts", [])
+    )
+
+
+def test_normalize_session_messages_excludes_auto_memory_search():
+    client = _client()
+
+    normalized = client._normalize_session_messages(
+        [
+            {"role": "user", "content": "question"},
+            {
+                "role": "assistant",
+                "content": "final answer",
+                "tools_used": [
+                    {
+                        "tool_name": "auto_memory_search",
+                        "args": {"query": "question"},
+                        "result": "recalled memory",
+                        "auto": True,
+                    }
+                ],
+            },
+        ]
+    )
+
+    assert len(normalized) == 2
+    assert normalized[0]["role"] == "user"
+    assert normalized[1]["role"] == "assistant"
+    assert "content" not in normalized[0]
+    assert "content" not in normalized[1]
+    assert normalized[0]["parts"] == [{"type": "text", "text": "question"}]
+    assert normalized[1]["parts"] == [{"type": "text", "text": "final answer"}]
+    assert all(
+        part.get("tool_name") != "auto_memory_search"
+        for message in normalized
+        for part in message.get("parts", [])
+    )
+
+
 @pytest.mark.asyncio
 async def test_read_peer_profile_uses_current_user_peer_alias(monkeypatch):
     client = _client(api_key_type="user")
@@ -288,4 +429,3 @@ async def test_search_with_peer_id_uses_peer_target_uri_without_forwarding_peer_
             "limit": 3,
         }
     ]
-

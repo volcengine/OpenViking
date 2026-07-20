@@ -26,7 +26,7 @@ export type OpenVikingArchiveClient = {
   grepSessionArchives: (
     sessionId: string,
     pattern: string,
-    options: { archiveId?: string; caseInsensitive: boolean; agentId?: string },
+    options: { archiveId?: string; caseInsensitive: boolean },
   ) => Promise<{
     count?: number;
     matches?: OpenVikingArchiveMatch[];
@@ -34,7 +34,6 @@ export type OpenVikingArchiveClient = {
   getSessionArchive: (
     sessionId: string,
     archiveId: string,
-    agentId?: string,
   ) => Promise<{
     archive_id: string;
     abstract?: string;
@@ -128,7 +127,6 @@ export function registerOpenVikingArchiveTools(deps: OpenVikingArchiveToolsDeps)
           const result = await client.grepSessionArchives(ovSessionId, escapedQuery, {
             archiveId,
             caseInsensitive: true,
-            agentId,
           });
           const traceResults: RecallTraceResult[] = (result.matches ?? []).slice(0, deps.traceRecallMaxResultsPerSearch).map((match) => ({
             uri: match.uri,
@@ -263,7 +261,6 @@ export function registerOpenVikingArchiveTools(deps: OpenVikingArchiveToolsDeps)
         const detail = await client.getSessionArchive(
           session.ovSessionId,
           archiveId,
-          session.agentId,
         );
 
         const header = [

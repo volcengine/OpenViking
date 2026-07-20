@@ -12,7 +12,7 @@ pub mod resources;
 pub mod search;
 pub mod session;
 pub mod skills;
-pub mod system;
 pub mod snapshot;
+pub mod system;
 pub mod task;
 pub mod watch;

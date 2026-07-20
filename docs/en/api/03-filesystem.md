@@ -37,12 +37,20 @@ Read L0 abstract (~100 tokens summary).
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI (must be a directory) |
 
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
 abstract = client.abstract("viking://resources/docs/")
 print(f"Abstract: {abstract}")
 # Output: "Documentation for the project API, covering authentication, endpoints..."
+```
+
+**TypeScript SDK**
+
+```typescript
+const abstract = await client.abstract("viking://resources/docs/");
+console.log(abstract);
 ```
 
 **Go SDK**
@@ -72,6 +80,7 @@ curl -X GET "http://localhost:1933/api/v1/content/abstract?uri=viking://resource
 openviking abstract viking://resources/docs/
 ```
 
+
 **Response**
 
 ```json
@@ -94,11 +103,19 @@ Read L1 overview, applies to directories.
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI (must be a directory) |
 
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
 overview = client.overview("viking://resources/docs/")
 print(f"Overview:\n{overview}")
+```
+
+**TypeScript SDK**
+
+```typescript
+const overview = await client.overview("viking://resources/docs/");
+console.log(overview);
 ```
 
 **Go SDK**
@@ -127,6 +144,7 @@ curl -X GET "http://localhost:1933/api/v1/content/overview?uri=viking://resource
 ```bash
 openviking overview viking://resources/docs/
 ```
+
 
 **Response**
 
@@ -158,11 +176,19 @@ Read L2 full content.
 - `read()` accepts file URIs only. Passing an existing directory URI returns `INVALID_ARGUMENT` (`400`), not `NOT_FOUND`. This error carries a structured `details` payload — `details.expected` is `"file"`, `details.actual` is `"directory"`, and `details.resource` is the offending URI (present on the HTTP path) — so clients can detect a file-vs-directory mismatch programmatically (for example, fall back to `list`) instead of string-matching the message.
 - Public URI parameters accept `resources` and `user` scopes. For session files, use `viking://user/{user_id}/sessions/{session_id}` or the backward-compatible `viking://session/{session_id}` alias. Internal scopes such as `temp` and `queue` return `INVALID_URI`.
 
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
 content = client.read("viking://resources/docs/api.md")
 print(f"Content:\n{content}")
+```
+
+**TypeScript SDK**
+
+```typescript
+const content = await client.read("viking://resources/docs/api.md", 0, -1);
+console.log(content);
 ```
 
 **Go SDK**
@@ -191,6 +217,7 @@ curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://resources/do
 ```bash
 openviking read viking://resources/docs/api.md
 ```
+
 
 **Response**
 
@@ -226,6 +253,7 @@ Update an existing file, or create a new one when `mode="create"`, and automatic
 - File content is updated before the API returns. `wait` only controls whether the call waits for semantic/vector refresh to finish.
 - The public API no longer accepts `regenerate_semantics` or `revectorize`; write always refreshes related semantics and vectors.
 
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
@@ -236,6 +264,12 @@ result = client.write(
     wait=True,
 )
 print(result["root_uri"])
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.write("viking://resources/docs/new.md", "# New document\n", { wait: true });
 ```
 
 **Go SDK**
@@ -282,6 +316,7 @@ openviking write viking://resources/docs/api.md \
   --wait
 ```
 
+
 **Response**
 
 ```json
@@ -325,10 +360,12 @@ List directory contents.
 | uri | str | Yes | - | Viking URI |
 | simple | bool | No | False | Return only relative paths |
 | recursive | bool | No | False | List all subdirectories recursively |
-| output | str | No | `agent` | Output format: `agent` or `original` |
+| output | str | No | HTTP: `agent`; SDKs: `original` | Output format: `agent` or `original` |
 | abs_limit | int | No | 256 | Abstract length limit for `agent` output |
 | show_all_hidden | bool | No | False | Include hidden files like `-a` |
 | node_limit | int | No | 1000 | Maximum number of results |
+| sort_by | str | No | None | Sort directories and files within their groups by `name` or `mtime` before applying `node_limit`; directories remain first |
+| sort_order | str | No | `asc` | Sort direction: `asc` or `desc` |
 
 **Entry Structure**
 
@@ -344,13 +381,26 @@ List directory contents.
 }
 ```
 
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
-entries = client.ls("viking://resources/")
+entries = client.ls(
+    "viking://resources/",
+    node_limit=200,
+    sort_by="mtime",
+    sort_order="desc",
+)
 for entry in entries:
     type_str = "dir" if entry['isDir'] else "file"
     print(f"{entry['name']} - {type_str}")
+```
+
+**TypeScript SDK**
+
+```typescript
+const entries = await client.list("viking://resources/docs/", { simple: true });
+console.log(entries);
 ```
 
 **Go SDK**
@@ -391,6 +441,7 @@ curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&recursiv
 openviking ls viking://resources/ [--simple] [--recursive]
 ```
 
+
 **Response**
 
 ```json
@@ -421,11 +472,12 @@ Get directory tree structure.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI |
-| output | str | No | `agent` | Output format: `agent` or `original` |
-| abs_limit | int | No | 256 | Abstract length limit for `agent` output |
+| output | str | No | HTTP: `agent`; SDKs: `original` | Output format: `agent` or `original` |
+| abs_limit | int | No | HTTP: 256; SDKs: 128 | Abstract length limit for `agent` output |
 | show_all_hidden | bool | No | False | Include hidden files like `-a` |
 | node_limit | int | No | 1000 | Maximum number of results |
 | level_limit | int | No | 3 | Maximum directory depth to traverse |
+
 
 **Python SDK (Embedded / HTTP)**
 
@@ -434,6 +486,13 @@ entries = client.tree("viking://resources/")
 for entry in entries:
     type_str = "dir" if entry['isDir'] else "file"
     print(f"{entry['rel_path']} - {type_str}")
+```
+
+**TypeScript SDK**
+
+```typescript
+const tree = await client.tree("viking://resources/docs/", { nodeLimit: 100 });
+console.log(tree);
 ```
 
 **Go SDK**
@@ -464,6 +523,7 @@ curl -X GET "http://localhost:1933/api/v1/fs/tree?uri=viking://resources/" \
 ```bash
 openviking tree viking://resources/my-project/
 ```
+
 
 **Response**
 
@@ -502,6 +562,7 @@ Get file or directory status information. For directories, returns the count of 
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI |
 
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
@@ -513,6 +574,13 @@ print(f"Is directory: {info['isDir']}")
 dir_info = client.stat("viking://resources/docs")
 if dir_info.get('isDir'):
     print(f"Item count: {dir_info.get('count')}")
+```
+
+**TypeScript SDK**
+
+```typescript
+const metadata = await client.stat("viking://resources/docs/api.md");
+console.log(metadata);
 ```
 
 **Go SDK**
@@ -542,6 +610,7 @@ curl -X GET "http://localhost:1933/api/v1/fs/stat?uri=viking://resources/docs/ap
 openviking stat viking://resources/my-project/docs/api.md
 openviking stat viking://resources/my-project/docs
 ```
+
 
 **Response (File)**
 
@@ -596,11 +665,19 @@ Get logical extended attributes for a file or directory.
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI |
 
+
 **Python SDK (HTTP)**
 
 ```python
 attrs = client.attrs("viking://resources/docs/api.md")
 print(attrs["attrs"]["tags"])
+```
+
+**TypeScript SDK**
+
+```typescript
+const attributes = await client.attrs("viking://resources/docs/api.md");
+console.log(attributes);
 ```
 
 **Go SDK**
@@ -642,6 +719,7 @@ openviking attrs set-tags viking://resources/docs --tags team=search --mode appe
 ```
 
 Directory targets update the directory semantic records; `recursive=true` also updates existing descendant files and directory semantic records.
+
 
 **Response (Resource)**
 
@@ -694,11 +772,18 @@ Create a directory.
 | uri | str | Yes | - | Viking URI for the new directory |
 | description | str | No | `null` | Initial directory description. When provided, it is written to `.abstract.md` and queued for L0 vectorization. |
 
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
 client.mkdir("viking://resources/new-project/")
 client.mkdir("viking://resources/new-project/", description="API docs directory")
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.mkdir("viking://resources/docs/guides/", "Project guides");
 ```
 
 **Go SDK**
@@ -732,6 +817,7 @@ openviking mkdir viking://resources/new-project/
 openviking mkdir viking://resources/new-project/ --description "API docs directory"
 ```
 
+
 **Response**
 
 ```json
@@ -760,6 +846,7 @@ Invalid URI formats, unsupported schemes, and non-public scopes return `INVALID_
 | uri | str | Yes | - | Viking URI to remove |
 | recursive | bool | No | False | Remove directory recursively |
 
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
@@ -767,9 +854,13 @@ Invalid URI formats, unsupported schemes, and non-public scopes return `INVALID_
 client.rm("viking://resources/docs/old.md")
 
 # Remove directory recursively
-result = client.rm("viking://resources/old-project/", recursive=True)
-if 'estimated_deleted_count' in result:
-    print(f"Deleted {result['estimated_deleted_count']} items")
+client.rm("viking://resources/old-project/", recursive=True)
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.remove("viking://resources/docs/old.md", { wait: true });
 ```
 
 **Go SDK**
@@ -804,6 +895,7 @@ curl -X DELETE "http://localhost:1933/api/v1/fs?uri=viking://resources/old-proje
 ```bash
 openviking rm viking://resources/old.md [--recursive]
 ```
+
 
 **Response (Single file)**
 
@@ -847,6 +939,7 @@ Move file or directory.
 | from_uri | str | Yes | - | Source Viking URI |
 | to_uri | str | Yes | - | Destination Viking URI |
 
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
@@ -854,6 +947,15 @@ client.mv(
     "viking://resources/old-name/",
     "viking://resources/new-name/"
 )
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.move(
+  "viking://resources/docs/old.md",
+  "viking://resources/docs/new.md",
+);
 ```
 
 **Go SDK**
@@ -886,6 +988,7 @@ curl -X POST http://localhost:1933/api/v1/fs/mv \
 openviking mv viking://resources/old-name/ viking://resources/new-name/
 ```
 
+
 **Response**
 
 ```json
@@ -916,6 +1019,7 @@ Search content by pattern.
 | node_limit | int | No | 256 | Maximum number of results. Omitted requests default to 256; pass a larger integer when you need more results |
 | level_limit | int | No | Python SDK: 5; HTTP API / CLI / Go SDK: 10 | Maximum directory depth to traverse. The Go SDK currently uses the HTTP API default. |
 
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
@@ -930,6 +1034,13 @@ print(f"Found {results['count']} matches")
 for match in results['matches']:
     print(f"  {match['uri']}:{match['line']}")
     print(f"    {match['content']}")
+```
+
+**TypeScript SDK**
+
+```typescript
+const matches = await client.grep("viking://resources/docs/", "authentication");
+console.log(matches);
 ```
 
 **Go SDK**
@@ -969,6 +1080,7 @@ curl -X POST http://localhost:1933/api/v1/search/grep \
 openviking grep "authentication" --uri viking://resources/ [--ignore-case]
 ```
 
+
 **Response**
 
 ```json
@@ -1000,7 +1112,8 @@ Match files by pattern.
 |-----------|------|----------|---------|-------------|
 | pattern | str | Yes | - | Glob pattern (e.g., `**/*.md`) |
 | uri | str | No | "viking://" | Starting URI |
-| node_limit | int | No | None | Maximum number of results |
+| node_limit | int | No | 256 | Maximum number of results |
+
 
 **Python SDK (Embedded / HTTP)**
 
@@ -1014,6 +1127,13 @@ for uri in results['matches']:
 # Find all Python files
 results = client.glob("**/*.py", "viking://resources/")
 print(f"Found {results['count']} Python files")
+```
+
+**TypeScript SDK**
+
+```typescript
+const matches = await client.glob("**/*.md", "viking://resources/docs/");
+console.log(matches);
 ```
 
 **Go SDK**
@@ -1050,6 +1170,7 @@ curl -X POST http://localhost:1933/api/v1/search/glob \
 openviking glob "**/*.md" [--uri viking://resources/]
 ```
 
+
 **Response**
 
 ```json
@@ -1080,6 +1201,7 @@ Create relations between resources.
 | to_uris | str or List[str] | Yes | - | Target URI(s) |
 | reason | str | No | "" | Reason for the link |
 
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
@@ -1099,6 +1221,19 @@ client.link(
     ],
     reason="Related documentation"
 )
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.link(
+  "viking://resources/docs/api/",
+  [
+    "viking://resources/docs/auth/",
+    "viking://resources/docs/errors/",
+  ],
+  "Related documentation",
+);
 ```
 
 **HTTP API**
@@ -1135,6 +1270,7 @@ curl -X POST http://localhost:1933/api/v1/relations/link \
 openviking link viking://resources/docs/auth/ viking://resources/docs/security/ --reason "Security best practices"
 ```
 
+
 **Response**
 
 ```json
@@ -1160,6 +1296,7 @@ Get relations for a resource.
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI |
 
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
@@ -1167,6 +1304,13 @@ relations = client.relations("viking://resources/docs/auth/")
 for rel in relations:
     print(f"Related: {rel['uri']}")
     print(f"  Reason: {rel['reason']}")
+```
+
+**TypeScript SDK**
+
+```typescript
+const relations = await client.relations("viking://resources/docs/auth/");
+console.log(relations);
 ```
 
 **HTTP API**
@@ -1185,6 +1329,7 @@ curl -X GET "http://localhost:1933/api/v1/relations?uri=viking://resources/docs/
 ```bash
 openviking relations viking://resources/docs/auth/
 ```
+
 
 **Response**
 
@@ -1212,6 +1357,7 @@ Remove a relation.
 | from_uri | str | Yes | - | Source URI |
 | to_uri | str | Yes | - | Target URI to unlink |
 
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
@@ -1219,6 +1365,15 @@ client.unlink(
     "viking://resources/docs/auth/",
     "viking://resources/docs/security/"
 )
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.unlink(
+  "viking://resources/docs/auth/",
+  "viking://resources/docs/security/",
+);
 ```
 
 **HTTP API**
@@ -1243,6 +1398,7 @@ curl -X DELETE http://localhost:1933/api/v1/relations/link \
 openviking unlink viking://resources/docs/auth/ viking://resources/docs/security/
 ```
 
+
 **Response**
 
 ```json
@@ -1264,7 +1420,7 @@ Export a resource tree as a `.ovpack` file.
 
 #### 1. API Implementation Overview
 
-Packages all resources under the specified URI into a `.ovpack` file for backup or migration. Requires ROOT or ADMIN permissions.
+Packages all resources under the specified URI into a `.ovpack` file for backup or migration. Available to ROOT, ADMIN, and USER roles; normal URI access controls still apply.
 
 **Processing Flow**:
 1. Verify user permissions
@@ -1296,9 +1452,10 @@ Packages all resources under the specified URI into a `.ovpack` file for backup 
 | uri | string | Yes | - | Viking URI to export |
 | include_vectors | boolean | No | false | Include a pure-dense vector snapshot; hybrid index types are rejected |
 
-**Permission Requirements**: ROOT or ADMIN
+**Permission Requirements**: ROOT, ADMIN, or USER
 
 #### 3. Usage Examples
+
 
 **HTTP API**
 
@@ -1330,6 +1487,17 @@ client.initialize()
 # Note: Export functionality is primarily used via CLI
 ```
 
+**TypeScript SDK**
+
+```typescript
+const outputPath = await client.exportOVPack(
+  "viking://resources/docs/",
+  "./exports/docs.ovpack",
+  true,
+);
+console.log(outputPath);
+```
+
 **Go SDK**
 
 ```go
@@ -1355,6 +1523,7 @@ ov export viking://resources/my-project/ ./exports/my-project.ovpack
 ov export viking://resources/my-project/ ./exports/my-project.ovpack --include-vectors
 ```
 
+
 **Response Example**
 
 This endpoint directly returns a file stream (`Content-Type: application/zip`), does not return a JSON envelope.
@@ -1367,7 +1536,7 @@ Import a `.ovpack` file.
 
 #### 1. API Implementation Overview
 
-Imports a `.ovpack` file to a specified location for restoring or migrating data. Requires ROOT or ADMIN permissions.
+Imports a `.ovpack` file to a specified location for restoring or migrating data. Available to ROOT, ADMIN, and USER roles; normal URI access controls still apply.
 
 **Processing Flow**:
 1. Verify user permissions
@@ -1392,7 +1561,7 @@ Imports a `.ovpack` file to a specified location for restoring or migrating data
 | on_conflict | string | No | fail | Conflict policy: `fail`, `overwrite`, or `skip` |
 | vector_mode | string | No | auto | Vector handling: `auto`, `recompute`, or `require` |
 
-**Permission Requirements**: ROOT or ADMIN
+**Permission Requirements**: ROOT, ADMIN, or USER
 
 **Behavior Notes**:
 - The API no longer accepts `vectorize` or `force`.
@@ -1410,6 +1579,7 @@ Imports a `.ovpack` file to a specified location for restoring or migrating data
 - OVPack does not add import package-size, file-count, or directory-depth limits; the practical limit comes from ZIP, the storage backend, and the runtime environment.
 
 #### 3. Usage Examples
+
 
 **HTTP API**
 
@@ -1451,6 +1621,20 @@ client.initialize()
 # Note: Import functionality is primarily used via CLI
 ```
 
+**TypeScript SDK**
+
+```typescript
+const uri = await client.importOVPack(
+  "./exports/docs.ovpack",
+  "viking://resources/",
+  {
+    onConflict: "overwrite",
+    vectorMode: "auto",
+  },
+);
+console.log(uri);
+```
+
 **Go SDK**
 
 ```go
@@ -1481,6 +1665,7 @@ ov import ./exports/my-project.ovpack viking://resources/imported/ --on-conflict
 # Require restoring a compatible dense vector snapshot
 ov import ./exports/my-project.ovpack viking://resources/imported/ --vector-mode require
 ```
+
 
 **Response Example**
 

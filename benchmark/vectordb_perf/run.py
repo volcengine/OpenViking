@@ -19,6 +19,7 @@ import os
 import platform
 import random
 import shutil
+import statistics
 import struct
 import subprocess
 import sys
@@ -29,19 +30,21 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Optional, Sequence
 
-from openviking.storage.expr import PathScope
+from benchmark.vectordb_perf.async_utils import map_bounded_as_completed
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.collection_schemas import CollectionSchemas
+from openviking.storage.expr import PathScope
 from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import OpenVikingConfigSingleton
-
 
 BENCH_ACCOUNT_ID = "bench_account"
 BENCH_USER_ID = "bench_user"
 DIR_VECTOR_DATASET_URL = "https://github.com/KurtPatrickHere/dir-vector-dataset"
 DEFAULT_DIR_VECTOR_DATASETS = ("wiki", "arxiv")
 PROGRESS_INTERVAL_SECONDS = 5.0
+DIR_VECTOR_QUERY_SCOPES = ("dataset", "derived_gt_lca_v1")
+DERIVED_INDEX_READY_TIMEOUT_SECONDS = 600.0
 
 
 PROFILE_DEFAULTS: dict[str, dict[str, Any]] = {
@@ -83,6 +86,7 @@ PROFILE_DEFAULTS: dict[str, dict[str, Any]] = {
 DIR_VECTOR_FILES = {
     "wiki": {
         "corpus": "dbpedia_dir_2m_corpus.jsonl",
+        "corpus_paths": "dbpedia_dir_2m_corpus_paths.json",
         "vectors": "dbpedia_dir_2m_corpus_vectors.fvecs",
         "queries": "dbpedia_dir_2m_query.jsonl",
         "query_vectors": "dbpedia_dir_2m_query_vectors.fvecs",
@@ -128,6 +132,7 @@ class BenchOptions:
     seed: int
     distance: Optional[str]
     drop_at_end: bool
+    dir_vector_query_scope: str
 
 
 @dataclass
@@ -138,6 +143,12 @@ class QueryCase:
     ground_truth_ids: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class GroundTruthItem:
+    corpus_id: str
+    score: float = 1.0
+
+
 @dataclass
 class Workload:
     name: str
@@ -145,6 +156,8 @@ class Workload:
     records: Callable[[], Iterator[dict[str, Any]]]
     queries: list[QueryCase]
     expected_rows: Optional[int]
+    directory_queries: Optional[list[QueryCase]] = None
+    path_diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -171,6 +184,10 @@ class RunResult:
     workload: dict[str, Any]
     environment: dict[str, Any]
     kept_collection: bool
+
+
+def directory_queries(workload: Workload) -> list[QueryCase]:
+    return workload.queries if workload.directory_queries is None else workload.directory_queries
 
 
 def utc_now() -> str:
@@ -312,6 +329,106 @@ def iter_fvecs(path: Path, limit: Optional[int] = None) -> Iterator[list[float]]
             count += 1
 
 
+def iter_json_array_records(
+    path: Path,
+    limit: Optional[int] = None,
+    *,
+    chunk_size: int = 1024 * 1024,
+) -> Iterator[dict[str, Any]]:
+    """Stream a top-level JSON array without materializing the whole file."""
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be positive")
+    if limit is not None and limit <= 0:
+        return
+
+    decoder = json.JSONDecoder()
+    with path.open("r", encoding="utf-8") as handle:
+        buffer = ""
+        position = 0
+        eof = False
+        started = False
+        expect_value = True
+        after_comma = False
+        yielded = 0
+
+        def refill() -> None:
+            nonlocal buffer, position, eof
+            if position:
+                buffer = buffer[position:]
+                position = 0
+            chunk = handle.read(chunk_size)
+            if chunk:
+                buffer += chunk
+            else:
+                eof = True
+
+        while True:
+            if position >= len(buffer) and not eof:
+                refill()
+            while position < len(buffer) and buffer[position].isspace():
+                position += 1
+            if position >= len(buffer):
+                if eof:
+                    raise ValueError(f"truncated JSON array in {path.name}")
+                refill()
+                continue
+
+            if not started:
+                if buffer[position] != "[":
+                    raise ValueError(f"expected a top-level JSON array in {path.name}")
+                position += 1
+                started = True
+                continue
+
+            if not expect_value:
+                if buffer[position] == ",":
+                    position += 1
+                    expect_value = True
+                    after_comma = True
+                    continue
+                if buffer[position] == "]":
+                    position += 1
+                    while True:
+                        while position < len(buffer) and buffer[position].isspace():
+                            position += 1
+                        if position < len(buffer):
+                            raise ValueError(f"unexpected content after JSON array in {path.name}")
+                        if eof:
+                            return
+                        refill()
+                raise ValueError(f"expected ',' or ']' in {path.name}")
+
+            if buffer[position] == "]":
+                if after_comma:
+                    raise ValueError(f"trailing comma in JSON array in {path.name}")
+                position += 1
+                while True:
+                    while position < len(buffer) and buffer[position].isspace():
+                        position += 1
+                    if position < len(buffer):
+                        raise ValueError(f"unexpected content after JSON array in {path.name}")
+                    if eof:
+                        return
+                    refill()
+
+            try:
+                item, end = decoder.raw_decode(buffer, position)
+            except json.JSONDecodeError as exc:
+                if eof:
+                    raise ValueError(f"invalid JSON array in {path.name}: {exc}") from exc
+                refill()
+                continue
+            position = end
+            expect_value = False
+            after_comma = False
+            if not isinstance(item, dict):
+                raise ValueError(f"expected JSON objects in {path.name}")
+            yield item
+            yielded += 1
+            if limit is not None and yielded >= limit:
+                return
+
+
 def iter_json_records(path: Path, limit: Optional[int] = None) -> Iterator[dict[str, Any]]:
     if path.suffix == ".jsonl":
         with path.open("r", encoding="utf-8") as handle:
@@ -323,6 +440,18 @@ def iter_json_records(path: Path, limit: Optional[int] = None) -> Iterator[dict[
                     item = json.loads(stripped)
                     if isinstance(item, dict):
                         yield item
+        return
+
+    with path.open("r", encoding="utf-8") as handle:
+        first = ""
+        while not first:
+            char = handle.read(1)
+            if not char:
+                raise ValueError(f"empty JSON file: {path}")
+            if not char.isspace():
+                first = char
+    if first == "[":
+        yield from iter_json_array_records(path, limit)
         return
 
     data = json.loads(path.read_text(encoding="utf-8"))
@@ -364,25 +493,46 @@ def normalize_path(path: Any) -> str:
     return stripped.rstrip("/") if len(stripped) > 1 else stripped
 
 
-def extract_path(record: dict[str, Any]) -> str:
-    value = pick_value(
-        record,
-        (
-            "dir_path",
-            "dir_paths",
-            "path",
-            "paths",
-            "directory",
-            "directories",
-            "category_path",
-            "category_paths",
-            "date_path",
-        ),
-    )
+GENERIC_PATH_FIELDS = (
+    "dir_path",
+    "dir_paths",
+    "path",
+    "paths",
+    "directory",
+    "directories",
+    "category_path",
+    "category_paths",
+    "date_path",
+)
+
+
+def extract_declared_path(
+    record: dict[str, Any], fields: Sequence[str] = GENERIC_PATH_FIELDS
+) -> Optional[str]:
+    """Return only explicitly declared path metadata, never arbitrary prose."""
+    value = pick_value(record, fields)
     if value is not None:
         return normalize_path(value)
+    for container_name in ("constraints", "constraint", "metadata"):
+        nested = record.get(container_name)
+        if isinstance(nested, dict):
+            value = pick_value(nested, fields)
+            if value is not None:
+                return normalize_path(value)
+        elif container_name == "constraint" and isinstance(nested, (str, list)):
+            return normalize_path(nested)
+    return None
 
-    # Last resort for dataset variants with nested constraint metadata.
+
+def extract_path(record: dict[str, Any]) -> str:
+    return extract_declared_path(record) or "/"
+
+
+def extract_legacy_path(record: dict[str, Any]) -> str:
+    """Keep the pre-existing best-effort behavior for non-Wiki datasets."""
+    declared = extract_declared_path(record)
+    if declared is not None:
+        return declared
     for value in record.values():
         if isinstance(value, str) and "/" in value:
             return normalize_path(value)
@@ -396,7 +546,17 @@ def extract_path(record: dict[str, Any]) -> str:
 def record_id(record: dict[str, Any], fallback: int) -> str:
     value = pick_value(
         record,
-        ("id", "entity_id", "paper_id", "doc_id", "item_id", "source_id", "qid", "query_id"),
+        (
+            "id",
+            "_id",
+            "entity_id",
+            "paper_id",
+            "doc_id",
+            "item_id",
+            "source_id",
+            "qid",
+            "query_id",
+        ),
     )
     return str(value) if value is not None else str(fallback)
 
@@ -417,6 +577,65 @@ def path_matches(path_value: Any, prefix: str) -> bool:
         if path == normalized_prefix or path.startswith(normalized_prefix.rstrip("/") + "/"):
             return True
     return False
+
+
+def path_parts(path: str) -> tuple[str, ...]:
+    return tuple(part for part in normalize_path(path).strip("/").split("/") if part)
+
+
+def common_path_prefix(paths: Sequence[str]) -> str:
+    if not paths:
+        return "/"
+    prefix = list(path_parts(paths[0]))
+    for path in paths[1:]:
+        parts = path_parts(path)
+        index = 0
+        while index < min(len(prefix), len(parts)) and prefix[index] == parts[index]:
+            index += 1
+        del prefix[index:]
+        if not prefix:
+            return "/"
+    return "/" + "/".join(prefix) if prefix else "/"
+
+
+def iter_wiki_corpus_paths(path: Path, limit: Optional[int] = None) -> Iterator[tuple[str, str]]:
+    for index, item in enumerate(iter_json_array_records(path, limit)):
+        item_id = record_id(item, index)
+        if item_id != str(index):
+            raise ValueError(
+                f"Wiki corpus path mapping is not row-aligned at row {index}: id={item_id}"
+            )
+        raw_path = item.get("path")
+        normalized = normalize_path(raw_path)
+        if normalized == "/":
+            raise ValueError(f"Wiki corpus path mapping has an empty root path at row {index}")
+        yield item_id, normalized
+
+
+def collect_wiki_corpus_paths(path: Path, corpus_ids: set[str]) -> dict[str, str]:
+    if not corpus_ids:
+        return {}
+    found: dict[str, str] = {}
+    for item_id, item_path in iter_wiki_corpus_paths(path):
+        if item_id in corpus_ids:
+            found[item_id] = item_path
+            if len(found) == len(corpus_ids):
+                break
+    missing = corpus_ids - found.keys()
+    if missing:
+        preview = ", ".join(sorted(missing)[:5])
+        raise ValueError(
+            f"Wiki corpus path mapping is missing {len(missing)} ground-truth ids: {preview}"
+        )
+    return found
+
+
+def derived_gt_lca_scope(items: Sequence[GroundTruthItem], corpus_paths: dict[str, str]) -> str:
+    if not items:
+        return "/"
+    highest_score = max(item.score for item in items)
+    relevant_paths = [corpus_paths[item.corpus_id] for item in items if item.score == highest_score]
+    return common_path_prefix(relevant_paths)
 
 
 def synthetic_vector(rng: random.Random, dim: int) -> list[float]:
@@ -522,7 +741,9 @@ def build_synthetic_workload(options: BenchOptions) -> Workload:
     cases: list[QueryCase] = []
     for qindex in range(query_count):
         record_index = (qindex * max(1, rows // query_count)) % rows
-        full_path = synthetic_path(record_index, depth=options.path_depth, fanout=options.path_fanout)
+        full_path = synthetic_path(
+            record_index, depth=options.path_depth, fanout=options.path_fanout
+        )
         cases.append(
             QueryCase(
                 query_id=f"syn-q{qindex}",
@@ -540,8 +761,8 @@ def build_synthetic_workload(options: BenchOptions) -> Workload:
     )
 
 
-def load_ground_truth(path: Path) -> dict[str, list[str]]:
-    result: dict[str, list[str]] = {}
+def load_scored_ground_truth(path: Path) -> dict[str, list[GroundTruthItem]]:
+    result: dict[str, list[GroundTruthItem]] = {}
     with path.open("r", encoding="utf-8") as handle:
         for index, line in enumerate(handle):
             stripped = line.strip()
@@ -552,18 +773,27 @@ def load_ground_truth(path: Path) -> dict[str, list[str]]:
                 if parts[0].lower() in {"query-id", "query_id"}:
                     continue
                 if len(parts) >= 3 and is_number(parts[2]):
-                    result.setdefault(str(parts[0]), []).append(str(parts[1]))
+                    result.setdefault(str(parts[0]), []).append(
+                        GroundTruthItem(str(parts[1]), float(parts[2]))
+                    )
                     continue
                 if len(parts) >= 2:
-                    result[str(parts[0])] = [item for item in parts[1:] if item]
+                    result[str(parts[0])] = [GroundTruthItem(item) for item in parts[1:] if item]
                     continue
             else:
                 parts = stripped.replace(",", " ").split()
             if len(parts) < 2:
                 continue
             # Plain-text ground-truth files omit query ids; line number is the query id.
-            result[str(index)] = [item for item in parts if item]
+            result[str(index)] = [GroundTruthItem(item) for item in parts if item]
     return result
+
+
+def load_ground_truth(path: Path) -> dict[str, list[str]]:
+    return {
+        query_id: [item.corpus_id for item in items]
+        for query_id, items in load_scored_ground_truth(path).items()
+    }
 
 
 def is_number(value: str) -> bool:
@@ -610,6 +840,50 @@ def build_dir_vector_workload(options: BenchOptions) -> Workload:
         else {record_id(meta, index) for index, meta in enumerate(sample_metadata)}
     )
 
+    query_records = load_query_records(paths["queries"], query_limit if options.full else None)
+    if options.full and len(query_records) != total_queries:
+        raise ValueError(
+            f"query metadata/vector count mismatch: {len(query_records)} vs {total_queries}"
+        )
+    query_vectors = list(iter_fvecs(paths["query_vectors"], len(query_records)))
+    if len(query_vectors) != len(query_records):
+        raise ValueError(
+            f"query metadata/vector count mismatch: {len(query_records)} vs {len(query_vectors)}"
+        )
+    scored_ground_truth = load_scored_ground_truth(paths["ground_truth"])
+
+    effective_query_scope = (
+        options.dir_vector_query_scope if options.dataset == "wiki" else "dataset"
+    )
+    query_ground_truth = [
+        scored_ground_truth.get(record_id(query, index))
+        or scored_ground_truth.get(str(index))
+        or []
+        for index, query in enumerate(query_records)
+    ]
+    missing_wiki_scopes = [
+        record_id(query, index)
+        for index, query in enumerate(query_records)
+        if extract_declared_path(query) is None
+    ]
+    if (
+        options.dataset == "wiki"
+        and effective_query_scope == "dataset"
+        and options.mode != "write-only"
+        and missing_wiki_scopes
+    ):
+        raise ValueError(
+            f"wiki query metadata has no directory constraint for "
+            f"{len(missing_wiki_scopes)} queries; refusing a root-only Directory benchmark. "
+            "Use a corrected dataset, or explicitly opt into the diagnostic "
+            "--dir-vector-query-scope derived_gt_lca_v1 mode for Wiki."
+        )
+
+    wiki_gt_paths: dict[str, str] = {}
+    if options.dataset == "wiki" and options.mode != "write-only":
+        ground_truth_ids = {item.corpus_id for items in query_ground_truth for item in items}
+        wiki_gt_paths = collect_wiki_corpus_paths(paths["corpus_paths"], ground_truth_ids)
+
     def records() -> Iterator[dict[str, Any]]:
         vector_iter = iter_fvecs(paths["vectors"], row_limit)
         metadata_iter = (
@@ -617,51 +891,143 @@ def build_dir_vector_workload(options: BenchOptions) -> Workload:
             if sample_metadata is not None
             else iter_json_records(paths["corpus"], row_limit)
         )
-        for index, (meta, vector) in enumerate(zip(metadata_iter, vector_iter)):
+        if options.dataset == "wiki":
+            mapping_iter = iter_wiki_corpus_paths(
+                paths["corpus_paths"], None if options.full else row_limit
+            )
+            combined: Iterable[tuple[dict[str, Any], list[float], tuple[str, str]]] = zip(
+                metadata_iter, vector_iter, mapping_iter, strict=True
+            )
+        else:
+            combined = (
+                (
+                    meta,
+                    vector,
+                    (
+                        record_id(meta, index),
+                        extract_legacy_path(meta),
+                    ),
+                )
+                for index, (meta, vector) in enumerate(zip(metadata_iter, vector_iter, strict=True))
+            )
+
+        for index, (meta, vector, (mapped_id, mapped_path)) in enumerate(combined):
             rid = record_id(meta, index)
-            path = extract_path(meta)
+            if options.dataset == "wiki" and (rid != mapped_id or rid != str(index)):
+                raise ValueError(
+                    "Wiki corpus metadata/path/vector rows are not aligned at "
+                    f"row {index}: metadata_id={rid}, path_id={mapped_id}"
+                )
+            if options.dataset == "wiki" and mapped_path == "/":
+                raise ValueError(f"dir-vector corpus row {index} has no declared directory path")
             category = str(pick_value(meta, ("category", "primary_category", "type")) or "")
             title = str(pick_value(meta, ("title", "name", "label")) or rid)
             yield ov_context_record(
                 record_id=rid,
                 vector=vector,
-                uri=resource_uri(options.dataset, path, rid),
+                uri=resource_uri(options.dataset, mapped_path, rid),
                 index=index,
                 category=category,
                 content=title,
             )
 
-    query_records = load_query_records(paths["queries"], query_limit if options.full else None)
-    query_vectors = list(iter_fvecs(paths["query_vectors"], len(query_records)))
-    ground_truth = load_ground_truth(paths["ground_truth"])
-    covered_cases: list[QueryCase] = []
-    fallback_cases: list[QueryCase] = []
-    for index, (query_meta, vector) in enumerate(zip(query_records, query_vectors)):
+    base_covered: list[QueryCase] = []
+    base_fallback: list[QueryCase] = []
+    directory_covered: list[QueryCase] = []
+    directory_fallback: list[QueryCase] = []
+    missing_dataset_scopes: list[str] = []
+    root_derived_scopes = 0
+    for index, (query_meta, vector) in enumerate(zip(query_records, query_vectors, strict=True)):
         qid = record_id(query_meta, index)
-        gt = [str(item) for item in (ground_truth.get(qid) or ground_truth.get(str(index)) or [])]
+        scored_gt = query_ground_truth[index]
+        full_gt = [item.corpus_id for item in scored_gt]
+        gt = full_gt
         if sampled_ids is not None:
             gt = [item for item in gt if item in sampled_ids]
-        case = QueryCase(
+
+        declared_scope = (
+            extract_declared_path(query_meta)
+            if options.dataset == "wiki"
+            else extract_legacy_path(query_meta)
+        )
+        directory_scope = declared_scope or "/"
+        if effective_query_scope == "derived_gt_lca_v1" and options.mode != "write-only":
+            directory_scope = derived_gt_lca_scope(scored_gt, wiki_gt_paths)
+        elif options.dataset == "wiki" and directory_scope == "/":
+            missing_dataset_scopes.append(qid)
+
+        base_case = QueryCase(
             query_id=qid,
             vector=vector,
-            filter_path=resource_uri(options.dataset, extract_path(query_meta)),
+            filter_path=resource_uri(options.dataset, directory_scope),
             ground_truth_ids=gt,
         )
         if gt or sampled_ids is None:
-            covered_cases.append(case)
+            base_covered.append(base_case)
         else:
-            fallback_cases.append(case)
-    cases = covered_cases[:query_limit]
-    if len(cases) < query_limit:
-        cases.extend(fallback_cases[: query_limit - len(cases)])
+            base_fallback.append(base_case)
+
+        if options.dataset == "wiki" and directory_scope == "/":
+            if effective_query_scope == "derived_gt_lca_v1":
+                root_derived_scopes += 1
+            continue
+        directory_gt = (
+            [item for item in gt if path_matches(wiki_gt_paths[item], directory_scope)]
+            if options.dataset == "wiki"
+            else gt
+        )
+        directory_case = QueryCase(
+            query_id=qid,
+            vector=vector,
+            filter_path=resource_uri(options.dataset, directory_scope),
+            ground_truth_ids=directory_gt,
+        )
+        if directory_gt or sampled_ids is None:
+            directory_covered.append(directory_case)
+        else:
+            directory_fallback.append(directory_case)
+
+    def select_cases(covered: list[QueryCase], fallback: list[QueryCase]) -> list[QueryCase]:
+        selected = covered[:query_limit]
+        if len(selected) < query_limit:
+            selected.extend(fallback[: query_limit - len(selected)])
+        return selected
+
+    cases = select_cases(base_covered, base_fallback)
+    directory_cases = select_cases(directory_covered, directory_fallback)
     if not cases:
         raise ValueError("dir-vector query set is empty")
+    if options.mode != "write-only" and missing_dataset_scopes:
+        raise ValueError(
+            f"{options.dataset} query metadata has no directory constraint for "
+            f"{len(missing_dataset_scopes)} queries; refusing a root-only Directory benchmark. "
+            "Use a corrected dataset, or explicitly opt into the diagnostic "
+            "--dir-vector-query-scope derived_gt_lca_v1 mode for Wiki."
+        )
+    if options.mode != "write-only" and not directory_cases:
+        raise ValueError("dir-vector Directory query set is empty after path validation")
+
+    scope_depths = [len(path_parts(case.filter_path)) - 3 for case in directory_cases]
+    scope_depths = [max(0, depth) for depth in scope_depths]
+    path_diagnostics = {
+        "corpus_path_source": paths.get("corpus_paths", paths["corpus"]).name,
+        "query_scope_source": effective_query_scope,
+        "base_query_count": len(cases),
+        "directory_query_count": len(directory_cases),
+        "unique_directory_scopes": len({case.filter_path for case in directory_cases}),
+        "root_derived_scopes_omitted": root_derived_scopes,
+        "directory_scope_depth_min": min(scope_depths) if scope_depths else None,
+        "directory_scope_depth_median": statistics.median(scope_depths) if scope_depths else None,
+        "directory_scope_depth_max": max(scope_depths) if scope_depths else None,
+    }
     return Workload(
         name=f"dir-vector:{options.dataset}",
         dim=dim,
         records=records,
         queries=cases,
         expected_rows=row_limit,
+        directory_queries=directory_cases,
+        path_diagnostics=path_diagnostics,
     )
 
 
@@ -758,7 +1124,10 @@ async def run_search_phase(
                 level=[2],
                 limit=top_k,
             ),
-            extra={"query_id": query.query_id, "filter_path": query.filter_path if filtered else ""},
+            extra={
+                "query_id": query.query_id,
+                "filter_path": query.filter_path if filtered else "",
+            },
         )
 
     events: list[Event] = []
@@ -783,13 +1152,12 @@ async def run_search_phase(
                 force=done == len(queries),
             )
     else:
+
         async def tagged_query(query: QueryCase):
             event, rows = await one_query(query)
             return query, event, rows
 
-        pending = [asyncio.create_task(tagged_query(query)) for query in queries]
-        for future in asyncio.as_completed(pending):
-            query, event, rows = await future
+        async for query, event, rows in map_bounded_as_completed(queries, tagged_query, workers):
             events.append(event)
             results.append((query, rows or []))
             done += 1
@@ -829,6 +1197,30 @@ async def run_search_phase(
     return events, validation_errors, quality
 
 
+async def wait_for_auto_derived_index(
+    backend: VikingVectorIndexBackend,
+    *,
+    timeout: float = DERIVED_INDEX_READY_TIMEOUT_SECONDS,
+) -> bool:
+    """Wait for Auto's background GPU snapshot before timed search phases."""
+
+    def wait() -> bool:
+        adapter = backend._shared_adapter
+        collection = adapter.get_collection()
+        index = collection.get_index(adapter.index_name)
+        if index is None:
+            raise RuntimeError(f"benchmark index not found: {adapter.index_name}")
+        wait_for_rebuild = getattr(index, "wait_for_background_rebuild", None)
+        if not callable(wait_for_rebuild):
+            raise RuntimeError("Auto backend does not expose background rebuild readiness")
+        return bool(wait_for_rebuild(timeout=timeout))
+
+    ready = await asyncio.to_thread(wait)
+    if not ready:
+        raise TimeoutError(f"Auto derived index was not ready within {timeout:.0f}s")
+    return True
+
+
 def result_hits_ground_truth(rows: list[dict[str, Any]], ground_truth_ids: list[str]) -> bool:
     returned_ids = {str(row.get("id")) for row in rows if row.get("id") is not None}
     return any(str(item) in returned_ids for item in ground_truth_ids)
@@ -841,11 +1233,9 @@ def benchmark_context() -> RequestContext:
 async def upsert_records(
     backend: VikingVectorIndexBackend, ctx: RequestContext, records: list[dict[str, Any]]
 ) -> list[str]:
-    ids: list[str] = []
-    for record in records:
-        inserted = await backend.upsert(record, ctx=ctx)
-        if inserted:
-            ids.append(inserted)
+    ids = await backend.upsert_many(records, ctx=ctx)
+    if len(ids) != len(records):
+        raise RuntimeError(f"bulk upsert returned {len(ids)} ids for {len(records)} records")
     return ids
 
 
@@ -899,7 +1289,9 @@ async def run_benchmark_async(options: BenchOptions) -> RunResult:
     progress(
         "start "
         f"run_id={options.run_id} workload={workload.name} mode={options.mode} "
-        f"records={workload.expected_rows} queries={len(workload.queries)} dim={workload.dim}"
+        f"records={workload.expected_rows} base_queries={len(workload.queries)} "
+        f"directory_queries={len(directory_queries(workload))} "
+        f"dim={workload.dim}"
     )
     progress(f"collection={collection_name}")
 
@@ -939,28 +1331,29 @@ async def run_benchmark_async(options: BenchOptions) -> RunResult:
         progress(f"ingest: start batch_size={batch_size}")
         ingest_started_at = time.perf_counter()
         last_ingest_reported_at = 0.0
-        for batch in batched(workload.records(), batch_size):
-            if len(fetch_ids) < 20:
-                fetch_ids.extend(str(row["id"]) for row in batch[: 20 - len(fetch_ids)])
-            event, ids = await async_timed_event(
-                "ingest",
-                "upsert_rows_serial",
-                lambda batch=batch: upsert_records(backend, ctx, batch),
-                count=len(batch),
-            )
-            events.append(event)
-            if not event.success:
-                validation_errors.append(event.error or "upsert_rows_serial failed")
-                break
-            inserted += len(ids or [])
-            last_ingest_reported_at = progress_count(
-                "ingest",
-                inserted,
-                workload.expected_rows,
-                ingest_started_at,
-                last_ingest_reported_at,
-                force=inserted == workload.expected_rows,
-            )
+        async with backend.bulk_ingest(ctx=ctx):
+            for batch in batched(workload.records(), batch_size):
+                if len(fetch_ids) < 20:
+                    fetch_ids.extend(str(row["id"]) for row in batch[: 20 - len(fetch_ids)])
+                event, ids = await async_timed_event(
+                    "ingest",
+                    "upsert_rows_batch",
+                    lambda batch=batch: upsert_records(backend, ctx, batch),
+                    count=len(batch),
+                )
+                events.append(event)
+                if not event.success:
+                    validation_errors.append(event.error or "upsert_rows_batch failed")
+                    break
+                inserted += len(ids or [])
+                last_ingest_reported_at = progress_count(
+                    "ingest",
+                    inserted,
+                    workload.expected_rows,
+                    ingest_started_at,
+                    last_ingest_reported_at,
+                    force=inserted == workload.expected_rows,
+                )
 
     if options.mode != "read-only" and inserted == 0:
         validation_errors.append("no records inserted")
@@ -996,6 +1389,33 @@ async def run_benchmark_async(options: BenchOptions) -> RunResult:
             kept_collection=kept_collection,
         )
 
+    cuvs_config = getattr(vectordb_config, "cuvs", None)
+    auto_background_enabled = bool(
+        cuvs_config is not None
+        and getattr(cuvs_config, "auto_enable", False)
+        and getattr(cuvs_config, "auto_background_rebuild", False)
+    )
+    if auto_background_enabled:
+        progress("prepare: wait for Auto derived index")
+        event, _ = await async_timed_event(
+            "prepare",
+            "wait_for_auto_derived_index",
+            lambda: wait_for_auto_derived_index(backend),
+        )
+        events.append(event)
+        if not event.success:
+            validation_errors.append(event.error or "Auto derived index readiness failed")
+            await close_backend(backend)
+            return finalize_result(
+                options,
+                workload,
+                collection_name,
+                events,
+                validation_errors,
+                quality,
+                kept_collection=True,
+            )
+
     if options.mode == "read-only":
         fetch_ids = sample_record_ids(workload, 20)
 
@@ -1016,9 +1436,12 @@ async def run_benchmark_async(options: BenchOptions) -> RunResult:
     if not event.success:
         validation_errors.append(event.error or "fetch_by_ids failed")
     elif len(fetched or []) != len(fetch_ids):
-        validation_errors.append(f"fetch_by_ids returned {len(fetched or [])}, expected {len(fetch_ids)}")
+        validation_errors.append(
+            f"fetch_by_ids returned {len(fetched or [])}, expected {len(fetch_ids)}"
+        )
 
     selected_queries = workload.queries
+    selected_directory_queries = directory_queries(workload)
     search_events, errors, vector_quality = await run_search_phase(
         backend=backend,
         ctx=ctx,
@@ -1036,7 +1459,7 @@ async def run_benchmark_async(options: BenchOptions) -> RunResult:
         backend=backend,
         ctx=ctx,
         phase="filtered_vector_search",
-        queries=selected_queries,
+        queries=selected_directory_queries,
         top_k=options.top_k,
         concurrency=options.concurrency,
         filtered=True,
@@ -1045,7 +1468,7 @@ async def run_benchmark_async(options: BenchOptions) -> RunResult:
     validation_errors.extend(errors)
     quality["filtered_vector_search"] = filtered_quality
 
-    first_filter = selected_queries[0].filter_path
+    first_filter = selected_directory_queries[0].filter_path
     event, _ = await async_timed_event(
         "validate",
         "count_filtered",
@@ -1108,10 +1531,12 @@ def finalize_result(
             "dataset": options.dataset if options.workload == "dir-vector" else "synthetic",
             "record_count": workload.expected_rows,
             "query_count": len(workload.queries),
+            "directory_query_count": len(directory_queries(workload)),
             "vector_dim": workload.dim,
             "top_k": options.top_k,
             "full": options.full,
             "profile": options.profile,
+            "path_diagnostics": workload.path_diagnostics,
         },
         environment=collect_environment(),
         kept_collection=kept_collection,
@@ -1150,9 +1575,7 @@ def phase_summary_rows(events: list[Event]) -> list[dict[str, Any]]:
                 "p95_ms": round(percentile(latencies, 95), 3),
                 "p99_ms": round(percentile(latencies, 99), 3),
                 "max_ms": round(max(latencies), 3),
-                "throughput_per_sec": round((count / wall_ms) * 1000.0, 3)
-                if wall_ms > 0
-                else 0.0,
+                "throughput_per_sec": round((count / wall_ms) * 1000.0, 3) if wall_ms > 0 else 0.0,
             }
         )
     return rows
@@ -1281,9 +1704,7 @@ def write_outputs(result: RunResult, options: BenchOptions) -> None:
     write_text(output_dir / "summary_zh.md", build_markdown_report(result, summary_rows, options))
 
 
-def write_suite_outputs(
-    output_dir: Path, runs: list[tuple[BenchOptions, RunResult]]
-) -> None:
+def write_suite_outputs(output_dir: Path, runs: list[tuple[BenchOptions, RunResult]]) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     run_summaries = {
         run_options.dataset: phase_summary_rows(result.events) for run_options, result in runs
@@ -1295,9 +1716,12 @@ def write_suite_outputs(
             "records": result.workload.get("record_count"),
             "inserted": metric_value(run_summaries[run_options.dataset], "ingest", "count"),
             "queries": result.workload.get("query_count"),
+            "directory_queries": result.workload.get("directory_query_count"),
             "dim": result.workload.get("vector_dim"),
             "top_k": result.workload.get("top_k"),
-            "vector_qps": metric_value(run_summaries[run_options.dataset], "vector_search", "throughput_per_sec"),
+            "vector_qps": metric_value(
+                run_summaries[run_options.dataset], "vector_search", "throughput_per_sec"
+            ),
             "vector_recall": quality_rate(result.quality, "vector_search"),
             "filtered_qps": metric_value(
                 run_summaries[run_options.dataset], "filtered_vector_search", "throughput_per_sec"
@@ -1330,9 +1754,11 @@ def write_suite_outputs(
     ]
     for run_options, result in runs:
         lines.extend(["", f"## {run_options.dataset} 明细", ""])
-        detail = build_markdown_report(
-            result, run_summaries[run_options.dataset], run_options
-        ).strip().splitlines()
+        detail = (
+            build_markdown_report(result, run_summaries[run_options.dataset], run_options)
+            .strip()
+            .splitlines()
+        )
         for line in detail[1:]:
             lines.append("#" + line if line.startswith("#") else line)
     write_text(output_dir / "summary_zh.md", "\n".join(lines))
@@ -1357,7 +1783,10 @@ def quality_rate(quality: dict[str, Any], phase: str) -> str:
     return f"{float(value) * 100.0:.2f}%"
 
 
-def recall_scope(result: RunResult) -> str:
+def recall_scope(result: RunResult, phase: str = "filtered_vector_search") -> str:
+    query_scope_source = result.workload.get("path_diagnostics", {}).get("query_scope_source")
+    if phase == "filtered_vector_search" and query_scope_source and query_scope_source != "dataset":
+        return str(query_scope_source)
     if result.workload.get("workload") == "dir-vector" and not result.workload.get("full"):
         return "sampled_subset"
     return "official_full"
@@ -1373,6 +1802,7 @@ def workload_rows(result: RunResult, summary_rows: list[dict[str, Any]]) -> list
             "records": workload.get("record_count"),
             "inserted": metric_value(summary_rows, "ingest", "count"),
             "queries": workload.get("query_count"),
+            "directory_queries": workload.get("directory_query_count"),
             "dim": workload.get("vector_dim"),
             "top_k": workload.get("top_k"),
             "full": workload.get("full"),
@@ -1390,7 +1820,7 @@ def recall_qps_rows(
             "qps": metric_value(summary_rows, "vector_search", "throughput_per_sec"),
             "avg_ms": metric_value(summary_rows, "vector_search", "avg_ms"),
             "p95_ms": metric_value(summary_rows, "vector_search", "p95_ms"),
-            "scope": recall_scope(result),
+            "scope": recall_scope(result, "vector_search"),
             recall_header: quality_rate(result.quality, "vector_search"),
         },
         {
@@ -1398,7 +1828,7 @@ def recall_qps_rows(
             "qps": metric_value(summary_rows, "filtered_vector_search", "throughput_per_sec"),
             "avg_ms": metric_value(summary_rows, "filtered_vector_search", "avg_ms"),
             "p95_ms": metric_value(summary_rows, "filtered_vector_search", "p95_ms"),
-            "scope": recall_scope(result),
+            "scope": recall_scope(result, "filtered_vector_search"),
             recall_header: quality_rate(result.quality, "filtered_vector_search"),
         },
     ]
@@ -1434,11 +1864,19 @@ def build_markdown_report(
             "",
             markdown_table(workload_rows(result, summary_rows)),
             "",
+            "## Directory path 口径",
+            "",
+            f"- Corpus path source: `{result.workload.get('path_diagnostics', {}).get('corpus_path_source', 'generated')}`",
+            f"- Query scope source: `{result.workload.get('path_diagnostics', {}).get('query_scope_source', 'generated')}`",
+            f"- Directory queries: `{result.workload.get('directory_query_count')}`",
+            f"- Unique directory scopes: `{result.workload.get('path_diagnostics', {}).get('unique_directory_scopes', '-')}`",
+            f"- Root-derived scopes omitted: `{result.workload.get('path_diagnostics', {}).get('root_derived_scopes_omitted', 0)}`",
+            "",
             "## 召回与 QPS",
             "",
             markdown_table(recall_qps_rows(result, summary_rows, options)),
             "",
-            "gt_recall@K 按 query 的 ground truth 命中率统计；`sampled_subset` 只用于 smoke sanity，不代表官方全量 recall。官方 recall 请用 `--full`。",
+            "gt_recall@K 按 query 的 ground truth 命中率统计；`sampled_subset` 只用于 smoke sanity，不代表官方全量 recall。`derived_gt_lca_v1` 使用 ground truth 派生目录，只是诊断 workload，也不代表发布数据集的官方 query constraint。",
             "",
             "## 性能汇总",
             "",
@@ -1516,7 +1954,9 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> BenchOptions:
-    parser = argparse.ArgumentParser(description="Run OpenViking vector backend performance benchmark")
+    parser = argparse.ArgumentParser(
+        description="Run OpenViking vector backend performance benchmark"
+    )
     parser.add_argument("--config", help="Path to ov.conf. Defaults to OpenViking config lookup.")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--run-id")
@@ -1545,6 +1985,17 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> BenchOptions:
     parser.add_argument("--path-depth", type=int)
     parser.add_argument("--path-fanout", type=int)
     parser.add_argument("--filter-selectivity", type=float)
+    parser.add_argument(
+        "--dir-vector-query-scope",
+        choices=DIR_VECTOR_QUERY_SCOPES,
+        default="dataset",
+        help=(
+            "Directory scope source for dir-vector queries. dataset requires published query "
+            "constraints; derived_gt_lca_v1 gives Wiki an explicit diagnostic scope derived "
+            "from the deepest common path of highest-score ground-truth items. Other datasets "
+            "continue to use their published constraints."
+        ),
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--distance", choices=["ip", "l2", "cosine"])
     parser.add_argument("--drop-at-end", action="store_true", help="Drop benchmark collection")
@@ -1554,7 +2005,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> BenchOptions:
         raise ValueError("--drop-at-end is not allowed with --mode read-only")
 
     defaults = PROFILE_DEFAULTS[args.profile]
-    run_id = args.run_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid.uuid4().hex[:8]
+    run_id = (
+        args.run_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid.uuid4().hex[:8]
+    )
     output_dir = args.output_dir or Path("benchmark/results/vectordb_perf") / run_id
     return BenchOptions(
         config=args.config,
@@ -1580,6 +2033,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> BenchOptions:
         seed=args.seed,
         distance=args.distance,
         drop_at_end=args.drop_at_end,
+        dir_vector_query_scope=args.dir_vector_query_scope,
     )
 
 

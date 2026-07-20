@@ -87,6 +87,12 @@ class LocalCollectionAdapter(CollectionAdapter):
         result = collection.update_data(data_list)
         return list(result.ids or [])
 
+    def begin_bulk_ingest(self) -> None:
+        self.get_collection().begin_bulk_ingest()
+
+    def end_bulk_ingest(self) -> None:
+        self.get_collection().end_bulk_ingest()
+
 
 class CuVSCollectionAdapter(LocalCollectionAdapter):
     """Embedded OpenViking storage with dense search executed by NVIDIA cuVS."""

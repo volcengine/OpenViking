@@ -556,7 +556,6 @@ class MessageRange:
         result = []
         for i, msg_group in enumerate(self.elements):
             result.extend(self._format_contiguous_group(msg_group))
-            # Add "..." separator between non-contiguous message groups
             if i < len(self.elements) - 1:
                 result.append("...")
         return "\n".join(result)
@@ -675,9 +674,6 @@ class MemoryUpdateResult:
     def add_error(self, uri: str, error: Exception) -> None:
         self.errors.append((uri, error))
 
-    def has_changes(self) -> bool:
-        return len(self.written_uris) > 0 or len(self.edited_uris) > 0 or len(self.deleted_uris) > 0
-
     def summary(self) -> str:
         return (
             f"Written: {len(self.written_uris)}, "
@@ -713,10 +709,6 @@ class MemoryUpdater:
         self._registry = registry
         self._vikingdb = vikingdb
         self._transaction_handle = transaction_handle
-
-    def set_registry(self, registry: MemoryTypeRegistry) -> None:
-        """Set the memory type registry for URI resolution."""
-        self._registry = registry
 
     def _get_viking_fs(self):
         """Get or create VikingFS instance."""
@@ -816,23 +808,25 @@ class MemoryUpdater:
                 result.add_error("unknown", ValueError(error))
             return result
 
-        unresolved_ops = [
-            resolved_op for resolved_op in operations.upsert_operations if not resolved_op.uris
-        ]
-        if unresolved_ops:
-            missing = [
-                f"{resolved_op.memory_type}(page_id={resolved_op.page_id})"
-                for resolved_op in unresolved_ops
-            ]
-            raise ValueError(
-                f"Cannot apply operations: missing resolved URIs for {', '.join(missing)}"
+        applicable_upserts: List[ResolvedOperation] = []
+        has_unresolved_upserts = False
+        for resolved_op in operations.upsert_operations:
+            if resolved_op.uris:
+                applicable_upserts.append(resolved_op)
+                continue
+            has_unresolved_upserts = True
+            error_target = f"{resolved_op.memory_type}(page_id={resolved_op.page_id})"
+            resolution_error = ValueError("Missing resolved URI")
+            result.add_error(error_target, resolution_error)
+            tracer.error(
+                f"Skipping unresolved memory operation: {error_target}: {resolution_error}"
             )
 
         # Distribute resolved_links to corresponding upsert operations
         self._distribute_links_to_operations(operations)
 
         # Apply unified operations - _apply_edit returns True if edited, False if written
-        for resolved_op in operations.upsert_operations:
+        for resolved_op in applicable_upserts:
             try:
                 await self._apply_upsert(
                     resolved_op,
@@ -868,6 +862,13 @@ class MemoryUpdater:
         upserted_uri_keys = {_same_batch_delete_conflict_key(uri) for uri in upserted_uris}
         for file_content in operations.delete_file_contents:
             delete_uri = file_content.uri
+            if has_unresolved_upserts:
+                delete_error = ValueError(
+                    "Skipped delete because batch contains unresolved upsert URIs"
+                )
+                result.add_error(delete_uri, delete_error)
+                tracer.error(f"Skipping delete for {delete_uri}: {delete_error}")
+                continue
             if delete_uri in upserted_uris:
                 tracer.info(
                     f"[apply_operations] skipping delete for {delete_uri}: "

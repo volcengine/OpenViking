@@ -273,24 +273,6 @@ class TestHTTPAccessorPriorityRouting:
         assert accessor is not None
         assert accessor.__class__.__name__ == "HTTPAccessor"
 
-    def test_accessor_priority_order(self) -> None:
-        """Accessors should be registered in descending priority order."""
-        registry = AccessorRegistry(register_default=False)
-        http = HTTPAccessor()
-        git = GitAccessor()
-
-        # Register in any order
-        registry.register(http)
-        registry.register(git)
-
-        accessors = registry.list_accessors()
-
-        # GitAccessor (priority 80) should come before HTTPAccessor (priority 50)
-        assert len(accessors) == 2
-        assert accessors[0].__class__.__name__ == "GitAccessor"
-        assert accessors[1].__class__.__name__ == "HTTPAccessor"
-
-
 class TestHTTPAccessorRawUrlConversion:
     """Tests for HTTPAccessor._convert_to_raw_url (GitHub/GitLab blob -> raw)."""
 

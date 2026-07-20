@@ -142,6 +142,7 @@ export function createOpenVikingMcpProxy({
   readConfig,
   loggerFactory,
   fetchImpl = globalThis.fetch,
+  localToolProvider = null,
 } = {}) {
   if (typeof fetchImpl !== "function") {
     throw new Error("global fetch is required; use Node.js 18 or newer");
@@ -179,6 +180,43 @@ export function createOpenVikingMcpProxy({
     } catch { /* debug logging must never affect protocol IO */ }
   }
 
+  function localTools() {
+    if (!localToolProvider || typeof localToolProvider.listTools !== "function") return [];
+    const tools = localToolProvider.listTools();
+    return Array.isArray(tools) ? tools : [];
+  }
+
+  function appendLocalTools(message, outbound) {
+    if (message.method !== "tools/list" || !Array.isArray(outbound?.result?.tools)) {
+      return outbound;
+    }
+    const additions = localTools().filter((tool) => tool?.name);
+    if (additions.length === 0) return outbound;
+    const localNames = new Set(additions.map((tool) => tool.name));
+    const upstreamTools = outbound.result.tools.filter((tool) => !localNames.has(tool?.name));
+    return {
+      ...outbound,
+      result: {
+        ...outbound.result,
+        tools: [...upstreamTools, ...additions],
+      },
+    };
+  }
+
+  async function callLocalTool(message) {
+    if (
+      message.method !== "tools/call"
+      || !localToolProvider
+      || typeof localToolProvider.callTool !== "function"
+    ) {
+      return null;
+    }
+    const name = message.params?.name;
+    if (!localTools().some((tool) => tool?.name === name)) return null;
+    reloadIfCredentialFilesChanged("local_tool_call");
+    return localToolProvider.callTool(message.params, { config: proxyConfig });
+  }
+
   function reloadConfig(reason) {
     proxyConfig = readConfig();
     logger = loggerFactory("mcp-proxy", proxyConfig);
@@ -201,11 +239,14 @@ export function createOpenVikingMcpProxy({
     return true;
   }
 
-  function headersForRequest(includeSession = true, message = null) {
+  function headersForRequest(includeSession = true) {
     const headers = {
       "Content-Type": "application/json",
       "Accept": "application/json, text/event-stream",
-      "MCP-Protocol-Version": message?.params?.protocolVersion || protocolVersion,
+      // Always the proxy's current version (default, then server-negotiated) —
+      // never the client's un-negotiated ask, which strict upstreams reject
+      // with HTTP 400 before initialize negotiation can run.
+      "MCP-Protocol-Version": protocolVersion,
     };
     if (includeSession && sessionId) headers["Mcp-Session-Id"] = sessionId;
     if (proxyConfig.apiKey) headers.Authorization = `Bearer ${proxyConfig.apiKey}`;
@@ -265,7 +306,7 @@ export function createOpenVikingMcpProxy({
     try {
       const res = await fetchImpl(proxyConfig.mcpUrl, {
         method: "POST",
-        headers: headersForRequest(includeSession, message),
+        headers: headersForRequest(includeSession),
         body: JSON.stringify(message),
         signal: controller.signal,
       });
@@ -273,6 +314,10 @@ export function createOpenVikingMcpProxy({
       const messages = parseHttpBody(res.headers.get("content-type"), text);
       const nextSessionId = res.headers.get("mcp-session-id");
       if (nextSessionId) sessionId = nextSessionId;
+      if (message?.method === "initialize" && res.ok) {
+        const negotiated = messages.find((m) => typeof m?.result?.protocolVersion === "string")?.result.protocolVersion;
+        if (negotiated) protocolVersion = negotiated;
+      }
       if (!res.ok) {
         throw new HttpStatusError(res.status, res.statusText, text, messages);
       }
@@ -366,7 +411,7 @@ export function createOpenVikingMcpProxy({
     const expectsResponse = isRequest(message);
     if (message.method === "initialize") {
       initializeRequest = cloneMessage(message);
-      protocolVersion = message.params?.protocolVersion || protocolVersion || DEFAULT_PROTOCOL_VERSION;
+      protocolVersion = DEFAULT_PROTOCOL_VERSION;
       sessionId = "";
     }
     if (message.method === "notifications/initialized") {
@@ -374,6 +419,13 @@ export function createOpenVikingMcpProxy({
     }
 
     try {
+      const localResult = await callLocalTool(message);
+      if (localResult !== null) {
+        if (expectsResponse) {
+          await writeMessage({ jsonrpc: "2.0", id: message.id, result: localResult });
+        }
+        return;
+      }
       const send = sendWithRetry(message, { expectsResponse });
       if (message.method === "initialize") {
         initializeInFlight = send
@@ -389,7 +441,7 @@ export function createOpenVikingMcpProxy({
         return;
       }
       for (const outbound of result.messages) {
-        await writeMessage(outbound);
+        await writeMessage(appendLocalTools(message, outbound));
       }
     } catch (err) {
       if (expectsResponse) {

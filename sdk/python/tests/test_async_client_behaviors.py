@@ -1,6 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from openviking_sdk import AsyncHTTPClient, SyncHTTPClient
@@ -70,8 +70,9 @@ async def test_async_http_client_reindex_posts_content_reindex():
 
     result = await client.reindex(
         "viking://resources/demo",
-        mode="vectors_only",
+        mode="prune_orphans",
         wait=False,
+        dry_run=True,
     )
 
     assert result == {"status": "completed"}
@@ -79,8 +80,9 @@ async def test_async_http_client_reindex_posts_content_reindex():
         "/api/v1/content/reindex",
         json={
             "uri": "viking://resources/demo",
-            "mode": "vectors_only",
+            "mode": "prune_orphans",
             "wait": False,
+            "dry_run": True,
         },
     )
 
@@ -90,6 +92,7 @@ def test_sync_http_client_reindex_forwards_to_async_client():
     with patch.object(
         client._async_client,
         "reindex",
+        new_callable=Mock,
         return_value={"status": "accepted"},
     ) as mock_reindex:
         with patch(
@@ -98,13 +101,19 @@ def test_sync_http_client_reindex_forwards_to_async_client():
         ) as mock_run:
             result = client.reindex(
                 "viking://resources/demo",
-                mode="vectors_only",
+                mode="prune_orphans",
                 wait=False,
+                dry_run=True,
             )
 
     assert result == {"status": "accepted"}
     assert mock_run.called
-    assert mock_reindex.called
+    mock_reindex.assert_called_once_with(
+        uri="viking://resources/demo",
+        mode="prune_orphans",
+        wait=False,
+        dry_run=True,
+    )
 
 
 def test_sync_http_client_batch_add_messages_forwards_to_async_client():
@@ -557,6 +566,8 @@ async def test_ls_passes_full_query_params():
         abs_limit=32,
         show_all_hidden=True,
         node_limit=44,
+        sort_by="mtime",
+        sort_order="desc",
     )
 
     fake_http.get.assert_awaited_once_with(
@@ -569,6 +580,8 @@ async def test_ls_passes_full_query_params():
             "abs_limit": 32,
             "show_all_hidden": True,
             "node_limit": 44,
+            "sort_by": "mtime",
+            "sort_order": "desc",
         },
     )
 
@@ -707,6 +720,9 @@ async def test_export_and_backup_ovpack_append_default_suffixes(tmp_path):
     backup_response = SimpleNamespace(is_success=True, content=b"backup")
     fake_http = SimpleNamespace(post=AsyncMock(side_effect=[export_response, backup_response]))
     client._http = fake_http
+    existing_export = tmp_path / "exports" / "demo.ovpack"
+    existing_export.parent.mkdir()
+    existing_export.write_bytes(b"old-backup")
 
     export_path = await client.export_ovpack("/resources/demo/", str(tmp_path / "exports" / "demo"))
     backup_path = await client.backup_ovpack(str(tmp_path / "backup-dir"))
@@ -715,6 +731,27 @@ async def test_export_and_backup_ovpack_append_default_suffixes(tmp_path):
     assert Path(export_path).read_bytes() == b"exported"
     assert backup_path.endswith("backup-dir.ovpack")
     assert Path(backup_path).read_bytes() == b"backup"
+
+
+@pytest.mark.asyncio
+async def test_backup_ovpack_preserves_existing_file_when_replace_fails(tmp_path):
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._http = SimpleNamespace(
+        post=AsyncMock(
+            return_value=SimpleNamespace(is_success=True, content=b"new-backup")
+        )
+    )
+    output = tmp_path / "backup.ovpack"
+    output.write_bytes(b"known-good-backup")
+
+    with patch(
+        "openviking_sdk.client.os.replace", side_effect=OSError("replace failed")
+    ):
+        with pytest.raises(OSError, match="replace failed"):
+            await client.backup_ovpack(str(output))
+
+    assert output.read_bytes() == b"known-good-backup"
+    assert list(tmp_path.iterdir()) == [output]
 
 
 @pytest.mark.asyncio

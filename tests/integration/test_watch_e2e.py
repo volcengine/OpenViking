@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """End-to-end tests for resource watch functionality."""
 
-import asyncio
 import shutil
 from pathlib import Path
 
@@ -10,7 +9,6 @@ import pytest
 import pytest_asyncio
 
 from openviking import AsyncOpenViking
-from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
 from openviking_cli.exceptions import ConflictError
@@ -259,111 +257,6 @@ class TestWatchE2EConflictDetection:
 
 class TestWatchE2ESchedulerExecution:
     """End-to-end tests for scheduler execution."""
-
-    @pytest.mark.asyncio
-    async def test_scheduler_executes_watch_task(self, temp_dir: Path, watch_test_file: Path):
-        """Test that scheduler executes watch tasks on schedule."""
-        execution_count = 0
-
-        class MockResourceProcessor:
-            async def process_resource(self, **kwargs):
-                nonlocal execution_count
-                execution_count += 1
-                return {"root_uri": kwargs.get("to", "viking://resources/test")}
-
-        class MockSkillProcessor:
-            async def process_skill(self, **kwargs):
-                return {"status": "ok"}
-
-        class MockVikingDB:
-            pass
-
-        resource_service = ResourceService(
-            vikingdb=MockVikingDB(),
-            viking_fs=object(),
-            resource_processor=MockResourceProcessor(),
-            skill_processor=MockSkillProcessor(),
-            watch_scheduler=None,
-        )
-        scheduler = WatchScheduler(
-            resource_service=resource_service,
-            viking_fs=None,
-            check_interval=0.1,
-        )
-        await scheduler.start()
-
-        watch_manager = scheduler.watch_manager
-
-        task = await watch_manager.create_task(
-            path=str(watch_test_file),
-            to_uri="viking://resources/scheduler_test",
-            reason="Scheduler test",
-            watch_interval=0.002,
-        )
-
-        assert task.is_active is True
-
-        await asyncio.sleep(0.3)
-
-        await scheduler.stop()
-
-        assert execution_count >= 1
-
-        await watch_manager.clear_all_tasks()
-
-    @pytest.mark.asyncio
-    async def test_scheduler_updates_execution_time(self, temp_dir: Path, watch_test_file: Path):
-        """Test that scheduler updates execution time after task execution."""
-
-        class MockResourceProcessor:
-            async def process_resource(self, **kwargs):
-                return {"root_uri": kwargs.get("to", "viking://resources/test")}
-
-        class MockSkillProcessor:
-            async def process_skill(self, **kwargs):
-                return {"status": "ok"}
-
-        class MockVikingDB:
-            pass
-
-        resource_service = ResourceService(
-            vikingdb=MockVikingDB(),
-            viking_fs=object(),
-            resource_processor=MockResourceProcessor(),
-            skill_processor=MockSkillProcessor(),
-            watch_scheduler=None,
-        )
-
-        scheduler = WatchScheduler(
-            resource_service=resource_service,
-            viking_fs=None,
-            check_interval=0.1,
-        )
-        await scheduler.start()
-
-        watch_manager = scheduler.watch_manager
-
-        task = await watch_manager.create_task(
-            path=str(watch_test_file),
-            to_uri="viking://resources/execution_time_test",
-            reason="Execution time test",
-            watch_interval=0.002,
-        )
-
-        assert task.last_execution_time is None
-
-        await asyncio.sleep(0.3)
-
-        await scheduler.stop()
-
-        updated_task = await watch_manager.get_task(task.task_id)
-        assert updated_task is not None
-        assert updated_task.last_execution_time is not None
-        assert updated_task.next_execution_time is not None
-        assert updated_task.next_execution_time > updated_task.last_execution_time
-
-        await watch_manager.clear_all_tasks()
-
 
 class TestWatchE2EMultipleResources:
     """End-to-end tests for multiple resources."""

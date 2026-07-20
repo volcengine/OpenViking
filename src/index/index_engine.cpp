@@ -18,14 +18,32 @@ SearchResult IndexEngine::search(const SearchRequest& req) {
   return result;
 }
 
+std::optional<SearchResult> IndexEngine::search_with_filter_token(
+    const SearchRequest& req, uint64_t filter_token) {
+  SearchResult result;
+  bool token_found = false;
+  const int ret =
+      impl_->search_with_filter_token(req, filter_token, result, token_found);
+  if (ret != 0) {
+    throw std::runtime_error("Failed to search with native filter token");
+  }
+  if (!token_found) {
+    return std::nullopt;
+  }
+  result.result_num = result.labels.size();
+  return result;
+}
+
 int IndexEngine::set_filter_layout(
     const std::vector<uint64_t>& ordered_labels) {
   return impl_->set_filter_layout(ordered_labels);
 }
 
-FilterResult IndexEngine::evaluate_filter(const std::string& dsl) {
+FilterResult IndexEngine::evaluate_filter(
+    const std::string& dsl, uint64_t max_cached_candidates) {
   FilterResult result;
-  const int ret = impl_->evaluate_filter(dsl, result);
+  const int ret =
+      impl_->evaluate_filter(dsl, max_cached_candidates, result);
   if (ret != 0) {
     throw std::runtime_error("Failed to evaluate native scalar filter");
   }

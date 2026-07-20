@@ -20,7 +20,7 @@ export function estimateTokens(text) {
 
 export function buildRecallEndpointBody(cfg = {}) {
   const limit = Math.max(Number(cfg.recallLimit || 0), 1);
-  return {
+  const body = {
     query: "",
     quotas: {
       events: limit,
@@ -32,6 +32,8 @@ export function buildRecallEndpointBody(cfg = {}) {
     min_score: Number.isFinite(Number(cfg.scoreThreshold)) ? Number(cfg.scoreThreshold) : 0.35,
     render: true,
   };
+  if (cfg.recallPeerScope === "actor") body.peer_scope = "actor";
+  return body;
 }
 
 function clampScore(v) {
@@ -233,10 +235,7 @@ async function buildFallbackInjectionBlock(fetchJSON, items, cfg, actorPeerId = 
 async function recallViaEndpoint(fetchJSON, cfg, query, actorPeerId = "", log = () => {}) {
   const body = buildRecallEndpointBody(cfg);
   body.query = query;
-  const res = await fetchJSON("/api/v1/search/recall", {
-    method: "POST",
-    body: JSON.stringify(body),
-  }, { actorPeerId });
+  const res = await postRecall(fetchJSON, body, { actorPeerId, log });
   if (!res.ok) {
     log("recall_endpoint_fallback", { status: res.status || 0 });
     return null;
@@ -249,6 +248,27 @@ async function recallViaEndpoint(fetchJSON, cfg, query, actorPeerId = "", log = 
     rendered,
     "</openviking-context>",
   ].join("\n");
+}
+
+export async function postRecall(fetchJSON, body, opts = {}) {
+  const actorPeerId = opts.actorPeerId || "";
+  const log = opts.log || (() => {});
+  const request = { ...body };
+  const res = await fetchJSON("/api/v1/search/recall", {
+    method: "POST",
+    body: JSON.stringify(request),
+  }, { actorPeerId });
+  if (!request.peer_scope || (res.status !== 400 && res.status !== 422)) {
+    return res;
+  }
+
+  const downgraded = { ...request };
+  delete downgraded.peer_scope;
+  log("recall_peer_scope_downgrade", { status: res.status || 0 });
+  return fetchJSON("/api/v1/search/recall", {
+    method: "POST",
+    body: JSON.stringify(downgraded),
+  }, { actorPeerId });
 }
 
 export async function buildRecallBlock(fetchJSON, cfg, query, options = {}) {

@@ -77,17 +77,39 @@ measuring cold storage reads.
 - `native` is OpenViking's C++ flat index and is exact within its configured
   representation.
 - `cuvs_brute_force` is GPU exact search over its retained representation.
+- `cuvs_brute_force_fp16` uses the same exact algorithm after casting dataset
+  and queries to float16; report Recall@K against float32.
 - `cuvs_cagra` is approximate; the result reports Recall@K against an exact
   backend from the same run.
+- `cuvs_cagra_fp16` combines CAGRA approximation with float16 storage/query
+  casts and must be compared on both recall and retained VRAM.
+
+The harness rejects any FP16 or CAGRA-only run that has neither supplied
+ground truth nor an exact `native`/`cuvs_brute_force` backend. A missing recall
+value is displayed as `N/A`; it is never treated as perfect recall.
+
+Run the dtype frontier in one clean process with:
+
+```bash
+python benchmark/cuvs/run_index_benchmark.py \
+  --backends cuvs_brute_force,cuvs_brute_force_fp16,cuvs_cagra,cuvs_cagra_fp16 \
+  --vector-count 100000 \
+  --dimension 768 \
+  --query-count 1000 \
+  --k 10
+```
 
 The index-only harness constructs the native index without an explicit
 `Quant`, so both native and cuVS brute-force use float32 there. The collection
 and async service harnesses deliberately retain normal application behavior:
 the native CPU index uses its default per-vector-scale int8 quantization while
-the cuVS GPU shadow uses float32. Enabling cuVS does not mutate the native
-index metadata. Collection/service results are therefore application-path
-comparisons, not equal-dtype or equal-memory comparisons, and must be reported
-with Recall@K and the dtype caveat.
+the cuVS device dataset and queries use the configured dtype (float32 by
+default, or explicitly selected float16). The host record shadow retains
+prepared Python floating-point values; only the device dataset and queries are
+cast to the configured dtype when each is created. `dtype` does not rewrite the
+host shadow or the native index metadata. Collection/service results are
+therefore application-path comparisons, not equal-dtype or equal-memory
+comparisons, and must be reported with Recall@K and the dtype caveat.
 
 The native measurement uses the current OpenViking single-query call path; it
 is not a claim about the maximum throughput of a separately tuned,
@@ -248,6 +270,12 @@ python benchmark/cuvs/run_service_concurrency_benchmark.py \
   --unique-request-count 32 \
   --data-root /data/openviking-cuvs
 ```
+
+Add `--backends auto_cuvs_background` to isolate the optional coalescing
+background-rebuild path. The harness waits for a warm GPU snapshot before each
+mutation, then measures the immediate read burst while the dirty auto-cuVS
+index routes queries to native search. Rebuild waiting is kept outside the
+reported request wall time; the JSON records that wait separately.
 
 The normal tenant scope means every public service-facade query includes an
 `account_id` filter. The benchmark reports p50/p95/p99, QPS, errors, and the

@@ -26,7 +26,6 @@ from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import (
     TaskTracker,
     get_task_tracker,
-    reset_task_tracker,
     set_task_tracker,
 )
 from openviking_cli.exceptions import InvalidArgumentError, OpenVikingError, PermissionDeniedError
@@ -91,6 +90,7 @@ def _make_request(
 ) -> Request:
     """Create a minimal Starlette request for auth dependency tests."""
     # Ensure built-in plugins are registered
+    import openviking.server.auth.plugins  # noqa: F401
 
     raw_headers = []
     for key, value in (headers or {}).items():
@@ -130,6 +130,7 @@ def _build_auth_http_test_app(
     the test focused on request auth behavior and the structured HTTP error body.
     """
     # Ensure built-in plugins are registered
+    import openviking.server.auth.plugins  # noqa: F401
 
     app = FastAPI()
     # When auth is disabled and mode is the default api_key, fall back to dev mode
@@ -423,19 +424,19 @@ async def test_admin_sync_route_rejects_user_key(auth_client: httpx.AsyncClient,
 
 async def test_task_endpoints_require_auth():
     """Task endpoints must reject unauthenticated callers before lookup/filtering."""
-    reset_task_tracker()
+    set_task_tracker(None)
     app = _build_task_http_test_app(identity=None)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         for url in ("/api/v1/tasks", "/api/v1/tasks/nonexistent-id"):
             resp = await client.get(url)
             assert resp.status_code == 401
-    reset_task_tracker()
+    set_task_tracker(None)
 
 
 async def test_task_endpoints_are_user_scoped():
     """Authenticated callers must not see another user's background tasks."""
-    reset_task_tracker()
+    set_task_tracker(None)
     _set_fake_task_tracker()
     account_id = _uid()
     tracker = get_task_tracker()
@@ -482,7 +483,7 @@ async def test_task_endpoints_are_user_scoped():
         assert bob_list.status_code == 200
         assert {task["task_id"] for task in bob_list.json()["result"]} == {bob_task.task_id}
 
-    reset_task_tracker()
+    set_task_tracker(None)
 
 
 # ---- Role-based access tests ----
@@ -1145,6 +1146,84 @@ async def test_trusted_mode_with_root_api_key_accepts_matching_api_key():
     assert identity.user_id == "alice"
 
 
+async def test_trusted_mode_root_key_allows_admin_role_header(auth_app):
+    """Trusted upstreams with the root key may assert ADMIN role for tenant routes."""
+    manager = auth_app.state.api_key_manager
+    account_id = _uid()
+    await manager.create_account(account_id, "owner")
+    await manager.register_user(account_id, "alice", "user")
+
+    request = _make_request(
+        "/api/v1/resources",
+        headers={
+            "X-API-Key": ROOT_KEY,
+            "X-OpenViking-Account": account_id,
+            "X-OpenViking-User": "alice",
+            "X-OpenViking-Role": " ADMIN ",
+        },
+        auth_enabled=True,
+        auth_mode="trusted",
+        root_api_key=ROOT_KEY,
+        api_key_manager=manager,
+    )
+
+    identity = await resolve_identity(
+        request,
+        x_api_key=ROOT_KEY,
+        x_openviking_account=account_id,
+        x_openviking_user="alice",
+    )
+
+    assert identity.role == Role.ADMIN
+    assert identity.account_id == account_id
+    assert identity.user_id == "alice"
+
+
+async def test_trusted_mode_rejects_root_role_header():
+    """Trusted role header should not allow asserting ROOT."""
+    request = _make_request(
+        "/api/v1/resources",
+        headers={
+            "X-API-Key": ROOT_KEY,
+            "X-OpenViking-Account": "acme",
+            "X-OpenViking-User": "alice",
+            "X-OpenViking-Role": "root",
+        },
+        auth_enabled=False,
+        auth_mode="trusted",
+        root_api_key=ROOT_KEY,
+    )
+
+    with pytest.raises(InvalidArgumentError, match="X-OpenViking-Role"):
+        await resolve_identity(
+            request,
+            x_api_key=ROOT_KEY,
+            x_openviking_account="acme",
+            x_openviking_user="alice",
+        )
+
+
+async def test_trusted_mode_rejects_role_header_without_root_key():
+    """Role assertions require a configured root key so localhost trusted mode cannot self-elevate."""
+    request = _make_request(
+        "/api/v1/resources",
+        headers={
+            "X-OpenViking-Account": "acme",
+            "X-OpenViking-User": "alice",
+            "X-OpenViking-Role": "admin",
+        },
+        auth_enabled=False,
+        auth_mode="trusted",
+    )
+
+    with pytest.raises(InvalidArgumentError, match="X-OpenViking-Role"):
+        await resolve_identity(
+            request,
+            x_openviking_account="acme",
+            x_openviking_user="alice",
+        )
+
+
 async def test_trusted_mode_tenant_http_routes_require_explicit_identity_headers():
     """Trusted mode should reject tenant-scoped routes without account/user headers."""
     app = _build_auth_http_test_app(
@@ -1352,6 +1431,23 @@ async def test_trusted_mode_admin_api_with_partial_identity_still_requires_full_
             request,
             x_openviking_account="acme",
         )
+
+
+async def test_trusted_mode_root_key_can_target_account_without_caller_identity():
+    """A verified Root key should not treat a target account as partial caller identity."""
+    request = _make_request(
+        "/api/v1/admin/accounts/acme/users",
+        headers={"X-API-Key": ROOT_KEY},
+        auth_mode="trusted",
+        root_api_key=ROOT_KEY,
+    )
+    request.scope["path_params"] = {"account_id": "acme"}
+
+    identity = await resolve_identity(request, x_api_key=ROOT_KEY)
+
+    assert identity.role == Role.ROOT
+    assert identity.account_id == "acme"
+    assert identity.user_id == "trusted"
 
 
 async def test_trusted_mode_get_request_context_exempts_admin_paths():

@@ -1,8 +1,8 @@
 memory_type: profile
 description: |
   # Task Objective
-  User profile memory - captures "who the user is" as a person.
-  Extract relatively stable personal attributes that define the user's identity, work style, and preferences.
+  User profile memory - captures an identity summary of who the user is as a person.
+  Extract relatively stable personal attributes that define the user's identity at a high level.
   Include: profession, experience level, technical background, communication style, work habits, etc.
   Do NOT include transient conversation content or temporary mood states.
 
@@ -22,6 +22,7 @@ fields:
     type: string
     description: |
       User profile content in Markdown format describing "who the user is".
+      Use Markdown heading(s) with only the person's name, then bullets only; do not write paragraph bodies.
       Includes relatively stable personal attributes: profession, experience, tech stack, communication style, etc.
       Only record objective statuses, do not record events or similar information.
       [IMPORTANT] For changeable statuses, must include the last updated time in the format: (as of 2023-06-09)

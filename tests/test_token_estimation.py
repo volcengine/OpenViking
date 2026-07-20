@@ -5,6 +5,10 @@
 
 from openviking.message import Message, TextPart
 from openviking.session import Session
+from openviking.utils.token_estimation import (
+    estimate_text_tokens,
+    truncate_text_to_token_budget,
+)
 
 
 def test_message_estimated_tokens_is_cjk_aware():
@@ -12,6 +16,16 @@ def test_message_estimated_tokens_is_cjk_aware():
     msg = Message(id="msg-cjk", role="user", parts=[TextPart("\u4f60\u597d\u4e16\u754c")])
 
     assert msg.estimated_tokens == 6
+
+
+def test_truncate_text_to_token_budget_preserves_head_and_tail():
+    text = "summary-start " + ("填充内容" * 100) + " relevant-tail"
+
+    truncated = truncate_text_to_token_budget(text, 32)
+
+    assert estimate_text_tokens(truncated) <= 32
+    assert truncated.startswith("summary-start")
+    assert truncated.endswith("relevant-tail")
 
 
 async def test_archive_overview_tokens_do_not_trust_stale_low_metadata():

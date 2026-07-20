@@ -283,7 +283,6 @@ export function createMemoryOpenVikingContextEngine(params: {
       getClient,
       logger,
       rememberSessionAgentId,
-      resolveAgentId,
       isBypassedSession,
     });
   }

@@ -13,11 +13,11 @@
  * is just `{}`.
  */
 
-import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "./config.mjs";
+import { trySpawnCodex } from "./codex-launch.mjs";
 import { createLogger } from "./debug-log.mjs";
 import {
   buildCodexExecArgs,
@@ -26,13 +26,17 @@ import {
   markRecallCompressorRuntimeFailed,
 } from "./recall-compressor-profile.mjs";
 import { deriveOvSessionId } from "./session-state.mjs";
+import { postRecall } from "./shared/recall-core.mjs";
+import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("auto-recall");
+const effectivePeer = resolveEffectivePeerId({ cfg, cwd: process.cwd() });
 
 let emitted = false;
 let activeCompressor = null;
 let recallDeadline = null;
+const DEFAULT_FINAL_RECALL_CHARS = 6500;
 
 function output(obj, exitAfter = false) {
   if (emitted) return;
@@ -94,7 +98,7 @@ async function fetchJSON(path, init = {}) {
     }
     if (cfg.sendIdentityHeaders && cfg.account) headers["X-OpenViking-Account"] = cfg.account;
     if (cfg.sendIdentityHeaders && cfg.user) headers["X-OpenViking-User"] = cfg.user;
-    if (cfg.peerId) headers["X-OpenViking-Actor-Peer"] = cfg.peerId;
+    if (effectivePeer.peerId) headers["X-OpenViking-Actor-Peer"] = effectivePeer.peerId;
     const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     const body = await res.json().catch(() => null);
     if (!body) return { ok: false, status: res.status };
@@ -295,33 +299,47 @@ async function readMemoryContent(uri) {
 }
 
 async function recallViaTypeQuotaEndpoint(query) {
-  const result = await fetchJSON("/api/v1/search/recall", {
-    method: "POST",
-    body: JSON.stringify({
-      query,
-      quotas: {
-        events: Math.max(cfg.recallLimit, 1),
-        entities: Math.max(cfg.recallLimit, 1),
-        preferences: Math.max(1, Math.min(cfg.recallLimit, 3)),
-        experiences: 0,
-      },
-      max_chars: cfg.recallCompressMaxInputChars || 6500,
-      min_score: cfg.scoreThreshold,
-      render: true,
-    }),
-  });
+  const body = {
+    query,
+    quotas: {
+      events: Math.max(cfg.recallLimit, 1),
+      entities: Math.max(cfg.recallLimit, 1),
+      preferences: Math.max(1, Math.min(cfg.recallLimit, 3)),
+      experiences: 0,
+    },
+    max_chars: cfg.recallCompress
+      ? cfg.recallCompressMaxInputChars
+      : DEFAULT_FINAL_RECALL_CHARS,
+    min_score: cfg.scoreThreshold,
+    render: true,
+  };
+  if (cfg.recallPeerScope === "actor") body.peer_scope = "actor";
+  const result = await postRecall(fetchJSON, body, { actorPeerId: effectivePeer.peerId, log });
   if (!result.ok) {
     log("recall_endpoint_fallback", { status: result.status || 0 });
     return null;
   }
   const rendered = String(result.result?.rendered || "").trim();
-  if (!rendered) return "";
-  return [
-    "OpenViking memory digest:",
-    rendered,
-    "",
-    "More detail: use the OpenViking MCP recall/read/search tools with cited viking:// URIs if needed.",
-  ].join("\n");
+  const entries = Array.isArray(result.result?.entries) ? result.result.entries : [];
+  const items = entries
+    .map((entry) => ({
+      uri: String(entry?.uri || "").trim(),
+      category: String(entry?.type || "memory").trim() || "memory",
+      score: clampScore(entry?.score),
+      text: String(
+        entry?.content || entry?.summary || entry?.abstract || entry?.uri || "",
+      ).trim(),
+    }))
+    .filter((entry) => entry.uri && entry.text);
+  const context = rendered
+    ? [
+        "OpenViking memory digest:",
+        rendered,
+        "",
+        "More detail: use the OpenViking MCP recall/read/search tools with cited viking:// URIs if needed.",
+      ].join("\n")
+    : "";
+  return { context, items };
 }
 
 function truncateText(text, maxChars) {
@@ -397,11 +415,11 @@ async function runCodexCompressor(prompt, profile) {
         OPENVIKING_AUTO_CAPTURE: "0",
         OPENVIKING_RECALL_COMPRESS: "0",
       };
+      let child = null;
+      let timer = null;
       let done = false;
       let timedOut = false;
       let stderr = "";
-      const child = spawn("codex", args, { env, stdio: ["pipe", "ignore", "pipe"] });
-      activeCompressor = child;
       const finish = (value, { runtimeFailed = false } = {}) => {
         if (done) return;
         done = true;
@@ -420,7 +438,15 @@ async function runCodexCompressor(prompt, profile) {
         }
         resolve(value);
       };
-      const timer = setTimeout(() => {
+      const launch = trySpawnCodex(args, { env, stdio: ["pipe", "ignore", "pipe"] });
+      if (launch.error) {
+        logError("compress_spawn", launch.error);
+        finish(null, { runtimeFailed: true });
+        return;
+      }
+      child = launch.child;
+      activeCompressor = child;
+      timer = setTimeout(() => {
         timedOut = true;
         logError("compress_timeout", `timed out after ${cfg.recallCompressTimeoutMs}ms`);
         try {
@@ -531,7 +557,12 @@ async function main() {
     recallSessionId,
     query: userPrompt.slice(0, 200),
     queryLength: userPrompt.length,
-    config: { recallLimit: cfg.recallLimit, scoreThreshold: cfg.scoreThreshold },
+    config: {
+      recallLimit: cfg.recallLimit,
+      scoreThreshold: cfg.scoreThreshold,
+      peerSource: effectivePeer.source,
+      recallPeerScope: cfg.recallPeerScope,
+    },
   });
 
   if (!userPrompt || userPrompt.length < cfg.minQueryLength) {
@@ -549,13 +580,31 @@ async function main() {
 
   const endpointRecall = await recallViaTypeQuotaEndpoint(userPrompt);
   if (endpointRecall !== null) {
-    if (!endpointRecall) {
+    if (!endpointRecall.context && endpointRecall.items.length === 0) {
       log("skip", { stage: "recall_endpoint", reason: "no results" });
       emit();
       return;
     }
-    log("recall_endpoint", { chars: endpointRecall.length });
-    emit(endpointRecall);
+    const compressedContext = endpointRecall.items.length > 0
+      ? await compressMemoryContext(userPrompt, endpointRecall.items)
+      : null;
+    const endpointFallback = cfg.recallCompress && endpointRecall.items.length > 0
+      ? fallbackDigest(endpointRecall.items)
+      : endpointRecall.context;
+    const memoryContext = compressedContext === null
+      ? endpointFallback
+      : compressedContext;
+    if (!memoryContext) {
+      log("skip", { stage: "recall_endpoint", reason: "compressor found no relevant memory" });
+      emit();
+      return;
+    }
+    log("recall_endpoint", {
+      chars: memoryContext.length,
+      compressed: compressedContext !== null,
+      entryCount: endpointRecall.items.length,
+    });
+    emit(memoryContext);
     return;
   }
 

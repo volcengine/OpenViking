@@ -14,13 +14,14 @@ const HARNESS_SHARED_FILES = [
   "debug-log.mjs",
   "setup-wizard.mjs",
   "recall-core.mjs",
+  "workspace-peer.mjs",
   "profile-inject.mjs",
   "uri-guard.mjs",
 ];
-const OPENCODE_SHARED_FILES = [...HARNESS_SHARED_FILES, "mcp-proxy-core.mjs"];
+const OPENCODE_SHARED_FILES = [...HARNESS_SHARED_FILES, "mcp-proxy-core.mjs", "async-writer.mjs", "batch-send.mjs"];
 const TARGETS = [
-  { dir: join(ROOT, "examples", "claude-code-memory-plugin", "scripts", "shared"), files: null },
-  { dir: join(ROOT, "examples", "codex-memory-plugin", "scripts", "shared"), files: null },
+  { dir: join(ROOT, "examples", "claude-code-memory-plugin", "scripts", "shared"), files: OPENCODE_SHARED_FILES },
+  { dir: join(ROOT, "examples", "codex-memory-plugin", "scripts", "shared"), files: OPENCODE_SHARED_FILES },
   { dir: join(ROOT, "examples", "opencode-plugin", "lib", "shared"), files: OPENCODE_SHARED_FILES },
   { dir: join(ROOT, "examples", "pi-coding-agent-extension", "shared"), files: HARNESS_SHARED_FILES },
 ];

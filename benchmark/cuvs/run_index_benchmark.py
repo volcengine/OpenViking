@@ -39,7 +39,12 @@ from openviking.storage.vectordb.meta.index_meta import create_index_meta  # noq
 from openviking.storage.vectordb.store.data import DeltaRecord  # noqa: E402
 
 EXACT_BACKENDS = {"native", "cuvs_brute_force"}
-SUPPORTED_BACKENDS = (*sorted(EXACT_BACKENDS), "cuvs_cagra")
+SUPPORTED_BACKENDS = (
+    *sorted(EXACT_BACKENDS),
+    "cuvs_brute_force_fp16",
+    "cuvs_cagra",
+    "cuvs_cagra_fp16",
+)
 
 
 def utc_now() -> str:
@@ -394,6 +399,7 @@ class Backend(Protocol):
 
 class NativeFlatBackend:
     name = "native"
+    dtype = "unknown"
 
     def __init__(self, dimension: int, metric: str, ingest_batch_size: int):
         self.dimension = dimension
@@ -425,6 +431,7 @@ class NativeFlatBackend:
             },
         )
         config = index_meta.get_build_index_dict()
+        self.dtype = str(config["VectorIndex"].get("Quant", "float")).lower()
         config["VectorIndex"]["ElementCount"] = 0
         config["VectorIndex"]["MaxElementCount"] = int(dataset.shape[0])
         self.index = LocalIndex(json.dumps(config), index_meta)
@@ -469,6 +476,7 @@ class CuVSBackend:
         metric: str,
         build_params: dict[str, Any],
         search_params: dict[str, Any],
+        dtype: str = "float32",
     ):
         import cupy as cp
         from cuvs.neighbors import brute_force, cagra
@@ -482,6 +490,8 @@ class CuVSBackend:
         self.metric = "inner_product" if metric == "cosine" else "sqeuclidean"
         self.build_params = dict(build_params)
         self.search_params = dict(search_params)
+        self.dtype = dtype
+        self.device_dtype = cp.float16 if dtype == "float16" else cp.float32
         self.dataset = None
         self.index = None
         self.name = f"cuvs_{algorithm}"
@@ -490,7 +500,7 @@ class CuVSBackend:
         self.search_params = dict(search_params)
 
     def build(self, dataset: np.ndarray) -> None:
-        self.dataset = self.cp.asarray(dataset, dtype=self.cp.float32)
+        self.dataset = self.cp.asarray(dataset, dtype=self.device_dtype)
         if self.algorithm == "brute_force":
             self.index = self.brute_force.build(self.dataset, metric=self.metric)
         else:
@@ -501,7 +511,7 @@ class CuVSBackend:
     def search(self, queries: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
         if self.index is None:
             raise RuntimeError("cuVS index has not been built")
-        device_queries = self.cp.asarray(queries, dtype=self.cp.float32)
+        device_queries = self.cp.asarray(queries, dtype=self.device_dtype)
         if self.algorithm == "brute_force":
             distances, neighbors = self.brute_force.search(self.index, device_queries, k)
         else:
@@ -701,12 +711,22 @@ def make_backend(name: str, args: argparse.Namespace) -> Backend:
         return NativeFlatBackend(args.dimension, args.metric, args.native_ingest_batch_size)
     if name == "cuvs_brute_force":
         return CuVSBackend("brute_force", args.metric, {}, {})
+    if name == "cuvs_brute_force_fp16":
+        return CuVSBackend("brute_force", args.metric, {}, {}, dtype="float16")
     if name == "cuvs_cagra":
         return CuVSBackend(
             "cagra",
             args.metric,
             args.cagra_build_params,
             args.cagra_search_params,
+        )
+    if name == "cuvs_cagra_fp16":
+        return CuVSBackend(
+            "cagra",
+            args.metric,
+            args.cagra_build_params,
+            args.cagra_search_params,
+            dtype="float16",
         )
     raise ValueError(f"Unsupported backend: {name}")
 
@@ -719,6 +739,8 @@ def print_summary(results: Sequence[dict[str, Any]]) -> None:
     for result in results:
         search = result["search"]
         label = result["backend"]
+        recall_at_k_value = result.get("recall_at_k")
+        recall_text = f"{float(recall_at_k_value):.4f}" if recall_at_k_value is not None else "N/A"
         if result.get("cagra_search_params"):
             itopk_size = result["cagra_search_params"].get("itopk_size")
             search_width = result["cagra_search_params"].get("search_width", "auto")
@@ -730,7 +752,7 @@ def print_summary(results: Sequence[dict[str, Any]]) -> None:
             f"{search['per_query_latency_ms']['p50']:>7.3f}  "
             f"{search['per_query_latency_ms']['p95']:>7.3f}  "
             f"{search['qps']:>8.1f}  "
-            f"{result.get('recall_at_k', 1.0):>7.4f}"
+            f"{recall_text:>7}"
         )
 
 
@@ -839,6 +861,26 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     return backends
 
 
+def validate_reference_requirement(
+    parser: argparse.ArgumentParser,
+    backends: Sequence[str],
+    *,
+    has_supplied_ground_truth: bool,
+) -> None:
+    """Require an exact reference for every lossy or approximate backend."""
+
+    reference_required_backends = [name for name in backends if name not in EXACT_BACKENDS]
+    if (
+        reference_required_backends
+        and not has_supplied_ground_truth
+        and not set(backends).intersection(EXACT_BACKENDS)
+    ):
+        parser.error(
+            f"{', '.join(reference_required_backends)} requires native/cuvs_brute_force "
+            "or a full ann-benchmarks dataset with supplied ground truth"
+        )
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
@@ -886,15 +928,11 @@ def main() -> None:
             )
         reference_neighbors = supplied_ground_truth[:, : args.k]
         reference_backend = "ann-benchmarks_ground_truth"
-    if (
-        "cuvs_cagra" in backends
-        and reference_neighbors is None
-        and not set(backends).intersection(EXACT_BACKENDS)
-    ):
-        parser.error(
-            "CAGRA requires native/cuvs_brute_force or a full ann-benchmarks dataset "
-            "with supplied ground truth"
-        )
+    validate_reference_requirement(
+        parser,
+        backends,
+        has_supplied_ground_truth=reference_neighbors is not None,
+    )
 
     cagra_variants = cagra_search_variants(args)
     variant_keys = [json.dumps(value, sort_keys=True) for value in cagra_variants]
@@ -960,7 +998,7 @@ def main() -> None:
             rss_after = current_rss_bytes()
             gpu_after = backend.gpu_memory_used_bytes()
 
-            search_variants = cagra_variants if backend_name == "cuvs_cagra" else [None]
+            search_variants = cagra_variants if backend_name.startswith("cuvs_cagra") else [None]
             for variant_index, search_params in enumerate(search_variants):
                 if search_params is not None:
                     if not isinstance(backend, CuVSBackend):
@@ -982,6 +1020,7 @@ def main() -> None:
                 )
                 result = {
                     "backend": backend_name,
+                    "dtype": getattr(backend, "dtype", "unknown"),
                     "build_seconds": build_seconds,
                     "build_shared_across_variants": len(search_variants) > 1,
                     "search_variant_index": variant_index,

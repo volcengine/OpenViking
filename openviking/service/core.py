@@ -6,10 +6,12 @@ OpenViking Service Core.
 Main service class that composes all sub-services and manages infrastructure lifecycle.
 """
 
+import asyncio
 import os
 from typing import TYPE_CHECKING, Any, Optional
 
 from openviking.core.directories import DirectoryInitializer
+from openviking.core.namespace import canonicalize_uri
 from openviking.privacy import UserPrivacyConfigService
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
@@ -26,8 +28,9 @@ from openviking.session import create_session_compressor
 from openviking.storage import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
 from openviking.storage.index_consistency import check_index_consistency
+from openviking.storage.queuefs.add_resource_processor import AddResourceProcessor
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
-from openviking.storage.queuefs.understanding_parse_processor import UnderstandingParseProcessor
+from openviking.storage.queuefs.session_commit_processor import SessionCommitProcessor
 from openviking.storage.transaction import LockManager, init_lock_manager
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
 from openviking.utils.agfs_utils import (
@@ -36,7 +39,7 @@ from openviking.utils.agfs_utils import (
 )
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking.utils.skill_processor import SkillProcessor
-from openviking_cli.exceptions import NotInitializedError
+from openviking_cli.exceptions import InvalidArgumentError, NotInitializedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import OPENVIKING_ENABLE_RECORDER_ENV, get_openviking_config
@@ -413,13 +416,21 @@ class OpenVikingService:
         )
 
         if self._queue_manager:
-            external_parse_processor = UnderstandingParseProcessor(
-                self._resource_processor,
-                resource_memory_link_service=self._resource_memory_link_service,
+            external_parse_processor = AddResourceProcessor(
+                self._resource_service,
+                asyncio.get_running_loop(),
             )
             self._queue_manager.get_queue(
-                self._queue_manager.EXTERNAL_PARSE,
+                self._queue_manager.ADD_RESOURCE,
                 dequeue_handler=external_parse_processor,
+                allow_create=True,
+            )
+            self._queue_manager.get_queue(
+                self._queue_manager.SESSION_COMMIT,
+                dequeue_handler=SessionCommitProcessor(
+                    self._session_service,
+                    asyncio.get_running_loop(),
+                ),
                 allow_create=True,
             )
             self._queue_manager.start()
@@ -445,17 +456,17 @@ class OpenVikingService:
             self._watch_scheduler = None
             logger.info("WatchScheduler stopped")
 
+        if self._queue_manager:
+            await asyncio.to_thread(self._queue_manager.stop)
+            self._queue_manager = None
+            logger.info("Queue manager stopped")
+
         if self._lock_manager:
             await self._lock_manager.stop()
             self._lock_manager = None
 
         if self._vikingdb_manager:
             self._vikingdb_manager.mark_closing()
-
-        if self._queue_manager:
-            self._queue_manager.stop()
-            self._queue_manager = None
-            logger.info("Queue manager stopped")
 
         if self._vikingdb_manager:
             await self._vikingdb_manager.close()
@@ -484,6 +495,7 @@ class OpenVikingService:
         uri: str,
         mode: str = "vectors_only",
         wait: bool = True,
+        dry_run: bool = False,
         ctx: RequestContext | None = None,
     ) -> dict[str, Any]:
         """Reindex semantic/vector artifacts for a URI."""
@@ -491,12 +503,14 @@ class OpenVikingService:
             await self.initialize()
 
         effective_ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
+        canonical_uri = canonicalize_uri(uri, effective_ctx)
         from openviking.service.reindex_executor import get_reindex_executor
 
         return await get_reindex_executor().execute(
-            uri=uri,
+            uri=canonical_uri,
             mode=mode,
             wait=wait,
+            dry_run=dry_run,
             ctx=effective_ctx,
         )
 
@@ -513,6 +527,9 @@ class OpenVikingService:
             raise NotInitializedError("VikingFS")
 
         effective_ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
+        stat = await self._viking_fs.stat(uri, ctx=effective_ctx, skip_count=True)
+        if not stat.get("isDir", False):
+            raise InvalidArgumentError("Consistency check only supports directory URIs.")
         entries = await self._viking_fs.tree(
             uri,
             show_all_hidden=True,
@@ -547,10 +564,3 @@ class OpenVikingService:
         if not self._directory_initializer:
             return 0
         return await self._directory_initializer.initialize_user_directories(ctx)
-
-    async def initialize_agent_directories(self, ctx: RequestContext) -> int:
-        """Initialize current user's current-agent directory tree."""
-        self._ensure_initialized()
-        if not self._directory_initializer:
-            return 0
-        return await self._directory_initializer.initialize_agent_directories(ctx)

@@ -208,6 +208,37 @@ class TestDirectoryParserBasic:
         p = DirectoryParser()
         assert p.can_parse(tmp_path) is True
 
+    @pytest.mark.asyncio
+    async def test_git_repository_preserves_directory_filters(
+        self, tmp_path: Path, fake_fs: FakeVikingFS
+    ) -> None:
+        (tmp_path / ".git").mkdir()
+        (tmp_path / "notes").mkdir()
+        (tmp_path / "08_Attachments").mkdir()
+        (tmp_path / "notes" / "article.md").write_text("keep", encoding="utf-8")
+        (tmp_path / "notes" / "private.excalidraw.md").write_text(
+            "exclude", encoding="utf-8"
+        )
+        (tmp_path / "08_Attachments" / "diagram.md").write_text(
+            "ignore", encoding="utf-8"
+        )
+        (tmp_path / "main.py").write_text("exclude by include", encoding="utf-8")
+
+        with (
+            patch.object(BaseParser, "_get_viking_fs", return_value=fake_fs),
+            patch.object(DirectoryParser, "_add_git_metadata", new=AsyncMock()),
+        ):
+            result = await DirectoryParser().parse(
+                str(tmp_path),
+                ignore_dirs="08_Attachments",
+                include="*.md",
+                exclude="*.excalidraw.md",
+            )
+
+        uploaded_paths = {uri.split("/repository/", 1)[-1] for uri in fake_fs.files}
+        assert result.parser_name == "CodeRepositoryParser"
+        assert uploaded_paths == {"notes/article.md"}
+
     def test_can_parse_file(self, tmp_path: Path):
         f = tmp_path / "test.md"
         f.write_text("hello")

@@ -26,19 +26,28 @@ GPU. It does not mean CAGRA. CAGRA is the approximate GPU index and uses
 results. Each public-dataset process times all 10,000 queries after ten
 warm-up batches.
 
-The index-only harness uses float32 for both native and cuVS exact search. The
-collection and service sections intentionally preserve normal application
-behavior instead: native keeps its default per-vector-scale int8 index and
-cuVS keeps a float32 GPU shadow. Opting into cuVS does not rewrite the native
-index. Those later sections are therefore not equal-dtype or equal-memory
-comparisons and report native Recall@K against cuVS brute-force.
+For the measurements in this document, the index-only harness used float32 for
+both native and cuVS exact search. The collection and service runs intentionally
+preserved normal application behavior instead: native kept its default
+per-vector-scale int8 index, while cuVS was configured with `dtype=float32`.
+The current integration also supports an explicitly selected float16 device
+dataset/query; its host record shadow retains prepared Python floating-point
+values, and only the device dataset and query are cast to the configured dtype
+when each is created. Opting into cuVS does not rewrite the native index. The
+recorded collection and service results are therefore not equal-dtype or
+equal-memory comparisons and report native Recall@K against cuVS brute-force.
 
 ## GPU memory footprint
 
-The current cuVS shadow stores float32 vectors. The brute-force payload is
-therefore `N * dimension * 4` bytes. CAGRA also retains a uint32 neighbor graph
-of approximately `N * graph_degree * 4` bytes and may require an intermediate
-graph during build. A cached filter bitset adds approximately `N / 8` bytes.
+All cuVS measurements reported here used a float32 device dataset, so their
+brute-force payload was `N * dimension * 4` bytes. In the current integration,
+that device payload follows the configured `dtype`: float32 uses 4 bytes and
+float16 uses 2 bytes per component. The host shadow retains prepared Python
+floating-point values regardless of the device dtype; only the device dataset
+and query are cast to that dtype when each is created. CAGRA also retains a
+uint32 neighbor graph of approximately `N * graph_degree * 4` bytes and may
+require an intermediate graph during build. A cached filter bitset adds
+approximately `N / 8` bytes.
 
 The harness records `cudaMemGetInfo` immediately before and after index build.
 The following retained-build deltas are medians from five clean processes:
@@ -56,10 +65,10 @@ These are not peak-VRAM measurements. Allocator state, CAGRA build parameters,
 query batch size, and concurrent GPU use can add transient memory. The deltas
 also exclude the approximately 327 MiB CUDA runtime/context baseline observed
 before build in these processes. The opt-in memory-aware auto mode initializes
-that runtime first, then estimates the float32 payload, CAGRA retained and
-intermediate graphs, and filter cache; multiplies the result by a 2.0 default
-safety factor; and preserves 1 GiB of free memory. Insufficient budget keeps
-the native path for that query and allows a later retry.
+that runtime first, then estimates the configured-dtype device payload, CAGRA
+retained and intermediate graphs, and filter cache; multiplies the result by a
+2.0 default safety factor; and preserves 1 GiB of free memory. Insufficient
+budget keeps the native path for that query and allows a later retry.
 
 ## Batch size 1
 
@@ -195,12 +204,12 @@ runs.
 - Mutations: upsert 1, 100, 1,000, and 10,000 records; delete 100 records;
   close and reopen the persistent collection
 
-This comparison deliberately uses the normal collection defaults. The native
-flat index uses its default int8 quantization, while cuVS brute-force retains
-float32 vectors. Consequently, the native path is not the float exact baseline
-from the index microbenchmark. Its Recall@10 against cuVS GPU brute-force was
-0.982 without a filter and 0.978--0.994 with filters. This is both a quality
-and memory semantic that the integration must make explicit.
+This comparison deliberately used the normal collection defaults. The native
+flat index used its default int8 quantization, while these cuVS brute-force runs
+used `dtype=float32`. Consequently, the native path was not the float exact
+baseline from the index microbenchmark. Its Recall@10 against cuVS GPU
+brute-force was 0.982 without a filter and 0.978--0.994 with filters. This is
+both a quality and memory semantic that the integration must make explicit.
 
 ### Initial uncached-filter result
 
@@ -294,11 +303,11 @@ work is avoided after its cuVS bitset is cached. The 1% URI case remains on GPU
 because repeatedly rebuilding its native path bitmap was slower than cached
 cuVS search; only the 0.1% URI case crosses the more conservative path threshold.
 
-These auto-mode rows can execute over either the native int8 representation or
-the cuVS float32 representation. They are latency-routing results, not an
-equal-dtype comparison; applications requiring one fixed numerical
-representation should select an explicit backend or disable the native-routing
-thresholds.
+These auto-mode rows could execute over either the native int8 representation
+or the cuVS device representation, which was configured as float32 for these
+runs. They are latency-routing results, not an equal-dtype comparison;
+applications requiring one fixed numerical representation should select an
+explicit backend or disable the native-routing thresholds.
 
 ### Dirty-index selective-first follow-up
 
@@ -378,9 +387,9 @@ authentication, embedding, reranking, and LLM work are still excluded.
 
 Results aggregate five independent clean processes on H20. Values written with
 `+/-` include median absolute deviation; the compact paired-latency tables show
-process medians where dispersion is omitted. The native collection continues
-to use its default int8 vector quantization, while cuVS brute-force retains
-float32 vectors.
+process medians where dispersion is omitted. In these runs, the native
+collection used its default int8 vector quantization and cuVS brute-force was
+configured with `dtype=float32`.
 
 ### Cached tenant filter
 
@@ -454,9 +463,10 @@ the same rebuild delay amortized across more requests released together.
    imply better performance.
 3. CAGRA can improve batched capacity around Recall@10=0.96, but this benefit
    requires batching that the current OpenViking integration does not expose.
-4. Collection-level unfiltered lookup retains an approximately 9.0x warm-p50
-   benefit at 100K x 768D, but native int8 versus cuVS float32 is not an
-   equal-memory or equal-quality comparison.
+4. Collection-level unfiltered lookup retained an approximately 9.0x warm-p50
+   benefit at 100K x 768D in these runs, but native int8 versus the configured
+   cuVS float32 device representation is not an equal-memory or equal-quality
+   comparison.
 5. Caching prepared filter bitsets improves repeated-filter cuVS p50 by
    98--111x. Repeated 10% filters now favor cuVS, while native remains
    1.9--3.0x faster at 1% and 0.1% selectivity. A new filter still pays a

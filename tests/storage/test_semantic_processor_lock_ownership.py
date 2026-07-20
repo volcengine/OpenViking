@@ -41,6 +41,38 @@ class _FakeLockManager:
         return True
 
 
+class _RecoveringLockManager:
+    def __init__(self):
+        self._handles = {}
+        self.acquire_tree_calls = []
+        self.release_calls = []
+
+    async def get_handle_async(self, handle_id):
+        return self._handles.get(handle_id)
+
+    async def adopt_handle_async(self, handle_id, lock_paths):
+        del handle_id, lock_paths
+        return None
+
+    def get_handle(self, handle_id):
+        return self._handles.get(handle_id)
+
+    def create_handle(self):
+        handle = _FakeHandle("new-lock")
+        handle.locks = []
+        self._handles[handle.id] = handle
+        return handle
+
+    async def acquire_tree(self, handle, lock_path):
+        self.acquire_tree_calls.append(lock_path)
+        handle.locks.append(f"{lock_path}/.path.ovlock")
+        return True
+
+    async def release(self, handle):
+        self.release_calls.append(handle.id)
+        self._handles.pop(handle.id, None)
+
+
 class _FakeVikingFS:
     async def exists(self, uri, ctx=None):
         del uri, ctx
@@ -59,6 +91,7 @@ async def test_semantic_processor_borrows_caller_owned_lock(monkeypatch):
     class _FakeDagExecutor:
         def __init__(self, **kwargs):
             self.lock = kwargs["lock"]
+            self.stale = False
 
         async def run(self, root_uri):
             assert root_uri == "viking://resources/demo"
@@ -93,40 +126,56 @@ async def test_semantic_processor_borrows_caller_owned_lock(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_semantic_processor_recovers_stale_non_tree_handoff(monkeypatch):
+    processor = SemanticProcessor()
+    lock_manager = _RecoveringLockManager()
+
+    class _FakeDagExecutor:
+        def __init__(self, **kwargs):
+            self.lock = kwargs["lock"]
+            self.stale = False
+
+        async def run(self, root_uri):
+            assert root_uri == "viking://resources/demo"
+            assert self.lock.handle_id == "new-lock"
+            await self.lock.close()
+
+        def get_stats(self):
+            return DagStats()
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: _FakeVikingFS(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticDagExecutor",
+        lambda **kwargs: _FakeDagExecutor(**kwargs),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_lock.get_lock_manager",
+        lambda: lock_manager,
+    )
+
+    await processor.on_dequeue(
+        SemanticMsg(
+            uri="viking://resources/demo",
+            context_type="resource",
+            recursive=False,
+            lock_handoff=LockHandoffRef(
+                handle_id="stale-lock",
+                lock_paths=("/fake/viking/resources/.mw_exact_demo.deadbeef",),
+            ),
+        ).to_dict()
+    )
+
+    assert lock_manager.acquire_tree_calls == ["/fake/viking/resources/demo"]
+    assert lock_manager.release_calls == ["new-lock"]
+
+
+@pytest.mark.asyncio
 async def test_semantic_lock_scope_reacquires_tree_lock_when_handoff_handle_is_stale(
     monkeypatch,
 ):
-    class _RecoveringLockManager:
-        def __init__(self):
-            self._handles = {}
-            self.acquire_tree_calls = []
-            self.release_calls = []
-
-        async def get_handle_async(self, handle_id):
-            return self._handles.get(handle_id)
-
-        async def adopt_handle_async(self, handle_id, lock_paths):
-            del handle_id, lock_paths
-            return None
-
-        def get_handle(self, handle_id):
-            return self._handles.get(handle_id)
-
-        def create_handle(self):
-            handle = _FakeHandle("new-lock")
-            handle.locks = []
-            self._handles[handle.id] = handle
-            return handle
-
-        async def acquire_tree(self, handle, lock_path):
-            self.acquire_tree_calls.append(lock_path)
-            handle.locks.append(f"{lock_path}/.path.ovlock")
-            return True
-
-        async def release(self, handle):
-            self.release_calls.append(handle.id)
-            self._handles.pop(handle.id, None)
-
     lock_manager = _RecoveringLockManager()
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_lock.get_lock_manager",
@@ -137,12 +186,42 @@ async def test_semantic_lock_scope_reacquires_tree_lock_when_handoff_handle_is_s
         LockHandoffRef(
             handle_id="stale-lock",
             lock_paths=("/local/default/resources/CONTRIBUTING_CN_3/.path.ovlock",),
-        )
+        ),
+        fallback_path_factory=lambda: (_ for _ in ()).throw(
+            AssertionError("tree handoffs must not evaluate the fallback path")
+        ),
     )
 
     try:
         assert scope.lock.handle_id == "new-lock"
         assert lock_manager.acquire_tree_calls == ["/local/default/resources/CONTRIBUTING_CN_3"]
+    finally:
+        await scope.close()
+
+    assert lock_manager.release_calls == ["new-lock"]
+
+
+@pytest.mark.asyncio
+async def test_semantic_lock_scope_reacquires_fallback_path_for_stale_non_tree_handoff(
+    monkeypatch,
+):
+    lock_manager = _RecoveringLockManager()
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_lock.get_lock_manager",
+        lambda: lock_manager,
+    )
+
+    scope = await SemanticLockScope.resolve(
+        LockHandoffRef(
+            handle_id="stale-lock",
+            lock_paths=("/local/default/resources/.mw_exact_demo.deadbeef",),
+        ),
+        fallback_path_factory=lambda: "/local/default/resources/demo",
+    )
+
+    try:
+        assert scope.lock.handle_id == "new-lock"
+        assert lock_manager.acquire_tree_calls == ["/local/default/resources/demo"]
     finally:
         await scope.close()
 
