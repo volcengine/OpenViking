@@ -120,7 +120,8 @@ class _FakeLockManager:
         del handle_id
         return None
 
-    async def acquire_exact_path_batch(self, handle, paths):
+    async def acquire_exact_path_batch(self, handle, paths, timeout=None):
+        del timeout
         self.acquired_batches.append(paths)
         handle.locks.extend(paths)
         return True
