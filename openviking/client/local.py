@@ -1179,9 +1179,10 @@ class LocalClient(BaseClient):
         *,
         branch: str = "main",
         limit: int = 20,
+        paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Walk back along parents[0] up to limit commits."""
-        return await self._service.fs.log(branch=branch, limit=limit, ctx=self._ctx)
+        return await self._service.fs.log(branch=branch, limit=limit, paths=paths, ctx=self._ctx)
 
     async def git_get_ignore(self) -> str:
         """Return the account .ovgitignore content (empty string if absent)."""

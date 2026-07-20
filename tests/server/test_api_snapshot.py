@@ -2,10 +2,19 @@
 # SPDX-License-Identifier: AGPL-3.0
 """End-to-end tests for /api/v1/snapshot/*."""
 
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import httpx
 import pytest
 import pytest_asyncio
 
-import httpx
+from openviking.server.auth import get_request_context
+from openviking.server.app import create_app
+from openviking.server.config import ServerConfig
+from openviking.server.identity import RequestContext, Role
+from openviking_cli.exceptions import InvalidArgumentError, InvalidURIError
+from openviking_cli.session.user_id import UserIdentifier
 
 pytestmark = pytest.mark.asyncio
 
@@ -21,6 +30,24 @@ async def client_with_no_repo(app):
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
         yield c
+
+
+@pytest_asyncio.fixture(scope="function")
+async def snapshot_router_client():
+    """Production app without running its service-initializing lifespan."""
+    app = create_app(
+        config=ServerConfig(),
+        service=SimpleNamespace(sessions=None),
+    )
+
+    async def request_context_override():
+        return RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    app.dependency_overrides[get_request_context] = request_context_override
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        yield client
 
 
 async def test_commit_creates_snapshot(client_with_resource):
@@ -56,6 +83,84 @@ async def test_log_empty_repo_returns_404(client_with_no_repo):
     resp = await client.get("/api/v1/snapshot/log", params={"branch": "main", "limit": 5})
     assert resp.status_code == 404
     assert resp.json()["status"] == "error"
+
+
+async def test_log_value_error_is_mapped(monkeypatch):
+    from openviking.server.routers import snapshot
+
+    fake_service = SimpleNamespace(
+        fs=SimpleNamespace(
+            log=AsyncMock(
+                side_effect=ValueError("git tree path cannot be the account root: 'viking://'")
+            )
+        )
+    )
+    monkeypatch.setattr(snapshot, "get_service", lambda: fake_service)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    with pytest.raises((InvalidArgumentError, InvalidURIError)):
+        await snapshot.log(branch="main", limit=5, paths=["viking://"], _ctx=ctx)
+
+
+async def test_log_rejects_more_than_32_raw_path_parameters(snapshot_router_client, monkeypatch):
+    from openviking.server.routers import snapshot
+
+    log_mock = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        snapshot,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(log=log_mock)),
+    )
+    params = [("paths", "viking://resources/a.md")] * 33
+
+    response = await snapshot_router_client.get("/api/v1/snapshot/log", params=params)
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+    log_mock.assert_not_awaited()
+
+
+async def test_log_accepts_32_raw_path_parameters(snapshot_router_client, monkeypatch):
+    from openviking.server.routers import snapshot
+
+    log_mock = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        snapshot,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(log=log_mock)),
+    )
+    params = [("paths", f"viking://resources/{index}.md") for index in range(32)]
+
+    response = await snapshot_router_client.get("/api/v1/snapshot/log", params=params)
+
+    assert response.status_code == 200
+    forwarded_paths = log_mock.await_args.kwargs["paths"]
+    assert len(forwarded_paths) == 32
+
+
+async def test_log_scan_limit_error_maps_to_invalid_argument(monkeypatch):
+    from openviking.pyagfs.exceptions import AGFSInvalidOperationError
+    from openviking.server.routers import snapshot
+
+    fake_service = SimpleNamespace(
+        fs=SimpleNamespace(
+            log=AsyncMock(
+                side_effect=AGFSInvalidOperationError(
+                    "snapshot log scan limit exceeded: scanned 1000/1000 commits"
+                )
+            )
+        )
+    )
+    monkeypatch.setattr(snapshot, "get_service", lambda: fake_service)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    with pytest.raises(InvalidArgumentError, match="scan limit exceeded"):
+        await snapshot.log(
+            branch="main",
+            limit=1,
+            paths=["viking://resources/missing.md"],
+            _ctx=ctx,
+        )
 
 
 @pytest_asyncio.fixture(scope="function")

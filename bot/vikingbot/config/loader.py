@@ -711,16 +711,6 @@ def validate_openviking_auth(config: Config) -> None:
     return
 
 
-def warn_openviking_auth_config(config: Config) -> None:
-    """Backward-compatible wrapper for the complete OpenViking auth validation."""
-    validate_openviking_auth(config)
-
-
-def warn_missing_openviking_user_api_key(config: Config) -> None:
-    """Backward-compatible wrapper for the complete OpenViking auth validation."""
-    warn_openviking_auth_config(config)
-
-
 def save_config(
     config: Config, config_path: Path | None = None, include_defaults: bool = False
 ) -> None:

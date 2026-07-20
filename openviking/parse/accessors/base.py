@@ -7,7 +7,6 @@ Data Accessors are responsible for fetching data from remote sources
 or special paths and making them available as local files/directories.
 """
 
-import os
 import shutil
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -163,35 +162,3 @@ class DataAccessor(ABC):
             resource: The LocalResource to clean up
         """
         resource.cleanup()
-
-    def _create_temp_dir(self, prefix: str = "ov_accessor_") -> Path:
-        """
-        Create a temporary directory for this accessor.
-
-        Args:
-            prefix: Prefix for the temporary directory name
-
-        Returns:
-            Path to the created temporary directory
-        """
-        import tempfile
-
-        temp_dir = tempfile.mkdtemp(prefix=prefix)
-        return Path(temp_dir)
-
-    def _create_temp_file(self, suffix: str = "", prefix: str = "ov_accessor_") -> Path:
-        """
-        Create a temporary file for this accessor.
-
-        Args:
-            suffix: Suffix for the temporary file name
-            prefix: Prefix for the temporary file name
-
-        Returns:
-            Path to the created temporary file
-        """
-        import tempfile
-
-        fd, temp_path = tempfile.mkstemp(suffix=suffix, prefix=prefix)
-        os.close(fd)
-        return Path(temp_path)

@@ -219,6 +219,41 @@ async def test_log_walks_parents(git_harness):
     ]
 
 
+async def test_log_filters_multiple_paths_end_to_end(git_harness):
+    target_uri = "viking://resources/log_paths/a.md"
+    directory_uri = "viking://resources/log_paths/docs"
+    child_uri = f"{directory_uri}/guide.md"
+    unrelated_uri = "viking://resources/log_paths_other.md"
+
+    await git_harness.vfs.write_file(target_uri, b"target", ctx=git_harness.ctx)
+    target_commit = git_harness.client.snapshot.commit(
+        message="add target",
+        paths=[target_uri],
+    )
+
+    await git_harness.vfs.write_file(unrelated_uri, b"unrelated", ctx=git_harness.ctx)
+    git_harness.client.snapshot.commit(
+        message="add unrelated",
+        paths=[unrelated_uri],
+    )
+
+    await git_harness.vfs.write_file(child_uri, b"guide", ctx=git_harness.ctx)
+    directory_commit = git_harness.client.snapshot.commit(
+        message="add directory child",
+        paths=[child_uri],
+    )
+
+    history = git_harness.client.snapshot.log(
+        limit=2,
+        paths=[target_uri, directory_uri],
+    )
+
+    assert [item["oid"] for item in history] == [
+        directory_commit["commit_oid"],
+        target_commit["commit_oid"],
+    ]
+
+
 async def test_restore_reverts_file_and_advances_head(git_harness):
     await git_harness.vfs.write_file(
         "viking://resources/proj/a.md",

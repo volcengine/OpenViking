@@ -53,6 +53,37 @@ pub struct ShowRequest {
     pub path: Option<String>,
 }
 
+/// Input for walking commit history, optionally restricted to paths.
+#[derive(Debug, Clone)]
+pub struct LogRequest {
+    /// Account whose branch history should be read.
+    pub account: String,
+    /// Branch or ref to start from, usually "main".
+    pub branch: String,
+    /// Maximum number of matching commits to return.
+    pub limit: usize,
+    /// Optional account-relative paths. File paths match exactly; directory
+    /// paths match commits whose subtree changed.
+    pub paths: Option<Vec<String>>,
+}
+
+/// One commit returned by `GitService::log`.
+#[derive(Debug, Clone)]
+pub struct LogEntry {
+    /// Commit object id.
+    pub oid: ObjectId,
+    /// Root tree object id.
+    pub tree: ObjectId,
+    /// Parent commit ids.
+    pub parents: Vec<ObjectId>,
+    /// Commit author.
+    pub author: Actor,
+    /// Commit committer.
+    pub committer: Actor,
+    /// Full commit message.
+    pub message: String,
+}
+
 #[derive(Debug, Clone)]
 pub enum ShowResponse {
     Commit {

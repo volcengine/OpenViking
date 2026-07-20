@@ -4,7 +4,7 @@ import { buildGuardMessage, findVikingUri, normalizeToolName } from "./shared/ur
 const FILESYSTEM_TOOL_HINTS = {
   read: {
     tool: "openviking_read",
-    example: (uri) => `openviking_read(uri="${uri}")`,
+    example: (uri) => `openviking_read(uris=["${uri}"])`,
   },
   glob: {
     tool: "openviking_glob",
