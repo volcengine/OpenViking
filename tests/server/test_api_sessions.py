@@ -355,13 +355,14 @@ async def test_get_session_context_includes_incomplete_archive_messages(
     assert resp.status_code == 200
     body = resp.json()
     assert [m["parts"][0]["text"] for m in body["result"]["messages"]] == [
+        "Archived seed",
         "Pending user message",
         "Pending assistant response",
         "Current live message",
     ]
 
 
-async def test_get_session_context_skips_failed_archive_messages(
+async def test_get_session_context_restores_failed_archive_messages(
     client: httpx.AsyncClient, service
 ):
     create_resp = await client.post("/api/v1/sessions", json={})
@@ -406,6 +407,8 @@ async def test_get_session_context_skips_failed_archive_messages(
     assert resp.status_code == 200
     body = resp.json()
     assert [m["parts"][0]["text"] for m in body["result"]["messages"]] == [
+        "Archived seed",
+        "Failed archive message",
         "Current live message",
     ]
 

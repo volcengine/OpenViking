@@ -15,6 +15,7 @@ from openviking.message import Message, TextPart
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
+from openviking.storage.queuefs import QueueManager, SessionCommitMsg, get_queue_manager
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
@@ -67,6 +68,7 @@ def _write_test_config(tmp_path):
                     }
                 },
                 "encryption": {"enabled": False},
+                "memory": {"extraction_enabled": False},
             }
         ),
         encoding="utf-8",
@@ -88,6 +90,28 @@ async def client(test_data_dir, monkeypatch, tmp_path):
     with patch("openviking.utils.agfs_utils.create_agfs_client", return_value=mock_agfs):
         client = AsyncOpenViking(path=str(test_data_dir))
         await client.initialize()
+
+        # MockLocalAGFS provides ordinary file operations but not QueueFS's
+        # virtual enqueue/dequeue endpoints. Execute SessionCommit jobs through
+        # the real resume path so these context tests remain about context
+        # assembly rather than the storage mock's missing queue protocol.
+        queue_manager = get_queue_manager()
+        original_enqueue = queue_manager.enqueue
+
+        async def enqueue_with_session_commit_fallback(queue_name, data):
+            if queue_name != QueueManager.SESSION_COMMIT:
+                return await original_enqueue(queue_name, data)
+
+            async def process_commit():
+                await asyncio.sleep(0)
+                queued_session = client.session(session_id=data["session_id"])
+                await queued_session.load()
+                await queued_session.resume_queued_commit(SessionCommitMsg(**data))
+
+            asyncio.create_task(process_commit())
+            return data["task_id"]
+
+        monkeypatch.setattr(queue_manager, "enqueue", enqueue_with_session_commit_fallback)
         yield client
         await client.close()
 

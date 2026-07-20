@@ -455,13 +455,13 @@ async def test_store_does_not_autofill_peer_id_from_ctx(service, monkeypatch):
     from openviking.session.session import Session
 
     captured: list[tuple[str, str | None]] = []
-    original = Session.add_message
+    original = Session.add_message_async
 
-    def _spy(self, role, parts, peer_id=None, created_at=None):
+    async def _spy(self, role, parts, peer_id=None, created_at=None):
         captured.append((role, peer_id))
-        return original(self, role, parts, peer_id=peer_id, created_at=created_at)
+        return await original(self, role, parts, peer_id=peer_id, created_at=created_at)
 
-    monkeypatch.setattr(Session, "add_message", _spy)
+    monkeypatch.setattr(Session, "add_message_async", _spy)
 
     await remember(
         messages=[

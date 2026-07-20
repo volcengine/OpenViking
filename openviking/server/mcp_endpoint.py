@@ -423,10 +423,11 @@ async def remember(messages: list[StoreMessage]) -> str:
     session = await service.sessions.get(session_id, ctx, auto_create=True)
     for msg in messages:
         if msg.content:
-            session.add_message(
-                msg.role,
-                [TextPart(text=msg.content)],
-            )
+            add_async = getattr(session, "add_message_async", None)
+            if callable(add_async):
+                await add_async(msg.role, [TextPart(text=msg.content)])
+            else:
+                session.add_message(msg.role, [TextPart(text=msg.content)])
     await service.sessions.commit_async(session_id, ctx)
     return f"Stored {len(messages)} message(s) and committed for memory extraction."
 
