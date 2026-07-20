@@ -356,6 +356,7 @@ class FSService:
             role=str(ctx.role),
             skip_vectorization=False,
             telemetry_id=telemetry_id,
+            provider_request_context=ctx.provider_request_context,
             coalesce_key=build_semantic_coalesce_key(
                 context_type=context_type,
                 uri=root_uri,

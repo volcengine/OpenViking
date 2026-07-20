@@ -10,6 +10,10 @@ from typing import Any, Dict, Optional
 
 from openviking.observability.context import bind_execution_context
 from openviking.server.identity import RequestContext, Role
+from openviking.server.provider_context import (
+    ProviderRequestContext,
+    bind_provider_request_context,
+)
 from openviking.service.task_tracker import TaskStatus, get_task_tracker
 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
@@ -74,6 +78,9 @@ class AddResourceProcessor(DequeueHandlerBase):
             user=UserIdentifier(msg.account_id, msg.user_id),
             role=Role(msg.role),
             actor_peer_id=msg.actor_peer_id,
+            provider_request_context=ProviderRequestContext.from_dict(
+                msg.provider_request_context
+            ),
         )
         tracker = get_task_tracker()
         task = await tracker.create(
@@ -119,7 +126,11 @@ class AddResourceProcessor(DequeueHandlerBase):
                 user_id=ctx.user.user_id,
             )
 
-        with bind_execution_context(), bind_telemetry(telemetry):
+        with (
+            bind_execution_context(),
+            bind_telemetry(telemetry),
+            bind_provider_request_context(ctx.provider_request_context),
+        ):
             try:
                 await tracker.start(
                     msg.task_id,

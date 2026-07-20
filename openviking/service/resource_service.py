@@ -543,6 +543,7 @@ class ResourceService:
                 preserve_structure=kwargs.get("preserve_structure"),
                 create_parent=bool(kwargs.get("create_parent", False)),
                 source_name=source_name,
+                provider_request_context=ctx.provider_request_context,
                 args=self._sanitize_watch_processor_kwargs(processor_args),
             )
             task = await self._enqueue_add_resource_job(msg, resource_lock=resource_lock)
@@ -890,6 +891,7 @@ class ResourceService:
                     args=self._sanitize_watch_processor_kwargs(normalized_args.processor_kwargs),
                     source_name=source_name,
                     lock_handoff=lock_handoff.to_dict() if lock_handoff else None,
+                    provider_request_context=ctx.provider_request_context,
                     skip_watch_management=True,
                 )
                 task = await self._enqueue_add_resource_job(msg, resource_lock=lock_lease)
@@ -1020,6 +1022,7 @@ class ResourceService:
                     allow_local_path_resolution=allow_local_path_resolution,
                     enforce_public_remote_targets=enforce_public_remote_targets,
                     source_name=kwargs.get("source_name"),
+                    provider_request_context=ctx.provider_request_context,
                     skip_watch_management=True,
                 )
                 task = await self._enqueue_add_resource_job(

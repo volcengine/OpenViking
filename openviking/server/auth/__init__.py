@@ -13,6 +13,11 @@ from openviking.server.identity import (
     ResolvedIdentity,
     Role,
 )
+from openviking.server.provider_context import (
+    ProviderRequestContext,
+    referenced_template_headers,
+    set_provider_request_context,
+)
 from openviking.server.upload_token_store import UploadTokenError, upload_token_store
 from openviking.telemetry.span_models import update_root_span_identity
 from openviking_cli.exceptions import (
@@ -21,6 +26,7 @@ from openviking_cli.exceptions import (
     UnauthenticatedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config import get_openviking_config
 
 
 def _auth_mode(request: Request) -> str:
@@ -62,6 +68,24 @@ def _normalize_request_value(value: object) -> Optional[str]:
         normalized = value.strip()
         return normalized or None
     return None
+
+
+def _provider_context_from_request(request: Request) -> Optional[ProviderRequestContext]:
+    allowed_headers = getattr(request.app.state, "provider_template_headers", None)
+    if allowed_headers is None:
+        vlm = get_openviking_config().vlm
+        try:
+            vlm_config = vlm._build_vlm_config_dict()
+        except Exception:
+            vlm_config = {}
+        allowed_headers = referenced_template_headers(
+            vlm_config.get("extra_headers") or vlm.extra_headers
+        )
+        request.app.state.provider_template_headers = allowed_headers
+    return ProviderRequestContext.from_headers(
+        request.headers,
+        allowed_headers=set(allowed_headers),
+    )
 
 
 def normalize_actor_peer_header(value: Optional[str]) -> Optional[str]:
@@ -159,8 +183,10 @@ async def get_request_context(
         actor_peer_id=actor_peer_id,
         legacy_agent_id=legacy_agent_id,
         from_oauth=identity.from_oauth,
+        provider_request_context=_provider_context_from_request(request),
         api_key=raw_api_key,
     )
+    set_provider_request_context(ctx.provider_request_context)
     # Update the unified root observability context after authentication succeeds.
     update_root_span_identity(
         request_state=request.state,
@@ -205,11 +231,13 @@ async def get_upload_request_context(
                 # context), never from this upload request's headers, so server-side
                 # auto-ingest keeps the caller's peer scope for reason-memory routing.
                 actor_peer_id=consumed.actor_peer_id or None,
+                provider_request_context=_provider_context_from_request(request),
             )
         except ValueError as exc:
             raise HTTPException(
                 status_code=400, detail=f"invalid identity in token: {exc}"
             ) from exc
+        set_provider_request_context(ctx.provider_request_context)
         update_root_span_identity(
             request_state=request.state,
             account_id=consumed.account_id,
@@ -220,7 +248,12 @@ async def get_upload_request_context(
     identity = await resolve_identity(
         request, x_api_key, authorization, x_openviking_account, x_openviking_user
     )
-    return await get_request_context(request, identity, x_openviking_actor_peer, x_openviking_agent)
+    return await get_request_context(
+        request,
+        identity,
+        x_openviking_actor_peer,
+        x_openviking_agent,
+    )
 
 
 def require_role(*allowed_roles: Role):

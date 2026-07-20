@@ -5,6 +5,8 @@
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, Optional
 
+from openviking.server.provider_context import ProviderRequestContext
+
 
 @dataclass(kw_only=True)
 class AddResourceMsg:
@@ -35,8 +37,17 @@ class AddResourceMsg:
     args: Dict[str, Any] = field(default_factory=dict)
     lock_handoff_retry: int = 0
     source_name: Optional[str] = None
+    provider_request_context: Optional[Dict[str, Any]] = None
     watch_interval: float = 0
     skip_watch_management: bool = True
+
+    def __post_init__(self) -> None:
+        if isinstance(self.provider_request_context, ProviderRequestContext):
+            self.provider_request_context = self.provider_request_context.to_dict()
+        elif isinstance(self.provider_request_context, dict):
+            self.provider_request_context = dict(self.provider_request_context)
+        else:
+            self.provider_request_context = None
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
@@ -105,6 +116,9 @@ class AddResourceMsg:
             args=args,
             lock_handoff_retry=lock_handoff_retry,
             source_name=data.get("source_name"),
+            provider_request_context=data.get("provider_request_context")
+            if isinstance(data.get("provider_request_context"), dict)
+            else None,
             prepared=prepared,
             watch_interval=float(data.get("watch_interval", 0) or 0),
             skip_watch_management=bool(data.get("skip_watch_management", True)),

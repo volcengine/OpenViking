@@ -20,6 +20,7 @@ from openviking.server.config import ServerConfig, _is_localhost, validate_serve
 from openviking.server.dependencies import set_service
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
+from openviking.server.provider_context import referenced_template_headers
 from openviking.service.core import OpenVikingService
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import (
@@ -98,6 +99,7 @@ def _make_request(
     # When auth is disabled and mode is the default api_key, fall back to dev mode
     effective_auth_mode = auth_mode if auth_enabled or auth_mode != "api_key" else "dev"
     app.state.config = ServerConfig(auth_mode=effective_auth_mode, root_api_key=root_api_key)
+    app.state.provider_template_headers = set()
     if auth_enabled:
         # Non-empty api_key_manager means the server is in authenticated mode.
         app.state.api_key_manager = api_key_manager if api_key_manager is not None else object()
@@ -134,6 +136,7 @@ def _build_auth_http_test_app(
     # When auth is disabled and mode is the default api_key, fall back to dev mode
     effective_auth_mode = auth_mode if auth_enabled or auth_mode != "api_key" else "dev"
     app.state.config = ServerConfig(auth_mode=effective_auth_mode, root_api_key=root_api_key)
+    app.state.provider_template_headers = set()
     if auth_enabled:
         # Match production auth mode so get_request_context enters the guard path.
         app.state.api_key_manager = object()
@@ -174,6 +177,17 @@ def _build_auth_http_test_app(
             "result": {
                 "account_id": ctx.user.account_id,
                 "user_id": ctx.user.user_id,
+            },
+        }
+
+    @app.get("/api/v1/test/provider-context")
+    async def provider_context(ctx=Depends(get_request_context)):
+        """Expose non-sensitive provider context for auth regression tests."""
+        provider_ctx = ctx.provider_request_context
+        return {
+            "status": "ok",
+            "result": {
+                "context": provider_ctx.to_dict() if provider_ctx else {},
             },
         }
 
@@ -753,6 +767,40 @@ async def test_admin_reindex_requests_use_key_owner_in_api_key_mode():
     assert ctx.role == Role.ADMIN
     assert ctx.user.account_id == "acme"
     assert ctx.user.user_id == "admin"
+
+
+async def test_request_context_preserves_configured_provider_headers_via_http():
+    app = _build_auth_http_test_app(
+        ResolvedIdentity(role=Role.USER, account_id="acme", user_id="alice"),
+        auth_enabled=True,
+    )
+    app.state.provider_template_headers = referenced_template_headers(
+        {
+            "Authorization": "Bearer ${header:X-Provider-Service-JWT}",
+            "X-Caller-Service-Code": "${header:X-Caller-Service-Code}",
+        }
+    )
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get(
+            "/api/v1/test/provider-context",
+            headers={
+                "X-Provider-Service-JWT": "header.payload.signature",
+                "X-Caller-Service-Code": "talentana",
+                "X-Unused-Secret": "must-not-be-captured",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["result"] == {
+        "context": {
+            "headers": {
+                "X-Provider-Service-JWT": "header.payload.signature",
+                "X-Caller-Service-Code": "talentana",
+            },
+        },
+    }
 
 
 async def test_actor_peer_header_sets_request_context_scope():
