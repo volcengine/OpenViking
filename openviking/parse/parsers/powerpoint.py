@@ -8,6 +8,7 @@ Inspired by microsoft/markitdown approach.
 """
 
 import asyncio
+import hashlib
 from pathlib import Path
 from typing import List, Optional, Union
 
@@ -145,18 +146,48 @@ class PowerPointParser(BaseParser):
         self, slide, resource_name=None, storage=None, image_counter=None
     ) -> str:
         """Extract content from slide shapes."""
+        return self._extract_shapes_content(
+            slide.shapes,
+            resource_name=resource_name,
+            storage=storage,
+            image_counter=image_counter,
+        )
+
+    def _extract_shapes_content(
+        self, shapes, resource_name=None, storage=None, image_counter=None
+    ) -> str:
+        """Extract text, tables, and pictures from a shape collection.
+
+        Picture placeholders retain ``PLACEHOLDER`` as their shape type after
+        an image is inserted. Group shapes are containers, so recurse into
+        their children while preserving document order.
+        """
         from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
 
         content_parts = []
         image_counter = image_counter if image_counter is not None else [0]
 
-        for shape in slide.shapes:
+        for shape in shapes:
             if shape.is_placeholder:
                 ph_type = shape.placeholder_format.type
                 if ph_type in (PP_PLACEHOLDER.TITLE, PP_PLACEHOLDER.CENTER_TITLE):
                     continue
 
-            if getattr(shape, "shape_type", None) == MSO_SHAPE_TYPE.PICTURE:
+            shape_type = getattr(shape, "shape_type", None)
+            if shape_type == MSO_SHAPE_TYPE.GROUP:
+                grouped_content = self._extract_shapes_content(
+                    shape.shapes,
+                    resource_name=resource_name,
+                    storage=storage,
+                    image_counter=image_counter,
+                )
+                if grouped_content:
+                    content_parts.append(grouped_content)
+                continue
+
+            if shape_type == MSO_SHAPE_TYPE.PICTURE or (
+                shape_type == MSO_SHAPE_TYPE.PLACEHOLDER and hasattr(shape, "image")
+            ):
                 image_md = self._convert_picture(
                     shape, resource_name=resource_name, storage=storage, image_counter=image_counter
                 )
@@ -181,11 +212,13 @@ class PowerPointParser(BaseParser):
 
         try:
             image = shape.image
+            image_bytes = image.blob
             image_counter[0] += 1
-            filename = f"image{image_counter[0]}"
+            content_digest = hashlib.sha256(image_bytes).hexdigest()[:12]
+            filename = f"image{image_counter[0]}_{content_digest}"
             extension = f".{image.ext}" if image.ext else ".png"
             image_path = storage.save_image(
-                resource_name, image.blob, filename=filename, extension=extension
+                resource_name, image_bytes, filename=filename, extension=extension
             )
             rel_path = image_path.relative_to(storage.media_dir)
             return f"![{filename}]({rel_path})"
