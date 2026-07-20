@@ -19,7 +19,193 @@ from openviking.session.train import (
 from openviking.session.train.components.trajectory_analyzer import (
     TrajectoryAnalyzerContext,
     TrajectoryRolloutAnalyzer,
+    _trajectory_operation_validation_issues,
+    _trajectory_validation_issues,
 )
+
+
+def _valid_trajectory_content() -> str:
+    return """# task
+- Outcome: failure
+- Domain: service operation
+- User Goal: complete an operation and verify its result
+- Injected Experiences:
+  - Loaded: none
+  - Helpful: none
+  - Misleading: none
+  - Insufficient: none
+- Timeline:
+  - User request: complete the requested operation
+  - Observations: tool result reported a timeout
+  - Decisions: treated the timeout as success
+  - Actions: stopped without verification
+  - Outputs: reported completion
+  - Termination: done
+- Outcome Checks:
+  - Required outcome: failed; completion was not verified
+  - Constraints: unknown
+  - Required output/communication: failed; completion was reported without evidence
+- Correct Work To Preserve:
+  - initial operation request
+- Observed Problem:
+  - Failure type: missing_validation
+  - First observed divergence: after the timeout
+  - Candidate bad behavior: completion was assumed
+  - What was missing/wrong: no verification observation
+- Evidence References:
+  - Runtime evidence: tool result reported a timeout
+  - Direct external evidence: none
+  - Advisory signals: none
+- Raw Evidence:
+  - User/request snippets: complete the operation
+  - Tool/result snippets: timeout
+  - Final message snippets: operation complete
+- Result: completion was reported without verification"""
+
+
+def _valid_trajectory_fields(**overrides):
+    fields = {
+        "trajectory_name": "task",
+        "outcome": "failure",
+        "retrieval_anchor": (
+            "Stage: final_response; Boundary: completion verification; "
+            "Capability: verify; Target: requested operation; Outcome: failure"
+        ),
+        "experience_effects": '{"positive_ids":[],"negative_ids":[],"weak_ids":[]}',
+        "content": _valid_trajectory_content(),
+    }
+    fields.update(overrides)
+    return fields
+
+
+def test_trajectory_validation_enforces_complete_schema_and_grounded_language():
+    assert _trajectory_operation_validation_issues("task", _valid_trajectory_fields()) == []
+
+    missing = _valid_trajectory_fields(content="# task\n- Outcome: failure")
+    issues = _trajectory_operation_validation_issues("task", missing)
+    assert any(
+        issue.reason == "trajectory content is missing required sections" for issue in issues
+    )
+
+    invalid_effects = _valid_trajectory_fields(experience_effects="not-json")
+    issues = _trajectory_operation_validation_issues("task", invalid_effects)
+    assert any(
+        issue.reason == "trajectory experience_effects is not valid JSON" for issue in issues
+    )
+
+    unsupported = _valid_trajectory_fields(
+        content=_valid_trajectory_content().replace(
+            "tool result reported a timeout",
+            "none",
+        ),
+    )
+    issues = _trajectory_operation_validation_issues("task", unsupported)
+    assert any(
+        issue.reason == "trajectory material failure claim lacks direct evidence"
+        for issue in issues
+    )
+
+    mismatched_outcome = _valid_trajectory_fields(outcome="success")
+    issues = _trajectory_operation_validation_issues("task", mismatched_outcome)
+    assert any(
+        issue.reason == "trajectory outcome disagrees with content outcome" for issue in issues
+    )
+
+
+def test_trajectory_validation_canonicalizes_label_ordered_comma_anchor():
+    operation = ResolvedOperation(
+        old_memory_file_content=None,
+        memory_fields=_valid_trajectory_fields(
+            retrieval_anchor=(
+                "Stage: repair, Boundary: source warnings, Capability: validate sources, "
+                "Target: structured analysis, Outcome: failure"
+            )
+        ),
+        memory_type="trajectories",
+        uris=["viking://user/u/memories/trajectories/task.md"],
+        page_id=100,
+    )
+    operations = ResolvedOperations(
+        upsert_operations=[operation],
+        delete_file_contents=[],
+        errors=[],
+        resolved_links=[],
+    )
+
+    issues = _trajectory_validation_issues(operations)
+
+    assert issues == []
+    assert operation.memory_fields["retrieval_anchor"] == (
+        "Stage: repair; Boundary: source warnings; Capability: validate sources; "
+        "Target: structured analysis; Outcome: failure."
+    )
+
+
+def test_trajectory_validation_fills_known_empty_advisory_channel():
+    operation = ResolvedOperation(
+        old_memory_file_content=None,
+        memory_fields=_valid_trajectory_fields(
+            content=_valid_trajectory_content().replace("  - Advisory signals: none\n", "")
+        ),
+        memory_type="trajectories",
+        uris=["viking://user/u/memories/trajectories/task.md"],
+        page_id=100,
+    )
+    operations = ResolvedOperations(
+        upsert_operations=[operation],
+        delete_file_contents=[],
+        errors=[],
+        resolved_links=[],
+    )
+
+    issues = _trajectory_validation_issues(
+        operations,
+        evidence_sources={"advisory_signal_count": 0},
+    )
+
+    assert issues == []
+    assert "  - Advisory signals: none\n" in operation.memory_fields["content"]
+
+
+def test_trajectory_validation_requires_explicit_direct_external_evidence_source():
+    content = _valid_trajectory_content().replace(
+        "Direct external evidence: none",
+        "Direct external evidence: independent observer confirmed the missing result",
+    )
+    fields = _valid_trajectory_fields(content=content)
+
+    unsupported = _trajectory_operation_validation_issues("task", fields)
+    supported = _trajectory_operation_validation_issues(
+        "task",
+        fields,
+        evidence_sources={
+            "direct_available": True,
+            "items": [{"direct": True, "source": "independent_observer"}],
+        },
+    )
+
+    assert any(
+        issue.reason == "trajectory claims direct external evidence when none was supplied"
+        for issue in unsupported
+    )
+    assert not any(
+        issue.reason == "trajectory claims direct external evidence when none was supplied"
+        for issue in supported
+    )
+
+
+def test_trajectory_validation_allows_domain_language_that_can_also_be_control_plane_language():
+    content = _valid_trajectory_content().replace(
+        "treated the timeout as success",
+        "computed the requested evaluation reward from the observed timeout",
+    )
+
+    issues = _trajectory_operation_validation_issues(
+        "task",
+        _valid_trajectory_fields(content=content),
+    )
+
+    assert issues == []
 
 
 class FakeExtractLoop:
@@ -36,12 +222,26 @@ class FakeExtractLoop:
                 upsert_operations=[
                     ResolvedOperation(
                         old_memory_file_content=None,
-                        memory_fields={
-                            "trajectory_name": "task",
-                            "outcome": "success",
-                            "retrieval_anchor": "Stage: final",
-                            "content": "# task\nbody",
-                        },
+                        memory_fields=_valid_trajectory_fields(
+                            outcome="success",
+                            retrieval_anchor=(
+                                "Stage: final_response; Boundary: completion verification; "
+                                "Capability: verify; Target: requested operation; Outcome: success"
+                            ),
+                            content=(
+                                _valid_trajectory_content()
+                                .replace("- Outcome: failure", "- Outcome: success")
+                                .replace(
+                                    "Required outcome: failed; completion was not verified",
+                                    "Required outcome: passed; completion was verified",
+                                )
+                                .replace(
+                                    "Required output/communication: failed; completion was reported without evidence",
+                                    "Required output/communication: passed; completion evidence was reported",
+                                )
+                                .replace("Failure type: missing_validation", "Failure type: none")
+                            ),
+                        ),
                         memory_type="trajectories",
                         uris=["viking://user/u/memories/trajectories/task_20260607120000.md"],
                         page_id=100,
@@ -81,7 +281,7 @@ class FakeRolloutEvaluator:
             score=0.25,
             criterion_results=[
                 CriterionResult(
-                    criterion_name="tau2_reward",
+                    criterion_name="completion_quality",
                     passed=False,
                     score=0.0,
                     feedback=["reward was zero"],
@@ -143,11 +343,13 @@ async def test_trajectory_rollout_analyzer_extracts_and_persists_trajectory(monk
     assert len(fs.writes) == 1
     assert fs.writes[0][0] == "viking://user/u/memories/trajectories/task_20260607120000.md"
     assert '"case_name": "case"' in fs.writes[0][1]
+    assert '"evidence_sources"' not in fs.writes[0][1]
+    assert '"advisory_signals"' not in fs.writes[0][1]
     assert len(analysis.trajectories) == 1
     traj = analysis.trajectories[0]
     assert traj.name == "task"
     assert traj.outcome == "success"
-    assert traj.retrieval_anchor == "Stage: final"
+    assert traj.retrieval_anchor.startswith("Stage: final_response")
     assert traj.metadata["case_name"] == "case"
     assert analysis.evaluation.passed is True
     assert analysis.metadata["policy_snapshot_id"] == "snapshot"
@@ -160,7 +362,7 @@ async def test_trajectory_rollout_analyzer_evaluates_before_extracting_trajector
     FakeExtractLoop.created.clear()
     fs = FakeVikingFS()
     evaluator = FakeRolloutEvaluator()
-    evaluator_context = {"benchmark": "tau2"}
+    evaluator_context = {"source": "external_assessor"}
     monkeypatch.setattr(module, "ExtractLoop", FakeExtractLoop)
     monkeypatch.setattr(module, "get_viking_fs", lambda: fs)
 
@@ -185,15 +387,64 @@ async def test_trajectory_rollout_analyzer_evaluates_before_extracting_trajector
     assert analysis.evaluation.metadata == {"source": "fake"}
     created_loop = FakeExtractLoop.created[0]
     provider = created_loop.kwargs["context_provider"]
-    assert len(provider.messages) == 2
+    assert len(provider.messages) == 1
     assert provider.messages[0] is rollout.messages[0]
-    feedback_message = provider.messages[1]
-    assert feedback_message.role == "user"
-    assert "[Rollout Evaluation]" in feedback_message.content
-    assert "score: 0.25" in feedback_message.content
-    assert "task failed" in feedback_message.content
-    assert "missing confirmation" in feedback_message.content
-    assert analysis.metadata["extraction_message_count"] == 2
+    conversation_message = provider._build_conversation_message()
+    assert "## Evidence Sources" in conversation_message["content"]
+    assert '"source": "rollout_evaluation"' in conversation_message["content"]
+    assert '"direct": true' in conversation_message["content"]
+    assert "## Advisory Signals" in conversation_message["content"]
+    assert '"available": false' in conversation_message["content"]
+    assert '"score": 0.25' in conversation_message["content"]
+    assert "reward was zero" in conversation_message["content"]
+    assert "missing confirmation" in conversation_message["content"]
+    assert analysis.metadata["extraction_message_count"] == 1
+    assert analysis.metadata["evidence_source_summary"] == {
+        "direct_available": True,
+        "source_count": 1,
+        "advisory_signal_count": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_trajectory_rollout_analyzer_can_disable_evaluation_evidence(monkeypatch):
+    from openviking.session.train.components import trajectory_analyzer as module
+
+    FakeExtractLoop.created.clear()
+    fs = FakeVikingFS()
+    evaluator = FakeRolloutEvaluator()
+    monkeypatch.setattr(module, "ExtractLoop", FakeExtractLoop)
+    monkeypatch.setattr(module, "get_viking_fs", lambda: fs)
+
+    analyzer = TrajectoryRolloutAnalyzer(
+        viking_fs=fs,
+        vlm=SimpleNamespace(model="fake"),
+        evaluator=evaluator,
+    )
+    context = TrajectoryAnalyzerContext(
+        request_context=SimpleNamespace(
+            user=SimpleNamespace(account_id="default", user_id="u"),
+            account_id="default",
+        ),
+        inject_evaluation_feedback=False,
+    )
+
+    analysis = await analyzer.analyze(_rollout(), context)
+
+    provider = FakeExtractLoop.created[0].kwargs["context_provider"]
+    assert provider._evidence_sources == {
+        "direct_available": False,
+        "items": [],
+        "contract": (
+            "Only items with direct=true may prove a material claim. "
+            "Other items may only identify what to inspect."
+        ),
+    }
+    assert analysis.metadata["evidence_source_summary"] == {
+        "direct_available": False,
+        "source_count": 0,
+        "advisory_signal_count": 0,
+    }
 
 
 @pytest.mark.asyncio
@@ -207,15 +458,11 @@ async def test_trajectory_rollout_analyzer_records_injected_experience_feedback(
                     upsert_operations=[
                         ResolvedOperation(
                             old_memory_file_content=None,
-                            memory_fields={
-                                "trajectory_name": "task",
-                                "outcome": "failure",
-                                "retrieval_anchor": "Stage: final",
-                                "experience_effects": (
+                            memory_fields=_valid_trajectory_fields(
+                                experience_effects=(
                                     '{"positive_ids":[],"negative_ids":["E1"],"weak_ids":[]}'
-                                ),
-                                "content": "# task\nbody",
-                            },
+                                )
+                            ),
                             memory_type="trajectories",
                             uris=["viking://user/u/memories/trajectories/task_20260607120000.md"],
                             page_id=100,

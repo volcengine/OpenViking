@@ -114,6 +114,12 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--train-split",
+        choices=("train", "dev", "test"),
+        default="train",
+        help="Split used for training epochs (default: train).",
+    )
+    parser.add_argument(
         "--eval-index",
         default=None,
         help=(
@@ -179,8 +185,7 @@ def parse_args() -> argparse.Namespace:
         "--continue-on-rollout-failure",
         action="store_true",
         help=(
-            "Treat failed remote rollouts as 0-score eval results instead of "
-            "aborting the batch."
+            "Treat failed remote rollouts as 0-score eval results instead of aborting the batch."
         ),
     )
     parser.add_argument(
@@ -267,6 +272,7 @@ async def main_async() -> int:
             direct_experience_content=direct_experience_content,
             direct_experience_name=args.direct_experience_name,
             direct_experience_uri=args.direct_experience_uri,
+            train_split=args.train_split,
             train_index=_parse_indices_arg(args.train_index),
             eval_index=_parse_indices_arg(args.eval_index),
             benchmark_service_url=args.benchmark_service_url,

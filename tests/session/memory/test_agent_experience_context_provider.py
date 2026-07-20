@@ -50,27 +50,38 @@ def test_user_memory_provider_splits_but_trajectory_provider_keeps_messages_whol
     assert trajectory_provider.get_extract_context().messages[0] is messages[0]
 
 
-def test_agent_experience_instruction_preserves_coupled_scope_repairs():
+def test_agent_experience_instruction_uses_generic_evidence_bound_repairs():
     provider = AgentExperienceContextProvider(
         messages=[],
-        trajectory_summary="scope and communication failure",
-        trajectory_uri="viking://user/user_1/memories/trajectories/scope_failure.md",
+        trajectory_summary="the task stopped after an unverified tool response",
+        trajectory_uri="viking://user/user_1/memories/trajectories/verification_failure.md",
+        task_signature="complete an operation and verify its outcome",
     )
 
     instruction = provider.instruction()
 
-    assert "coupled rule" in instruction
-    assert (
-        "answer the information obligation without expanding the write/action scope" in instruction
-    )
-    assert "agent-proposed broader plan" in instruction
+    assert "observations, decisions, actions, verification, and outputs" in instruction
+    assert "runtime evidence or direct external evidence" in instruction
     assert "State the behavior delta" in instruction
     assert "Do not output `trigger_code`" in instruction
-    assert "later modified, canceled, upgraded" in instruction
     assert "`Does not apply when` must describe a task-pattern mismatch" in instruction
-    assert "canonical runtime value field" in instruction
-    assert 'other", "remaining", "those"' in instruction
     assert "## Situation" in instruction
+
+
+def test_agent_experience_instruction_has_no_domain_router():
+    provider = AgentExperienceContextProvider(
+        messages=[],
+        trajectory_summary="a generated output missed a required verification step",
+        trajectory_uri="viking://user/user_1/memories/trajectories/output_failure.md",
+        task_signature="produce and verify an output",
+    )
+
+    instruction = provider.instruction()
+
+    assert "Artifact Task Profile" not in instruction
+    assert "Conditionally Activated Domain Rules" not in instruction
+    assert "spreadsheet" not in instruction
+    assert "canonical total/paid/charged" not in instruction
 
 
 @pytest.mark.asyncio

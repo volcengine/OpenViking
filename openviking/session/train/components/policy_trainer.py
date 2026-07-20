@@ -398,7 +398,17 @@ class StreamingPolicyTrainer:
                 gradients=gradient_chunk,
                 policy_set=self.policy_set,
                 ctx=self.context,
-                analyses=analyses,
+                analyses=chunk.analyses,
+            )
+            plan.metadata.setdefault(
+                "source_trajectory_uris",
+                sorted(
+                    {
+                        uri
+                        for analysis in chunk.analyses
+                        for uri in _analysis_trajectory_uris(analysis)
+                    }
+                ),
             )
             self.policy_set = apply_result.updated_policy_set
             plans.append(plan)
@@ -515,17 +525,21 @@ def _chunks_buffered_items_by_gradient_count(
     if size <= 0:
         raise ValueError("chunk size must be > 0")
 
-    all_gradients: list[SemanticGradient] = []
-    for item in items:
-        all_gradients.extend(item.gradients)
-
-    if not all_gradients:
-        return [_BufferedRolloutTrainingChunk(gradients=[])]
-
     chunks: list[_BufferedRolloutTrainingChunk] = []
-    for start in range(0, len(all_gradients), size):
-        chunk_gradients = all_gradients[start : start + size]
-        chunks.append(_BufferedRolloutTrainingChunk(gradients=chunk_gradients))
+    for item in items:
+        item_gradients = list(item.gradients)
+        if not item_gradients:
+            continue
+        item_analyses = [item.analysis] if item.analysis is not None else []
+        for start in range(0, len(item_gradients), size):
+            chunks.append(
+                _BufferedRolloutTrainingChunk(
+                    gradients=item_gradients[start : start + size],
+                    analyses=item_analyses,
+                )
+            )
+    if not chunks:
+        return [_BufferedRolloutTrainingChunk(gradients=[], analyses=[])]
     return chunks
 
 
@@ -590,6 +604,13 @@ def _scope_training_result_to_submitter(
         scoped_plan,
     )
     metadata = dict(result.metadata or {})
+    scoped_gate_reports = _gate_reports_from_scoped_plan(
+        scoped_plan,
+        submitter_gate_report=submitter.gate_report,
+    )
+    scoped_post_validation_retries = list(
+        dict(getattr(scoped_plan, "metadata", {}) or {}).get("post_validation_retries", []) or []
+    )
     metadata.update(
         {
             "batch_rollout_count": metadata.get("rollout_count"),
@@ -600,6 +621,9 @@ def _scope_training_result_to_submitter(
             "gradient_count": len(submitter.gradients),
             "source": "streaming_rollouts_scoped",
             "scoped_to_submitter": True,
+            "gate_reports": scoped_gate_reports,
+            "gate_summary": _gate_summary(scoped_gate_reports),
+            "post_validation_retries": scoped_post_validation_retries,
             **(
                 {"gate_report": submitter.gate_report}
                 if getattr(submitter, "gate_report", None) is not None
@@ -633,13 +657,57 @@ def _scope_plan_to_analysis(
         )
     ]
     metadata = dict(getattr(plan, "metadata", {}) or {})
+    scoped_chunks = [
+        dict(chunk)
+        for chunk in metadata.get("chunks", []) or []
+        if isinstance(chunk, dict)
+        and trajectory_uris.intersection(
+            str(uri) for uri in chunk.get("source_trajectory_uris", []) or []
+        )
+    ]
+    scoped_gate_reports: list[dict[str, Any]] = []
+    scoped_retries: list[dict[str, Any]] = []
+    for chunk in scoped_chunks:
+        if isinstance(chunk.get("gate_report"), dict):
+            scoped_gate_reports.append(dict(chunk["gate_report"]))
+        scoped_gate_reports.extend(
+            dict(report)
+            for report in chunk.get("gate_reports", []) or []
+            if isinstance(report, dict)
+        )
+        scoped_retries.extend(
+            dict(event)
+            for event in chunk.get("post_validation_retries", []) or []
+            if isinstance(event, dict)
+        )
     metadata.update(
         {
             "scoped_to_trajectory_uris": sorted(trajectory_uris),
             "unscoped_item_count": len(getattr(plan, "items", []) or []),
+            "chunks": scoped_chunks,
+            "gate_reports": scoped_gate_reports,
+            "post_validation_retries": scoped_retries,
         }
     )
+    metadata.pop("gate_report", None)
     return PolicyUpdatePlan(items=scoped_items, metadata=metadata)
+
+
+def _gate_reports_from_scoped_plan(
+    plan: PolicyUpdatePlan,
+    *,
+    submitter_gate_report: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    reports: list[dict[str, Any]] = []
+    if isinstance(submitter_gate_report, dict):
+        reports.append(dict(submitter_gate_report))
+    metadata = dict(getattr(plan, "metadata", {}) or {})
+    reports.extend(
+        dict(report)
+        for report in metadata.get("gate_reports", []) or []
+        if isinstance(report, dict)
+    )
+    return reports
 
 
 def _plan_item_belongs_to_trajectories(
@@ -729,6 +797,7 @@ class _BufferedRolloutTraining:
 @dataclass(slots=True)
 class _BufferedRolloutTrainingChunk:
     gradients: list[SemanticGradient]
+    analyses: list[RolloutAnalysis] = field(default_factory=list)
 
 
 _streaming_policy_trainer_registry: dict[Hashable, StreamingPolicyTrainer] = {}

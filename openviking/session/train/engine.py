@@ -79,7 +79,9 @@ class PolicyTrainingEngine:
             ]
         )
         gradients = [gradient for batch in gradient_batches for gradient in batch]
-        gate_runner = ctx.gate_runner or default_policy_gate_runner()
+        gate_runner = _gate_runner_for_gradients(ctx, gradients)
+        if gate_runner is None:
+            return gradients
         gradients, gate_report = await gate_runner.filter_gradients(
             gradients,
             analyses=analyses,
@@ -96,35 +98,36 @@ class PolicyTrainingEngine:
         ctx: PipelineContext,
         analyses: list[RolloutAnalysis] | None = None,
     ) -> tuple[PolicyUpdatePlan, PolicyApplyResult]:
+        gate_runner = _gate_runner_for_gradients(ctx, gradients)
         async with policy_set.lock() as transaction_handle:
             latest_policy_set = await policy_set.reload()
             _prepare_optimization_context_for_gates(
                 ctx.optimization_context,
                 analyses=list(analyses or []),
-                gate_runner=ctx.gate_runner or default_policy_gate_runner(),
+                gate_runner=gate_runner,
             )
             plan = await self.policy_optimizer.plan(
                 gradients,
                 latest_policy_set,
                 ctx.optimization_context,
             )
-            gate_runner = ctx.gate_runner or default_policy_gate_runner()
-            filtered_items, gate_report = await gate_runner.filter_plan(
-                list(plan.items or []),
-                analyses=list(analyses or []),
-                policy_set=latest_policy_set,
-            )
-            _append_gate_report(ctx, gate_report)
-            if len(filtered_items) != len(plan.items or []):
-                plan = PolicyUpdatePlan(
-                    items=filtered_items,
-                    metadata={
-                        **dict(plan.metadata or {}),
-                        "gate_report": gate_report.to_dict(),
-                    },
+            if gate_runner is not None:
+                filtered_items, gate_report = await gate_runner.filter_plan(
+                    list(plan.items or []),
+                    analyses=list(analyses or []),
+                    policy_set=latest_policy_set,
                 )
-            elif gate_report.decisions:
-                plan.metadata.setdefault("gate_reports", []).append(gate_report.to_dict())
+                _append_gate_report(ctx, gate_report)
+                if len(filtered_items) != len(plan.items or []):
+                    plan = PolicyUpdatePlan(
+                        items=filtered_items,
+                        metadata={
+                            **dict(plan.metadata or {}),
+                            "gate_report": gate_report.to_dict(),
+                        },
+                    )
+                elif gate_report.decisions:
+                    plan.metadata.setdefault("gate_reports", []).append(gate_report.to_dict())
             apply_result = await self.policy_updater.apply(
                 plan,
                 latest_policy_set,
@@ -158,3 +161,11 @@ def _prepare_optimization_context_for_gates(
             optimization_context.gate_runner = gate_runner
         except Exception:
             pass
+
+
+def _gate_runner_for_gradients(ctx: PipelineContext, gradients: list[Any]) -> Any:
+    if ctx.gate_runner is not None:
+        return ctx.gate_runner
+    if any(getattr(gradient, "after_file", None) is not None for gradient in gradients):
+        return default_policy_gate_runner()
+    return None

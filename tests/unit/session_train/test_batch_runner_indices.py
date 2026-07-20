@@ -8,6 +8,7 @@ from openviking.session.train.batch_runner import (
     _baseline_cache_key,
     _case_loader,
     _effective_eval_index,
+    _train_rollout_cache_key_prefix,
 )
 
 
@@ -35,6 +36,40 @@ def test_case_loader_uses_multi_value_train_and_eval_index_filters():
     assert config.eval_index == [10, 14, 18]
     assert train_loader.filters == {"task_indices": [1, 5, 6]}
     assert eval_loader.filters == {"task_indices": [10, 14, 18]}
+
+
+def test_train_split_can_target_test_cases_and_separates_cache_keys():
+    train_config = BatchTrainEvalConfig(
+        dataset="vaka_dev_v1",
+        domain="benchmark",
+        train_split="train",
+        benchmark_service_url="http://127.0.0.1:8765",
+    )
+    test_config = BatchTrainEvalConfig(
+        dataset="vaka_dev_v1",
+        domain="benchmark",
+        train_split="test",
+        benchmark_service_url="http://127.0.0.1:8765",
+    )
+
+    loader = _case_loader(test_config, split=test_config.train_split, sample_index=None)
+
+    assert loader.split == "test"
+    assert _train_rollout_cache_key_prefix(train_config) != _train_rollout_cache_key_prefix(
+        test_config
+    )
+
+
+def test_train_split_rejects_unknown_split():
+    import pytest
+
+    with pytest.raises(ValueError, match="train_split must be train, dev, or test"):
+        BatchTrainEvalConfig(
+            dataset="vaka_dev_v1",
+            domain="benchmark",
+            train_split="unknown",
+            benchmark_service_url="http://127.0.0.1:8765",
+        )
 
 
 def test_baseline_cache_key_depends_on_multi_eval_index():

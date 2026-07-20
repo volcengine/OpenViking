@@ -125,7 +125,12 @@ class SessionCommitPolicyTrainer:
         *,
         execution_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        session_id = _session_id_for_rollout(rollout, run_id=self.run_id)
+        session_id = _session_id_for_rollout(
+            rollout,
+            run_id=self.run_id,
+            execution_metadata=execution_metadata,
+            rollout_index=index,
+        )
         stage = "prepare_messages"
         try:
             messages = (
@@ -458,13 +463,34 @@ def _commit_telemetry_id(commit_result: dict[str, Any]) -> str | None:
     return str(telemetry_id) if telemetry_id else None
 
 
-def _session_id_for_rollout(rollout: Rollout, *, run_id: str) -> str:
+def _session_id_for_rollout(
+    rollout: Rollout,
+    *,
+    run_id: str,
+    execution_metadata: dict[str, Any] | None = None,
+    rollout_index: int | None = None,
+) -> str:
     safe_name = _safe_session_fragment(rollout.case.name)
     metadata = rollout.metadata or {}
-    execution_metadata = metadata.get("execution_metadata", {})
-    epoch = execution_metadata.get("epoch", "0")
-    task_no = metadata.get("task_no", "0")
-    split = metadata.get("data_split", "tau2")
+    embedded_execution_metadata = metadata.get("execution_metadata", {})
+    if not isinstance(embedded_execution_metadata, dict):
+        embedded_execution_metadata = {}
+    context_execution_metadata = execution_metadata or {}
+    epoch = context_execution_metadata.get(
+        "epoch", embedded_execution_metadata.get("epoch", 0)
+    )
+    task_no = metadata.get("task_no")
+    if task_no is None:
+        task_no = context_execution_metadata.get("train_trial")
+    if task_no is None:
+        task_no = context_execution_metadata.get("trial_index")
+    if task_no is None:
+        task_no = rollout_index if rollout_index is not None else 0
+    split = (
+        metadata.get("data_split")
+        or context_execution_metadata.get("train_split")
+        or "train"
+    )
     return f"tau2_train_{run_id}_{split}_e{epoch}_t{task_no}_{safe_name}"
 
 

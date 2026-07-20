@@ -115,30 +115,24 @@ The system handles create vs update automatically:
 - Existing experience is misleading, over-broad, too weak, or caused the bad path → update it, primarily by sharpening `## Situation`, `## Procedure`, and `## Anti-pattern`.
 - No relevant experience exists and the failure has a reusable preventive repair → create a new experience.
 - The failure is successful, case-specific, unsupported, random, already solved by available tool facts, or not preventable by a runtime reminder → output no changes.
-- If the failure came from agent-initiated scope expansion, do not treat the user's later yes/confirmation to the agent's over-broad proposal as a clean user-initiated request. Preserve the original user-requested write/action scope unless the user independently requested a new object/action in their own words.
-- If tool/action/DB checks passed but required user-visible communication failed, create/update a communication-boundary experience. Generalize the omitted literal into its semantic role: total cost, identifier, policy explanation, next step, etc.
-- Treat trajectory memories as factual evidence, not authoritative conclusions. Use their `Timeline`, `Outcome Checks`, `Observed Problem`, `Value/Scope Trace/Evidence`, `Source Field Trace/Evidence`, and `Raw Evidence` to infer the reusable repair.
-- When both successful and non-successful trajectories are available for the same or similar task pattern, compare them before writing an experience: identify which user-visible value, included/excluded record set, source field, label, confirmation, or write argument appears in successful traces and is missing/different in failures.
+- Treat trajectory memories as factual evidence, not authoritative conclusions. Use their `Timeline`, `Outcome Checks`, `Observed Problem`, `Evidence References`, and `Raw Evidence` to infer the reusable repair.
+- When both successful and non-successful trajectories are available for the same or similar task pattern, compare observations, decisions, actions, verification, and outputs at the first material divergence.
 - Do not copy trajectory wording directly into an experience. Re-check the original runtime evidence, injected experience effects, existing experiences, and this gate contract before writing an injectable reminder.
 - A failed or partial trajectory does not require an experience update. Create/update only when the evidence supports a narrow runtime reminder that would likely prevent or recover from the first materially outcome-changing mistake.
 
 ## Writing rules
 
-- One distinct root failure pattern → one experience. Split unrelated failures; keep a coupled rule for communication/action scope when the same ambiguity causes both, so the future agent can answer the information obligation without expanding the write/action scope.
-- State the behavior delta: block a write, change one argument, ask/read one missing fact, or include one requested source-bound fact in communication.
-- Preserve object boundaries. A user's yes to an agent-proposed broader plan is not independent evidence for extra objects/actions.
-- For communication, totals, counts, lists, or summaries, bind the answer to the user-requested scope, frozen record/set membership, included/excluded records, source field, derivation, later-write effect, selected object, or policy gate.
-- For information/aggregate/list/summary/value requests, preserve the user-requested source scope at the moment the request is made. Later write actions may create a second "post-action/current remaining state" scope, but they must not silently replace the original requested scope.
-- If user wording is ambiguous between an original requested set and a post-action remaining/current-state set, write the experience so the future agent gives both scopes with explicit labels instead of only the narrower post-action scope.
-- Do not treat relative words like "other", "remaining", "those", "the rest", "其他", or "剩余" as explicit exclusions when the user is also discussing writes. They are ambiguous unless the user's own wording says to exclude a named object or semantic role; in ambiguous cases, `Scope ambiguity` must name both scopes.
-- Do not exclude records from a request-time information/aggregate/list/summary/value merely because they are later modified, canceled, upgraded, consumed, split, or otherwise changed. Exclude them only when the user's own wording explicitly excluded that semantic role from the earlier information request.
-- If later writes affect records that could belong to a requested information/list/aggregate value, `Scope ambiguity` must name both the original request-time scope and the post-action/current remaining scope; do not write none/无.
-- For total cost, paid amount, balance, refund, or similar monetary aggregates, bind the answer to the canonical runtime value field when one exists: explicit total/paid/charged/order/payment-history amount fields beat reconstructed lower-level unit/segment/item price sums. Use line items only when no canonical total exists, or as a cross-check. If those values differ, the experience must tell the future agent which source field to prefer. Do not name lower-level price fields as the primary source when a record-level total/paid/charged amount is available in runtime evidence.
+- One distinct root failure pattern → one experience. Split unrelated failures; keep symptoms together only when they share the same evidence, decision boundary, and repair.
+- Do not merge failures merely because an advisory signal gives them the same label. Merge only when first runtime divergence, decisive evidence, applicability, and minimal repair action are compatible.
+- Reject generic slogans such as "check all requirements", "ensure full compliance", or "review carefully" unless they are replaced with one concrete runtime boundary, one observable or independently verifiable fact, and one corrective action.
+- State the behavior delta: change one decision, input, action, verification step, or output at a named boundary.
+- Bind every reminder to runtime evidence or direct external evidence. Advisory signals may guide inspection but cannot independently justify an experience.
+- Treat a `rollout_evaluation` direct source as authoritative evidence of outcome and requirement compliance. It can establish what result must be prevented or repaired, but it cannot independently prove an unobserved internal cause.
+- When evaluation proves a reusable failed requirement but the internal cause is unknown, place a prevention or verification reminder at the earliest observable boundary instead of inventing hidden reasoning.
 - `Does not apply when` must describe a task-pattern mismatch, not a temporal stage. Do not write conditions such as "still reading", "before final response", "before writes complete", or "not yet at final_response"; the skill loader may read the experience at task start even when it applies at a later boundary.
-- If a loaded existing experience encodes the misleading rule that later-modified/canceled/upgraded records should be removed from an earlier requested aggregate, update that experience instead of creating a competing memory.
-- Do not encode dataset-specific values, IDs, amounts, or domain names in the reusable rule; express the lesson as source-scope binding, freeze point, included/excluded object roles, and later-write effect.
+- Do not encode dataset-specific values, IDs, paths, or domain names in the reusable rule; express the lesson as an observable condition, decision boundary, and behavior delta.
 - Preserve correct near-misses: `## Situation`/`## Anti-pattern` must say when NOT to apply the experience.
-- Avoid evaluator/control-plane wording such as evaluation, evaluator, communicate_checks, action_checks, db_check, reward, rubric, 评估, 奖励. Rewrite into runtime facts.
+- Do not present advisory signals as runtime observations or causal facts. Derive every behavior claim from runtime evidence or direct external evidence; otherwise keep the cause unknown.
 - Keep it concise, imperative, and machine-readable. No raw IDs, hidden answers, policy dumps, or full task paths.
 - Use the same language for all `experience_name` values.
 

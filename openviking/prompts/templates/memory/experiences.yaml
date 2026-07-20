@@ -19,7 +19,7 @@ fields:
       Name the generalizable failure-repair pattern, not the specific instance.
       Must be written in {{ language }}.
       {% if language == 'en' %}Use lowercase snake_case, max 5 words.{% else %}Use a concise noun phrase, max 15 characters.{% endif %}
-      Good: "booking_duplicate_handling", "missing_total_cost", "汇总费用遗漏".
+      Good: "verify_before_irreversible_action", "missing_required_output", "关键校验遗漏".
     merge_op: immutable
 
   - name: constraint
@@ -31,24 +31,22 @@ fields:
       Output the experience in EXACTLY this 4-section Markdown format. The skill loader
       shows `## Situation` in search results and may load the whole file with
       `read_experience`, so the experience must be understandable without trigger_code.
+      Keep the Markdown headings and field labels below exactly in English even when the
+      field values are written in another language.
 
       ## Situation
       - Applies when: <runtime-visible task/user/tool-result situation where this lesson matters>
       - Does not apply when: <closest nearby but non-applicable task pattern; do not use
         temporal stage wording such as before final_response or while still reading/writing>
-      - Source binding: <which user request scope, confirmed object, retrieved record/set,
-        source field, policy gate, calculation, or candidate message content supplies the rule>
-      - Scope ambiguity: <if an information/list/aggregate request could mean both the
-        originally requested set and a later post-action/current-state set, state both
-        scopes and how to label them; otherwise none>
+      - Evidence binding: <which observation or evidence supports applying the rule>
+      - Decision boundary: <the earliest reusable point where the reminder changes behavior>
 
       ## Reminder
       - <one sentence root-cause lesson that changes the next agent behavior>
 
       ## Procedure
-      - Before/when <candidate action or communication boundary>: <check the decisive runtime fact>
-      - If <bad condition>: <block/change exactly one argument, ask/read one missing fact,
-        or include one required user-visible fact>
+      - Before/when <candidate decision/action/output boundary>: <check the decisive evidence>
+      - If <bad condition>: <apply the smallest corrective or recovery action>
       - Else: <proceed without rewriting unrelated workflow steps>
 
       ## Anti-pattern
@@ -59,16 +57,24 @@ fields:
       - Failure repair only. Do not output generic positive workflows, full SOPs, success-path
         summaries, or case transcripts.
       - One experience covers one reusable root failure pattern. Split unrelated failures; keep
-        coupled communication/action scope together only when the same ambiguity causes both.
+        coupled symptoms together only when they share the same evidence, boundary, and repair.
+        Do not compress several independently testable omissions into one reminder. A multi-step
+        procedure is valid only when every step implements the same single behavior change.
+      - Do not merge failures merely because they share an evaluator label such as missing
+        requirement. Merge only when first runtime divergence, decisive evidence, applicability,
+        and minimal repair action are compatible.
+      - Reject generic slogans such as "check all requirements", "ensure full compliance", or
+        "review carefully". Replace them with one concrete runtime boundary, one observable or
+        independently verifiable fact, and one corrective action.
       - Focus on the first materially outcome-changing mistake and the minimal prevention or
         recovery action at that boundary.
       - Treat trajectory memories as factual evidence, not authoritative conclusions.
-        Prefer their `Timeline`, `Outcome Checks`, `Observed Problem`, `Value/Scope Trace/Evidence`,
-        `Source Field Trace/Evidence`, and `Raw Evidence` when inferring a repair.
+        Prefer their `Timeline`, `Outcome Checks`, `Observed Problem`, `Evidence References`, and
+        `Raw Evidence` when inferring a repair.
       - When both successful and non-successful trajectories are available for the same or
         similar task pattern, compare them before writing an experience: find which
-        user-visible value, included/excluded record set, source field, label, confirmation,
-        or write argument appears in successful traces and is missing/different in failures.
+        observation, decision, action, verification, or output differs at the first material
+        divergence.
       - Do not copy any trajectory wording directly into an experience. Re-check the original
         runtime evidence, injected experience effects, existing experiences, and these rules
         before writing an injectable reminder.
@@ -79,53 +85,60 @@ fields:
         output no experience changes.
       - If a loaded experience was causal and marked over-broad, misleading, or too weak, update
         that existing experience; otherwise do not patch irrelevant loaded experiences.
-      - Do not mention evaluator/control-plane terms such as evaluation, evaluator,
-        communicate_checks, action_checks, db_check, reward, rubric, 评估, or 奖励 in runtime
-        content. Rewrite them into runtime facts: user request, retrieved records, source fields,
-        policy gate, calculation, or required user-visible message.
-      - Preserve object boundaries. A user's yes to the agent's over-broad proposal is not proof
-        that the user independently requested extra objects/actions.
-      - For communication failures, bind required facts to their source: requested scope, frozen
-        record/set membership, included/excluded records, source field, derivation, later-write
-        effect, selected object, or policy gate. Avoid vague reminders like "include all required
-        information".
-      - For information, aggregate, list, summary, or value requests, preserve the user-requested
-        source scope at the moment the request is made. Later write actions may create a second
-        "post-action/current remaining state" scope, but they must not silently replace the
-        original requested scope.
-      - If the user's wording is ambiguous between the original requested set and a post-action
-        remaining/current-state set, the experience should instruct the future agent to include
-        both scopes with explicit labels, not only the narrower post-action scope.
-      - Do not treat relative words like "other", "remaining", "those", "the rest", "其他", or
-        "剩余" as explicit exclusions when the user is also discussing writes. They are ambiguous
-        unless the user's own wording says to exclude a named object or semantic role (for example
-        "except/excluding X"). In ambiguous cases, `Scope ambiguity` must name both scopes.
-      - Do not exclude records from a request-time information/aggregate/list/summary/value
-        merely because they are later modified, canceled, upgraded, consumed, split, or otherwise
-        changed. Exclude them only when the user's own wording explicitly excluded that semantic
-        role from the earlier information request.
-      - If later writes affect records that could belong to a requested information/list/aggregate
-        value, `Scope ambiguity` must name both the original request-time scope and the
-        post-action/current remaining scope; do not write none/无.
-      - For total cost, paid amount, balance, refund, or similar monetary aggregates, bind the
-        answer to the canonical runtime value field when one exists: explicit total/paid/charged/
-        order/payment-history amount fields beat a reconstructed line-item sum. Use line items
-        only when no canonical total exists, or as a cross-check. If those values differ, the
-        experience must tell the future agent which source field to prefer.
-      - State when the scope is frozen, the semantic roles included/excluded, the source fields
-        used for derivation, and whether later writes change the previously requested scope.
+      - Do not present advisory signals as runtime observations or causal facts. Derive every
+        behavior claim from runtime evidence or direct external evidence; otherwise keep the
+        cause unknown.
+      - Bind every reminder to a concrete evidence source and decision boundary. Advisory signals
+        may guide inspection but cannot independently justify an experience.
+      - Treat a `rollout_evaluation` direct source as authoritative evidence of outcome and
+        requirement compliance. It may justify learning what result must be prevented or repaired.
+        Infer why the agent reached that result only when the trajectory exposes the relevant
+        observation, decision, action, verification, or output boundary.
+      - When evaluation proves a reusable failed requirement but the internal cause is unknown,
+        write a prevention or verification reminder at the earliest observable boundary instead of
+        inventing hidden reasoning.
+      - Preserve the nearest correct behavior and state the closest non-applicable situation so
+        the reminder does not block valid paths in other domains.
       - `Does not apply when` must describe a task-pattern mismatch, not the current temporal
         stage. Do not write conditions such as "still reading", "before final response", "before
         writes complete", or "not yet at the final_response"; the skill loader may read the
         experience at task start even when the reminder applies at a later boundary.
-      - If a loaded existing experience encodes the misleading rule that later-modified/canceled/
-        upgraded records should be removed from an earlier requested aggregate, update that
-        experience instead of creating a competing memory.
-      - Do not encode dataset-specific values, IDs, amounts, or domain names in the reusable rule;
-        express the lesson as source-scope binding, freeze point, included/excluded object roles,
-        and later-write effect.
+      - Do not encode dataset-specific values, IDs, amounts, paths, or domain names in the reusable
+        rule; express the lesson as an observable condition, decision boundary, and behavior delta.
+        In particular, replace example numbers, date/month ranges, source workbook tab names, and
+        helper script filenames with values read from the runtime request, source, or available tools.
+        Prefer semantic capabilities and source roles over exact tool identifiers when the tool name
+        is not itself part of the runtime contract.
+      - Never infer output language solely from audience geography. Follow explicit language
+        instructions first; otherwise preserve the user's language choice or ask when the choice
+        materially affects the deliverable. Do not describe any audience as "implying" a language.
+        Locale may affect conventions without selecting language.
+      - Verification may use an in-context requirement map or any available scratch mechanism, but
+        do not mandate a fixed helper filename, visible intermediate file, or extra deliverable unless
+        the runtime user request or tool contract explicitly requires it.
       - For same-tool near misses, `Situation` and `Anti-pattern` must state the discriminator
         that separates the wrong candidate from the correct one.
+      - If a required source is unavailable, prefer a verifiable authoritative alternative. If no
+        substitute can be verified, state the limitation; do not fill factual gaps from unchecked
+        general knowledge.
+      - Do not fill required fields with guessed values, assumptions, or placeholders merely to
+        preserve a schema. Only use them when the user explicitly permits that behavior; otherwise
+        ask for the missing evidence, mark it unavailable, or disclose the limitation.
+      - Do not turn a genre convention or evaluator-only preference into a mandatory runtime
+        requirement when the user, an authoritative source, and the observable task schema do not
+        require it. Keep unsupported additions optional or output no experience change.
+      - Guard every mandatory output section, field, artifact, or language choice with the same
+        explicit runtime requirement that justifies it. A related input concept, audience, locale,
+        or genre does not by itself imply another required output element.
+      - Treat user-provided assumptions, exclusions, and pre-handled topics as reasoning constraints.
+        Do not require copying them into an introduction, scope section, or other visible output unless
+        the runtime request explicitly asks for that restatement.
+      - For fixed-capacity artifacts, do not resolve requirement conflicts by shrinking text or packing
+        dense nested content. Preserve readability; use explicit priorities, surface the conflict, or
+        request a scope/layout decision when all required content cannot fit.
+      - Describe internal-process leakage semantically. Do not copy platform names, hidden
+        directories, internal manifest filenames, or control metadata literals into the reusable
+        runtime rule.
       - Keep the experience concise: no setup chatter, no policy dumps, no full paths, no raw IDs,
         no hidden answers. Use semantic roles instead of case literals.
       - Use imperative, machine-readable bullets. No introductory or closing paragraphs.

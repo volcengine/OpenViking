@@ -76,6 +76,7 @@ class BatchTrainEvalConfig:
     commit_poll_interval_seconds: float = 2.0
     commit_timeout_seconds: float | None = None
     commit_concurrency: int = 200
+    train_split: str = "train"
     train_index: int | str | list[int] | tuple[int, ...] | None = None
     eval_index: int | str | list[int] | tuple[int, ...] | None = None
     benchmark_service_url: str | None = None
@@ -128,6 +129,9 @@ class BatchTrainEvalConfig:
             raise ValueError("commit_timeout_seconds must be > 0")
         if self.commit_concurrency <= 0:
             raise ValueError("commit_concurrency must be > 0")
+        self.train_split = str(self.train_split or "train").strip().lower().replace("-", "_")
+        if self.train_split not in {"train", "dev", "test"}:
+            raise ValueError("train_split must be train, dev, or test")
         self.train_index = _normalize_index_filter(self.train_index, label="train_index")
         self.eval_index = _normalize_index_filter(self.eval_index, label="eval_index")
         if self.eval_split is not None:
@@ -225,6 +229,7 @@ class BatchTrainEvalReport:
     batch_size: int | None
     concurrency: int
     commit_concurrency: int
+    train_split: str
     train_index: int | list[int] | None
     eval_index: int | list[int] | None
     policy_root_uri: str
@@ -266,6 +271,7 @@ class BatchTrainEvalReport:
             "batch_size": self.batch_size,
             "concurrency": self.concurrency,
             "commit_concurrency": self.commit_concurrency,
+            "train_split": self.train_split,
             "train_index": self.train_index,
             "eval_index": self.eval_index,
             "policy_root_uri": self.policy_root_uri,
@@ -334,6 +340,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             epochs=config.epochs,
             concurrency=config.concurrency,
             commit_concurrency=config.commit_concurrency,
+            train_split=config.train_split,
             train_index=_index_payload(config.train_index),
             eval_index=_index_payload(config.eval_index),
             effective_eval_index=_index_payload(effective_eval_index),
@@ -429,7 +436,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
 
         train_loader = _case_loader(
             config,
-            split="train",
+            split=config.train_split,
             sample_index=config.train_index,
         )
 
@@ -437,6 +444,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             epoch=0,
             training=True,
             max_epochs=config.epochs,
+            train_split=config.train_split,
             eval_each_epoch_case_loader=(
                 eval_loader
                 if (
@@ -512,6 +520,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             batch_size=config.batch_size,
             concurrency=config.concurrency,
             commit_concurrency=config.commit_concurrency,
+            train_split=config.train_split,
             train_index=_index_payload(config.train_index),
             eval_index=_index_payload(effective_eval_index),
             policy_root_uri=policy_root_uri,
@@ -568,6 +577,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
                 "dataset": config.dataset,
                 "domain": config.domain,
                 "epochs": config.epochs,
+                "train_split": config.train_split,
                 "trials": config.trials,
                 "train_trials": config.train_trials,
                 "reuse_train_rollout_cache": config.reuse_train_rollout_cache,
@@ -830,6 +840,7 @@ def _pipeline_context(
     training: bool,
     max_epochs: int = 1,
     rollout_stage: str | None = None,
+    train_split: str | None = None,
     eval_split: str | None = None,
     eval_each_epoch_case_loader: Any = None,
     eval_trials: int = 1,
@@ -841,6 +852,8 @@ def _pipeline_context(
     execution_metadata = {"epoch": epoch, "training": training}
     if rollout_stage is not None:
         execution_metadata["rollout_stage"] = rollout_stage
+    if train_split is not None:
+        execution_metadata["train_split"] = train_split
     if eval_split is not None:
         execution_metadata["eval_split"] = eval_split
     hooks = None
@@ -1089,6 +1102,7 @@ def _write_run_metadata(
         "domain": config.domain,
         "run_timestamp": config.run_timestamp,
         "result_dir_name": config.result_dir_name,
+        "train_split": config.train_split,
         "git": git_metadata,
     }
     (run_dir / "run_metadata.json").write_text(
@@ -1126,7 +1140,7 @@ def _train_rollout_cache_key_prefix(config: BatchTrainEvalConfig) -> str:
     payload = {
         "dataset": config.dataset,
         "domain": config.domain,
-        "split": "train",
+        "split": config.train_split,
         "train_index": _index_payload(config.train_index),
         "train_trials": config.train_trials,
         "max_iterations": config.max_iterations,
@@ -1137,7 +1151,10 @@ def _train_rollout_cache_key_prefix(config: BatchTrainEvalConfig) -> str:
     stable = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     digest = sha256(stable.encode("utf-8")).hexdigest()[:16]
     index = _index_label(config.train_index)
-    return f"{_cache_slug(config.domain)}_train_index-{index}_trials-{config.train_trials}_{digest}"
+    split = _cache_slug(config.train_split)
+    return (
+        f"{_cache_slug(config.domain)}_{split}_index-{index}_trials-{config.train_trials}_{digest}"
+    )
 
 
 def _baseline_cache_key(config: BatchTrainEvalConfig) -> str:

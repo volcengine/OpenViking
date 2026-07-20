@@ -47,6 +47,7 @@ from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import generate_uri
 from openviking.session.train import (
     Case,
+    CriterionResult,
     ExperienceGradientContext,
     ExperienceGradientEstimator,
     ExperienceSetLoader,
@@ -62,6 +63,7 @@ from openviking.session.train import (
     RolloutTrainingResult,
     Rubric,
     RubricCriterion,
+    RubricEvaluation,
     SkillPolicyUpdater,
     SkillSetLoader,
     StreamingPolicyTrainerConfig,
@@ -80,6 +82,7 @@ logger = get_logger(__name__)
 _CASES_MEMORY_TYPE = "cases"
 _TRAINING_CASE_SPEC_PROTOCOL = "openviking.batch_train.case_spec.v1"
 _TRAINING_CASE_SPEC_HEADER = "# OpenViking Batch Training CaseSpec v1"
+_TRAINING_OUTCOME_EVALUATION_HEADER = "# OpenViking OutcomeEvaluation"
 _TRAINING_FAST_PATH_MEMORY_TYPES = frozenset({"cases", "trajectories", "experiences"})
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
 
@@ -553,7 +556,8 @@ class SessionCompressorV3:
         strict_extract_errors: bool = False,
         collect_memory_diff: bool = False,
     ) -> dict[str, Any]:
-        if not messages or ctx is None:
+        runtime_messages, committed_evaluation = _separate_training_evaluation_messages(messages)
+        if not runtime_messages or ctx is None:
             return {"case_count": 0, "submitted": 0, "reason": "missing_messages_or_ctx"}
         if not cases:
             tracer.info("No commit training case memories extracted; skipping streaming train")
@@ -576,7 +580,7 @@ class SessionCompressorV3:
             optimizer_context = PatchMergePolicyOptimizerContext(request_context=ctx)
             gradient_context = ExperienceGradientContext(
                 request_context=ctx,
-                messages=list(messages),
+                messages=list(runtime_messages),
                 strict_extract_errors=strict_extract_errors,
             )
             analysis_context = TrajectoryAnalyzerContext(
@@ -644,6 +648,7 @@ class SessionCompressorV3:
             skill_submitted = 0
             skill_uris: list[str] = []
             filtered_exp_gradient_count = 0
+            experience_dispositions: list[dict[str, Any]] = []
             memory_diffs: list[dict[str, Any]] = []
             policy_snapshot_id = _commit_policy_snapshot_id(
                 session_id=session_id,
@@ -656,8 +661,9 @@ class SessionCompressorV3:
                 case_uri = _case_uri_for_case(case, case_uri_map)
                 rollout = Rollout(
                     case=case,
-                    messages=list(messages),
+                    messages=list(runtime_messages),
                     policy_snapshot_id=policy_snapshot_id,
+                    evaluation=committed_evaluation,
                 )
                 # Analyze once — trajectories + skill patches co-extracted
                 analysis = await self.rollout_analyzer.analyze(rollout, analysis_context)
@@ -681,6 +687,18 @@ class SessionCompressorV3:
                         analysis=analysis,
                         rollout=rollout,
                     )
+                finalized_dispositions = _finalize_experience_dispositions(
+                    analysis=analysis,
+                    training_result=exp_training_result,
+                    session_id=session_id,
+                )
+                experience_dispositions.extend(finalized_dispositions)
+                filtered_exp_gradient_count += sum(
+                    1
+                    for item in finalized_dispositions
+                    if item.get("disposition")
+                    not in {"experience_created", "experience_updated", "success_no_learning"}
+                )
                 if case_uri:
                     await self._link_case_to_training_outputs(
                         analysis=analysis,
@@ -736,6 +754,7 @@ class SessionCompressorV3:
                 "skill_submitted": skill_submitted,
                 "skill_uris": skill_uris,
                 "filtered_exp_gradient_count": filtered_exp_gradient_count,
+                "experience_dispositions": experience_dispositions,
             }
             if collect_memory_diff:
                 response["memory_diff"] = _merge_memory_diffs(
@@ -846,6 +865,7 @@ class SessionCompressorV3:
             gate_rejections=_gate_rejections_from_training_result(training_result),
             gate_summary=_gate_summary_from_training_result(training_result),
             post_validation_retries=_post_validation_retries_from_training_result(training_result),
+            experience_dispositions=_experience_dispositions_from_training_result(training_result),
         )
 
     async def _link_case_to_training_outputs(
@@ -893,6 +913,16 @@ class SessionCompressorV3:
         await viking_fs.write_file(
             uri=f"{archive_uri.rstrip('/')}/memory_diff.json",
             content=json.dumps(merged, ensure_ascii=False, indent=4),
+            ctx=ctx,
+        )
+        dispositions = [
+            item for item in merged.get("experience_dispositions", []) if isinstance(item, dict)
+        ]
+        await viking_fs.write_file(
+            uri=f"{archive_uri.rstrip('/')}/experience_extraction_report.jsonl",
+            content="\n".join(
+                json.dumps(item, ensure_ascii=False, sort_keys=True) for item in dispositions
+            ),
             ctx=ctx,
         )
 
@@ -973,6 +1003,73 @@ def _training_messages_after_case_spec(messages: list[Message]) -> list[Message]
     return [
         message for message in messages[1:] if not _is_embedded_rollout_evaluation_message(message)
     ]
+
+
+def _separate_training_evaluation_messages(
+    messages: list[Message],
+) -> tuple[list[Message], RubricEvaluation | None]:
+    runtime_messages: list[Message] = []
+    evaluation: RubricEvaluation | None = None
+    for message in messages:
+        text = _message_text(message).strip()
+        if text.startswith(_TRAINING_OUTCOME_EVALUATION_HEADER):
+            parsed = _training_evaluation_from_message(text)
+            if parsed is not None:
+                evaluation = parsed
+            continue
+        runtime_messages.append(message)
+    return runtime_messages, evaluation
+
+
+def _training_evaluation_from_message(text: str) -> RubricEvaluation | None:
+    match = _JSON_FENCE_RE.search(text)
+    raw_payload = (
+        match.group(1).strip()
+        if match
+        else text.removeprefix(_TRAINING_OUTCOME_EVALUATION_HEADER).strip()
+    )
+    if not raw_payload:
+        return None
+    try:
+        payload = JsonUtils.loads(raw_payload)
+    except Exception as exc:
+        logger.warning("Ignoring invalid OutcomeEvaluation payload: %s", exc)
+        return None
+    raw_evaluation = payload.get("evaluation") if isinstance(payload, dict) else None
+    if not isinstance(raw_evaluation, dict):
+        return None
+    criteria: list[CriterionResult] = []
+    for index, item in enumerate(raw_evaluation.get("criterion_results") or []):
+        if not isinstance(item, dict):
+            continue
+        criteria.append(
+            CriterionResult(
+                criterion_name=str(item.get("criterion_name") or f"criterion_{index + 1}"),
+                passed=bool(item.get("passed")),
+                score=_safe_weight(item.get("score"), default=0.0),
+                feedback=_string_list(item.get("feedback")),
+                evidence=_string_list(item.get("evidence")),
+                metadata=dict(item.get("metadata") or {})
+                if isinstance(item.get("metadata"), dict)
+                else {},
+            )
+        )
+    return RubricEvaluation(
+        passed=bool(raw_evaluation.get("passed")),
+        score=_safe_weight(raw_evaluation.get("score"), default=0.0),
+        criterion_results=criteria,
+        metadata=dict(raw_evaluation.get("metadata") or {})
+        if isinstance(raw_evaluation.get("metadata"), dict)
+        else {},
+    )
+
+
+def _string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return [str(value)]
 
 
 def _is_embedded_rollout_evaluation_message(message: Message) -> bool:
@@ -1669,6 +1766,7 @@ def _make_memory_diff(
     gate_rejections: list[dict[str, Any]] | None = None,
     gate_summary: dict[str, Any] | None = None,
     post_validation_retries: list[dict[str, Any]] | None = None,
+    experience_dispositions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     result = {
         "archive_uri": archive_uri,
@@ -1683,16 +1781,24 @@ def _make_memory_diff(
             "total_adds": len(adds),
             "total_updates": len(updates),
             "total_deletes": len(deletes),
-            "total_gate_rejections": len(gate_rejections or []),
-            "total_post_validation_retries": len(post_validation_retries or []),
         },
     }
     if gate_rejections:
         result["gate_rejections"] = list(gate_rejections)
+        result["summary"]["total_gate_rejections"] = len(gate_rejections)
     if gate_summary:
         result["gate_summary"] = dict(gate_summary)
     if post_validation_retries:
         result["post_validation_retries"] = list(post_validation_retries)
+        result["summary"]["total_post_validation_retries"] = len(post_validation_retries)
+    if experience_dispositions:
+        result["experience_dispositions"] = list(experience_dispositions)
+        result["summary"]["total_experience_dispositions"] = len(experience_dispositions)
+        disposition_summary: dict[str, int] = {}
+        for item in experience_dispositions:
+            key = str(item.get("disposition") or "unknown")
+            disposition_summary[key] = disposition_summary.get(key, 0) + 1
+        result["experience_disposition_summary"] = disposition_summary
     return result
 
 
@@ -1706,6 +1812,7 @@ def _merge_memory_diffs(
     deletes: list[dict[str, Any]] = []
     gate_rejections: list[dict[str, Any]] = []
     post_validation_retries: list[dict[str, Any]] = []
+    experience_dispositions: list[dict[str, Any]] = []
     gate_summary: dict[str, Any] = {}
     trace_id = tracer.get_trace_id() or None
     for diff in diffs:
@@ -1725,6 +1832,9 @@ def _merge_memory_diffs(
         post_validation_retries.extend(
             [item for item in diff.get("post_validation_retries", []) if isinstance(item, dict)]
         )
+        experience_dispositions.extend(
+            [item for item in diff.get("experience_dispositions", []) if isinstance(item, dict)]
+        )
         _merge_gate_summary(gate_summary, diff.get("gate_summary"))
     merged = _make_memory_diff(
         archive_uri=archive_uri,
@@ -1734,6 +1844,7 @@ def _merge_memory_diffs(
         gate_rejections=gate_rejections,
         gate_summary=gate_summary,
         post_validation_retries=post_validation_retries,
+        experience_dispositions=experience_dispositions,
     )
     merged["trace_id"] = trace_id
     return merged
@@ -1794,6 +1905,94 @@ def _post_validation_retries_from_training_result(
     return retries
 
 
+def _experience_dispositions_from_training_result(
+    training_result: RolloutTrainingResult,
+) -> list[dict[str, Any]]:
+    dispositions: list[dict[str, Any]] = []
+    for analysis in getattr(training_result, "analyses", []) or []:
+        metadata = dict(getattr(analysis, "metadata", {}) or {})
+        dispositions.extend(
+            item for item in metadata.get("experience_dispositions", []) if isinstance(item, dict)
+        )
+    return dispositions
+
+
+def _finalize_experience_dispositions(
+    *,
+    analysis: RolloutAnalysis,
+    training_result: RolloutTrainingResult,
+    session_id: Optional[str],
+) -> list[dict[str, Any]]:
+    records = [
+        dict(item)
+        for item in analysis.metadata.get("experience_dispositions", [])
+        if isinstance(item, dict)
+    ]
+    applied_uris = set(getattr(training_result.apply_result, "written_uris", []) or [])
+    gate_rejections = _gate_rejections_from_training_result(training_result)
+    gradients = list(getattr(training_result, "gradients", []) or [])
+    applied_plan_items = [
+        item
+        for item in list(getattr(training_result.plan, "items", []) or [])
+        if item.kind == "upsert"
+        and item.memory_type == "experiences"
+        and _experience_plan_item_uri(
+            item,
+            getattr(training_result.apply_result.updated_policy_set, "root_uri", ""),
+        )
+        in applied_uris
+    ]
+    applied_plan_uris = {
+        _experience_plan_item_uri(
+            item,
+            getattr(training_result.apply_result.updated_policy_set, "root_uri", ""),
+        )
+        for item in applied_plan_items
+    }
+
+    for record in records:
+        record["session_id"] = str(session_id or "")
+        if record.get("disposition") != "gradient_proposed":
+            continue
+        target_uris = set(record.get("experience_uris") or [])
+        written = sorted((target_uris & applied_uris) or applied_plan_uris)
+        if written:
+            matching_items = [
+                item
+                for item in applied_plan_items
+                if _experience_plan_item_uri(
+                    item,
+                    getattr(training_result.apply_result.updated_policy_set, "root_uri", ""),
+                )
+                in written
+            ]
+            matching_gradients = [
+                gradient
+                for gradient in gradients
+                if str(getattr(gradient, "target_uri", "") or "") in written
+            ]
+            created = any(item.before_content is None for item in matching_items) or (
+                not matching_items
+                and any(
+                    getattr(gradient, "before_file", None) is None
+                    for gradient in matching_gradients
+                )
+            )
+            record["disposition"] = "experience_created" if created else "experience_updated"
+            record["reason"] = "experience plan passed gates and was applied"
+            record["experience_uris"] = written
+        elif gate_rejections:
+            record["disposition"] = "plan_gate_rejected"
+            record["reason"] = "experience candidate was rejected by the final plan gate"
+            record["gate_rejections"] = gate_rejections
+        else:
+            record["disposition"] = "merge_noop"
+            record["reason"] = "experience candidate produced no effective policy write after merge"
+
+    analysis.metadata["experience_dispositions"] = records
+    return records
+
+
 def _merge_gate_summary(target: dict[str, Any], source: Any) -> None:
     if not isinstance(source, dict):
         return
@@ -1839,7 +2038,13 @@ def _memory_diff_has_changes(diff: Any) -> bool:
     if not isinstance(summary, dict):
         return False
     return any(
-        int(summary.get(key) or 0) > 0 for key in ("total_adds", "total_updates", "total_deletes")
+        int(summary.get(key) or 0) > 0
+        for key in (
+            "total_adds",
+            "total_updates",
+            "total_deletes",
+            "total_experience_dispositions",
+        )
     )
 
 

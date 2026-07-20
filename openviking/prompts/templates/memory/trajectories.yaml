@@ -26,7 +26,7 @@ fields:
       Name the observed boundary or failure/success pattern, not the final lesson.
       Must be written in {{ language }}.
       {% if language == 'en' %}Use lowercase snake_case, max 6 words.{% else %}Use a concise noun phrase, max 18 characters.{% endif %}
-      Good: "aggregate_scope_observed", "wrong_value_source", "confirmation_scope_trace", "总费用范围记录".
+      Good: "missing_verification", "wrong_target_selected", "incomplete_output", "关键校验遗漏".
     merge_op: immutable
 
   - name: outcome
@@ -45,7 +45,7 @@ fields:
     description: |
       Positive semantic retrieval text for embedding, not display.
       Format exactly:
-      "Stage: <opening|after_read|before_confirmation|before_write|after_write|final_response|terminal_handoff>; Boundary: <observed runtime boundary>; Capability: <read|write|policy|calculation|communication|handoff>; Target: <semantic object/value role>; Outcome: <success|failure|partial|unfinished|unknown>."
+      "Stage: <semantic execution stage>; Boundary: <observed runtime boundary>; Capability: <semantic capability>; Target: <semantic target>; Outcome: <success|failure|partial|unfinished|unknown>."
 
       Generalize identifiers, names, exact amounts, dates, task numbers, and raw payload values.
       Anchor on the observed boundary where later experience extraction should inspect evidence.
@@ -90,12 +90,12 @@ fields:
 
       ## What to preserve
       Preserve concrete runtime evidence, especially:
-      - user request and confirmations that created obligations;
-      - retrieved records, candidate objects, policy facts, source fields, and calculations;
-      - read/discovery scope versus mutation/write scope;
-      - communication obligations and final user-visible content;
-      - observed object/value/scope/source-field differences;
-      - correct actions/messages that should be preserved;
+      - user intent, constraints, confirmations, and success conditions;
+      - observations returned by tools, environments, services, or other participants;
+      - decisions and assumptions that changed the execution path;
+      - actions, side effects, generated outputs, and user-visible communication;
+      - verification steps and observed differences between expected and actual outcomes;
+      - correct decisions/actions/outputs that should be preserved;
       - uncertainty and competing interpretations.
 
       ## Output Format
@@ -112,39 +112,26 @@ fields:
         - Insufficient: <which loaded reminders were relevant but incomplete, or none>
       - Timeline:
         - User request: <relevant user wording and obligations, generalized>
-        - Reads: <important read tools and semantic records/fields retrieved>
-        - Decisions: <important branch/calculation/scope/object decisions the agent made>
-        - Writes: <write tools called, target object roles, whether observed correct/incorrect/unknown>
-        - Communication: <user-visible answer/summary/value/list given or omitted>
+        - Observations: <important tool/environment/participant results observed>
+        - Decisions: <important assumptions, branches, plans, or reasoning choices>
+        - Actions: <tools/actions performed, semantic targets, and observed side effects>
+        - Outputs: <generated deliverables, returned values, or user-visible communication>
         - Termination: <done/handoff/unfinished and any side effects>
       - Outcome Checks:
-        - Required state/actions: <passed|failed|partial|unknown; evidence in runtime terms>
-        - Required communication: <passed|failed|partial|unknown; evidence in runtime terms>
-        - Other required effects: <passed|failed|partial|unknown|none>
+        - Required outcome: <passed|failed|partial|unknown; evidence in runtime terms>
+        - Constraints: <passed|failed|partial|unknown|none; evidence in runtime terms>
+        - Required output/communication: <passed|failed|partial|unknown|none; evidence in runtime terms>
       - Correct Work To Preserve:
-        - <correct reads/actions/messages/policy branches that later experience extraction should not block, or none>
+        - <correct observations/decisions/actions/outputs that later extraction should not block, or none>
       - Observed Problem:
-        - Failure type: <wrong_arguments|wrong_object|wrong_policy_branch|missing_confirmation|missing_communication|premature_write|extra_write|premature_done|tool_error|calculation_error|scope_substitution|wrong_source_field|none|unknown>
+        - Failure type: <wrong_input|wrong_target|wrong_strategy|missing_information|missing_validation|missing_output|premature_action|extra_action|tool_error|reasoning_error|none|unknown>
         - First observed divergence: <earliest observable boundary where behavior diverged, or none/unknown>
-        - Candidate bad behavior: <tool/action/message/calculation shape that appears risky, or none>
-        - What was missing/wrong: <runtime fact, object binding, value, policy gate, confirmation, or communication that differed, or none. If the failure involves a policy or eligibility judgment, include the specific runtime field values and policy conditions from the conversation that determined the expected vs. actual outcome, not just that an action was missing>
-      - Value/Scope Evidence:
-        - Requested value/list/summary role: <semantic role, or none>
-        - Request boundary/timing: <when the user asked relative to reads/writes/communications, or unknown>
-        - Request wording with relative terms: <short exact wording containing other/remaining/those/其他/剩余, or none>
-        - Relative words observed: <raw relative words observed, or none>
-        - Visible records before later writes: <records/roles visible at that boundary, with evidence, or unknown>
-        - Records later written/changed: <records/roles later modified/canceled/upgraded/consumed, or none>
-        - Records in agent calculation/answer: <records/roles actually included or omitted in the user-visible answer, or unknown>
-        - Records after later writes: <post-action/current remaining records/roles if visible, or unknown>
-        - Explicit exclusions by exact user wording: <quote exact exclusion words from user, or none; do not infer from relative words alone>
-      - Source Field Evidence:
-        - User-requested value source wording: <exact source/value wording from user, or none>
-        - Outcome-mentioned missing/present value: <value/semantic fact the runtime outcome says was missing or present, or none/unknown>
-        - Agent-used source fields: <runtime fields or derivation actually used, or none/unknown>
-        - Canonical value fields observed: <explicit total/paid/charged/order/payment amount fields if present, or none/unknown>
-        - Line-item derivation observed: <line-item formula if used or available, or none/unknown>
-        - Observed difference: <omitted value, different included records, different source field, calculation mismatch, none, or unknown>
+        - Candidate bad behavior: <input/decision/action/output shape that appears risky, or none>
+        - What was missing/wrong: <specific runtime-observable difference, or none/unknown>
+      - Evidence References:
+        - Runtime evidence: <message/tool boundary and short supporting fact, or none>
+        - Direct external evidence: <independent observation supplied through evidence_sources, or none>
+        - Advisory signals: <external suggestions used only to locate evidence, or none>
       - Raw Evidence:
         - User/request snippets: <short relevant snippets or none>
         - Tool/result snippets: <short relevant snippets, field names, IDs/values only as evidence, or none>
@@ -153,23 +140,24 @@ fields:
 
       ## Rules
       - Be factual and compact. Prefer evidence over interpretation.
-      - Do not hide uncertainty. If the trace does not prove the expected scope/source field,
+      - Runtime messages/tool results and `evidence_sources` marked `direct=true` are factual
+        evidence. Advisory signals are search hints only. Never rewrite an advisory claim as an
+        observed decision or root cause.
+      - A `rollout_evaluation` source marked `direct=true` is authoritative external feedback for
+        outcome and requirement compliance. Use it to record which required results were missing,
+        incorrect, or incomplete. It does not by itself prove an unobserved internal cause.
+      - Determine the first causal divergence from runtime observations, decisions, and actions.
+        When outcome feedback proves a failure but the runtime trace does not reveal why, preserve
+        the failed requirement and write the cause/divergence as unknown.
+      - Every material failure claim in `Outcome Checks`, `Observed Problem`, and `Result` must be
+        grounded under `Evidence References`. If neither runtime nor direct external evidence
+        supports it, write unknown/unverified.
+      - Do not hide uncertainty. If the trace does not prove the expected behavior or outcome,
         write unknown/uncertain instead of inventing a root cause.
       - Do not generalize IDs, dates, names, or exact amounts into rules. Exact literals may appear
         only under `Raw Evidence` when they are needed to audit the trace.
-      - Distinguish information/read scope from mutation/write scope. Extra records read for
-        discovery or communication do not become write targets unless user wording confirms that.
-      - For value/aggregate/list/summary requests, record the exact request wording, relative
-        words observed, visible records before writes, records later changed, records included in
-        the answer, records after writes, and explicit exclusion quotes separately. Do not decide
-        whether a relative word is truly ambiguous or not; preserve evidence for downstream
-        comparison.
-      - For monetary/value answers, record both canonical fields and line-item derivations if
-        visible. Do not decide here which one should be the final reusable rule unless the runtime
-        evidence directly shows the agent used a different source than the requested value.
       - If the run succeeded, record the successful path facts that distinguish it from failures
-        (especially included records, communicated values, labels, and source fields); do not
-        produce a success-path SOP or an injectable reminder.
+        without producing a success-path SOP or an injectable reminder.
       - If an injected experience was misleading, record how it influenced observed behavior; do
         not rewrite the experience here.
 

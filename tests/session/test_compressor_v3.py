@@ -11,7 +11,12 @@ import pytest
 from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session import create_session_compressor
-from openviking.session.compressor_v3 import SessionCompressorV3, _experience_root_uri
+from openviking.session.compressor_v3 import (
+    SessionCompressorV3,
+    _experience_root_uri,
+    _finalize_experience_dispositions,
+    _separate_training_evaluation_messages,
+)
 from openviking.session.memory.dataclass import (
     MemoryFile,
     ResolvedOperation,
@@ -91,6 +96,100 @@ def test_factory_ignores_deprecated_memory_version():
 def test_experience_root_uri_requires_request_user():
     with pytest.raises(ValueError, match="RequestContext.user.user_id is required"):
         _experience_root_uri(SimpleNamespace(user=None))
+
+
+def test_final_disposition_uses_applied_split_plan_after_gate_retry():
+    trajectory_uri = "viking://user/u/memories/trajectories/literature_review.md"
+    experience_uris = [
+        "viking://user/u/memories/experiences/repair_definition.md",
+        "viking://user/u/memories/experiences/repair_measurement.md",
+    ]
+    analysis = RolloutAnalysis(
+        evaluation=RubricEvaluation(
+            passed=False,
+            score=0.8,
+            criterion_results=[],
+            feedback=[],
+        ),
+        trajectories=[
+            Trajectory(
+                name="literature_review",
+                uri=trajectory_uri,
+                content="trajectory",
+                outcome="partial",
+                retrieval_anchor="",
+            )
+        ],
+        gradients=[],
+        metadata={
+            "experience_dispositions": [
+                {
+                    "disposition": "gradient_proposed",
+                    "experience_uris": [
+                        "viking://user/u/memories/experiences/combined_repair.md"
+                    ],
+                }
+            ]
+        },
+    )
+    plan = PolicyUpdatePlan(
+        items=[
+            PolicyPlanItem(
+                kind="upsert",
+                memory_type="experiences",
+                target_name=uri.rsplit("/", 1)[-1].removesuffix(".md"),
+                target_uri=uri,
+                before_content=None,
+                after_content="experience",
+                links=[
+                    StoredLink(
+                        from_uri=uri,
+                        to_uri=trajectory_uri,
+                        link_type="derived_from",
+                        weight=1.0,
+                    )
+                ],
+            )
+            for uri in experience_uris
+        ]
+    )
+    result = RolloutTrainingResult(
+        analyses=[analysis],
+        gradients=[],
+        plan=plan,
+        apply_result=PolicyApplyResult(
+            updated_policy_set=ExperienceSet(
+                root_uri="viking://user/u/memories/experiences",
+                policies=[],
+            ),
+            written_uris=experience_uris,
+        ),
+        metadata={
+            "gate_reports": [
+                {
+                    "stage": "post_plan",
+                    "decisions": [
+                        {
+                            "action": "reject",
+                            "gate_name": "experience_plan_quality",
+                            "reason": "retry the combined candidate",
+                            "evidence": {"target_name": "combined_repair"},
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+
+    records = _finalize_experience_dispositions(
+        analysis=analysis,
+        training_result=result,
+        session_id="s1",
+    )
+
+    assert records[0]["disposition"] == "experience_created"
+    assert records[0]["experience_uris"] == experience_uris
+    assert "gate_rejections" not in records[0]
 
 
 def test_case_experience_links_require_policy_root_uri():
@@ -633,6 +732,33 @@ def test_training_case_spec_message_uses_fast_path_protocol():
     assert "duplicate_booking_rubric" in text
 
 
+def test_training_outcome_evaluation_is_structured_and_removed_from_runtime_messages():
+    runtime_message = Message(id="runtime", role="user", parts=[TextPart("complete operation")])
+    evaluation_message = Message(
+        id="evaluation",
+        role="system",
+        parts=[
+            TextPart(
+                """# OpenViking OutcomeEvaluation
+
+```json
+{"evaluation":{"passed":false,"score":0.25,"criterion_results":[{"criterion_name":"completion","passed":false,"score":0.0,"feedback":["verification missing"],"evidence":["external probe"]}],"metadata":{"evidence_sources":[{"source":"external_probe","direct":true,"value":"not completed"}]}}}
+```"""
+            )
+        ],
+    )
+
+    runtime, evaluation = _separate_training_evaluation_messages(
+        [runtime_message, evaluation_message]
+    )
+
+    assert runtime == [runtime_message]
+    assert evaluation is not None
+    assert evaluation.score == pytest.approx(0.25)
+    assert evaluation.criterion_results[0].feedback == ["verification missing"]
+    assert evaluation.metadata["evidence_sources"][0]["source"] == "external_probe"
+
+
 def test_training_case_spec_message_uses_original_case_name_for_trials():
     case = _training_case()
     case.name = "tau2_airline_train_1_t0"
@@ -729,6 +855,14 @@ async def test_v3_fast_path_writes_final_memory_diff_with_case_traj_and_exp(monk
                     "deletes": [],
                 },
                 "summary": {"total_adds": 1, "total_updates": 1, "total_deletes": 0},
+                "experience_dispositions": [
+                    {
+                        "session_id": "s1",
+                        "trajectory_uri": "viking://user/u/memories/trajectories/duplicate_booking.md",
+                        "disposition": "experience_updated",
+                        "reason": "experience plan passed gates and was applied",
+                    }
+                ],
             },
         }
 
@@ -751,7 +885,17 @@ async def test_v3_fast_path_writes_final_memory_diff_with_case_traj_and_exp(monk
         "trajectories",
     ]
     assert [item["memory_type"] for item in diff["operations"]["updates"]] == ["experiences"]
-    assert diff["summary"] == {"total_adds": 2, "total_updates": 1, "total_deletes": 0}
+    assert diff["summary"] == {
+        "total_adds": 2,
+        "total_updates": 1,
+        "total_deletes": 0,
+        "total_experience_dispositions": 1,
+    }
+    report_lines = writes[f"{archive_uri}/experience_extraction_report.jsonl"].splitlines()
+    assert len(report_lines) == 1
+    report = __import__("json").loads(report_lines[0])
+    assert report["disposition"] == "experience_updated"
+    assert report["session_id"] == "s1"
 
 
 @pytest.mark.asyncio
