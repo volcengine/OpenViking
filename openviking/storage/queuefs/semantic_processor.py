@@ -1323,7 +1323,7 @@ class SemanticProcessor(DequeueHandlerBase):
         return {
             name: summary
             for name, summary in entries.items()
-            if isinstance(name, str) and isinstance(summary, str)
+            if isinstance(name, str) and isinstance(summary, str) and summary.strip()
         }
 
     def _serialize_memory_summary_cache(self, file_summaries: List[Dict[str, str]]) -> str:
@@ -1331,7 +1331,9 @@ class SemanticProcessor(DequeueHandlerBase):
         entries = {
             item["name"]: item["summary"]
             for item in file_summaries
-            if isinstance(item.get("name"), str) and isinstance(item.get("summary"), str)
+            if isinstance(item.get("name"), str)
+            and isinstance(item.get("summary"), str)
+            and item["summary"].strip()
         }
         return json.dumps(
             {"version": MEMORY_SUMMARY_CACHE_VERSION, "entries": entries},
