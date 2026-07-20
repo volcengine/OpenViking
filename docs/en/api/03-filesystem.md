@@ -266,6 +266,12 @@ result = client.write(
 print(result["root_uri"])
 ```
 
+For a complete application example, see
+[Periodic report Resources](https://github.com/volcengine/OpenViking/tree/main/examples/periodic-report-resource).
+It writes a Markdown report followed by a small JSON manifest and verifies both
+with `read`. This is a caller-owned storage convention: OpenViking does not
+provide report scheduling, report generation, or an application extension ABI.
+
 **TypeScript SDK**
 
 ```typescript

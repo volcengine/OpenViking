@@ -266,6 +266,12 @@ result = client.write(
 print(result["root_uri"])
 ```
 
+完整的应用示例请参阅
+[周期报告 Resource](https://github.com/volcengine/OpenViking/tree/main/examples/periodic-report-resource)。
+该示例先写入 Markdown 正文，再写入小型 JSON manifest，并通过 `read` 精确
+校验两者。这是调用方负责的存储约定；OpenViking 不提供报告调度、报告生成
+或应用 extension ABI。
+
 **TypeScript SDK**
 
 ```typescript
