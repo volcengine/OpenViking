@@ -98,9 +98,52 @@ def _hash_sparse_term(term: str) -> int:
     return xxhash.xxh64_intdigest(str(term)) % QDRANT_SPARSE_INDEX_MAX
 
 
-def _sparse_to_qdrant(sparse_vector: Optional[Dict[str, float]]) -> Optional[Dict[str, List[Any]]]:
+def _maybe_qdrant_sparse_payload(
+    value: Any,
+) -> Optional[Dict[str, List[Any]]]:
+    """Return the value unchanged if it is already a Qdrant-encoded sparse vector.
+
+    Qdrant serializes sparse vectors as ``{"indices": [int, ...], "values":
+    [float, ...]}``. Records read back from Qdrant with ``with_vector=True``
+    (e.g. via :meth:`QdrantCollection.fetch_data`) carry this encoded shape, and
+    when such a record is upserted again we must emit it verbatim instead of
+    re-hashing the list-valued entries (which would discard the sparse vector).
+    """
+    if not isinstance(value, dict):
+        return None
+    indices = value.get("indices")
+    values = value.get("values")
+    if not isinstance(indices, list) or not isinstance(values, list):
+        return None
+    if len(indices) != len(values) or not indices:
+        return None
+    coerced_indices: List[int] = []
+    for index in indices:
+        if isinstance(index, bool) or not isinstance(index, int):
+            return None
+        coerced_indices.append(index)
+    coerced_values: List[float] = []
+    for raw_value in values:
+        try:
+            coerced_values.append(float(raw_value))
+        except (TypeError, ValueError):
+            return None
+    return {"indices": coerced_indices, "values": coerced_values}
+
+
+def _sparse_to_qdrant(sparse_vector: Optional[Dict[str, Any]]) -> Optional[Dict[str, List[Any]]]:
     if not sparse_vector:
         return None
+    # Qdrant returns sparse vectors in its own {indices, values} encoding when a
+    # point is read back with with_vector=True (e.g. fetch_data). When such a
+    # record is fed back into _make_point on a full-record upsert (update_search_tags,
+    # update_data, ...), we must pass the already-encoded sparse vector through
+    # unchanged rather than re-hashing the list-valued entries, which would
+    # silently drop the sparse vector. The {term: weight} shape produced by the
+    # search/embedding path still goes through the hash+merge pipeline below.
+    encoded = _maybe_qdrant_sparse_payload(sparse_vector)
+    if encoded is not None:
+        return encoded
     merged: Dict[int, float] = {}
     hashed_terms: Dict[int, str] = {}
     collisions: List[tuple[str, str, int]] = []
