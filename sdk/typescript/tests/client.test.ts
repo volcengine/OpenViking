@@ -64,7 +64,9 @@ describe("OpenVikingClient", () => {
   });
 
   it("sends dry_run for prune_orphans reindex requests", async () => {
-    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok({ status: "completed" }));
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(ok({ status: "completed" }));
     const client = new OpenVikingClient({
       baseUrl: "https://example.com",
       fetch: fetcher,
@@ -484,7 +486,62 @@ describe("OpenVikingClient", () => {
 
     await expect(
       client.backupOVPack("backup", false, { signal: controller.signal }),
-    ).rejects.toMatchObject({ code: "DEADLINE_EXCEEDED" });
+    ).rejects.toMatchObject({
+      code: "ABORTED",
+      message: "Request was aborted by the caller",
+    });
+  });
+
+  it("maps OpenVikingError abort reasons to caller cancellation", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async (_input, init) => {
+        if (init?.signal?.aborted) throw init.signal.reason;
+        return new Response(new Uint8Array([1]));
+      });
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+    const controller = new AbortController();
+    controller.abort(new OpenVikingError("cancelled", { code: "UNAVAILABLE" }));
+
+    await expect(
+      client.backupOVPack("backup", false, { signal: controller.signal }),
+    ).rejects.toMatchObject({
+      code: "ABORTED",
+      message: "Request was aborted by the caller",
+    });
+  });
+
+  it("keeps in-flight caller cancellation distinct from timeouts", async () => {
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(
+      async (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          markStarted?.();
+          init?.signal?.addEventListener("abort", () =>
+            reject(init.signal?.reason),
+          );
+        }),
+    );
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+      timeout: 10_000,
+    });
+    const controller = new AbortController();
+
+    const request = client.backupOVPack("backup", false, {
+      signal: controller.signal,
+    });
+    await started;
+    controller.abort(new Error("cancelled"));
+
+    await expect(request).rejects.toMatchObject({ code: "ABORTED" });
   });
 
   it("rejects directories before importing or restoring OVPack files", async () => {
