@@ -30,7 +30,7 @@ from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS
-from openviking.utils.time_utils import get_current_timestamp
+from openviking.utils.time_utils import get_current_timestamp, parse_iso_datetime
 from openviking_cli.exceptions import (
     AlreadyExistsError,
     NotFoundError,
@@ -422,9 +422,11 @@ class SessionService:
         ctx: RequestContext,
         *,
         reason_hint: str,
+        session: Optional[Session] = None,
     ) -> bool:
         """Best-effort automatic commit scheduler entrypoint."""
-        session = await self.get(session_id, ctx, auto_create=False)
+        if session is None:
+            session = await self.get(session_id, ctx, auto_create=False)
         policy = session.meta.auto_commit_policy
         if not self._should_run_auto_commit(session, policy, reason_hint):
             return False
@@ -509,7 +511,7 @@ class SessionService:
         if not last_auto_commit_at:
             return False
         try:
-            last_dt = datetime.fromisoformat(last_auto_commit_at)
+            last_dt = parse_iso_datetime(last_auto_commit_at)
         except (TypeError, ValueError):
             return False
         now = datetime.now()

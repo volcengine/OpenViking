@@ -16,9 +16,31 @@ import openviking.service.session_auto_commit as auto_commit_module
 import openviking.service.session_service as session_service_module
 from openviking.server.config import SessionAutoCommitConfig
 from openviking.server.identity import RequestContext
-from openviking.service.session_auto_commit import SessionAutoCommitScheduler
+from openviking.service.session_auto_commit import (
+    SessionAutoCommitScheduler,
+    compute_next_check_at,
+)
 from openviking.service.session_service import SessionService
 from openviking_cli.session.user_id import UserIdentifier
+
+
+_REAL_DATETIME = datetime
+
+
+class _Python310LikeDateTime:
+    @classmethod
+    def fromisoformat(cls, value: str):
+        if isinstance(value, str) and value.endswith("Z"):
+            raise ValueError("Invalid isoformat string")
+        return _REAL_DATETIME.fromisoformat(value)
+
+    @classmethod
+    def now(cls):
+        return _REAL_DATETIME.now()
+
+    @classmethod
+    def fromtimestamp(cls, timestamp: float, tz=None):
+        return _REAL_DATETIME.fromtimestamp(timestamp, tz=tz)
 
 
 class _FakeVikingFS:
@@ -234,6 +256,15 @@ def _session_entry(session_id: str) -> dict[str, object]:
     return {"name": session_id, "isDir": True}
 
 
+def test_compute_next_check_at_parses_utc_z_timestamps_on_python310(monkeypatch):
+    monkeypatch.setattr(auto_commit_module, "datetime", _Python310LikeDateTime)
+
+    assert (
+        compute_next_check_at("2026-06-20T10:00:00.000Z", 60)
+        == "2026-06-20T10:01:00+00:00"
+    )
+
+
 @pytest.mark.asyncio
 async def test_run_auto_commit_rechecks_token_threshold_before_committing(monkeypatch):
     session = _FakeAutoCommitSession(
@@ -274,6 +305,32 @@ async def test_run_auto_commit_skips_when_policy_is_disabled(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_maybe_schedule_auto_commit_reuses_loaded_session(monkeypatch):
+    session = _FakeAutoCommitSession(
+        _FakeSessionMeta(
+            auto_commit_policy=None,
+            pending_tokens=10_000,
+            message_count=1_000,
+        )
+    )
+    service = SessionService()
+
+    async def fail_get(*args, **kwargs):
+        raise AssertionError("session should be reused instead of reloaded")
+
+    monkeypatch.setattr(service, "get", fail_get)
+
+    did_schedule = await service.maybe_schedule_auto_commit(
+        "session_a",
+        _auto_commit_ctx(),
+        reason_hint="message_write",
+        session=session,
+    )
+
+    assert did_schedule is False
+
+
+@pytest.mark.asyncio
 async def test_run_auto_commit_commits_when_token_threshold_exceeded(monkeypatch):
     session = _FakeAutoCommitSession(
         _FakeSessionMeta(
@@ -295,6 +352,30 @@ async def test_run_auto_commit_commits_when_token_threshold_exceeded(monkeypatch
     assert session.commit_calls == [(3, True)]
     assert session.save_calls == 1
     assert session.meta.last_auto_commit_at != ""
+
+
+@pytest.mark.asyncio
+async def test_run_auto_commit_throttles_with_utc_z_last_auto_commit_at_on_python310(monkeypatch):
+    monkeypatch.setattr(session_service_module, "datetime", _Python310LikeDateTime)
+    session = _FakeAutoCommitSession(
+        _FakeSessionMeta(
+            auto_commit_policy={
+                "pending_token_threshold": 100,
+                "message_count_threshold": 500,
+                "keep_recent_count": 0,
+                "min_commit_interval_seconds": 60,
+            },
+            pending_tokens=101,
+            message_count=5,
+            last_auto_commit_at="2099-01-01T00:00:00.000Z",
+        )
+    )
+    service = _session_service_for_auto_commit_test(monkeypatch, session)
+
+    await service.run_auto_commit("session_a", _auto_commit_ctx(), reason="message_write")
+
+    assert session.commit_calls == []
+    assert session.save_calls == 0
 
 
 @pytest.mark.asyncio

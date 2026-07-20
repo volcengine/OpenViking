@@ -1012,11 +1012,11 @@ class LocalClient(BaseClient):
             peer_id=self._resolve_message_peer_id(role, peer_id),
             created_at=created_at,
         )
-        await self._service.sessions.touch_last_message_at(session)
         await self._service.sessions.maybe_schedule_auto_commit(
             session_id,
             self._ctx,
             reason_hint="message_write",
+            session=session,
         )
         return {
             "session_id": session_id,
@@ -1076,11 +1076,11 @@ class LocalClient(BaseClient):
             )
 
         added = session.add_messages(specs)
-        await self._service.sessions.touch_last_message_at(session)
         await self._service.sessions.maybe_schedule_auto_commit(
             session_id,
             self._ctx,
             reason_hint="message_write",
+            session=session,
         )
         return {
             "session_id": session_id,

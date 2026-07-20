@@ -945,6 +945,8 @@ class Session:
         self._meta.message_count = len(self._messages)
         if self._meta.total_message_count is not None:
             self._meta.total_message_count += len(messages)
+        if messages:
+            self._meta.last_message_at = get_current_timestamp()
         self._save_meta_sync()
 
     def add_messages(

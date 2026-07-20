@@ -160,6 +160,7 @@ async def test_local_client_batch_add_messages_forwards_to_session():
             return specs
 
     fake_session = FakeSession()
+    maybe_schedule_calls = []
 
     class FakeSessions:
         async def get(self, session_id, ctx, auto_create=False):
@@ -167,6 +168,9 @@ async def test_local_client_batch_add_messages_forwards_to_session():
             assert ctx is client._ctx
             assert auto_create is True
             return fake_session
+
+        async def maybe_schedule_auto_commit(self, session_id, ctx, reason_hint=None, session=None):
+            maybe_schedule_calls.append((session_id, ctx, reason_hint, session))
 
     client = LocalClient.__new__(LocalClient)
     client._service = SimpleNamespace(sessions=FakeSessions())
@@ -188,6 +192,9 @@ async def test_local_client_batch_add_messages_forwards_to_session():
     )
 
     assert result == {"session_id": "batch-session", "message_count": 2, "added": 2}
+    assert maybe_schedule_calls == [
+        ("batch-session", client._ctx, "message_write", fake_session)
+    ]
     assert fake_session.messages[0]["role"] == "user"
     assert fake_session.messages[0]["peer_id"] == "explicit-user"
     assert fake_session.messages[0]["created_at"] == "2026-05-28T00:00:00+00:00"
@@ -213,6 +220,7 @@ async def test_local_client_add_message_accepts_image_parts():
             )
 
     fake_session = FakeSession()
+    maybe_schedule_calls = []
 
     class FakeSessions:
         async def get(self, session_id, ctx, auto_create=False):
@@ -220,6 +228,9 @@ async def test_local_client_add_message_accepts_image_parts():
             assert ctx is client._ctx
             assert auto_create is True
             return fake_session
+
+        async def maybe_schedule_auto_commit(self, session_id, ctx, reason_hint=None, session=None):
+            maybe_schedule_calls.append((session_id, ctx, reason_hint, session))
 
     client = LocalClient.__new__(LocalClient)
     client._service = SimpleNamespace(sessions=FakeSessions())
@@ -237,6 +248,9 @@ async def test_local_client_add_message_accepts_image_parts():
     )
 
     assert result == {"session_id": "image-session", "message_count": 1}
+    assert maybe_schedule_calls == [
+        ("image-session", client._ctx, "message_write", fake_session)
+    ]
     assert isinstance(fake_session.messages[0]["parts"][0], TextPart)
     assert isinstance(fake_session.messages[0]["parts"][1], ImagePart)
     assert fake_session.messages[0]["parts"][1].url == "https://example.com/image.png"

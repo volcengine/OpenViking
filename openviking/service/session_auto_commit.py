@@ -14,6 +14,7 @@ from openviking.pyagfs import AsyncAGFSClient
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
 from openviking.session.auto_commit_policy import AutoCommitPolicy
+from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 
@@ -309,7 +310,7 @@ def compute_next_check_at(last_message_at: str, idle_timeout_seconds: int) -> Op
     if not last_message_at:
         return None
     try:
-        base = datetime.fromisoformat(last_message_at)
+        base = parse_iso_datetime(last_message_at)
     except Exception:
         return None
     return (base + timedelta(seconds=idle_timeout_seconds)).isoformat()
@@ -317,7 +318,7 @@ def compute_next_check_at(last_message_at: str, idle_timeout_seconds: int) -> Op
 
 def is_next_check_due(next_check_at: str, now: datetime) -> Optional[bool]:
     try:
-        next_dt = datetime.fromisoformat(next_check_at)
+        next_dt = parse_iso_datetime(next_check_at)
     except Exception:
         return None
 

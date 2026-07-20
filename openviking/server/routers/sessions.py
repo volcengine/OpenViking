@@ -538,11 +538,11 @@ async def add_message(
                 }
             ]
         )
-        await service.sessions.touch_last_message_at(session)
         await service.sessions.maybe_schedule_auto_commit(
             session_id,
             _ctx,
             reason_hint="message_write",
+            session=session,
         )
         return {
             "session_id": session_id,
@@ -584,11 +584,11 @@ async def batch_add_messages(
                 }
             )
         msgs = session.add_messages(specs)
-        await service.sessions.touch_last_message_at(session)
         await service.sessions.maybe_schedule_auto_commit(
             session_id,
             _ctx,
             reason_hint="message_write",
+            session=session,
         )
         return {
             "session_id": session_id,

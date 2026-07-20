@@ -22,6 +22,7 @@ from openviking.server.config import (
 from openviking.server.dependencies import set_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import sessions as sessions_router
+from openviking.session.session import Session
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
@@ -444,6 +445,47 @@ async def test_add_message_records_last_message_at(
     assert session_resp.status_code == 200
     result = session_resp.json()["result"]
     assert result["last_message_at"]
+
+
+async def test_direct_session_add_message_records_last_message_at(service):
+    session = await service.sessions.get(
+        "direct-last-message-at-session",
+        RequestContext(user=DEFAULT_USER, role=Role.ROOT),
+        auto_create=True,
+    )
+    assert session.meta.last_message_at == ""
+
+    session.add_message("user", [TextPart("Hello, world!")])
+
+    assert session.meta.last_message_at
+
+
+async def test_add_message_records_last_message_at_with_single_meta_save(
+    client: httpx.AsyncClient,
+    monkeypatch,
+):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+    save_session_ids = []
+    original_save_meta = Session._save_meta
+
+    async def counting_save_meta(self):
+        save_session_ids.append(self.session_id)
+        await original_save_meta(self)
+
+    monkeypatch.setattr(Session, "_save_meta", counting_save_meta)
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "Hello, world!"},
+    )
+    assert resp.status_code == 200
+
+    assert save_session_ids == [session_id]
+
+    session_resp = await client.get(f"/api/v1/sessions/{session_id}")
+    assert session_resp.status_code == 200
+    assert session_resp.json()["result"]["last_message_at"]
 
 
 async def test_add_message_ignores_removed_auto_commit_policy_field(client: httpx.AsyncClient):
