@@ -115,19 +115,19 @@ Filesystem operations and semantic retrieval are tenant-aware:
 
 This keeps "what you can search" aligned with "what you can read."
 
-### Peer-Default View
+### Peer Collection Filter
 
 `peer_id` is a content scope inside the current user boundary. It never changes the
 tenant or user identity.
 
 Set `X-OpenViking-Actor-Peer: <peer_id>` (or SDK/CLI `actor_peer_id`) when a request
-should operate in one peer workspace by default:
+should only see one peer from the current user's peer collection:
 
-- Empty-target retrieval excludes user-root memories/resources, includes the selected peer's memories/resources, and keeps shared `viking://resources` plus user skills available.
+- Empty-target retrieval still includes the current user root and shared `viking://resources`.
 - When retrieval resolves `viking://user/{user}/peers`, only that peer's memories/resources are selected.
 - Filesystem operations cannot read, list/tree, grep/find/search, write, move, or delete another peer under `viking://user/{user}/peers`.
-- Session messages without an explicit `peer_id` inherit the actor peer, so `remember`, `ov add-memory`, and session commits write extracted memories under that peer. Use MCP `remember(..., scope="user")` or `ov add-memory --scope user ...` to intentionally write shared user memory; explicit user-memory retrieval targets remain available as well.
-- User skills, shared resources, and session ownership are otherwise unchanged.
+- User-scoped memories, resources, skills, shared resources, and session ownership are otherwise unchanged.
+- `remember` and `ov add-memory` keep their user-memory default. To write peer memory, pass the exact peer memories root with `target_uri` / `--target-uri`; the target must be the active peer when an actor peer is configured.
 - The peer ID must be a safe single path segment, for example `web-visitor-alice`.
 
 ## Standard Usage Flow

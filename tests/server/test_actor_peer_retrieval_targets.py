@@ -46,11 +46,13 @@ def test_owner_default_search_targets_owner_memory_resources_and_skills():
     ]
 
 
-def test_actor_default_search_uses_peer_view_without_user_content_roots():
+def test_actor_default_search_keeps_user_view_and_filters_peer_collection():
     targets = _target_dirs(actor_peer_id="web-visitor-alice")
 
     assert targets == [
         "viking://resources",
+        "viking://user/support_bot/memories",
+        "viking://user/support_bot/resources",
         "viking://user/support_bot/skills",
         "viking://user/support_bot/peers/web-visitor-alice/memories",
         "viking://user/support_bot/peers/web-visitor-alice/resources",
@@ -63,10 +65,12 @@ def test_actor_search_keeps_explicit_resource_target():
     assert targets == ["viking://resources/docs"]
 
 
-def test_actor_search_user_root_uses_peer_view_without_user_content_roots():
+def test_actor_search_user_root_keeps_user_content_and_filters_peer_collection():
     targets = _target_dirs("viking://user", actor_peer_id="web-visitor-alice")
 
     assert targets == [
+        "viking://user/support_bot/memories",
+        "viking://user/support_bot/resources",
         "viking://user/support_bot/skills",
         "viking://user/support_bot/peers/web-visitor-alice/memories",
         "viking://user/support_bot/peers/web-visitor-alice/resources",
@@ -77,6 +81,7 @@ def test_actor_default_memory_targets_actor_peer_memory():
     assert default_target_directories(
         _ctx("web-visitor-alice"), context_type=ContextType.MEMORY
     ) == [
+        "viking://user/support_bot/memories",
         "viking://user/support_bot/peers/web-visitor-alice/memories",
     ]
 
@@ -95,21 +100,13 @@ def test_actor_default_resource_targets_global_and_actor_peer_resources():
         _ctx("web-visitor-alice"), context_type=ContextType.RESOURCE
     ) == [
         "viking://resources",
+        "viking://user/support_bot/resources",
         "viking://user/support_bot/peers/web-visitor-alice/resources",
     ]
 
 
 def test_explicit_user_memory_target_stays_self_memory_only():
     targets = _target_dirs("viking://user/memories")
-
-    assert targets == ["viking://user/support_bot/memories"]
-
-
-def test_actor_explicit_user_memory_target_stays_available():
-    targets = _target_dirs(
-        "viking://user/memories",
-        actor_peer_id="web-visitor-alice",
-    )
 
     assert targets == ["viking://user/support_bot/memories"]
 

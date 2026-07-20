@@ -288,24 +288,78 @@ fn parse_messages(input: &str) -> Result<Vec<(String, String)>> {
     Ok(vec![("user".to_string(), input.to_string())])
 }
 
-fn message_body(role: &str, content: &str) -> serde_json::Value {
-    json!({
+fn message_body(role: &str, content: &str, peer_id: Option<&str>) -> serde_json::Value {
+    let mut body = json!({
         "role": role,
         "content": content
-    })
+    });
+    if let Some(peer_id) = peer_id {
+        body["peer_id"] = json!(peer_id);
+    }
+    body
 }
 
-fn add_memory_session_body(scope: &str) -> serde_json::Value {
-    if scope == "user" {
-        json!({
-            "memory_policy": {
-                "self": {"enabled": true},
-                "peer": {"enabled": false}
-            }
-        })
-    } else {
-        json!({})
+#[derive(Debug, PartialEq)]
+struct AddMemoryTarget {
+    session_body: serde_json::Value,
+    peer_id: Option<String>,
+}
+
+fn resolve_add_memory_target(
+    client: &HttpClient,
+    target_uri: Option<&str>,
+) -> Result<AddMemoryTarget> {
+    let Some(raw_target) = target_uri else {
+        return Ok(AddMemoryTarget {
+            session_body: json!({}),
+            peer_id: None,
+        });
+    };
+    let target = raw_target.trim().trim_end_matches('/');
+    if target.is_empty() {
+        return Err(Error::Client("target URI must not be empty".to_string()));
     }
+
+    let user_root = format!("viking://user/{}", client.user_id().unwrap_or("default"));
+    if target == format!("{user_root}/memories") {
+        return Ok(AddMemoryTarget {
+            session_body: json!({
+                "memory_policy": {
+                    "self": {"enabled": true},
+                    "peer": {"enabled": false}
+                }
+            }),
+            peer_id: None,
+        });
+    }
+
+    let peer_prefix = format!("{user_root}/peers/");
+    if let Some(peer_path) = target.strip_prefix(&peer_prefix)
+        && let Some(peer_id) = peer_path.strip_suffix("/memories")
+        && !peer_id.is_empty()
+        && !peer_id.contains('/')
+    {
+        if let Some(actor_peer_id) = client.actor_peer_id()
+            && peer_id != actor_peer_id
+        {
+            return Err(Error::Client(
+                "target URI cannot write another actor peer's memory".to_string(),
+            ));
+        }
+        return Ok(AddMemoryTarget {
+            session_body: json!({
+                "memory_policy": {
+                    "self": {"enabled": false},
+                    "peer": {"enabled": true}
+                }
+            }),
+            peer_id: Some(peer_id.to_string()),
+        });
+    }
+
+    Err(Error::Client(format!(
+        "target URI must be {user_root}/memories or {user_root}/peers/<peer_id>/memories"
+    )))
 }
 
 pub async fn add_message(
@@ -342,7 +396,7 @@ pub async fn add_messages(
     let path = format!("/api/v1/sessions/{}/messages/batch", url_encode(session_id));
     let messages_json: Vec<serde_json::Value> = messages
         .iter()
-        .map(|(role, content)| message_body(role, content))
+        .map(|(role, content)| message_body(role, content, None))
         .collect();
     let body = json!({"messages": messages_json});
     let response: serde_json::Value = client.post(&path, &body).await?;
@@ -371,15 +425,16 @@ pub async fn commit_session(
 pub async fn add_memory(
     client: &HttpClient,
     input: &str,
-    scope: &str,
+    target_uri: Option<&str>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     let messages = parse_messages(input)?;
+    let target = resolve_add_memory_target(client, target_uri)?;
 
     // 1. Create a new session
     let session_response: serde_json::Value = client
-        .post("/api/v1/sessions", &add_memory_session_body(scope))
+        .post("/api/v1/sessions", &target.session_body)
         .await?;
     let mut profile_lines: Vec<serde_json::Value> = extract_profile_lines(&session_response);
     let session_id = session_response["session_id"].as_str().ok_or_else(|| {
@@ -390,7 +445,7 @@ pub async fn add_memory(
     let path = format!("/api/v1/sessions/{}/messages/batch", url_encode(session_id));
     let messages_json: Vec<serde_json::Value> = messages
         .iter()
-        .map(|(role, content)| message_body(role, content))
+        .map(|(role, content)| message_body(role, content, target.peer_id.as_deref()))
         .collect();
     let body = json!({"messages": messages_json});
     let response: serde_json::Value = client.post(&path, &body).await?;
@@ -430,7 +485,8 @@ fn url_encode(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{add_memory_session_body, parse_messages, render_session_get_for_table};
+    use super::{parse_messages, render_session_get_for_table, resolve_add_memory_target};
+    use crate::client::HttpClient;
     use crate::error::Error;
     use serde_json::json;
 
@@ -478,18 +534,58 @@ mod tests {
         );
     }
 
+    fn target_test_client(actor_peer_id: Option<&str>) -> HttpClient {
+        HttpClient::new(
+            "http://127.0.0.1:1933",
+            None,
+            Some("acct".to_string()),
+            Some("alice".to_string()),
+            actor_peer_id.map(ToString::to_string),
+            30.0,
+            false,
+            None,
+        )
+    }
+
     #[test]
-    fn add_memory_user_scope_sets_session_policy() {
+    fn add_memory_target_uri_selects_exact_user_or_peer_scope() {
+        let client = target_test_client(Some("code-agent"));
+        let user =
+            resolve_add_memory_target(&client, Some("viking://user/alice/memories/")).unwrap();
+        assert_eq!(user.peer_id, None);
         assert_eq!(
-            add_memory_session_body("user"),
-            json!({
-                "memory_policy": {
-                    "self": {"enabled": true},
-                    "peer": {"enabled": false}
-                }
-            })
+            user.session_body,
+            json!({"memory_policy": {"self": {"enabled": true}, "peer": {"enabled": false}}})
         );
-        assert_eq!(add_memory_session_body("peer"), json!({}));
+
+        let peer = resolve_add_memory_target(
+            &client,
+            Some("viking://user/alice/peers/code-agent/memories"),
+        )
+        .unwrap();
+        assert_eq!(peer.peer_id.as_deref(), Some("code-agent"));
+        assert_eq!(
+            peer.session_body,
+            json!({"memory_policy": {"self": {"enabled": false}, "peer": {"enabled": true}}})
+        );
+    }
+
+    #[test]
+    fn add_memory_target_uri_rejects_other_peer_and_non_memory_paths() {
+        let client = target_test_client(Some("code-agent"));
+        let other_peer = resolve_add_memory_target(
+            &client,
+            Some("viking://user/alice/peers/other-agent/memories"),
+        )
+        .expect_err("another actor peer must be rejected");
+        assert!(other_peer.to_string().contains("another actor peer"));
+
+        let resources = resolve_add_memory_target(
+            &client,
+            Some("viking://user/alice/peers/code-agent/resources"),
+        )
+        .expect_err("resource root must be rejected");
+        assert!(resources.to_string().contains("target URI must be"));
     }
 
     #[test]

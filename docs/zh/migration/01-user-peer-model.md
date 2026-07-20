@@ -81,8 +81,8 @@ ov session list
 | `ov ls viking://session` | 支持读，会合并新 session 和旧 session。 |
 | 读 `viking://session/<session_id>/...` | 支持读，按新路径优先、旧路径兜底。 |
 | 写 `viking://session/...` | 不支持。新 session 写入 `viking://user/<user_id>/sessions/...`。 |
-| HTTP SDK `find` / `search` 传 `agent_id` | 支持，只查选中的 actor peer 视图；只有发送 `X-OpenViking-Agent` 的真正 legacy 请求才会查旧 agent 数据。 |
-| 配置 `actor_peer_id` 后使用 `remember` / `ov add-memory` | 没有显式 `peer_id` 的 message 会继承 actor peer，提取结果写入 `viking://user/<user_id>/peers/<peer_id>/memories/`。需要显式写入共享 user memory 时使用 `scope="user"` / `--scope user`。 |
+| HTTP SDK `find` / `search` 传 `agent_id` | 支持；空 target 检索同时包含 user memory 与选中的 actor peer 视图。只有发送 `X-OpenViking-Agent` 的真正 legacy 请求才会查旧 agent 数据。 |
+| 配置 `actor_peer_id` 后使用 `remember` / `ov add-memory` | 默认仍写入 user memory。需要写入 peer memory 时，通过 `target_uri` / `--target-uri` 显式传入 `viking://user/<user_id>/peers/<peer_id>/memories`。 |
 | `find` / `search` body 传旧 `peer_id` | 不支持。新 peer 视图使用 `actor_peer_id` 或 `X-OpenViking-Actor-Peer`。 |
 | 同时配置 `actor_peer_id` 和 `agent_id` | 不支持，会报错。 |
 | HTTP SDK `agent_id` client 下显式传 message `peer_id` | 支持。该 message 使用显式 `peer_id`；只有没有 message `peer_id` 时才走 legacy fallback。 |

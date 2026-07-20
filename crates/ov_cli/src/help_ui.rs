@@ -686,8 +686,8 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Add one structured message.",
             },
             HelpItem {
-                label: "ov add-memory --scope user \"Shared deployment owner is Alice\"",
-                description: "Explicitly store shared user memory while an actor peer is active.",
+                label: "ov add-memory --target-uri viking://user/alice/peers/code-agent/memories \"Task context\"",
+                description: "Write to one explicit peer memories root.",
             },
         ],
         next_steps: &[HelpItem {

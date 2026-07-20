@@ -37,7 +37,12 @@ from openviking.server.mcp_endpoint import (
     search,
 )
 from openviking.server.mcp_endpoint import ls as list_tool
-from openviking_cli.exceptions import FailedPreconditionError, UnauthenticatedError
+from openviking_cli.exceptions import (
+    FailedPreconditionError,
+    InvalidArgumentError,
+    PermissionDeniedError,
+    UnauthenticatedError,
+)
 from openviking_cli.session.user_id import UserIdentifier
 
 DEFAULT_CTX = RequestContext(
@@ -450,8 +455,8 @@ async def test_store_batch_messages(service):
     assert "2 message" in result
 
 
-async def test_store_without_actor_peer_keeps_messages_user_scoped(service, monkeypatch):
-    """MCP store without an actor peer keeps messages user-scoped."""
+async def test_store_does_not_autofill_peer_id_from_ctx(service, monkeypatch):
+    """MCP store should not create synthetic peer_id values."""
     from openviking.session.session import Session
 
     captured: list[tuple[str, str | None]] = []
@@ -476,40 +481,28 @@ async def test_store_without_actor_peer_keeps_messages_user_scoped(service, monk
     ]
 
 
-async def test_store_defaults_messages_to_actor_peer(service, monkeypatch):
-    from openviking.session.session import Session
-
-    captured: list[tuple[str, str | None]] = []
-    original = Session.add_message
-
-    def _spy(self, role, parts, peer_id=None, created_at=None):
-        captured.append((role, peer_id))
-        return original(self, role, parts, peer_id=peer_id, created_at=created_at)
-
-    monkeypatch.setattr(Session, "add_message", _spy)
-    actor_ctx = RequestContext(
-        user=UserIdentifier("acct", "caller"),
-        role=Role.USER,
-        actor_peer_id="code-agent",
-    )
-    token = _mcp_ctx.set(actor_ctx)
-    try:
-        await remember(
-            messages=[
-                StoreMessage(role="user", content="user msg"),
-                StoreMessage(role="assistant", content="assistant msg"),
-            ]
-        )
-    finally:
-        _mcp_ctx.reset(token)
-
-    assert captured == [
-        ("user", "code-agent"),
-        ("assistant", "code-agent"),
-    ]
-
-
-async def test_store_user_scope_bypasses_actor_peer(service, monkeypatch):
+@pytest.mark.parametrize(
+    ("target_uri", "memory_policy", "expected_peer_id"),
+    [
+        (
+            "viking://user/caller/memories/",
+            {"self": {"enabled": True}, "peer": {"enabled": False}},
+            None,
+        ),
+        (
+            "viking://user/caller/peers/code-agent/memories",
+            {"self": {"enabled": False}, "peer": {"enabled": True}},
+            "code-agent",
+        ),
+    ],
+)
+async def test_store_uses_explicit_memory_target(
+    service,
+    monkeypatch,
+    target_uri,
+    memory_policy,
+    expected_peer_id,
+):
     class FakeSession:
         def __init__(self):
             self.messages = []
@@ -530,25 +523,44 @@ async def test_store_user_scope_bypasses_actor_peer(service, monkeypatch):
     token = _mcp_ctx.set(actor_ctx)
     try:
         result = await remember(
-            messages=[StoreMessage(role="user", content="Shared deployment owner")],
-            scope="user",
+            messages=[StoreMessage(role="user", content="Remember this")],
+            target_uri=target_uri,
         )
     finally:
         _mcp_ctx.reset(token)
 
     assert "stored" in result.lower()
     create.assert_awaited_once()
-    created_ctx, created_session_id = create.await_args.args
-    assert created_ctx is actor_ctx
-    assert created_session_id.startswith("mcp-store-")
-    assert create.await_args.kwargs == {
-        "memory_policy": {
-            "self": {"enabled": True},
-            "peer": {"enabled": False},
-        }
-    }
-    assert fake_session.messages[0][2] is None
+    assert create.await_args.args[0] is actor_ctx
+    assert create.await_args.args[1].startswith("mcp-store-")
+    assert create.await_args.kwargs == {"memory_policy": memory_policy}
+    assert fake_session.messages[0][2] == expected_peer_id
     commit.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("target_uri", "error_type"),
+    [
+        ("viking://user/caller/peers/other-agent/memories", PermissionDeniedError),
+        ("viking://user/caller/peers/code-agent/resources", InvalidArgumentError),
+        ("viking://user/other/memories", InvalidArgumentError),
+    ],
+)
+async def test_store_rejects_unsafe_memory_target(target_uri, error_type):
+    actor_ctx = RequestContext(
+        user=UserIdentifier("acct", "caller"),
+        role=Role.USER,
+        actor_peer_id="code-agent",
+    )
+    token = _mcp_ctx.set(actor_ctx)
+    try:
+        with pytest.raises(error_type):
+            await remember(
+                messages=[StoreMessage(role="user", content="Remember this")],
+                target_uri=target_uri,
+            )
+    finally:
+        _mcp_ctx.reset(token)
 
 
 async def test_store_skips_empty_message_content(service, monkeypatch):

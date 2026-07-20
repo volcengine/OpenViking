@@ -111,12 +111,8 @@ def _resolve_memory_extraction_scope(
     *,
     config_session_skill_extraction_enabled: bool,
 ) -> _MemoryExtractionScope:
-    actor_peer_id = safe_peer_id(ctx.actor_peer_id)
-    peer_default = actor_peer_id is not None and policy.peer_enabled
-    allow_self_memory = policy.self_enabled and not peer_default
+    allow_self_memory = policy.self_enabled
     allowed_peer_ids = _message_peer_ids(messages) if policy.peer_enabled else set()
-    if actor_peer_id is not None and policy.peer_enabled:
-        allowed_peer_ids.add(actor_peer_id)
 
     return _MemoryExtractionScope(
         allow_self_memory=allow_self_memory,

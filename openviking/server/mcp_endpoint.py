@@ -31,6 +31,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from openviking.core.namespace import canonical_user_root, canonicalize_uri, uri_parts
 from openviking.parse.parsers.code.ast.code_tools import (
     CODE_SEARCH_CONCURRENCY,
     expand_symbol,
@@ -410,15 +411,51 @@ class StoreMessage(BaseModel):
     content: str = Field(description="Message text content")
 
 
-@mcp.tool()
-async def remember(
-    messages: list[StoreMessage],
-    scope: Literal["peer", "user"] = "peer",
-) -> str:
-    """Store information into OpenViking long-term memory.
+def _resolve_remember_target(
+    target_uri: str,
+    ctx: RequestContext,
+) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    """Translate an explicit memory root into extraction policy and peer identity."""
+    raw_target = target_uri.strip()
+    if not raw_target:
+        return None, None
 
-    ``scope="peer"`` uses the active actor peer when one is configured.
-    ``scope="user"`` explicitly stores shared user memory instead.
+    try:
+        target = canonicalize_uri(raw_target, ctx)
+    except (TypeError, ValueError) as exc:
+        raise InvalidArgumentError(f"Invalid target_uri: {exc}") from exc
+
+    user_root = canonical_user_root(ctx)
+    if target == f"{user_root}/memories":
+        return {
+            "self": {"enabled": True},
+            "peer": {"enabled": False},
+        }, None
+
+    parts = uri_parts(target)
+    root_parts = uri_parts(user_root)
+    suffix = parts[len(root_parts) :] if parts[: len(root_parts)] == root_parts else []
+    if len(suffix) == 3 and suffix[0] == "peers" and suffix[2] == "memories":
+        peer_id = suffix[1]
+        if ctx.actor_peer_id and peer_id != ctx.actor_peer_id:
+            raise PermissionDeniedError("Actor peer cannot write another peer's memory.")
+        return {
+            "self": {"enabled": False},
+            "peer": {"enabled": True},
+        }, peer_id
+
+    raise InvalidArgumentError(
+        "target_uri must be the current user's memories root or one exact peer memories root"
+    )
+
+
+@mcp.tool()
+async def remember(messages: list[StoreMessage], target_uri: str = "") -> str:
+    """Store information into long-term memory.
+
+    Set ``target_uri`` to the current user's exact ``.../memories`` root or an
+    exact ``.../peers/<peer_id>/memories`` root to choose the write scope.
+    Omitting it preserves the existing user-memory default.
     """
     import uuid
 
@@ -427,19 +464,15 @@ async def remember(
     service = get_service()
     ctx = _get_ctx()
     session_id = f"mcp-store-{uuid.uuid4().hex[:12]}"
-    if scope == "user":
+    memory_policy, message_peer_id = _resolve_remember_target(target_uri, ctx)
+    if memory_policy is None:
+        session = await service.sessions.get(session_id, ctx, auto_create=True)
+    else:
         session = await service.sessions.create(
             ctx,
             session_id,
-            memory_policy={
-                "self": {"enabled": True},
-                "peer": {"enabled": False},
-            },
+            memory_policy=memory_policy,
         )
-        message_peer_id = None
-    else:
-        session = await service.sessions.get(session_id, ctx, auto_create=True)
-        message_peer_id = ctx.actor_peer_id
     for msg in messages:
         if msg.content:
             session.add_message(

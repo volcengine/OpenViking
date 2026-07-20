@@ -797,9 +797,9 @@ enum Commands {
         /// or JSON array of such objects for multiple messages.
         #[arg(value_name = "content")]
         content: String,
-        /// Write to the active peer by default, or explicitly to shared user memory.
-        #[arg(long, default_value = "peer", value_parser = ["peer", "user"])]
-        scope: String,
+        /// Exact user or peer memories root that should receive the extracted memory.
+        #[arg(long, value_name = "uri")]
+        target_uri: Option<String>,
     },
     /// [Data] Privacy config management commands
     Privacy {
@@ -3031,9 +3031,10 @@ async fn main() {
                 recursive,
             } => handlers::handle_set_tags(uri, tags, mode, recursive, ctx).await,
         },
-        Commands::AddMemory { content, scope } => {
-            handlers::handle_add_memory(content, scope, ctx).await
-        }
+        Commands::AddMemory {
+            content,
+            target_uri,
+        } => handlers::handle_add_memory(content, target_uri, ctx).await,
         Commands::Tui { uri } => handlers::handle_tui(uri, ctx).await,
         Commands::Chat {
             message,
@@ -3349,20 +3350,26 @@ mod tests {
     }
 
     #[test]
-    fn cli_add_memory_parses_explicit_user_scope() {
+    fn cli_add_memory_parses_explicit_target_uri() {
         let cli = Cli::try_parse_from([
             "ov",
             "add-memory",
-            "--scope",
-            "user",
-            "shared deployment owner",
+            "--target-uri",
+            "viking://user/alice/peers/code-agent/memories",
+            "task-specific context",
         ])
         .unwrap();
 
         match cli.command {
-            Commands::AddMemory { content, scope } => {
-                assert_eq!(content, "shared deployment owner");
-                assert_eq!(scope, "user");
+            Commands::AddMemory {
+                content,
+                target_uri,
+            } => {
+                assert_eq!(content, "task-specific context");
+                assert_eq!(
+                    target_uri.as_deref(),
+                    Some("viking://user/alice/peers/code-agent/memories")
+                );
             }
             _ => panic!("expected add-memory command"),
         }

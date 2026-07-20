@@ -136,8 +136,6 @@ def _resolve_message_parts(msg_request: AddMessageRequest) -> List[Part]:
 def _resolve_message_peer_id(msg_request: AddMessageRequest, ctx: RequestContext) -> Optional[str]:
     if msg_request.peer_id is not None:
         return msg_request.peer_id
-    if ctx.actor_peer_id is not None:
-        return ctx.actor_peer_id
     if ctx.legacy_agent_id is not None and msg_request.role == "assistant":
         return ctx.legacy_agent_id
     return None

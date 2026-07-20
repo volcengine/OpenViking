@@ -641,28 +641,6 @@ async def test_add_message_request_persists_peer_id(service, monkeypatch):
     assert session.messages[-1].peer_id == "assistant-b"
 
 
-async def test_add_message_request_defaults_to_actor_peer(service, monkeypatch):
-    session_id = "actor-peer-default"
-    ctx = RequestContext(
-        user=UserIdentifier("acct_trusted", "caller"),
-        role=Role.USER,
-        actor_peer_id="code-agent",
-    )
-
-    response = await _call_add_message_route(
-        service,
-        monkeypatch,
-        ctx=ctx,
-        payload=_message_request("user", content="hello actor peer"),
-        session_id=session_id,
-    )
-
-    assert response.result["message_count"] == 1
-    session = await service.sessions.get(session_id, ctx, auto_create=False)
-    await session.load()
-    assert session.messages[-1].peer_id == "code-agent"
-
-
 async def test_add_multiple_messages(client: httpx.AsyncClient):
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
