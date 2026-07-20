@@ -107,6 +107,14 @@ def test_parse_code_hosting_url_gitlab_tree_keeps_group_repo():
     assert parse_code_hosting_url("https://gitlab.com/group/repo/tree/main") == "group/repo"
 
 
+@pytest.mark.parametrize("kind", ["tree", "blob"])
+def test_parse_code_hosting_url_gitlab_nested_namespace_browse_url(kind):
+    assert (
+        parse_code_hosting_url(f"https://gitlab.com/group/subgroup/repo/-/{kind}/main/README.md")
+        == "group/subgroup/repo"
+    )
+
+
 def test_parse_code_hosting_url_https_with_port():
     assert parse_code_hosting_url("https://github.com:443/org/repo") == "org/repo"
 
@@ -257,6 +265,14 @@ def test_is_git_repo_url_gitlab_nested_namespace_page_is_not_clone_url():
 
 def test_is_git_repo_url_gitlab_tree_url():
     assert is_git_repo_url("https://gitlab.com/group/repo/tree/main") is True
+
+
+def test_is_git_repo_url_gitlab_nested_tree_url():
+    assert is_git_repo_url("https://gitlab.com/group/subgroup/repo/-/tree/main") is True
+
+
+def test_is_git_repo_url_gitlab_nested_blob_url():
+    assert is_git_repo_url("https://gitlab.com/group/subgroup/repo/-/blob/main/README.md") is False
 
 
 def test_is_git_repo_url_azure_devops_repo():

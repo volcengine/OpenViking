@@ -130,10 +130,23 @@ class TestGitAccessor:
             == "https://oauth2:secret@gitlab.com/group/subgroup/repo.git"
         )
 
+    def test_normalize_gitlab_nested_tree_url(self, accessor: GitAccessor) -> None:
+        assert (
+            accessor._normalize_repo_url(
+                "https://gitlab.com/group/subgroup/repo/-/tree/main/README.md"
+            )
+            == "https://gitlab.com/group/subgroup/repo"
+        )
+
     def test_redact_url_credentials(self, accessor: GitAccessor) -> None:
         source = "https://oauth2:secret@gitlab.com/group/subgroup/repo.git"
         assert (
             accessor._redact_url_credentials(source) == "https://gitlab.com/group/subgroup/repo.git"
+        )
+
+    def test_redact_authorization_header(self, accessor: GitAccessor) -> None:
+        assert accessor._redact_credentials_in_text("Authorization: Bearer secret-token") == (
+            "Authorization: Bearer [REDACTED]"
         )
 
     @pytest.mark.parametrize(
@@ -180,9 +193,21 @@ class TestGitAccessor:
         self, accessor: GitAccessor, tmp_path: Path
     ) -> None:
         source = "https://oauth2:secret@gitlab.com/group/subgroup/repo.git"
-        with patch.object(accessor, "_run_git", new_callable=AsyncMock):
+        observed = {}
+
+        async def _capture_git(args, cwd=None, env=None):
+            observed["args"] = args
+            observed["auth_config"] = Path(env["GIT_CONFIG_GLOBAL"])
+            observed["auth_content"] = observed["auth_config"].read_text(encoding="utf-8")
+            return ""
+
+        with patch.object(accessor, "_run_git", side_effect=_capture_git):
             await accessor._git_clone(source, str(tmp_path))
 
+        assert source not in observed["args"]
+        assert "secret" not in " ".join(observed["args"])
+        assert "Authorization: Basic b2F1dGgyOnNlY3JldA==" in observed["auth_content"]
+        assert not observed["auth_config"].exists()
         assert (tmp_path / ".git_source_repo").read_text(encoding="utf-8") == (
             "https://gitlab.com/group/subgroup/repo.git"
         )
@@ -215,9 +240,11 @@ class TestGitAccessor:
                 await accessor._gitlab_zip_download(source, "main", str(tmp_path))
 
         request = urlopen.call_args.args[0]
-        assert request.full_url.endswith("/group/subgroup/repo/-/archive/main/repo-main.zip")
+        assert request.full_url.endswith(
+            "/api/v4/projects/group%2Fsubgroup%2Frepo/repository/archive.zip?sha=main"
+        )
         assert "oauth2:secret@" not in request.full_url
-        assert request.get_header("Authorization") == "Basic b2F1dGgyOnNlY3JldA=="
+        assert request.get_header("Authorization") == "Bearer secret"
         assert "oauth2:secret@" not in str(exc_info.value)
 
     async def test_github_archive_encodes_fragment_in_ref(

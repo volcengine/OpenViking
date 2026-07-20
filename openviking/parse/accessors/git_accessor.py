@@ -311,7 +311,12 @@ class GitAccessor(DataAccessor):
     @staticmethod
     def _redact_credentials_in_text(text: str) -> str:
         """Remove HTTP/Git/SSH URL userinfo embedded in diagnostic text."""
-        return re.sub(r"(?P<scheme>(?:https?|git|ssh)://)[^/@\s]+@", r"\g<scheme>", text)
+        redacted = re.sub(r"(?P<scheme>(?:https?|git|ssh)://)[^/@\s]+@", r"\g<scheme>", text)
+        return re.sub(
+            r"(?i)(authorization:\s*(?:basic|bearer)\s+)\S+",
+            r"\1[REDACTED]",
+            redacted,
+        )
 
     def _get_repo_name(self, url: str) -> str:
         """Get repository name with organization for GitHub/GitLab URLs.
@@ -342,11 +347,17 @@ class GitAccessor(DataAccessor):
         name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
         return name or "repository"
 
-    async def _run_git(self, args: list[str], cwd: Optional[str] = None) -> str:
+    async def _run_git(
+        self,
+        args: list[str],
+        cwd: Optional[str] = None,
+        env: Optional[dict[str, str]] = None,
+    ) -> str:
         """Run a git command."""
         proc = await asyncio.create_subprocess_exec(
             *args,
             cwd=cwd,
+            env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -397,52 +408,89 @@ class GitAccessor(DataAccessor):
         public_url = self._redact_url_credentials(url)
         logger.info(f"[GitAccessor] Cloning {public_url} to {target_dir}...")
 
-        clone_args = [
-            "git",
-            "clone",
-            "--depth",
-            "1",
-            "--no-recurse-submodules",
-        ]
-        if branch and not commit:
-            clone_args.extend(["--branch", branch])
-        clone_args.extend([url, target_dir])
-        await self._run_git(clone_args)
+        git_env = None
+        auth_config_path = None
+        parsed = urlparse(url)
+        if parsed.username is not None and parsed.password is not None:
+            username = unquote(parsed.username)
+            password = unquote(parsed.password)
+            if "\n" in username + password or "\x00" in username + password:
+                raise ValueError("Invalid newline or NUL in repository credentials")
 
-        if commit:
-            try:
-                await self._run_git(["git", "-C", target_dir, "fetch", "origin", commit])
-            except RuntimeError:
+            credentials = base64.b64encode(f"{username}:{password}".encode()).decode()
+            public_parsed = urlparse(public_url)
+            auth_scope = f"{public_parsed.scheme}://{public_parsed.netloc}/"
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                prefix="ov_git_auth_",
+                suffix=".config",
+                delete=False,
+            ) as auth_config:
+                auth_config.write(
+                    f'[http "{auth_scope}"]\n\textraHeader = Authorization: Basic {credentials}\n'
+                )
+                auth_config_path = auth_config.name
+            os.chmod(auth_config_path, stat.S_IRUSR | stat.S_IWUSR)
+            git_env = os.environ.copy()
+            git_env["GIT_CONFIG_GLOBAL"] = auth_config_path
+            git_env["GIT_TERMINAL_PROMPT"] = "0"
+
+        try:
+            clone_args = [
+                "git",
+                "clone",
+                "--depth",
+                "1",
+                "--no-recurse-submodules",
+            ]
+            if branch and not commit:
+                clone_args.extend(["--branch", branch])
+            clone_args.extend([public_url, target_dir])
+            await self._run_git(clone_args, env=git_env)
+
+            if commit:
                 try:
                     await self._run_git(
-                        ["git", "-C", target_dir, "fetch", "--all", "--tags", "--prune"]
+                        ["git", "-C", target_dir, "fetch", "origin", commit], env=git_env
                     )
                 except RuntimeError:
-                    pass
-                ok = await self._has_commit(target_dir, commit)
-                if not ok:
                     try:
                         await self._run_git(
-                            ["git", "-C", target_dir, "fetch", "--unshallow", "origin"]
+                            ["git", "-C", target_dir, "fetch", "--all", "--tags", "--prune"],
+                            env=git_env,
                         )
                     except RuntimeError:
                         pass
-                ok = await self._has_commit(target_dir, commit)
-                if not ok:
-                    await self._run_git(
-                        [
-                            "git",
-                            "-C",
-                            target_dir,
-                            "fetch",
-                            "origin",
-                            "+refs/heads/*:refs/remotes/origin/*",
-                        ]
-                    )
                     ok = await self._has_commit(target_dir, commit)
                     if not ok:
-                        raise RuntimeError(f"Failed to fetch commit {commit} from {public_url}")
-            await self._run_git(["git", "-C", target_dir, "checkout", commit])
+                        try:
+                            await self._run_git(
+                                ["git", "-C", target_dir, "fetch", "--unshallow", "origin"],
+                                env=git_env,
+                            )
+                        except RuntimeError:
+                            pass
+                    ok = await self._has_commit(target_dir, commit)
+                    if not ok:
+                        await self._run_git(
+                            [
+                                "git",
+                                "-C",
+                                target_dir,
+                                "fetch",
+                                "origin",
+                                "+refs/heads/*:refs/remotes/origin/*",
+                            ],
+                            env=git_env,
+                        )
+                        ok = await self._has_commit(target_dir, commit)
+                        if not ok:
+                            raise RuntimeError(f"Failed to fetch commit {commit} from {public_url}")
+                await self._run_git(["git", "-C", target_dir, "checkout", commit])
+        finally:
+            if auth_config_path is not None:
+                Path(auth_config_path).unlink(missing_ok=True)
 
         # Add a marker with the credential-free source URL.
         def _write_marker():
@@ -569,12 +617,26 @@ class GitAccessor(DataAccessor):
         repo_slug = repo_raw[:-4] if repo_raw.endswith(".git") else repo_raw
         project_path = "/".join([*repo_parts[:-1], repo_slug])
 
-        ref = quote(branch or "HEAD", safe="")
-        zip_url = (
+        ref_raw = branch or "HEAD"
+        ref = quote(ref_raw, safe="")
+        browser_zip_url = (
             f"{parsed.scheme}://{parsed.netloc}/{project_path}/-/archive/"
             f"{ref}/{repo_slug}-{ref}.zip"
         )
-        public_zip_url = self._redact_url_credentials(zip_url)
+        public_zip_url = self._redact_url_credentials(browser_zip_url)
+        oauth_token = None
+        if parsed.username is not None and parsed.password is not None:
+            if unquote(parsed.username).lower() != "oauth2":
+                raise ValueError("GitLab archive API requires oauth2 URL credentials")
+            oauth_token = unquote(parsed.password)
+            if "\n" in oauth_token or "\x00" in oauth_token:
+                raise ValueError("Invalid newline or NUL in GitLab OAuth token")
+            public_parsed = urlparse(public_zip_url)
+            project_id = quote(project_path, safe="")
+            public_zip_url = (
+                f"{public_parsed.scheme}://{public_parsed.netloc}/api/v4/projects/"
+                f"{project_id}/repository/archive.zip?sha={ref}"
+            )
 
         logger.info(f"[GitAccessor] Downloading GitLab ZIP: {public_zip_url}")
 
@@ -585,10 +647,8 @@ class GitAccessor(DataAccessor):
         # Download (blocking HTTP; run in thread pool)
         def _download() -> None:
             headers = {"User-Agent": "OpenViking"}
-            if parsed.username is not None and parsed.password is not None:
-                credentials = f"{unquote(parsed.username)}:{unquote(parsed.password)}"
-                encoded = base64.b64encode(credentials.encode()).decode()
-                headers["Authorization"] = f"Basic {encoded}"
+            if oauth_token is not None:
+                headers["Authorization"] = f"Bearer {oauth_token}"
 
             req = urllib.request.Request(public_zip_url, headers=headers)
             with urllib.request.urlopen(req, timeout=1800) as resp, open(zip_path, "wb") as f:

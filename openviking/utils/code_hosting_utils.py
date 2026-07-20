@@ -107,7 +107,16 @@ def _extract_gitlab_repo_parts(path_parts: list[str]) -> Optional[list[str]]:
     accepted only when they use the explicit clone URL suffix (``.git``), so
     ordinary project pages are not mistaken for repositories.
     """
-    if len(path_parts) < 2 or "-" in path_parts:
+    if len(path_parts) < 2:
+        return None
+    if "-" in path_parts:
+        marker_index = path_parts.index("-")
+        if (
+            marker_index >= 2
+            and marker_index + 1 < len(path_parts)
+            and path_parts[marker_index + 1] in {"tree", "blob"}
+        ):
+            return path_parts[:marker_index]
         return None
     if len(path_parts) == 2 or path_parts[-1].endswith(".git"):
         return path_parts
@@ -336,7 +345,15 @@ def is_git_repo_url(url: str) -> bool:
                 return True
 
         if _domain_matches(parsed, config.code.gitlab_domains):
-            if _extract_gitlab_repo_parts(raw_path_parts) is not None:
+            gitlab_repo_parts = _extract_gitlab_repo_parts(raw_path_parts)
+            if "-" in raw_path_parts:
+                marker_index = raw_path_parts.index("-")
+                return (
+                    gitlab_repo_parts is not None
+                    and marker_index + 1 < len(raw_path_parts)
+                    and raw_path_parts[marker_index + 1] == "tree"
+                )
+            if gitlab_repo_parts is not None:
                 return True
             # Preserve support for the historical two-part GitLab tree form.
             return len(path_parts) == 4 and path_parts[2] == "tree"
