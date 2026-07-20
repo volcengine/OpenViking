@@ -1,6 +1,6 @@
 # OpenClaw 插件
 
-为 [OpenClaw](https://github.com/openclaw/openclaw) 添加长效记忆。安装完成后，OpenClaw 会自动记住对话中的重要信息，并在每次回复前召回相关上下文。
+为 [OpenClaw](https://github.com/openclaw/openclaw) 添加长效记忆。安装完成后，OpenClaw 会自动记住对话中的重要信息；对于经过 OpenClaw context-engine transform 路径的 turn，还会在每次回复前召回相关上下文。
 
 源码：[examples/openclaw-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/openclaw-plugin)
 
@@ -33,7 +33,13 @@ openclaw openviking setup --base-url http://your-server:1933 --api-key sk-xxx --
 openclaw gateway restart
 ```
 
-`setup` 向导写入配置并激活插件。安装完成后开始对话——OpenClaw 会自动记忆和召回。
+`setup` 向导写入配置并激活插件。安装完成后开始对话——OpenClaw 会自动记忆；经过 context-engine transform 路径的 turn 还会在每次回复前召回相关记忆。
+
+> **外部 ACP Agent：** 其 turn 当前会绕过 context-engine transform 路径。
+> 它们仍可能被 capture，但不会注入自动召回结果。在 OpenClaw 提供
+> gateway/ACP 预处理 hook 之前，请在插件工具可用时显式调用
+> `memory_recall`，或使用等效的 OpenViking MCP 召回工具。进展见
+> [#1140](https://github.com/volcengine/OpenViking/issues/1140)。
 
 <details>
 <summary><b>备用方案：通过 <code>ov-install</code> 安装</b></summary>
