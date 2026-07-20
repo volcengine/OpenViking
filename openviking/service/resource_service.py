@@ -356,7 +356,7 @@ class ResourceService:
         tracker = get_task_tracker()
         task = await tracker.create(
             "add_resource",
-            resource_id=None if getattr(msg, "defer_target_resolution", False) else msg.root_uri,
+            resource_id=None if msg.defer_target_resolution else msg.root_uri,
             account_id=msg.account_id,
             user_id=msg.user_id,
             task_id=msg.task_id,
