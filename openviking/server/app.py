@@ -54,6 +54,10 @@ from openviking.server.routers import (
 )
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
+from openviking.utils.request_headers import (
+    bind_request_headers,
+    collect_dynamic_request_header_names,
+)
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
@@ -202,6 +206,8 @@ def create_app(
 
     validate_server_config(config)
 
+    model_config = get_openviking_config()
+    dynamic_request_header_names = collect_dynamic_request_header_names(model_config)
     usage_reporter_unset = object()
     usage_reporter = usage_reporter_unset
 
@@ -395,6 +401,16 @@ def create_app(
             )
         response = await call_next(request)
         return response
+
+    @app.middleware("http")
+    async def bind_dynamic_request_headers(request: Request, call_next: Callable):
+        if not dynamic_request_header_names:
+            return await call_next(request)
+        with bind_request_headers(
+            request.headers,
+            source_names=dynamic_request_header_names,
+        ):
+            return await call_next(request)
 
     # Add request timing middleware
     @app.middleware("http")

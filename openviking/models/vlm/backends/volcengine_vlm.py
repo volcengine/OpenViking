@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.telemetry import tracer
+from openviking.utils.request_headers import resolve_extra_headers
 from openviking_cli.utils import get_logger
 
 from ..base import ToolCall, VLMResponse
@@ -131,7 +132,7 @@ class VolcEngineVLM(OpenAIVLM):
             "messages": kwargs_messages,
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
-            "extra_headers": self.extra_headers,
+            "extra_headers": resolve_extra_headers(self.extra_headers),
         }
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
@@ -166,7 +167,7 @@ class VolcEngineVLM(OpenAIVLM):
             "messages": kwargs_messages,
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
-            "extra_headers": self.extra_headers,
+            "extra_headers": resolve_extra_headers(self.extra_headers),
         }
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
@@ -347,7 +348,7 @@ class VolcEngineVLM(OpenAIVLM):
             "messages": kwargs_messages,
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
-            "extra_headers": self.extra_headers,
+            "extra_headers": resolve_extra_headers(self.extra_headers),
         }
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
@@ -391,7 +392,7 @@ class VolcEngineVLM(OpenAIVLM):
             "messages": kwargs_messages,
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
-            "extra_headers": self.extra_headers,
+            "extra_headers": resolve_extra_headers(self.extra_headers),
         }
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens

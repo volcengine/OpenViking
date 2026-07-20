@@ -665,6 +665,28 @@ Common use cases:
 - **Custom proxies**: Add authentication or tracing headers
 - **API gateways**: Add version or routing identifiers
 
+`extra_headers` also supports forwarding arbitrary headers from the current OpenViking HTTP request. Use an exact `@request.header.<header-name>` value to declare the source header; header lookup is case-insensitive:
+
+```json
+{
+  "vlm": {
+    "provider": "openai",
+    "api_key": "fallback-api-key",
+    "model": "gpt-4o",
+    "api_base": "https://llm-proxy.example.com/v1",
+    "extra_headers": {
+      "Authorization": "@request.header.Authorization",
+      "X-Tenant-ID": "@request.header.X-OpenViking-Tenant",
+      "X-Proxy-Route": "primary"
+    }
+  }
+}
+```
+
+This syntax is available to VLM/query planner, embedding, and rerank providers that support `extra_headers`. A literal value such as `"primary"` is always sent as configured. During a user-triggered HTTP operation, dynamic headers follow the operation into background tasks and the ExternalParse, Semantic, and Embedding queues. If a referenced source header is absent from that request, the dynamic outbound header is omitted. For example, when a dynamic `Authorization` source is absent, the model client uses the configured `api_key`.
+
+Only request headers explicitly referenced by dynamic values are handed off. QueueFS persists those selected values with the queued operation until it is acknowledged, allowing processing to continue across worker threads, server workers, and restarts. When forwarding credentials such as `Authorization`, restrict access to the QueueFS backend and protect its storage at rest. Autonomous work without an originating HTTP request, including periodic watch executions, does not retain a user's request headers; dynamic entries are omitted and the configured `api_key` and fixed headers are used. A watch triggered manually through the HTTP API uses the headers from that trigger request for that execution only.
+
 **Custom Request Body**
 
 For OpenAI-compatible providers that accept provider-specific JSON body fields, add them via `extra_request_body`. OpenViking merges these fields into the `extra_body` sent by the OpenAI SDK or LiteLLM:

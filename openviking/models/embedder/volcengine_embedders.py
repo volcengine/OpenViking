@@ -17,6 +17,7 @@ from openviking.models.embedder.base import (
 )
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
+from openviking.utils.request_headers import resolve_extra_headers
 from openviking_cli.utils.logger import default_logger as logger
 
 VOLCENGINE_CLIENT_REQUEST_ID_HEADER = "X-Client-Request-Id"
@@ -28,6 +29,10 @@ def _build_volcengine_headers(extra_headers: Optional[Dict[str, str]]) -> Dict[s
     if not any(k.lower() == VOLCENGINE_CLIENT_REQUEST_ID_HEADER.lower() for k in headers):
         headers[VOLCENGINE_CLIENT_REQUEST_ID_HEADER] = VOLCENGINE_CLIENT_REQUEST_ID
     return headers
+
+
+def _resolve_volcengine_headers(extra_headers: Optional[Dict[str, str]]) -> Dict[str, str]:
+    return _build_volcengine_headers(resolve_extra_headers(extra_headers))
 
 
 def to_multimodal_input(content: "EmbeddingInput") -> List[Dict[str, Any]]:
@@ -113,7 +118,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
         self.api_base = api_base or "https://ark.cn-beijing.volces.com/api/v3"
         self.dimension = dimension
         self.input_type = input_type
-        self.extra_headers = _build_volcengine_headers(extra_headers)
+        self.extra_headers = dict(extra_headers or {})
 
         if not self.api_key:
             raise ValueError("api_key is required")
@@ -194,7 +199,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
                 response = self.client.multimodal_embeddings.create(
                     input=to_multimodal_input(content),
                     model=self.model_name,
-                    extra_headers=self.extra_headers,
+                    extra_headers=_resolve_volcengine_headers(self.extra_headers),
                 )
                 self._update_telemetry_token_usage(response)
                 vector = response.data.embedding
@@ -204,7 +209,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
                 response = self.client.embeddings.create(
                     input=text,
                     model=self.model_name,
-                    extra_headers=self.extra_headers,
+                    extra_headers=_resolve_volcengine_headers(self.extra_headers),
                 )
                 self._update_telemetry_token_usage(response)
                 vector = response.data[0].embedding
@@ -234,7 +239,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
                 response = await client.multimodal_embeddings.create(
                     input=to_multimodal_input(content),
                     model=self.model_name,
-                    extra_headers=self.extra_headers,
+                    extra_headers=_resolve_volcengine_headers(self.extra_headers),
                 )
                 self._update_telemetry_token_usage(response)
                 vector = response.data.embedding
@@ -243,7 +248,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
                 response = await client.embeddings.create(
                     input=text,
                     model=self.model_name,
-                    extra_headers=self.extra_headers,
+                    extra_headers=_resolve_volcengine_headers(self.extra_headers),
                 )
                 self._update_telemetry_token_usage(response)
                 vector = response.data[0].embedding
@@ -296,7 +301,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
         self.api_key = api_key
         self.api_base = api_base
         self.input_type = input_type
-        self.extra_headers = _build_volcengine_headers(extra_headers)
+        self.extra_headers = dict(extra_headers or {})
 
         if not self.api_key:
             raise ValueError("api_key is required")
@@ -358,7 +363,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
                 input=to_multimodal_input(content),
                 model=self.model_name,
                 sparse_embedding={"type": "enabled"},
-                extra_headers=self.extra_headers,
+                extra_headers=_resolve_volcengine_headers(self.extra_headers),
             )
             self._update_telemetry_token_usage(response)
             item = response.data
@@ -387,7 +392,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
                 input=to_multimodal_input(content),
                 model=self.model_name,
                 sparse_embedding={"type": "enabled"},
-                extra_headers=self.extra_headers,
+                extra_headers=_resolve_volcengine_headers(self.extra_headers),
             )
             self._update_telemetry_token_usage(response)
             item = response.data
@@ -445,7 +450,7 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
         self.api_base = api_base
         self.dimension = dimension
         self.input_type = input_type
-        self.extra_headers = _build_volcengine_headers(extra_headers)
+        self.extra_headers = dict(extra_headers or {})
 
         if not self.api_key:
             raise ValueError("api_key is required")
@@ -514,7 +519,7 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
                 input=to_multimodal_input(content),
                 model=self.model_name,
                 sparse_embedding={"type": "enabled"},
-                extra_headers=self.extra_headers,
+                extra_headers=_resolve_volcengine_headers(self.extra_headers),
             )
             self._update_telemetry_token_usage(response)
             item = response.data
@@ -547,7 +552,7 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
                 input=to_multimodal_input(content),
                 model=self.model_name,
                 sparse_embedding={"type": "enabled"},
-                extra_headers=self.extra_headers,
+                extra_headers=_resolve_volcengine_headers(self.extra_headers),
             )
             self._update_telemetry_token_usage(response)
             item = response.data

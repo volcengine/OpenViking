@@ -1,8 +1,9 @@
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
-from openviking.resource.watch_manager import WatchManager
+from openviking.resource.watch_manager import WatchManager, WatchTask
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.service.resource_service import ResourceService
 
@@ -110,3 +111,23 @@ class TestWatchSchedulerResourceExistence:
         assert updated.is_active is True
         assert resource_service.calls and resource_service.calls[0]["to"] == task.to_uri
         manager.update_execution_time.assert_awaited_once_with(task.task_id)
+
+    @pytest.mark.asyncio
+    async def test_periodic_execution_runs_due_task_through_resource_service(self):
+        task = WatchTask(task_id="periodic-task", path=__file__)
+        resource_service = SimpleNamespace(
+            add_resource=AsyncMock(return_value={"root_uri": "viking://resources/test"})
+        )
+        scheduler = WatchScheduler(resource_service=resource_service, check_interval=1)
+        scheduler._watch_manager = SimpleNamespace(
+            get_due_tasks=AsyncMock(return_value=[task]),
+            update_execution_time=AsyncMock(),
+        )
+
+        await scheduler._check_and_execute_due_tasks()
+
+        resource_service.add_resource.assert_awaited_once()
+        call_kwargs = resource_service.add_resource.await_args.kwargs
+        assert call_kwargs["path"] == __file__
+        assert call_kwargs["skip_watch_management"] is True
+        scheduler._watch_manager.update_execution_time.assert_awaited_once_with(task.task_id)

@@ -633,6 +633,28 @@ LiteLLM 的 Bedrock bearer-token API-key 鉴权，请设置 `forward_api_key=tru
 - **自定义代理**: 添加认证头或追踪头
 - **API 网关**: 添加版本或路由标识
 
+`extra_headers` 也支持从当前 OpenViking HTTP 请求中透传任意请求头。将值完整写成 `@request.header.<请求头名>` 即可声明动态来源；读取请求头时不区分大小写：
+
+```json
+{
+  "vlm": {
+    "provider": "openai",
+    "api_key": "fallback-api-key",
+    "model": "gpt-4o",
+    "api_base": "https://llm-proxy.example.com/v1",
+    "extra_headers": {
+      "Authorization": "@request.header.Authorization",
+      "X-Tenant-ID": "@request.header.X-OpenViking-Tenant",
+      "X-Proxy-Route": "primary"
+    }
+  }
+}
+```
+
+该语法适用于支持 `extra_headers` 的 VLM/query planner、embedding 和 rerank provider。`"primary"` 这类普通字符串始终按固定值发送。对于用户通过 HTTP 发起的操作，动态请求头会随本次操作传递到后台 task，以及 ExternalParse、Semantic 和 Embedding 队列。如果该请求缺少已声明的来源头，对应动态请求头会被省略；例如动态 `Authorization` 缺失时，模型客户端会使用配置文件中的 `api_key`。
+
+系统只会传递动态配置明确引用的来源请求头。QueueFS 会将这些筛选后的值随队列任务持久化到任务被确认完成，从而支持跨 worker 线程、服务 worker 和重启继续处理。转发 `Authorization` 等凭证时，应限制 QueueFS 后端的访问权限，并对其存储进行静态加密保护。周期性 watch 等没有来源 HTTP 请求的自主后台任务不会保存用户请求头；此时动态项会被省略，并使用配置文件中的 `api_key` 和固定请求头。通过 HTTP API 手动触发 watch 时，仅本次执行使用该触发请求携带的动态头。
+
 **自定义请求 Body**
 
 对于接受 provider 专有 JSON body 字段的 OpenAI 兼容 provider，可以通过 `extra_request_body` 配置。OpenViking 会把这些字段合并到 OpenAI SDK 或 LiteLLM 发送的 `extra_body` 中：

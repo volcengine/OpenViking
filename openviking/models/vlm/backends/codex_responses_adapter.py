@@ -246,6 +246,9 @@ class CodexCompletionsAdapter:
         tools = _convert_tools_for_responses(kwargs.get("tools"))
         if tools:
             response_kwargs["tools"] = tools
+        extra_headers = kwargs.get("extra_headers")
+        if extra_headers:
+            response_kwargs["extra_headers"] = extra_headers
         collected_output_items: List[Any] = []
         collected_text_deltas: List[str] = []
         has_function_calls = False
