@@ -78,7 +78,6 @@ class TrajectoryAnalyzerContext:
     strict_extract_errors: bool = False
     latest_archive_overview: str = ""
     evaluator_context: Any = None
-    inject_evaluation_feedback: bool = True
     include_session_skills: bool = False
 
 
@@ -107,12 +106,11 @@ class TrajectoryRolloutAnalyzer:
 
         evaluation = await self._evaluate_rollout(rollout, context)
         extraction_messages = list(rollout.messages)
-        extraction_evaluation = evaluation if context.inject_evaluation_feedback else None
         advisory_signals = _advisory_signals_payload(
             rollout,
-            extraction_evaluation,
+            evaluation,
         )
-        evidence_sources = _evidence_sources_payload(rollout, extraction_evaluation)
+        evidence_sources = _evidence_sources_payload(rollout, evaluation)
         result = await self.extract_trajectory_memories(
             messages=extraction_messages,
             ctx=context.request_context,
@@ -560,6 +558,7 @@ def _trajectory_operation_validation_issues(
     *,
     evidence_sources: dict[str, Any] | None = None,
 ) -> list[_TrajectoryValidationIssue]:
+    del evidence_sources
     issues: list[_TrajectoryValidationIssue] = []
     required_fields = (
         "trajectory_name",
@@ -587,26 +586,6 @@ def _trajectory_operation_validation_issues(
                 details=outcome,
             )
         )
-    direct_evaluation = _direct_rollout_evaluation(evidence_sources)
-    if direct_evaluation is not None:
-        evaluation_passed = bool(direct_evaluation.get("passed"))
-        if evaluation_passed and outcome and outcome != "success":
-            issues.append(
-                _TrajectoryValidationIssue(
-                    target_name=target_name,
-                    reason="trajectory outcome disagrees with direct evaluation",
-                    details=f"evaluation_passed=true, outcome={outcome}",
-                )
-            )
-        elif not evaluation_passed and outcome == "success":
-            issues.append(
-                _TrajectoryValidationIssue(
-                    target_name=target_name,
-                    reason="trajectory outcome disagrees with direct evaluation",
-                    details="evaluation_passed=false, outcome=success",
-                )
-            )
-
     content = str(fields.get("content") or "")
     content_outcome_match = re.search(r"(?m)^-\s+Outcome\s*:\s*([^\n]+)", content)
     if outcome and content_outcome_match:
@@ -687,19 +666,6 @@ def _experience_effects_validation_issues(
             details=", ".join(invalid),
         )
     ]
-
-
-def _direct_rollout_evaluation(
-    evidence_sources: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    for item in (evidence_sources or {}).get("items", []) or []:
-        if (
-            isinstance(item, dict)
-            and item.get("direct") is True
-            and item.get("source") == "rollout_evaluation"
-        ):
-            return item
-    return None
 
 
 def _trajectory_validation_retry_instruction(issues: list[_TrajectoryValidationIssue]) -> str:
@@ -818,32 +784,6 @@ def _evidence_sources_payload(
     evaluation: RubricEvaluation | None,
 ) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
-    if evaluation is not None:
-        items.append(
-            {
-                "source": "rollout_evaluation",
-                "kind": "outcome_evaluation",
-                "direct": True,
-                "scope": "outcome_and_requirement_compliance",
-                "passed": bool(evaluation.passed),
-                "score": float(evaluation.score),
-                "feedback": list(evaluation.feedback),
-                "criterion_results": [
-                    {
-                        "criterion_name": item.criterion_name,
-                        "passed": bool(item.passed),
-                        "score": float(item.score),
-                        "feedback": list(item.feedback),
-                        "evidence": list(item.evidence),
-                    }
-                    for item in evaluation.criterion_results
-                ],
-                "contract": (
-                    "Authoritative feedback for outcome and requirement compliance. "
-                    "It does not independently prove an unobserved internal cause."
-                ),
-            }
-        )
     sources = (
         ("rollout_metadata", dict(rollout.metadata or {})),
         ("evaluation_metadata", dict(evaluation.metadata or {}) if evaluation else {}),

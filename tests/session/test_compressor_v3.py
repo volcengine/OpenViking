@@ -449,7 +449,20 @@ async def test_train_from_extracted_case_memories_submits_streaming_rollout(monk
 @pytest.mark.asyncio
 async def test_train_from_extracted_multiple_case_memories_analyzes_bound_rollouts(monkeypatch):
     seen_rollouts = []
-    rollout_messages = _messages()
+    evaluation_message = Message(
+        id="evaluation",
+        role="user",
+        parts=[
+            TextPart(
+                """# OpenViking OutcomeEvaluation
+
+```json
+{"evaluation":{"passed":false,"score":0.25,"criterion_results":[],"metadata":{}}}
+```"""
+            )
+        ],
+    )
+    rollout_messages = [*_messages(), evaluation_message]
 
     class FakeTrainer:
         policy_set = ExperienceSet(
@@ -522,6 +535,7 @@ async def test_train_from_extracted_multiple_case_memories_analyzes_bound_rollou
         rollout_messages,
         rollout_messages,
     ]
+    assert [rollout.evaluation.score for rollout in seen_rollouts] == [0.25, 0.25]
 
 
 @pytest.mark.asyncio
@@ -827,7 +841,7 @@ def test_training_case_spec_message_uses_fast_path_protocol():
     assert "duplicate_booking_rubric" in text
 
 
-def test_training_outcome_evaluation_is_structured_and_removed_from_runtime_messages():
+def test_training_outcome_evaluation_is_parsed_without_removing_message():
     runtime_message = Message(id="runtime", role="user", parts=[TextPart("complete operation")])
     evaluation_message = Message(
         id="evaluation",
@@ -843,11 +857,11 @@ def test_training_outcome_evaluation_is_structured_and_removed_from_runtime_mess
         ],
     )
 
-    runtime, evaluation = _separate_training_evaluation_messages(
-        [runtime_message, evaluation_message]
-    )
+    messages = [runtime_message, evaluation_message]
+    preserved_messages, evaluation = _separate_training_evaluation_messages(messages)
 
-    assert runtime == [runtime_message]
+    assert preserved_messages == [runtime_message, evaluation_message]
+    assert messages == preserved_messages
     assert evaluation is not None
     assert evaluation.score == pytest.approx(0.25)
     assert evaluation.criterion_results[0].feedback == ["verification missing"]

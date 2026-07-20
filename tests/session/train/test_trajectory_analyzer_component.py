@@ -137,6 +137,37 @@ def test_trajectory_validation_does_not_enforce_content_section_layout():
     assert _trajectory_operation_validation_issues("task", fields) == []
 
 
+def test_trajectory_validation_does_not_compare_outcome_with_optional_evaluator():
+    fields = _valid_trajectory_fields(
+        outcome="success",
+        retrieval_anchor=(
+            "Stage: final_response; Boundary: completion verification; "
+            "Capability: verify; Target: requested operation; Outcome: success"
+        ),
+        content=(
+            _valid_trajectory_content()
+            .replace("- Outcome: failure", "- Outcome: success")
+            .replace(
+                "Required outcome: failed; completion was not verified",
+                "Required outcome: passed; completion was verified",
+            )
+        ),
+    )
+
+    issues = _trajectory_operation_validation_issues(
+        "task",
+        fields,
+        evidence_sources={
+            "direct_available": True,
+            "items": [
+                {"source": "rollout_evaluation", "direct": True, "passed": False}
+            ],
+        },
+    )
+
+    assert issues == []
+
+
 def test_trajectory_validation_canonicalizes_label_ordered_comma_anchor():
     operation = ResolvedOperation(
         old_memory_file_content=None,
@@ -318,7 +349,9 @@ async def test_trajectory_rollout_analyzer_extracts_and_persists_trajectory(monk
 
 
 @pytest.mark.asyncio
-async def test_trajectory_rollout_analyzer_evaluates_before_extracting_trajectory(monkeypatch):
+async def test_trajectory_analyzer_preserves_evaluation_message_without_synthesized_summary(
+    monkeypatch,
+):
     from openviking.session.train.components import trajectory_analyzer as module
 
     FakeExtractLoop.created.clear()
@@ -342,6 +375,20 @@ async def test_trajectory_rollout_analyzer_evaluates_before_extracting_trajector
     )
 
     rollout = _rollout()
+    evaluation_message = Message(
+        id="evaluation",
+        role="user",
+        parts=[
+            TextPart(
+                text=(
+                    "# OpenViking OutcomeEvaluation\n\n"
+                    "Missing required writes:\n"
+                    "- cancel_reservation({reservation_id: MSJ4OA})"
+                )
+            )
+        ],
+    )
+    rollout.messages.append(evaluation_message)
     analysis = await analyzer.analyze(rollout, context)
 
     assert evaluator.calls == [(rollout, evaluator_context)]
@@ -349,21 +396,21 @@ async def test_trajectory_rollout_analyzer_evaluates_before_extracting_trajector
     assert analysis.evaluation.metadata == {"source": "fake"}
     created_loop = FakeExtractLoop.created[0]
     provider = created_loop.kwargs["context_provider"]
-    assert len(provider.messages) == 1
+    assert len(provider.messages) == 2
     assert provider.messages[0] is rollout.messages[0]
+    assert provider.messages[-1] is evaluation_message
     conversation_message = provider._build_conversation_message()
     assert "## Evidence Sources" in conversation_message["content"]
-    assert '"source": "rollout_evaluation"' in conversation_message["content"]
-    assert '"direct": true' in conversation_message["content"]
+    assert '"source": "rollout_evaluation"' not in conversation_message["content"]
     assert "## Advisory Signals" in conversation_message["content"]
     assert '"available": false' in conversation_message["content"]
-    assert '"score": 0.25' in conversation_message["content"]
-    assert "reward was zero" in conversation_message["content"]
-    assert "missing confirmation" in conversation_message["content"]
-    assert analysis.metadata["extraction_message_count"] == 1
+    assert "Missing required writes:" in conversation_message["content"]
+    assert "MSJ4OA" in conversation_message["content"]
+    assert '"score": 0.25' not in conversation_message["content"]
+    assert analysis.metadata["extraction_message_count"] == 2
     assert analysis.metadata["evidence_source_summary"] == {
-        "direct_available": True,
-        "source_count": 1,
+        "direct_available": False,
+        "source_count": 0,
         "advisory_signal_count": 0,
     }
 

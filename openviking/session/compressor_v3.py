@@ -1026,7 +1026,6 @@ def _training_messages_after_case_spec(messages: list[Message]) -> list[Message]
 def _separate_training_evaluation_messages(
     messages: list[Message],
 ) -> tuple[list[Message], RubricEvaluation | None]:
-    runtime_messages: list[Message] = []
     evaluation: RubricEvaluation | None = None
     for message in messages:
         text = _message_text(message).strip()
@@ -1034,9 +1033,7 @@ def _separate_training_evaluation_messages(
             parsed = _training_evaluation_from_message(text)
             if parsed is not None:
                 evaluation = parsed
-            continue
-        runtime_messages.append(message)
-    return runtime_messages, evaluation
+    return list(messages), evaluation
 
 
 def _training_evaluation_from_message(text: str) -> RubricEvaluation | None:
