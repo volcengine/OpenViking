@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import importlib
+import inspect
+import pkgutil
 from types import SimpleNamespace
 
 import pytest
@@ -25,11 +28,8 @@ from openviking.session.train.gates import (
     ExperiencePlanQualityGate,
     ExperiencePortabilityGate,
     ExperienceRootCausePreventionGate,
-    ExperienceRuntimeWordingGate,
     ExperienceSkillReadabilityGate,
     ExperienceSpecificityGate,
-    ExperienceToolAlignmentGate,
-    ExperienceTriggerRuntimeGate,
     GateDecision,
     GateReport,
     GateRunner,
@@ -243,6 +243,34 @@ def test_default_policy_gate_runner_uses_layered_experience_quality_gates():
     assert "Update safety" not in contract
 
 
+def test_every_concrete_experience_gate_is_enabled():
+    modules = [gates_module]
+    package_path = getattr(gates_module, "__path__", None)
+    if package_path is not None:
+        modules.extend(
+            importlib.import_module(module_info.name)
+            for module_info in pkgutil.walk_packages(
+                package_path,
+                prefix=f"{gates_module.__name__}.",
+            )
+        )
+    defined_gate_types = {
+        value
+        for module in modules
+        for value in vars(module).values()
+        if inspect.isclass(value)
+        and value.__module__ == module.__name__
+        and value.__name__.startswith("Experience")
+        and value.__name__.endswith("Gate")
+    }
+    enabled_gate_types = {
+        *(type(gate) for gate in default_policy_gate_runner().gates),
+        ExperienceRootCausePreventionGate,
+    }
+
+    assert defined_gate_types == enabled_gate_types
+
+
 @pytest.mark.asyncio
 async def test_gate_runner_traces_each_applicable_gate_result_once(monkeypatch):
     class AllowGate:
@@ -301,244 +329,6 @@ async def test_gate_runner_traces_each_applicable_gate_result_once(monkeypatch):
     assert "action=reject" in trace_events[1]
     assert "candidate failed semantic review" in trace_events[1]
     assert "\n" not in trace_events[1]
-
-
-@pytest.mark.asyncio
-async def test_runtime_wording_gate_rejects_evaluator_terms_in_experience_content():
-    trajectory = _trajectory_with_repair_signal(
-        action="create",
-        first_wrong_tool="communicate_with_user",
-        trigger_boundary="communicate_with_user",
-    )
-    item = _plan_item()
-    item.after_content = (
-        "## Situation\n"
-        "- Applies when: final communication must include a total.\n"
-        "- Does not apply when: no total was requested.\n"
-        "- Source binding: communicate_checks and evaluator_feedback required total.\n\n"
-        "## Reminder\n"
-        "- Include the total required by rubric_result.\n\n"
-        "## Procedure\n"
-        "- Before calling `communicate_with_user`: check the final message.\n"
-        "- If the total is missing: add it.\n"
-        "- Else: proceed.\n\n"
-        "## Anti-pattern\n"
-        "- Do not omit evaluator-required content.\n"
-        "- Preserve unrelated actions.\n"
-    )
-    target = GateTarget(
-        stage="post_plan",
-        memory_type="experiences",
-        target_kind="plan_item",
-        plan_item=item,
-        analysis=None,
-        trajectory=trajectory,
-        policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
-    )
-
-    decision = await ExperienceRuntimeWordingGate().evaluate(target)
-
-    assert decision is not None
-    assert decision.action == "reject"
-    assert decision.gate_name == "experience_runtime_wording"
-    assert set(decision.evidence["terms"]) >= {
-        "communicate_checks",
-        "evaluator_feedback",
-        "rubric_result",
-    }
-
-
-@pytest.mark.asyncio
-async def test_runtime_wording_gate_rejects_underscored_control_plane_terms():
-    item = _plan_item()
-    item.after_content = item.after_content.replace(
-        "user request scope and retrieved record prices",
-        "rollout_evaluation and review_result evidence",
-    )
-    target = GateTarget(
-        stage="post_gradient",
-        memory_type="experiences",
-        target_kind="plan_item",
-        plan_item=item,
-        analysis=None,
-        trajectory=_trajectory_with_repair_signal(action="create"),
-        policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
-    )
-
-    decision = await ExperienceRuntimeWordingGate().evaluate(target)
-
-    assert decision is not None
-    assert set(decision.evidence["terms"]) >= {"rollout_evaluation", "review_result"}
-    assert "Observed diagnostics" not in decision.repair_prompt
-
-
-@pytest.mark.asyncio
-async def test_runtime_wording_gate_allows_user_domain_evaluation_language():
-    item = _plan_item()
-    item.after_content = item.after_content.replace(
-        "user request scope and retrieved record prices",
-        "the user's model evaluation request and supplied rubric",
-    )
-    target = GateTarget(
-        stage="post_plan",
-        memory_type="experiences",
-        target_kind="plan_item",
-        plan_item=item,
-        analysis=None,
-        trajectory=_trajectory_with_repair_signal(action="create"),
-        policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
-    )
-
-    decision = await ExperienceRuntimeWordingGate().evaluate(target)
-
-    assert decision is None
-
-
-@pytest.mark.asyncio
-async def test_runtime_wording_gate_rejects_platform_specific_internal_metadata():
-    item = _plan_item()
-    item.after_content = item.after_content.replace(
-        "Include the requested source-bound total in the final message.",
-        "Remove Acme-specific internal metadata from the final message.",
-    )
-    target = GateTarget(
-        stage="post_gradient",
-        memory_type="experiences",
-        target_kind="plan_item",
-        plan_item=item,
-        trajectory=_trajectory_with_repair_signal(action="create"),
-    )
-
-    decision = await ExperienceRuntimeWordingGate().evaluate(target)
-
-    assert decision is not None
-    assert "platform_internal_metadata" in decision.evidence["terms"]
-
-
-@pytest.mark.asyncio
-async def test_runtime_wording_gate_rejects_platform_internal_file_literals():
-    item = _plan_item()
-    item.after_content = item.after_content.replace(
-        "Include the requested source-bound total in the final message.",
-        'Remove internal tool-specific terms such as ".private_runtime" and "manifest.json".',
-    )
-    target = GateTarget(
-        stage="post_gradient",
-        memory_type="experiences",
-        target_kind="plan_item",
-        plan_item=item,
-        trajectory=_trajectory_with_repair_signal(action="create"),
-    )
-
-    decision = await ExperienceRuntimeWordingGate().evaluate(target)
-
-    assert decision is not None
-    assert "platform_internal_literal" in decision.evidence["terms"]
-
-
-@pytest.mark.asyncio
-async def test_runtime_wording_gate_rejects_chinese_internal_file_literals():
-    item = _plan_item()
-    item.after_content = item.after_content.replace(
-        "Include the requested source-bound total in the final message.",
-        "不要在用户回答中提及内部路径或文件，例如 .private/manifest.json。",
-    )
-    target = GateTarget(
-        stage="post_gradient",
-        memory_type="experiences",
-        target_kind="plan_item",
-        plan_item=item,
-        trajectory=_trajectory_with_repair_signal(action="create"),
-    )
-
-    decision = await ExperienceRuntimeWordingGate().evaluate(target)
-
-    assert decision is not None
-    assert "platform_internal_literal" in decision.evidence["terms"]
-
-
-@pytest.mark.asyncio
-async def test_runtime_wording_gate_rejects_platform_tool_identifier_in_evidence_binding():
-    item = _plan_item()
-    item.after_content = item.after_content.replace(
-        "user request scope and retrieved record prices",
-        "image recognition output (e.g., private-image-recognition) and spreadsheet cells",
-    )
-    target = GateTarget(
-        stage="post_gradient",
-        memory_type="experiences",
-        target_kind="plan_item",
-        plan_item=item,
-        trajectory=_trajectory_with_repair_signal(action="create"),
-    )
-
-    decision = await ExperienceRuntimeWordingGate().evaluate(target)
-
-    assert decision is not None
-    assert "platform_tool_identifier" in decision.evidence["terms"]
-
-
-@pytest.mark.asyncio
-async def test_runtime_wording_gate_rejects_evaluation_in_evidence_binding():
-    item = _plan_item()
-    item.after_content = item.after_content.replace(
-        "user request scope and retrieved record prices",
-        "user request and evaluation showing a missing total",
-    )
-    target = GateTarget(
-        stage="post_gradient",
-        memory_type="experiences",
-        target_kind="plan_item",
-        plan_item=item,
-        trajectory=_trajectory_with_repair_signal(action="create"),
-    )
-
-    decision = await ExperienceRuntimeWordingGate().evaluate(target)
-
-    assert decision is not None
-    assert "evaluation_as_evidence_binding" in decision.evidence["terms"]
-
-
-@pytest.mark.asyncio
-async def test_runtime_wording_gate_rejects_chinese_evaluation_in_evidence_binding():
-    item = _plan_item()
-    item.after_content = item.after_content.replace(
-        "user request scope and retrieved record prices",
-        "用户请求；或有评估显示部分对象信息缺失",
-    )
-    target = GateTarget(
-        stage="post_gradient",
-        memory_type="experiences",
-        target_kind="plan_item",
-        plan_item=item,
-        trajectory=_trajectory_with_repair_signal(action="create"),
-    )
-
-    decision = await ExperienceRuntimeWordingGate().evaluate(target)
-
-    assert decision is not None
-    assert "evaluation_as_evidence_binding_chinese" in decision.evidence["terms"]
-
-
-@pytest.mark.asyncio
-async def test_runtime_wording_gate_rejects_internal_task_checklist_file():
-    item = _plan_item()
-    item.after_content = item.after_content.replace(
-        "user request scope and retrieved record prices",
-        "user request and internal task_checklist.json",
-    )
-    target = GateTarget(
-        stage="post_gradient",
-        memory_type="experiences",
-        target_kind="plan_item",
-        plan_item=item,
-        trajectory=_trajectory_with_repair_signal(action="create"),
-    )
-
-    decision = await ExperienceRuntimeWordingGate().evaluate(target)
-
-    assert decision is not None
-    assert "internal_task_checklist_file" in decision.evidence["terms"]
 
 
 @pytest.mark.asyncio
@@ -1732,109 +1522,6 @@ async def test_causal_signal_gate_allows_structured_selected_c1():
 
 
 @pytest.mark.asyncio
-async def test_trigger_runtime_gate_rejects_vikingbot_incompatible_trigger():
-    trajectory = _trajectory_with_repair_signal(
-        action="create",
-        first_wrong_tool="communicate_with_user",
-        trigger_boundary="communicate_with_user",
-    )
-    item = _plan_item()
-    item.metadata = {
-        "merge_memory_fields": {
-            "trigger_code": (
-                "def should_trigger(ctx):\n"
-                "    import os\n"
-                "    return ctx.get('candidate_tool') == 'communicate_with_user'\n"
-            )
-        }
-    }
-    target = GateTarget(
-        stage="post_plan",
-        memory_type="experiences",
-        target_kind="plan_item",
-        plan_item=item,
-        analysis=None,
-        trajectory=trajectory,
-        policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
-    )
-
-    decision = await ExperienceTriggerRuntimeGate().evaluate(target)
-
-    assert decision is not None
-    assert decision.action == "reject"
-    assert decision.retriable is True
-    assert decision.gate_name == "experience_trigger_runtime"
-    assert "VikingBot constraint runtime" in decision.reason
-
-
-@pytest.mark.asyncio
-async def test_trigger_runtime_gate_allows_vikingbot_supported_negative_slice():
-    item = _plan_item()
-    item.metadata = {
-        "merge_memory_fields": {
-            "trigger_code": (
-                "def should_trigger(ctx):\n"
-                "    messages = ctx.get('messages', [])\n"
-                "    return bool(messages[-10:]) and ctx.get('candidate_tool') == 'communicate_with_user'\n"
-            )
-        }
-    }
-    target = GateTarget(
-        stage="post_plan",
-        memory_type="experiences",
-        target_kind="plan_item",
-        plan_item=item,
-        analysis=None,
-        trajectory=_trajectory_with_repair_signal(
-            action="create",
-            first_wrong_tool="communicate_with_user",
-            trigger_boundary="communicate_with_user",
-        ),
-        policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
-    )
-
-    decision = await ExperienceTriggerRuntimeGate().evaluate(target)
-
-    assert decision is None
-
-
-@pytest.mark.asyncio
-async def test_trigger_runtime_gate_parses_rendered_experience_trigger_body():
-    item = _plan_item()
-    item.metadata = {}
-    item.after_content = (
-        "## Failure Pattern\n"
-        "- Missing required information.\n\n"
-        "# Experience Trigger\n"
-        "- experience_name: final_required_info\n"
-        "- trigger_code:\n"
-        "```python\n"
-        "def should_trigger(ctx):\n"
-        "    import os\n"
-        "    return True\n"
-        "```\n"
-    )
-    target = GateTarget(
-        stage="post_plan",
-        memory_type="experiences",
-        target_kind="plan_item",
-        plan_item=item,
-        analysis=None,
-        trajectory=_trajectory_with_repair_signal(
-            action="create",
-            first_wrong_tool="communicate_with_user",
-            trigger_boundary="communicate_with_user",
-        ),
-        policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
-    )
-
-    decision = await ExperienceTriggerRuntimeGate().evaluate(target)
-
-    assert decision is not None
-    assert decision.action == "reject"
-
-
-@pytest.mark.asyncio
 async def test_causal_signal_gate_allows_failed_skip_signal_for_new_experience():
     trajectory = _trajectory_with_repair_signal(action="skip", trigger_boundary="none")
     item = _plan_item()
@@ -1851,69 +1538,6 @@ async def test_causal_signal_gate_allows_failed_skip_signal_for_new_experience()
     decision = await ExperienceCausalSignalGate().evaluate(target)
 
     assert decision is None
-
-
-@pytest.mark.asyncio
-async def test_tool_alignment_uses_first_wrong_tool_even_when_trigger_boundary_none():
-    trajectory = _trajectory_with_repair_signal(
-        action="skip",
-        first_wrong_tool="communicate_with_user",
-        trigger_boundary="none",
-    )
-    item = _plan_item()
-    target = GateTarget(
-        stage="post_plan",
-        memory_type="experiences",
-        target_kind="plan_item",
-        plan_item=item,
-        analysis=None,
-        trajectory=trajectory,
-        policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
-    )
-
-    decision = await ExperienceToolAlignmentGate().evaluate(target)
-
-    assert decision is None
-
-
-@pytest.mark.asyncio
-async def test_causal_signal_gate_allows_split_signal_with_no_existing_target_for_new_experience():
-    trajectory = Trajectory(
-        name="missing_total",
-        uri="viking://user/u/memories/trajectories/missing_total.md",
-        outcome="failure",
-        retrieval_anchor="Stage: final_response",
-        content=(
-            "# Missing total\n"
-            "- Outcome: failure\n"
-            "- First Wrong Tool Call:\n"
-            "  - Tool: communicate_with_user\n"
-            "  - Error type: missing_communication\n"
-            "- Experience Repair Signal:\n"
-            "  - Recommended operation: create\n"
-            "  - Existing experience action: none\n"
-            "  - Existing target experience: none\n"
-            "  - New experience action: create\n"
-            "  - New experience candidate: missing_required_total\n"
-            "  - Trigger boundary: communicate_with_user\n"
-        ),
-    )
-    item = _plan_item()
-    target = GateTarget(
-        stage="post_plan",
-        memory_type="experiences",
-        target_kind="plan_item",
-        plan_item=item,
-        analysis=None,
-        trajectory=trajectory,
-        policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
-    )
-
-    causal_decision = await ExperienceCausalSignalGate().evaluate(target)
-    alignment_decision = await ExperienceToolAlignmentGate().evaluate(target)
-
-    assert causal_decision is None
-    assert alignment_decision is None
 
 
 @pytest.mark.asyncio
