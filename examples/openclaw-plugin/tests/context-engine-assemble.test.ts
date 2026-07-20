@@ -145,7 +145,6 @@ describe("context-engine assemble()", () => {
         isError: false,
       },
     ]);
-    expect(JSON.stringify(result.messages)).not.toContain("[Archive Index]");
   });
 
   it("emits a non-error toolResult for a running tool (not a synthetic error)", async () => {

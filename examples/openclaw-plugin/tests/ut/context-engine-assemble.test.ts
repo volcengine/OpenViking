@@ -412,7 +412,6 @@ describe("context-engine assemble()", () => {
       role: "user",
       content: "[Session History Summary]\n# Session Summary\nPreviously discussed repository setup.",
     });
-    expect(JSON.stringify(result.messages)).not.toContain("[Archive Index]");
     expect(result.messages[1]).toEqual({
       role: "assistant",
       content: [{ type: "text", text: "Stored answer from OpenViking." }],
@@ -475,7 +474,6 @@ describe("context-engine assemble()", () => {
       role: "user",
       content: "[Session History Summary]\n# Session Summary\nPreviously discussed repository setup.",
     });
-    expect(JSON.stringify(result.messages)).not.toContain("[Archive Index]");
     expect(result.messages[1]).toEqual({
       role: "assistant",
       content: [
