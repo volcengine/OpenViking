@@ -49,6 +49,36 @@ def test_build_turns_does_not_treat_tool_transport_as_user_query():
     ]
 
 
+def test_explicit_assistant_role_tool_transport_stays_with_previous_step():
+    messages = [
+        _message("u1", "user", "find the issue"),
+        Message(
+            id="a1",
+            role="assistant",
+            parts=[TextPart("I will inspect it"), ToolPart(tool_id="t1", tool_name="read")],
+        ),
+        Message(
+            id="tr1",
+            role="assistant",
+            message_kind="tool_transport",
+            parts=[
+                ToolPart(
+                    tool_id="t1",
+                    tool_name="read",
+                    tool_output="result",
+                    tool_status="completed",
+                )
+            ],
+        ),
+    ]
+
+    turns = build_turns(messages)
+
+    assert [[message.id for message in step.messages] for step in turns[0].steps] == [
+        ["a1", "tr1"]
+    ]
+
+
 def test_message_semantic_fields_round_trip_without_affecting_legacy_rows():
     message = Message(
         id="checkpoint-1",

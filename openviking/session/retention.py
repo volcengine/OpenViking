@@ -105,12 +105,12 @@ class ActiveMessageBudgetPlan:
 
 def _append_to_turn(turn: UserTurn, message: Message) -> None:
     """Append a message without splitting assistant/tool-result relationships."""
-    if message.role == "assistant":
-        turn.steps.append(AssistantStep(messages=[message]))
-        return
-
     if is_tool_transport(message) and turn.steps:
         turn.steps[-1].messages.append(message)
+        return
+
+    if message.role == "assistant":
+        turn.steps.append(AssistantStep(messages=[message]))
         return
 
     # Malformed/legacy input can contain transport messages before an assistant
@@ -335,7 +335,8 @@ def _partial_latest_turn_plan(
     retained_tokens = int(anchor.estimated_tokens or 0) if anchor is not None else 0
     retained_tokens += sum(step.estimated_tokens for step in retained_steps)
 
-    # Leave room for a checkpoint derived from the already-generated overview.
+    # Leave room for the dedicated checkpoint summary generated alongside the
+    # existing Working Memory output during Phase 2.
     # Mandatory anchor/final/tail messages are never dropped merely to satisfy
     # the budget; in that case budget_exceeded reports the lossless overflow.
     checkpoint_reserve = min(

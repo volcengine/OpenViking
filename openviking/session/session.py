@@ -138,10 +138,13 @@ def _resolve_memory_extraction_scope(
 # Phase 2 of a commit generates / updates a structured 7-section Working
 # Memory document stored at archive_NNN/.overview.md.
 #
-# First commit: call `compression.ov_wm_v2` with a plain completion.
+# First commit: call `compression.ov_wm_v2` with a plain completion unless
+# partial-Turn retention also needs checkpoint summaries. In that case the
+# same call uses `create_working_memory` and returns both products.
 # Subsequent commits: call `compression.ov_wm_v2_update` with the
-# `update_working_memory` tool to get a per-section decision, then let
-# the server do section-level merge against the previous WM.
+# `update_working_memory` tool to get a per-section decision plus any requested
+# checkpoint summaries, then let the server do section-level merge against the
+# previous WM.
 # =====================================================================
 
 WM_SEVEN_SECTIONS: List[str] = [
@@ -215,11 +218,67 @@ WM_UPDATE_TOOL: Dict[str, Any] = {
                     "required": list(WM_SEVEN_SECTIONS),
                     "additionalProperties": False,
                     "properties": dict.fromkeys(WM_SEVEN_SECTIONS, _WM_SECTION_OP_SCHEMA),
-                }
+                },
+                "checkpoint_summaries": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "When checkpoint sources are present, one concise continuation "
+                        "summary per checkpoint_source index, in ascending index order."
+                    ),
+                },
             },
         },
     },
 }
+
+WM_CREATE_WITH_CHECKPOINTS_TOOL: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "create_working_memory",
+        "description": (
+            "Create the complete Working Memory and the requested checkpoint summaries "
+            "from the same model pass."
+        ),
+        "parameters": {
+            "type": "object",
+            "required": ["working_memory", "checkpoint_summaries"],
+            "additionalProperties": False,
+            "properties": {
+                "working_memory": {
+                    "type": "string",
+                    "description": "Complete 7-section Working Memory markdown.",
+                },
+                "checkpoint_summaries": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "One concise continuation summary per checkpoint_source index, "
+                        "in ascending index order."
+                    ),
+                },
+            },
+        },
+    },
+}
+
+
+@dataclass(frozen=True)
+class _CheckpointRequest:
+    """Server-owned mapping for one checkpoint summary requested from Phase 2."""
+
+    turn_anchor_message_id: str
+    source_message_ids: tuple[str, ...]
+    retained_message_token_budget: int
+    estimated_active_tokens: int
+
+
+@dataclass(frozen=True)
+class _ArchiveSummaryResult:
+    """The two products emitted by the existing Working-Memory model call."""
+
+    overview: str
+    checkpoint_summaries: tuple[str, ...] = ()
 
 
 @dataclass
@@ -1996,6 +2055,15 @@ class Session:
                     ov_config = get_openviking_config()
                     effective_policy = MemoryPolicy.from_dict(memory_policy)
                     working_memory_enabled = effective_policy.working_memory_enabled
+                    checkpoint_requests = (
+                        await self._collect_checkpoint_requests_for_phase2(
+                            archive_uri,
+                            covered_failed_archives,
+                            messages,
+                        )
+                        if working_memory_enabled
+                        else []
+                    )
                     latest_archive_overview = (
                         await self._get_latest_completed_archive_overview(
                             exclude_archive_uri=archive_uri,
@@ -2020,10 +2088,29 @@ class Session:
                                 "(memory_policy.working_memory.enabled=false)"
                             )
                             return
-                        summary = await self._generate_archive_summary_async(
+                        summary_kwargs: Dict[str, Any] = {
+                            "latest_archive_overview": latest_archive_overview,
+                        }
+                        if checkpoint_requests:
+                            summary_kwargs["checkpoint_requests"] = checkpoint_requests
+                        generated = await self._generate_archive_summary_async(
                             extraction_messages,
-                            latest_archive_overview=latest_archive_overview,
+                            **summary_kwargs,
                         )
+                        summary_result = (
+                            generated
+                            if isinstance(generated, _ArchiveSummaryResult)
+                            else _ArchiveSummaryResult(overview=str(generated or ""))
+                        )
+                        checkpoint_records = self._build_checkpoint_records(
+                            checkpoint_requests,
+                            summary_result.checkpoint_summaries,
+                        )
+                        summary = summary_result.overview
+                        if checkpoint_requests and not summary.strip():
+                            raise ValueError(
+                                "Working Memory output is empty for a required checkpoint"
+                            )
                         if self._viking_fs and summary:
                             abstract = self._extract_abstract_from_summary(summary)
                             await self._viking_fs.write_file(
@@ -2041,6 +2128,7 @@ class Session:
                                 {
                                     "overview_tokens": estimate_text_tokens(summary),
                                     "abstract_tokens": estimate_text_tokens(abstract),
+                                    "checkpoints": checkpoint_records,
                                 },
                             )
 
@@ -2340,6 +2428,7 @@ class Session:
                 archive_uri,
                 first_message_id,
                 last_message_id,
+                working_memory_enabled=working_memory_enabled,
                 coverage_start_archive=coverage_start_archive,
                 coverage_end_archive=coverage_end_archive,
                 covered_failed_archives=covered_failed_archives,
@@ -2403,6 +2492,7 @@ class Session:
         first_message_id: str,
         last_message_id: str,
         *,
+        working_memory_enabled: Optional[bool] = None,
         coverage_start_archive: Optional[str] = None,
         coverage_end_archive: Optional[str] = None,
         covered_failed_archives: Optional[List[str]] = None,
@@ -2416,6 +2506,7 @@ class Session:
             {
                 "starting_message_id": first_message_id,
                 "ending_message_id": last_message_id,
+                "working_memory_enabled": working_memory_enabled,
                 "coverage_start_archive": coverage_start_archive or archive_id,
                 "coverage_end_archive": coverage_end_archive or archive_id,
                 "covered_failed_archives": list(covered_failed_archives or []),
@@ -2463,15 +2554,9 @@ class Session:
 
         context = await self._collect_session_context_components()
         merged_messages = context["messages"]
-        active_budget = token_budget
-        if (
-            self._meta.retention_mode == RETENTION_MODE_TURN_BUDGET
-            and self._meta.retained_message_token_budget > 0
-        ):
-            active_budget = min(active_budget, self._meta.retained_message_token_budget)
         budgeted = fit_active_messages_to_budget(
             merged_messages,
-            token_budget=active_budget,
+            token_budget=token_budget,
         )
         merged_messages = budgeted.messages
         message_tokens = budgeted.estimated_tokens
@@ -2480,7 +2565,7 @@ class Session:
                 "[get_session_context] active budget applied: session_id=%s, "
                 "budget=%s, dropped=%s, truncated=%s",
                 self.session_id,
-                active_budget,
+                token_budget,
                 len(budgeted.dropped_message_ids),
                 len(budgeted.truncated_message_ids),
             )
@@ -2612,12 +2697,10 @@ class Session:
 
         uncovered = await self._get_uncovered_archive_messages(archive_states)
         merged_messages = self._stable_deduplicate_messages(uncovered + list(self._messages))
-        if latest_archive:
-            merged_messages = await self._insert_checkpoint_if_needed(
-                merged_messages,
-                latest_archive,
-                archive_states,
-            )
+        merged_messages = await self._insert_checkpoint_if_needed(
+            merged_messages,
+            archive_states,
+        )
 
         return {
             "latest_archive": latest_archive,
@@ -2682,12 +2765,34 @@ class Session:
                     )
 
             if done_exists:
-                # Preserve the established archive contract: .done means the
-                # archive is complete even when no overview was generated
-                # (for example memory_policy.working_memory.enabled=false).
-                # Completed raw messages must not be merged back into active
-                # context solely because the optional overview is absent.
                 overview = await self._read_archive_overview(archive["archive_uri"])
+                if done.get("working_memory_enabled") is True and not overview.strip():
+                    # New markers distinguish an intentionally overview-less
+                    # working_memory=false commit from a missing/corrupt
+                    # required overview. The latter remains logically live and
+                    # can be rolled forward by a later successful archive.
+                    logger.warning(
+                        "Completed archive has no readable required overview: %s",
+                        archive["archive_uri"],
+                    )
+                    states.append(
+                        ArchiveState(
+                            archive_id=archive["archive_id"],
+                            archive_uri=archive["archive_uri"],
+                            index=archive["index"],
+                            state="failed",
+                            done=done,
+                            failed={
+                                "stage": "archive_overview",
+                                "error": "required overview is missing or unreadable",
+                            },
+                        )
+                    )
+                    continue
+
+                # working_memory=false legitimately writes .done without an
+                # overview. Legacy markers lack the explicit flag, so retain
+                # their established completed semantics for compatibility.
                 states.append(
                     ArchiveState(
                         archive_id=archive["archive_id"],
@@ -2743,7 +2848,10 @@ class Session:
                 max(state.coverage_start_index, state.coverage_end_index),
             )
             for candidate in states:
-                if start <= candidate.index <= end:
+                # A pending archive still has a live Phase 2 owner and is never
+                # valid coverage input. Even malformed/manual range metadata
+                # must not make its raw messages disappear.
+                if start <= candidate.index <= end and candidate.state != "pending":
                     covered.add(candidate.archive_id)
             explicit = state.done.get("covered_failed_archives", [])
             if isinstance(explicit, list):
@@ -2920,84 +3028,237 @@ class Session:
         except Exception:
             return {}
 
-    @classmethod
-    def _checkpoint_abstract_from_overview(cls, overview: str) -> str:
-        """Reuse stable Working-Memory sections without another model call."""
-        sections = cls._parse_wm_sections(overview)
-        selected: List[str] = []
-        for name in ("Current State", "Key Facts & Decisions", "Open Issues"):
-            body = sections.get(f"## {name}", "").strip()
-            if body:
-                selected.append(f"{name}:\n{body}")
-        if selected:
-            return "\n\n".join(selected)
-        return overview.strip()
+    async def _collect_checkpoint_requests_for_phase2(
+        self,
+        archive_uri: str,
+        covered_failed_archives: List[str],
+        messages: List[Message],
+    ) -> List[_CheckpointRequest]:
+        """Collect and validate partial-Turn checkpoint work owned by this Phase 2.
+
+        Failed archives rolled into the current commit contribute their pending
+        checkpoint sources. Requests sharing one retained user anchor are merged
+        before the LLM call, so context assembly inserts one checkpoint per Turn.
+        """
+        archive_root = archive_uri.rstrip("/").rsplit("/", 1)[0]
+        current_archive_id = archive_uri.rstrip("/").split("/")[-1]
+        archive_ids = list(
+            dict.fromkeys(
+                [
+                    archive_id
+                    for archive_id in [*covered_failed_archives, current_archive_id]
+                    if isinstance(archive_id, str) and re.fullmatch(r"archive_\d+", archive_id)
+                ]
+            )
+        )
+        archive_ids.sort(key=lambda item: int(item.split("_")[1]))
+
+        message_by_id = {message.id: message for message in messages}
+        message_ids = set(message_by_id)
+        message_order = {message.id: index for index, message in enumerate(messages)}
+        turn_anchor_by_message_id: Dict[str, Optional[str]] = {}
+        for turn in build_turns(messages):
+            owner_anchor_id = turn.anchor.id if turn.anchor is not None else None
+            for message in turn.messages:
+                turn_anchor_by_message_id[message.id] = owner_anchor_id
+        merged: Dict[str, Dict[str, Any]] = {}
+        for archive_id in archive_ids:
+            meta = await self._read_archive_meta(f"{archive_root}/{archive_id}")
+            plan = meta.get("retention_plan")
+            if not isinstance(plan, dict) or not plan.get("partial_turn"):
+                continue
+
+            anchor_id = plan.get("turn_anchor_message_id")
+            raw_source_ids = plan.get("checkpoint_source_message_ids")
+            if not isinstance(anchor_id, str) or not anchor_id:
+                raise ValueError(f"{archive_id} has a partial Turn without a valid anchor")
+            if not isinstance(raw_source_ids, list) or not raw_source_ids:
+                raise ValueError(
+                    f"{archive_id} has a partial Turn without checkpoint source messages"
+                )
+            source_ids = [
+                source_id
+                for source_id in raw_source_ids
+                if isinstance(source_id, str) and source_id
+            ]
+            if len(source_ids) != len(raw_source_ids):
+                raise ValueError(f"{archive_id} has invalid checkpoint source message IDs")
+
+            missing_ids = [
+                message_id
+                for message_id in [anchor_id, *source_ids]
+                if message_id not in message_ids
+            ]
+            if missing_ids:
+                raise ValueError(
+                    f"{archive_id} checkpoint source is missing messages: {missing_ids}"
+                )
+            invalid_source_ids = [
+                source_id
+                for source_id in source_ids
+                if is_user_query(message_by_id[source_id])
+                or turn_anchor_by_message_id.get(source_id) != anchor_id
+            ]
+            if invalid_source_ids:
+                raise ValueError(
+                    f"{archive_id} checkpoint source is outside its Assistant/Tool prefix: "
+                    f"{invalid_source_ids}"
+                )
+
+            request = merged.setdefault(
+                anchor_id,
+                {
+                    "source_message_ids": [],
+                    "retained_message_token_budget": 0,
+                    "estimated_active_tokens": 0,
+                },
+            )
+            request["source_message_ids"] = list(
+                dict.fromkeys([*request["source_message_ids"], *source_ids])
+            )
+            # The newest plan for the same still-active Turn is authoritative.
+            request["retained_message_token_budget"] = max(
+                0, int(plan.get("retained_message_token_budget", 0) or 0)
+            )
+            request["estimated_active_tokens"] = max(
+                0, int(plan.get("estimated_active_tokens", 0) or 0)
+            )
+
+        requests: List[_CheckpointRequest] = []
+        for anchor_id, request in merged.items():
+            source_ids = sorted(
+                request["source_message_ids"],
+                key=lambda message_id: message_order[message_id],
+            )
+            requests.append(
+                _CheckpointRequest(
+                    turn_anchor_message_id=anchor_id,
+                    source_message_ids=tuple(source_ids),
+                    retained_message_token_budget=request["retained_message_token_budget"],
+                    estimated_active_tokens=request["estimated_active_tokens"],
+                )
+            )
+        requests.sort(
+            key=lambda request: min(
+                message_order[source_id] for source_id in request.source_message_ids
+            )
+        )
+        return requests
+
+    @staticmethod
+    def _build_checkpoint_records(
+        requests: List[_CheckpointRequest],
+        summaries: tuple[str, ...],
+    ) -> List[Dict[str, Any]]:
+        """Bind ordinal LLM outputs to server-owned IDs and enforce local budgets."""
+        if len(summaries) != len(requests):
+            raise ValueError(
+                "Working Memory output returned "
+                f"{len(summaries)} checkpoint summaries for {len(requests)} requests"
+            )
+
+        records: List[Dict[str, Any]] = []
+        for request, raw_summary in zip(requests, summaries, strict=True):
+            summary = raw_summary.strip() if isinstance(raw_summary, str) else ""
+            if not summary:
+                raise ValueError("Working Memory output contains an empty checkpoint summary")
+
+            configured_budget = request.retained_message_token_budget
+            if configured_budget > 0:
+                available = configured_budget - request.estimated_active_tokens
+                checkpoint_budget = (
+                    min(1024, available) if available > 0 else min(256, configured_budget)
+                )
+            else:
+                checkpoint_budget = 1024
+            abstract = truncate_text_to_token_budget(summary, max(1, checkpoint_budget))
+            if not abstract:
+                raise ValueError("Checkpoint summary is empty after local token truncation")
+            records.append(
+                {
+                    "turn_anchor_message_id": request.turn_anchor_message_id,
+                    "source_message_ids": list(request.source_message_ids),
+                    "abstract": abstract,
+                    "estimated_tokens": estimate_text_tokens(abstract),
+                }
+            )
+        return records
 
     async def _insert_checkpoint_if_needed(
         self,
         messages: List[Message],
-        latest_archive: Dict[str, Any],
         states: List[ArchiveState],
     ) -> List[Message]:
-        """Insert deterministic checkpoints after retained anchors once coverage succeeds."""
-        if not messages or not latest_archive.get("overview"):
+        """Insert persisted checkpoint products after retained anchors.
+
+        Only completed archives are authoritative. Legacy archives without a
+        ``checkpoints`` metadata field do not synthesize one from their overview.
+        """
+        if not messages:
             return messages
 
-        covered = self._covered_archive_ids(states)
         message_ids = {message.id for message in messages}
         candidates: Dict[str, Dict[str, Any]] = {}
         for state in states:
-            if state.state != "completed" and state.archive_id not in covered:
+            if state.state != "completed":
                 continue
             meta = await self._read_archive_meta(state.archive_uri)
-            plan = meta.get("retention_plan")
-            if not isinstance(plan, dict) or not plan.get("partial_turn"):
+            checkpoints = meta.get("checkpoints")
+            if not isinstance(checkpoints, list):
                 continue
-            anchor_id = plan.get("turn_anchor_message_id")
-            source_ids = plan.get("checkpoint_source_message_ids")
-            if not isinstance(anchor_id, str) or anchor_id not in message_ids:
-                continue
-            if not isinstance(source_ids, list) or not source_ids:
-                continue
+            for checkpoint in checkpoints:
+                if not isinstance(checkpoint, dict):
+                    continue
+                anchor_id = checkpoint.get("turn_anchor_message_id")
+                source_ids = checkpoint.get("source_message_ids")
+                abstract = checkpoint.get("abstract")
+                if not isinstance(anchor_id, str) or anchor_id not in message_ids:
+                    continue
+                if not isinstance(source_ids, list) or not source_ids:
+                    continue
+                if not isinstance(abstract, str) or not abstract.strip():
+                    continue
+                valid_source_ids = [
+                    item for item in source_ids if isinstance(item, str) and item
+                ]
+                if not valid_source_ids:
+                    continue
 
-            previous = candidates.get(anchor_id)
-            merged_source_ids = list(
-                dict.fromkeys(
-                    (previous.get("source_message_ids", []) if previous else [])
-                    + [item for item in source_ids if isinstance(item, str)]
+                # One long-running User Turn may be partially committed more
+                # than once. Keep every disjoint completed prefix instead of
+                # letting the newest checkpoint erase earlier compressed Steps.
+                candidate = candidates.setdefault(
+                    anchor_id,
+                    {
+                        "archive_id": state.archive_id,
+                        "archive_uri": state.archive_uri,
+                        "source_message_ids": [],
+                        "abstracts": [],
+                    },
                 )
-            )
-            candidates[anchor_id] = {
-                # The abstract below comes from the latest completed overview,
-                # which may be a later archive that rolled a failed partial
-                # archive forward. Point ContextPart at the actual overview
-                # carrying the coverage, not at the original failed directory.
-                "archive_id": latest_archive["archive_id"],
-                "archive_uri": latest_archive["archive_uri"],
-                "index": state.index,
-                "source_message_ids": merged_source_ids,
-                "token_budget": max(0, int(plan.get("retained_message_token_budget", 0) or 0)),
-            }
+                seen_source_ids = set(candidate["source_message_ids"])
+                new_source_ids = [
+                    source_id
+                    for source_id in valid_source_ids
+                    if source_id not in seen_source_ids
+                ]
+                if not new_source_ids:
+                    continue
+                candidate["archive_id"] = state.archive_id
+                candidate["archive_uri"] = state.archive_uri
+                candidate["source_message_ids"].extend(new_source_ids)
+                candidate["abstracts"].append(abstract.strip())
 
         if not candidates:
             return messages
 
-        raw_tokens = sum(int(message.estimated_tokens or 0) for message in messages)
-        checkpoint_text = self._checkpoint_abstract_from_overview(latest_archive["overview"])
         result: List[Message] = []
         for message in messages:
             result.append(message)
             candidate = candidates.get(message.id)
             if not candidate:
                 continue
-            configured_budget = candidate["token_budget"]
-            available = max(0, configured_budget - raw_tokens) if configured_budget else 0
-            if available:
-                abstract = truncate_text_to_token_budget(checkpoint_text, available)
-            else:
-                # Lossless anchor/final retention can legitimately exceed B. Keep
-                # a bounded checkpoint and report overflow via commit metadata.
-                abstract = truncate_text_to_token_budget(checkpoint_text, 256)
+            abstract = "\n\n".join(candidate["abstracts"])
             if not abstract:
                 continue
             result.append(
@@ -3244,11 +3505,72 @@ class Session:
         body = "\n".join(lines) if lines else "(no content)"
         return f"[{m.role}]: {body}"
 
+    @classmethod
+    def _format_messages_for_wm(
+        cls,
+        messages: List[Message],
+        checkpoint_requests: List[_CheckpointRequest],
+    ) -> str:
+        """Format WM input and mark checkpoint sources with ordinal-only tags."""
+        source_indexes: Dict[str, int] = {}
+        for index, request in enumerate(checkpoint_requests):
+            for message_id in request.source_message_ids:
+                previous = source_indexes.setdefault(message_id, index)
+                if previous != index:
+                    raise ValueError(
+                        f"Checkpoint source message {message_id} belongs to multiple requests"
+                    )
+
+        lines: List[str] = []
+        open_index: Optional[int] = None
+        for message in messages:
+            index = source_indexes.get(message.id)
+            if index != open_index:
+                if open_index is not None:
+                    lines.append("</checkpoint_source>")
+                if index is not None:
+                    lines.append(f'<checkpoint_source index="{index}">')
+                open_index = index
+            lines.append(cls._format_message_for_wm(message))
+        if open_index is not None:
+            lines.append("</checkpoint_source>")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _checkpoint_prompt_instructions(request_count: int) -> str:
+        if request_count <= 0:
+            return ""
+        return (
+            "# CHECKPOINT OUTPUT\n\n"
+            f"The session content contains checkpoint_source blocks indexed 0 through "
+            f"{request_count - 1}. In the SAME tool call, return checkpoint_summaries "
+            f"with exactly {request_count} strings in index order. Each string must "
+            "summarize only its marked block as a compact continuation note: preserve "
+            "the assistant's intent, important tool actions and results, conclusions, "
+            "and unfinished work; omit raw output bulk and do not mention archiving, "
+            "checkpointing, or this instruction."
+        )
+
+    @staticmethod
+    def _parse_required_checkpoint_summaries(
+        args: Dict[str, Any],
+        request_count: int,
+    ) -> tuple[str, ...]:
+        raw = args.get("checkpoint_summaries")
+        if not isinstance(raw, list):
+            raise ValueError("tool_call arguments.checkpoint_summaries missing")
+        if len(raw) != request_count or not all(isinstance(item, str) for item in raw):
+            raise ValueError(
+                f"tool_call checkpoint_summaries must contain exactly {request_count} strings"
+            )
+        return tuple(raw)
+
     async def _generate_archive_summary_async(
         self,
         messages: List[Message],
         latest_archive_overview: str = "",
-    ) -> str:
+        checkpoint_requests: Optional[List[_CheckpointRequest]] = None,
+    ) -> str | _ArchiveSummaryResult:
         """Generate Working Memory document for the current archive (async).
 
         Two paths:
@@ -3265,13 +3587,19 @@ class Session:
             f"_generate_archive_summary_async called "
             f"messages={len(messages)} prior_wm={len(latest_archive_overview)}B"
         )
+        checkpoint_requests = list(checkpoint_requests or [])
         if not messages:
+            if checkpoint_requests:
+                raise ValueError("Cannot generate checkpoints without archive messages")
             return ""
 
-        formatted = "\n".join(self._format_message_for_wm(m) for m in messages)
+        formatted = self._format_messages_for_wm(messages, checkpoint_requests)
+        checkpoint_instructions = self._checkpoint_prompt_instructions(len(checkpoint_requests))
 
         vlm = get_openviking_config().vlm
         if not (vlm and vlm.is_available()):
+            if checkpoint_requests:
+                raise ValueError("A configured VLM is required to generate checkpoint summaries")
             turn_count = len([m for m in messages if is_user_query(m)])
             return (
                 f"# Session Summary\n\n**Overview**: {turn_count} turns, {len(messages)} messages"
@@ -3280,6 +3608,8 @@ class Session:
         try:
             from openviking.prompts import render_prompt
         except Exception as e:
+            if checkpoint_requests:
+                raise RuntimeError("Prompt module is required to generate checkpoints") from e
             logger.warning(f"Prompt module unavailable: {e}")
             turn_count = len([m for m in messages if is_user_query(m)])
             return (
@@ -3303,12 +3633,46 @@ class Session:
                     {
                         "messages": formatted,
                         "latest_archive_overview": latest_archive_overview or "",
+                        "checkpoint_instructions": checkpoint_instructions,
                     },
                 )
+                if checkpoint_requests:
+                    response = await vlm.get_completion_async(
+                        prompt=prompt,
+                        tools=[WM_CREATE_WITH_CHECKPOINTS_TOOL],
+                        tool_choice={
+                            "type": "function",
+                            "function": {"name": "create_working_memory"},
+                        },
+                    )
+                    if not (
+                        getattr(response, "has_tool_calls", False)
+                        and getattr(response, "tool_calls", None)
+                    ):
+                        raise ValueError(
+                            "Working Memory creation returned no create_working_memory tool call"
+                        )
+                    args = response.tool_calls[0].arguments
+                    if isinstance(args, str):
+                        args = json.loads(args)
+                    if not isinstance(args, dict):
+                        raise ValueError("create_working_memory arguments must be an object")
+                    working_memory = args.get("working_memory")
+                    if not isinstance(working_memory, str) or not working_memory.strip():
+                        raise ValueError("create_working_memory.working_memory is empty")
+                    return _ArchiveSummaryResult(
+                        overview=working_memory,
+                        checkpoint_summaries=self._parse_required_checkpoint_summaries(
+                            args,
+                            len(checkpoint_requests),
+                        ),
+                    )
                 return await vlm.get_completion_async(prompt)
             except Exception as e:
                 _wm_debug(f"creation failed: {e}")
                 logger.warning(f"WM creation failed: {e}")
+                if checkpoint_requests:
+                    raise
                 turn_count = len([m for m in messages if is_user_query(m)])
                 return (
                     f"# Session Summary\n\n"
@@ -3327,6 +3691,7 @@ class Session:
                     "messages": formatted,
                     "latest_archive_overview": latest_archive_overview,
                     "wm_section_reminders": reminders,
+                    "checkpoint_instructions": checkpoint_instructions,
                 },
             )
             resp = await vlm.get_completion_async(
@@ -3341,6 +3706,8 @@ class Session:
             import traceback as _tb
 
             _wm_debug(f"tool_call raised: {type(e).__name__}: {e} tb={_tb.format_exc()[-400:]}")
+            if checkpoint_requests:
+                raise
             logger.warning("WM update tool_call failed (%s); falling back to creation prompt", e)
             return await self._fallback_generate_wm_creation(
                 formatted, messages, latest_archive_overview
@@ -3356,11 +3723,14 @@ class Session:
         )
 
         if not has_tc:
+            if checkpoint_requests:
+                raise ValueError("Working Memory update returned no tool call for checkpoints")
             logger.warning("WM update: LLM returned no tool_call; falling back to creation prompt")
             return await self._fallback_generate_wm_creation(
                 formatted, messages, latest_archive_overview
             )
 
+        checkpoint_summaries: tuple[str, ...] = ()
         try:
             raw_args = resp.tool_calls[0].arguments
             _wm_debug(f"raw_args type={type(raw_args).__name__} preview={str(raw_args)[:400]!r}")
@@ -3398,6 +3768,11 @@ class Session:
                     _wm_debug(f"recovered args keys={list(args.keys())}")
 
             _wm_debug(f"args keys={list(args.keys())}")
+            if checkpoint_requests:
+                checkpoint_summaries = self._parse_required_checkpoint_summaries(
+                    args,
+                    len(checkpoint_requests),
+                )
             # Tolerant: if LLM returned {"Session Title": {...}, ...} without
             # the outer "sections" wrapper, treat the top-level as ops.
             if "sections" in args and isinstance(args["sections"], dict):
@@ -3410,6 +3785,8 @@ class Session:
             if not isinstance(ops, dict):
                 raise ValueError("ops is not a dict")
         except Exception as e:
+            if checkpoint_requests:
+                raise
             _wm_debug(
                 f"args parse failed: {type(e).__name__}: {e}; attempting regex recovery from raw"
             )
@@ -3458,7 +3835,13 @@ class Session:
             f"ops keys={list(ops.keys())[:7]} "
             f"ops_summary={[(k, v.get('op') if isinstance(v, dict) else type(v).__name__) for k, v in ops.items()][:7]}"
         )
-        return self._merge_wm_sections(latest_archive_overview, ops)
+        overview = self._merge_wm_sections(latest_archive_overview, ops)
+        if checkpoint_requests:
+            return _ArchiveSummaryResult(
+                overview=overview,
+                checkpoint_summaries=checkpoint_summaries,
+            )
+        return overview
 
     async def _fallback_generate_wm_creation(
         self,
@@ -3480,7 +3863,11 @@ class Session:
 
             prompt = render_prompt(
                 "compression.ov_wm_v2",
-                {"messages": formatted_messages, "latest_archive_overview": prior_overview},
+                {
+                    "messages": formatted_messages,
+                    "latest_archive_overview": prior_overview,
+                    "checkpoint_instructions": "",
+                },
             )
             return await get_openviking_config().vlm.get_completion_async(prompt)
         except Exception as e:

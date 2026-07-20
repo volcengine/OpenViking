@@ -10,7 +10,9 @@ import pytest
 
 from openviking import AsyncOpenViking
 from openviking.message import Message, TextPart, ToolPart
+from openviking.models.vlm.base import ToolCall, VLMResponse
 from openviking.service.task_tracker import get_task_tracker
+from openviking.session.session import Session, _ArchiveSummaryResult, _CheckpointRequest
 
 
 async def _write_archive(
@@ -59,6 +61,22 @@ def _text_message(message_id: str, role: str, text: str) -> Message:
     return Message(id=message_id, role=role, parts=[TextPart(text)])
 
 
+def test_checkpoint_record_respects_remaining_retained_budget():
+    records = Session._build_checkpoint_records(
+        [
+            _CheckpointRequest(
+                turn_anchor_message_id="u1",
+                source_message_ids=("a1",),
+                retained_message_token_budget=20,
+                estimated_active_tokens=15,
+            )
+        ],
+        ("A" * 400,),
+    )
+
+    assert records[0]["estimated_tokens"] <= 5
+
+
 async def test_two_pending_archives_are_visible_independent_of_commit_count(
     client: AsyncOpenViking,
 ):
@@ -87,9 +105,7 @@ async def test_session_context_enforces_hard_budget_without_mutating_archive_raw
     await session._write_to_agfs_async(messages=[live])
 
     context = await session.get_session_context(token_budget=100)
-    raw = await session._read_archive_messages(
-        f"{session.uri}/history/archive_001"
-    )
+    raw = await session._read_archive_messages(f"{session.uri}/history/archive_001")
 
     assert context["estimatedTokens"] <= 100
     assert context["stats"]["activeTokens"] <= 100
@@ -113,6 +129,28 @@ async def test_failed_archive_returns_raw_but_done_without_overview_stays_archiv
         2,
         [_text_message("u2", "user", "completed without overview")],
         done={"starting_message_id": "u2", "ending_message_id": "u2"},
+    )
+
+    context = await session.get_session_context()
+
+    assert [message["id"] for message in context["messages"]] == ["u1"]
+    assert context["stats"]["failedArchives"] == 1
+
+
+async def test_done_with_missing_required_overview_remains_uncovered(
+    client: AsyncOpenViking,
+):
+    session = client.session(session_id="missing_required_overview_test")
+    await session.ensure_exists()
+    await _write_archive(
+        session,
+        1,
+        [_text_message("u1", "user", "required overview raw")],
+        done={
+            "starting_message_id": "u1",
+            "ending_message_id": "u1",
+            "working_memory_enabled": True,
+        },
     )
 
     context = await session.get_session_context()
@@ -146,7 +184,7 @@ async def test_legacy_done_marker_covers_only_its_own_archive(
     assert [message["id"] for message in context["messages"]] == ["u1"]
 
 
-async def test_explicit_failed_coverage_cannot_hide_a_pending_archive(
+async def test_coverage_metadata_cannot_hide_a_pending_archive(
     client: AsyncOpenViking,
 ):
     session = client.session(session_id="pending_not_explicitly_covered_test")
@@ -164,6 +202,8 @@ async def test_explicit_failed_coverage_cannot_hide_a_pending_archive(
         done={
             "starting_message_id": "u2",
             "ending_message_id": "u2",
+            "coverage_start_archive": "archive_001",
+            "coverage_end_archive": "archive_002",
             "covered_failed_archives": ["archive_001"],
         },
     )
@@ -255,11 +295,9 @@ async def test_phase2_never_replays_an_earlier_pending_archive(
         [_text_message("u3", "user", "current three")],
     )
 
-    messages, start, end, failed, _completed_steps = (
-        await session._prepare_phase2_archive_messages(
-            current_uri,
-            [_text_message("u3", "user", "current three")],
-        )
+    messages, start, end, failed, _completed_steps = await session._prepare_phase2_archive_messages(
+        current_uri,
+        [_text_message("u3", "user", "current three")],
     )
 
     assert [message.id for message in messages] == ["u2", "u3"]
@@ -375,6 +413,67 @@ async def test_phase2_roll_forward_writes_coverage_and_calls_existing_summary_on
     assert context["messages"] == []
 
 
+async def test_phase2_rolls_forward_done_archive_with_missing_required_overview(
+    client: AsyncOpenViking,
+    monkeypatch,
+):
+    session = client.session(session_id="invalid_done_roll_forward_test")
+    await session.ensure_exists()
+    await _write_archive(
+        session,
+        1,
+        [_text_message("u1", "user", "raw from invalid completed archive")],
+        done={
+            "starting_message_id": "u1",
+            "ending_message_id": "u1",
+            "working_memory_enabled": True,
+        },
+    )
+    current = _text_message("u2", "user", "current archive")
+    current_uri = await _write_archive(session, 2, [current])
+    seen_message_ids: list[list[str]] = []
+
+    async def fake_summary(messages, latest_archive_overview=""):
+        assert latest_archive_overview == ""
+        seen_message_ids.append([message.id for message in messages])
+        return "# Session Summary\n\n## Current State\nInvalid archive was recovered."
+
+    config = SimpleNamespace(
+        memory=SimpleNamespace(
+            extraction_enabled=False,
+            session_skill_extraction_enabled=False,
+        )
+    )
+    monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+    monkeypatch.setattr(session, "_generate_archive_summary_async", fake_summary)
+
+    task_id = str(uuid4())
+    await get_task_tracker().create(
+        "session_commit",
+        resource_id=session.session_id,
+        account_id=session.ctx.account_id,
+        user_id=session.ctx.user.user_id,
+        task_id=task_id,
+    )
+    await session._run_memory_extraction(
+        task_id=task_id,
+        archive_uri=current_uri,
+        messages=[current],
+        usage_records=[],
+        first_message_id=current.id,
+        last_message_id=current.id,
+        memory_policy={"working_memory": {"enabled": True}},
+    )
+
+    done = json.loads(await session._viking_fs.read_file(f"{current_uri}/.done", ctx=session.ctx))
+    context = await session.get_session_context()
+    assert seen_message_ids == [["u1", "u2"]]
+    assert done["coverage_start_archive"] == "archive_001"
+    assert done["covered_failed_archives"] == ["archive_001"]
+    assert context["latest_archive_overview"].endswith("Invalid archive was recovered.")
+    assert context["messages"] == []
+
+
 async def test_roll_forward_does_not_repeat_completed_memory_step_messages(
     client: AsyncOpenViking,
     monkeypatch,
@@ -478,7 +577,15 @@ Connection pool exhaustion is confirmed.
                 "checkpoint_source_message_ids": ["a1"],
                 "raw_tail_start_message_id": "a2",
                 "retained_message_token_budget": 12_000,
-            }
+            },
+            "checkpoints": [
+                {
+                    "turn_anchor_message_id": "u1",
+                    "source_message_ids": ["a1"],
+                    "abstract": "Checked the first signal and found pool saturation.",
+                    "estimated_tokens": 12,
+                }
+            ],
         },
         done={
             "starting_message_id": "u1",
@@ -490,8 +597,12 @@ Connection pool exhaustion is confirmed.
     )
     session._messages = [anchor, tail]
     await session._write_to_agfs_async(messages=session._messages)
+    # The retained-message budget belongs to commit planning. Context reads
+    # must use their own request budget instead of silently reusing this value.
+    session.meta.retention_mode = "turn_budget"
+    session.meta.retained_message_token_budget = 1
 
-    context = await session.get_session_context()
+    context = await session.get_session_context(token_budget=128_000)
 
     assert [message["id"] for message in context["messages"]] == [
         "u1",
@@ -503,7 +614,502 @@ Connection pool exhaustion is confirmed.
     assert "peer_id" not in checkpoint
     assert checkpoint["source_message_ids"] == ["a1"]
     assert checkpoint["parts"][0]["uri"] == archive_uri
-    assert "Connection pool exhaustion" in checkpoint["parts"][0]["abstract"]
+    assert checkpoint["parts"][0]["abstract"] == (
+        "Checked the first signal and found pool saturation."
+    )
+
+
+async def test_legacy_partial_turn_does_not_derive_checkpoint_from_overview(
+    client: AsyncOpenViking,
+):
+    session = client.session(session_id="legacy_partial_turn_without_checkpoint_test")
+    await session.ensure_exists()
+    anchor = _text_message("u1", "user", "investigate the outage")
+    early = _text_message("a1", "assistant", "checking the first signal")
+    tail = _text_message("a2", "assistant", "the latest raw step")
+    await _write_archive(
+        session,
+        1,
+        [anchor, early],
+        overview="# Working Memory\n\n## Current State\nPool exhaustion was found.",
+        meta={
+            "retention_plan": {
+                "mode": "turn_budget",
+                "partial_turn": True,
+                "turn_anchor_message_id": "u1",
+                "checkpoint_source_message_ids": ["a1"],
+                "retained_message_token_budget": 12_000,
+            }
+        },
+        done={"starting_message_id": "u1", "ending_message_id": "a1"},
+    )
+    session._messages = [anchor, tail]
+    await session._write_to_agfs_async(messages=session._messages)
+
+    context = await session.get_session_context()
+
+    assert [message["id"] for message in context["messages"]] == ["u1", "a2"]
+
+
+async def test_phase2_persists_checkpoint_from_same_summary_call(
+    client: AsyncOpenViking,
+    monkeypatch,
+):
+    session = client.session(session_id="phase2_checkpoint_product_test")
+    await session.ensure_exists()
+    anchor = _text_message("u1", "user", "investigate the outage")
+    early = _text_message("a1", "assistant", "checking the first signal")
+    tail = _text_message("a2", "assistant", "the latest raw step")
+    archive_uri = await _write_archive(
+        session,
+        1,
+        [anchor, early],
+        meta={
+            "retention_plan": {
+                "mode": "turn_budget",
+                "partial_turn": True,
+                "turn_anchor_message_id": "u1",
+                "checkpoint_source_message_ids": ["a1"],
+                "raw_tail_start_message_id": "a2",
+                "retained_message_token_budget": 6000,
+                "estimated_active_tokens": 100,
+            }
+        },
+    )
+    session._messages = [anchor, tail]
+    await session._write_to_agfs_async(messages=session._messages)
+    calls = 0
+
+    async def fake_summary(
+        messages,
+        latest_archive_overview="",
+        checkpoint_requests=None,
+    ):
+        nonlocal calls
+        calls += 1
+        assert latest_archive_overview == ""
+        assert [message.id for message in messages] == ["u1", "a1"]
+        assert checkpoint_requests is not None
+        assert len(checkpoint_requests) == 1
+        assert checkpoint_requests[0].turn_anchor_message_id == "u1"
+        assert checkpoint_requests[0].source_message_ids == ("a1",)
+        return _ArchiveSummaryResult(
+            overview="# Working Memory\n\n## Current State\nPool saturation confirmed.",
+            checkpoint_summaries=("Checked the first signal; pool saturation was confirmed.",),
+        )
+
+    config = SimpleNamespace(
+        memory=SimpleNamespace(
+            extraction_enabled=False,
+            session_skill_extraction_enabled=False,
+        )
+    )
+    monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+    monkeypatch.setattr(session, "_generate_archive_summary_async", fake_summary)
+
+    task_id = str(uuid4())
+    await get_task_tracker().create(
+        "session_commit",
+        resource_id=session.session_id,
+        account_id=session.ctx.account_id,
+        user_id=session.ctx.user.user_id,
+        task_id=task_id,
+    )
+    await session._run_memory_extraction(
+        task_id=task_id,
+        archive_uri=archive_uri,
+        messages=[anchor, early],
+        usage_records=[],
+        first_message_id="u1",
+        last_message_id="a1",
+        memory_policy={"working_memory": {"enabled": True}},
+    )
+
+    meta = json.loads(
+        await session._viking_fs.read_file(f"{archive_uri}/.meta.json", ctx=session.ctx)
+    )
+    context = await session.get_session_context()
+    assert calls == 1
+    assert meta["checkpoints"][0]["turn_anchor_message_id"] == "u1"
+    assert meta["checkpoints"][0]["source_message_ids"] == ["a1"]
+    assert meta["checkpoints"][0]["abstract"] == (
+        "Checked the first signal; pool saturation was confirmed."
+    )
+    assert meta["checkpoints"][0]["estimated_tokens"] > 0
+    assert [message["id"] for message in context["messages"]] == [
+        "u1",
+        "checkpoint_archive_001_u1",
+        "a2",
+    ]
+
+
+async def test_wm_creation_returns_two_products_in_one_model_call(
+    client: AsyncOpenViking,
+    monkeypatch,
+):
+    session = client.session(session_id="single_call_checkpoint_generation_test")
+    calls: list[dict] = []
+
+    class FakeVLM:
+        @staticmethod
+        def is_available() -> bool:
+            return True
+
+        async def get_completion_async(self, **kwargs):
+            calls.append(kwargs)
+            return VLMResponse(
+                tool_calls=[
+                    ToolCall(
+                        id="tool-call-1",
+                        name="create_working_memory",
+                        arguments={
+                            "working_memory": (
+                                "# Working Memory\n\n## Current State\nInvestigation continues."
+                            ),
+                            "checkpoint_summaries": [
+                                "Queried the service and found pool saturation."
+                            ],
+                        },
+                    )
+                ],
+                finish_reason="tool_calls",
+            )
+
+    vlm = FakeVLM()
+    monkeypatch.setattr(
+        "openviking.session.session.get_openviking_config",
+        lambda: SimpleNamespace(vlm=vlm),
+    )
+    anchor = _text_message("secret-anchor-id", "user", "investigate the outage")
+    source = _text_message("secret-source-id", "assistant", "queried the service")
+    result = await session._generate_archive_summary_async(
+        [anchor, source],
+        checkpoint_requests=[
+            _CheckpointRequest(
+                turn_anchor_message_id=anchor.id,
+                source_message_ids=(source.id,),
+                retained_message_token_budget=6000,
+                estimated_active_tokens=100,
+            )
+        ],
+    )
+
+    assert isinstance(result, _ArchiveSummaryResult)
+    assert result.checkpoint_summaries == ("Queried the service and found pool saturation.",)
+    assert len(calls) == 1
+    assert calls[0]["tools"][0]["function"]["name"] == "create_working_memory"
+    assert '<checkpoint_source index="0">' in calls[0]["prompt"]
+    assert calls[0]["prompt"].count("queried the service") == 1
+    assert "secret-anchor-id" not in calls[0]["prompt"]
+    assert "secret-source-id" not in calls[0]["prompt"]
+
+
+async def test_wm_update_returns_two_products_in_one_model_call(
+    client: AsyncOpenViking,
+    monkeypatch,
+):
+    session = client.session(session_id="single_call_checkpoint_update_test")
+    calls: list[dict] = []
+
+    class FakeVLM:
+        @staticmethod
+        def is_available() -> bool:
+            return True
+
+        async def get_completion_async(self, **kwargs):
+            calls.append(kwargs)
+            return VLMResponse(
+                tool_calls=[
+                    ToolCall(
+                        id="tool-call-1",
+                        name="update_working_memory",
+                        arguments={
+                            "sections": {
+                                name: {"op": "KEEP"}
+                                for name in (
+                                    "Session Title",
+                                    "Current State",
+                                    "Task & Goals",
+                                    "Key Facts & Decisions",
+                                    "Files & Context",
+                                    "Errors & Corrections",
+                                    "Open Issues",
+                                )
+                            },
+                            "checkpoint_summaries": [
+                                "Compared logs and ruled out the network path."
+                            ],
+                        },
+                    )
+                ],
+                finish_reason="tool_calls",
+            )
+
+    vlm = FakeVLM()
+    monkeypatch.setattr(
+        "openviking.session.session.get_openviking_config",
+        lambda: SimpleNamespace(vlm=vlm),
+    )
+    source = _text_message("source-id", "assistant", "compared the logs")
+    prior = """# Working Memory
+
+## Session Title
+Outage investigation
+
+## Current State
+Investigation continues.
+
+## Task & Goals
+Find the outage cause.
+
+## Key Facts & Decisions
+None.
+
+## Files & Context
+None.
+
+## Errors & Corrections
+None.
+
+## Open Issues
+Confirm the database state.
+"""
+    result = await session._generate_archive_summary_async(
+        [source],
+        latest_archive_overview=prior,
+        checkpoint_requests=[
+            _CheckpointRequest(
+                turn_anchor_message_id="anchor-id",
+                source_message_ids=(source.id,),
+                retained_message_token_budget=6000,
+                estimated_active_tokens=100,
+            )
+        ],
+    )
+
+    assert isinstance(result, _ArchiveSummaryResult)
+    assert result.checkpoint_summaries == ("Compared logs and ruled out the network path.",)
+    assert "Investigation continues." in result.overview
+    assert len(calls) == 1
+    assert calls[0]["tools"][0]["function"]["name"] == "update_working_memory"
+    assert "checkpoint_summaries" in calls[0]["prompt"]
+
+
+async def test_roll_forward_collects_multiple_checkpoint_requests(
+    client: AsyncOpenViking,
+):
+    session = client.session(session_id="multiple_roll_forward_checkpoint_test")
+    await session.ensure_exists()
+    first_anchor = _text_message("u1", "user", "first investigation")
+    first_source = _text_message("a1", "assistant", "first archived step")
+    second_anchor = _text_message("u2", "user", "second investigation")
+    second_source = _text_message("a2", "assistant", "second archived step")
+    await _write_archive(
+        session,
+        1,
+        [first_anchor, first_source],
+        failed=True,
+        meta={
+            "retention_plan": {
+                "partial_turn": True,
+                "turn_anchor_message_id": "u1",
+                "checkpoint_source_message_ids": ["a1"],
+                "retained_message_token_budget": 6000,
+                "estimated_active_tokens": 100,
+            }
+        },
+    )
+    await _write_archive(
+        session,
+        2,
+        [second_anchor, second_source],
+        failed=True,
+        meta={
+            "retention_plan": {
+                "partial_turn": True,
+                "turn_anchor_message_id": "u2",
+                "checkpoint_source_message_ids": ["a2"],
+                "retained_message_token_budget": 6000,
+                "estimated_active_tokens": 120,
+            }
+        },
+    )
+    current = _text_message("u3", "user", "current work")
+    current_uri = await _write_archive(session, 3, [current], meta={})
+    combined = [first_anchor, first_source, second_anchor, second_source, current]
+
+    requests = await session._collect_checkpoint_requests_for_phase2(
+        current_uri,
+        ["archive_001", "archive_002"],
+        combined,
+    )
+    formatted = session._format_messages_for_wm(combined, requests)
+
+    assert [request.turn_anchor_message_id for request in requests] == ["u1", "u2"]
+    assert [request.source_message_ids for request in requests] == [("a1",), ("a2",)]
+    assert formatted.count('<checkpoint_source index="0">') == 1
+    assert formatted.count('<checkpoint_source index="1">') == 1
+
+
+async def test_checkpoint_request_rejects_user_or_cross_turn_sources(
+    client: AsyncOpenViking,
+):
+    session = client.session(session_id="invalid_checkpoint_source_test")
+    await session.ensure_exists()
+    anchor = _text_message("u1", "user", "first query")
+    assistant = _text_message("a1", "assistant", "first response")
+    archive_uri = await _write_archive(
+        session,
+        1,
+        [anchor, assistant],
+        meta={
+            "retention_plan": {
+                "partial_turn": True,
+                "turn_anchor_message_id": "u1",
+                "checkpoint_source_message_ids": ["u1"],
+                "retained_message_token_budget": 6000,
+                "estimated_active_tokens": 100,
+            }
+        },
+    )
+
+    with pytest.raises(ValueError, match="outside its Assistant/Tool prefix"):
+        await session._collect_checkpoint_requests_for_phase2(
+            archive_uri,
+            [],
+            [anchor, assistant],
+        )
+
+
+async def test_missing_required_checkpoint_keeps_archive_raw_uncovered(
+    client: AsyncOpenViking,
+    monkeypatch,
+):
+    session = client.session(session_id="missing_required_checkpoint_test")
+    await session.ensure_exists()
+    anchor = _text_message("u1", "user", "investigate the outage")
+    early = _text_message("a1", "assistant", "checking the first signal")
+    tail = _text_message("a2", "assistant", "the latest raw step")
+    archive_uri = await _write_archive(
+        session,
+        1,
+        [anchor, early],
+        meta={
+            "retention_plan": {
+                "mode": "turn_budget",
+                "partial_turn": True,
+                "turn_anchor_message_id": "u1",
+                "checkpoint_source_message_ids": ["a1"],
+                "retained_message_token_budget": 6000,
+                "estimated_active_tokens": 100,
+            }
+        },
+    )
+    session._messages = [anchor, tail]
+    await session._write_to_agfs_async(messages=session._messages)
+
+    async def fake_summary(*_args, **_kwargs):
+        # Simulate an old/malformed implementation that returns only overview.
+        return "# Working Memory\n\n## Current State\nPool saturation confirmed."
+
+    config = SimpleNamespace(
+        memory=SimpleNamespace(
+            extraction_enabled=False,
+            session_skill_extraction_enabled=False,
+        )
+    )
+    monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+    monkeypatch.setattr(session, "_generate_archive_summary_async", fake_summary)
+
+    task_id = str(uuid4())
+    await get_task_tracker().create(
+        "session_commit",
+        resource_id=session.session_id,
+        account_id=session.ctx.account_id,
+        user_id=session.ctx.user.user_id,
+        task_id=task_id,
+    )
+    await session._run_memory_extraction(
+        task_id=task_id,
+        archive_uri=archive_uri,
+        messages=[anchor, early],
+        usage_records=[],
+        first_message_id="u1",
+        last_message_id="a1",
+        memory_policy={"working_memory": {"enabled": True}},
+    )
+
+    assert not await session._viking_fs.exists(f"{archive_uri}/.done", ctx=session.ctx)
+    assert await session._viking_fs.exists(f"{archive_uri}/.failed.json", ctx=session.ctx)
+    context = await session.get_session_context()
+    assert [message["id"] for message in context["messages"]] == ["u1", "a1", "a2"]
+    assert not any(message.get("message_kind") == "checkpoint" for message in context["messages"])
+
+
+async def test_working_memory_disabled_does_not_generate_or_restore_checkpoint(
+    client: AsyncOpenViking,
+    monkeypatch,
+):
+    session = client.session(session_id="wm_disabled_partial_checkpoint_test")
+    await session.ensure_exists()
+    anchor = _text_message("u1", "user", "investigate the outage")
+    early = _text_message("a1", "assistant", "checking the first signal")
+    tail = _text_message("a2", "assistant", "the latest raw step")
+    archive_uri = await _write_archive(
+        session,
+        1,
+        [anchor, early],
+        meta={
+            "retention_plan": {
+                "mode": "turn_budget",
+                "partial_turn": True,
+                "turn_anchor_message_id": "u1",
+                "checkpoint_source_message_ids": ["a1"],
+                "retained_message_token_budget": 6000,
+                "estimated_active_tokens": 100,
+            }
+        },
+    )
+    session._messages = [anchor, tail]
+    await session._write_to_agfs_async(messages=session._messages)
+
+    async def unexpected_summary(*_args, **_kwargs):
+        raise AssertionError("Working Memory generation must stay disabled")
+
+    config = SimpleNamespace(
+        memory=SimpleNamespace(
+            extraction_enabled=False,
+            session_skill_extraction_enabled=False,
+        )
+    )
+    monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+    monkeypatch.setattr(session, "_generate_archive_summary_async", unexpected_summary)
+
+    task_id = str(uuid4())
+    await get_task_tracker().create(
+        "session_commit",
+        resource_id=session.session_id,
+        account_id=session.ctx.account_id,
+        user_id=session.ctx.user.user_id,
+        task_id=task_id,
+    )
+    await session._run_memory_extraction(
+        task_id=task_id,
+        archive_uri=archive_uri,
+        messages=[anchor, early],
+        usage_records=[],
+        first_message_id="u1",
+        last_message_id="a1",
+        memory_policy={
+            "working_memory": {"enabled": False},
+            "self": {"enabled": False},
+            "peer": {"enabled": False},
+        },
+    )
+
+    assert await session._viking_fs.exists(f"{archive_uri}/.done", ctx=session.ctx)
+    context = await session.get_session_context()
+    assert [message["id"] for message in context["messages"]] == ["u1", "a2"]
 
 
 async def test_covered_failed_partial_turn_checkpoint_points_to_covering_overview(
@@ -535,6 +1141,16 @@ async def test_covered_failed_partial_turn_checkpoint_points_to_covering_overvie
         2,
         [_text_message("u2", "user", "a later query")],
         overview="# Session Summary\n\n## Current State\nThe early signal is covered.",
+        meta={
+            "checkpoints": [
+                {
+                    "turn_anchor_message_id": "u1",
+                    "source_message_ids": ["a1"],
+                    "abstract": "The early signal ruled out a network failure.",
+                    "estimated_tokens": 11,
+                }
+            ]
+        },
         done={
             "starting_message_id": "u1",
             "ending_message_id": "u2",
@@ -552,6 +1168,66 @@ async def test_covered_failed_partial_turn_checkpoint_points_to_covering_overvie
     assert checkpoint["id"] == "checkpoint_archive_002_u1"
     assert checkpoint["parts"][0]["uri"] == covering_uri
     assert checkpoint["source_message_ids"] == ["a1"]
+
+
+async def test_repeated_partial_commits_merge_checkpoints_for_same_turn_anchor(
+    client: AsyncOpenViking,
+):
+    session = client.session(session_id="repeated_partial_checkpoint_merge_test")
+    await session.ensure_exists()
+    anchor = _text_message("u1", "user", "investigate the outage")
+    tail = _text_message("a3", "assistant", "latest raw step")
+    await _write_archive(
+        session,
+        1,
+        [anchor, _text_message("a1", "assistant", "first old step")],
+        overview="# Working Memory\n\n## Current State\nFirst prefix covered.",
+        meta={
+            "checkpoints": [
+                {
+                    "turn_anchor_message_id": "u1",
+                    "source_message_ids": ["a1"],
+                    "abstract": "First prefix found pool saturation.",
+                    "estimated_tokens": 9,
+                }
+            ]
+        },
+        done={"starting_message_id": "u1", "ending_message_id": "a1"},
+    )
+    second_uri = await _write_archive(
+        session,
+        2,
+        [anchor, _text_message("a2", "assistant", "second old step")],
+        overview="# Working Memory\n\n## Current State\nSecond prefix covered.",
+        meta={
+            "checkpoints": [
+                {
+                    "turn_anchor_message_id": "u1",
+                    "source_message_ids": ["a2"],
+                    "abstract": "Second prefix ruled out the network path.",
+                    "estimated_tokens": 11,
+                }
+            ]
+        },
+        done={"starting_message_id": "u1", "ending_message_id": "a2"},
+    )
+    session._messages = [anchor, tail]
+    await session._write_to_agfs_async(messages=session._messages)
+
+    context = await session.get_session_context()
+
+    assert [message["id"] for message in context["messages"]] == [
+        "u1",
+        "checkpoint_archive_002_u1",
+        "a3",
+    ]
+    checkpoint = context["messages"][1]
+    assert checkpoint["source_message_ids"] == ["a1", "a2"]
+    assert checkpoint["parts"][0]["uri"] == second_uri
+    assert checkpoint["parts"][0]["abstract"] == (
+        "First prefix found pool saturation.\n\n"
+        "Second prefix ruled out the network path."
+    )
 
 
 async def test_commit_externalizes_tool_outputs_across_the_whole_turn(

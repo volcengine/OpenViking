@@ -616,7 +616,7 @@ class AgentLoop:
         session: Session,
         *,
         force_commit: bool = False,
-        keep_recent_count: int | None = None,
+        keep_recent_turn_count: int | None = None,
         commit_message_threshold: int | None = None,
         openviking_connection: dict[str, Any] | None = None,
     ) -> bool:
@@ -629,8 +629,8 @@ class AgentLoop:
             "session": session,
             "force_commit": force_commit,
         }
-        if keep_recent_count is not None:
-            kwargs["keep_recent_count"] = keep_recent_count
+        if keep_recent_turn_count is not None:
+            kwargs["keep_recent_turn_count"] = keep_recent_turn_count
         if commit_message_threshold is not None:
             kwargs["commit_message_threshold"] = commit_message_threshold
         if openviking_connection:
@@ -655,14 +655,14 @@ class AgentLoop:
         session: Session,
         *,
         force_commit: bool = False,
-        keep_recent_count: int | None = None,
+        keep_recent_turn_count: int | None = None,
         commit_message_threshold: int | None = None,
         openviking_connection: dict[str, Any] | None = None,
     ) -> bool:
         success = await self._submit_openviking_session(
             session,
             force_commit=force_commit,
-            keep_recent_count=keep_recent_count,
+            keep_recent_turn_count=keep_recent_turn_count,
             commit_message_threshold=commit_message_threshold,
             openviking_connection=openviking_connection,
         )
@@ -708,7 +708,9 @@ class AgentLoop:
         await self._submit_openviking_session_and_clear_if_committed(
             session,
             force_commit=True,
-            keep_recent_count=int(getattr(agents_config, "commit_keep_recent_count", 10) or 0),
+            keep_recent_turn_count=int(
+                getattr(agents_config, "commit_keep_recent_turn_count", 3) or 0
+            ),
             commit_message_threshold=self.memory_window,
             openviking_connection=getattr(msg, "openviking_connection", None),
         )
@@ -717,7 +719,7 @@ class AgentLoop:
         self,
         session: Session,
         *,
-        keep_recent_count: int = 0,
+        keep_recent_turn_count: int = 0,
         clear_local_session: bool = False,
         rotate_session_id: bool = False,
         openviking_connection: dict[str, Any] | None = None,
@@ -725,7 +727,7 @@ class AgentLoop:
         success = await self._submit_openviking_session(
             session,
             force_commit=True,
-            keep_recent_count=keep_recent_count,
+            keep_recent_turn_count=keep_recent_turn_count,
             openviking_connection=openviking_connection,
         )
         if not success:
@@ -1252,7 +1254,7 @@ class AgentLoop:
                 if self._ov_session_context_enabled():
                     committed = await self._commit_openviking_session(
                         session,
-                        keep_recent_count=0,
+                        keep_recent_turn_count=0,
                         clear_local_session=True,
                         openviking_connection=openviking_connection,
                     )
@@ -1287,7 +1289,7 @@ class AgentLoop:
                 if self._ov_session_context_enabled():
                     remembered = await self._commit_openviking_session(
                         session,
-                        keep_recent_count=self.config.agents.commit_keep_recent_count,
+                        keep_recent_turn_count=self.config.agents.commit_keep_recent_turn_count,
                         openviking_connection=openviking_connection,
                     )
                     if not remembered:
