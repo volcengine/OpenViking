@@ -234,7 +234,7 @@ def render_extraction_evidence_context(
             "- Outcome feedback does not independently prove an unobserved internal cause. Record the decisions and actions that actually occurred; keep the decision basis unknown when the runtime trajectory does not show it.",
             "- Advisory Signals are suggestions for locating evidence, not proof.",
             "- Never turn an advisory signal into an observed decision or root cause. If runtime and direct external evidence do not support a claim, record unknown/unverified.",
-            "- In each Key Step `Evidence` field, identify the runtime message, tool result, or direct external source that supports the recorded facts.",
+            "- In the Execution log, bind material facts to their runtime message, tool result, or direct external source with concise `# =>` comments or nearby factual comments.",
             "",
             "## Evidence Sources",
             json.dumps(

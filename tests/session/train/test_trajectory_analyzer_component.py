@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -38,27 +37,20 @@ def _valid_trajectory_content() -> str:
   - Misleading: none
   - Insufficient: none
 
-## Key Steps
+## Execution
 
-### Step 1
-- Boundary: operation_result_interpretation
-- Trigger: the requested operation returned a tool result
-- Observed facts: tool result reported a timeout
-- Decision: treated the timeout as success
-- Decision basis: no verification result was obtained
-- Action: stopped without verification
-- Result: completion remained unverified
-- Evidence: operation tool result reported timeout
+```python
+user_message_1 = "complete the operation and verify its result"
 
-### Step 2
-- Boundary: final_response
-- Trigger: the agent prepared the final response
-- Observed facts: completion remained unverified
-- Decision: report completion
-- Decision basis: assumed the earlier operation succeeded
-- Action: sent operation complete
-- Result: user received an unsupported completion claim
-- Evidence: final assistant message said operation complete
+operation_result = perform_operation(target="requested operation")
+# => {"status": "timeout"}
+
+completion_verified = False
+# Actual decision basis: no verification result was obtained
+
+communicate_with_user(content="operation complete")
+# => user received the completion claim
+```
 
 ## Evaluation
 - Required outcome: failed; completion was not verified
@@ -85,23 +77,18 @@ def _valid_trajectory_fields(**overrides):
     return fields
 
 
-def test_trajectory_prompt_requires_normalized_key_steps():
+def test_trajectory_prompt_requires_linear_python_execution_log():
     prompt_path = (
         Path(__file__).parents[3] / "openviking/prompts/templates/memory/trajectories.yaml"
     )
     prompt = yaml.safe_load(prompt_path.read_text(encoding="utf-8"))["fields"][-1]["description"]
 
     for label in (
-        "## Key Steps",
-        "### Step <positive integer>",
-        "- Boundary:",
-        "- Trigger:",
-        "- Observed facts:",
-        "- Decision:",
-        "- Decision basis:",
-        "- Action:",
-        "- Result:",
-        "- Evidence:",
+        "## Execution",
+        "```python",
+        "user_message_<n>",
+        "real tool method name",
+        "# =>",
         "## Evaluation",
         "- Required outcome:",
         "- Failed requirements:",
@@ -111,7 +98,9 @@ def test_trajectory_prompt_requires_normalized_key_steps():
     ):
         assert label in prompt
 
-    for legacy_heading in (
+    for removed_format in (
+        "## Key Steps",
+        "### Step <positive integer>",
         "- Timeline:",
         "- Outcome Checks:",
         "- Correct Work To Preserve:",
@@ -119,17 +108,15 @@ def test_trajectory_prompt_requires_normalized_key_steps():
         "- Evidence References:",
         "- Raw Evidence:",
     ):
-        assert legacy_heading not in prompt
+        assert removed_format not in prompt
 
 
-def test_trajectory_validation_enforces_complete_schema_and_grounded_language():
+def test_trajectory_validation_keeps_only_foundational_memory_checks():
     assert _trajectory_operation_validation_issues("task", _valid_trajectory_fields()) == []
 
-    missing = _valid_trajectory_fields(content="# task\n- Outcome: failure")
+    missing = _valid_trajectory_fields(content="")
     issues = _trajectory_operation_validation_issues("task", missing)
-    assert any(
-        issue.reason == "trajectory content is missing required sections" for issue in issues
-    )
+    assert any(issue.reason == "trajectory is missing required fields" for issue in issues)
 
     invalid_effects = _valid_trajectory_fields(experience_effects="not-json")
     issues = _trajectory_operation_validation_issues("task", invalid_effects)
@@ -137,24 +124,17 @@ def test_trajectory_validation_enforces_complete_schema_and_grounded_language():
         issue.reason == "trajectory experience_effects is not valid JSON" for issue in issues
     )
 
-    unsupported = _valid_trajectory_fields(
-        content=re.sub(
-            r"(?m)^- Evidence:.*$",
-            "- Evidence: none",
-            _valid_trajectory_content(),
-        ),
-    )
-    issues = _trajectory_operation_validation_issues("task", unsupported)
-    assert any(
-        issue.reason == "trajectory material failure claim lacks direct evidence"
-        for issue in issues
-    )
-
     mismatched_outcome = _valid_trajectory_fields(outcome="success")
     issues = _trajectory_operation_validation_issues("task", mismatched_outcome)
     assert any(
         issue.reason == "trajectory outcome disagrees with content outcome" for issue in issues
     )
+
+
+def test_trajectory_validation_does_not_enforce_content_section_layout():
+    fields = _valid_trajectory_fields(content="# task\n- Outcome: failure")
+
+    assert _trajectory_operation_validation_issues("task", fields) == []
 
 
 def test_trajectory_validation_canonicalizes_label_ordered_comma_anchor():
@@ -183,196 +163,6 @@ def test_trajectory_validation_canonicalizes_label_ordered_comma_anchor():
     assert operation.memory_fields["retrieval_anchor"] == (
         "Stage: repair; Boundary: source warnings; Capability: validate sources; "
         "Target: structured analysis; Outcome: failure."
-    )
-
-
-def test_trajectory_validation_requires_explicit_direct_external_evidence_source():
-    content = _valid_trajectory_content().replace(
-        "External feedback: none",
-        "External feedback: independent observer confirmed the missing result",
-    )
-    fields = _valid_trajectory_fields(content=content)
-
-    unsupported = _trajectory_operation_validation_issues("task", fields)
-    supported = _trajectory_operation_validation_issues(
-        "task",
-        fields,
-        evidence_sources={
-            "direct_available": True,
-            "items": [{"direct": True, "source": "independent_observer"}],
-        },
-    )
-
-    assert any(
-        issue.reason == "trajectory claims direct external evidence when none was supplied"
-        for issue in unsupported
-    )
-    assert not any(
-        issue.reason == "trajectory claims direct external evidence when none was supplied"
-        for issue in supported
-    )
-
-
-def test_trajectory_validation_allows_domain_language_that_can_also_be_control_plane_language():
-    content = _valid_trajectory_content().replace(
-        "treated the timeout as success",
-        "computed the requested evaluation reward from the observed timeout",
-    )
-
-    issues = _trajectory_operation_validation_issues(
-        "task",
-        _valid_trajectory_fields(content=content),
-    )
-
-    assert issues == []
-
-
-def test_trajectory_validation_requires_every_key_step_field():
-    content = _valid_trajectory_content().replace(
-        "- Decision basis: no verification result was obtained\n",
-        "",
-        1,
-    )
-
-    issues = _trajectory_operation_validation_issues(
-        "task",
-        _valid_trajectory_fields(content=content),
-    )
-
-    assert any(
-        issue.reason == "trajectory key steps are missing required fields" for issue in issues
-    )
-
-
-def test_trajectory_validation_rejects_duplicate_key_step_fields():
-    content = _valid_trajectory_content().replace(
-        "- Decision: treated the timeout as success\n",
-        "- Decision: treated the timeout as success\n- Decision: stop processing\n",
-        1,
-    )
-
-    issues = _trajectory_operation_validation_issues(
-        "task",
-        _valid_trajectory_fields(content=content),
-    )
-
-    assert any(issue.reason == "trajectory key steps repeat required fields" for issue in issues)
-
-
-def test_trajectory_validation_requires_key_step_field_order():
-    content = _valid_trajectory_content().replace(
-        "- Decision: treated the timeout as success\n"
-        "- Decision basis: no verification result was obtained",
-        "- Decision basis: no verification result was obtained\n"
-        "- Decision: treated the timeout as success",
-        1,
-    )
-
-    issues = _trajectory_operation_validation_issues(
-        "task",
-        _valid_trajectory_fields(content=content),
-    )
-
-    assert any(issue.reason == "trajectory key step fields are out of order" for issue in issues)
-
-
-def test_trajectory_validation_rejects_unexpected_key_step_fields():
-    content = _valid_trajectory_content().replace(
-        "- Evidence: operation tool result reported timeout",
-        "- Root cause: the tool timed out\n- Evidence: operation tool result reported timeout",
-        1,
-    )
-
-    issues = _trajectory_operation_validation_issues(
-        "task",
-        _valid_trajectory_fields(content=content),
-    )
-
-    assert any(issue.reason == "trajectory key steps contain unexpected fields" for issue in issues)
-
-
-def test_trajectory_validation_requires_consecutive_key_step_numbers():
-    content = _valid_trajectory_content().replace("### Step 2", "### Step 3")
-
-    issues = _trajectory_operation_validation_issues(
-        "task",
-        _valid_trajectory_fields(content=content),
-    )
-
-    assert any(
-        issue.reason == "trajectory key step numbers are not consecutive" for issue in issues
-    )
-
-
-def test_trajectory_validation_rejects_removed_diagnostic_sections():
-    content = _valid_trajectory_content() + "\n\n- Observed Problem:\n  - Failure type: unknown"
-
-    issues = _trajectory_operation_validation_issues(
-        "task",
-        _valid_trajectory_fields(content=content),
-    )
-
-    assert any(
-        issue.reason == "trajectory content contains removed diagnostic sections"
-        for issue in issues
-    )
-
-
-def test_trajectory_validation_rejects_unexpected_top_level_sections():
-    content = _valid_trajectory_content() + "\n\n## Advice\n- Retry the operation"
-
-    issues = _trajectory_operation_validation_issues(
-        "task",
-        _valid_trajectory_fields(content=content),
-    )
-
-    assert any(
-        issue.reason == "trajectory content contains unexpected top-level sections"
-        for issue in issues
-    )
-
-
-def test_trajectory_validation_requires_complete_evaluation_fields():
-    content = _valid_trajectory_content().replace("- External feedback: none\n", "")
-
-    issues = _trajectory_operation_validation_issues(
-        "task",
-        _valid_trajectory_fields(content=content),
-    )
-
-    assert any(
-        issue.reason == "trajectory evaluation is missing required fields" for issue in issues
-    )
-
-
-def test_trajectory_validation_rejects_unexpected_evaluation_fields():
-    content = _valid_trajectory_content().replace(
-        "- Unexplained differences: none",
-        "- Root cause: tool timeout\n- Unexplained differences: none",
-    )
-
-    issues = _trajectory_operation_validation_issues(
-        "task",
-        _valid_trajectory_fields(content=content),
-    )
-
-    assert any(
-        issue.reason == "trajectory evaluation contains unexpected fields" for issue in issues
-    )
-
-
-def test_trajectory_validation_accepts_explicit_none_and_unknown_step_values():
-    content = _valid_trajectory_content().replace(
-        "- Decision: report completion\n- Decision basis: assumed the earlier operation succeeded",
-        "- Decision: none\n- Decision basis: unknown",
-    )
-
-    assert (
-        _trajectory_operation_validation_issues(
-            "task",
-            _valid_trajectory_fields(content=content),
-        )
-        == []
     )
 
 
