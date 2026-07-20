@@ -569,29 +569,31 @@ class SemanticProcessor(DequeueHandlerBase):
 
             existing_summaries: Dict[str, str] = {}
             if msg.changes:
+                valid_summary_cache = False
                 try:
                     raw_cache = await viking_fs.read_file(
                         f"{dir_uri}/{MEMORY_SUMMARY_CACHE_FILENAME}", ctx=ctx
                     )
-                    existing_summaries.update(self._parse_memory_summary_cache(raw_cache))
-                    if existing_summaries:
+                    parsed_cache = self._parse_memory_summary_cache(raw_cache)
+                    if parsed_cache is not None:
+                        valid_summary_cache = True
+                        existing_summaries.update(parsed_cache)
                         logger.info(
                             f"Loaded {len(existing_summaries)} summaries from memory sidecar cache"
                         )
                 except Exception as e:
                     logger.debug(f"No memory summary sidecar found for {dir_uri}: {e}")
 
-                try:
-                    old_overview = await viking_fs.read_file(f"{dir_uri}/.overview.md", ctx=ctx)
-                    if old_overview:
-                        parsed_overview = self._parse_overview_md(old_overview)
-                        for name, summary in parsed_overview.items():
-                            existing_summaries.setdefault(name, summary)
+                if not valid_summary_cache:
+                    try:
+                        old_overview = await viking_fs.read_file(f"{dir_uri}/.overview.md", ctx=ctx)
+                        if old_overview:
+                            existing_summaries.update(self._parse_overview_md(old_overview))
                         logger.info(
                             f"Parsed {len(existing_summaries)} existing summaries from overview.md"
                         )
-                except Exception as e:
-                    logger.debug(f"No existing overview.md found for {dir_uri}: {e}")
+                    except Exception as e:
+                        logger.debug(f"No existing overview.md found for {dir_uri}: {e}")
 
             changed_files: Set[str] = set()
             if msg.changes:
@@ -1307,19 +1309,19 @@ class SemanticProcessor(DequeueHandlerBase):
 
         return summaries
 
-    def _parse_memory_summary_cache(self, cache_content: str) -> Dict[str, str]:
-        """Parse the deterministic per-file memory summary cache."""
+    def _parse_memory_summary_cache(self, cache_content: str) -> Optional[Dict[str, str]]:
+        """Parse the deterministic per-file cache, preserving invalid-vs-empty state."""
         if not cache_content:
-            return {}
+            return None
         try:
             payload = json.loads(cache_content)
         except (TypeError, ValueError):
-            return {}
+            return None
         if not isinstance(payload, dict) or payload.get("version") != MEMORY_SUMMARY_CACHE_VERSION:
-            return {}
+            return None
         entries = payload.get("entries")
         if not isinstance(entries, dict):
-            return {}
+            return None
         return {
             name: summary
             for name, summary in entries.items()

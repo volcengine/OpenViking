@@ -334,6 +334,61 @@ async def test_memory_directory_reuses_filename_keyed_summary_cache(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_memory_directory_falls_back_to_overview_for_invalid_summary_cache(monkeypatch):
+    processor = SemanticProcessor(max_concurrent_llm=4)
+    dir_uri = "viking://user/default/memories/preferences"
+    generated = []
+    written = []
+
+    class InvalidCachedMemoryDirFS(_FakeMemoryDirFS):
+        async def read_file(self, uri, ctx=None):
+            del ctx
+            if uri.endswith("/.summary_cache.json"):
+                return '{"version": 2, "entries": {}}'
+            if uri.endswith("/.overview.md"):
+                return "### first.md\n\nold:first.md\n\n### second.md\n\nold:second.md"
+            raise FileNotFoundError(uri)
+
+    async def generate_file_summary(file_path, llm_sem=None, ctx=None):
+        del llm_sem, ctx
+        generated.append(file_path)
+        name = file_path.rsplit("/", 1)[-1]
+        return {"name": name, "summary": f"fresh:{name}"}
+
+    async def write_semantics(**kwargs):
+        written.append(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: InvalidCachedMemoryDirFS(),
+    )
+    monkeypatch.setattr(processor, "_generate_single_file_summary", generate_file_summary)
+    monkeypatch.setattr(processor, "_generate_overview", AsyncMock(return_value="overview"))
+    monkeypatch.setattr(
+        processor,
+        "_normalize_overview_generation",
+        lambda overview: (overview, "abstract"),
+    )
+    monkeypatch.setattr(processor, "_write_memory_directory_semantics", write_semantics)
+
+    await processor._process_memory_directory(
+        SemanticMsg(
+            uri=dir_uri,
+            context_type="memory",
+            changes={"modified": [f"{dir_uri}/first.md"]},
+            skip_vectorization=True,
+        )
+    )
+
+    assert generated == [f"{dir_uri}/first.md"]
+    assert json.loads(written[0]["summary_cache"])["entries"] == {
+        "first.md": "fresh:first.md",
+        "second.md": "old:second.md",
+    }
+
+
+@pytest.mark.asyncio
 async def test_memory_directory_retries_blank_cached_summary(monkeypatch):
     processor = SemanticProcessor(max_concurrent_llm=4)
     dir_uri = "viking://user/default/memories/preferences"
@@ -354,7 +409,7 @@ async def test_memory_directory_retries_blank_cached_summary(monkeypatch):
                     }
                 )
             if uri.endswith("/.overview.md"):
-                return ""
+                return "### second.md\n\nstale:second.md"
             raise FileNotFoundError(uri)
 
     async def generate_file_summary(file_path, llm_sem=None, ctx=None):
@@ -397,6 +452,14 @@ async def test_memory_directory_retries_blank_cached_summary(monkeypatch):
             "second.md": "fresh:second.md",
         },
     }
+
+
+def test_memory_summary_cache_distinguishes_valid_empty_from_invalid():
+    processor = SemanticProcessor()
+
+    assert processor._parse_memory_summary_cache('{"version": 1, "entries": {}}') == {}
+    assert processor._parse_memory_summary_cache("not-json") is None
+    assert processor._parse_memory_summary_cache('{"version": 2, "entries": {}}') is None
 
 
 @pytest.mark.asyncio
