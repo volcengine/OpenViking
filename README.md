@@ -96,12 +96,8 @@ Before starting with OpenViking, please ensure your environment meets the follow
 ##### Python Package
 
 ```bash
-python -m pip install --upgrade openviking
+pip install openviking --upgrade --force-reinstall
 ```
-
-Install OpenViking in a dedicated virtual environment or container. Avoid
-`--force-reinstall` in an environment shared with another application: pip can
-upgrade that application's pinned dependencies while resolving OpenViking.
 
 ##### Rust CLI (Optional)
 
