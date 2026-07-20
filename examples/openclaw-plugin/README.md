@@ -1,6 +1,9 @@
 # OpenViking for OpenClaw
 
-Use [OpenViking](https://github.com/volcengine/OpenViking) as OpenClaw's long-term context engine: automatic recall, session archive, memory extraction, semantic search, and RAG over a remote OpenViking server.
+Use [OpenViking](https://github.com/volcengine/OpenViking) as OpenClaw's long-term
+context engine: automatic recall for turns that traverse the context-engine
+transform path, session archive, memory extraction, semantic search, and RAG
+over a remote OpenViking server.
 
 ## Quick Start
 
@@ -26,7 +29,13 @@ The agent runs install → setup → restart → verify automatically. See [INST
 | **Every turn** (`afterTurn`) | New messages are appended to an OpenViking session; commit/extraction is threshold-triggered |
 | **Explicit remember** (`memory_store`) | Important long-term facts can be written and committed immediately |
 | **On `/compact`** (`compact`) | Pending session messages are committed and extracted into long-term memories |
-| **Before each reply** (`assemble`) | Relevant memories are auto-retrieved and injected into context |
+| **Context-engine transform** (`transformContext` `assemble`) | Relevant memories are auto-retrieved and injected before the model reply |
+
+> **External ACP agents:** Their turns currently bypass the context-engine
+> transform path. They may still be captured, but automatic recall is not
+> injected. Until OpenClaw provides a gateway/ACP preprocessing hook, use
+> `memory_recall` where the plugin tools are available, or an equivalent explicit
+> OpenViking MCP recall. Follow [#1140](https://github.com/volcengine/OpenViking/issues/1140) for status.
 
 ## Tools
 
@@ -251,7 +260,7 @@ Beyond automatic behavior, the plugin exposes these tools directly:
 
 They serve different roles:
 
-- automatic recall covers the default case where the model does not know what to search yet
+- for context-engine turns, automatic recall covers the default case where the model does not know what to search yet
 - `memory_recall` gives the model an explicit follow-up search path
 - `memory_store` is for immediately persisting clearly important information when the user expresses durable-memory intent
 - `ov_archive_expand` is the "go back to archive detail" escape hatch when summaries are not enough
