@@ -74,9 +74,10 @@ fields:
     description: |
       Write in {{ language }}. Keep raw tool names, schema keys, and quoted runtime values unchanged.
 
-      You are producing a compact factual trace for downstream experience extraction. Your job is
-      to preserve enough runtime evidence for a later extractor to compare multiple trajectories
-      and decide the true reusable experience. Do not decide the final experience here.
+      Produce a compact factual execution record for downstream experience extraction. Preserve
+      the decision inputs, decision actually made, action, and observed result at each material
+      boundary so a later extractor can compare successful and failed trajectories. Do not decide
+      the root cause or final experience here.
 
       ## Do NOT output
       - No `Counterfactual Ideal Experience` section.
@@ -87,19 +88,27 @@ fields:
       - No broad advice such as "check all requirements" or "include all information".
       - No `Diagnostic Hints` section.
       - No `Ambiguous references` field or verdict such as `Ambiguous references: none`.
+      - No `Timeline`, `Outcome Checks`, `Correct Work To Preserve`, `Observed Problem`,
+        `Evidence References`, or `Raw Evidence` section.
 
-      ## What to preserve
-      Preserve concrete runtime evidence, especially:
-      - user intent, constraints, confirmations, and success conditions;
-      - observations returned by tools, environments, services, or other participants;
-      - decisions and assumptions that changed the execution path;
-      - actions, side effects, generated outputs, and user-visible communication;
-      - verification steps and observed differences between expected and actual outcomes;
-      - correct decisions/actions/outputs that should be preserved;
-      - uncertainty and competing interpretations.
+      ## Which steps to record
+      Record only material execution boundaries:
+      - a decision or assumption that changed the execution branch;
+      - a user confirmation, refusal, or new constraint that changed permission or scope;
+      - a state-changing action and its observed side effect;
+      - a required user-visible output;
+      - a tool failure, handoff, termination, or material verification.
+
+      Do not create a separate step for every routine read. When a read result affects a later
+      decision, preserve the exact fields used by that decision under `Observed facts`. Group
+      repeated reads at the same boundary, but retain the object-to-field binding needed to audit
+      each decision. Exact identifiers, amounts, dates, or values may appear when needed to bind an
+      observation to its decision, action, or result; omit unrelated payload fields.
 
       ## Output Format
-      Output exactly ONE markdown record with the labels below. Do not add extra top-level sections.
+      Output exactly ONE markdown record with the labels below. Do not add extra top-level sections
+      or omit any step field. Number steps consecutively beginning at 1. Use `none` when no action or
+      decision occurred and `unknown` when the runtime evidence does not reveal the value.
 
       # <trajectory_name>
       - Outcome: <success|failure|partial|unfinished|unknown>
@@ -110,33 +119,29 @@ fields:
         - Helpful: <which loaded reminders appeared helpful, or none>
         - Misleading: <which loaded reminders appeared misleading/over-broad, or none>
         - Insufficient: <which loaded reminders were relevant but incomplete, or none>
-      - Timeline:
-        - User request: <relevant user wording and obligations, generalized>
-        - Observations: <important tool/environment/participant results observed>
-        - Decisions: <important assumptions, branches, plans, or reasoning choices>
-        - Actions: <tools/actions performed, semantic targets, and observed side effects>
-        - Outputs: <generated deliverables, returned values, or user-visible communication>
-        - Termination: <done/handoff/unfinished and any side effects>
-      - Outcome Checks:
-        - Required outcome: <passed|failed|partial|unknown; evidence in runtime terms>
-        - Constraints: <passed|failed|partial|unknown|none; evidence in runtime terms>
-        - Required output/communication: <passed|failed|partial|unknown|none; evidence in runtime terms>
-      - Correct Work To Preserve:
-        - <correct observations/decisions/actions/outputs that later extraction should not block, or none>
-      - Observed Problem:
-        - Failure type: <wrong_input|wrong_target|wrong_strategy|missing_information|missing_validation|missing_output|premature_action|extra_action|tool_error|reasoning_error|none|unknown>
-        - First observed divergence: <earliest observable boundary where behavior diverged, or none/unknown>
-        - Candidate bad behavior: <input/decision/action/output shape that appears risky, or none>
-        - What was missing/wrong: <specific runtime-observable difference, or none/unknown>
-      - Evidence References:
-        - Runtime evidence: <message/tool boundary and short supporting fact, or none>
-        - Direct external evidence: <independent observation supplied through evidence_sources, or none>
-        - Advisory signals: <external suggestions used only to locate evidence, or none>
-      - Raw Evidence:
-        - User/request snippets: <short relevant snippets or none>
-        - Tool/result snippets: <short relevant snippets, field names, IDs/values only as evidence, or none>
-        - Final message snippets: <short relevant snippets or none>
-      - Result: <concise final outcome and side effects>
+
+      ## Key Steps
+
+      ### Step <positive integer>
+      - Boundary: <semantic decision or action boundary>
+      - Trigger: <event or obligation that made this step necessary>
+      - Observed facts: <only facts available at this point>
+      - Decision: <decision actually made, or none>
+      - Decision basis: <observed basis used by the execution, or unknown>
+      - Action: <action actually taken, including tool and target when applicable, or none>
+      - Result: <observed result or side effect>
+      - Evidence: <message/tool/result references and essential exact values>
+
+      <repeat the complete Step block only for another material boundary>
+
+      ## Evaluation
+      - Required outcome: <passed|failed|partial|unknown; factual evidence>
+      - Failed requirements: <explicit failed requirements or none/unknown>
+      - External feedback: <explicit direct feedback or none>
+      - Unexplained differences: <known evidence gap or none>
+
+      ## Result
+      - <concise final state, outputs, and side effects>
 
       ## Rules
       - Be factual and compact. Prefer evidence over interpretation.
@@ -146,16 +151,14 @@ fields:
       - A `rollout_evaluation` source marked `direct=true` is authoritative external feedback for
         outcome and requirement compliance. Use it to record which required results were missing,
         incorrect, or incomplete. It does not by itself prove an unobserved internal cause.
-      - Determine the first causal divergence from runtime observations, decisions, and actions.
-        When outcome feedback proves a failure but the runtime trace does not reveal why, preserve
-        the failed requirement and write the cause/divergence as unknown.
-      - Every material failure claim in `Outcome Checks`, `Observed Problem`, and `Result` must be
-        grounded under `Evidence References`. If neither runtime nor direct external evidence
-        supports it, write unknown/unverified.
+      - Record the decision the agent actually made, even when the evaluation failed. Do not label
+        that decision correct or incorrect and do not replace it with what should have happened.
+      - `Decision basis` records only the basis observable in the execution. If the trace does not
+        reveal it, write `unknown`; never infer a hidden policy or internal cause.
+      - Every material failure claim in `Evaluation` and `Result` must be grounded by a Step
+        `Evidence` field or explicit direct external feedback.
       - Do not hide uncertainty. If the trace does not prove the expected behavior or outcome,
         write unknown/uncertain instead of inventing a root cause.
-      - Do not generalize IDs, dates, names, or exact amounts into rules. Exact literals may appear
-        only under `Raw Evidence` when they are needed to audit the trace.
       - If the run succeeded, record the successful path facts that distinguish it from failures
         without producing a success-path SOP or an injectable reminder.
       - If an injected experience was misleading, record how it influenced observed behavior; do

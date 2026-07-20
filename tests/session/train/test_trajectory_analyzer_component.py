@@ -3,9 +3,12 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from openviking.message import Message, TextPart
 from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
@@ -34,33 +37,37 @@ def _valid_trajectory_content() -> str:
   - Helpful: none
   - Misleading: none
   - Insufficient: none
-- Timeline:
-  - User request: complete the requested operation
-  - Observations: tool result reported a timeout
-  - Decisions: treated the timeout as success
-  - Actions: stopped without verification
-  - Outputs: reported completion
-  - Termination: done
-- Outcome Checks:
-  - Required outcome: failed; completion was not verified
-  - Constraints: unknown
-  - Required output/communication: failed; completion was reported without evidence
-- Correct Work To Preserve:
-  - initial operation request
-- Observed Problem:
-  - Failure type: missing_validation
-  - First observed divergence: after the timeout
-  - Candidate bad behavior: completion was assumed
-  - What was missing/wrong: no verification observation
-- Evidence References:
-  - Runtime evidence: tool result reported a timeout
-  - Direct external evidence: none
-  - Advisory signals: none
-- Raw Evidence:
-  - User/request snippets: complete the operation
-  - Tool/result snippets: timeout
-  - Final message snippets: operation complete
-- Result: completion was reported without verification"""
+
+## Key Steps
+
+### Step 1
+- Boundary: operation_result_interpretation
+- Trigger: the requested operation returned a tool result
+- Observed facts: tool result reported a timeout
+- Decision: treated the timeout as success
+- Decision basis: no verification result was obtained
+- Action: stopped without verification
+- Result: completion remained unverified
+- Evidence: operation tool result reported timeout
+
+### Step 2
+- Boundary: final_response
+- Trigger: the agent prepared the final response
+- Observed facts: completion remained unverified
+- Decision: report completion
+- Decision basis: assumed the earlier operation succeeded
+- Action: sent operation complete
+- Result: user received an unsupported completion claim
+- Evidence: final assistant message said operation complete
+
+## Evaluation
+- Required outcome: failed; completion was not verified
+- Failed requirements: completion verification and grounded final response
+- External feedback: none
+- Unexplained differences: none
+
+## Result
+- Completion was reported without verification"""
 
 
 def _valid_trajectory_fields(**overrides):
@@ -76,6 +83,43 @@ def _valid_trajectory_fields(**overrides):
     }
     fields.update(overrides)
     return fields
+
+
+def test_trajectory_prompt_requires_normalized_key_steps():
+    prompt_path = (
+        Path(__file__).parents[3] / "openviking/prompts/templates/memory/trajectories.yaml"
+    )
+    prompt = yaml.safe_load(prompt_path.read_text(encoding="utf-8"))["fields"][-1]["description"]
+
+    for label in (
+        "## Key Steps",
+        "### Step <positive integer>",
+        "- Boundary:",
+        "- Trigger:",
+        "- Observed facts:",
+        "- Decision:",
+        "- Decision basis:",
+        "- Action:",
+        "- Result:",
+        "- Evidence:",
+        "## Evaluation",
+        "- Required outcome:",
+        "- Failed requirements:",
+        "- External feedback:",
+        "- Unexplained differences:",
+        "## Result",
+    ):
+        assert label in prompt
+
+    for legacy_heading in (
+        "- Timeline:",
+        "- Outcome Checks:",
+        "- Correct Work To Preserve:",
+        "- Observed Problem:",
+        "- Evidence References:",
+        "- Raw Evidence:",
+    ):
+        assert legacy_heading not in prompt
 
 
 def test_trajectory_validation_enforces_complete_schema_and_grounded_language():
@@ -94,9 +138,10 @@ def test_trajectory_validation_enforces_complete_schema_and_grounded_language():
     )
 
     unsupported = _valid_trajectory_fields(
-        content=_valid_trajectory_content().replace(
-            "tool result reported a timeout",
-            "none",
+        content=re.sub(
+            r"(?m)^- Evidence:.*$",
+            "- Evidence: none",
+            _valid_trajectory_content(),
         ),
     )
     issues = _trajectory_operation_validation_issues("task", unsupported)
@@ -141,36 +186,10 @@ def test_trajectory_validation_canonicalizes_label_ordered_comma_anchor():
     )
 
 
-def test_trajectory_validation_fills_known_empty_advisory_channel():
-    operation = ResolvedOperation(
-        old_memory_file_content=None,
-        memory_fields=_valid_trajectory_fields(
-            content=_valid_trajectory_content().replace("  - Advisory signals: none\n", "")
-        ),
-        memory_type="trajectories",
-        uris=["viking://user/u/memories/trajectories/task.md"],
-        page_id=100,
-    )
-    operations = ResolvedOperations(
-        upsert_operations=[operation],
-        delete_file_contents=[],
-        errors=[],
-        resolved_links=[],
-    )
-
-    issues = _trajectory_validation_issues(
-        operations,
-        evidence_sources={"advisory_signal_count": 0},
-    )
-
-    assert issues == []
-    assert "  - Advisory signals: none\n" in operation.memory_fields["content"]
-
-
 def test_trajectory_validation_requires_explicit_direct_external_evidence_source():
     content = _valid_trajectory_content().replace(
-        "Direct external evidence: none",
-        "Direct external evidence: independent observer confirmed the missing result",
+        "External feedback: none",
+        "External feedback: independent observer confirmed the missing result",
     )
     fields = _valid_trajectory_fields(content=content)
 
@@ -208,6 +227,155 @@ def test_trajectory_validation_allows_domain_language_that_can_also_be_control_p
     assert issues == []
 
 
+def test_trajectory_validation_requires_every_key_step_field():
+    content = _valid_trajectory_content().replace(
+        "- Decision basis: no verification result was obtained\n",
+        "",
+        1,
+    )
+
+    issues = _trajectory_operation_validation_issues(
+        "task",
+        _valid_trajectory_fields(content=content),
+    )
+
+    assert any(
+        issue.reason == "trajectory key steps are missing required fields" for issue in issues
+    )
+
+
+def test_trajectory_validation_rejects_duplicate_key_step_fields():
+    content = _valid_trajectory_content().replace(
+        "- Decision: treated the timeout as success\n",
+        "- Decision: treated the timeout as success\n- Decision: stop processing\n",
+        1,
+    )
+
+    issues = _trajectory_operation_validation_issues(
+        "task",
+        _valid_trajectory_fields(content=content),
+    )
+
+    assert any(issue.reason == "trajectory key steps repeat required fields" for issue in issues)
+
+
+def test_trajectory_validation_requires_key_step_field_order():
+    content = _valid_trajectory_content().replace(
+        "- Decision: treated the timeout as success\n"
+        "- Decision basis: no verification result was obtained",
+        "- Decision basis: no verification result was obtained\n"
+        "- Decision: treated the timeout as success",
+        1,
+    )
+
+    issues = _trajectory_operation_validation_issues(
+        "task",
+        _valid_trajectory_fields(content=content),
+    )
+
+    assert any(issue.reason == "trajectory key step fields are out of order" for issue in issues)
+
+
+def test_trajectory_validation_rejects_unexpected_key_step_fields():
+    content = _valid_trajectory_content().replace(
+        "- Evidence: operation tool result reported timeout",
+        "- Root cause: the tool timed out\n- Evidence: operation tool result reported timeout",
+        1,
+    )
+
+    issues = _trajectory_operation_validation_issues(
+        "task",
+        _valid_trajectory_fields(content=content),
+    )
+
+    assert any(issue.reason == "trajectory key steps contain unexpected fields" for issue in issues)
+
+
+def test_trajectory_validation_requires_consecutive_key_step_numbers():
+    content = _valid_trajectory_content().replace("### Step 2", "### Step 3")
+
+    issues = _trajectory_operation_validation_issues(
+        "task",
+        _valid_trajectory_fields(content=content),
+    )
+
+    assert any(
+        issue.reason == "trajectory key step numbers are not consecutive" for issue in issues
+    )
+
+
+def test_trajectory_validation_rejects_removed_diagnostic_sections():
+    content = _valid_trajectory_content() + "\n\n- Observed Problem:\n  - Failure type: unknown"
+
+    issues = _trajectory_operation_validation_issues(
+        "task",
+        _valid_trajectory_fields(content=content),
+    )
+
+    assert any(
+        issue.reason == "trajectory content contains removed diagnostic sections"
+        for issue in issues
+    )
+
+
+def test_trajectory_validation_rejects_unexpected_top_level_sections():
+    content = _valid_trajectory_content() + "\n\n## Advice\n- Retry the operation"
+
+    issues = _trajectory_operation_validation_issues(
+        "task",
+        _valid_trajectory_fields(content=content),
+    )
+
+    assert any(
+        issue.reason == "trajectory content contains unexpected top-level sections"
+        for issue in issues
+    )
+
+
+def test_trajectory_validation_requires_complete_evaluation_fields():
+    content = _valid_trajectory_content().replace("- External feedback: none\n", "")
+
+    issues = _trajectory_operation_validation_issues(
+        "task",
+        _valid_trajectory_fields(content=content),
+    )
+
+    assert any(
+        issue.reason == "trajectory evaluation is missing required fields" for issue in issues
+    )
+
+
+def test_trajectory_validation_rejects_unexpected_evaluation_fields():
+    content = _valid_trajectory_content().replace(
+        "- Unexplained differences: none",
+        "- Root cause: tool timeout\n- Unexplained differences: none",
+    )
+
+    issues = _trajectory_operation_validation_issues(
+        "task",
+        _valid_trajectory_fields(content=content),
+    )
+
+    assert any(
+        issue.reason == "trajectory evaluation contains unexpected fields" for issue in issues
+    )
+
+
+def test_trajectory_validation_accepts_explicit_none_and_unknown_step_values():
+    content = _valid_trajectory_content().replace(
+        "- Decision: report completion\n- Decision basis: assumed the earlier operation succeeded",
+        "- Decision: none\n- Decision basis: unknown",
+    )
+
+    assert (
+        _trajectory_operation_validation_issues(
+            "task",
+            _valid_trajectory_fields(content=content),
+        )
+        == []
+    )
+
+
 class FakeExtractLoop:
     created = []
 
@@ -236,10 +404,9 @@ class FakeExtractLoop:
                                     "Required outcome: passed; completion was verified",
                                 )
                                 .replace(
-                                    "Required output/communication: failed; completion was reported without evidence",
-                                    "Required output/communication: passed; completion evidence was reported",
+                                    "Failed requirements: completion verification and grounded final response",
+                                    "Failed requirements: none",
                                 )
-                                .replace("Failure type: missing_validation", "Failure type: none")
                             ),
                         ),
                         memory_type="trajectories",

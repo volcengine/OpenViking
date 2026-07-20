@@ -61,19 +61,43 @@ _TRAJECTORY_COMMA_ANCHOR_RE = re.compile(
     r"Outcome:\s*(?P<outcome>success|failure|partial|unfinished|unknown)[.;]?\s*$",
     re.IGNORECASE,
 )
-_TRAJECTORY_REQUIRED_CONTENT_LABELS = (
+_TRAJECTORY_REQUIRED_HEADER_LABELS = (
     "Outcome",
     "Domain",
     "User Goal",
     "Injected Experiences",
+)
+_TRAJECTORY_REQUIRED_SECTIONS = (
+    "Key Steps",
+    "Evaluation",
+    "Result",
+)
+_TRAJECTORY_STEP_FIELDS = (
+    "Boundary",
+    "Trigger",
+    "Observed facts",
+    "Decision",
+    "Decision basis",
+    "Action",
+    "Result",
+    "Evidence",
+)
+_TRAJECTORY_EVALUATION_FIELDS = (
+    "Required outcome",
+    "Failed requirements",
+    "External feedback",
+    "Unexplained differences",
+)
+_TRAJECTORY_REMOVED_DIAGNOSTIC_SECTIONS = (
     "Timeline",
     "Outcome Checks",
     "Correct Work To Preserve",
     "Observed Problem",
     "Evidence References",
     "Raw Evidence",
-    "Result",
 )
+
+
 @dataclass(slots=True)
 class _TrajectoryValidationIssue:
     target_name: str
@@ -536,7 +560,6 @@ def _trajectory_validation_issues(
         raw_fields = getattr(op, "memory_fields", {}) or {}
         if isinstance(raw_fields, dict):
             _normalize_trajectory_retrieval_anchor(raw_fields)
-            _normalize_known_empty_evidence_references(raw_fields, evidence_sources)
         fields = dict(raw_fields)
         name = str(fields.get("trajectory_name") or _fallback_trajectory_name(op))
         issues.extend(
@@ -564,32 +587,6 @@ def _normalize_trajectory_retrieval_anchor(fields: dict[str, Any]) -> None:
         f"Capability: {values['capability']}; Target: {values['target']}; "
         f"Outcome: {values['outcome'].lower()}."
     )
-
-
-def _normalize_known_empty_evidence_references(
-    fields: dict[str, Any],
-    evidence_sources: dict[str, Any] | None,
-) -> None:
-    """Fill an omitted evidence channel only when its source set is known empty."""
-
-    if int((evidence_sources or {}).get("advisory_signal_count") or 0) != 0:
-        return
-    content = str(fields.get("content") or "")
-    if not content or re.search(r"(?m)^\s+-\s+Advisory signals\s*:", content):
-        return
-    evidence_header = re.search(r"(?m)^-\s+Evidence References\s*:\s*$", content)
-    if evidence_header is None:
-        return
-    section_end = re.search(
-        r"(?m)^-\s+(?:Raw Evidence|Result)\s*:",
-        content[evidence_header.end() :],
-    )
-    insertion_at = (
-        evidence_header.end() + section_end.start() if section_end is not None else len(content)
-    )
-    prefix = content[:insertion_at].rstrip("\n")
-    suffix = content[insertion_at:].lstrip("\n")
-    fields["content"] = prefix + "\n  - Advisory signals: none\n" + suffix
 
 
 def _trajectory_operation_validation_issues(
@@ -756,9 +753,14 @@ def _trajectory_content_validation_issues(
         )
     missing_labels = [
         label
-        for label in _TRAJECTORY_REQUIRED_CONTENT_LABELS
+        for label in _TRAJECTORY_REQUIRED_HEADER_LABELS
         if not re.search(rf"(?m)^-\s+{re.escape(label)}\s*:", content)
     ]
+    missing_labels.extend(
+        label
+        for label in _TRAJECTORY_REQUIRED_SECTIONS
+        if not re.search(rf"(?m)^##\s+{re.escape(label)}\s*$", content)
+    )
     if missing_labels:
         issues.append(
             _TrajectoryValidationIssue(
@@ -769,15 +771,47 @@ def _trajectory_content_validation_issues(
         )
     duplicate_labels = [
         label
-        for label in _TRAJECTORY_REQUIRED_CONTENT_LABELS
+        for label in _TRAJECTORY_REQUIRED_HEADER_LABELS
         if len(re.findall(rf"(?m)^-\s+{re.escape(label)}\s*:", content)) > 1
     ]
+    duplicate_labels.extend(
+        label
+        for label in _TRAJECTORY_REQUIRED_SECTIONS
+        if len(re.findall(rf"(?m)^##\s+{re.escape(label)}\s*$", content)) > 1
+    )
     if duplicate_labels:
         issues.append(
             _TrajectoryValidationIssue(
                 target_name=target_name,
                 reason="trajectory content repeats required sections",
                 details=", ".join(duplicate_labels),
+            )
+        )
+    top_level_sections = [
+        label.strip() for label in re.findall(r"(?m)^##\s+([^\n]+?)\s*$", content)
+    ]
+    unexpected_sections = [
+        label for label in top_level_sections if label not in _TRAJECTORY_REQUIRED_SECTIONS
+    ]
+    if unexpected_sections:
+        issues.append(
+            _TrajectoryValidationIssue(
+                target_name=target_name,
+                reason="trajectory content contains unexpected top-level sections",
+                details=", ".join(unexpected_sections),
+            )
+        )
+    removed_sections = [
+        label
+        for label in _TRAJECTORY_REMOVED_DIAGNOSTIC_SECTIONS
+        if re.search(rf"(?mi)^\s*(?:##\s+|-\s+){re.escape(label)}\s*:", content)
+    ]
+    if removed_sections:
+        issues.append(
+            _TrajectoryValidationIssue(
+                target_name=target_name,
+                reason="trajectory content contains removed diagnostic sections",
+                details=", ".join(removed_sections),
             )
         )
     forbidden_patterns = (
@@ -799,6 +833,162 @@ def _trajectory_content_validation_issues(
                 details=", ".join(found),
             )
         )
+    issues.extend(_trajectory_key_step_validation_issues(target_name, content))
+    issues.extend(_trajectory_evaluation_validation_issues(target_name, content))
+    return issues
+
+
+def _trajectory_key_step_validation_issues(
+    target_name: str,
+    content: str,
+) -> list[_TrajectoryValidationIssue]:
+    section_match = re.search(
+        r"(?ms)^##\s+Key Steps\s*$\n(?P<body>.*?)(?=^##\s+Evaluation\s*$)",
+        content,
+    )
+    if section_match is None:
+        return []
+    body = section_match.group("body")
+    step_matches = list(re.finditer(r"(?m)^###\s+Step\s+(?P<number>\d+)\s*$", body))
+    if not step_matches:
+        return [
+            _TrajectoryValidationIssue(
+                target_name=target_name,
+                reason="trajectory content has no key steps",
+            )
+        ]
+
+    issues: list[_TrajectoryValidationIssue] = []
+    numbers = [int(match.group("number")) for match in step_matches]
+    if numbers != list(range(1, len(numbers) + 1)):
+        issues.append(
+            _TrajectoryValidationIssue(
+                target_name=target_name,
+                reason="trajectory key step numbers are not consecutive",
+                details=f"found={numbers}",
+            )
+        )
+
+    missing: list[str] = []
+    duplicate: list[str] = []
+    out_of_order: list[str] = []
+    unexpected: list[str] = []
+    for index, step_match in enumerate(step_matches):
+        step_number = step_match.group("number")
+        block_end = step_matches[index + 1].start() if index + 1 < len(step_matches) else len(body)
+        block = body[step_match.end() : block_end]
+        first_positions: list[int] = []
+        complete = True
+        for field in _TRAJECTORY_STEP_FIELDS:
+            matches = list(re.finditer(rf"(?m)^-\s+{re.escape(field)}\s*:\s*(.*)$", block))
+            if not matches or not matches[0].group(1).strip():
+                missing.append(f"Step {step_number}: {field}")
+                complete = False
+                continue
+            if len(matches) > 1:
+                duplicate.append(f"Step {step_number}: {field}")
+            first_positions.append(matches[0].start())
+        if complete and first_positions != sorted(first_positions):
+            out_of_order.append(f"Step {step_number}")
+        field_names = [field.strip() for field in re.findall(r"(?m)^-\s+([^:\n]+?)\s*:", block)]
+        unexpected.extend(
+            f"Step {step_number}: {field}"
+            for field in field_names
+            if field not in _TRAJECTORY_STEP_FIELDS
+        )
+
+    if missing:
+        issues.append(
+            _TrajectoryValidationIssue(
+                target_name=target_name,
+                reason="trajectory key steps are missing required fields",
+                details=", ".join(missing),
+            )
+        )
+    if duplicate:
+        issues.append(
+            _TrajectoryValidationIssue(
+                target_name=target_name,
+                reason="trajectory key steps repeat required fields",
+                details=", ".join(duplicate),
+            )
+        )
+    if out_of_order:
+        issues.append(
+            _TrajectoryValidationIssue(
+                target_name=target_name,
+                reason="trajectory key step fields are out of order",
+                details=", ".join(out_of_order),
+            )
+        )
+    if unexpected:
+        issues.append(
+            _TrajectoryValidationIssue(
+                target_name=target_name,
+                reason="trajectory key steps contain unexpected fields",
+                details=", ".join(unexpected),
+            )
+        )
+    return issues
+
+
+def _trajectory_evaluation_validation_issues(
+    target_name: str,
+    content: str,
+) -> list[_TrajectoryValidationIssue]:
+    section_match = re.search(
+        r"(?ms)^##\s+Evaluation\s*$\n(?P<body>.*?)(?=^##\s+Result\s*$)",
+        content,
+    )
+    if section_match is None:
+        return []
+    body = section_match.group("body")
+    missing: list[str] = []
+    duplicate: list[str] = []
+    positions: list[int] = []
+    for field in _TRAJECTORY_EVALUATION_FIELDS:
+        matches = list(re.finditer(rf"(?m)^-\s+{re.escape(field)}\s*:\s*(.*)$", body))
+        if not matches or not matches[0].group(1).strip():
+            missing.append(field)
+            continue
+        if len(matches) > 1:
+            duplicate.append(field)
+        positions.append(matches[0].start())
+
+    issues: list[_TrajectoryValidationIssue] = []
+    if missing:
+        issues.append(
+            _TrajectoryValidationIssue(
+                target_name=target_name,
+                reason="trajectory evaluation is missing required fields",
+                details=", ".join(missing),
+            )
+        )
+    if duplicate:
+        issues.append(
+            _TrajectoryValidationIssue(
+                target_name=target_name,
+                reason="trajectory evaluation repeats required fields",
+                details=", ".join(duplicate),
+            )
+        )
+    if not missing and positions != sorted(positions):
+        issues.append(
+            _TrajectoryValidationIssue(
+                target_name=target_name,
+                reason="trajectory evaluation fields are out of order",
+            )
+        )
+    field_names = [field.strip() for field in re.findall(r"(?m)^-\s+([^:\n]+?)\s*:", body)]
+    unexpected = [field for field in field_names if field not in _TRAJECTORY_EVALUATION_FIELDS]
+    if unexpected:
+        issues.append(
+            _TrajectoryValidationIssue(
+                target_name=target_name,
+                reason="trajectory evaluation contains unexpected fields",
+                details=", ".join(unexpected),
+            )
+        )
     return issues
 
 
@@ -807,54 +997,24 @@ def _trajectory_evidence_validation_issues(
     content: str,
     evidence_sources: dict[str, Any] | None,
 ) -> list[_TrajectoryValidationIssue]:
-    evidence_labels = (
-        "Runtime evidence",
-        "Direct external evidence",
-        "Advisory signals",
-    )
-    values: dict[str, str] = {}
-    missing: list[str] = []
-    duplicate: list[str] = []
-    for label in evidence_labels:
-        matches = re.findall(rf"(?m)^\s+-\s+{re.escape(label)}\s*:\s*(.*)$", content)
-        if not matches:
-            missing.append(label)
-            continue
-        if len(matches) > 1:
-            duplicate.append(label)
-        values[label] = matches[0].strip()
-
     issues: list[_TrajectoryValidationIssue] = []
-    if missing:
-        issues.append(
-            _TrajectoryValidationIssue(
-                target_name=target_name,
-                reason="trajectory evidence references are incomplete",
-                details=", ".join(missing),
-            )
-        )
-    if duplicate:
-        issues.append(
-            _TrajectoryValidationIssue(
-                target_name=target_name,
-                reason="trajectory evidence references are duplicated",
-                details=", ".join(duplicate),
-            )
-        )
-
     direct_available = bool((evidence_sources or {}).get("direct_available"))
-    runtime_grounded = _has_substantive_evidence(values.get("Runtime evidence", ""))
-    external_grounded = direct_available and _has_substantive_evidence(
-        values.get("Direct external evidence", "")
+    runtime_grounded = any(
+        _has_substantive_evidence(value)
+        for value in re.findall(r"(?m)^-\s+Evidence\s*:\s*(.*)$", content)
     )
-    if not direct_available and _has_substantive_evidence(
-        values.get("Direct external evidence", "")
-    ):
+    external_feedback_match = re.search(
+        r"(?m)^-\s+External feedback\s*:\s*(.*)$",
+        content,
+    )
+    external_feedback = external_feedback_match.group(1).strip() if external_feedback_match else ""
+    external_grounded = direct_available and _has_substantive_evidence(external_feedback)
+    if not direct_available and _has_substantive_evidence(external_feedback):
         issues.append(
             _TrajectoryValidationIssue(
                 target_name=target_name,
                 reason="trajectory claims direct external evidence when none was supplied",
-                details=values.get("Direct external evidence", "")[:300],
+                details=external_feedback[:300],
             )
         )
     if _has_material_failure_claim(content) and not (runtime_grounded or external_grounded):
@@ -899,12 +1059,15 @@ def _has_substantive_evidence(value: str) -> bool:
 
 def _has_material_failure_claim(content: str) -> bool:
     if re.search(
-        r"(?mi)^\s+-\s+(?:Required outcome|Constraints|Required output/communication)\s*:\s*(?:failed|partial)\b",
+        r"(?mi)^\s*-\s+Required outcome\s*:\s*(?:failed|partial)\b",
         content,
     ):
         return True
-    match = re.search(r"(?mi)^\s+-\s+Failure type\s*:\s*([^\n]+)", content)
-    return bool(match and match.group(1).strip().lower() not in {"none", "unknown", "无", "未知"})
+    match = re.search(r"(?mi)^\s*-\s+Failed requirements\s*:\s*([^\n]+)", content)
+    return bool(
+        match
+        and match.group(1).strip().lower() not in {"none", "unknown", "none/unknown", "无", "未知"}
+    )
 
 
 def _trajectory_validation_retry_instruction(issues: list[_TrajectoryValidationIssue]) -> str:
@@ -923,7 +1086,9 @@ def _trajectory_validation_retry_instruction(issues: list[_TrajectoryValidationI
             "",
             "Required repair:",
             "- Do not output Counterfactual Ideal Experience, Runtime experience content, Experience Repair Signal, Diagnostic Hints, Recommended operation, Selected candidate, or C1/C2/C3 sections.",
-            "- Record observed execution facts only: timeline, outcome checks, correct work to preserve, observed problem, evidence references, raw evidence, and uncertainty.",
+            "- Do not output Timeline, Outcome Checks, Correct Work To Preserve, Observed Problem, Evidence References, or Raw Evidence sections.",
+            "- Record observed execution facts only in normalized Key Steps, followed by factual Evaluation and Result sections.",
+            "- Every Step must include Boundary, Trigger, Observed facts, Decision, Decision basis, Action, Result, and Evidence exactly once in that order. Use none or unknown rather than omitting a field.",
             "- Include every required field and section from the trajectory schema. Use the exact retrieval_anchor and experience_effects formats.",
             "- Treat Advisory Signals as hints only. Never present them as runtime observations or causal facts; write unknown when runtime or direct external evidence does not support a cause.",
             "Output ONLY the complete JSON object as an instance of OUTPUT_SCHEMA; "
