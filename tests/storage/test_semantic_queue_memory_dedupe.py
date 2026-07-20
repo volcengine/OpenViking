@@ -109,7 +109,8 @@ class _FakePathLock:
         self.acquired_batches = []
         self.release_calls = []
 
-    async def pathlock_acquire_exact_batch(self, paths):
+    async def pathlock_acquire_exact_batch(self, paths, timeout=None):
+        del timeout
         self.acquired_batches.append(paths)
         return {"id": "lock-1"}
 
