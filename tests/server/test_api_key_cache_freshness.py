@@ -11,6 +11,7 @@ import pytest
 
 from openviking.server.api_keys import APIKeyManager
 from openviking.server.api_keys.legacy import ACCOUNTS_CACHE_TTL_SECONDS
+from openviking.server.config import ServerConfig
 from openviking.server.identity import Role
 from openviking_cli.exceptions import UnauthenticatedError
 
@@ -31,13 +32,40 @@ class FakeSharedStorage:
         self.values[path] = deepcopy(value)
 
 
-def _manager(storage: FakeSharedStorage) -> APIKeyManager:
+def _manager(
+    storage: FakeSharedStorage,
+    *,
+    accounts_cache_ttl_seconds: float = ACCOUNTS_CACHE_TTL_SECONDS,
+) -> APIKeyManager:
     viking_fs = MagicMock()
     viking_fs.agfs = MagicMock()
-    manager = APIKeyManager(root_key=ROOT_KEY, viking_fs=viking_fs)
+    manager = APIKeyManager(
+        root_key=ROOT_KEY,
+        viking_fs=viking_fs,
+        accounts_cache_ttl_seconds=accounts_cache_ttl_seconds,
+    )
     manager._legacy._read_json = storage.read_json
     manager._legacy._write_json = storage.write_json
     return manager
+
+
+def test_server_cache_ttl_configuration_is_positive():
+    assert ServerConfig().api_key_cache_ttl_seconds == ACCOUNTS_CACHE_TTL_SECONDS
+
+    with pytest.raises(ValueError):
+        ServerConfig(api_key_cache_ttl_seconds=0)
+
+
+async def test_configured_cache_ttl_controls_staleness():
+    manager = _manager(FakeSharedStorage(), accounts_cache_ttl_seconds=120.0)
+    await manager.load()
+
+    assert manager._legacy._loaded_at is not None
+    manager._legacy._loaded_at -= 119.0
+    assert manager._legacy._cache_is_stale() is False
+
+    manager._legacy._loaded_at -= 2.0
+    assert manager._legacy._cache_is_stale() is True
 
 
 async def test_peer_created_key_refreshes_on_first_cache_miss():

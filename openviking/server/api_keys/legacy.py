@@ -69,6 +69,7 @@ class LegacyAPIKeyManager:
         root_key: str,
         viking_fs: VikingFS,
         api_key_hashing_enabled: bool = False,
+        accounts_cache_ttl_seconds: float = ACCOUNTS_CACHE_TTL_SECONDS,
     ):
         """Initialize APIKeyManager.
 
@@ -77,11 +78,14 @@ class LegacyAPIKeyManager:
             viking_fs: VikingFS client for persistent storage of user keys.
             api_key_hashing_enabled: Whether API key Argon2id hashing is enabled.
                 Default: false - rely on file-level AES encryption for protection.
+            accounts_cache_ttl_seconds: Maximum age of the in-process account
+                cache before the next authenticated request reloads it.
         """
         self._root_key = root_key
         self._viking_fs = viking_fs
         self._async_agfs = AsyncAGFSClient(viking_fs.agfs)
         self._api_key_hashing_enabled = api_key_hashing_enabled
+        self._accounts_cache_ttl_seconds = accounts_cache_ttl_seconds
         self._accounts: Dict[str, AccountInfo] = {}
         # Prefix index: key_prefix -> list[UserKeyEntry]
         self._prefix_index: Dict[str, list[UserKeyEntry]] = {}
@@ -246,7 +250,7 @@ class LegacyAPIKeyManager:
     def _cache_is_stale(self) -> bool:
         if self._loaded_at is None:
             return True
-        return time.monotonic() - self._loaded_at >= ACCOUNTS_CACHE_TTL_SECONDS
+        return time.monotonic() - self._loaded_at >= self._accounts_cache_ttl_seconds
 
     def _miss_refresh_is_due(self) -> bool:
         if self._last_miss_refresh_at is None:

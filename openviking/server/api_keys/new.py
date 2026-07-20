@@ -12,6 +12,7 @@ import secrets
 from typing import Optional, Tuple
 
 from openviking.server.api_keys.legacy import (
+    ACCOUNTS_CACHE_TTL_SECONDS,
     LegacyAPIKeyManager,
     derive_seeded_api_key_secret,
 )
@@ -84,6 +85,7 @@ class NewAPIKeyManager:
         root_key: str,
         viking_fs: VikingFS,
         api_key_hashing_enabled: bool = False,
+        accounts_cache_ttl_seconds: float = ACCOUNTS_CACHE_TTL_SECONDS,
     ):
         """Initialize NewAPIKeyManager.
 
@@ -92,10 +94,15 @@ class NewAPIKeyManager:
             viking_fs: VikingFS client for persistent storage of user keys.
             api_key_hashing_enabled: Whether API key Argon2id hashing is enabled.
                 Default: false - rely on file-level AES encryption for protection.
+            accounts_cache_ttl_seconds: Maximum age of the in-process account
+                cache before the next authenticated request reloads it.
         """
         # Delegate to legacy manager for all core functionality
         self._legacy = LegacyAPIKeyManager(
-            root_key, viking_fs, api_key_hashing_enabled=api_key_hashing_enabled
+            root_key,
+            viking_fs,
+            api_key_hashing_enabled=api_key_hashing_enabled,
+            accounts_cache_ttl_seconds=accounts_cache_ttl_seconds,
         )
 
     async def load(self) -> None:
