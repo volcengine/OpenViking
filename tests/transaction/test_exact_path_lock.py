@@ -226,6 +226,36 @@ async def test_exact_path_lock_backs_off_to_configured_cap(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_exact_path_lock_backoff_does_not_sleep_past_deadline(monkeypatch):
+    agfs = _agfs_with_docs_dir()
+    lock = PathLockEngine(agfs, poll_interval=0.2, poll_max_interval=1.0)
+    first = LockHandle(id="deadline-first")
+    second = LockHandle(id="deadline-second")
+    target = "/local/default/resources/docs/deadline.md"
+
+    assert await lock.acquire_exact_path(target, first)
+
+    class _FakeLoop:
+        now = 100.0
+
+        def time(self):
+            return self.now
+
+    fake_loop = _FakeLoop()
+    sleep_intervals: list[float] = []
+
+    async def fake_sleep(interval: float):
+        sleep_intervals.append(interval)
+        fake_loop.now += interval
+
+    monkeypatch.setattr(path_lock_module.asyncio, "get_running_loop", lambda: fake_loop)
+    monkeypatch.setattr(path_lock_module.asyncio, "sleep", fake_sleep)
+
+    assert not await lock.acquire_exact_path(target, second, timeout=0.15)
+    assert sleep_intervals == [pytest.approx(0.15)]
+
+
+@pytest.mark.asyncio
 async def test_wait_progress_log_is_rate_limited_per_path(monkeypatch):
     path_lock_module._last_wait_progress_at.clear()
     info = MagicMock()

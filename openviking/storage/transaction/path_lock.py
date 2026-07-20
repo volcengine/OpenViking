@@ -117,8 +117,9 @@ class PathLockEngine:
         self._poll_interval = poll_interval
         self._poll_max_interval = poll_max_interval
 
-    async def _sleep_before_retry(self, interval: float) -> float:
-        await asyncio.sleep(interval)
+    async def _sleep_before_retry(self, interval: float, deadline: float) -> float:
+        remaining = max(0.0, deadline - asyncio.get_running_loop().time())
+        await asyncio.sleep(min(interval, remaining))
         return min(interval * 2, self._poll_max_interval)
 
     def _get_lock_path(self, path: str) -> str:
@@ -550,7 +551,7 @@ class PathLockEngine:
                         f"(waited={now - wait_start:.1f}s)",
                     )
                     next_wait_log_at = now + _WAIT_LOG_INTERVAL
-                poll_interval = await self._sleep_before_retry(poll_interval)
+                poll_interval = await self._sleep_before_retry(poll_interval, deadline)
                 continue
 
             same_path_lock = self._get_lock_path(path)
@@ -566,7 +567,7 @@ class PathLockEngine:
                         if asyncio.get_running_loop().time() >= deadline:
                             _log_timeout_waiting(f"[EXACT] Timeout waiting for lock: {path}")
                             return False
-                        poll_interval = await self._sleep_before_retry(poll_interval)
+                        poll_interval = await self._sleep_before_retry(poll_interval, deadline)
                         continue
 
             ancestor_conflict = await self._check_ancestors_for_tree(path, owner_id)
@@ -590,7 +591,7 @@ class PathLockEngine:
                         f"(path={path}, waited={now - wait_start:.1f}s)",
                     )
                     next_wait_log_at = now + _WAIT_LOG_INTERVAL
-                poll_interval = await self._sleep_before_retry(poll_interval)
+                poll_interval = await self._sleep_before_retry(poll_interval, deadline)
                 continue
 
             parent = self._get_parent_path(path)
@@ -612,7 +613,7 @@ class PathLockEngine:
                 logger.debug(f"[EXACT] Lost lock write race on: {path}")
                 if asyncio.get_running_loop().time() >= deadline:
                     return False
-                poll_interval = await self._sleep_before_retry(poll_interval)
+                poll_interval = await self._sleep_before_retry(poll_interval, deadline)
                 continue
 
             conflict_after = await self._check_path_lock(path, owner_id)
@@ -644,7 +645,7 @@ class PathLockEngine:
                         f"(waited={now - wait_start:.1f}s)",
                     )
                     next_wait_log_at = now + _WAIT_LOG_INTERVAL
-                poll_interval = await self._sleep_before_retry(poll_interval)
+                poll_interval = await self._sleep_before_retry(poll_interval, deadline)
                 continue
 
             if not await self._is_lock_owned_by_async(lock_path, owner_id):
@@ -659,7 +660,7 @@ class PathLockEngine:
                         f"(waited={now - wait_start:.1f}s)",
                     )
                     next_wait_log_at = now + _WAIT_LOG_INTERVAL
-                poll_interval = await self._sleep_before_retry(poll_interval)
+                poll_interval = await self._sleep_before_retry(poll_interval, deadline)
                 continue
 
             owner.add_lock(lock_path)
@@ -708,7 +709,7 @@ class PathLockEngine:
                         f"(waited={now - wait_start:.1f}s)",
                     )
                     next_wait_log_at = now + _WAIT_LOG_INTERVAL
-                poll_interval = await self._sleep_before_retry(poll_interval)
+                poll_interval = await self._sleep_before_retry(poll_interval, deadline)
                 continue
 
             # Check ancestor paths for TREE locks held by other owners
@@ -731,7 +732,7 @@ class PathLockEngine:
                         f"(path={path}, waited={now - wait_start:.1f}s)",
                     )
                     next_wait_log_at = now + _WAIT_LOG_INTERVAL
-                poll_interval = await self._sleep_before_retry(poll_interval)
+                poll_interval = await self._sleep_before_retry(poll_interval, deadline)
                 continue
 
             exact_conflict = await self._check_exact_path_lock(path, owner_id)
@@ -743,7 +744,7 @@ class PathLockEngine:
                 if asyncio.get_running_loop().time() >= deadline:
                     _log_timeout_waiting(f"[TREE] Timeout waiting for exact lock: {exact_conflict}")
                     return False
-                poll_interval = await self._sleep_before_retry(poll_interval)
+                poll_interval = await self._sleep_before_retry(poll_interval, deadline)
                 continue
 
             desc_conflict = await self._scan_descendants_for_locks(path, owner_id)
@@ -765,7 +766,7 @@ class PathLockEngine:
                         f"(path={path}, waited={now - wait_start:.1f}s)",
                     )
                     next_wait_log_at = now + _WAIT_LOG_INTERVAL
-                poll_interval = await self._sleep_before_retry(poll_interval)
+                poll_interval = await self._sleep_before_retry(poll_interval, deadline)
                 continue
 
             if not await self._ensure_directory_exists_async(path):
@@ -808,7 +809,7 @@ class PathLockEngine:
                         f"(waited={now - wait_start:.1f}s)",
                     )
                     next_wait_log_at = now + _WAIT_LOG_INTERVAL
-                poll_interval = await self._sleep_before_retry(poll_interval)
+                poll_interval = await self._sleep_before_retry(poll_interval, deadline)
                 continue
 
             if not await self._is_lock_owned_by_async(lock_path, owner_id):
@@ -823,7 +824,7 @@ class PathLockEngine:
                         f"(waited={now - wait_start:.1f}s)",
                     )
                     next_wait_log_at = now + _WAIT_LOG_INTERVAL
-                poll_interval = await self._sleep_before_retry(poll_interval)
+                poll_interval = await self._sleep_before_retry(poll_interval, deadline)
                 continue
 
             owner.add_lock(lock_path)
