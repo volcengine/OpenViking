@@ -205,6 +205,7 @@ def _experience_root_cause_prevention_prompt(
     comparison_content = _comparison_trajectory_context(trajectory)
     trajectory_uri = trajectory.uri if trajectory is not None else ""
     trajectory_outcome = trajectory.outcome if trajectory is not None else ""
+    target_experience_was_loaded = _target_experience_was_loaded(target)
 
     return f"""You are a senior counterfactual failure diagnostician for agent experience extraction.
 
@@ -219,6 +220,30 @@ decision boundary for the ONE failure pattern it claims to repair,
 would it reliably prevent or recover from that pattern without breaking nearby
 correct cases? Other independent failures may remain; this candidate is not
 required to make the entire source trajectory succeed by itself.
+
+Prior experience execution:
+- target_experience_was_loaded: {str(target_experience_was_loaded).lower()}
+- When this value is true and the evaluation failed, treat the existing experience
+  as empirically insufficient for the claimed failure pattern. Pass an update only
+  if it explains why the old rule did not prevent the failure and adds a concrete
+  decision-rule or action delta. Reject paraphrases, stronger wording, or checklist additions
+  that preserve the same decision logic.
+- When the old experience already requires gathering or checking the relevant evidence,
+  an explicit tool name, field list, exhaustive loop, or verification checklist is not a
+  new delta. The update must change the decision made from that evidence at the observed
+  failure boundary.
+
+Evidence authority:
+- Direct evaluation evidence establishes whether the source trajectory failed.
+- A successful comparison trajectory may establish the required observable action
+  or output delta even when the failed trajectory does not explain why it was correct.
+- Do not reject a candidate merely because that successful action appears only in
+  comparison trajectories. Comparison evidence must not be used to invent a hidden cause,
+  unavailable tool, override path, or unsupported policy rule.
+- For the observable behavior delta, evaluator-backed successful comparison behavior is authoritative
+  over the failed trajectory's interpretation. If they conflict, encode the narrow runtime-observable exception
+  supported by their differing inputs and actions; do not preserve the failed interpretation,
+  demand source-only proof of the successful action, or generalize it into a broader hidden policy.
 
 Candidate-local review rule:
 - Judge only whether this candidate completely repairs its claimed root failure.
@@ -319,6 +344,23 @@ target: {target.target_name}
 
 {after}
 """
+
+
+def _target_experience_was_loaded(target: GateTarget) -> bool:
+    if target.before_content is None or target.analysis is None:
+        return False
+    if target.gradient is not None:
+        target_uri = str(target.gradient.target_uri or "")
+    elif target.plan_item is not None:
+        target_uri = str(target.plan_item.target_uri or "")
+    else:
+        target_uri = ""
+    loaded_uris = {
+        str(uri)
+        for uri in list(target.analysis.metadata.get("loaded_experience_uris") or [])
+        if uri
+    }
+    return bool(target_uri and target_uri in loaded_uris)
 
 
 def _experience_candidate_local_reconsideration_prompt(

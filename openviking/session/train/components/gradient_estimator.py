@@ -568,13 +568,42 @@ def _trajectory_or_analysis_metadata(
 def _loaded_experience_uris(analysis: RolloutAnalysis) -> list[str]:
     messages = dict(getattr(analysis, "metadata", {}) or {}).get("rollout_messages") or []
     reminders = extract_injected_experience_reminders(messages)
-    return list(
-        dict.fromkeys(
-            str(reminder.get("experience_uri") or "")
-            for reminder in reminders
-            if reminder.get("experience_uri")
+    loaded_uris = [
+        str(reminder.get("experience_uri") or "")
+        for reminder in reminders
+        if reminder.get("experience_uri")
+    ]
+    for message in messages:
+        parts = (
+            message.get("parts", []) if isinstance(message, dict) else getattr(message, "parts", [])
         )
-    )
+        for part in parts or []:
+            tool_name = (
+                part.get("tool_name", "")
+                if isinstance(part, dict)
+                else getattr(part, "tool_name", "")
+            )
+            tool_status = (
+                part.get("tool_status", "")
+                if isinstance(part, dict)
+                else getattr(part, "tool_status", "")
+            )
+            tool_input = (
+                part.get("tool_input", {})
+                if isinstance(part, dict)
+                else getattr(part, "tool_input", {})
+            )
+            if tool_name != "read_experience":
+                continue
+            if tool_status != "completed":
+                continue
+            tool_input = tool_input or {}
+            if not isinstance(tool_input, dict):
+                continue
+            uri = str(tool_input.get("experience_uri") or "")
+            if uri:
+                loaded_uris.append(uri)
+    return list(dict.fromkeys(loaded_uris))
 
 
 def _experience_extract_gate_runner(vlm: Any) -> GateRunner:

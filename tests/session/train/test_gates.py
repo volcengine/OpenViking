@@ -415,6 +415,40 @@ async def test_experience_root_cause_prevention_gate_allows_preventive_experienc
 
 
 @pytest.mark.asyncio
+async def test_experience_gate_requires_new_delta_when_loaded_experience_still_failed():
+    target, gate = _gradient_target(
+        '{"pass": true, "root_cause_quality": "sufficient", '
+        '"reason": "new decision rule fixes the observed action delta", '
+        '"expected_behavior_change": "apply a different eligibility decision", '
+        '"repair_prompt": "", "risks": []}'
+    )
+    assert target.gradient is not None
+    target.gradient.before_file = MemoryFile(
+        uri=target.gradient.target_uri,
+        content="Existing reminder that was already injected.",
+        memory_type="experiences",
+        extra_fields={"experience_name": target.gradient.target_name},
+    )
+    assert target.analysis is not None
+    target.analysis.metadata["loaded_experience_uris"] = [target.gradient.target_uri]
+
+    decision = await gate.evaluate(target)
+
+    assert decision is None
+    prompt = gate.vlm.calls[0]["prompt"]
+    assert "target_experience_was_loaded: true" in prompt
+    assert "empirically insufficient for the claimed failure pattern" in prompt
+    assert "why the old rule did not prevent the failure" in prompt
+    assert "paraphrases, stronger wording, or checklist additions" in prompt
+    assert "successful comparison trajectory may establish" in prompt
+    assert "must not be used to invent a hidden cause" in prompt
+    assert "an explicit tool name, field list, exhaustive loop, or verification checklist" in prompt
+    assert "must change the decision made from that evidence" in prompt
+    assert "evaluator-backed successful comparison behavior is authoritative" in prompt
+    assert "encode the narrow runtime-observable exception" in prompt
+
+
+@pytest.mark.asyncio
 async def test_experience_root_cause_prevention_gate_rejects_non_preventive_experience():
     target, gate = _gradient_target(
         '{"pass": false, "root_cause_quality": "not_preventive", '

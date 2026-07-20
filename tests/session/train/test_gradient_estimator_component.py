@@ -487,6 +487,27 @@ async def test_experience_gradient_estimator_runs_extract_loop(monkeypatch):
     assert captured["extract_loop_kwargs"]["context_provider"]._isolation_handler is not None
 
 
+def test_loaded_experience_uris_include_completed_read_experience_calls():
+    analysis = _analysis(passed=False, outcome="failure")
+    loaded_uri = "viking://user/u/memories/experiences/loaded.md"
+    analysis.metadata["rollout_messages"] = [
+        {
+            "role": "user",
+            "parts": [
+                {
+                    "type": "tool",
+                    "tool_name": "read_experience",
+                    "tool_status": "completed",
+                    "tool_input": {"experience_uri": loaded_uri},
+                    "tool_output": f"# Loaded Experience\n\nExperience URI: `{loaded_uri}`",
+                }
+            ],
+        }
+    ]
+
+    assert gradient_estimator_module._loaded_experience_uris(analysis) == [loaded_uri]
+
+
 @pytest.mark.asyncio
 async def test_post_validation_gate_sees_prefetched_comparison_trajectories(monkeypatch):
     analysis = _analysis(passed=False, outcome="failure")
