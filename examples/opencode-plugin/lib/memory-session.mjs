@@ -29,7 +29,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   let saveTimer = null
 
   async function init() {
-    await migrateLegacySessionMap()
+    if (config.autoCapture) await migrateLegacySessionMap()
     await loadState()
     const health = await fetchJSON(config, "/health", {}, { timeoutMs: 5000 })
     if (health.ok) {
@@ -140,9 +140,9 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       await handleSessionCompacted(event)
     } else if (event.type === "session.idle") {
       await handleSessionIdle(event)
-    } else if (event.type === "message.updated") {
+    } else if (event.type === "message.updated" && config.autoCapture) {
       await handleMessageUpdated(event)
-    } else if (event.type === "message.part.updated") {
+    } else if (event.type === "message.part.updated" && config.autoCapture) {
       await handleMessagePartUpdated(event)
     }
   }
@@ -259,7 +259,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     if (!state) return false
 
     const added = await flushPendingMessages(opencodeSessionId, state)
-    if (commit) {
+    if (commit && config.autoCapture) {
       await commitOvSession(state.ovSessionId, { force: true, reason })
     } else if (added > 0) {
       await maybeCommitByThreshold(state)
@@ -361,6 +361,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   }
 
   async function flushPendingMessages(opencodeSessionId, state) {
+    if (!config.autoCapture) return 0
     const toSend = []
     for (const [messageId, message] of state.messages.entries()) {
       if (message.captured) continue

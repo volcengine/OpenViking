@@ -2035,7 +2035,14 @@ class Session:
 
     async def _get_pending_archive_messages(self) -> List[Message]:
         """Return messages from in-progress archives newer than the latest completed archive."""
-        latest_completed_index = max(0, self._meta.commit_count)
+        # Seed from 0 rather than ``commit_count``: Phase 1 bumps ``commit_count``
+        # as soon as an archive's messages are written, before its Phase 2 memory
+        # extraction finishes and the ``.done`` marker is written. The in-flight
+        # archive's index therefore equals ``commit_count``, so seeding from
+        # ``commit_count`` would treat that still-pending archive as already
+        # completed and drop its messages from the assembled context (issue #3129).
+        # Completed archives are detected below via their ``.done`` marker.
+        latest_completed_index = 0
         pending_archives: List[Dict[str, Any]] = []
         for archive in sorted(await self._list_archive_refs(), key=lambda item: item["index"]):
             try:

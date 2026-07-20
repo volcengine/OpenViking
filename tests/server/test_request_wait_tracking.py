@@ -175,7 +175,10 @@ async def test_add_resource_wait_uses_request_tracker_when_telemetry_disabled(se
 
 
 @pytest.mark.asyncio
-async def test_add_resource_wait_timeout_returns_pollable_background_task(service, monkeypatch):
+@pytest.mark.parametrize("telemetry_enabled", [True, False])
+async def test_add_resource_wait_timeout_returns_pollable_background_task(
+    service, monkeypatch, telemetry_enabled
+):
     from openviking.service.task_tracker import TaskStatus, get_task_tracker
 
     tracker = _TimeoutThenCompleteRequestWaitTracker(
@@ -185,7 +188,10 @@ async def test_add_resource_wait_timeout_returns_pollable_background_task(servic
         }
     )
     ctx = RequestContext(user=service.user, role=Role.ROOT)
-    telemetry = OperationTelemetry(operation="resources.add_resource", enabled=True)
+    telemetry = OperationTelemetry(
+        operation="resources.add_resource",
+        enabled=telemetry_enabled,
+    )
 
     async def _fake_process_resource(**kwargs):
         del kwargs

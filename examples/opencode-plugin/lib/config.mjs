@@ -233,7 +233,14 @@ function normalizeConfig(config) {
   config.captureMaxLength = Math.max(200, Math.min(100000, Math.round(Number(config.captureMaxLength) || 24000)))
   config.captureToolMaxChars = Math.max(200, Math.min(20000, Math.round(Number(config.captureToolMaxChars) || 2000)))
   config.commitTokenThreshold = Math.max(1000, Math.round(Number(config.commitTokenThreshold) || 20000))
-  config.commitKeepRecentCount = Math.max(0, Math.round(Number(config.commitKeepRecentCount) || 10))
+  const rawCommitKeepRecentCount = config.commitKeepRecentCount
+  const commitKeepRecentCount = rawCommitKeepRecentCount == null ||
+    (typeof rawCommitKeepRecentCount === "string" && rawCommitKeepRecentCount.trim() === "")
+    ? Number.NaN
+    : Number(rawCommitKeepRecentCount)
+  config.commitKeepRecentCount = Number.isFinite(commitKeepRecentCount)
+    ? Math.max(0, Math.round(commitKeepRecentCount))
+    : DEFAULT_CONFIG.commitKeepRecentCount
   config.profileTokenBudget = Math.max(500, Math.round(Number(config.profileTokenBudget) || 10000))
   config.resumeContextBudget = Math.max(1024, Math.round(Number(config.resumeContextBudget) || 32000))
   if (!Array.isArray(config.bypassSessionPatterns)) config.bypassSessionPatterns = []

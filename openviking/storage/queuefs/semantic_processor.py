@@ -748,19 +748,19 @@ class SemanticProcessor(DequeueHandlerBase):
         lock: LockLease = NO_LOCK,
     ) -> DiffResult:
         viking_fs = get_viking_fs()
+        if not await viking_fs.exists(root_uri, ctx=ctx):
+            raise FileNotFoundError(
+                f"Semantic source no longer exists; refusing to sync into {target_uri}: {root_uri}"
+            )
         diff = DiffResult()
         lock_handle = lock.handle
 
         async def list_children(dir_uri: str) -> Tuple[Dict[str, str], Dict[str, str]]:
             files: Dict[str, str] = {}
             dirs: Dict[str, str] = {}
-            try:
-                entries = await viking_fs.ls(
-                    dir_uri, show_all_hidden=True, node_limit=LS_ALL_NODES, ctx=ctx
-                )
-            except Exception as e:
-                logger.error(f"[SyncDiff] Failed to list {dir_uri}: {e}")
-                return files, dirs
+            entries = await viking_fs.ls(
+                dir_uri, show_all_hidden=True, node_limit=LS_ALL_NODES, ctx=ctx
+            )
 
             for entry in entries:
                 name = entry.get("name", "")
