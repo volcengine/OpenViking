@@ -43,6 +43,19 @@ def _seed_secret(user_id: str, seed: str) -> str:
 ROOT_KEY = "admin-api-test-root-key-abcdef1234567890ab"
 
 
+class _NoopLockContext:
+    """The lightweight fake storage does not exercise transaction locking."""
+
+    def __init__(self, *_args, **_kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
+
+
 class _FakeAGFS:
     def __init__(self):
         self._files = {}
@@ -134,7 +147,13 @@ def _build_lightweight_admin_test_app() -> FastAPI:
 
 
 @pytest_asyncio.fixture(scope="function")
-async def lightweight_admin_app():
+async def lightweight_admin_app(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.server.api_keys.legacy.get_lock_manager", lambda: None
+    )
+    monkeypatch.setattr(
+        "openviking.server.api_keys.legacy.LockContext", _NoopLockContext
+    )
     app = _build_lightweight_admin_test_app()
     await app.state.api_key_manager.load()
     return app

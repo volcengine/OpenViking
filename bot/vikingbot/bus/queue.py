@@ -1,7 +1,7 @@
 """Async message queue for decoupled channel-agent communication."""
 
 import asyncio
-from typing import Callable, Awaitable, Any
+from typing import Awaitable, Callable
 
 from loguru import logger
 
@@ -79,8 +79,3 @@ class MessageBus:
     def inbound_size(self) -> int:
         """Number of pending inbound messages."""
         return self.inbound.qsize()
-
-    @property
-    def outbound_size(self) -> int:
-        """Number of pending outbound messages."""
-        return self.outbound.qsize()

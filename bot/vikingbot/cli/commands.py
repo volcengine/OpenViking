@@ -19,9 +19,7 @@ from prompt_toolkit.history import FileHistory
 from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.styles import Style as PromptStyle
 from rich.console import Console
-from rich.markdown import Markdown
 from rich.table import Table
-from rich.text import Text
 
 from vikingbot import __logo__, __version__
 from vikingbot.agent.loop import AgentLoop
@@ -266,15 +264,6 @@ def _init_prompt_session() -> None:
     )
 
 
-def _print_agent_response(response: str, render_markdown: bool) -> None:
-    """Render assistant response with consistent terminal styling."""
-    content = response or ""
-    body = Markdown(content) if render_markdown else Text(content)
-    console.print()
-    console.print(f"[cyan]{__logo__} vikingbot[/cyan]")
-    console.print(body)
-    console.print()
-
 
 def _is_exit_command(command: str) -> bool:
     """Return True when input should end interactive chat."""
@@ -463,9 +452,6 @@ def gateway(
             agent_loop.run(),
             server.serve(),
         ]
-        # if enable_console:
-        #     tasks.append(start_console(console_port))
-
         try:
             await asyncio.gather(*tasks)
         finally:
@@ -657,25 +643,6 @@ def prepare_heartbeat(config, agent_loop, session_manager) -> HeartbeatService:
     return heartbeat
 
 
-async def start_console(console_port):
-    """Start the console web UI in a separate thread within the same process."""
-    try:
-        import threading
-
-        from vikingbot.console.console_gradio_simple import run_console_server
-
-        def run_in_thread():
-            try:
-                run_console_server(console_port)
-            except Exception as e:
-                console.print(f"[yellow]Console server error: {e}[/yellow]")
-
-        thread = threading.Thread(target=run_in_thread, daemon=True)
-        thread.start()
-        console.print(f"[green]✓[/green] Console: http://localhost:{console_port}")
-    except Exception as e:
-        console.print(f"[yellow]Warning: Console not available ({e})[/yellow]")
-
 
 # ============================================================================
 # Agent Commands
@@ -683,14 +650,6 @@ async def start_console(console_port):
 
 
 # Helper for thinking spinner context
-def _thinking_ctx(logs: bool):
-    """Return a context manager for showing thinking spinner."""
-    if logs:
-        from contextlib import nullcontext
-
-        return nullcontext()
-    return console.status("[dim]vikingbot is thinking...[/dim]", spinner="dots")
-
 
 def prepare_agent_channel(
     config,

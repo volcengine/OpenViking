@@ -12,11 +12,10 @@ from openviking.parse.parsers.constants import (
     ADDITIONAL_TEXT_EXTENSIONS,
     CODE_EXTENSIONS,
     DOCUMENTATION_EXTENSIONS,
-    IGNORE_DIRS,
     IGNORE_EXTENSIONS,
 )
 from openviking.parse.parsers.text_encoding import normalize_text_bytes
-from openviking.utils.path_safety import safe_join_viking_uri, sanitize_relative_viking_path
+from openviking.utils.path_safety import safe_join_viking_uri
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -95,44 +94,6 @@ def should_skip_file(
         return True, f"os error: {exc}"
 
     return False, ""
-
-
-def should_skip_directory(
-    dir_name: str,
-    ignore_dirs: Optional[Set[str]] = None,
-) -> bool:
-    """Return True when a directory should be skipped during traversal."""
-    effective_ignore_dirs = ignore_dirs if ignore_dirs is not None else IGNORE_DIRS
-    return dir_name in effective_ignore_dirs or dir_name.startswith(".")
-
-
-def _sanitize_rel_path(rel_path: str) -> str:
-    """Compatibility wrapper for existing upload utility callers/tests."""
-    return sanitize_relative_viking_path(rel_path)
-
-
-async def upload_text_files(
-    file_paths: List[Tuple[Path, str]],
-    viking_uri_base: str,
-    viking_fs: Any,
-) -> Tuple[int, List[str]]:
-    """Upload text files to VikingFS and return uploaded count with warnings."""
-    uploaded_count = 0
-    warnings: List[str] = []
-
-    for file_path, rel_path in file_paths:
-        try:
-            target_uri = safe_join_viking_uri(viking_uri_base, rel_path)
-            content = file_path.read_bytes()
-            content = detect_and_convert_encoding(content, file_path)
-            await viking_fs.write_file_bytes(target_uri, content)
-            uploaded_count += 1
-        except Exception as exc:
-            warning = f"Failed to upload {file_path}: {exc}"
-            warnings.append(warning)
-            logger.warning(warning)
-
-    return uploaded_count, warnings
 
 
 _UPLOAD_CONCURRENCY = 8

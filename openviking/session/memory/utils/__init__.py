@@ -12,7 +12,6 @@ from openviking.session.memory.utils.json_parser import (
     extract_json_content,
     parse_json_with_stability,
     parse_value_with_tolerance,
-    remove_json_trailing_content,
     value_fault_tolerance,
 )
 from openviking.session.memory.utils.language import (
@@ -67,7 +66,6 @@ __all__ = [
     "is_uri_allowed",
     # JSON Parser
     "extract_json_content",
-    "remove_json_trailing_content",
     "parse_json_with_stability",
     "value_fault_tolerance",
     "parse_value_with_tolerance",

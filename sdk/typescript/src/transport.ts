@@ -71,8 +71,14 @@ export class OpenVikingTransport {
       `${this.baseUrl}${path.startsWith("/") ? path : `/${path}`}`,
     );
     for (const [key, value] of Object.entries(options.query ?? {})) {
-      if (value !== undefined && value !== null && value !== "")
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          if (item !== undefined && item !== null && item !== "")
+            url.searchParams.append(key, String(item));
+        }
+      } else if (value !== undefined && value !== null && value !== "") {
         url.searchParams.set(key, String(value));
+      }
     }
     if (this.profile) url.searchParams.set("profile", "1");
     const headers = new Headers(this.headers);

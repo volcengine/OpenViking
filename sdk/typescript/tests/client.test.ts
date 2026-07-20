@@ -554,6 +554,7 @@ describe("OpenVikingClient", () => {
         }),
       )
       .mockResolvedValueOnce(ok([{ oid: "commit-1" }]))
+      .mockResolvedValueOnce(ok([{ oid: "commit-1" }]))
       .mockResolvedValueOnce(ok("*.tmp\n"))
       .mockResolvedValueOnce(ok(null))
       .mockResolvedValueOnce(ok(null));
@@ -570,7 +571,15 @@ describe("OpenVikingClient", () => {
       size: 2,
       bytes: new Uint8Array([4, 5]),
     });
-    await expect(client.gitLog()).resolves.toEqual([{ oid: "commit-1" }]);
+    await expect(
+      client.gitLog("main", 20, [
+        "viking://resources/a",
+        "viking://resources/docs",
+      ]),
+    ).resolves.toEqual([{ oid: "commit-1" }]);
+    await expect(client.gitLog("main", 20, [])).resolves.toEqual([
+      { oid: "commit-1" },
+    ]);
     await expect(client.gitGetIgnore()).resolves.toBe("*.tmp\n");
     await client.gitSetIgnore("*.log\n");
     await client.gitDeleteIgnore();
@@ -583,7 +592,16 @@ describe("OpenVikingClient", () => {
     expect(
       new URL(String(fetcher.mock.calls[1]![0])).searchParams.get("path"),
     ).toBe("viking://resources/a");
-    expect(JSON.parse(String(fetcher.mock.calls[4]![1]?.body))).toEqual({
+    const logUrl = new URL(String(fetcher.mock.calls[2]![0]));
+    expect(logUrl.searchParams.get("limit")).toBe("20");
+    expect(logUrl.searchParams.getAll("paths")).toEqual([
+      "viking://resources/a",
+      "viking://resources/docs",
+    ]);
+    const unfilteredLogUrl = new URL(String(fetcher.mock.calls[3]![0]));
+    expect(unfilteredLogUrl.searchParams.get("limit")).toBe("20");
+    expect(unfilteredLogUrl.searchParams.getAll("paths")).toEqual([]);
+    expect(JSON.parse(String(fetcher.mock.calls[5]![1]?.body))).toEqual({
       content: "*.log\n",
     });
   });

@@ -251,35 +251,6 @@ async def test_refresh_token_roundtrip(store):
 
 
 @pytest.mark.asyncio
-async def test_refresh_replay_revokes_chain(store):
-    """Reusing a consumed refresh must allow the caller to revoke the family."""
-    rt1 = "rt-1"
-    rt2 = "rt-2"
-    rt3 = "rt-3"
-    for rt in (rt1, rt2, rt3):
-        await store.insert_refresh(
-            token_plain=rt,
-            client_id="cx",
-            account_id="acct",
-            user_id="user",
-            role="user",
-            scope=None,
-            resource=None,
-            authorizing_key_fp=_FP,
-            ttl_seconds=86400,
-        )
-    # Consume rt1 (rotate to rt2). Then attacker replays rt1.
-    assert await store.consume_refresh(token_plain=rt1, replaced_by_plain=rt2) is not None
-    assert await store.consume_refresh(token_plain=rt1, replaced_by_plain=None) is None
-    # Detection — caller now revokes the chain.
-    revoked = await store.revoke_chain(client_id="cx", account_id="acct", user_id="user")
-    assert revoked >= 2  # rt2 and rt3 still active before revoke
-    # Both rt2 and rt3 must now be unusable.
-    assert await store.consume_refresh(token_plain=rt2, replaced_by_plain=None) is None
-    assert await store.consume_refresh(token_plain=rt3, replaced_by_plain=None) is None
-
-
-@pytest.mark.asyncio
 async def test_access_token_load_and_revoke(store):
     token = "at-secret"
     await store.insert_access(

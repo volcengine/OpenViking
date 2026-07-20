@@ -123,11 +123,22 @@ async def test_show_with_path(local_client, mock_fs):
 @pytest.mark.asyncio
 async def test_log_defaults(local_client, mock_fs):
     out = await local_client.git_log()
-    mock_fs.log.assert_awaited_once_with(branch="main", limit=20, ctx=local_client._ctx)
+    mock_fs.log.assert_awaited_once_with(
+        branch="main", limit=20, paths=None, ctx=local_client._ctx
+    )
     assert len(out) == 1
 
 
 @pytest.mark.asyncio
 async def test_log_overrides(local_client, mock_fs):
-    await local_client.git_log(branch="dev", limit=5)
-    mock_fs.log.assert_awaited_once_with(branch="dev", limit=5, ctx=local_client._ctx)
+    await local_client.git_log(
+        branch="dev",
+        limit=5,
+        paths=["viking://resources/a.md", "viking://resources/docs"],
+    )
+    mock_fs.log.assert_awaited_once_with(
+        branch="dev",
+        limit=5,
+        paths=["viking://resources/a.md", "viking://resources/docs"],
+        ctx=local_client._ctx,
+    )
