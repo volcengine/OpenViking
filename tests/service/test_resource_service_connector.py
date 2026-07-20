@@ -12,6 +12,7 @@ import pytest
 from openviking.server.identity import RequestContext, Role
 from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
+from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -290,31 +291,34 @@ async def test_add_resource_falls_back_for_shared_source_with_exact_to(
 
 
 @pytest.mark.asyncio
-async def test_git_background_task_enters_private_execution_chain(
-    monkeypatch,
-    ctx,
-    service,
-):
-    tracker = _task_tracker()
-    monkeypatch.setattr(
-        "openviking.service.task_tracker.get_task_tracker",
-        lambda: tracker,
-    )
-    service.add_resource = AsyncMock(side_effect=AssertionError("public route re-entered"))
-    service._add_resource = AsyncMock(return_value={"status": "success", "root_uri": "root"})
+async def test_add_resource_job_reenters_public_route_synchronously(ctx, service):
+    service.add_resource = AsyncMock(return_value={"status": "success", "root_uri": "root"})
     resource_lock = SimpleNamespace(close=AsyncMock())
-
-    await service._run_add_resource_task(
-        "task-1",
-        ctx=ctx,
-        add_kwargs={"path": "git://example.com/repo.git", "ctx": ctx},
-        resource_lock=resource_lock,
+    stage_callback = AsyncMock()
+    msg = AddResourceMsg(
+        task_id="task-1",
+        path="git://example.com/repo.git",
+        root_uri="viking://resources/repo",
+        account_id=ctx.account_id,
+        user_id=ctx.user.user_id,
+        role=str(ctx.role),
+        args={"parser_backend": "understanding"},
     )
 
-    service.add_resource.assert_not_awaited()
-    assert service._add_resource.await_args.kwargs["route_source"] is False
-    tracker.complete.assert_awaited_once()
-    resource_lock.close.assert_awaited_once()
+    result = await service.execute_add_resource_job(
+        msg,
+        ctx=ctx,
+        resource_lock=resource_lock,
+        stage_callback=stage_callback,
+    )
+
+    assert result == {"status": "success", "root_uri": "root"}
+    call = service.add_resource.await_args.kwargs
+    assert call["path"] == msg.path
+    assert call["to"] == msg.root_uri
+    assert call["wait"] is True
+    assert call["resource_lock"] is resource_lock
+    assert call["args"] == {"parser_backend": "understanding"}
 
 
 @pytest.mark.asyncio

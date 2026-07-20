@@ -28,6 +28,7 @@ logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from openviking.session.compressor_v2 import SessionCompressorV2
+    from openviking.usage_reporter import UsageReporter
 
 
 class SessionService:
@@ -43,6 +44,7 @@ class SessionService:
         self._viking_fs = viking_fs
         self._session_compressor = session_compressor
         self._tool_output_externalization_config = ToolOutputExternalizationConfig()
+        self._usage_reporter: Optional["UsageReporter"] = None
 
     def set_dependencies(
         self,
@@ -60,6 +62,10 @@ class SessionService:
     ) -> None:
         """Set tool output externalization controls for newly created sessions."""
         self._tool_output_externalization_config = config.model_copy(deep=True)
+
+    def set_usage_reporter(self, usage_reporter: Optional["UsageReporter"]) -> None:
+        """Set the usage reporter for newly created sessions."""
+        self._usage_reporter = usage_reporter
 
     def _ensure_initialized(self) -> None:
         """Ensure all dependencies are initialized."""
@@ -120,6 +126,7 @@ class SessionService:
             session_id=session_id,
             session_uri=session_uri,
             tool_output_externalization_config=self._tool_output_externalization_config,
+            usage_reporter=self._usage_reporter,
         )
 
     async def create(

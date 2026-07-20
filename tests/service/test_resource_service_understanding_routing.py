@@ -8,6 +8,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
 from openviking.storage.queuefs import QueueManager
+from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -94,9 +95,11 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
         "task_id": "task-1",
     }
     _, message = queue_manager.enqueue.await_args.args
-    assert queue_manager.enqueue.await_args.args[0] == QueueManager.EXTERNAL_PARSE
-    assert message["resolved_extension"] == ".pdf"
-    assert message["source_name"] == "manual.pdf"
+    assert queue_manager.enqueue.await_args.args[0] == QueueManager.ADD_RESOURCE
+    queued = AddResourceMsg.from_dict(message)
+    assert queued.args["parser_backend"] == "understanding"
+    assert queued.args["resolved_extension"] == ".pdf"
+    assert queued.source_name == "manual.pdf"
     assert not downloaded.exists()
     processor.process_resource.assert_not_awaited()
     lock.handoff.assert_awaited_once()

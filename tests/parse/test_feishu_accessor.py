@@ -7,7 +7,7 @@ import sys
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
-from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+from openviking.parse.accessors.feishu_accessor import FeishuAccessor, _title_as_filename
 
 
 class _SuccessResponse:
@@ -269,6 +269,10 @@ def test_guess_image_ext_defaults_to_png_when_unknown():
     assert accessor._guess_image_ext(b"not-an-image", None) == ".png"
     assert accessor._guess_image_ext(b"\xff\xd8\xff", None) == ".jpg"
     assert accessor._guess_image_ext(b"anything", "image/gif") == ".gif"
+
+
+def test_title_as_filename_preserves_prefix_around_path_separators():
+    assert _title_as_filename("API Docs/Overview\\v2") == "API Docs_Overview_v2"
 
 
 def test_access_offloads_synchronous_download_to_thread(monkeypatch):
@@ -615,3 +619,28 @@ def test_embedded_sheet_uses_same_user_token(monkeypatch):
     assert inspect_block.call_args.args[0].token_types == {"user"}
     assert inspect_block.call_args.args[1].user_access_token == "u-test"
     assert read_range.call_args.kwargs["feishu_access_token"] == "u-test"
+
+
+def test_access_keeps_raw_title_but_exposes_safe_original_filename(monkeypatch):
+    accessor = FeishuAccessor()
+    accessor._config = SimpleNamespace(download_images=False)
+
+    async def fake_fetch_document(*_args, **_kwargs):
+        from openviking.parse.accessors.feishu_accessor import FeishuDocument
+
+        return FeishuDocument(
+            doc_type="docx",
+            token="doc_token",
+            markdown_content="# API Docs/Overview",
+            title="API Docs/Overview",
+            meta={},
+        )
+
+    monkeypatch.setattr(accessor, "_fetch_document", fake_fetch_document)
+
+    resource = asyncio.run(accessor.access("https://example.feishu.cn/docx/doc_token"))
+    try:
+        assert resource.meta["feishu_title"] == "API Docs/Overview"
+        assert resource.meta["original_filename"] == "API Docs_Overview"
+    finally:
+        resource.cleanup()

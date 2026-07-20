@@ -68,7 +68,7 @@ class ParserRegistry:
         self._register("zip", ZipParser())
         self._register("directory", DirectoryParser())
 
-        self._register("image", ImageParser())
+        self._register("image", ImageParser(config=self._parser_configs.get("image")))
         self._register("audio", AudioParser())
         self._register("video", VideoParser())
 
@@ -173,6 +173,7 @@ def get_registry() -> ParserRegistry:
                 "powerpoint": config.markdown,
                 "excel": config.markdown,
                 "epub": config.markdown,
+                "image": config.image,
             }
         except Exception:
             parser_configs = None

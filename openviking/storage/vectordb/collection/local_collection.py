@@ -5,9 +5,11 @@ import json
 import os
 import random
 import shutil
+import threading
 import time
+from contextlib import contextmanager
 from itertools import zip_longest
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -52,6 +54,106 @@ from openviking_cli.utils.logger import default_logger as logger
 
 # Use imported constants, no longer defined here
 AUTO_ID_KEY = SpecialFields.AUTO_ID.value
+
+
+class _MutationMarker:
+    def __init__(self):
+        self.changed = False
+
+    def mark_changed(self) -> None:
+        self.changed = True
+
+
+class _IndexMutationBarrier:
+    """Coordinate index replacement with concurrent Store/index mutations.
+
+    Normal mutations share the barrier so independent writers retain their
+    existing concurrency. Index publication is exclusive: it waits for writes
+    already in flight and prevents a new write from selecting the index being
+    replaced. A monotonically increasing generation lets an off-lock rebuild
+    reject a Store snapshot that became stale while the replacement was built.
+    """
+
+    def __init__(self):
+        self._condition = threading.Condition(threading.Lock())
+        self._active_mutations = 0
+        self._publisher = False
+        self._waiting_publishers = 0
+        self._generation = 0
+
+    @contextmanager
+    def mutation(self) -> Iterator[_MutationMarker]:
+        with self._condition:
+            while self._publisher or self._waiting_publishers:
+                self._condition.wait()
+            self._active_mutations += 1
+        marker = _MutationMarker()
+        try:
+            yield marker
+        except BaseException:
+            # The Store may already have committed before a later step raises.
+            marker.mark_changed()
+            raise
+        finally:
+            with self._condition:
+                if marker.changed:
+                    self._generation += 1
+                self._active_mutations -= 1
+                if self._active_mutations == 0:
+                    self._condition.notify_all()
+
+    @contextmanager
+    def exclusive_mutation(self) -> Iterator[None]:
+        with self._exclusive() as _:
+            try:
+                yield
+            finally:
+                with self._condition:
+                    self._generation += 1
+
+    def snapshot_generation(self) -> int:
+        """Return a boundary ordered after any exclusive collection mutation."""
+
+        with self._condition:
+            while self._publisher or self._waiting_publishers:
+                self._condition.wait()
+            return self._generation
+
+    def is_current(self, expected_generation: int) -> bool:
+        """Check whether a snapshot is already known to be stale."""
+
+        with self._condition:
+            return (
+                not self._publisher
+                and self._active_mutations == 0
+                and self._generation == expected_generation
+            )
+
+    @contextmanager
+    def publish_if_current(self, expected_generation: int) -> Iterator[bool]:
+        """Reserve publication and report whether the snapshot is still current."""
+
+        with self._exclusive():
+            with self._condition:
+                current = self._generation == expected_generation
+            yield current
+
+    @contextmanager
+    def _exclusive(self) -> Iterator[None]:
+        with self._condition:
+            self._waiting_publishers += 1
+            try:
+                while self._publisher or self._active_mutations:
+                    self._condition.wait()
+                self._publisher = True
+            finally:
+                self._waiting_publishers -= 1
+        try:
+            yield
+        finally:
+            with self._condition:
+                self._publisher = False
+                self._condition.notify_all()
 
 
 def get_or_create_local_collection(
@@ -122,6 +224,9 @@ class LocalCollection(ICollection):
         config: Optional[Dict[str, Any]] = None,
     ):
         self.indexes = ThreadSafeDictManager[IIndex]()
+        self._index_mutation_barrier = _IndexMutationBarrier()
+        self._bulk_ingest_lock = threading.RLock()
+        self._bulk_ingest_depth = 0
         self.meta: CollectionMeta = meta
         self.collection_name = ""
 
@@ -156,15 +261,16 @@ class LocalCollection(ICollection):
             meta_data["Description"] = description
         if not meta_data:
             return
-        self.meta.update(meta_data)
-        self.data_processor = DataProcessor(
-            self.meta.fields_dict, collection_name=self.meta.collection_name
-        )
+        with self._index_mutation_barrier.exclusive_mutation():
+            self.meta.update(meta_data)
+            self.data_processor = DataProcessor(
+                self.meta.fields_dict, collection_name=self.meta.collection_name
+            )
 
     def get_meta_data(self):
         return self.meta.get_meta_data()
 
-    def close(self):
+    def _close_unlocked(self) -> None:
         self._delete_scheduler_job()
 
         # Shutdown scheduler
@@ -184,6 +290,125 @@ class LocalCollection(ICollection):
         self.indexes.iterate(close_index)
         self.indexes.clear()
 
+    def close(self):
+        with self._index_mutation_barrier.exclusive_mutation():
+            self._close_unlocked()
+
+    def begin_bulk_ingest(self) -> None:
+        """Defer optional derived-index rebuilds until the outer scope exits."""
+
+        with self._bulk_ingest_lock:
+            if self._bulk_ingest_depth > 0:
+                self._bulk_ingest_depth += 1
+                return
+            suspended: List[IIndex] = []
+            try:
+                for index in self.indexes.get_all().values():
+                    index.begin_bulk_ingest()
+                    suspended.append(index)
+            except Exception:
+                for index in reversed(suspended):
+                    try:
+                        index.end_bulk_ingest()
+                    except Exception:
+                        logger.warning(
+                            "Failed to roll back bulk-ingest suspension",
+                            exc_info=True,
+                        )
+                raise
+            self._bulk_ingest_depth = 1
+
+    def end_bulk_ingest(self) -> None:
+        """Resume derived-index maintenance after a matching begin call."""
+
+        with self._bulk_ingest_lock:
+            if self._bulk_ingest_depth <= 0:
+                raise RuntimeError("bulk ingest scope is not active")
+            if self._bulk_ingest_depth > 1:
+                self._bulk_ingest_depth -= 1
+                return
+            first_error: Optional[Exception] = None
+            for index in self.indexes.get_all().values():
+                try:
+                    index.end_bulk_ingest()
+                except Exception as exc:
+                    if first_error is None:
+                        first_error = exc
+                    logger.warning("Failed to end bulk-ingest suspension", exc_info=True)
+            self._bulk_ingest_depth = 0
+            if first_error is not None:
+                raise first_error
+
+    @staticmethod
+    def _start_index_background_rebuild(index: IIndex) -> None:
+        start = getattr(index, "_start_dense_rebuild_worker", None)
+        if callable(start):
+            start()
+
+    @staticmethod
+    def _stop_index_background_rebuild(index: IIndex) -> None:
+        stop = getattr(index, "_stop_dense_rebuild_worker", None)
+        if callable(stop):
+            stop()
+
+    def _publish_index(
+        self,
+        index_name: str,
+        index: IIndex,
+    ) -> Optional[IIndex]:
+        """Publish an index while the caller holds the mutation barrier."""
+
+        with self._bulk_ingest_lock:
+            replaced = self.indexes.get(index_name)
+            if self._bulk_ingest_depth > 0:
+                index.begin_bulk_ingest()
+            self.indexes.set(index_name, index)
+            return replaced
+
+    def _install_index(
+        self,
+        index_name: str,
+        index: IIndex,
+        *,
+        expected_generation: int,
+        expected_replaced: IIndex,
+        start_background_rebuild: bool = False,
+    ) -> bool:
+        """Publish a replacement only if its Store snapshot is still current."""
+
+        replaced: Optional[IIndex] = None
+        with self._index_mutation_barrier.publish_if_current(expected_generation) as current:
+            if not current or self.indexes.get(index_name) is not expected_replaced:
+                return False
+            replaced = self._publish_index(index_name, index)
+        if replaced is not None and replaced is not index:
+            try:
+                # Retire the old worker before starting the replacement so two
+                # full GPU builds do not overlap. This happens after the map
+                # swap, so Store writes keep flowing to the new index while a
+                # possibly in-flight old build winds down.
+                self._stop_index_background_rebuild(replaced)
+            except Exception:
+                # Publication is the commit point. Post-swap maintenance
+                # failures must not make the caller discard the installed index.
+                logger.warning(
+                    "Failed to stop background rebuild for replaced index '%s'",
+                    index_name,
+                    exc_info=True,
+                )
+        if start_background_rebuild:
+            try:
+                self._start_index_background_rebuild(index)
+            except Exception:
+                # Publication is the commit point. A worker-start failure must
+                # not be reported as though the old index remained installed.
+                logger.warning(
+                    "Failed to start background rebuild for installed index '%s'",
+                    index_name,
+                    exc_info=True,
+                )
+        return True
+
     def drop(self):
         self.close()
 
@@ -193,10 +418,43 @@ class LocalCollection(ICollection):
             meta_data = {}
         if not self.store_mgr:
             raise RuntimeError("Store manager is not initialized")
-        cands_list: List[CandidateData] = self.store_mgr.get_all_cands_data()
-        index = self._new_index(index_name, meta_data, cands_list)
-        self.indexes.set(index_name, index)
-        self._delete_expire_delta_record()
+        # Index creation has no older index that can absorb concurrent writes.
+        # Keep its initial Store snapshot and publication in one exclusive
+        # mutation scope; later steady-state rebuilds use generation validation
+        # instead and remain off the write hot path.
+        replaced: Optional[IIndex] = None
+        published = False
+        try:
+            with self._index_mutation_barrier.exclusive_mutation():
+                cands_list: List[CandidateData] = self.store_mgr.get_all_cands_data()
+                index = self._new_index(
+                    index_name,
+                    meta_data,
+                    cands_list,
+                    defer_dense_rebuild_start=True,
+                )
+                replaced = self._publish_index(index_name, index)
+                published = True
+                self._delete_expire_delta_record()
+        finally:
+            if replaced is not None and replaced is not index:
+                try:
+                    self._stop_index_background_rebuild(replaced)
+                except Exception:
+                    logger.warning(
+                        "Failed to stop background rebuild for replaced index '%s'",
+                        index_name,
+                        exc_info=True,
+                    )
+            if published:
+                try:
+                    self._start_index_background_rebuild(index)
+                except Exception:
+                    logger.warning(
+                        "Failed to start background rebuild for installed index '%s'",
+                        index_name,
+                        exc_info=True,
+                    )
         return index
 
     def has_index(self, index_name: str) -> bool:
@@ -206,9 +464,10 @@ class LocalCollection(ICollection):
         return self.indexes.get(index_name)
 
     def drop_index(self, index_name: str) -> None:
-        index = self.indexes.remove(index_name)
-        if index:
-            index.drop()
+        with self._index_mutation_barrier.exclusive_mutation():
+            index = self.indexes.remove(index_name)
+            if index:
+                index.drop()
 
     def get_indexes(self) -> Dict[str, IIndex]:
         return self.indexes.get_all()
@@ -219,10 +478,12 @@ class LocalCollection(ICollection):
         scalar_index: Optional[Dict[str, Any]] = None,
         description: Optional[str] = None,
     ) -> None:
-        index = self.indexes.get(index_name)
-        if not index:
-            return
-        index.update(scalar_index, description)
+        with self._index_mutation_barrier.mutation() as mutation:
+            index = self.indexes.get(index_name)
+            if not index:
+                return
+            index.update(scalar_index, description)
+            mutation.mark_changed()
 
     def get_index_meta_data(self, index_name: str) -> Optional[Dict[str, Any]]:
         index = self.indexes.get(index_name)
@@ -567,13 +828,15 @@ class LocalCollection(ICollection):
 
         if not self.store_mgr:
             raise RuntimeError("Store manager is not initialized")
-        need_record_delta = True if self.indexes.count() > 0 else False
-        delta_list = self.store_mgr.add_cands_data(cands_list, ttl, need_record_delta)
+        with self._index_mutation_barrier.mutation() as mutation:
+            need_record_delta = True if self.indexes.count() > 0 else False
+            delta_list = self.store_mgr.add_cands_data(cands_list, ttl, need_record_delta)
+            mutation.mark_changed()
 
-        def upsert_to_index(name, index):
-            index.upsert_data(delta_list)
+            def upsert_to_index(name, index):
+                index.upsert_data(delta_list)
 
-        self.indexes.iterate(upsert_to_index)
+            self.indexes.iterate(upsert_to_index)
 
         for i, data in enumerate(data_list):
             data[vk] = list(cands_list[i].vector) if cands_list[i].vector else []
@@ -629,13 +892,15 @@ class LocalCollection(ICollection):
         )
         if not self.store_mgr:
             raise RuntimeError("Store manager is not initialized")
-        need_record_delta = True if self.indexes.count() > 0 else False
-        delta_list = self.store_mgr.delete_data(labels_list, need_record_delta)
+        with self._index_mutation_barrier.mutation() as mutation:
+            need_record_delta = True if self.indexes.count() > 0 else False
+            delta_list = self.store_mgr.delete_data(labels_list, need_record_delta)
+            mutation.mark_changed()
 
-        def delete_from_index(name, index):
-            index.delete_data(delta_list)
+            def delete_from_index(name, index):
+                index.delete_data(delta_list)
 
-        self.indexes.iterate(delete_from_index)
+            self.indexes.iterate(delete_from_index)
 
     def delete_all_data(self):
         """Delete all data and rebuild indexes (thread-safe).
@@ -648,53 +913,65 @@ class LocalCollection(ICollection):
 
         Uses locks to ensure no concurrent read/write requests cause errors during the operation.
         """
-        # Use get_all_with_lock() to ensure atomicity of the entire operation
-        with self.indexes.get_all_with_lock() as indexes_dict:
-            # 1. Save metadata and names for all indexes
-            indexes_metadata = []
-            for index_name, index in indexes_dict.items():
+        # Keep one lock order everywhere: mutation barrier, bulk-ingest state,
+        # then the index map.
+        # This also lets replacement indexes inherit an active suspension before
+        # they become visible to concurrent readers or writers.
+        with self._index_mutation_barrier.exclusive_mutation():
+            with self._bulk_ingest_lock, self.indexes.get_all_with_lock() as indexes_dict:
+                # 1. Save metadata and names for all indexes
+                indexes_metadata = []
+                for index_name, index in indexes_dict.items():
+                    try:
+                        meta_data = index.get_meta_data()
+                        indexes_metadata.append((index_name, meta_data))
+                        logger.debug(f"Saved metadata for index: {index_name}")
+                    except Exception as e:
+                        logger.error(f"Failed to get metadata for index {index_name}: {e}")
+
+                # 2. Delete all indexes
+                index_names = list(indexes_dict.keys())
+                for index_name in index_names:
+                    try:
+                        index = indexes_dict.pop(index_name, None)
+                        if index:
+                            index.drop()
+                            logger.debug(f"Dropped index: {index_name}")
+                    except Exception as e:
+                        logger.error(f"Failed to drop index {index_name}: {e}")
+
+                # 3. Clear storage data
                 try:
-                    meta_data = index.get_meta_data()
-                    indexes_metadata.append((index_name, meta_data))
-                    logger.debug(f"Saved metadata for index: {index_name}")
+                    if self.store_mgr:
+                        self.store_mgr.clear()
+                        logger.info(
+                            "Storage cleared successfully",
+                            extra={"collection": self.collection_name},
+                        )
                 except Exception as e:
-                    logger.error(f"Failed to get metadata for index {index_name}: {e}")
+                    logger.error(f"Failed to clear storage: {e}")
+                    raise
 
-            # 2. Delete all indexes
-            index_names = list(indexes_dict.keys())
-            for index_name in index_names:
-                try:
-                    index = indexes_dict.pop(index_name, None)
-                    if index:
-                        index.drop()
-                        logger.debug(f"Dropped index: {index_name}")
-                except Exception as e:
-                    logger.error(f"Failed to drop index {index_name}: {e}")
+                # 4. Rebuild empty indexes using saved metadata
+                for index_name, meta_data in indexes_metadata:
+                    try:
+                        empty_cands_list: List[CandidateData] = []
+                        new_index = self._new_index(
+                            index_name,
+                            meta_data,
+                            empty_cands_list,
+                            defer_dense_rebuild_start=True,
+                        )
+                        if self._bulk_ingest_depth > 0:
+                            new_index.begin_bulk_ingest()
+                        indexes_dict[index_name] = new_index
+                        self._start_index_background_rebuild(new_index)
+                        logger.info(f"Rebuilt index: {index_name}")
+                    except Exception as e:
+                        logger.error(f"Failed to rebuild index {index_name}: {e}")
+                        # Continue rebuilding other indexes, don't interrupt the process
 
-            # 3. Clear storage data
-            try:
-                if self.store_mgr:
-                    self.store_mgr.clear()
-                    logger.info(
-                        "Storage cleared successfully", extra={"collection": self.collection_name}
-                    )
-            except Exception as e:
-                logger.error(f"Failed to clear storage: {e}")
-                raise
-
-            # 4. Rebuild empty indexes using saved metadata
-            for index_name, meta_data in indexes_metadata:
-                try:
-                    # Rebuild index with empty data list
-                    empty_cands_list: List[CandidateData] = []
-                    new_index = self._new_index(index_name, meta_data, empty_cands_list)
-                    indexes_dict[index_name] = new_index
-                    logger.info(f"Rebuilt index: {index_name}")
-                except Exception as e:
-                    logger.error(f"Failed to rebuild index {index_name}: {e}")
-                    # Continue rebuilding other indexes, don't interrupt the process
-
-            logger.info(f"delete_all_data completed. Rebuilt {len(indexes_dict)} indexes")
+                logger.info(f"delete_all_data completed. Rebuilt {len(indexes_dict)} indexes")
 
     def _delete_expire_delta_record(self):
         oldest_version = 0
@@ -708,12 +985,15 @@ class LocalCollection(ICollection):
     def _expire_timeout_data(self):
         if not self.store_mgr:
             return
-        delta_list = self.store_mgr.expire_data()
+        with self._index_mutation_barrier.mutation() as mutation:
+            delta_list = self.store_mgr.expire_data()
+            if delta_list:
+                mutation.mark_changed()
 
-        def delete_from_index(name, index):
-            index.delete_data(delta_list)
+            def delete_from_index(name, index):
+                index.delete_data(delta_list)
 
-        self.indexes.iterate(delete_from_index)
+            self.indexes.iterate(delete_from_index)
 
     def _register_scheduler_job(self):
         if self.ttl_cleanup_seconds > 0:
@@ -793,28 +1073,76 @@ class LocalCollection(ICollection):
             index_name: Name of the index
             old_index: Old index object
         """
+        # PersistentIndex deliberately reports need_rebuild=False. Its builder
+        # writes version markers into the live index directory before map
+        # publication, so it cannot use the optimistic discard protocol below
+        # without a separate staging directory and atomic filesystem commit.
+        if not isinstance(old_index, VolatileIndex):
+            logger.debug("Skipping optimistic replacement for persistent index '%s'", index_name)
+            return
+
+        new_index: Optional[IIndex] = None
+        installed = False
         try:
+            expected_generation = self._index_mutation_barrier.snapshot_generation()
+
             # 1. Retrieve all data
             if not self.store_mgr:
                 raise RuntimeError("Store manager is not initialized")
             cands_list: List[CandidateData] = self.store_mgr.get_all_cands_data()
+            if not self._index_mutation_barrier.is_current(expected_generation):
+                logger.debug(
+                    "Skipping stale replacement build for index '%s' after Store snapshot",
+                    index_name,
+                )
+                return
 
             # 2. Get index metadata
             meta_data = old_index.get_meta_data()
 
             # 3. Create new index (this process is safe and doesn't affect the old index)
-            new_index = self._new_index(index_name, meta_data, cands_list, True)
+            new_index = self._new_index(
+                index_name,
+                meta_data,
+                cands_list,
+                True,
+                defer_dense_rebuild_start=True,
+            )
 
-            # 4. Atomically replace the old index (ThreadSafeDictManager ensures thread safety)
-            self.indexes.set(index_name, new_index)
+            # 4. Publish only if no Store/index mutation completed after the
+            # snapshot boundary and this is still the index being rebuilt.
+            # Otherwise the continuously updated old index remains authoritative
+            # and a later maintenance pass can retry compaction.
+            installed = self._install_index(
+                index_name,
+                new_index,
+                expected_generation=expected_generation,
+                expected_replaced=old_index,
+                start_background_rebuild=True,
+            )
+            if not installed:
+                logger.debug(
+                    "Discarding stale replacement for index '%s' after a concurrent mutation",
+                    index_name,
+                )
 
-            # 5. Don't manually close the old index, let Python GC automatically reclaim it
-            #    This avoids errors for threads currently using old_index
-            #    The object will be automatically destructed when all references are released
+            # 5. _install_index stops only the old background maintenance
+            #    worker. It deliberately leaves the old search object usable
+            #    until concurrent readers release their references.
 
         except Exception as e:
             logger.error(f"Failed to rebuild index {index_name}: {e}")
             # Rebuild failed, keep the old index unchanged
+        finally:
+            if new_index is not None and not installed:
+                try:
+                    new_index.close()
+                except Exception:
+                    logger.warning(
+                        "Failed to close unpublished replacement index '%s'",
+                        index_name,
+                        exc_info=True,
+                    )
 
     def aggregate_data(
         self,
@@ -886,6 +1214,7 @@ class LocalCollection(ICollection):
         meta_data: Dict[str, Any],
         cands_list: List[CandidateData],
         force_rebuild: bool = False,
+        defer_dense_rebuild_start: bool = False,
     ):
         raise NotImplementedError
 
@@ -906,6 +1235,7 @@ class VolatileCollection(LocalCollection):
         meta_data: Dict[str, Any],
         cands_list: List[CandidateData],
         force_rebuild: bool = False,
+        defer_dense_rebuild_start: bool = False,
     ):
         meta = create_index_meta(self.meta, "", meta_data)
         index = VolatileIndex(
@@ -913,6 +1243,7 @@ class VolatileCollection(LocalCollection):
             meta=meta,
             cands_list=cands_list,
             dense_search_config=self.dense_search_config,
+            defer_dense_rebuild_start=defer_dense_rebuild_start,
         )
         return index
 
@@ -1100,8 +1431,9 @@ class PersistCollection(LocalCollection):
 
     def close(self):
         """Close the collection and release resources."""
-        self.flush_all_indexes()
-        super().close()  # Call parent close (includes TTL scheduling deletion)
+        with self._index_mutation_barrier.exclusive_mutation():
+            self.flush_all_indexes()
+            self._close_unlocked()
 
     def flush_all_indexes(self):
         """Manually trigger persistence of all indexes.
@@ -1132,6 +1464,7 @@ class PersistCollection(LocalCollection):
         meta_data: Dict[str, Any],
         cands_list: List[CandidateData],
         force_rebuild: bool = False,
+        defer_dense_rebuild_start: bool = False,
     ):
         new_index_dir = str(safe_join_name(self.index_dir, index_name))
         os.makedirs(new_index_dir, exist_ok=True)
@@ -1144,6 +1477,7 @@ class PersistCollection(LocalCollection):
             cands_list=cands_list,
             force_rebuild=force_rebuild,
             dense_search_config=self.dense_search_config,
+            defer_dense_rebuild_start=defer_dense_rebuild_start,
         )
         return index
 

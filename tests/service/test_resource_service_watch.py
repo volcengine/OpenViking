@@ -13,7 +13,7 @@ from openviking.resource.watch_manager import WatchManager
 from openviking.server.identity import RequestContext, Role
 from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
-from openviking_cli.exceptions import ConflictError
+from openviking_cli.exceptions import ConflictError, InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -145,6 +145,26 @@ class TestWatchTaskCreation:
         assert task.instruction == "Monitor for changes"
         assert task.watch_interval == 30.0
         assert task.is_active is True
+
+    @pytest.mark.asyncio
+    async def test_watch_interval_rejected_for_uploaded_snapshot_source(
+        self, resource_service: ResourceService, request_context: RequestContext
+    ):
+        """A temp-upload source is a one-time snapshot: watching it would silently
+        re-process stale content forever, so creation must fail loudly."""
+        to_uri = "viking://resources/uploaded_resource"
+
+        with pytest.raises(InvalidArgumentError, match="uploaded content"):
+            await resource_service.add_resource(
+                path="/app/.openviking/workspace/temp/upload/upload_abc123.zip",
+                ctx=request_context,
+                to=to_uri,
+                watch_interval=30.0,
+                args={"temp_file_id": "upload_abc123.zip"},
+            )
+
+        task = await get_task_by_uri(resource_service, to_uri, request_context)
+        assert task is None
 
     @pytest.mark.asyncio
     async def test_watch_interval_auto_binds_root_uri_when_to_omitted(
