@@ -144,6 +144,10 @@ class TestGitAccessor:
             accessor._redact_url_credentials(source) == "https://gitlab.com/group/subgroup/repo.git"
         )
 
+    def test_redact_url_credentials_preserves_ssh_username(self, accessor: GitAccessor) -> None:
+        source = "ssh://git@gitlab.com/group/subgroup/repo.git"
+        assert accessor._redact_url_credentials(source) == source
+
     def test_redact_authorization_header(self, accessor: GitAccessor) -> None:
         assert accessor._redact_credentials_in_text("Authorization: Bearer secret-token") == (
             "Authorization: Bearer [REDACTED]"
@@ -211,6 +215,23 @@ class TestGitAccessor:
         assert (tmp_path / ".git_source_repo").read_text(encoding="utf-8") == (
             "https://gitlab.com/group/subgroup/repo.git"
         )
+
+    async def test_git_clone_preserves_ssh_transport_username(
+        self, accessor: GitAccessor, tmp_path: Path
+    ) -> None:
+        source = "ssh://git@gitlab.com/group/subgroup/repo.git"
+        observed = {}
+
+        async def _capture_git(args, cwd=None, env=None):
+            del cwd, env
+            observed["args"] = args
+            return ""
+
+        with patch.object(accessor, "_run_git", side_effect=_capture_git):
+            await accessor._git_clone(source, str(tmp_path))
+
+        assert source in observed["args"]
+        assert (tmp_path / ".git_source_repo").read_text(encoding="utf-8") == source
 
     async def test_access_does_not_propagate_oauth_credentials(
         self, accessor: GitAccessor, tmp_path: Path

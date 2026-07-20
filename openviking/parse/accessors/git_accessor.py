@@ -306,6 +306,11 @@ class GitAccessor(DataAccessor):
         parsed = urlparse(url)
         if "@" not in parsed.netloc:
             return url
+        # ``ssh://git@host/...`` carries a transport username, not a secret.
+        # Dropping it changes which account Git uses and can break otherwise
+        # valid SSH clone URLs. Password-bearing SSH URLs are still redacted.
+        if parsed.scheme == "ssh" and parsed.password is None:
+            return url
         return parsed._replace(netloc=parsed.netloc.rsplit("@", 1)[-1]).geturl()
 
     @staticmethod
