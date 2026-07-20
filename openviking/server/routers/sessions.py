@@ -138,12 +138,16 @@ class AddMessageRequest(BaseModel):
             raise ValueError("Either 'content' or 'parts' must be provided")
         return self
 
+    model_config = {"extra": "forbid"}
+
 
 class BatchAddMessageRequest(BaseModel):
     """Request model for adding multiple messages in a single request."""
 
     messages: List[AddMessageRequest] = Field(..., max_length=100)
     telemetry: TelemetryRequest = False
+
+    model_config = {"extra": "forbid"}
 
 
 class UsedRequest(BaseModel):

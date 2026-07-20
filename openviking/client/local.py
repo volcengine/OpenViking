@@ -32,6 +32,8 @@ from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
 
+_BATCH_ADD_MESSAGE_KEYS = frozenset({"role", "content", "parts", "created_at", "peer_id"})
+
 
 def _to_jsonable(value: Any) -> Any:
     """Convert internal objects into JSON-serializable values."""
@@ -1054,6 +1056,14 @@ class LocalClient(BaseClient):
         specs: list[dict[str, Any]] = []
 
         for index, message in enumerate(messages):
+            extra_keys = set(message) - _BATCH_ADD_MESSAGE_KEYS
+            if extra_keys:
+                allowed = ", ".join(sorted(_BATCH_ADD_MESSAGE_KEYS))
+                unknown = ", ".join(sorted(extra_keys))
+                raise ValueError(
+                    f"messages[{index}]: unsupported field(s): {unknown}; allowed: {allowed}"
+                )
+
             role = message.get("role")
             if not role:
                 raise ValueError(f"messages[{index}]: missing required key 'role'")

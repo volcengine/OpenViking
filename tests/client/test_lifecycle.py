@@ -89,49 +89,31 @@ class TestClientInitialization:
         finally:
             await AsyncOpenViking.reset()
 
-    async def test_add_message_accepts_auto_commit_policy_in_embedded_mode(
+    async def test_add_message_rejects_auto_commit_policy_in_embedded_mode(
         self, client: AsyncOpenViking
     ):
-        policy = {
-            "enabled": True,
-            "token_threshold": 128,
-            "keep_recent_count": 1,
-        }
+        with pytest.raises(TypeError, match="auto_commit_policy"):
+            await client.add_message(
+                "embedded-auto-commit-policy",
+                "user",
+                content="hello",
+                auto_commit_policy={"enabled": True},
+            )
 
-        result = await client.add_message(
-            "embedded-auto-commit-policy",
-            "user",
-            content="hello",
-            auto_commit_policy=policy,
-        )
-
-        assert result["message_count"] == 1
-        detail = await client.get_session("embedded-auto-commit-policy")
-        assert detail["auto_commit_policy"] == policy
-
-    async def test_batch_add_messages_accepts_auto_commit_policy_in_embedded_mode(
+    async def test_batch_add_messages_rejects_auto_commit_policy_in_embedded_mode(
         self, client: AsyncOpenViking
     ):
-        policy = {
-            "enabled": True,
-            "token_threshold": 128,
-            "keep_recent_count": 1,
-        }
-
-        result = await client.batch_add_messages(
-            "embedded-batch-auto-commit-policy",
-            [{"role": "user", "content": "hello"}],
-            auto_commit_policy=policy,
-        )
-
-        assert result["added"] == 1
-        detail = await client.get_session("embedded-batch-auto-commit-policy")
-        assert detail["auto_commit_policy"] == policy
+        with pytest.raises(TypeError, match="auto_commit_policy"):
+            await client.batch_add_messages(
+                "embedded-batch-auto-commit-policy",
+                [{"role": "user", "content": "hello"}],
+                auto_commit_policy={"enabled": True},
+            )
 
     async def test_batch_add_messages_rejects_per_message_auto_commit_policy_in_embedded_mode(
         self, client: AsyncOpenViking
     ):
-        with pytest.raises(ValueError, match="Per-message auto_commit_policy is not allowed"):
+        with pytest.raises(ValueError, match="unsupported field\\(s\\): auto_commit_policy"):
             await client.batch_add_messages(
                 "embedded-batch-per-message-auto-commit-policy",
                 [

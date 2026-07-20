@@ -488,7 +488,7 @@ async def test_add_message_records_last_message_at_with_single_meta_save(
     assert session_resp.json()["result"]["last_message_at"]
 
 
-async def test_add_message_ignores_removed_auto_commit_policy_field(client: httpx.AsyncClient):
+async def test_add_message_rejects_removed_auto_commit_policy_field(client: httpx.AsyncClient):
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
 
@@ -500,13 +500,7 @@ async def test_add_message_ignores_removed_auto_commit_policy_field(client: http
             "auto_commit_policy": {"pending_token_threshold": 123},
         },
     )
-    # The per-message policy input has been removed; the field has no effect
-    # and the session keeps auto commit disabled unless configured at creation.
-    assert resp.status_code == 200
-
-    session_resp = await client.get(f"/api/v1/sessions/{session_id}")
-    policy = session_resp.json()["result"]["config"]["auto_commit_policy"]
-    assert policy is None
+    assert resp.status_code == 400
 
 
 async def test_create_session_defaults_auto_commit_policy_to_disabled(
@@ -875,12 +869,10 @@ async def test_batch_add_message_accepts_mixed_parts(client: httpx.AsyncClient, 
     assert isinstance(session.messages[0].parts[1], ImagePart)
 
 
-async def test_batch_add_message_ignores_removed_auto_commit_policy(client: httpx.AsyncClient):
+async def test_batch_add_message_rejects_removed_auto_commit_policy(client: httpx.AsyncClient):
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
 
-    # The batch endpoint no longer honors a top-level auto_commit_policy; the
-    # field is ignored and the write still succeeds.
     resp = await client.post(
         f"/api/v1/sessions/{session_id}/messages/batch",
         json={
@@ -889,11 +881,7 @@ async def test_batch_add_message_ignores_removed_auto_commit_policy(client: http
         },
     )
 
-    assert resp.status_code == 200
-
-    session_resp = await client.get(f"/api/v1/sessions/{session_id}")
-    policy = session_resp.json()["result"]["config"]["auto_commit_policy"]
-    assert policy is None
+    assert resp.status_code == 400
 
 
 async def test_add_message_splits_tool_result_aggregate(client: httpx.AsyncClient):
