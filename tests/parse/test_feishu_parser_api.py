@@ -10,8 +10,9 @@ import pytest
 from openviking.parse.understanding_api import PREPARED_RESPONSE_ID_ARG, UnderstandingAPI
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
-from openviking.storage.queuefs.understanding_parse_msg import UnderstandingParseMsg
-from openviking.storage.queuefs.understanding_parse_processor import UnderstandingParseProcessor
+from openviking.service.task_tracker import TaskStatus
+from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
+from openviking.storage.queuefs.add_resource_processor import AddResourceProcessor
 from openviking.utils.media_processor import UnifiedResourceProcessor
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
@@ -310,8 +311,8 @@ async def test_submit_url_returns_response_id_without_persisting_auth():
     )
 
 
-def test_external_parse_message_round_trips_internal_fields():
-    msg = UnderstandingParseMsg(
+def test_add_resource_message_round_trips_internal_fields():
+    msg = AddResourceMsg(
         task_id="task-1",
         path="https://example.larkoffice.com/docx/doxcnToken",
         root_uri="viking://resources/doxcnToken",
@@ -322,10 +323,10 @@ def test_external_parse_message_round_trips_internal_fields():
         understanding_response_id="response-1",
     )
 
-    restored = UnderstandingParseMsg.from_dict(msg.to_dict())
+    restored = AddResourceMsg.from_dict(msg.to_dict())
 
     assert restored.args == {}
-    assert "feishu_access_token" not in restored.to_json()
+    assert "feishu_access_token" not in json.dumps(restored.to_dict())
     assert restored.defer_target_resolution is True
     assert restored.understanding_response_id == "response-1"
 
@@ -362,10 +363,6 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(monk
         Mock(return_value=task_tracker),
     )
     monkeypatch.setattr(
-        "openviking.storage.queuefs.understanding_parse_processor.get_task_tracker",
-        Mock(return_value=task_tracker),
-    )
-    monkeypatch.setattr(
         "openviking.storage.queuefs.get_queue_manager",
         Mock(return_value=queue_manager),
     )
@@ -380,6 +377,7 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(monk
         skill_processor=SimpleNamespace(),
     )
     service._parser_router = parser_router
+    monkeypatch.setattr("openviking.service.resource_service.uuid4", Mock(return_value="task-1"))
     monkeypatch.setattr(service, "_is_feishu_url", Mock(return_value=True))
     ctx = RequestContext(
         user=UserIdentifier("account-1", "user-1"),
@@ -406,27 +404,30 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(monk
     assert payload["understanding_response_id"] == "response-1"
     assert payload["args"] == {"custom_option": "forwarded"}
 
-    await UnderstandingParseProcessor(resource_processor).on_dequeue(payload)
+    queued_msg = AddResourceMsg.from_dict(payload)
+    service.add_resource = AsyncMock(
+        return_value={
+            "status": "success",
+            "root_uri": "viking://resources/lark/真实文档标题",
+        }
+    )
+    await service.execute_add_resource_job(
+        queued_msg,
+        ctx=ctx,
+        resource_lock=None,
+        stage_callback=AsyncMock(),
+    )
 
-    call = resource_processor.process_resource.await_args
+    call = service.add_resource.await_args
     assert call.kwargs[PREPARED_RESPONSE_ID_ARG] == "response-1"
-    assert call.kwargs["custom_option"] == "forwarded"
-    assert "args" not in call.kwargs
+    assert call.kwargs["args"] == {"custom_option": "forwarded"}
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("cancel_stage", "queue_persisted"),
-    [
-        ("submit", False),
-        ("enqueue", False),
-        ("handoff", True),
-    ],
-)
+@pytest.mark.parametrize("cancel_stage", ["submit", "enqueue", "handoff"])
 async def test_uat_producer_cancellation_respects_queue_ownership(
     monkeypatch,
     cancel_stage,
-    queue_persisted,
 ):
     source = "https://example.larkoffice.com/docx/doxcnToken"
     root_uri = "viking://resources/fixed"
@@ -487,7 +488,7 @@ async def test_uat_producer_cancellation_respects_queue_ownership(
     )
 
     service = ResourceService(
-        viking_fs=SimpleNamespace(_uri_to_path=lambda _uri, _ctx: "/resources/fixed"),
+        viking_fs=SimpleNamespace(_uri_to_path=lambda _uri, ctx: "/resources/fixed"),
         resource_processor=resource_processor,
         skill_processor=SimpleNamespace(),
     )
@@ -508,18 +509,13 @@ async def test_uat_producer_cancellation_respects_queue_ownership(
             args={"feishu_access_token": "u-secret"},
         )
 
-    if queue_persisted:
-        lock_lease.close.assert_not_awaited()
-        task_tracker.fail.assert_not_awaited()
-        enqueue.assert_awaited_once()
+    lock_lease.close.assert_awaited_once_with()
+    task_tracker.create.assert_not_awaited()
+    task_tracker.fail.assert_not_awaited()
+    if cancel_stage == "submit":
+        enqueue.assert_not_awaited()
     else:
-        lock_lease.close.assert_awaited_once_with()
-        task_tracker.fail.assert_awaited_once_with(
-            "task-1",
-            "external parse scheduling cancelled",
-            account_id="account-1",
-            user_id="user-1",
-        )
+        enqueue.assert_awaited_once()
 
 
 def test_prepared_response_id_is_reserved_from_public_args():
@@ -533,27 +529,101 @@ def test_prepared_response_id_is_reserved_from_public_args():
 
 
 @pytest.mark.asyncio
-async def test_external_parse_worker_defers_target_and_expands_prepared_response(monkeypatch):
-    resource_processor = SimpleNamespace(
-        process_resource=AsyncMock(
-            return_value={
-                "status": "success",
-                "root_uri": "viking://resources/真实文档标题",
-            }
+async def test_add_resource_job_defers_target_and_expands_prepared_response():
+    service = ResourceService()
+    service.add_resource = AsyncMock(
+        return_value={
+            "status": "success",
+            "root_uri": "viking://resources/真实文档标题",
+        }
+    )
+    msg = AddResourceMsg(
+        task_id="task-1",
+        path="https://example.larkoffice.com/docx/doxcnToken",
+        root_uri="viking://resources/lark/doxcnToken",
+        account_id="account-1",
+        user_id="user-1",
+        role="user",
+        defer_target_resolution=True,
+        understanding_response_id="response-1",
+    )
+    ctx = RequestContext(
+        user=UserIdentifier("account-1", "user-1"),
+        role=Role.USER,
+    )
+
+    result = await service.execute_add_resource_job(
+        msg,
+        ctx=ctx,
+        resource_lock=None,
+        stage_callback=AsyncMock(),
+    )
+
+    call = service.add_resource.await_args
+    assert call.kwargs["to"] is None
+    assert call.kwargs["parent"] == "viking://resources/lark"
+    assert call.kwargs[PREPARED_RESPONSE_ID_ARG] == "response-1"
+    assert call.kwargs["args"] == {}
+    assert result["root_uri"] == "viking://resources/真实文档标题"
+
+
+@pytest.mark.asyncio
+async def test_add_resource_job_expands_parser_args():
+    service = ResourceService()
+    service.add_resource = AsyncMock(
+        return_value={
+            "status": "success",
+            "root_uri": "viking://resources/doxcnToken",
+        }
+    )
+    msg = AddResourceMsg(
+        task_id="task-1",
+        path="https://example.larkoffice.com/docx/doxcnToken",
+        root_uri="viking://resources/doxcnToken",
+        account_id="account-1",
+        user_id="user-1",
+        role="user",
+        args={"custom_option": "forwarded"},
+    )
+    ctx = RequestContext(
+        user=UserIdentifier("account-1", "user-1"),
+        role=Role.USER,
+    )
+
+    await service.execute_add_resource_job(
+        msg,
+        ctx=ctx,
+        resource_lock=None,
+        stage_callback=AsyncMock(),
+    )
+
+    call = service.add_resource.await_args
+    assert call.kwargs["to"] == "viking://resources/doxcnToken"
+    assert call.kwargs["parent"] is None
+    assert call.kwargs["args"] == {"custom_option": "forwarded"}
+
+
+@pytest.mark.asyncio
+async def test_add_resource_processor_persists_final_resource_uri(monkeypatch):
+    final_uri = "viking://resources/真实文档标题"
+    service = SimpleNamespace(
+        execute_add_resource_job=AsyncMock(
+            return_value={"status": "success", "root_uri": final_uri}
         )
     )
     task_tracker = SimpleNamespace(
+        create=AsyncMock(return_value=SimpleNamespace(status=TaskStatus.PENDING)),
         start=AsyncMock(),
         update_stage=AsyncMock(),
         complete=AsyncMock(),
         fail=AsyncMock(),
     )
     monkeypatch.setattr(
-        "openviking.storage.queuefs.understanding_parse_processor.get_task_tracker",
+        "openviking.storage.queuefs.add_resource_processor.get_task_tracker",
         Mock(return_value=task_tracker),
     )
-    processor = UnderstandingParseProcessor(resource_processor)
-    msg = UnderstandingParseMsg(
+    processor = AddResourceProcessor(service, asyncio.get_running_loop())
+    msg = AddResourceMsg(
         task_id="task-1",
         path="https://example.larkoffice.com/docx/doxcnToken",
         root_uri="viking://resources/lark/doxcnToken",
@@ -564,61 +634,22 @@ async def test_external_parse_worker_defers_target_and_expands_prepared_response
         understanding_response_id="response-1",
     )
 
-    await processor.on_dequeue(msg.to_dict())
+    await processor._process(msg, msg.to_dict())
 
-    call = resource_processor.process_resource.await_args
-    assert call.kwargs["to"] is None
-    assert call.kwargs["parent"] == "viking://resources/lark"
-    assert call.kwargs[PREPARED_RESPONSE_ID_ARG] == "response-1"
-    assert "create_parent" not in call.kwargs
-    assert "args" not in call.kwargs
-    task_tracker.complete.assert_awaited_once()
-    completed_result = task_tracker.complete.await_args.args[1]
-    assert completed_result["root_uri"] == "viking://resources/真实文档标题"
-    assert task_tracker.complete.await_args.kwargs["resource_id"] == (
-        "viking://resources/真实文档标题"
-    )
-
-
-@pytest.mark.asyncio
-async def test_external_parse_worker_expands_parser_args(monkeypatch):
-    resource_processor = SimpleNamespace(
-        process_resource=AsyncMock(
-            return_value={
-                "status": "success",
-                "root_uri": "viking://resources/doxcnToken",
-            }
-        )
-    )
-    task_tracker = SimpleNamespace(
-        start=AsyncMock(),
-        update_stage=AsyncMock(),
-        complete=AsyncMock(),
-        fail=AsyncMock(),
-    )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.understanding_parse_processor.get_task_tracker",
-        Mock(return_value=task_tracker),
-    )
-    processor = UnderstandingParseProcessor(resource_processor)
-    msg = UnderstandingParseMsg(
-        task_id="task-1",
-        path="https://example.larkoffice.com/docx/doxcnToken",
-        root_uri="viking://resources/doxcnToken",
+    task_tracker.create.assert_awaited_once_with(
+        "add_resource",
+        resource_id=None,
         account_id="account-1",
         user_id="user-1",
-        role="user",
-        args={"custom_option": "forwarded"},
+        task_id="task-1",
     )
-
-    await processor.on_dequeue(msg.to_dict())
-
-    call = resource_processor.process_resource.await_args
-    assert call.kwargs["to"] == "viking://resources/doxcnToken"
-    assert call.kwargs["parent"] is None
-    assert call.kwargs["custom_option"] == "forwarded"
-    assert "args" not in call.kwargs
-    task_tracker.complete.assert_awaited_once()
+    task_tracker.complete.assert_awaited_once_with(
+        "task-1",
+        {"status": "success", "root_uri": final_uri},
+        account_id="account-1",
+        user_id="user-1",
+        resource_id=final_uri,
+    )
 
 
 def test_feishu_bypass_requires_configured_auth(monkeypatch):
