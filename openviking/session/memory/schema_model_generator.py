@@ -51,8 +51,11 @@ class SchemaModelGenerator:
         template_context: Optional[Dict[str, Any]] = None,
     ):
         if hasattr(schemas, "list_all"):
-            schemas = schemas.list_all()
-        self.schemas = schemas
+            self._all_schemas = schemas.list_all(include_disabled=True)
+            schemas = schemas.list_all(include_disabled=False)
+        else:
+            self._all_schemas = list(schemas)
+        self.schemas = list(schemas)
         self._template_context = dict(template_context or {})
         self._model_cache: Dict[str, Type[BaseModel]] = {}
         self._flat_data_models: Dict[str, Type[BaseModel]] = {}
@@ -172,7 +175,8 @@ class SchemaModelGenerator:
             Dictionary mapping memory_type to generated model class
         """
         models: Dict[str, Type[BaseModel]] = {}
-        for memory_type in self.schemas:
+        schemas = self._all_schemas if include_disabled else self.schemas
+        for memory_type in schemas:
             models[memory_type.memory_type] = self.create_flat_data_model(memory_type)
         return models
 

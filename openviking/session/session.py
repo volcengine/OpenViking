@@ -43,7 +43,7 @@ from openviking_cli.utils import get_logger, run_async
 from openviking_cli.utils.config import get_openviking_config
 
 if TYPE_CHECKING:
-    from openviking.session.compressor_v2 import SessionCompressorV2 as SessionCompressor
+    from openviking.session.compressor_v3 import SessionCompressorV3 as SessionCompressor
     from openviking.storage import VikingDBManager
     from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
     from openviking.storage.viking_fs import VikingFS
@@ -1435,7 +1435,7 @@ class Session:
                             operation_name=operation_name,
                         )
 
-                    # Summary, long-term memory, and execution-derived memory run concurrently.
+                    # Summary and V3 long-term memory extraction run concurrently.
                     memory_extraction_enabled = ov_config.memory.extraction_enabled
                     config_session_skill_extraction_enabled = (
                         ov_config.memory.session_skill_extraction_enabled
@@ -1450,7 +1450,6 @@ class Session:
                     )
                     self_memory_enabled = extraction_scope.allow_self_memory
                     allowed_peer_ids = extraction_scope.allowed_peer_ids
-                    session_skill_extraction_enabled = extraction_scope.include_session_skills
                     memory_type_filter = extraction_scope.memory_types
                     long_term_memory_types, execution_memory_types = _split_policy_memory_types(
                         memory_type_filter
@@ -1466,18 +1465,11 @@ class Session:
                         and memory_extraction_enabled
                         and (execution_memory_types is None or bool(execution_memory_types))
                     )
-                    session_skill_extraction_enabled = (
-                        session_skill_extraction_enabled and execution_memory_has_work
-                    )
                     has_policy_work = bool(long_term_has_work or execution_memory_has_work)
                     if self._session_compressor and has_policy_work:
                         logger.info(
                             "Starting post-commit extraction from %s archived messages",
                             len(messages),
-                        )
-
-                        has_execution_memory = hasattr(
-                            self._session_compressor, "extract_execution_memories"
                         )
 
                         extraction_tasks: List[Any] = []
@@ -1516,35 +1508,12 @@ class Session:
                             )
                             extraction_labels.append("long_term")
 
-                        if has_execution_memory and execution_memory_has_work:
-
-                            async def _run_execution_memory_extraction() -> Any:
-                                # See _run_long_term_memory_extraction: surface errors
-                                # so retries can engage and final failures are visible.
-                                return await self._session_compressor.extract_execution_memories(
-                                    messages=extraction_messages,
-                                    ctx=self.ctx,
-                                    strict_extract_errors=True,
-                                    latest_archive_overview=latest_archive_overview,
-                                    archive_uri=archive_uri,
-                                    allowed_memory_types=execution_memory_types,
-                                    include_session_skills=session_skill_extraction_enabled,
-                                )
-
-                            extraction_tasks.append(
-                                _run_retryable_phase2_step(
-                                    "execution_memory_extraction",
-                                    _run_execution_memory_extraction,
-                                )
-                            )
-                            extraction_labels.append("execution")
-
                         _results = await asyncio.gather(
                             *extraction_tasks,
                             return_exceptions=True,
                         )
                         # Binary archive outcome: if ANY Phase 2 step (Working
-                        # Memory summary, long-term, or execution memory) still
+                        # Memory summary or V3 extraction) still
                         # fails after retries, the whole archive is marked
                         # .failed.json and skipped. There is no partial state.
                         extraction_error: Optional[BaseException] = None

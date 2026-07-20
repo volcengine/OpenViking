@@ -50,7 +50,7 @@ from openviking_cli.utils.config.storage_config import StorageConfig
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
-    from openviking.session.compressor_v2 import SessionCompressorV2
+    from openviking.session.compressor_v3 import SessionCompressorV3
 
 
 class OpenVikingService:
@@ -87,7 +87,7 @@ class OpenVikingService:
         self._embedder: Optional[Any] = None
         self._resource_processor: Optional[ResourceProcessor] = None
         self._skill_processor: Optional[SkillProcessor] = None
-        self._session_compressor: Optional["SessionCompressorV2"] = None
+        self._session_compressor: Optional["SessionCompressorV3"] = None
         self._lock_manager: Optional[LockManager] = None
         self._directory_initializer: Optional[DirectoryInitializer] = None
         self._watch_scheduler: Optional[WatchScheduler] = None
@@ -227,7 +227,7 @@ class OpenVikingService:
         return self._lock_manager
 
     @property
-    def session_compressor(self) -> Optional["SessionCompressorV2"]:
+    def session_compressor(self) -> Optional["SessionCompressorV3"]:
         """Get SessionCompressor instance."""
         return self._session_compressor
 

@@ -10,6 +10,7 @@ import pytest
 
 from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
+from openviking.session import compressor_v3 as compressor_v3_module
 from openviking.session import create_session_compressor
 from openviking.session.compressor_v3 import SessionCompressorV3, _experience_root_uri
 from openviking.session.memory.dataclass import (
@@ -91,6 +92,211 @@ def test_factory_ignores_deprecated_memory_version():
 def test_experience_root_uri_requires_request_user():
     with pytest.raises(ValueError, match="RequestContext.user.user_id is required"):
         _experience_root_uri(SimpleNamespace(user=None))
+
+
+@pytest.mark.asyncio
+async def test_v3_prepares_provider_before_building_isolation_handler(monkeypatch):
+    events: list[str] = []
+    prepared_context = object()
+    provider_instances = []
+    orchestrator_context_providers = []
+
+    class FakeProvider:
+        def __init__(self, **kwargs):
+            self._isolation_handler = kwargs["isolation_handler"]
+            provider_instances.append(self)
+
+        async def prepare_extraction_messages(self):
+            events.append("provider.prepare")
+
+        def get_extract_context(self):
+            events.append("provider.get_context")
+            return prepared_context
+
+    class FakeIsolationHandler:
+        def __init__(self, ctx, extract_context, **kwargs):
+            del ctx, kwargs
+            assert extract_context is prepared_context
+            events.append("isolation.init:prepared-context")
+
+        def prepare_messages(self):
+            events.append("isolation.prepare_messages")
+
+    class FakeRegistry:
+        async def initialize_memory_files(self, ctx, allowed_memory_types=None):
+            del ctx, allowed_memory_types
+
+    class EmptyOrchestrator:
+        async def run(self):
+            return None, []
+
+    compressor = SessionCompressorV3(vikingdb=None)
+
+    def fake_get_or_create_react(**kwargs):
+        orchestrator_context_providers.append(kwargs.get("context_provider"))
+        return EmptyOrchestrator()
+
+    compressor._get_or_create_react = fake_get_or_create_react
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.SessionExtractContextProvider",
+        FakeProvider,
+    )
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.MemoryIsolationHandler",
+        FakeIsolationHandler,
+    )
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.create_default_registry",
+        lambda: FakeRegistry(),
+    )
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.get_viking_fs",
+        lambda: SimpleNamespace(),
+    )
+
+    await compressor._extract_user_memories(messages=_messages(), ctx=_ctx())
+
+    assert events[:4] == [
+        "provider.prepare",
+        "provider.get_context",
+        "isolation.init:prepared-context",
+        "isolation.prepare_messages",
+    ]
+    assert orchestrator_context_providers == provider_instances
+
+
+@pytest.mark.asyncio
+async def test_v3_initializes_memory_files_with_allowed_types(monkeypatch):
+    initialize_memory_files = AsyncMock()
+    registry = SimpleNamespace(initialize_memory_files=initialize_memory_files)
+
+    class EmptyOrchestrator:
+        async def run(self):
+            return None, []
+
+    compressor = SessionCompressorV3(vikingdb=None)
+    compressor._get_or_create_react = lambda **kwargs: EmptyOrchestrator()
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.create_default_registry",
+        lambda: registry,
+    )
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.get_viking_fs",
+        lambda: SimpleNamespace(),
+    )
+
+    ctx = _ctx()
+    allowed_memory_types = {"profile", "preferences"}
+    await compressor._extract_user_memories(
+        messages=_messages(),
+        ctx=ctx,
+        allowed_memory_types=allowed_memory_types,
+    )
+
+    initialize_memory_files.assert_awaited_once_with(
+        ctx,
+        allowed_memory_types=allowed_memory_types,
+    )
+
+
+@pytest.mark.asyncio
+async def test_v3_non_strict_extraction_returns_empty_response():
+    compressor = SessionCompressorV3(vikingdb=None)
+    compressor._extract_user_memories = AsyncMock(
+        side_effect=RuntimeError("synthetic VLM failure")
+    )
+
+    result = await compressor.extract_long_term_memories(
+        messages=_messages(),
+        ctx=_ctx(),
+        strict_extract_errors=False,
+    )
+
+    assert result == {"contexts": [], "session_skills": []}
+
+
+@pytest.mark.asyncio
+async def test_v3_strict_extraction_propagates_failure():
+    compressor = SessionCompressorV3(vikingdb=None)
+    compressor._extract_user_memories = AsyncMock(
+        side_effect=RuntimeError("synthetic VLM failure")
+    )
+
+    with pytest.raises(RuntimeError, match="synthetic VLM failure"):
+        await compressor.extract_long_term_memories(
+            messages=_messages(),
+            ctx=_ctx(),
+            strict_extract_errors=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_v3_reports_memory_extraction_gauges(monkeypatch):
+    gauges: dict[str, int] = {}
+    telemetry = SimpleNamespace(set=lambda name, value: gauges.__setitem__(name, value))
+
+    class EmptyRegistry:
+        pass
+
+    class OperationOrchestrator:
+        async def run(self):
+            return (
+                ResolvedOperations(
+                    upsert_operations=[],
+                    delete_file_contents=[],
+                    errors=[],
+                ),
+                [],
+            )
+
+    result = MemoryUpdateResult()
+    result.add_written("viking://user/u/memories/events/created-1.md")
+    result.add_written("viking://user/u/memories/events/created-2.md")
+    result.add_edited("viking://user/u/memories/profile.md")
+    result.add_deleted("viking://user/u/memories/events/deleted.md")
+    result.add_error("viking://user/u/memories/events/error-1.md", RuntimeError("one"))
+    result.add_error("viking://user/u/memories/events/error-2.md", RuntimeError("two"))
+
+    class FakeStreamingUpdater:
+        async def submit(self, request):
+            return SimpleNamespace(operations=request.operations, apply_result=result)
+
+    compressor = SessionCompressorV3(vikingdb=None)
+    compressor._get_or_create_react = lambda **kwargs: OperationOrchestrator()
+    monkeypatch.setattr(
+        compressor_v3_module,
+        "get_current_telemetry",
+        lambda: telemetry,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.create_default_registry",
+        lambda: EmptyRegistry(),
+    )
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.get_viking_fs",
+        lambda: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.get_streaming_memory_updater",
+        AsyncMock(return_value=FakeStreamingUpdater()),
+    )
+
+    await compressor._extract_user_memories(
+        messages=_messages(),
+        ctx=_ctx(),
+        allow_self_memory=False,
+    )
+
+    assert gauges == {
+        "memory.extract.candidates.total": 3,
+        "memory.extract.candidates.standard": 0,
+        "memory.extract.candidates.tool_skill": 0,
+        "memory.extract.created": 2,
+        "memory.extract.merged": 1,
+        "memory.extract.deleted": 1,
+        "memory.extract.skipped": 2,
+    }
 
 
 def test_case_experience_links_require_policy_root_uri():
@@ -323,7 +529,8 @@ async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch):
     trained_cases = []
 
     class DummyRegistry:
-        async def initialize_memory_files(self, ctx):
+        async def initialize_memory_files(self, ctx, allowed_memory_types=None):
+            del ctx, allowed_memory_types
             return None
 
     class DummyOrchestrator:
@@ -406,7 +613,8 @@ async def test_v3_extract_trains_only_canonical_case_after_patch_merge(monkeypat
         )
 
     class DummyRegistry:
-        async def initialize_memory_files(self, ctx):
+        async def initialize_memory_files(self, ctx, allowed_memory_types=None):
+            del ctx, allowed_memory_types
             return None
 
     class DummyOrchestrator:

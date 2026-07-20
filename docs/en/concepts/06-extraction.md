@@ -227,8 +227,13 @@ await client.add_skill({
 # Memory auto-extracted from session
 await session.commit()
 
-# Flow: SessionCompressorV2 → ExtractLoop → MemoryUpdater → SemanticQueue
+# Flow: SessionCompressorV3 → ExtractLoop → MemoryUpdater → SemanticQueue
 ```
+
+V3 has one extraction entry. It first extracts enabled user-memory schemas,
+including `cases`. Trajectory, experience, and optional executable session-skill
+training runs only when that extraction produces at least one case. A session
+with no case therefore produces none of those execution-derived artifacts.
 
 ## Related Documents
 

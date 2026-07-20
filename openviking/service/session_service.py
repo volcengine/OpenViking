@@ -27,7 +27,7 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
-    from openviking.session.compressor_v2 import SessionCompressorV2
+    from openviking.session.compressor_v3 import SessionCompressorV3
     from openviking.usage_reporter import UsageReporter
 
 
@@ -38,7 +38,7 @@ class SessionService:
         self,
         vikingdb: Optional[VikingDBManager] = None,
         viking_fs: Optional[VikingFS] = None,
-        session_compressor: Optional["SessionCompressorV2"] = None,
+        session_compressor: Optional["SessionCompressorV3"] = None,
     ):
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
@@ -50,7 +50,7 @@ class SessionService:
         self,
         vikingdb: VikingDBManager,
         viking_fs: VikingFS,
-        session_compressor: "SessionCompressorV2",
+        session_compressor: "SessionCompressorV3",
     ) -> None:
         """Set dependencies (for deferred initialization)."""
         self._vikingdb = vikingdb
@@ -333,7 +333,7 @@ class SessionService:
         """
         self._ensure_initialized()
         if not self._session_compressor:
-            raise NotInitializedError("SessionCompressorV2")
+            raise NotInitializedError("SessionCompressorV3")
 
         session = await self.get(session_id, ctx)
         archive_uri = f"{session.uri}/manual_extract"

@@ -1510,8 +1510,6 @@ viking://user/{user_id}/sessions/{session_id}/
 | events | `user/memories/events/` | 重要事件 |
 | trajectories | `user/memories/trajectories/` | 可复用的操作契约 |
 | experiences | `user/memories/experiences/` | 可复用的执行经验 |
-| tools | `user/memories/tools/` | 工具使用经验与最佳实践 |
-| skills | `user/memories/skills/` | 技能执行经验与工作流策略 |
 
 ---
 

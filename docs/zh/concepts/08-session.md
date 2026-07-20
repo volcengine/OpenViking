@@ -143,7 +143,7 @@ commit() 分两阶段执行：
 
 ## 记忆提取
 
-### 8 种分类
+### 记忆分类
 
 | 分类 | 归属 | 说明 | 可合并 |
 |------|------|------|--------|
@@ -153,8 +153,6 @@ commit() 分两阶段执行：
 | **events** | user | 事件/决策 | ❌ |
 | **cases** | agent | 问题+解决方案 | ❌ |
 | **patterns** | agent | 可复用流程 | ✅ |
-| **tools** | agent | 工具使用经验与最佳实践 | ✅ |
-| **skills** | agent | 技能执行经验与工作流策略 | ✅ |
 
 ### 提取流程
 
@@ -255,9 +253,7 @@ viking://user/memories/
 
 viking://user/memories/
 ├── cases/
-├── patterns/
-├── tools/
-└── skills/
+└── patterns/
 ```
 
 `viking://user/sessions/{session_id}` 是相对当前请求用户的短路径，服务端会将其

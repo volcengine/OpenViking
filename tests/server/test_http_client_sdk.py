@@ -299,7 +299,6 @@ async def test_sdk_get_session_archive(http_client):
         return []
 
     svc.session_compressor.extract_long_term_memories = _no_memories
-    svc.session_compressor.extract_execution_memories = _no_memories
 
     session_info = await client.create_session()
     session_id = session_info["session_id"]
