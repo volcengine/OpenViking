@@ -1,0 +1,28 @@
+openviking/storage/transaction/lock_context.py
+  s_4bb3e14bbc4f98::t_0a03d6ca991aff 5,10,28,36,50-52,56-58,67
+tests/server/test_admin_api.py
+  s_4bb3e14bbc4f98::t_603e46d60fd563 46-58,150-156
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "21dfd4f0dc975b50ccc860d0df454d3b606cad64",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_4bb3e14bbc4f98": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7eaf-dbe9-7322-8883-66041438fd3a",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
