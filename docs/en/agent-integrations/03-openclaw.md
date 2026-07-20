@@ -1,6 +1,8 @@
 # OpenClaw Plugin
 
-Add long-term memory to [OpenClaw](https://github.com/openclaw/openclaw). After installation, OpenClaw automatically remembers important facts from conversations and recalls relevant context before every reply.
+Add long-term memory to [OpenClaw](https://github.com/openclaw/openclaw). After installation, OpenClaw automatically
+remembers important facts from conversations. For turns that use OpenClaw's
+context-engine transform path, it also recalls relevant context before each reply.
 
 Source: [examples/openclaw-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/openclaw-plugin)
 
@@ -33,7 +35,15 @@ openclaw openviking setup --base-url http://your-server:1933 --api-key sk-xxx --
 openclaw gateway restart
 ```
 
-The `setup` wizard writes configuration and activates the plugin. After install, start a conversation — OpenClaw will begin remembering and recalling automatically.
+The `setup` wizard writes configuration and activates the plugin. After install,
+start a conversation — OpenClaw will begin remembering automatically.
+Context-engine turns will also recall relevant memories before each reply.
+
+> **External ACP agents:** Their turns currently bypass the context-engine
+> transform path. They may still be captured, but automatic recall is not
+> injected. Until OpenClaw provides a gateway/ACP preprocessing hook, use
+> `memory_recall` where the plugin tools are available, or an equivalent explicit
+> OpenViking MCP recall. Follow [#1140](https://github.com/volcengine/OpenViking/issues/1140) for status.
 
 <details>
 <summary><b>Alternative: install via <code>ov-install</code></b></summary>
