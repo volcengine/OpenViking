@@ -178,3 +178,23 @@ async def test_sync_failure_does_not_advance_source_metadata(monkeypatch):
     )
 
     assert fake_fs.contents["viking://resources/root/.source.json"] == "old source metadata"
+
+
+@pytest.mark.asyncio
+async def test_sync_missing_source_never_touches_target(monkeypatch):
+    fake_fs = AsyncMock()
+    fake_fs.exists.return_value = False
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: fake_fs,
+    )
+
+    with pytest.raises(FileNotFoundError, match="refusing to sync"):
+        await SemanticProcessor()._sync_topdown_recursive(
+            "viking://temp/missing",
+            "viking://resources/root",
+            lock=NO_LOCK,
+        )
+
+    fake_fs.ls.assert_not_awaited()
+    fake_fs.rm.assert_not_awaited()

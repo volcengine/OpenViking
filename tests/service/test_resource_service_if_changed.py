@@ -13,10 +13,18 @@ class FakeLock:
     def __init__(self):
         self.active = True
         self.closed = False
+        self.handed_off = False
 
     async def close(self):
         self.active = False
         self.closed = True
+
+    def to_handoff(self):
+        return None
+
+    async def handoff(self):
+        self.active = False
+        self.handed_off = True
 
 
 class FakeBackgroundTask:
@@ -47,7 +55,10 @@ class FakeResourceProcessor:
 
     async def process_resource(self, **kwargs):
         self.calls.append(kwargs)
-        return {"status": "success", "root_uri": kwargs["to"]}
+        result = {"status": "success", "root_uri": kwargs["to"]}
+        if kwargs.get("defer_post_processing"):
+            result.update({"_post_process": {}, "_resource_lock": self.lock})
+        return result
 
 
 def _fingerprint(sha="a" * 64):
@@ -141,6 +152,14 @@ async def test_if_changed_returns_noop_under_target_lock():
 async def test_if_changed_changed_source_keeps_lock_through_processing():
     service, processor = _service(build_source_metadata(_fingerprint()))
 
+    async def enqueue_job(_msg, *, resource_lock):
+        assert resource_lock is processor.lock
+        assert resource_lock.active
+        await resource_lock.handoff()
+        return SimpleNamespace(task_id="task-1")
+
+    service._enqueue_add_resource_job = enqueue_job
+
     result = await service.add_resource(
         path="/safe/upload.md",
         ctx=_ctx(),
@@ -152,6 +171,9 @@ async def test_if_changed_changed_source_keeps_lock_through_processing():
     )
 
     assert result["status"] == "success"
+    assert result["task_id"] == "task-1"
     assert processor.calls[0]["resource_lock"] is processor.lock
     assert processor.calls[0]["source_fingerprint"]["source_sha256"] == "b" * 64
-    assert processor.lock.closed
+    assert processor.calls[0]["defer_post_processing"] is True
+    assert processor.lock.handed_off
+    assert not processor.lock.closed

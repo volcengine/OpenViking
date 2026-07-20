@@ -28,9 +28,9 @@ from openviking.session import create_session_compressor
 from openviking.storage import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
 from openviking.storage.index_consistency import check_index_consistency
+from openviking.storage.queuefs.add_resource_processor import AddResourceProcessor
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
 from openviking.storage.queuefs.session_commit_processor import SessionCommitProcessor
-from openviking.storage.queuefs.understanding_parse_processor import UnderstandingParseProcessor
 from openviking.storage.transaction import LockManager, init_lock_manager
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
 from openviking.utils.agfs_utils import (
@@ -416,12 +416,12 @@ class OpenVikingService:
         )
 
         if self._queue_manager:
-            external_parse_processor = UnderstandingParseProcessor(
-                self._resource_processor,
-                resource_memory_link_service=self._resource_memory_link_service,
+            external_parse_processor = AddResourceProcessor(
+                self._resource_service,
+                asyncio.get_running_loop(),
             )
             self._queue_manager.get_queue(
-                self._queue_manager.EXTERNAL_PARSE,
+                self._queue_manager.ADD_RESOURCE,
                 dequeue_handler=external_parse_processor,
                 allow_create=True,
             )

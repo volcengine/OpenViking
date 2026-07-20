@@ -749,6 +749,10 @@ class SemanticProcessor(DequeueHandlerBase):
         lock: LockLease = NO_LOCK,
     ) -> DiffResult:
         viking_fs = get_viking_fs()
+        if not await viking_fs.exists(root_uri, ctx=ctx):
+            raise FileNotFoundError(
+                f"Semantic source no longer exists; refusing to sync into {target_uri}: {root_uri}"
+            )
         diff = DiffResult()
         sync_errors: List[str] = []
         lock_handle = lock.handle

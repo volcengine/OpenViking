@@ -533,46 +533,64 @@ class LocalCollection(ICollection):
 
         pk_list = label_list
         fields_list = []
-        if not output_fields:
-            output_fields = list(self.meta.fields_dict.keys())
-        if self.meta.primary_key or output_fields:
+        projected_fields = (
+            list(self.meta.fields_dict.keys()) if not output_fields else list(output_fields)
+        )
+        include_vector = bool(self.meta.vector_key) and self.meta.vector_key in projected_fields
+        if self.meta.primary_key or projected_fields:
             if not self.store_mgr:
                 raise RuntimeError("Store manager is not initialized")
-            cands_list = self.store_mgr.fetch_cands_data(label_list)
+
+            cands_vectors: Optional[List[List[float]]] = None
+            if include_vector:
+                cands_list = self.store_mgr.fetch_cands_data(label_list)
+                cands_fields_payloads = [
+                    cand.fields if cand is not None else None for cand in cands_list
+                ]
+                cands_vectors = [cand.vector if cand is not None else [] for cand in cands_list]
+            else:
+                cands_fields_payloads = self.store_mgr.fetch_cands_fields(label_list)
 
             valid_indices = []
-            for i, cand in enumerate(cands_list):
-                if cand is not None:
+            for i, fields_payload in enumerate(cands_fields_payloads):
+                if fields_payload is not None:
                     valid_indices.append(i)
                 else:
                     logger.warning(
                         f"Candidate data is None for label index {i} (label: {label_list[i] if i < len(label_list) else 'unknown'}), skipping."
                     )
 
-            if len(valid_indices) < len(cands_list):
-                cands_list = [cands_list[i] for i in valid_indices]
+            if len(valid_indices) < len(cands_fields_payloads):
+                cands_fields_payloads = [cands_fields_payloads[i] for i in valid_indices]
+                if cands_vectors is not None:
+                    cands_vectors = [cands_vectors[i] for i in valid_indices]
                 pk_list = [pk_list[i] for i in valid_indices]
                 scores_list = [scores_list[i] for i in valid_indices]
 
             # Parse each candidate's fields defensively: a single corrupted JSON
             # string (e.g. truncated by the storage layer's uint16 length prefix)
-            # must not fail the whole query. Skip the bad ones and keep cands_list,
-            # pk_list and scores_list aligned, mirroring the None-skip above.
+            # must not fail the whole query. Skip the bad ones and keep payloads,
+            # vectors, pk_list and scores_list aligned, mirroring the None-skip above.
             cands_fields = []
             json_valid_indices = []
-            for i, cand in enumerate(cands_list):
+            for i, fields_payload in enumerate(cands_fields_payloads):
                 try:
-                    cands_fields.append(json.loads(cand.fields))
+                    parsed_fields = json.loads(fields_payload)
+                    if not isinstance(parsed_fields, dict):
+                        raise TypeError("candidate fields JSON must be an object")
+                    cands_fields.append(parsed_fields)
                     json_valid_indices.append(i)
                 except (json.JSONDecodeError, TypeError) as e:
                     logger.warning(
-                        f"Failed to parse candidate fields as JSON (label={cand.label}, "
-                        f"fields_len={len(cand.fields) if cand.fields else 0}), skipping. "
+                        f"Failed to parse candidate fields as JSON (label={pk_list[i]}, "
+                        f"fields_len={len(fields_payload) if fields_payload else 0}), skipping. "
                         f"Error: {e}"
                     )
 
-            if len(json_valid_indices) < len(cands_list):
-                cands_list = [cands_list[i] for i in json_valid_indices]
+            if len(json_valid_indices) < len(cands_fields_payloads):
+                cands_fields_payloads = [cands_fields_payloads[i] for i in json_valid_indices]
+                if cands_vectors is not None:
+                    cands_vectors = [cands_vectors[i] for i in json_valid_indices]
                 pk_list = [pk_list[i] for i in json_valid_indices]
                 scores_list = [scores_list[i] for i in json_valid_indices]
 
@@ -581,12 +599,12 @@ class LocalCollection(ICollection):
                     cands_field.get(self.meta.primary_key, "") for cands_field in cands_fields
                 ]
             fields_list = [
-                {field: cands_field.get(field, None) for field in output_fields}
+                {field: cands_field.get(field, None) for field in projected_fields}
                 for cands_field in cands_fields
             ]
-            if self.meta.vector_key:
-                for i, cands in enumerate(cands_list):
-                    fields_list[i][self.meta.vector_key] = cands.vector
+            if include_vector and self.meta.vector_key and cands_vectors is not None:
+                for i, vector in enumerate(cands_vectors):
+                    fields_list[i][self.meta.vector_key] = vector
 
         search_result.data = [
             SearchItemResult(id=pk, fields=fields, score=score)
