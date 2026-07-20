@@ -93,6 +93,7 @@ class PostValidationRetryDecision:
     instruction: str = ""
     discard: bool = False
     include_latest_draft: bool = False
+    latest_draft_override: Any = None
 
 
 PostValidationHook = Callable[
@@ -369,10 +370,15 @@ OUTPUT_SCHEMA definition itself.
                         max_iterations += 1
                         self._disable_tools_for_iteration = True
                         if decision.include_latest_draft:
+                            retry_draft = (
+                                decision.latest_draft_override
+                                if decision.latest_draft_override is not None
+                                else operations
+                            )
                             messages.append(
                                 {
                                     "role": "assistant",
-                                    "content": self._serialize_operations_draft(operations),
+                                    "content": self._serialize_operations_draft(retry_draft),
                                 }
                             )
                         messages.append(

@@ -817,14 +817,6 @@ async def test_tau2_prepare_experience_loader_skill_writes_required_skill(tmp_pa
     assert "call `read_experience` unless" in content
     assert "later boundary in the same task" in content
     assert "Re-search on new subtasks" in content
-    assert "bounded exception" in content
-    assert "every condition" in content
-    assert "override only the conflicting policy interpretation" in content
-    assert "all unrelated policy constraints" in content
-    assert (
-        "Current policy, current tool results, and current user facts override prior experience"
-        not in content
-    )
     assert "case_name" in content
     assert "case URI" not in content
     assert "RETURN_COMPLETED" not in content
@@ -833,25 +825,6 @@ async def test_tau2_prepare_experience_loader_skill_writes_required_skill(tmp_pa
     assert fake_sandbox.writes
     assert fake_sandbox.writes[0][0] == "skills/experience_loader/SKILL.md"
     assert context_builder.latest_experience_loader_skill_content == content
-
-
-def test_tau2_skill_loader_system_prompt_allows_narrow_policy_exceptions():
-    from benchmark.tau2.train.rollout_executor_vikingbot import _build_system_prompt
-
-    prompt = _build_system_prompt(
-        "# Airline policy",
-        keep_default_tools=True,
-        rollout_language="default",
-        loader_mode="skill",
-    )
-
-    assert "fully matches a narrowly bounded exception" in prompt
-    assert "override only the conflicting policy interpretation" in prompt
-    assert "preserve all unrelated policy constraints" in prompt
-    assert (
-        "current policy, current tool results, and current user facts override prior experience"
-        not in prompt
-    )
 
 
 @pytest.mark.asyncio

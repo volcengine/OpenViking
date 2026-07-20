@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -12,7 +11,12 @@ import pytest
 from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session import create_session_compressor
-from openviking.session.compressor_v3 import SessionCompressorV3, _experience_root_uri
+from openviking.session.compressor_v3 import (
+    SessionCompressorV3,
+    _experience_root_uri,
+    _finalize_experience_dispositions,
+    _separate_training_evaluation_messages,
+)
 from openviking.session.memory.dataclass import (
     MemoryFile,
     ResolvedOperation,
@@ -23,7 +27,6 @@ from openviking.session.memory.memory_updater import MemoryUpdateResult
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.train import (
     Case,
-    CriterionResult,
     ExperienceSet,
     PolicyApplyResult,
     PolicyPlanItem,
@@ -37,10 +40,7 @@ from openviking.session.train import (
     StreamingPolicyTrainerConfig,
     Trajectory,
 )
-from openviking.session.train.components.session_commit import (
-    _case_spec_message_to_request,
-    _evaluation_message_to_request,
-)
+from openviking.session.train.components.session_commit import _case_spec_message_to_request
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -98,6 +98,185 @@ def test_experience_root_uri_requires_request_user():
         _experience_root_uri(SimpleNamespace(user=None))
 
 
+def test_case_trajectory_link_types_encode_outcome():
+    from openviking.session.compressor_v3 import _case_trajectory_links
+
+    case_uri = "viking://user/u/memories/cases/case.md"
+    trajectories = [
+        SimpleNamespace(
+            uri=f"viking://user/u/memories/trajectories/{outcome}.md",
+            outcome=outcome,
+        )
+        for outcome in ("success", "failure", "partial", "unfinished", "unknown", "invalid")
+    ]
+
+    links = _case_trajectory_links(
+        analysis=SimpleNamespace(trajectories=trajectories),
+        case_uri=case_uri,
+    )
+
+    assert [link.link_type for link in links] == [
+        "successful_trajectory",
+        "failed_trajectory",
+        "partial_trajectory",
+        "unfinished_trajectory",
+        "unknown_trajectory",
+        "unknown_trajectory",
+    ]
+
+
+def test_case_memory_fields_include_generalized_situation():
+    from openviking.session.compressor_v3 import _case_to_memory_fields
+
+    case = _training_case()
+    case.input["user_query"] = (
+        "Reason for call:\n\tCancel reservation ABC123 on July 20.\n"
+        "Task instructions:\n\tRefund $500 without changing unrelated bookings."
+    )
+
+    fields = _case_to_memory_fields(case)
+
+    assert fields["situation"]
+    assert "ABC123" not in fields["situation"]
+    assert "$500" not in fields["situation"]
+    assert "July 20" not in fields["situation"]
+    assert "<reservation_id>" in fields["situation"]
+    assert "<amount>" in fields["situation"]
+    assert "<date>" in fields["situation"]
+
+
+def test_retain_case_links_keeps_latest_five_per_outcome_class():
+    from openviking.session.compressor_v3 import _retain_case_links
+
+    case_uri = "viking://user/u/memories/cases/case.md"
+
+    def link(index: int, link_type: str, directory: str = "trajectories") -> dict:
+        return StoredLink(
+            from_uri=case_uri,
+            to_uri=f"viking://user/u/memories/{directory}/{link_type}_{index}.md",
+            link_type=link_type,
+            weight=1.0,
+            created_at=f"2026-07-{index + 1:02d}T00:00:00Z",
+        ).model_dump()
+
+    links = [
+        *[link(index, "successful_trajectory") for index in range(7)],
+        *[link(index, "failed_trajectory") for index in range(7)],
+        link(0, "related_to", directory="experiences"),
+        link(0, "related_to"),
+    ]
+
+    retained = _retain_case_links(links)
+
+    success = [item for item in retained if item["link_type"] == "successful_trajectory"]
+    failure = [item for item in retained if item["link_type"] == "failed_trajectory"]
+    assert [item["to_uri"] for item in success] == [
+        f"viking://user/u/memories/trajectories/successful_trajectory_{index}.md"
+        for index in range(6, 1, -1)
+    ]
+    assert [item["to_uri"] for item in failure] == [
+        f"viking://user/u/memories/trajectories/failed_trajectory_{index}.md"
+        for index in range(6, 1, -1)
+    ]
+    assert any("/memories/experiences/" in item["to_uri"] for item in retained)
+    assert not any(
+        item["link_type"] == "related_to" and "/memories/trajectories/" in item["to_uri"]
+        for item in retained
+    )
+
+
+def test_final_disposition_uses_applied_split_plan_after_gate_retry():
+    trajectory_uri = "viking://user/u/memories/trajectories/literature_review.md"
+    experience_uris = [
+        "viking://user/u/memories/experiences/repair_definition.md",
+        "viking://user/u/memories/experiences/repair_measurement.md",
+    ]
+    analysis = RolloutAnalysis(
+        evaluation=RubricEvaluation(
+            passed=False,
+            score=0.8,
+            criterion_results=[],
+            feedback=[],
+        ),
+        trajectories=[
+            Trajectory(
+                name="literature_review",
+                uri=trajectory_uri,
+                content="trajectory",
+                outcome="partial",
+                retrieval_anchor="",
+            )
+        ],
+        gradients=[],
+        metadata={
+            "experience_dispositions": [
+                {
+                    "disposition": "gradient_proposed",
+                    "experience_uris": ["viking://user/u/memories/experiences/combined_repair.md"],
+                }
+            ]
+        },
+    )
+    plan = PolicyUpdatePlan(
+        items=[
+            PolicyPlanItem(
+                kind="upsert",
+                memory_type="experiences",
+                target_name=uri.rsplit("/", 1)[-1].removesuffix(".md"),
+                target_uri=uri,
+                before_content=None,
+                after_content="experience",
+                links=[
+                    StoredLink(
+                        from_uri=uri,
+                        to_uri=trajectory_uri,
+                        link_type="derived_from",
+                        weight=1.0,
+                    )
+                ],
+            )
+            for uri in experience_uris
+        ]
+    )
+    result = RolloutTrainingResult(
+        analyses=[analysis],
+        gradients=[],
+        plan=plan,
+        apply_result=PolicyApplyResult(
+            updated_policy_set=ExperienceSet(
+                root_uri="viking://user/u/memories/experiences",
+                policies=[],
+            ),
+            written_uris=experience_uris,
+        ),
+        metadata={
+            "gate_reports": [
+                {
+                    "stage": "post_plan",
+                    "decisions": [
+                        {
+                            "action": "reject",
+                            "gate_name": "experience_plan_quality",
+                            "reason": "retry the combined candidate",
+                            "evidence": {"target_name": "combined_repair"},
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+
+    records = _finalize_experience_dispositions(
+        analysis=analysis,
+        training_result=result,
+        session_id="s1",
+    )
+
+    assert records[0]["disposition"] == "experience_created"
+    assert records[0]["experience_uris"] == experience_uris
+    assert "gate_rejections" not in records[0]
+
+
 def test_case_experience_links_require_policy_root_uri():
     traj_uri = "viking://user/u/memories/trajectories/t.md"
     plan = PolicyUpdatePlan(
@@ -136,49 +315,16 @@ def test_case_experience_links_require_policy_root_uri():
         )
 
 
-def test_case_trajectory_link_types_encode_outcome():
-    from openviking.session.compressor_v3 import _case_trajectory_links
-
-    case_uri = "viking://user/u/memories/cases/case.md"
-    trajectories = [
-        SimpleNamespace(
-            uri=f"viking://user/u/memories/trajectories/{outcome}.md",
-            outcome=outcome,
-        )
-        for outcome in ("success", "failure", "partial", "unfinished", "unknown")
-    ]
-    trajectories.extend(
-        [
-            SimpleNamespace(
-                uri="viking://user/u/memories/trajectories/invalid.md",
-                outcome="invalid",
-            ),
-            SimpleNamespace(
-                uri="viking://user/u/memories/trajectories/missing.md",
-            ),
-        ]
-    )
-
-    links = _case_trajectory_links(
-        analysis=SimpleNamespace(trajectories=trajectories),
-        case_uri=case_uri,
-    )
-
-    assert [link.link_type for link in links] == [
-        "successful_trajectory",
-        "failed_trajectory",
-        "partial_trajectory",
-        "unfinished_trajectory",
-        "unknown_trajectory",
-        "unknown_trajectory",
-        "unknown_trajectory",
-    ]
-
-
 @pytest.mark.asyncio
 async def test_train_from_extracted_case_memories_submits_streaming_rollout(monkeypatch):
     submitted_gradients = []
     submitted_analyses = []
+    no_op_lease = SimpleNamespace(handle=object(), close=AsyncMock())
+    acquire_lock = AsyncMock(return_value=no_op_lease)
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.OwnedLockLease.acquire_exact_paths",
+        acquire_lock,
+    )
 
     class FakeTrainer:
         policy_set = ExperienceSet(
@@ -244,17 +390,12 @@ async def test_train_from_extracted_case_memories_submits_streaming_rollout(monk
             )
         ]
 
-    fake_fs = SimpleNamespace(
-        _uri_to_path=lambda uri, ctx=None: uri.removeprefix("viking://"),
-        ls=AsyncMock(return_value=[]),
-        read_file=AsyncMock(side_effect=FileNotFoundError),
-    )
-    no_op_lease = SimpleNamespace(handle=object(), close=AsyncMock())
-    monkeypatch.setattr("openviking.session.compressor_v3.get_viking_fs", lambda: fake_fs)
-    monkeypatch.setattr("openviking.session.compressor_v3.get_lock_manager", lambda: object())
     monkeypatch.setattr(
-        "openviking.session.compressor_v3.OwnedLockLease",
-        SimpleNamespace(acquire_exact_paths=AsyncMock(return_value=no_op_lease)),
+        "openviking.session.compressor_v3.get_viking_fs",
+        lambda: SimpleNamespace(
+            ls=AsyncMock(return_value=[]),
+            _uri_to_path=lambda uri, ctx=None: uri.removeprefix("viking://"),
+        ),
     )
     monkeypatch.setattr(
         "openviking.session.compressor_v3.get_streaming_policy_trainer",
@@ -302,12 +443,12 @@ async def test_train_from_extracted_case_memories_submits_streaming_rollout(monk
     assert cases[0].name == "重复预订处理"
     assert cases[0].input["summary"] == "用户要求处理重复预订"
     assert cases[0].rubric.criteria[0].name == "先验证重复"
+    acquire_lock.assert_awaited()
 
 
 @pytest.mark.asyncio
 async def test_train_from_extracted_multiple_case_memories_analyzes_bound_rollouts(monkeypatch):
     seen_rollouts = []
-    seen_contexts = []
     rollout_messages = _messages()
 
     class FakeTrainer:
@@ -318,8 +459,8 @@ async def test_train_from_extracted_multiple_case_memories_analyzes_bound_rollou
 
     class FakeAnalyzer:
         async def analyze(self, rollout, context):
+            del context
             seen_rollouts.append(rollout)
-            seen_contexts.append(context)
             return RolloutAnalysis(
                 evaluation=RubricEvaluation(
                     passed=True,
@@ -363,18 +504,12 @@ async def test_train_from_extracted_multiple_case_memories_analyzes_bound_rollou
             max_gradients_per_update=8,
         ),
     )
-    failed_evaluation = RubricEvaluation(
-        passed=False,
-        score=0.0,
-        criterion_results=[],
-        metadata={"source": "tau2"},
-    )
+
     result = await compressor.train_from_extracted_cases(
         cases=[case_a, case_b],
         messages=rollout_messages,
         ctx=_ctx(),
         session_id="s1",
-        rollout_evaluation=failed_evaluation,
     )
 
     assert result["case_count"] == 2
@@ -387,11 +522,6 @@ async def test_train_from_extracted_multiple_case_memories_analyzes_bound_rollou
         rollout_messages,
         rollout_messages,
     ]
-    assert [rollout.evaluation for rollout in seen_rollouts] == [
-        failed_evaluation,
-        failed_evaluation,
-    ]
-    assert all(not hasattr(context, "inject_evaluation_feedback") for context in seen_contexts)
 
 
 @pytest.mark.asyncio
@@ -598,21 +728,6 @@ def _case_spec_message(case: Case | None = None) -> Message:
     )
 
 
-def _outcome_evaluation_message(evaluation: RubricEvaluation) -> Message:
-    rollout = Rollout(
-        case=_training_case(),
-        messages=[],
-        policy_snapshot_id="snapshot-1",
-        evaluation=evaluation,
-    )
-    request = _evaluation_message_to_request(rollout)
-    return Message(
-        id="outcome-evaluation",
-        role=request["role"],
-        parts=[TextPart(text=request["parts"][0]["text"])],
-    )
-
-
 @pytest.mark.asyncio
 async def test_v3_training_case_spec_fast_path_skips_user_memory_extraction_and_strips_control_message():
     case_spec = _case_spec_message()
@@ -651,71 +766,6 @@ async def test_v3_training_case_spec_fast_path_skips_user_memory_extraction_and_
     assert [case.name for case in trained[0]["cases"]] == ["duplicate_booking"]
     assert trained[0]["messages"] == rollout_messages
     assert contexts[0].uri == "viking://user/u/memories/cases/duplicate_booking.md"
-
-
-@pytest.mark.asyncio
-async def test_v3_training_case_spec_fast_path_propagates_canonical_failed_evaluation():
-    failed_evaluation = RubricEvaluation(
-        passed=False,
-        score=0.0,
-        criterion_results=[
-            CriterionResult(
-                criterion_name="tau2_reward",
-                passed=False,
-                score=0.0,
-                feedback=["The task reward was zero."],
-                evidence=["The reservation was not cancelled."],
-                metadata={"reward": 0.0},
-            )
-        ],
-        metadata={"source": "tau2"},
-    )
-    outcome_message = _outcome_evaluation_message(failed_evaluation)
-    trained = []
-    compressor = SessionCompressorV3(vikingdb=None, rollout_analyzer=SimpleNamespace())
-
-    async def fake_write_training_case_memory(**kwargs):
-        del kwargs
-        result = MemoryUpdateResult()
-        result.add_written("viking://user/u/memories/cases/duplicate_booking.md")
-        return result
-
-    async def fake_train_from_extracted_cases(**kwargs):
-        trained.append(kwargs)
-        return {"case_count": 1, "submitted": 1}
-
-    compressor._write_training_case_memory = fake_write_training_case_memory
-    compressor.train_from_extracted_cases = fake_train_from_extracted_cases
-
-    await compressor.extract_long_term_memories(
-        messages=[_case_spec_message(), *_messages(), outcome_message],
-        ctx=_ctx(),
-        session_id="s1",
-        allowed_memory_types={"cases", "trajectories", "experiences"},
-    )
-
-    evaluation = trained[0]["rollout_evaluation"]
-    assert evaluation.passed is False
-    assert evaluation.score == 0.0
-    assert evaluation.criterion_results == failed_evaluation.criterion_results
-    assert evaluation.metadata == {"source": "tau2"}
-    assert trained[0]["messages"] == _messages()
-
-
-def test_outcome_evaluation_message_contains_only_canonical_payload():
-    evaluation = RubricEvaluation(
-        passed=False,
-        score=0.0,
-        criterion_results=[],
-        metadata={"source": "tau2"},
-    )
-
-    text = _outcome_evaluation_message(evaluation).content
-
-    assert text.startswith("# OpenViking OutcomeEvaluation\n\n```json")
-    assert "Tau2 Evaluation Semantics" not in text
-    assert "Derived Evaluation Verdict" not in text
-    assert "Evaluation Interpretation" not in text
 
 
 @pytest.mark.asyncio
@@ -775,6 +825,33 @@ def test_training_case_spec_message_uses_fast_path_protocol():
     assert text.startswith("# OpenViking Batch Training CaseSpec v1")
     assert "openviking.batch_train.case_spec.v1" in text
     assert "duplicate_booking_rubric" in text
+
+
+def test_training_outcome_evaluation_is_structured_and_removed_from_runtime_messages():
+    runtime_message = Message(id="runtime", role="user", parts=[TextPart("complete operation")])
+    evaluation_message = Message(
+        id="evaluation",
+        role="system",
+        parts=[
+            TextPart(
+                """# OpenViking OutcomeEvaluation
+
+```json
+{"evaluation":{"passed":false,"score":0.25,"criterion_results":[{"criterion_name":"completion","passed":false,"score":0.0,"feedback":["verification missing"],"evidence":["external probe"]}],"metadata":{"evidence_sources":[{"source":"external_probe","direct":true,"value":"not completed"}]}}}
+```"""
+            )
+        ],
+    )
+
+    runtime, evaluation = _separate_training_evaluation_messages(
+        [runtime_message, evaluation_message]
+    )
+
+    assert runtime == [runtime_message]
+    assert evaluation is not None
+    assert evaluation.score == pytest.approx(0.25)
+    assert evaluation.criterion_results[0].feedback == ["verification missing"]
+    assert evaluation.metadata["evidence_sources"][0]["source"] == "external_probe"
 
 
 def test_training_case_spec_message_uses_original_case_name_for_trials():
@@ -873,6 +950,14 @@ async def test_v3_fast_path_writes_final_memory_diff_with_case_traj_and_exp(monk
                     "deletes": [],
                 },
                 "summary": {"total_adds": 1, "total_updates": 1, "total_deletes": 0},
+                "experience_dispositions": [
+                    {
+                        "session_id": "s1",
+                        "trajectory_uri": "viking://user/u/memories/trajectories/duplicate_booking.md",
+                        "disposition": "experience_updated",
+                        "reason": "experience plan passed gates and was applied",
+                    }
+                ],
             },
         }
 
@@ -899,9 +984,13 @@ async def test_v3_fast_path_writes_final_memory_diff_with_case_traj_and_exp(monk
         "total_adds": 2,
         "total_updates": 1,
         "total_deletes": 0,
-        "total_post_validation_retries": 0,
-        "total_gate_rejections": 0,
+        "total_experience_dispositions": 1,
     }
+    report_lines = writes[f"{archive_uri}/experience_extraction_report.jsonl"].splitlines()
+    assert len(report_lines) == 1
+    report = __import__("json").loads(report_lines[0])
+    assert report["disposition"] == "experience_updated"
+    assert report["session_id"] == "s1"
 
 
 @pytest.mark.asyncio
@@ -973,13 +1062,7 @@ async def test_v3_builds_training_memory_diff_from_streaming_result(monkeypatch)
         archive_uri=archive_uri,
     )
 
-    assert diff["summary"] == {
-        "total_adds": 1,
-        "total_updates": 1,
-        "total_deletes": 0,
-        "total_post_validation_retries": 0,
-        "total_gate_rejections": 0,
-    }
+    assert diff["summary"] == {"total_adds": 1, "total_updates": 1, "total_deletes": 0}
     assert diff["operations"]["adds"][0]["memory_type"] == "trajectories"
     update = diff["operations"]["updates"][0]
     assert update["memory_type"] == "experiences"
@@ -1076,13 +1159,7 @@ async def test_v3_training_memory_diff_filters_batch_items_by_current_analysis_t
         archive_uri=archive_uri,
     )
 
-    assert diff["summary"] == {
-        "total_adds": 2,
-        "total_updates": 0,
-        "total_deletes": 0,
-        "total_post_validation_retries": 0,
-        "total_gate_rejections": 0,
-    }
+    assert diff["summary"] == {"total_adds": 2, "total_updates": 0, "total_deletes": 0}
     assert [op["uri"] for op in diff["operations"]["adds"]] == [traj_a, exp_a]
 
 
@@ -1091,6 +1168,12 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
     case_uri = "viking://user/u/memories/cases/duplicate_booking.md"
     traj_uri = "viking://user/u/memories/trajectories/duplicate_booking.md"
     exp_uri = "viking://user/u/memories/experiences/booking_duplicate_handling.md"
+    no_op_lease = SimpleNamespace(handle=object(), close=AsyncMock())
+    acquire_lock = AsyncMock(return_value=no_op_lease)
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.OwnedLockLease.acquire_exact_paths",
+        acquire_lock,
+    )
 
     class FakeFS:
         def __init__(self):
@@ -1245,13 +1328,7 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
         ]
 
     fs = FakeFS()
-    no_op_lease = SimpleNamespace(handle=object(), close=AsyncMock())
     monkeypatch.setattr("openviking.session.compressor_v3.get_viking_fs", lambda: fs)
-    monkeypatch.setattr("openviking.session.compressor_v3.get_lock_manager", lambda: object())
-    monkeypatch.setattr(
-        "openviking.session.compressor_v3.OwnedLockLease",
-        SimpleNamespace(acquire_exact_paths=AsyncMock(return_value=no_op_lease)),
-    )
     monkeypatch.setattr(
         "openviking.session.compressor_v3.get_streaming_policy_trainer",
         AsyncMock(return_value=FakeTrainer()),
@@ -1270,6 +1347,7 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
     )
 
     assert result["submitted"] == 1
+    acquire_lock.assert_awaited()
     case_file = MemoryFileUtils.read(fs.files[case_uri], uri=case_uri)
     assert any(
         link["to_uri"] == traj_uri
@@ -1299,233 +1377,7 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
     assert any(link["from_uri"] == case_uri for link in exp_file.backlinks)
 
 
-@pytest.mark.asyncio
-async def test_render_case_links_serializes_concurrent_updates(monkeypatch):
-    from openviking.session import compressor_v3
-
-    case_uri = "viking://user/u/memories/cases/cancel_all_flights.md"
-    exp_a = "viking://user/u/memories/experiences/check_insurance.md"
-    exp_b = "viking://user/u/memories/experiences/check_all_reservations.md"
-
-    class FakeFS:
-        def __init__(self):
-            self.files = {
-                case_uri: MemoryFileUtils.write(
-                    MemoryFile(
-                        uri=case_uri,
-                        memory_type="cases",
-                        extra_fields={
-                            "memory_type": "cases",
-                            "case_name": "cancel_all_flights",
-                        },
-                    )
-                )
-            }
-            self.read_count = 0
-            self.second_read_started = asyncio.Event()
-
-        def _uri_to_path(self, uri, ctx=None):
-            del ctx
-            return uri.removeprefix("viking://")
-
-        async def read_file(self, uri, ctx=None):
-            del ctx
-            snapshot = self.files[uri]
-            self.read_count += 1
-            if self.read_count == 1:
-                try:
-                    await asyncio.wait_for(self.second_read_started.wait(), timeout=0.05)
-                except TimeoutError:
-                    pass
-            else:
-                self.second_read_started.set()
-            return snapshot
-
-        async def write_file(self, uri, content, ctx=None, lock_handle=None):
-            del ctx, lock_handle
-            self.files[uri] = content
-
-    class FakeHandle:
-        def __init__(self, handle_id):
-            self.id = handle_id
-            self.locks = []
-
-    class FakeLockManager:
-        def __init__(self):
-            self._lock = asyncio.Lock()
-            self._handles = {}
-            self._path_lock = SimpleNamespace(_lock_expire=300.0)
-            self.timeouts = []
-
-        def create_handle(self):
-            handle = FakeHandle(f"handle-{len(self._handles) + 1}")
-            self._handles[handle.id] = handle
-            return handle
-
-        async def acquire_exact_path_batch(self, handle, paths, timeout=None):
-            self.timeouts.append(timeout)
-            await self._lock.acquire()
-            handle.locks.extend(paths)
-            return True
-
-        def get_handle(self, handle_id):
-            return self._handles.get(handle_id)
-
-        async def release(self, handle):
-            handle.locks.clear()
-            self._handles.pop(handle.id, None)
-            self._lock.release()
-
-    fs = FakeFS()
-    lock_manager = FakeLockManager()
-    monkeypatch.setattr(compressor_v3, "get_lock_manager", lambda: lock_manager, raising=False)
-
-    links = [
-        StoredLink(from_uri=case_uri, to_uri=exp_a, link_type="related_to", weight=1.0),
-        StoredLink(from_uri=case_uri, to_uri=exp_b, link_type="related_to", weight=1.0),
-    ]
-    await asyncio.gather(
-        *[
-            compressor_v3._render_case_links_from_template(
-                case_uri=case_uri,
-                links=[link],
-                ctx=_ctx(),
-                viking_fs=fs,
-            )
-            for link in links
-        ]
-    )
-
-    case_file = MemoryFileUtils.read(fs.files[case_uri], uri=case_uri)
-    assert {link["to_uri"] for link in case_file.links} == {exp_a, exp_b}
-    assert lock_manager.timeouts == [None, None]
-
-
-@pytest.mark.asyncio
-async def test_render_case_link_retention_keeps_newest_trajectory_links(monkeypatch):
-    from openviking.session import compressor_v3
-
-    case_uri = "viking://user/u/memories/cases/bounded.md"
-
-    def stored_link(to_uri: str, link_type: str, created_at: str) -> dict:
-        return StoredLink(
-            from_uri=case_uri,
-            to_uri=to_uri,
-            link_type=link_type,
-            weight=1.0,
-            created_at=created_at,
-        ).model_dump()
-
-    success_times = [
-        "2026-07-17T00:00:00Z",
-        "2026-07-17T02:00:00Z",
-        "2026-07-17T02:00:00Z",
-        "2026-07-17T03:00:00Z",
-        "2026-07-17T04:00:00Z",
-        "2026-07-17T05:00:00Z",
-        "2026-07-17T06:00:00Z",
-    ]
-    success_uris = [
-        f"viking://user/u/memories/trajectories/success_{index}.md" for index in range(7)
-    ]
-    non_success_types = [
-        "failed_trajectory",
-        "partial_trajectory",
-        "unfinished_trajectory",
-        "unknown_trajectory",
-        "failed_trajectory",
-        "partial_trajectory",
-        "unfinished_trajectory",
-    ]
-    non_success_uris = [
-        f"viking://user/u/memories/trajectories/non_success_{index}.md" for index in range(7)
-    ]
-    experience_uris = [
-        f"viking://user/u/memories/experiences/experience_{index}.md" for index in range(3)
-    ]
-    unrelated_uri = "viking://user/u/memories/entities/topic.md"
-    legacy_trajectory_uri = "viking://user/u/memories/trajectories/legacy.md"
-    initial_links = [
-        *[
-            stored_link(uri, "successful_trajectory", success_times[index])
-            for index, uri in enumerate(success_uris)
-        ],
-        *[
-            stored_link(uri, non_success_types[index], f"2026-07-17T0{index}:30:00Z")
-            for index, uri in enumerate(non_success_uris)
-        ],
-        *[stored_link(uri, "related_to", "") for uri in experience_uris],
-        stored_link(unrelated_uri, "related_to", ""),
-        stored_link(legacy_trajectory_uri, "related_to", ""),
-    ]
-
-    class FakeFS:
-        def __init__(self):
-            self.files = {
-                case_uri: MemoryFileUtils.write(
-                    MemoryFile(
-                        uri=case_uri,
-                        memory_type="cases",
-                        links=initial_links,
-                        extra_fields={"memory_type": "cases", "case_name": "bounded"},
-                    )
-                )
-            }
-
-        def _uri_to_path(self, uri, ctx=None):
-            del ctx
-            return uri.removeprefix("viking://")
-
-        async def read_file(self, uri, ctx=None):
-            del ctx
-            return self.files[uri]
-
-        async def write_file(self, uri, content, ctx=None, lock_handle=None):
-            del ctx, lock_handle
-            self.files[uri] = content
-
-    fs = FakeFS()
-    no_op_lease = SimpleNamespace(handle=object(), close=AsyncMock())
-    monkeypatch.setattr(compressor_v3, "get_lock_manager", lambda: object())
-    monkeypatch.setattr(
-        compressor_v3.OwnedLockLease,
-        "acquire_exact_paths",
-        AsyncMock(return_value=no_op_lease),
-    )
-
-    await compressor_v3._render_case_links_from_template(
-        case_uri=case_uri,
-        links=[
-            StoredLink(
-                from_uri=case_uri,
-                to_uri=experience_uris[-1],
-                link_type="related_to",
-                weight=1.0,
-            )
-        ],
-        ctx=_ctx(),
-        viking_fs=fs,
-    )
-
-    case_file = MemoryFileUtils.read(fs.files[case_uri], uri=case_uri)
-    success_links = [
-        link for link in case_file.links if link["link_type"] == "successful_trajectory"
-    ]
-    non_success_links = [
-        link for link in case_file.links if link["link_type"] in set(non_success_types)
-    ]
-    experience_links = [
-        link for link in case_file.links if "/memories/experiences/" in link["to_uri"]
-    ]
-
-    assert [link["to_uri"] for link in success_links] == list(reversed(success_uris[2:]))
-    assert [link["to_uri"] for link in non_success_links] == list(reversed(non_success_uris[2:]))
-    assert {link["to_uri"] for link in experience_links} == set(experience_uris)
-    assert unrelated_uri in {link["to_uri"] for link in case_file.links}
-    assert legacy_trajectory_uri not in {link["to_uri"] for link in case_file.links}
-
-
-def test_training_messages_after_case_spec_filters_all_evaluation_control_messages():
+def test_training_messages_after_case_spec_filters_legacy_embedded_evaluation_message():
     from openviking.session.compressor_v3 import _training_messages_after_case_spec
 
     case_spec = _case_spec_message()
@@ -1545,9 +1397,9 @@ def test_training_messages_after_case_spec_filters_all_evaluation_control_messag
         parts=[TextPart(text="# OpenViking OutcomeEvaluation")],
     )
 
-    assert (
-        _training_messages_after_case_spec(
-            [case_spec, *rollout_messages, legacy_eval, outcome_eval]
-        )
-        == rollout_messages
-    )
+    assert _training_messages_after_case_spec(
+        [case_spec, *rollout_messages, legacy_eval, outcome_eval]
+    ) == [
+        *rollout_messages,
+        outcome_eval,
+    ]

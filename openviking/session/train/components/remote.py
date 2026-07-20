@@ -22,8 +22,10 @@ from openviking.session.train.components.progress import run_with_progress
 from openviking.session.train.context import ExecutionContext
 from openviking.session.train.domain import (
     Case,
+    CriterionResult,
     ExperienceSet,
     Rollout,
+    RubricEvaluation,
 )
 
 DEFAULT_REMOTE_CASE_PAGE_SIZE = 1000
@@ -117,6 +119,8 @@ class RemoteRolloutExecutor:
     poll_interval_seconds: float = 2.0
     execution_timeout_seconds: float = 3600.0
     missing_execution_grace_seconds: float = 60.0
+    max_main_agent_std_handshake_retries: int = 1
+    continue_on_rollout_failure: bool = False
     show_progress: bool = False
     progress_label: str = "rollout"
     on_rollout_complete: Any | None = None
@@ -132,6 +136,8 @@ class RemoteRolloutExecutor:
             raise ValueError("execution_timeout_seconds must be > 0")
         if self.missing_execution_grace_seconds <= 0:
             raise ValueError("missing_execution_grace_seconds must be > 0")
+        if self.max_main_agent_std_handshake_retries < 0:
+            raise ValueError("max_main_agent_std_handshake_retries must be >= 0")
 
     async def execute(
         self,
@@ -150,7 +156,30 @@ class RemoteRolloutExecutor:
         ) as client:
 
             async def _execute(case: Case, index: int) -> Rollout:
-                rollout = await self._execute_one(client, case, policy_set, context)
+                try:
+                    # The polling loop has its own deadline, but an outer timeout
+                    # guarantees a stalled await cannot keep a whole batch open.
+                    rollout = await asyncio.wait_for(
+                        self._execute_with_handshake_retry(
+                            client, case, policy_set, context
+                        ),
+                        timeout=(
+                            self.execution_timeout_seconds
+                            + self.request_timeout_seconds
+                        ),
+                    )
+                except Exception as exc:
+                    if not self.continue_on_rollout_failure:
+                        raise
+                    rollout = _failed_rollout(
+                        case=case,
+                        policy_snapshot_id=context.policy_snapshot_id,
+                        execution_id=None,
+                        error={
+                            "code": type(exc).__name__,
+                            "message": str(exc),
+                        },
+                    )
                 await self._emit_rollout_complete(
                     rollout=rollout,
                     index=index,
@@ -166,6 +195,23 @@ class RemoteRolloutExecutor:
                 description=f"Running {len(case_list)} rollouts, concurrency={self.concurrency}",
                 concurrency=self.concurrency,
             )
+
+    async def _execute_with_handshake_retry(
+        self,
+        client: httpx.AsyncClient,
+        case: Case,
+        policy_set: ExperienceSet,
+        context: ExecutionContext,
+    ) -> Rollout:
+        retries = 0
+        while True:
+            try:
+                return await self._execute_one(client, case, policy_set, context)
+            except _RetryableMainAgentHandshakeError:
+                if retries >= self.max_main_agent_std_handshake_retries:
+                    raise
+                retries += 1
+                await asyncio.sleep(min(self.poll_interval_seconds * retries, 10.0))
 
     async def _emit_rollout_complete(
         self,
@@ -205,7 +251,12 @@ class RemoteRolloutExecutor:
         )
         response.raise_for_status()
         execution_id = _require_execution_id(response.json(), case=case)
-        return await self._poll_execution(client, execution_id, case=case)
+        return await self._poll_execution(
+            client,
+            execution_id,
+            case=case,
+            policy_snapshot_id=context.policy_snapshot_id,
+        )
 
     async def _poll_execution(
         self,
@@ -213,6 +264,7 @@ class RemoteRolloutExecutor:
         execution_id: str,
         *,
         case: Case,
+        policy_snapshot_id: str,
     ) -> Rollout:
         loop = asyncio.get_running_loop()
         started_at = loop.time()
@@ -221,6 +273,7 @@ class RemoteRolloutExecutor:
         transient_errors = 0
         missing_execution_errors = 0
         last_transient_error: BaseException | None = None
+        last_transient_response: httpx.Response | None = None
         while True:
             try:
                 response = await client.get(f"/v1/rollouts/executions/{execution_id}")
@@ -254,6 +307,17 @@ class RemoteRolloutExecutor:
                     min(self.poll_interval_seconds * missing_execution_errors, 10.0)
                 )
                 continue
+            if _is_retryable_poll_response(response):
+                transient_errors += 1
+                last_transient_response = response
+                if loop.time() >= deadline:
+                    raise TimeoutError(
+                        f"rollout execution {execution_id} polling timed out for case {case.name} "
+                        f"after {self.execution_timeout_seconds}s; last polling response: "
+                        f"{response.status_code} {_response_text(response)}"
+                    )
+                await asyncio.sleep(min(self.poll_interval_seconds * transient_errors, 10.0))
+                continue
             response.raise_for_status()
             data = response.json()
             status = data.get("status")
@@ -265,16 +329,31 @@ class RemoteRolloutExecutor:
                     )
                 return rollout_from_dict(rollout_data)
             if status == "failed":
+                error = data.get("error") or "unknown error"
+                if _is_retryable_main_agent_handshake_error(error):
+                    raise _RetryableMainAgentHandshakeError(error)
+                if self.continue_on_rollout_failure:
+                    return _failed_rollout(
+                        case=case,
+                        policy_snapshot_id=policy_snapshot_id,
+                        execution_id=execution_id,
+                        error=error,
+                    )
                 raise RuntimeError(
                     f"rollout execution {execution_id} failed for case {case.name}: "
-                    f"{data.get('error') or 'unknown error'}"
+                    f"{error}"
                 )
             if asyncio.get_running_loop().time() >= deadline:
                 last_error_text = (
                     f"; last polling error: {type(last_transient_error).__name__}: "
                     f"{last_transient_error}"
                     if last_transient_error is not None
-                    else ""
+                    else (
+                        f"; last polling response: {last_transient_response.status_code} "
+                        f"{_response_text(last_transient_response)}"
+                        if last_transient_response is not None
+                        else ""
+                    )
                 )
                 raise TimeoutError(
                     f"rollout execution {execution_id} timed out for case {case.name} "
@@ -313,6 +392,73 @@ def _require_execution_id(data: dict[str, Any], *, case: Case) -> str:
     if not isinstance(execution_id, str) or not execution_id:
         raise RuntimeError(f"rollout service did not return execution_id for case {case.name}")
     return execution_id
+
+
+def _failed_rollout(
+    *,
+    case: Case,
+    policy_snapshot_id: str,
+    execution_id: str | None,
+    error: Any,
+) -> Rollout:
+    message = _error_message(error)
+    return Rollout(
+        case=case,
+        messages=[],
+        policy_snapshot_id=policy_snapshot_id,
+        evaluation=RubricEvaluation(
+            passed=False,
+            score=0.0,
+            criterion_results=[
+                CriterionResult(
+                    criterion_name="rollout_execution",
+                    passed=False,
+                    score=0.0,
+                    feedback=[message],
+                    evidence=[],
+                    metadata={
+                        "execution_id": execution_id,
+                        "error": error,
+                    },
+                )
+            ],
+            feedback=[message],
+            metadata={
+                "execution_id": execution_id,
+                "error": error,
+                "rollout_failed": True,
+            },
+        ),
+        metadata={
+            "execution_id": execution_id,
+            "error": error,
+            "rollout_failed": True,
+        },
+    )
+
+
+def _error_message(error: Any) -> str:
+    if isinstance(error, dict):
+        code = str(error.get("code") or "rollout_failed")
+        message = str(error.get("message") or error)
+        return f"{code}: {message}"
+    return str(error)
+
+
+def _is_retryable_poll_response(response: httpx.Response) -> bool:
+    return response.status_code == 408 or response.status_code == 429 or response.status_code >= 500
+
+
+class _RetryableMainAgentHandshakeError(RuntimeError):
+    """A confirmed Homepage WS handshake failure that is safe to resubmit once."""
+
+
+def _is_retryable_main_agent_handshake_error(error: Any) -> bool:
+    if not isinstance(error, dict):
+        return False
+    if str(error.get("code") or "").strip() != "MAIN_AGENT_STD_FAILED":
+        return False
+    return "opening handshake" in str(error.get("message") or "").lower()
 
 
 def _response_text(response: httpx.Response, *, max_chars: int = 500) -> str:

@@ -1,8 +1,8 @@
 memory_type: experiences
 description: |
   A generalizable, reusable failure-repair experience distilled from agent execution.
-  It exposes clear applicability, one corrective reminder, a short procedure, and anti-patterns.
-  It is not a full workflow, success summary, or case log.
+  It is read by the skill experience loader, so the content must expose clear applicability,
+  the minimal corrective reminder, and anti-patterns. It is not a full workflow or a case log.
 
 directory: "viking://user/{{ user_space }}/memories/experiences"
 filename_template: "{{ experience_name }}.md"
@@ -26,53 +26,145 @@ fields:
   - name: experience_name
     type: string
     description: |
-      Name the generalizable failure-repair pattern, not the case.
+      Name the generalizable failure-repair pattern, not the specific instance.
       Must be written in {{ language }}.
       {% if language == 'en' %}Use lowercase snake_case, max 5 words.{% else %}Use a concise noun phrase, max 15 characters.{% endif %}
-      Good: "booking_duplicate_handling", "missing_total_cost", "汇总费用遗漏".
+      Good: "verify_before_irreversible_action", "missing_required_output", "关键校验遗漏".
     merge_op: immutable
 
   - name: situation
     type: string
     description: |
-      Write only the bullet body for `## Situation`; the template adds the heading.
-      Content must be written in {{ language }}. Keep real tool names, schema fields, identifiers,
-      and quoted enum values unchanged. Use exactly these four bullets:
-      - Applies when: <runtime-visible task/user/tool-result condition>
-      - Does not apply when: <closest non-applicable task pattern, never a temporal stage>
-      - Source binding: <user scope, confirmed object, record/set, field, policy text, or calculation>
-      - Scope ambiguity: <both labeled scopes when ambiguity is evidenced; otherwise none>
+      Natural-language content must be written in {{ language }}. Keep tool names, schema
+      fields, Python identifiers, and quoted runtime values unchanged.
+
+      Write only the bullet body for `## Situation`; the storage template adds the heading.
+      The skill loader shows this section in search results and may load the whole file with
+      `read_experience`, so it must be understandable without trigger_code.
+      - Applies when: <runtime-visible task/user/tool-result situation where this lesson matters>
+      - Does not apply when: <closest nearby but non-applicable task pattern; do not use
+        temporal stage wording such as before final_response or while still reading/writing>
+      - Evidence binding: <which observation or evidence supports applying the rule>
+      - Decision boundary: <the earliest reusable point where the reminder changes behavior>
+
+      Rules:
+      - Failure repair only. Do not output generic positive workflows, full SOPs, success-path
+        summaries, or case transcripts.
+      - One experience covers one reusable root failure pattern. Split unrelated failures; keep
+        coupled symptoms together only when they share the same evidence, boundary, and repair.
+        Do not compress several independently testable omissions into one reminder. A multi-step
+        procedure is valid only when every step implements the same single behavior change.
+      - Do not merge failures merely because they share an evaluator label such as missing
+        requirement. Merge only when first runtime divergence, decisive evidence, applicability,
+        and minimal repair action are compatible.
+      - Reject generic slogans such as "check all requirements", "ensure full compliance", or
+        "review carefully". Replace them with one concrete runtime boundary, one observable or
+        independently verifiable fact, and one corrective action.
+      - Focus on the first materially outcome-changing mistake and the minimal prevention or
+        recovery action at that boundary.
+      - Treat trajectory memories as factual evidence, not authoritative conclusions.
+        Prefer their `Timeline`, `Outcome Checks`, `Observed Problem`, `Evidence References`, and
+        `Raw Evidence` when inferring a repair.
+      - When both successful and non-successful trajectories are available for the same or
+        similar task pattern, compare them before writing an experience: find which
+        observation, decision, action, verification, or output differs at the first material
+        divergence.
+      - Do not copy any trajectory wording directly into an experience. Re-check the original
+        runtime evidence, injected experience effects, existing experiences, and these rules
+        before writing an injectable reminder.
+      - For non-success trajectories, create or update an experience only when the evidence
+        supports a narrow runtime reminder that would likely prevent or recover from the first
+        materially outcome-changing mistake.
+      - For successful, case-specific, already-covered, unsupported, or not-preventable failures,
+        output no experience changes.
+      - If a loaded experience was causal and marked over-broad, misleading, or too weak, update
+        that existing experience; otherwise do not patch irrelevant loaded experiences.
+      - Do not present advisory signals as runtime observations or causal facts. Derive every
+        behavior claim from runtime evidence or direct external evidence; otherwise keep the
+        cause unknown.
+      - Bind every reminder to a concrete evidence source and decision boundary. Advisory signals
+        may guide inspection but cannot independently justify an experience.
+      - Treat a `rollout_evaluation` direct source as authoritative evidence of outcome and
+        requirement compliance. It may justify learning what result must be prevented or repaired.
+        Infer why the agent reached that result only when the trajectory exposes the relevant
+        observation, decision, action, verification, or output boundary.
+      - When evaluation proves a reusable failed requirement but the internal cause is unknown,
+        write a prevention or verification reminder at the earliest observable boundary instead of
+        inventing hidden reasoning.
+      - Preserve the nearest correct behavior and state the closest non-applicable situation so
+        the reminder does not block valid paths in other domains.
+      - `Does not apply when` must describe a task-pattern mismatch, not the current temporal
+        stage. Do not write conditions such as "still reading", "before final response", "before
+        writes complete", or "not yet at the final_response"; the skill loader may read the
+        experience at task start even when the reminder applies at a later boundary.
+      - Do not encode dataset-specific values, IDs, amounts, paths, or domain names in the reusable
+        rule; express the lesson as an observable condition, decision boundary, and behavior delta.
+        In particular, replace example numbers, date/month ranges, source workbook tab names, and
+        helper script filenames with values read from the runtime request, source, or available tools.
+        Prefer semantic capabilities and source roles over exact tool identifiers when the tool name
+        is not itself part of the runtime contract.
+      - Never infer output language solely from audience geography. Follow explicit language
+        instructions first; otherwise preserve the user's language choice or ask when the choice
+        materially affects the deliverable. Do not describe any audience as "implying" a language.
+        Locale may affect conventions without selecting language.
+      - Verification may use an in-context requirement map or any available scratch mechanism, but
+        do not mandate a fixed helper filename, visible intermediate file, or extra deliverable unless
+        the runtime user request or tool contract explicitly requires it.
+      - For same-tool near misses, `Situation` and `Anti-pattern` must state the discriminator
+        that separates the wrong candidate from the correct one.
+      - If a required source is unavailable, prefer a verifiable authoritative alternative. If no
+        substitute can be verified, state the limitation; do not fill factual gaps from unchecked
+        general knowledge.
+      - Do not fill required fields with guessed values, assumptions, or placeholders merely to
+        preserve a schema. Only use them when the user explicitly permits that behavior; otherwise
+        ask for the missing evidence, mark it unavailable, or disclose the limitation.
+      - Do not turn a genre convention or evaluator-only preference into a mandatory runtime
+        requirement when the user, an authoritative source, and the observable task schema do not
+        require it. Keep unsupported additions optional or output no experience change.
+      - Guard every mandatory output section, field, artifact, or language choice with the same
+        explicit runtime requirement that justifies it. A related input concept, audience, locale,
+        or genre does not by itself imply another required output element.
+      - Treat user-provided assumptions, exclusions, and pre-handled topics as reasoning constraints.
+        Do not require copying them into an introduction, scope section, or other visible output unless
+        the runtime request explicitly asks for that restatement.
+      - For fixed-capacity artifacts, do not resolve requirement conflicts by shrinking text or packing
+        dense nested content. Preserve readability; use explicit priorities, surface the conflict, or
+        request a scope/layout decision when all required content cannot fit.
+      - Describe internal-process leakage semantically. Do not copy platform names, hidden
+        directories, internal manifest filenames, or control metadata literals into the reusable
+        runtime rule.
+      - Keep the experience concise: no setup chatter, no policy dumps, no full paths, no raw IDs,
+        no hidden answers. Use semantic roles instead of case literals.
+      - Use imperative, machine-readable bullets. No introductory or closing paragraphs.
+
     merge_op: patch
 
   - name: reminder
     type: string
     description: |
-      Write only the bullet body for `## Reminder`; the template adds the heading.
-      Content must be written in {{ language }}.
-      - <one imperative root-cause lesson describing the minimal behavior change>
+      Natural-language content must be written in {{ language }}. Keep tool names, schema
+      fields, Python identifiers, and quoted runtime values unchanged.
+      Write only the bullet body for `## Reminder`; the storage template adds the heading.
+      - <one sentence root-cause lesson that changes the next agent behavior>
     merge_op: patch
 
   - name: procedure
     type: string
     description: |
-      Write only the bullet body for `## Procedure`; the template adds the heading.
-      Content must be written in {{ language }}. Use exactly these boundary checks:
-      - Before/when <action or communication boundary>: <inspect the decisive runtime fact>
-      - If <bad condition>: <block/change one argument, read/ask one fact, or communicate one fact>
+      Natural-language content must be written in {{ language }}. Keep tool names, schema
+      fields, Python identifiers, and quoted runtime values unchanged.
+      Write only the bullet body for `## Procedure`; the storage template adds the heading.
+      - Before/when <candidate decision/action/output boundary>: <check the decisive evidence>
+      - If <bad condition>: <apply the smallest corrective or recovery action>
       - Else: <proceed without rewriting unrelated workflow steps>
     merge_op: patch
 
   - name: anti_pattern
     type: string
     description: |
-      Write only the bullet body for `## Anti-pattern`; the template adds the heading.
-      Content must be written in {{ language }}. Use exactly these bullets:
-      - Do not <the tempting wrong behavior>
-      - Preserve <the nearest correct behavior/object/action>
-
-      For policy/eligibility repairs, distinguish action eligibility from benefit eligibility only
-      when comparison or authoritative outcome evidence demonstrates the separation. A user's
-      willingness to forgo a benefit is relevant but is not sufficient by itself to prove an action
-      is allowed. If runtime evidence makes benefit eligibility a real prerequisite, preserve that
-      gate instead of weakening it.
+      Natural-language content must be written in {{ language }}. Keep tool names, schema
+      fields, Python identifiers, and quoted runtime values unchanged.
+      Write only the bullet body for `## Anti-pattern`; the storage template adds the heading.
+      - Do not <the tempting wrong behavior that caused the failure>
+      - Preserve <the nearest correct behavior/object/action that must not be blocked>
     merge_op: patch

@@ -391,11 +391,22 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
                 _format_memory_diff_markdown(_parse_memory_diff(memory_diff)),
                 encoding="utf-8",
             )
+            extraction_report_path = commit_dir / "experience_extraction_report.jsonl"
+            try:
+                extraction_report = await self.client.read(
+                    f"{archive_uri}/experience_extraction_report.jsonl"
+                )
+                extraction_report_path.write_text(str(extraction_report), encoding="utf-8")
+            except Exception:
+                extraction_report_path = None
             self._update_rollout_status(
                 train_dir,
                 artifact_state="memory_diff_done",
                 memory_diff_path=str(commit_dir / "memory_diff.json"),
                 memory_diff_markdown_path=str(commit_dir / "memory_diff.md"),
+                experience_extraction_report_path=(
+                    str(extraction_report_path) if extraction_report_path is not None else None
+                ),
                 commit_path=str(commit_dir),
             )
             self._update_rollout_index_entry(
@@ -404,6 +415,9 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
                     "artifact_state": "memory_diff_done",
                     "memory_diff_path": str(commit_dir / "memory_diff.json"),
                     "memory_diff_markdown_path": str(commit_dir / "memory_diff.md"),
+                    "experience_extraction_report_path": (
+                        str(extraction_report_path) if extraction_report_path is not None else None
+                    ),
                     "commit_path": str(commit_dir),
                 },
             )

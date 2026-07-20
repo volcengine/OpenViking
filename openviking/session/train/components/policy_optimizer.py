@@ -4,7 +4,9 @@
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -29,7 +31,11 @@ from openviking.session.train.domain import (
     PolicyUpdatePlan,
     RolloutAnalysis,
 )
-from openviking.session.train.gates import GateRunner, build_gate_retry_instruction
+from openviking.session.train.gates import (
+    GateRunner,
+    build_gate_retry_instruction,
+    candidate_retry_draft,
+)
 from openviking.session.train.interfaces import SemanticGradient
 from openviking.session.train.utils import first_uri, safe_int
 from openviking.telemetry import tracer
@@ -37,6 +43,8 @@ from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
+
+_EXPERIENCE_PLAN_POST_VALIDATION_MAX_RETRIES = 3
 
 
 @dataclass(slots=True)
@@ -187,6 +195,10 @@ class PatchMergePolicyOptimizer:
             console=False,
         )
 
+        retained_valid_upserts: dict[tuple[str, str], Any] = {}
+        retained_valid_deletes: dict[str, Any] = {}
+        gate_retry_history: list[Any] = []
+
         async def post_validation_hook(
             operations: Any,
             retry_count: int,
@@ -194,8 +206,6 @@ class PatchMergePolicyOptimizer:
             messages: list[dict[str, Any]] | None = None,
             latest_draft: Any = None,
         ):
-            if retry_count >= 1:
-                return None
             gate_runner = context.gate_runner
             if gate_runner is None or self.memory_type != "experiences":
                 return None
@@ -206,28 +216,83 @@ class PatchMergePolicyOptimizer:
                 memory_type=self.memory_type,
                 schema=self._get_schema(),
             )
-            _, report = await gate_runner.filter_plan(
+            gated, report = await gate_runner.filter_plan(
                 items,
                 analyses=list(context.analyses or []),
                 policy_set=policy_set,
             )
-            instruction = build_gate_retry_instruction(report)
+            _remember_gated_plan_operations(
+                operations,
+                gated,
+                schema=self._get_schema(),
+                retained_upserts=retained_valid_upserts,
+                retained_deletes=retained_valid_deletes,
+            )
+            instruction = build_gate_retry_instruction(
+                report,
+                prior_reports=gate_retry_history,
+            )
             if not instruction:
+                if report.rejected_count or (
+                    retry_count and (retained_valid_upserts or retained_valid_deletes)
+                ):
+                    _restore_gated_plan_operations(
+                        operations,
+                        retained_upserts=retained_valid_upserts,
+                        retained_deletes=retained_valid_deletes,
+                    )
+                if retry_count:
+                    context.metadata.setdefault("post_validation_retries", []).append(
+                        _post_validation_retry_event(
+                            stage="post_plan",
+                            retry_index=retry_count,
+                            report=report.to_dict(),
+                            instruction="",
+                            final_outcome="passed_after_retry",
+                            candidate_draft=latest_draft,
+                        )
+                    )
                 return None
             report_dict = report.to_dict()
+            gate_retry_history.append(report)
             context.metadata.setdefault("gate_retry_reports", []).append(report_dict)
+            final_outcome = (
+                "discarded_after_max_retries"
+                if retry_count >= _EXPERIENCE_PLAN_POST_VALIDATION_MAX_RETRIES
+                else "retry_requested"
+            )
             context.metadata.setdefault("post_validation_retries", []).append(
                 _post_validation_retry_event(
                     stage="post_plan",
                     retry_index=retry_count,
                     report=report_dict,
                     instruction=instruction,
+                    final_outcome=final_outcome,
+                    candidate_draft=latest_draft,
                 )
             )
+            if retry_count >= _EXPERIENCE_PLAN_POST_VALIDATION_MAX_RETRIES:
+                if retained_valid_upserts or retained_valid_deletes:
+                    _restore_gated_plan_operations(
+                        operations,
+                        retained_upserts=retained_valid_upserts,
+                        retained_deletes=retained_valid_deletes,
+                    )
+                    event = context.metadata["post_validation_retries"][-1]
+                    event["final_outcome"] = "accepted_valid_subset_after_max_retries"
+                    event["retained_count"] = len(retained_valid_upserts) + len(
+                        retained_valid_deletes
+                    )
+                    return None
+                return PostValidationRetryDecision(discard=True)
             return PostValidationRetryDecision(
                 retry=True,
                 instruction=instruction,
                 include_latest_draft=True,
+                latest_draft_override=candidate_retry_draft(
+                    latest_draft,
+                    target_names=set(report.retriable_rejected_targets()),
+                ),
             )
 
         orchestrator = ExtractLoop(
@@ -239,10 +304,104 @@ class PatchMergePolicyOptimizer:
             max_iterations=1,
             thinking=self.memory_type in {"trajectories", "experiences"},
             post_validation_hook=post_validation_hook,
-            max_post_validation_retries=1,
+            max_post_validation_retries=_EXPERIENCE_PLAN_POST_VALIDATION_MAX_RETRIES,
         )
         operations, _ = await orchestrator.run()
         return operations
+
+
+def _retain_gated_plan_operations(
+    operations: Any,
+    gated: list[PolicyPlanItem],
+    *,
+    schema: MemoryTypeSchema,
+) -> None:
+    """Keep independently valid plan operations when a sibling exhausts retries."""
+
+    allowed_upserts = {
+        (
+            str(item.target_uri or ""),
+            str(item.target_name or ""),
+            str(item.after_content or ""),
+        )
+        for item in gated
+        if item.kind == "upsert"
+    }
+    allowed_deletes = {
+        str(item.target_uri or "") for item in gated if item.kind == "delete" and item.target_uri
+    }
+
+    retained_upserts = []
+    for operation in getattr(operations, "upsert_operations", []) or []:
+        if getattr(operation, "memory_type", None) != "experiences":
+            retained_upserts.append(operation)
+            continue
+        fields = dict(getattr(operation, "memory_fields", {}) or {})
+        target_uri = str(first_uri(getattr(operation, "uris", []) or []) or "")
+        target_name = str(
+            fields.get("experience_name")
+            or fields.get("name")
+            or _fallback_policy_name(operation, memory_type="experiences")
+        )
+        after_content = render_operation_after_file(operation, schema=schema).content
+        if (target_uri, target_name, after_content) in allowed_upserts:
+            retained_upserts.append(operation)
+
+    operations.upsert_operations = retained_upserts
+    operations.delete_file_contents = [
+        memory_file
+        for memory_file in (getattr(operations, "delete_file_contents", []) or [])
+        if str(getattr(memory_file, "uri", "") or "") in allowed_deletes
+    ]
+
+
+def _remember_gated_plan_operations(
+    operations: Any,
+    gated: list[PolicyPlanItem],
+    *,
+    schema: MemoryTypeSchema,
+    retained_upserts: dict[tuple[str, str], Any],
+    retained_deletes: dict[str, Any],
+) -> None:
+    """Carry independently valid plan items across model repair attempts."""
+
+    selected = deepcopy(operations)
+    _retain_gated_plan_operations(selected, gated, schema=schema)
+    for operation in getattr(selected, "upsert_operations", []) or []:
+        if getattr(operation, "memory_type", None) != "experiences":
+            continue
+        fields = dict(getattr(operation, "memory_fields", {}) or {})
+        target_uri = str(first_uri(getattr(operation, "uris", []) or []) or "")
+        target_name = str(
+            fields.get("experience_name")
+            or fields.get("name")
+            or _fallback_policy_name(operation, memory_type="experiences")
+        )
+        retained_upserts[(target_uri, target_name)] = operation
+        retained_deletes.pop(target_uri, None)
+    for memory_file in getattr(selected, "delete_file_contents", []) or []:
+        target_uri = str(getattr(memory_file, "uri", "") or "")
+        if target_uri:
+            for key in [key for key in retained_upserts if key[0] == target_uri]:
+                retained_upserts.pop(key, None)
+            retained_deletes[target_uri] = memory_file
+
+
+def _restore_gated_plan_operations(
+    operations: Any,
+    *,
+    retained_upserts: dict[tuple[str, str], Any],
+    retained_deletes: dict[str, Any],
+) -> None:
+    """Replace the latest partial draft with all candidates already proven valid."""
+
+    non_experience = [
+        operation
+        for operation in (getattr(operations, "upsert_operations", []) or [])
+        if getattr(operation, "memory_type", None) != "experiences"
+    ]
+    operations.upsert_operations = non_experience + list(retained_upserts.values())
+    operations.delete_file_contents = list(retained_deletes.values())
 
 
 def _post_validation_retry_event(
@@ -251,6 +410,8 @@ def _post_validation_retry_event(
     retry_index: int,
     report: dict[str, Any],
     instruction: str,
+    final_outcome: str = "retry_requested",
+    candidate_draft: Any = None,
 ) -> dict[str, Any]:
     return {
         "stage": stage,
@@ -260,13 +421,27 @@ def _post_validation_retry_event(
         "rejected_count": int(report.get("rejected_count") or 0),
         "warning_count": int(report.get("warning_count") or 0),
         "retriable": bool(str(instruction or "").strip()),
-        "final_outcome": "retry_requested",
+        "final_outcome": final_outcome,
         "instruction_preview": _preview_instruction(instruction),
+        "gate_report": report,
+        "candidate_preview": _preview_candidate(candidate_draft),
     }
 
 
 def _preview_instruction(instruction: str, *, limit: int = 500) -> str:
     text = " ".join(str(instruction or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
+def _preview_candidate(candidate: Any, *, limit: int = 4000) -> str:
+    if candidate is None:
+        return ""
+    try:
+        text = json.dumps(candidate, ensure_ascii=False, default=str, sort_keys=True)
+    except (TypeError, ValueError):
+        text = str(candidate)
     if len(text) <= limit:
         return text
     return text[: limit - 3] + "..."
@@ -528,6 +703,7 @@ def _operations_to_plan_items(
         memory_type=memory_type,
         schema=schema,
     )
+    single_source_trajectory = _source_trajectory_count(source_links_by_target) == 1
     replacement_source_uris_by_target = _replacement_source_uris_by_target(operations)
     upsert_target_uris: set[str] = set()
     for op in getattr(operations, "upsert_operations", []) or []:
@@ -558,6 +734,19 @@ def _operations_to_plan_items(
         if before_content is None and target_uri:
             policy = _find_policy_by_uri(policy_set, target_uri)
             before_content = policy.content if policy is not None else None
+        item_links = _source_trajectory_links_for_plan_item(
+            target_uri=target_uri or "",
+            target_name=target_name,
+            before_content=before_content,
+            after_content=after_content,
+            trigger_code=str(fields.get("trigger_code") or ""),
+            source_links_by_target=source_links_by_target,
+            replacement_source_uris=replacement_source_uris_by_target.get(
+                target_uri or "",
+                [],
+            ),
+            include_all_sources=(upsert_output_count == 1 or single_source_trajectory),
+        )
         items.append(
             PolicyPlanItem(
                 kind="upsert",
@@ -572,24 +761,19 @@ def _operations_to_plan_items(
                     policy_set,
                 ),
                 confidence=confidence,
-                links=_source_trajectory_links_for_plan_item(
-                    target_uri=target_uri or "",
-                    target_name=target_name,
-                    before_content=before_content,
-                    after_content=after_content,
-                    trigger_code=str(fields.get("trigger_code") or ""),
-                    source_links_by_target=source_links_by_target,
-                    replacement_source_uris=replacement_source_uris_by_target.get(
-                        target_uri or "",
-                        [],
-                    ),
-                    include_all_sources=upsert_output_count == 1,
-                ),
+                links=item_links,
                 metadata={
                     "rationale": "PatchMergeContextProvider merged semantic gradients via ExtractLoop.",
                     "merge_gradient_count": len(gradients),
                     "merge_memory_fields": plan_fields,
                     "superseded_experience_uris": [policy.uri for policy in superseded_policies],
+                    **_plan_quality_review_metadata(
+                        memory_type=memory_type,
+                        before_content=before_content,
+                        after_content=after_content,
+                        links=item_links,
+                        gradients=gradients,
+                    ),
                 },
             )
         )
@@ -658,6 +842,73 @@ def _operations_to_plan_items(
         )
         delete_uris.add(policy.uri)
     return items
+
+
+def _plan_quality_review_metadata(
+    *,
+    memory_type: str,
+    before_content: str | None,
+    after_content: str,
+    links: list[StoredLink],
+    gradients: list[SemanticGradient],
+) -> dict[str, Any]:
+    """Describe whether final merge output needs an additional semantic review."""
+
+    if memory_type != "experiences":
+        return {
+            "plan_quality_review_required": False,
+            "plan_quality_review_reason": "not_experience",
+        }
+    normalized_after = _normalized_policy_content(after_content)
+    normalized_before = _normalized_policy_content(before_content or "")
+    if before_content is not None and normalized_after == normalized_before:
+        return {
+            "plan_quality_review_required": False,
+            "plan_quality_review_reason": "content_unchanged",
+        }
+    source_trajectory_uris = {
+        str(getattr(link, "to_uri", "") or "")
+        for link in links
+        if str(getattr(link, "link_type", "") or "") == "derived_from"
+        and str(getattr(link, "to_uri", "") or "")
+    }
+    if len(source_trajectory_uris) > 1:
+        return {
+            "plan_quality_review_required": True,
+            "plan_quality_review_reason": "multiple_sources_merged",
+        }
+    if before_content is not None:
+        return {
+            "plan_quality_review_required": True,
+            "plan_quality_review_reason": "existing_experience_changed",
+        }
+    source_contents: set[str] = set()
+    for gradient in gradients:
+        after_file = getattr(gradient, "after_file", None)
+        if after_file is None:
+            continue
+        gradient_source_uris = {
+            str(getattr(link, "to_uri", "") or "")
+            for link in list(getattr(gradient, "links", []) or [])
+            if str(getattr(link, "link_type", "") or "") == "derived_from"
+            and str(getattr(link, "to_uri", "") or "")
+        }
+        if source_trajectory_uris and not source_trajectory_uris.intersection(gradient_source_uris):
+            continue
+        source_contents.add(_normalized_policy_content(after_file.plain_content()))
+    if normalized_after in source_contents:
+        return {
+            "plan_quality_review_required": False,
+            "plan_quality_review_reason": "single_candidate_unchanged",
+        }
+    return {
+        "plan_quality_review_required": True,
+        "plan_quality_review_reason": "materially_rewritten",
+    }
+
+
+def _normalized_policy_content(content: str) -> str:
+    return "\n".join(line.rstrip() for line in str(content or "").strip().splitlines())
 
 
 def _name_field_for_memory_type(memory_type: str) -> str:
@@ -737,9 +988,9 @@ def _remap_source_trajectory_links(
     target_uri: str,
 ) -> list[StoredLink]:
     return [
-        link.model_copy(update={"from_uri": target_uri})
+        link.model_copy(update={"from_uri": target_uri}) if target_uri else link
         for link in links
-        if target_uri and _is_source_trajectory_link(link) and link.to_uri
+        if _is_source_trajectory_link(link) and link.to_uri
     ]
 
 
@@ -870,6 +1121,19 @@ def _source_trajectory_links_by_target(
                 seen.add(dedupe_key)
                 result[key].append(link)
     return dict(result)
+
+
+def _source_trajectory_count(
+    source_links_by_target: dict[tuple[str, str], list[StoredLink]],
+) -> int:
+    return len(
+        {
+            link.to_uri
+            for links in source_links_by_target.values()
+            for link in links
+            if _is_source_trajectory_link(link) and link.to_uri
+        }
+    )
 
 
 def _gradient_source_keys(

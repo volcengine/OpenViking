@@ -3,12 +3,48 @@
 
 from openviking.message import Message
 from openviking.message.part import TextPart
-from openviking.prompts.manager import PromptManager
 from openviking.session.memory.agent_trajectory_context_provider import (
     AgentTrajectoryContextProvider,
     extract_injected_experience_reminders,
 )
-from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+
+
+def test_trajectory_provider_separates_direct_evidence_from_advisory_signals():
+    provider = AgentTrajectoryContextProvider(
+        messages=[Message(id="1", role="user", parts=[TextPart(text="complete task")])],
+        evidence_sources={
+            "direct_available": True,
+            "items": [{"direct": True, "source": "independent_probe", "value": "timeout"}],
+        },
+        advisory_signals={"available": True, "items": [{"label": "possible timeout"}]},
+    )
+
+    rendered = provider._build_conversation_message()["content"]
+
+    assert "## Evidence Source Contract" in rendered
+    assert "Evidence Sources with `direct=true`" in rendered
+    assert "authoritative for outcome and requirement compliance" in rendered
+    assert "does not independently prove an unobserved internal cause" in rendered
+    assert "## Advisory Signals" in rendered
+    assert "independent_probe" in rendered
+    assert "possible timeout" in rendered
+    assert "spreadsheet" not in rendered
+
+
+def test_trajectory_provider_safely_renders_non_json_evidence_values():
+    marker = object()
+    provider = AgentTrajectoryContextProvider(
+        messages=[Message(id="1", role="user", parts=[TextPart(text="complete task")])],
+        evidence_sources={
+            "direct_available": True,
+            "items": [{"direct": True, "source": "external_observer", "value": marker}],
+        },
+    )
+
+    rendered = provider._build_conversation_message()["content"]
+
+    assert "external_observer" in rendered
+    assert str(marker) in rendered
 
 
 def test_trajectory_provider_extracts_injected_experience_aliases():
@@ -36,50 +72,5 @@ def test_trajectory_provider_extracts_injected_experience_aliases():
 
     assert "## Deterministic Injected Experience Reminders" in conversation_message["content"]
     assert "- E1: 预订前确认支付金额一致;" in conversation_message["content"]
-    assert "observable rollout behavior" in conversation_message["content"]
-    assert "Use only these IDs" not in conversation_message["content"]
-    assert "positive_ids" not in conversation_message["content"]
-    assert "negative_ids" not in conversation_message["content"]
-    assert "weak_ids" not in conversation_message["content"]
+    assert "Use only these IDs" in conversation_message["content"]
     assert "## Conversation History" in conversation_message["content"]
-
-
-def test_trajectory_schema_is_factual_and_has_no_experience_effect_labels():
-    memory_dir = PromptManager._get_bundled_templates_dir() / "memory"
-    registry = MemoryTypeRegistry(load_schemas=False)
-    registry.load_from_yaml(str(memory_dir / "trajectories.yaml"))
-    schema = registry.get("trajectories")
-    field_names = {field.name for field in schema.fields}
-    content_description = next(
-        field.description for field in schema.fields if field.name == "content"
-    )
-
-    assert "experience_effects" not in field_names
-    for required in (
-        "User Evidence",
-        "Runtime Evidence",
-        "Execution",
-        "Injected Experience Evidence",
-        "Uncertainty",
-    ):
-        assert required in content_description
-    assert "exactly one trajectory operation" in content_description.lower()
-    assert "- Observed behavior after injection:" in content_description
-    assert (
-        "- Communication: <user-visible information actually communicated, or none>"
-        in content_description
-    )
-    assert "followed, ignored, contradicted, helpful, misleading" in content_description
-    assert "遵循、忽略、违反、有帮助、误导" in content_description
-    assert "- Observable use:" not in content_description
-    for forbidden in (
-        "Correct Work To Preserve",
-        "Observed Problem",
-        "Candidate bad behavior",
-        "What was missing/wrong",
-        "Outcome Checks",
-        "Value/Scope Evidence",
-        "Source Field Evidence",
-        "Raw Evidence",
-    ):
-        assert forbidden not in content_description

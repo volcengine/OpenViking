@@ -348,6 +348,8 @@ class AgentExperienceContextProvider(SessionExtractContextProvider):
         return resolve_output_language(strip_language_detection_noise(self.trajectory_summary))
 
     def instruction(self) -> str:
+        from openviking.session.train.gates import default_experience_gate_contract
+
         output_language = self._output_language
         schema = self._get_registry().get("experiences")
         content_field_names = schema.content_field_names() if schema is not None else ()
@@ -357,7 +359,7 @@ class AgentExperienceContextProvider(SessionExtractContextProvider):
             situation_guidance = """The skill loader uses the rendered `situation` field as the
 applicability snippet. It must clearly say when the experience applies, when it does not apply,
 and which runtime source binds the rule. """
-        return f"""You are a memory extraction agent. Distill a minimal reusable failure repair.
+        return f"""You are a memory extraction agent. Distill reusable failure-repair experiences from failed or partially failed agent execution trajectories.
 
 ## Inputs
 
@@ -366,48 +368,21 @@ and which runtime source binds the rule. """
 - Existing `candidate_experience` memories linked to the exact case or actually loaded in the
   failed rollout
 
-The successful trajectory is reference evidence: it shows what differed, but the output must say
-what experience should be added or adjusted for the failed case. Trajectories are factual evidence;
-do not copy or modify them.
-
-## Authoritative outcome evidence
-
-System-generated Outcome Evidence defines which state, action, or communication changed the
-result. If it conflicts with base-policy wording, override only the smallest conflicting policy interpretation
-needed to explain the required outcome; preserve non-conflicting constraints and object boundaries.
-The experience itself must not mention the evaluator, evaluation metadata, hidden checks, expected
-actions, reward, or rubric. Rewrite the lesson using runtime-visible facts.
-
-## Comparison workflow
-
-1. Align the same behavior boundary in the failed and successful trajectories.
-2. Compare user scope, objects, observed fields and values, agent-stated decisions, tool actions
-   and arguments, communication, and final state.
-3. Use Outcome Evidence to identify the smallest difference that changed the result.
-4. Infer the minimum runtime-observable discriminator a future agent can actually inspect.
-5. Classify a candidate experience as correct-but-ignored, too weak, misleading, or irrelevant.
-6. Choose Update, Create, or Skip.
-
-## Closed-world evidence
-
-- Use only user statements, tool results, schema fields, values, and policy text observed in the
-  failed or successful trajectories.
-- Never invent a flag or field such as `cancellation_allowed` or another `*_allowed` field that
-  was not present in runtime evidence.
-- Generalize case IDs, but preserve decisive real schema field names and enum categories.
-- If Outcome Evidence requires an action but neither trajectory exposes an observable condition
-  for choosing it, do not guess a business rule; choose Skip.
-- Preserve the original user-requested object and action boundaries. An agent-proposed expansion
-  followed by user agreement is not an independently requested new scope.
+Source and comparison trajectories are evidence only. Do not copy or modify trajectory text in
+the output.
 
 ## Decision and output
 
-- Update when an existing experience is misleading or its applicability/reminder is too weak.
-- Create when no relevant experience covers a supported, reusable prevention or recovery.
-- Skip when an existing experience is already correct but was ignored, or when the failure is
-  case-specific, unsupported, random, already covered, or not preventable by a runtime reminder.
-- Emit one experience for one behavior delta: block/change one action or argument, read/ask for
-  one missing fact, or include one source-bound fact in communication. Do not write a full SOP.
+- Existing experience is correct but the agent ignored it: skip unless its wording or
+  applicability is too weak to guide skill loading.
+- Existing experience is misleading, over-broad, or too weak: update it.
+- No relevant experience exists and the failure has a reusable preventive repair: create it.
+- Successful, case-specific, unsupported, random, already-covered, or non-preventable failures:
+  output no changes.
+- Treat trajectories as factual evidence, not authoritative conclusions. Compare observations,
+  decisions, actions, verification, and outputs at the first material divergence.
+- Do not copy trajectory wording directly into an experience. Re-check runtime evidence,
+  injected experience effects, existing experiences, and the gate contract below.
 
 Each entry must provide:
 - `experience_name`: an existing name for Update or a new name for Create
@@ -421,6 +396,7 @@ The system applies same-name entries as updates and new names as creates. Use `s
 of `delete_ids`. Keep content concise, imperative, free of case IDs and hidden answers, and use the
 same language for all `experience_name` values.
 
+{default_experience_gate_contract()}
 - Follow field descriptions in the schema.
 - Output JSON only. Do not call any tools.
 

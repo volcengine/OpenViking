@@ -6,10 +6,9 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from test_fakes import fake_request_context, render_experience_fields
+from test_fakes import fake_request_context
 
 from openviking.session.memory.dataclass import MemoryFile, StoredLink
-from openviking.session.memory.merge_op.base import SearchReplaceBlock, StrPatch
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.train import (
     ContentHashPolicySnapshotter,
@@ -21,30 +20,59 @@ from openviking.session.train import (
     PatchMergePolicyOptimizer,
     PatchMergePolicyOptimizerContext,
     PatchSemanticGradient,
-    PolicyPlanItem,
     PolicyUpdatePlan,
+)
+from openviking.session.train.components.policy_optimizer import (
+    _operations_to_plan_items,
+    _plan_quality_review_metadata,
+    _remap_source_trajectory_links,
 )
 from openviking.session.train.components.trajectory_analyzer import (
     _trajectory_content_validation_issues,
+    _trajectory_operation_validation_issues,
+    _trajectory_validation_issues,
 )
-from openviking.session.train.gates import GateDecision, GateRunner
+from openviking.session.train.gates import ExperienceSkillReadabilityGate, GateRunner
 
 DEFAULT_TRIGGER_CODE = (
     'def should_trigger(ctx):\n    return ctx.get("candidate_tool") == "test_tool"\n'
 )
 
 
-def _experience_fields(reminder: str) -> dict[str, str]:
+def _experience_fields(
+    name: str,
+    *,
+    situation: str | None = None,
+    reminder: str = "- Include the requested total.",
+    procedure: str = "- Check the candidate answer and add the total when missing.",
+    anti_pattern: str = "- Do not omit the requested total.",
+) -> dict[str, str]:
     return {
-        "situation": (
-            "- Applies when: the tested operation reaches its decision boundary.\n"
-            "- Does not apply when: the operation pattern is unrelated.\n"
-            "- Source binding: user request and retrieved records."
+        "experience_name": name,
+        "situation": situation
+        or (
+            "- Applies when: a requested total must appear in the final answer.\n"
+            "- Does not apply when: no total was requested.\n"
+            "- Evidence binding: the user's request for the total.\n"
+            "- Decision boundary: before final communication."
         ),
-        "reminder": f"- {reminder}",
-        "procedure": "- Before acting: check the source-bound condition.",
-        "anti_pattern": "- Do not ignore the source-bound condition.",
+        "reminder": reminder,
+        "procedure": procedure,
+        "anti_pattern": anti_pattern,
     }
+
+
+def test_source_trajectory_link_survives_plan_before_final_uri_assignment():
+    link = StoredLink(
+        from_uri="viking://user/u/memories/experiences/draft_name.md",
+        to_uri="viking://user/u/memories/trajectories/source.md",
+        link_type="derived_from",
+        weight=1.0,
+    )
+
+    result = _remap_source_trajectory_links([link], target_uri="")
+
+    assert result == [link]
 
 
 def test_trajectory_validation_rejects_experience_generation_sections():
@@ -66,11 +94,78 @@ def test_trajectory_validation_rejects_experience_generation_sections():
     issues = _trajectory_content_validation_issues("bad_trace", content)
 
     assert issues
-    assert issues[0].reason == "trajectory contains experience-generation sections"
-    assert "Counterfactual Ideal Experience" in issues[0].details
-    assert "Experience Repair Signal" in issues[0].details
-    assert "Ambiguous references" in issues[0].details
-    assert "Diagnostic Hints" in issues[0].details
+    assert any(
+        issue.reason == "trajectory contains experience-generation sections" for issue in issues
+    )
+    forbidden_issue = next(
+        issue
+        for issue in issues
+        if issue.reason == "trajectory contains experience-generation sections"
+    )
+    assert "Counterfactual Ideal Experience" in forbidden_issue.details
+    assert "Experience Repair Signal" in forbidden_issue.details
+    assert "Ambiguous references" in forbidden_issue.details
+    assert "Diagnostic Hints" in forbidden_issue.details
+
+
+def test_trajectory_validation_requires_exactly_one_output():
+    operations = type("Operations", (), {"upsert_operations": []})()
+
+    issues = _trajectory_validation_issues(operations)
+
+    assert any(
+        issue.reason == "trajectory extraction must produce exactly one trajectory"
+        for issue in issues
+    )
+
+
+def test_trajectory_success_must_match_direct_evaluation():
+    fields = {
+        "trajectory_name": "incorrect_success",
+        "outcome": "success",
+        "retrieval_anchor": "Stage: final; Outcome: success.",
+        "experience_effects": '{"positive_ids": [], "negative_ids": [], "weak_ids": []}',
+        "content": "# Incorrect success\n- Outcome: success\n",
+    }
+    evidence_sources = {
+        "items": [
+            {
+                "source": "rollout_evaluation",
+                "direct": True,
+                "passed": False,
+                "score": 0.8,
+            }
+        ]
+    }
+
+    issues = _trajectory_operation_validation_issues(
+        "incorrect_success",
+        fields,
+        evidence_sources=evidence_sources,
+    )
+
+    assert any(
+        issue.reason == "trajectory outcome disagrees with direct evaluation" for issue in issues
+    )
+
+
+def test_trajectory_anchor_allows_trailing_semicolon_after_outcome():
+    fields = {
+        "trajectory_name": "partial_run",
+        "outcome": "partial",
+        "retrieval_anchor": (
+            "Stage: execution; Boundary: final_write; Capability: spreadsheet; "
+            "Target: report; Outcome: partial;"
+        ),
+        "experience_effects": '{"positive_ids": [], "negative_ids": [], "weak_ids": []}',
+        "content": "# Partial run\n- Outcome: partial\n",
+    }
+
+    issues = _trajectory_operation_validation_issues("partial_run", fields)
+
+    assert not any(
+        issue.reason == "trajectory retrieval_anchor has invalid structure" for issue in issues
+    )
 
 
 class FakeVikingFS:
@@ -141,10 +236,15 @@ def _memory_file(
 ) -> MemoryFile:
     fields: dict[str, Any] = {
         "memory_type": "experiences",
-        "experience_name": name,
         "status": status,
         "trigger_code": trigger_code,
-        **_experience_fields(content),
+        **_experience_fields(
+            name,
+            situation=content,
+            reminder=content,
+            procedure=content,
+            anti_pattern=content,
+        ),
     }
     if version is not None:
         fields["version"] = version
@@ -209,6 +309,117 @@ def _plan_from_gradient(gradient: PatchSemanticGradient) -> PolicyUpdatePlan:
         items=[
             _plan_item_from_gradient(gradient),
         ]
+    )
+
+
+def test_plan_quality_review_skips_unchanged_single_candidate():
+    gradient = _patch_gradient(before=None, after="candidate body")
+
+    metadata = _plan_quality_review_metadata(
+        memory_type="experiences",
+        before_content=None,
+        after_content="candidate body",
+        links=gradient.links,
+        gradients=[gradient],
+    )
+
+    assert metadata == {
+        "plan_quality_review_required": False,
+        "plan_quality_review_reason": "single_candidate_unchanged",
+    }
+
+
+def test_plan_quality_review_checks_existing_update_and_multi_source_merge():
+    first = _patch_gradient(before="old", after="first candidate")
+    second = _patch_gradient(
+        name="second",
+        uri="viking://user/u/memories/experiences/second.md",
+        before=None,
+        after="second candidate",
+        links=[
+            StoredLink(
+                from_uri="viking://user/u/memories/experiences/second.md",
+                to_uri="viking://user/u/memories/trajectories/traj2.md",
+                link_type="derived_from",
+                weight=1.0,
+            )
+        ],
+    )
+
+    update = _plan_quality_review_metadata(
+        memory_type="experiences",
+        before_content="old",
+        after_content="first candidate",
+        links=first.links,
+        gradients=[first],
+    )
+    merged = _plan_quality_review_metadata(
+        memory_type="experiences",
+        before_content=None,
+        after_content="merged candidate",
+        links=[*first.links, *second.links],
+        gradients=[first, second],
+    )
+
+    assert update["plan_quality_review_required"] is True
+    assert update["plan_quality_review_reason"] == "existing_experience_changed"
+    assert merged["plan_quality_review_required"] is True
+    assert merged["plan_quality_review_reason"] == "multiple_sources_merged"
+
+
+def test_split_experiences_keep_single_trajectory_provenance():
+    from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
+
+    policy_set = _experience_set()
+    trajectory_uri = "viking://user/u/memories/trajectories/literature_review.md"
+    gradient = _patch_gradient(
+        name="repair_literature_review",
+        uri=f"{policy_set.root_uri}/repair_literature_review.md",
+        before=None,
+        links=[
+            StoredLink(
+                from_uri=f"{policy_set.root_uri}/repair_literature_review.md",
+                to_uri=trajectory_uri,
+                link_type="derived_from",
+                weight=1.0,
+            )
+        ],
+    )
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                old_memory_file_content=None,
+                memory_fields=_experience_fields(
+                    name,
+                    situation=name,
+                    reminder="R",
+                    procedure="P",
+                    anti_pattern="A",
+                ),
+                memory_type="experiences",
+                uris=[f"{policy_set.root_uri}/{name}.md"],
+            )
+            for name in ("repair_definition", "repair_measurement")
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+
+    items = _operations_to_plan_items(
+        operations=operations,
+        gradients=[gradient],
+        policy_set=policy_set,
+        memory_type="experiences",
+        schema=PatchMergePolicyOptimizer()._get_schema(),
+    )
+
+    assert len(items) == 2
+    assert all(
+        any(
+            link.link_type == "derived_from" and link.to_uri == trajectory_uri
+            for link in item.links
+        )
+        for item in items
     )
 
 
@@ -378,86 +589,10 @@ async def test_memory_file_policy_updater_writes_experience_files():
     assert result.errors == []
     assert result.written_uris == [policy_set.policies[0].uri]
     written = fs.files[policy_set.policies[0].uri]
-    assert written.startswith("## Situation")
-    assert "- new content" in written
+    assert written.startswith("## Situation\nnew content")
     assert '"memory_type": "experiences"' in written
     assert '"experience_name": "booking_duplicate_handling"' in written
     assert '"version": 2' in written
-
-
-@pytest.mark.asyncio
-async def test_memory_file_policy_updater_applies_experience_section_patches_before_writing():
-    name = "先执行合格航班取消"
-    uri = f"viking://user/u/memories/experiences/{name}.md"
-    original_fields = _experience_fields("old reminder")
-    original_content = render_experience_fields(original_fields)
-    policy_set = ExperienceSet(
-        root_uri="viking://user/u/memories/experiences",
-        policies=[
-            Experience(
-                name=name,
-                uri=uri,
-                version=1,
-                status="draft",
-                content=original_content,
-                metadata={
-                    "memory_type": "experiences",
-                    "experience_name": name,
-                    "status": "draft",
-                    **original_fields,
-                },
-            )
-        ],
-    )
-    patch_fields = {
-        "experience_name": name,
-        "situation": StrPatch(
-            blocks=[
-                SearchReplaceBlock(
-                    search="- Applies when: the tested operation reaches its decision boundary.",
-                    replace="- Applies when: 用户请求取消多个航班预约。",
-                )
-            ]
-        ),
-        "reminder": StrPatch(
-            blocks=[
-                SearchReplaceBlock(
-                    search="- old reminder",
-                    replace="- 先取消可执行的预订，再处理剩余请求。",
-                )
-            ]
-        ),
-    }
-    plan = PolicyUpdatePlan(
-        items=[
-            PolicyPlanItem(
-                kind="upsert",
-                memory_type="experiences",
-                target_name=name,
-                target_uri=uri,
-                before_content=original_content,
-                after_content=render_experience_fields({**original_fields, **patch_fields}),
-                base_version=1,
-                confidence=0.8,
-                links=[],
-                metadata={"merge_memory_fields": patch_fields},
-            )
-        ]
-    )
-
-    fs = FakeVikingFS({})
-    result = await MemoryFilePolicyUpdater(viking_fs=fs).apply(
-        plan,
-        policy_set,
-        fake_request_context(),
-    )
-
-    assert result.errors == []
-    written = fs.files[uri]
-    assert "SearchReplaceBlock" not in written
-    assert "blocks=[" not in written
-    assert "- Applies when: 用户请求取消多个航班预约。" in written
-    assert "- 先取消可执行的预订，再处理剩余请求。" in written
 
 
 @pytest.mark.asyncio
@@ -625,10 +760,13 @@ async def test_patch_merge_policy_optimizer_runs_patch_merge_extract_loop(monkey
                                     "version": 1,
                                 },
                             ),
-                            memory_fields={
-                                "experience_name": "booking_duplicate_handling",
-                                **_experience_fields("merged content"),
-                            },
+                            memory_fields=_experience_fields(
+                                "booking_duplicate_handling",
+                                situation="merged content",
+                                reminder="merged content",
+                                procedure="merged content",
+                                anti_pattern="merged content",
+                            ),
                             memory_type="experiences",
                             uris=[policy_set.policies[0].uri],
                         )
@@ -653,75 +791,16 @@ async def test_patch_merge_policy_optimizer_runs_patch_merge_extract_loop(monkey
     assert plan.items[0].kind == "upsert"
     assert plan.items[0].target_uri == policy_set.policies[0].uri
     assert plan.items[0].before_content == "content"
-    assert plan.items[0].after_content == render_experience_fields(
-        _experience_fields("merged content")
-    )
+    assert "## Situation\nmerged content" in plan.items[0].after_content
     assert [link.to_uri for link in plan.items[0].links] == [
         "viking://user/u/memories/trajectories/traj1.md"
     ]
     assert captured["context_provider"].__class__.__name__ == "PatchMergeContextProvider"
     assert captured["context_provider"].get_tools() == []
     assert "Patch 1" in captured["prefetch_messages"][-1]["content"]
-    assert "  reminder:" in captured["prefetch_messages"][-1]["content"]
-    assert "-- stale content" in captured["prefetch_messages"][-1]["content"]
-    assert "+- merged content" in captured["prefetch_messages"][-1]["content"]
-
-
-@pytest.mark.asyncio
-async def test_patch_merge_plan_items_resolve_experience_fields():
-    from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
-    from openviking.session.memory.memory_type_registry import create_default_registry
-    from openviking.session.train.components.policy_optimizer import _operations_to_plan_items
-
-    policy_set = _experience_set()
-    policy = policy_set.policies[0]
-    original_fields = _experience_fields("old reminder")
-    old_file = MemoryFile(
-        uri=policy.uri,
-        content=render_experience_fields(original_fields),
-        memory_type="experiences",
-        extra_fields={
-            "memory_type": "experiences",
-            "experience_name": policy.name,
-            "version": policy.version,
-            **original_fields,
-        },
-    )
-    operations = ResolvedOperations(
-        upsert_operations=[
-            ResolvedOperation(
-                old_memory_file_content=old_file,
-                memory_fields={
-                    "experience_name": policy.name,
-                    "situation": StrPatch(
-                        blocks=[
-                            SearchReplaceBlock(
-                                search="the tested operation reaches its decision boundary",
-                                replace="the tested cancellation reaches its decision boundary",
-                            )
-                        ]
-                    ),
-                },
-                memory_type="experiences",
-                uris=[policy.uri],
-            )
-        ],
-        delete_file_contents=[],
-        errors=[],
-    )
-    schema = create_default_registry().get("experiences")
-    assert schema is not None
-
-    items = _operations_to_plan_items(
-        operations=operations,
-        gradients=[],
-        policy_set=policy_set,
-        memory_type="experiences",
-        schema=schema,
-    )
-    assert items[0].metadata["merge_memory_fields"]["situation"] == (
-        original_fields["situation"].replace("tested operation", "tested cancellation")
-    )
+    assert "  situation:" in captured["prefetch_messages"][-1]["content"]
+    assert "-stale content" in captured["prefetch_messages"][-1]["content"]
+    assert "+merged content" in captured["prefetch_messages"][-1]["content"]
 
 
 @pytest.mark.asyncio
@@ -784,10 +863,13 @@ async def test_patch_merge_policy_optimizer_merges_all_patch_gradients_once(monk
                     upsert_operations=[
                         ResolvedOperation(
                             old_memory_file_content=None,
-                            memory_fields={
-                                "experience_name": "重复预订处理",
-                                **_experience_fields("合并后的重复预订处理经验"),
-                            },
+                            memory_fields=_experience_fields(
+                                "重复预订处理",
+                                situation="合并后的重复预订处理经验",
+                                reminder="合并后的重复预订处理经验",
+                                procedure="合并后的重复预订处理经验",
+                                anti_pattern="合并后的重复预订处理经验",
+                            ),
                             memory_type="experiences",
                             uris=[f"{root}/重复预订处理.md"],
                         )
@@ -892,8 +974,10 @@ async def test_patch_merge_policy_optimizer_recovers_source_link_by_unique_trigg
                         ResolvedOperation(
                             old_memory_file_content=None,
                             memory_fields={
-                                "experience_name": "update_flights支付方式验证",
-                                **_experience_fields("改名后的航班支付经验"),
+                                **_experience_fields(
+                                    "update_flights支付方式验证",
+                                    situation="改名后的航班支付经验",
+                                ),
                                 "trigger_code": flight_trigger,
                             },
                             memory_type="experiences",
@@ -902,8 +986,10 @@ async def test_patch_merge_policy_optimizer_recovers_source_link_by_unique_trigg
                         ResolvedOperation(
                             old_memory_file_content=None,
                             memory_fields={
-                                "experience_name": "update_baggages支付方式验证",
-                                **_experience_fields("改名后的行李支付经验"),
+                                **_experience_fields(
+                                    "update_baggages支付方式验证",
+                                    situation="改名后的行李支付经验",
+                                ),
                                 "trigger_code": baggage_trigger,
                             },
                             memory_type="experiences",
@@ -984,19 +1070,19 @@ async def test_patch_merge_policy_optimizer_keeps_distinct_output_source_links_s
                     upsert_operations=[
                         ResolvedOperation(
                             old_memory_file_content=None,
-                            memory_fields={
-                                "experience_name": "取消资格核验",
-                                **_experience_fields("取消前核验资格"),
-                            },
+                            memory_fields=_experience_fields(
+                                "取消资格核验",
+                                situation="取消前核验资格",
+                            ),
                             memory_type="experiences",
                             uris=[f"{root}/取消资格核验.md"],
                         ),
                         ResolvedOperation(
                             old_memory_file_content=None,
-                            memory_fields={
-                                "experience_name": "退款总额传达",
-                                **_experience_fields("多笔退款后传达总额"),
-                            },
+                            memory_fields=_experience_fields(
+                                "退款总额传达",
+                                situation="多笔退款后传达总额",
+                            ),
                             memory_type="experiences",
                             uris=[f"{root}/退款总额传达.md"],
                         ),
@@ -1078,10 +1164,10 @@ async def test_patch_merge_policy_optimizer_single_canonical_output_inherits_all
                     upsert_operations=[
                         ResolvedOperation(
                             old_memory_file_content=None,
-                            memory_fields={
-                                "experience_name": "重复预订处理",
-                                **_experience_fields("合并后的重复预订处理经验"),
-                            },
+                            memory_fields=_experience_fields(
+                                "重复预订处理",
+                                situation="合并后的重复预订处理经验",
+                            ),
                             memory_type="experiences",
                             uris=[f"{root}/重复预订处理.md"],
                         )
@@ -1144,10 +1230,13 @@ async def test_patch_merge_policy_optimizer_runs_llm_for_single_patch(monkeypatc
                                     "version": 1,
                                 },
                             ),
-                            memory_fields={
-                                "experience_name": "booking_duplicate_handling",
-                                **_experience_fields("merged update"),
-                            },
+                            memory_fields=_experience_fields(
+                                "booking_duplicate_handling",
+                                situation="merged update",
+                                reminder="merged update",
+                                procedure="merged update",
+                                anti_pattern="merged update",
+                            ),
                             memory_type="experiences",
                             uris=[policy_set.policies[0].uri],
                         )
@@ -1170,13 +1259,11 @@ async def test_patch_merge_policy_optimizer_runs_llm_for_single_patch(monkeypatc
 
     assert captured["constructed"] is True
     assert plan.metadata["patch_gradient_count"] == 1
-    assert plan.items[0].after_content == render_experience_fields(
-        _experience_fields("merged update")
-    )
+    assert "## Situation\nmerged update" in plan.items[0].after_content
 
 
 @pytest.mark.asyncio
-async def test_patch_merge_instruction_requires_structured_experience_fields(monkeypatch):
+async def test_patch_merge_instruction_requires_skill_experience_sections(monkeypatch):
     from openviking.session.memory.dataclass import ResolvedOperations
 
     policy_set = _experience_set()
@@ -1206,10 +1293,8 @@ async def test_patch_merge_instruction_requires_structured_experience_fields(mon
         PatchMergePolicyOptimizerContext(request_context=fake_request_context()),
     )
 
-    assert (
-        "preserve the `experiences` schema's structured content fields" in captured["instruction"]
-    )
     assert "`situation`, `reminder`, `procedure`, `anti_pattern`" in captured["instruction"]
+    assert "storage template adds the\nMarkdown structure" in captured["instruction"]
     assert "canonical value/source-field" in captured["instruction"]
 
 
@@ -1230,23 +1315,6 @@ async def test_patch_merge_post_plan_retry_includes_latest_draft(monkeypatch):
     )
     captured = {}
 
-    class RejectingGate:
-        name = "test_rejecting_gate"
-        mode = "enforce"
-
-        def applies_to(self, target):
-            return True
-
-        async def evaluate(self, target):
-            return GateDecision(
-                gate_name=self.name,
-                action="reject",
-                reason="test rejection",
-                evidence={"target_name": target.target_name},
-                retriable=True,
-                repair_prompt="Populate the schema's structured content fields.",
-            )
-
     class FakeExtractLoop:
         def __init__(self, **kwargs):
             captured.update(kwargs)
@@ -1256,10 +1324,13 @@ async def test_patch_merge_post_plan_retry_includes_latest_draft(monkeypatch):
                 upsert_operations=[
                     ResolvedOperation(
                         old_memory_file_content=None,
-                        memory_fields={
-                            "experience_name": "bad_experience",
-                            "situation": "- Applies when: a test runs.",
-                        },
+                        memory_fields=_experience_fields(
+                            "bad_experience",
+                            situation="# bad_experience",
+                            reminder="",
+                            procedure="",
+                            anti_pattern="",
+                        ),
                         memory_type="experiences",
                         uris=[f"{root}/bad_experience.md"],
                     )
@@ -1285,13 +1356,292 @@ async def test_patch_merge_post_plan_retry_includes_latest_draft(monkeypatch):
         policy_set,
         PatchMergePolicyOptimizerContext(
             request_context=fake_request_context(),
-            gate_runner=GateRunner([RejectingGate()]),
+            gate_runner=GateRunner([ExperienceSkillReadabilityGate()]),
         ),
     )
 
     assert captured["decision"].retry is True
     assert captured["decision"].include_latest_draft is True
-    assert "Populate the schema's structured content fields" in captured["decision"].instruction
+    assert "corresponding `situation`, `reminder`, `procedure`" in captured["decision"].instruction
+
+
+@pytest.mark.asyncio
+async def test_patch_merge_post_plan_rechecks_retry_and_discards_invalid_final_draft(monkeypatch):
+    from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
+
+    policy_set = _experience_set()
+    root = policy_set.root_uri
+    gradient = _patch_gradient(
+        name="bad_experience",
+        uri=f"{root}/bad_experience.md",
+        before=None,
+        after="# bad_experience\n\n## 规则\n1. incomplete production reminder",
+    )
+    captured = {}
+
+    class FakeExtractLoop:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def run(self):
+            operations = ResolvedOperations(
+                upsert_operations=[
+                    ResolvedOperation(
+                        old_memory_file_content=None,
+                        memory_fields=_experience_fields(
+                            "bad_experience",
+                            situation="# bad_experience",
+                            reminder="",
+                            procedure="",
+                            anti_pattern="",
+                        ),
+                        memory_type="experiences",
+                        uris=[f"{root}/bad_experience.md"],
+                    )
+                ],
+                delete_file_contents=[],
+                errors=[],
+            )
+            captured["decision"] = await captured["post_validation_hook"](
+                operations,
+                3,
+                messages=[{"role": "user", "content": "retry"}],
+                latest_draft=operations,
+            )
+            return ResolvedOperations(upsert_operations=[], delete_file_contents=[], errors=[]), []
+
+    monkeypatch.setattr(
+        "openviking.session.train.components.policy_optimizer.ExtractLoop", FakeExtractLoop
+    )
+
+    context = PatchMergePolicyOptimizerContext(
+        request_context=fake_request_context(),
+        gate_runner=GateRunner([ExperienceSkillReadabilityGate()]),
+    )
+    await PatchMergePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
+        [gradient], policy_set, context
+    )
+
+    assert captured["decision"].discard is True
+    assert context.metadata["post_validation_retries"][-1]["final_outcome"] == (
+        "discarded_after_max_retries"
+    )
+
+
+@pytest.mark.asyncio
+async def test_patch_merge_post_plan_retains_valid_sibling_after_retry_exhaustion(monkeypatch):
+    from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
+
+    policy_set = _experience_set()
+    root = policy_set.root_uri
+    valid_content = (
+        "## Situation\n"
+        "- Applies when: a requested total must appear in the final answer.\n"
+        "- Does not apply when: no total was requested.\n"
+        "- Evidence binding: the user's request for the total.\n"
+        "- Decision boundary: before final communication.\n\n"
+        "## Reminder\n- Include the requested total.\n\n"
+        "## Procedure\n- Check the candidate answer and add the total when missing.\n\n"
+        "## Anti-pattern\n- Do not omit the requested total.\n"
+    )
+    gradients = [
+        _patch_gradient(
+            name="valid_experience",
+            uri=f"{root}/valid_experience.md",
+            before=None,
+            after=valid_content,
+        ),
+        _patch_gradient(
+            name="invalid_experience",
+            uri=f"{root}/invalid_experience.md",
+            before=None,
+            after="# invalid\n",
+        ),
+    ]
+    captured = {}
+
+    class FakeExtractLoop:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def run(self):
+            operations = ResolvedOperations(
+                upsert_operations=[
+                    ResolvedOperation(
+                        old_memory_file_content=None,
+                        memory_fields=_experience_fields("valid_experience"),
+                        memory_type="experiences",
+                        uris=[f"{root}/valid_experience.md"],
+                    ),
+                    ResolvedOperation(
+                        old_memory_file_content=None,
+                        memory_fields=_experience_fields(
+                            "invalid_experience",
+                            situation="# invalid",
+                            reminder="",
+                            procedure="",
+                            anti_pattern="",
+                        ),
+                        memory_type="experiences",
+                        uris=[f"{root}/invalid_experience.md"],
+                    ),
+                ],
+                delete_file_contents=[],
+                errors=[],
+            )
+            captured["decision"] = await captured["post_validation_hook"](
+                operations,
+                3,
+                messages=[{"role": "user", "content": "retry"}],
+                latest_draft=operations,
+            )
+            captured["retained_names"] = [
+                operation.memory_fields.get("experience_name")
+                for operation in operations.upsert_operations
+            ]
+            return operations, []
+
+    monkeypatch.setattr(
+        "openviking.session.train.components.policy_optimizer.ExtractLoop", FakeExtractLoop
+    )
+
+    context = PatchMergePolicyOptimizerContext(
+        request_context=fake_request_context(),
+        gate_runner=GateRunner([ExperienceSkillReadabilityGate()]),
+    )
+    plan = await PatchMergePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
+        gradients,
+        policy_set,
+        context,
+    )
+
+    assert captured["decision"] is None
+    assert captured["retained_names"] == ["valid_experience"]
+    assert [item.target_name for item in plan.items] == ["valid_experience"]
+    event = context.metadata["post_validation_retries"][-1]
+    assert event["final_outcome"] == "accepted_valid_subset_after_max_retries"
+    assert event["retained_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_patch_merge_post_plan_carries_valid_sibling_across_retry_drafts(monkeypatch):
+    from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
+
+    policy_set = _experience_set()
+    root = policy_set.root_uri
+    valid_content = (
+        "## Situation\n"
+        "- Applies when: a requested total must appear in the final answer.\n"
+        "- Does not apply when: no total was requested.\n"
+        "- Evidence binding: the user's request for the total.\n"
+        "- Decision boundary: before final communication.\n\n"
+        "## Reminder\n- Include the requested total.\n\n"
+        "## Procedure\n- Check the candidate answer and add the total when missing.\n\n"
+        "## Anti-pattern\n- Do not omit the requested total.\n"
+    )
+    gradients = [
+        _patch_gradient(
+            name="valid_experience",
+            uri=f"{root}/valid_experience.md",
+            before=None,
+            after=valid_content,
+        ),
+        _patch_gradient(
+            name="invalid_experience",
+            uri=f"{root}/invalid_experience.md",
+            before=None,
+            after="# invalid\n",
+        ),
+    ]
+    captured = {}
+
+    class FakeExtractLoop:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def run(self):
+            first = ResolvedOperations(
+                upsert_operations=[
+                    ResolvedOperation(
+                        old_memory_file_content=None,
+                        memory_fields=_experience_fields("valid_experience"),
+                        memory_type="experiences",
+                        uris=[f"{root}/valid_experience.md"],
+                    ),
+                    ResolvedOperation(
+                        old_memory_file_content=None,
+                        memory_fields=_experience_fields(
+                            "invalid_experience",
+                            situation="# invalid",
+                            reminder="",
+                            procedure="",
+                            anti_pattern="",
+                        ),
+                        memory_type="experiences",
+                        uris=[f"{root}/invalid_experience.md"],
+                    ),
+                ],
+                delete_file_contents=[],
+                errors=[],
+            )
+            first_decision = await captured["post_validation_hook"](
+                first,
+                0,
+                messages=[{"role": "user", "content": "initial"}],
+                latest_draft=first,
+            )
+            assert first_decision.retry is True
+
+            final = ResolvedOperations(
+                upsert_operations=[
+                    ResolvedOperation(
+                        old_memory_file_content=None,
+                        memory_fields=_experience_fields(
+                            "combined_invalid_experience",
+                            situation="# still invalid",
+                            reminder="",
+                            procedure="",
+                            anti_pattern="",
+                        ),
+                        memory_type="experiences",
+                        uris=[f"{root}/combined_invalid_experience.md"],
+                    )
+                ],
+                delete_file_contents=[],
+                errors=[],
+            )
+            captured["final_decision"] = await captured["post_validation_hook"](
+                final,
+                3,
+                messages=[{"role": "user", "content": "retry"}],
+                latest_draft=final,
+            )
+            captured["retained_names"] = [
+                operation.memory_fields.get("experience_name")
+                for operation in final.upsert_operations
+            ]
+            return final, []
+
+    monkeypatch.setattr(
+        "openviking.session.train.components.policy_optimizer.ExtractLoop", FakeExtractLoop
+    )
+
+    context = PatchMergePolicyOptimizerContext(
+        request_context=fake_request_context(),
+        gate_runner=GateRunner([ExperienceSkillReadabilityGate()]),
+    )
+    plan = await PatchMergePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
+        gradients,
+        policy_set,
+        context,
+    )
+
+    assert captured["final_decision"] is None
+    assert captured["retained_names"] == ["valid_experience"]
+    assert [item.target_name for item in plan.items] == ["valid_experience"]
+    event = context.metadata["post_validation_retries"][-1]
+    assert event["final_outcome"] == "accepted_valid_subset_after_max_retries"
+    assert event["retained_count"] == 1
 
 
 def test_experience_memory_schema_is_skill_readable_without_trigger_fields():
@@ -1302,12 +1652,10 @@ def test_experience_memory_schema_is_skill_readable_without_trigger_fields():
     assert schema is not None
     fields = {field.name: field for field in schema.fields}
     assert {"situation", "reminder", "procedure", "anti_pattern"} <= fields.keys()
-    assert "constraint" not in fields
     assert "trigger_code" not in fields
-    assert "Applies when" in fields["situation"].description
-    assert "root-cause lesson" in fields["reminder"].description
+    assert "## Situation" in fields["situation"].description
+    assert "skill loader" in fields["situation"].description
     assert schema.content_template is not None
-    assert "{{ situation }}" in schema.content_template
     assert "# Experience Trigger" not in schema.content_template
 
 
@@ -1317,21 +1665,21 @@ def test_experience_content_template_renders_skill_readable_markdown_only():
     from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
     schema = create_default_registry().get("experiences")
-    fields = {
-        "situation": (
+    fields = _experience_fields(
+        "refund_check",
+        situation=(
             "- Applies when: refund request.\n"
             "- Does not apply when: no refund.\n"
             "- Source binding: user request and retrieved ticket."
         ),
-        "reminder": "- Check refund eligibility.",
-        "procedure": (
+        reminder="- Check refund eligibility.",
+        procedure=(
             "- Before refunding: verify eligibility.\n"
             "- If ineligible: explain policy.\n"
             "- Else: proceed."
         ),
-        "anti_pattern": ("- Do not refund without eligibility.\n- Preserve eligible refunds."),
-    }
-    body = render_experience_fields(fields)
+        anti_pattern=("- Do not refund without eligibility.\n- Preserve eligible refunds."),
+    )
     rendered = MemoryFileUtils.write(
         MemoryFile(
             uri="viking://user/u/memories/experiences/refund.md",
@@ -1339,7 +1687,6 @@ def test_experience_content_template_renders_skill_readable_markdown_only():
             memory_type="experiences",
             extra_fields={
                 "memory_type": "experiences",
-                "experience_name": "refund_check",
                 **fields,
             },
         ),
@@ -1351,11 +1698,10 @@ def test_experience_content_template_renders_skill_readable_markdown_only():
     assert "## Situation" in rendered
     assert '"situation":' in rendered
     assert '"anti_pattern":' in rendered
-    assert '"constraint":' not in rendered
     assert '"content":' not in rendered
     parsed = MemoryFileUtils.read(rendered)
-    assert parsed.plain_content() == body
-    assert {name: parsed.extra_fields[name] for name in fields} == fields
+    assert parsed.extra_fields["situation"] == fields["situation"]
+    assert parsed.extra_fields["anti_pattern"] == fields["anti_pattern"]
 
 
 @pytest.mark.asyncio
@@ -1364,17 +1710,6 @@ async def test_memory_file_policy_updater_persists_skill_experience_from_merge_f
 
     policy_set = _experience_set()
     fs = FakeVikingFS({})
-    fields = {
-        "situation": (
-            "- Applies when: a duplicate booking is possible.\n"
-            "- Does not apply when: no matching booking exists.\n"
-            "- Source binding: request and retrieved bookings."
-        ),
-        "reminder": "- Avoid duplicate bookings.",
-        "procedure": "- Before booking: compare the candidate with retrieved bookings.",
-        "anti_pattern": "- Do not create a duplicate booking.",
-    }
-    body = render_experience_fields(fields)
     plan = PolicyUpdatePlan(
         items=[
             PolicyPlanItem(
@@ -1383,12 +1718,14 @@ async def test_memory_file_policy_updater_persists_skill_experience_from_merge_f
                 target_name="booking_duplicate_handling",
                 target_uri=policy_set.policies[0].uri,
                 before_content="content",
-                after_content=body,
+                after_content="new content",
                 base_version=1,
                 metadata={
                     "merge_memory_fields": {
-                        "experience_name": "booking_duplicate_handling",
-                        **fields,
+                        **_experience_fields(
+                            "booking_duplicate_handling",
+                            reminder="- New content.",
+                        ),
                     }
                 },
             )
@@ -1403,12 +1740,11 @@ async def test_memory_file_policy_updater_persists_skill_experience_from_merge_f
 
     assert result.errors == []
     written = fs.files[policy_set.policies[0].uri]
+    assert '"reminder": "- New content."' in written
     assert '"situation":' in written
-    assert '"anti_pattern":' in written
-    assert '"constraint":' not in written
     assert '"trigger_code":' not in written
     assert '"content":' not in written
-    assert body in written
+    assert "New content" in written
 
 
 @pytest.mark.asyncio

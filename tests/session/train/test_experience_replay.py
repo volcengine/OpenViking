@@ -173,6 +173,13 @@ async def test_replay_uses_historical_evidence_but_reruns_extraction_and_gate(
 
     async def fake_gate(**kwargs):
         nonlocal gate_calls
+        if kwargs.get("semantic_vlm") is None:
+            gradients = kwargs["gradients"]
+            return gradients, GateReport(
+                stage="post_gradient",
+                evaluated_count=len(gradients),
+                allowed_count=len(gradients),
+            )
         gate_calls += 1
         await kwargs["semantic_vlm"].get_completion(f"gate:{gate_calls}")
         gradients = kwargs["gradients"]

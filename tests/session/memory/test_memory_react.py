@@ -317,6 +317,12 @@ class TestExtractLoopPostValidationHook:
         def __init__(self, schemas):
             self._schemas = schemas
             self._extract_context = ExtractContext([], split_long_text_messages=False)
+            self._registry = MemoryTypeRegistry(load_schemas=False)
+            for schema in schemas:
+                self._registry.register(schema)
+
+        def _get_registry(self):
+            return self._registry
 
         def get_memory_schemas(self, ctx):
             return self._schemas
@@ -377,7 +383,12 @@ class TestExtractLoopPostValidationHook:
             assert operations.upsert_operations
             assert messages
             assert latest_draft.preferences
-            return decisions.pop(0)
+            decision = decisions.pop(0)
+            if decision is not None:
+                focused_draft = latest_draft.model_copy(deep=True)
+                focused_draft.preferences[0].content = "focused rejected draft"
+                decision.latest_draft_override = focused_draft
+            return decision
 
         vlm = self._SequenceVLM(
             [
@@ -401,6 +412,10 @@ class TestExtractLoopPostValidationHook:
         assert len(vlm.seen_calls) == 2
         retry_messages = vlm.seen_calls[1]["messages"]
         assert any(
+            message["role"] == "assistant" and "focused rejected draft" in message["content"]
+            for message in retry_messages
+        )
+        assert not any(
             message["role"] == "assistant" and "first draft" in message["content"]
             for message in retry_messages
         )

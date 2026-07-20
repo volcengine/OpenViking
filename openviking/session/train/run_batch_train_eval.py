@@ -115,6 +115,12 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--train-split",
+        choices=("train", "dev", "test"),
+        default="train",
+        help="Split used for training epochs (default: train).",
+    )
+    parser.add_argument(
         "--eval-index",
         default=None,
         help=(
@@ -174,6 +180,13 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Reuse cached epoch-0 train rollouts when available. Default is off; "
             "cache misses still execute rollouts and populate the cache."
+        ),
+    )
+    parser.add_argument(
+        "--continue-on-rollout-failure",
+        action="store_true",
+        help=(
+            "Treat failed remote rollouts as 0-score eval results instead of aborting the batch."
         ),
     )
     parser.add_argument(
@@ -260,6 +273,7 @@ async def main_async() -> int:
             direct_experience_content=direct_experience_content,
             direct_experience_name=args.direct_experience_name,
             direct_experience_uri=args.direct_experience_uri,
+            train_split=args.train_split,
             train_index=_parse_indices_arg(args.train_index),
             eval_index=_parse_indices_arg(args.eval_index),
             benchmark_service_url=args.benchmark_service_url,
@@ -271,6 +285,7 @@ async def main_async() -> int:
             trials=args.trials,
             train_trials=args.train_trials,
             reuse_train_rollout_cache=args.reuse_train_rollout_cache,
+            continue_on_rollout_failure=args.continue_on_rollout_failure,
             clean_result=args.clean_result,
             keep_recent_results=args.keep_recent_results,
             git_notes_commit=os.environ.get("OPENVIKING_TRAIN_GIT_NOTES_COMMIT"),

@@ -64,11 +64,6 @@ system_prompt: |
   evidence for both request-time and post-action scopes. Also fail when a
   monetary/value repair would keep using the wrong source field even though the
   retrieved record exposes a canonical total/paid/charged/payment amount field.
-  When source, comparison, or authoritative outcome evidence demonstrates that
-  the target behavior requires an action despite an unavailable attached benefit,
-  fail drafts that conflate action eligibility with benefit eligibility. Do not
-  infer that separation merely because the user accepted no benefit. Preserve a
-  benefit condition when the evidence shows it is a true action prerequisite.
 
   Return JSON only.
 user_prompt: |
@@ -94,7 +89,7 @@ user_prompt: |
   {
     "pass": false,
     "need_followup": true,
-    "root_cause_quality": "<surface_level|too_late_boundary|wrong_scope|missing_scope_freeze|missing_scope_separation|later_write_scope_substitution|implicit_later_write_exclusion|wrong_source_field|missing_source_binding|missing_causal_link|not_injectable|over_broad|unsafe_runtime_wording|unclear|action_benefit_eligibility_confusion>",
+    "root_cause_quality": "<surface_level|too_late_boundary|wrong_scope|missing_scope_freeze|missing_scope_separation|later_write_scope_substitution|implicit_later_write_exclusion|wrong_source_field|missing_source_binding|missing_causal_link|not_injectable|over_broad|unsafe_runtime_wording|unclear>",
     "reason": "<brief diagnosis of the deepest missing causal link>",
     "followup_message": "<one concise diagnostic follow-up asking the extractor to re-diagnose the missing prevention link>"
   }
@@ -113,9 +108,6 @@ user_prompt: |
   - the draft cannot explain why that changed behavior would make the next
     similar session succeed;
   - the repair is broad, case-literal, or could block correct behavior.
-  - authoritative outcome evidence requires an action despite an unavailable
-    benefit, but the draft still conflates action eligibility with benefit
-    eligibility or fails to identify the runtime discriminator;
 
   Do not ask for a particular lesson template. Ask for the causal diagnosis that
   would make the next extraction produce a truly preventive experience.

@@ -81,22 +81,15 @@ def test_agent_experience_instruction_owns_closed_world_comparison_workflow():
     instruction = provider.instruction()
 
     assert "exact same case" in instruction
-    assert "runtime-observable discriminator" in instruction
-    assert "successful trajectory is reference evidence" in instruction
-    assert "cancellation_allowed" in instruction
-    assert "Update" in instruction
-    assert "Create" in instruction
-    assert "Skip" in instruction
+    assert "first material divergence" in instruction
+    assert "update it" in instruction
+    assert "create it" in instruction
+    assert "output no changes" in instruction
     assert "Do not output `trigger_code`" in instruction
     assert "`situation`, `reminder`, `procedure`, `anti_pattern`" in instruction
     assert "storage template defines the Markdown structure and order" in instruction
-    assert "Authoritative outcome evidence" in instruction
-    assert "smallest conflicting policy interpretation" in instruction
-    assert "preserve non-conflicting constraints and object boundaries" in instruction
-    assert "Tau2 evaluator authority" not in instruction
-    assert "The experience itself must not" in instruction
-    assert "mention the evaluator" in instruction
-    assert "evaluation metadata, hidden checks" in instruction
+    assert "Authoritative outcome evidence" not in instruction
+    assert "cancellation_allowed" not in instruction
     for removed_section in (
         "Timeline",
         "Outcome Checks",
@@ -104,7 +97,6 @@ def test_agent_experience_instruction_owns_closed_world_comparison_workflow():
         "Value/Scope Trace/Evidence",
         "Source Field Trace/Evidence",
         "Raw Evidence",
-        "injected experience effects",
     ):
         assert removed_section not in instruction
 
@@ -137,18 +129,17 @@ def test_agent_experience_instruction_lists_custom_template_content_fields():
     assert "`reminder`" not in instruction
 
 
-def test_experience_schema_action_benefit_rule_requires_authoritative_evidence():
+def test_experience_schema_uses_target_comparison_guidance_without_authoritative_gate():
     schema_path = Path(__file__).parents[3] / "openviking/prompts/templates/memory/experiences.yaml"
     schema = yaml.safe_load(schema_path.read_text(encoding="utf-8"))
+    situation = next(field for field in schema["fields"] if field["name"] == "situation")
     anti_pattern = next(field for field in schema["fields"] if field["name"] == "anti_pattern")
+    situation_description = " ".join(situation["description"].split())
     description = " ".join(anti_pattern["description"].split())
 
-    assert "authoritative outcome evidence" in description
-    assert "is not sufficient by itself" in description
-    assert "preserve that gate instead of weakening it" in description
-    assert "refund ineligibility as cancellation ineligibility" not in description
-    assert "When both successful and non-successful trajectories" not in description
-    assert "Value/Scope Trace/Evidence" not in description
+    assert "When both successful and non-successful trajectories" in situation_description
+    assert "authoritative outcome evidence" not in description
+    assert "preserve that gate instead of weakening it" not in description
 
 
 @pytest.mark.asyncio

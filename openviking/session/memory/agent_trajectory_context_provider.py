@@ -9,6 +9,7 @@ co-extract reusable executable skills in the same ReAct pass.
 
 from __future__ import annotations
 
+import json
 import re
 from html import unescape
 from typing import Any, Dict, List
@@ -61,11 +62,15 @@ class AgentTrajectoryContextProvider(SessionExtractContextProvider):
         *args,
         include_trajectories: bool = True,
         include_session_skills: bool = False,
+        evidence_sources: Dict[str, Any] | None = None,
+        advisory_signals: Dict[str, Any] | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self._include_trajectories = include_trajectories
         self._include_session_skills = include_session_skills
+        self._evidence_sources = dict(evidence_sources or {})
+        self._advisory_signals = dict(advisory_signals or {})
         self._skill_provider = SessionSkillContextProvider(*args, **kwargs)
         self._injected_experience_reminders = extract_injected_experience_reminders(self.messages)
         self._sync_skill_provider_state()
@@ -90,7 +95,9 @@ class AgentTrajectoryContextProvider(SessionExtractContextProvider):
     def instruction(self) -> str:
         return (
             "You are an extraction agent. Analyze the archived conversation, use read when "
-            "needed, and output only JSON that matches the schema descriptions."
+            "needed, and output only JSON that matches the schema descriptions. Runtime messages "
+            "and evidence sources marked direct are factual evidence. Advisory signals must never "
+            "be rewritten as observed causes without supporting direct evidence."
         )
 
     def get_memory_schemas(self, ctx: RequestContext) -> List[Any]:
@@ -123,9 +130,15 @@ class AgentTrajectoryContextProvider(SessionExtractContextProvider):
     def _build_conversation_message(self) -> Dict[str, Any]:
         message = super()._build_conversation_message()
         injected_context = render_injected_experience_context(self._injected_experience_reminders)
-        if injected_context:
+        evidence_context = render_extraction_evidence_context(
+            evidence_sources=self._evidence_sources,
+            advisory_signals=self._advisory_signals,
+        )
+        prefixes = [item for item in (evidence_context, injected_context) if item]
+        if prefixes:
             message = dict(message)
-            message["content"] = f"{injected_context}\n\n{message.get('content', '')}"
+            prefix_text = "\n\n".join(prefixes)
+            message["content"] = f"{prefix_text}\n\n{message.get('content', '')}"
         return message
 
     async def execute_tool(self, tool_call) -> Any:
@@ -187,9 +200,9 @@ def render_injected_experience_context(reminders: List[Dict[str, str]]) -> str:
         return ""
     lines = [
         "## Deterministic Injected Experience Reminders",
-        "The following experience reminders were actually loaded in this rollout.",
-        "Use these IDs and names only under `Injected Experience Evidence` to record loaded "
-        "reminders and observable rollout behavior. Do not grade reminder quality.",
+        "The following experience reminders were extracted deterministically from the rollout.",
+        "Use only these IDs in the trajectory `experience_effects` field's "
+        "`positive_ids`, `negative_ids`, and `weak_ids` arrays.",
     ]
     for item in reminders:
         lines.append(
@@ -198,10 +211,48 @@ def render_injected_experience_context(reminders: List[Dict[str, str]]) -> str:
             f"uri={item.get('experience_uri') or '<unknown>'}; "
             f"triggered_before={item.get('triggered_before_tool') or 'unknown'}"
         )
-    lines.append(
-        "Do not invent additional experience IDs or infer effects not visible in the rollout."
+    lines.extend(
+        [
+            'If this list is present, output only these IDs (for example `"E1"`) in the '
+            "`experience_effects` ID lists; do not invent additional experience IDs.",
+        ]
     )
     return "\n".join(lines)
+
+
+def render_extraction_evidence_context(
+    *,
+    evidence_sources: Dict[str, Any],
+    advisory_signals: Dict[str, Any],
+) -> str:
+    return "\n".join(
+        [
+            "## Evidence Source Contract",
+            "- Conversation messages and tool results are runtime evidence.",
+            "- Entries in Evidence Sources with `direct=true` are direct external evidence.",
+            "- A `rollout_evaluation` direct source is authoritative for outcome and requirement compliance, including which expected results were missing or incorrect.",
+            "- Outcome feedback does not independently prove an unobserved internal cause. Use the runtime trajectory to locate the earliest causal decision or action; keep the cause unknown when the trajectory does not show it.",
+            "- Advisory Signals are suggestions for locating evidence, not proof.",
+            "- Never turn an advisory signal into an observed decision or root cause. If runtime and direct external evidence do not support a claim, record unknown/unverified.",
+            "- In `Evidence References`, identify the runtime boundary or direct external source used for every material failure claim.",
+            "",
+            "## Evidence Sources",
+            json.dumps(
+                evidence_sources or {"direct_available": False, "items": []},
+                default=str,
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            "",
+            "## Advisory Signals",
+            json.dumps(
+                advisory_signals or {"available": False, "items": []},
+                default=str,
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+        ]
+    )
 
 
 def _iter_message_text(messages: Any) -> List[str]:

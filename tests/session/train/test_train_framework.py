@@ -822,7 +822,9 @@ async def test_streaming_policy_trainer_flushes_on_gradient_count():
     assert second.metadata["flush_reason"] == "count"
     assert second.metadata["gradient_count"] == 1
     assert second.metadata["batch_gradient_count"] == 2
-    assert second.apply_result.updated_policy_set.policies[0].version == 2
+    # Each source trajectory is optimized in its own chunk, so two accepted
+    # updates advance the shared policy set twice.
+    assert second.apply_result.updated_policy_set.policies[0].version == 3
     assert await trainer.get_buffered_gradient_count() == 0
     assert trainer.last_apply_result is second.batch_result.apply_result
 
@@ -1489,6 +1491,42 @@ async def test_session_commit_policy_trainer_recovers_commit_read_error_from_tas
     assert commit_result["task_status"] == "completed"
     assert commit_result["error"] is None
     assert client.committed_sessions == [(commit_result["session_id"], 2, True)]
+
+
+@pytest.mark.asyncio
+async def test_session_commit_policy_trainer_uses_context_epoch_for_unique_session_ids():
+    from openviking.session.train import SessionCommitPolicyTrainer
+
+    client = FakeSessionCommitClient()
+    trainer = SessionCommitPolicyTrainer(
+        client=client,
+        run_id="run1",
+        poll_interval_seconds=0.01,
+    )
+    rollout = Rollout(
+        case=_case(),
+        messages=[Message(id="m1", role="user", parts=[TextPart(text="hello")])],
+        policy_snapshot_id="snapshot-1",
+        evaluation=RubricEvaluation(passed=False, score=0.0, criterion_results=[], feedback=[]),
+        metadata={},
+    )
+
+    epoch_zero = await trainer.train_rollouts(
+        [rollout],
+        _policy_set(),
+        PipelineContext(execution_metadata={"epoch": 0, "train_split": "test"}),
+    )
+    epoch_one = await trainer.train_rollouts(
+        [rollout],
+        _policy_set(),
+        PipelineContext(execution_metadata={"epoch": 1, "train_split": "test"}),
+    )
+
+    epoch_zero_id = epoch_zero.apply_result.metadata["commit_results"][0]["session_id"]
+    epoch_one_id = epoch_one.apply_result.metadata["commit_results"][0]["session_id"]
+    assert epoch_zero_id == f"tau2_train_run1_test_e0_t0_{_case().name}"
+    assert epoch_one_id == f"tau2_train_run1_test_e1_t0_{_case().name}"
+    assert epoch_zero_id != epoch_one_id
 
 
 @pytest.mark.asyncio
@@ -2358,7 +2396,7 @@ async def test_session_commit_policy_trainer_filters_legacy_embedded_evaluation_
 
 
 @pytest.mark.asyncio
-async def test_session_commit_policy_trainer_sends_canonical_evaluation_payload_only():
+async def test_session_commit_policy_trainer_adds_tau2_evaluation_semantics():
     from openviking.message import ToolPart
     from openviking.session.train import SessionCommitPolicyTrainer
 
@@ -2429,9 +2467,12 @@ async def test_session_commit_policy_trainer_sends_canonical_evaluation_payload_
     committed_messages = client.messages[commit_result["session_id"]]
     last_text = committed_messages[-1]["parts"][0]["text"]
     assert "# OpenViking OutcomeEvaluation" in last_text
-    assert "## Tau2 Evaluation Semantics" not in last_text
-    assert "## Derived Evaluation Verdict" not in last_text
+    assert "## Tau2 Evaluation Semantics" in last_text
+    assert "action_checks[].action_match=true" in last_text
+    assert "Treat it as correct and required" in last_text
+    assert "## Derived Evaluation Verdict" in last_text
+    assert "Required actions matched (preservation set; do not block these):" in last_text
     assert "update_reservation_flights" in last_text
-    assert '"action_match": true' in last_text
-    assert '"tool_type": "write"' in last_text
-    assert '"met": false' in last_text
+    assert "action_match=true | tool_type=write" in last_text
+    assert "first repair boundary should be communicate_with_user / final response" in last_text
+    assert "Do not learn any experience that blocks or discourages" in last_text

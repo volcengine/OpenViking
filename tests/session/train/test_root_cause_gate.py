@@ -61,10 +61,6 @@ async def test_root_cause_gate_returns_generic_retry_decision():
     assert decision.include_latest_draft is True
     assert "source-bound ideal experience" in decision.instruction
     assert len(vlm.seen_calls) == 1
-    system_prompt = " ".join(vlm.seen_calls[0]["messages"][0]["content"].split())
-    assert "authoritative outcome evidence" in system_prompt
-    assert "Do not infer that separation merely because" in system_prompt
-    assert "true action prerequisite" in system_prompt
     assert "Latest complete draft JSON" in vlm.seen_calls[0]["messages"][1]["content"]
 
 
