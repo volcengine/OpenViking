@@ -32,6 +32,16 @@ _FEISHU_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(feishu://image/([^)]+)\)")
 _FEISHU_DOCUMENT_FORBIDDEN = 1770032
 
 
+def _title_as_filename(title: str) -> str:
+    """Keep a Feishu display title intact while making it one filename segment.
+
+    Feishu titles may contain path separators.  ``original_filename`` is passed
+    through filename-oriented helpers downstream, so leaving separators in that
+    field makes ``Path(...).name`` silently discard the title prefix.
+    """
+    return title.replace("/", "_").replace("\\", "_")
+
+
 def _getattr_safe(obj, key: str, default=None):
     """Get attribute from SDK object or dict, with safe fallback."""
     if isinstance(obj, dict):
@@ -247,7 +257,7 @@ class FeishuAccessor(DataAccessor):
                 "feishu_doc_type": doc.doc_type,
                 "feishu_token": doc.token,
                 "feishu_title": doc.title,
-                "original_filename": doc.title,
+                "original_filename": _title_as_filename(doc.title),
                 **doc.meta,
             }
 
@@ -299,12 +309,19 @@ class FeishuAccessor(DataAccessor):
         return ``None`` so callers continue with a full synchronization.
         """
         source_str = str(source)
-        if not self.can_handle(source_str):
-            return None
-
         try:
+            if not self.can_handle(source_str):
+                return None
             doc_type, token = self._parse_feishu_url(source_str)
             if doc_type not in {"docx", "wiki"}:
+                return None
+            if doc_type == "wiki":
+                doc_type, token, _ = await asyncio.to_thread(
+                    self._resolve_wiki_node,
+                    token,
+                    feishu_access_token,
+                )
+            if doc_type != "docx":
                 return None
             return await asyncio.to_thread(
                 self._fetch_latest_modify_time_sync,

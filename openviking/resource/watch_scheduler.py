@@ -7,6 +7,8 @@ Provides scheduled task execution for watch tasks.
 """
 
 import asyncio
+import hashlib
+import json
 from datetime import datetime
 from typing import Any, Dict, Optional, Set
 
@@ -16,6 +18,7 @@ from openviking.resource.feishu_watch_auth import (
     apply_feishu_refreshed_token,
     feishu_auth_state_needs_refresh,
     is_feishu_auth_state,
+    load_feishu_app_credentials,
 )
 from openviking.resource.watch_manager import WatchManager
 from openviking.server.error_mapping import is_not_found_error
@@ -26,7 +29,8 @@ from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
-_FEISHU_LATEST_MODIFY_TIME_KEY = "feishu_latest_modify_time"
+_FEISHU_SYNC_FINGERPRINT_KEY = "feishu_sync_fingerprint_v1"
+_FEISHU_ACCESS_TOKEN_KEY = "feishu_access_token"
 
 
 class WatchScheduler:
@@ -228,7 +232,8 @@ class WatchScheduler:
         cancelled = False
         should_deactivate = False
         deactivation_reason = ""
-        feishu_latest_modify_time: Optional[int] = None
+        feishu_source_version: Optional[int] = None
+        feishu_sync_fingerprint: Optional[str] = None
         skip_resource_sync = False
         resource_sync_succeeded = False
 
@@ -288,17 +293,28 @@ class WatchScheduler:
                                 raise
 
                     if not should_deactivate:
-                        feishu_latest_modify_time = await self._fetch_feishu_latest_modify_time(
+                        feishu_source_version = await self._fetch_feishu_latest_modify_time(
                             task.path,
-                            processor_kwargs.get("feishu_access_token"),
+                            processor_kwargs.get(_FEISHU_ACCESS_TOKEN_KEY),
                         )
-                        previous_modify_time = (getattr(task, "sync_state", {}) or {}).get(
-                            _FEISHU_LATEST_MODIFY_TIME_KEY
+                        if feishu_source_version is not None:
+                            destination_state = await self._fetch_destination_sync_state(
+                                task.to_uri,
+                                ctx,
+                            )
+                            feishu_sync_fingerprint = self._build_feishu_sync_fingerprint(
+                                task,
+                                processor_kwargs=processor_kwargs,
+                                source_version=feishu_source_version,
+                                destination_state=destination_state,
+                            )
+                        previous_fingerprint = (getattr(task, "sync_state", {}) or {}).get(
+                            _FEISHU_SYNC_FINGERPRINT_KEY
                         )
-                        skip_resource_sync = (
-                            feishu_latest_modify_time is not None
-                            and previous_modify_time is not None
-                            and feishu_latest_modify_time == previous_modify_time
+                        skip_resource_sync = bool(
+                            feishu_sync_fingerprint
+                            and previous_fingerprint
+                            and feishu_sync_fingerprint == previous_fingerprint
                         )
                         if skip_resource_sync:
                             logger.info(
@@ -319,9 +335,12 @@ class WatchScheduler:
                         build_index=getattr(task, "build_index", True),
                         summarize=getattr(task, "summarize", False),
                         watch_interval=task.watch_interval,
+                        wait=feishu_source_version is not None,
                         skip_watch_management=True,
                         **processor_kwargs,
                     )
+                    if not isinstance(result, dict) or result.get("status") == "error":
+                        raise RuntimeError("Resource synchronization did not complete successfully")
                     resource_sync_succeeded = True
 
                     logger.info(
@@ -362,14 +381,21 @@ class WatchScheduler:
                         )
                     else:
                         sync_state_updates = None
-                        if (
-                            resource_sync_succeeded
-                            and not skip_resource_sync
-                            and feishu_latest_modify_time is not None
-                        ):
-                            sync_state_updates = {
-                                _FEISHU_LATEST_MODIFY_TIME_KEY: feishu_latest_modify_time
-                            }
+                        if resource_sync_succeeded and not skip_resource_sync:
+                            destination_state = await self._fetch_destination_sync_state(
+                                task.to_uri,
+                                ctx,
+                            )
+                            feishu_sync_fingerprint = self._build_feishu_sync_fingerprint(
+                                task,
+                                processor_kwargs=processor_kwargs,
+                                source_version=feishu_source_version,
+                                destination_state=destination_state,
+                            )
+                            if feishu_sync_fingerprint is not None:
+                                sync_state_updates = {
+                                    _FEISHU_SYNC_FINGERPRINT_KEY: feishu_sync_fingerprint
+                                }
                         if sync_state_updates is None:
                             update_execution_time = self._watch_manager.update_execution_time(
                                 task.task_id
@@ -432,13 +458,129 @@ class WatchScheduler:
         path: str,
         feishu_access_token: Optional[str] = None,
     ) -> Optional[int]:
-        accessor = self._get_feishu_accessor()
-        if not accessor.can_handle(path):
+        try:
+            accessor = self._get_feishu_accessor()
+            if not accessor.can_handle(path):
+                return None
+            return await accessor.fetch_latest_modify_time(
+                path,
+                feishu_access_token=feishu_access_token,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[WatchScheduler] Feishu source precheck failed for %s: %s; "
+                "falling back to full synchronization",
+                path,
+                exc,
+            )
             return None
-        return await accessor.fetch_latest_modify_time(
-            path,
-            feishu_access_token=feishu_access_token,
-        )
+
+    async def _fetch_destination_sync_state(
+        self,
+        uri: Optional[str],
+        ctx: RequestContext,
+    ) -> Optional[Dict[str, Any]]:
+        if not uri:
+            return {"uri": None}
+        if self._viking_fs is None:
+            return None
+        try:
+            stat = await self._viking_fs.stat(uri, ctx=ctx, skip_count=True)
+            if not isinstance(stat, dict):
+                return None
+            return {
+                "uri": uri,
+                "is_dir": bool(stat.get("isDir", False)),
+                "name": stat.get("name"),
+                "size": stat.get("size"),
+                "mod_time": stat.get("modTime"),
+            }
+        except Exception as exc:
+            logger.warning(
+                "[WatchScheduler] Destination state precheck failed for %s: %s; "
+                "falling back to full synchronization",
+                uri,
+                exc,
+            )
+            return None
+
+    def _build_feishu_sync_fingerprint(
+        self,
+        task,
+        *,
+        processor_kwargs: Dict[str, Any],
+        source_version: Optional[int],
+        destination_state: Optional[Dict[str, Any]],
+    ) -> Optional[str]:
+        if source_version is None or destination_state is None:
+            return None
+
+        try:
+            stable_kwargs = dict(processor_kwargs)
+            explicit_access_token = stable_kwargs.pop(_FEISHU_ACCESS_TOKEN_KEY, None)
+            auth_state = getattr(task, "auth_state", None)
+            if is_feishu_auth_state(auth_state):
+                auth_context = {
+                    "mode": "user",
+                    "provider": auth_state.get("provider"),
+                    "refresh_token_digest": self._secret_digest(auth_state.get("refresh_token")),
+                }
+            elif explicit_access_token:
+                auth_context = {
+                    "mode": "user",
+                    "access_token_digest": self._secret_digest(explicit_access_token),
+                }
+            else:
+                credentials = load_feishu_app_credentials()
+                auth_context = {
+                    "mode": "app",
+                    "app_id": credentials.app_id,
+                    "domain": credentials.domain,
+                    "app_secret_digest": self._secret_digest(credentials.app_secret),
+                }
+
+            payload = {
+                "schema": "feishu_watch_sync_fingerprint_v1",
+                "source": {
+                    "path": task.path,
+                    "latest_modify_time": source_version,
+                },
+                "destination": destination_state,
+                "inputs": {
+                    "to_uri": task.to_uri,
+                    "parent_uri": task.parent_uri,
+                    "reason": task.reason,
+                    "instruction": task.instruction,
+                    "build_index": getattr(task, "build_index", True),
+                    "summarize": getattr(task, "summarize", False),
+                    "processor_kwargs": stable_kwargs,
+                    "account_id": task.account_id,
+                    "user_id": task.user_id,
+                    "original_role": getattr(task, "original_role", None),
+                    "auth": auth_context,
+                },
+            }
+            encoded = json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        except Exception as exc:
+            logger.warning(
+                "[WatchScheduler] Failed to build Feishu sync fingerprint for %s: %s; "
+                "falling back to full synchronization",
+                task.path,
+                exc,
+            )
+            return None
+        return hashlib.sha256(encoded).hexdigest()
+
+    @staticmethod
+    def _secret_digest(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        return hashlib.sha256(str(value).encode("utf-8")).hexdigest()
 
     def _check_resource_exists(self, path: str) -> bool:
         """Check if a resource path exists.
