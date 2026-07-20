@@ -142,6 +142,7 @@ class BaseClient(ABC):
         uri: str,
         mode: str = "vectors_only",
         wait: bool = True,
+        dry_run: bool = False,
     ) -> Dict[str, Any]:
         """Reindex semantic/vector artifacts for a URI."""
         ...
@@ -158,6 +159,8 @@ class BaseClient(ABC):
         abs_limit: int = 256,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
     ) -> List[Any]:
         """List directory contents."""
         ...
@@ -253,7 +256,7 @@ class BaseClient(ABC):
     @abstractmethod
     async def find(
         self,
-        query: str,
+        query: str = "",
         target_uri: Union[str, List[str]] = "",
         limit: int = 10,
         score_threshold: Optional[float] = None,
@@ -261,6 +264,7 @@ class BaseClient(ABC):
         context_type: Optional[SearchContextTypeInput] = None,
         tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
+        image: Optional[Any] = None,
     ) -> Any:
         """Semantic search without session context."""
         ...
@@ -268,7 +272,7 @@ class BaseClient(ABC):
     @abstractmethod
     async def search(
         self,
-        query: str,
+        query: str = "",
         target_uri: Union[str, List[str]] = "",
         session_id: Optional[str] = None,
         limit: int = 10,
@@ -277,6 +281,7 @@ class BaseClient(ABC):
         context_type: Optional[SearchContextTypeInput] = None,
         tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
+        image: Optional[Any] = None,
     ) -> Any:
         """Semantic search with optional session context."""
         ...
@@ -584,6 +589,7 @@ class BaseClient(ABC):
         *,
         branch: str = "main",
         limit: int = 20,
+        paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Walk back along parents[0] up to limit commits."""
 

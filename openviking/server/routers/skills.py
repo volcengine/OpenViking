@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Agent-scope skill management endpoints for OpenViking HTTP Server."""
 
+import asyncio
 import re
 import shutil
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional
 
 import yaml
 from fastapi import APIRouter, Depends, Request
@@ -157,18 +158,6 @@ async def _entry_looks_like_skill(
         return False
     return True
 
-
-def _merge_skills(skills_list: list[list[Dict[str, Any]]]) -> list[Dict[str, Any]]:
-    """Merge skills from multiple sources, user skills take precedence."""
-    seen_names = set()
-    result = []
-    for skills in skills_list:
-        for skill in skills:
-            name = skill.get("name")
-            if name not in seen_names:
-                seen_names.add(name)
-                result.append(skill)
-    return result
 
 
 def _validate_skill_name(skill_name: str) -> str:
@@ -485,47 +474,6 @@ async def _list_skill_files(
     return entries
 
 
-def _parse_skill_data(
-    service,
-    data: Any,
-    *,
-    allow_local_path_resolution: bool,
-    source_path_hint: Optional[str] = None,
-) -> Dict[str, Any]:
-    skill_processor = getattr(service.resources, "_skill_processor", None)
-    if skill_processor is None:
-        raise RuntimeError("SkillProcessor is required for skill validation")
-    skill_dict, _, _, _ = skill_processor._parse_skill(  # noqa: SLF001 - keep parser authority centralized.
-        data,
-        allow_local_path_resolution=allow_local_path_resolution,
-        source_path_hint=source_path_hint,
-    )
-    return skill_dict
-
-
-def _validate_data_matches_name(
-    service,
-    data: Any,
-    skill_name: str,
-    *,
-    allow_local_path_resolution: bool,
-    source_path_hint: Optional[str] = None,
-) -> Dict[str, Any]:
-    parsed = _parse_skill_data(
-        service,
-        data,
-        allow_local_path_resolution=allow_local_path_resolution,
-        source_path_hint=source_path_hint,
-    )
-    expected_name = _validate_skill_name(skill_name)
-    if parsed.get("name") != expected_name:
-        raise InvalidArgumentError(
-            f"Skill name mismatch: path name is '{expected_name}', content name is '{parsed.get('name')}'",
-            details={"expected": expected_name, "actual": parsed.get("name")},
-        )
-    return parsed
-
-
 async def _restore_skill_privacy(
     service,
     ctx: RequestContext,
@@ -615,34 +563,37 @@ async def find_skills(
         user_root = f"{canonical_user_root(_ctx)}/skills"
         agent_root = "viking://agent/skills"
 
-        user_execution = await run_operation(
-            operation="skills.find",
-            telemetry=request.telemetry,
-            fn=lambda: service.search.find(
-                query=request.query,
-                ctx=_ctx,
-                target_uri=user_root,
-                limit=request.limit,
-                score_threshold=request.score_threshold,
-                level=request.level,
+        user_execution, agent_execution = await asyncio.gather(
+            run_operation(
+                operation="skills.find",
+                telemetry=request.telemetry,
+                fn=lambda: service.search.find(
+                    query=request.query,
+                    ctx=_ctx,
+                    target_uri=user_root,
+                    limit=request.limit,
+                    score_threshold=request.score_threshold,
+                    level=request.level,
+                ),
+            ),
+            run_operation(
+                operation="skills.find",
+                telemetry=request.telemetry,
+                fn=lambda: service.search.find(
+                    query=request.query,
+                    ctx=_ctx,
+                    target_uri=agent_root,
+                    limit=request.limit,
+                    score_threshold=request.score_threshold,
+                    level=request.level,
+                ),
             ),
         )
+
         user_result = user_execution.result
         user_result_dict = user_result.to_dict() if hasattr(user_result, "to_dict") else dict(user_result or {})
         user_hits = [_skill_summary_from_hit(hit) for hit in user_result_dict.get("skills", [])]
 
-        agent_execution = await run_operation(
-            operation="skills.find",
-            telemetry=request.telemetry,
-            fn=lambda: service.search.find(
-                query=request.query,
-                ctx=_ctx,
-                target_uri=agent_root,
-                limit=request.limit,
-                score_threshold=request.score_threshold,
-                level=request.level,
-            ),
-        )
         agent_result = agent_execution.result
         agent_result_dict = agent_result.to_dict() if hasattr(agent_result, "to_dict") else dict(agent_result or {})
         agent_hits = [_skill_summary_from_hit(hit) for hit in agent_result_dict.get("skills", [])]

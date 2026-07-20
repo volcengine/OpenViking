@@ -9,7 +9,7 @@ Source: [examples/openclaw-plugin](https://github.com/volcengine/OpenViking/tree
 | Component | Required Version |
 | --- | --- |
 | Node.js | >= 22 |
-| OpenClaw | >= 2026.4.8 |
+| OpenClaw | >= 2026.5.27 |
 
 The plugin connects to a running OpenViking server — see the [Deployment Guide](../guides/03-deployment.md) if you need one.
 

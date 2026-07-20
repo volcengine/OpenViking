@@ -327,6 +327,8 @@ jobs:
         required_filter_symbols = (
             "_index_engine_set_filter_layout",
             "_index_engine_evaluate_filter",
+            "_index_engine_evaluate_filter_cached",
+            "_index_engine_search_with_filter_token",
         )
         missing_filter_symbols = [
             symbol for symbol in required_filter_symbols if not hasattr(backend, symbol)
@@ -337,7 +339,11 @@ jobs:
                 f"{', '.join(missing_filter_symbols)}"
             )
 
-        required_filter_methods = ("set_filter_layout", "evaluate_filter")
+        required_filter_methods = (
+            "set_filter_layout",
+            "evaluate_filter",
+            "search_with_filter_token",
+        )
         missing_filter_methods = [
             method for method in required_filter_methods if not hasattr(engine.IndexEngine, method)
         ]

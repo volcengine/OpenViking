@@ -15,6 +15,10 @@ eggs/
 lib/
 # Shared memory-plugin JS source — not a Python build artifact.
 !examples/memory-plugin-shared/lib/
+!examples/opencode-plugin/lib/
+!examples/opencode-plugin/lib/**
+!examples/pi-coding-agent-extension/lib/
+!examples/pi-coding-agent-extension/lib/**
 lib64/
 parts/
 sdist/
@@ -219,3 +223,6 @@ tests/integration/.tmp_*/
 
 # LoopX local control-plane state
 .loopx/
+
+# all node_modules folders
+node_modules/

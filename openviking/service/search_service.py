@@ -8,9 +8,16 @@ Provides semantic search operations: search, find.
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_optional_viking_uris
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import VikingFS
+from openviking.utils.image_search import (
+    image_bytes_to_data_uri,
+    is_data_image_uri,
+    is_http_url,
+    is_viking_uri,
+)
 from openviking_cli.exceptions import InvalidArgumentError, NotInitializedError
 from openviking_cli.utils import get_logger
 
@@ -20,9 +27,9 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-def _ensure_non_empty_query(query: str) -> None:
-    if not query.strip():
-        raise InvalidArgumentError("Search query must not be empty.")
+def _ensure_non_empty_query(query: str, image_url: Optional[str] = None) -> None:
+    if not query.strip() and not image_url:
+        raise InvalidArgumentError("Search query or image_url must not be empty.")
 
 
 class SearchService:
@@ -41,6 +48,24 @@ class SearchService:
             raise NotInitializedError("VikingFS")
         return self._viking_fs
 
+    async def _resolve_image_url(
+        self,
+        image_url: Optional[str],
+        ctx: RequestContext,
+    ) -> Optional[str]:
+        if not image_url:
+            return None
+        image_url = resolve_path_variables(image_url)
+        if is_viking_uri(image_url):
+            viking_fs = self._ensure_initialized()
+            content = await viking_fs.read_file_bytes(image_url, ctx=ctx)
+            return image_bytes_to_data_uri(content, image_url)
+        if is_data_image_uri(image_url) or is_http_url(image_url):
+            return image_url
+        raise InvalidArgumentError(
+            "image_url must be a data:image base64 URI, http(s) URL, or viking:// URI."
+        )
+
     async def search(
         self,
         query: str,
@@ -51,6 +76,7 @@ class SearchService:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         level: Optional[List[int]] = None,
+        image_url: Optional[str] = None,
     ) -> Any:
         """Complex search with session context.
 
@@ -66,12 +92,13 @@ class SearchService:
         Returns:
             FindResult
         """
-        _ensure_non_empty_query(query)
+        resolved_image_url = await self._resolve_image_url(image_url, ctx)
+        _ensure_non_empty_query(query, resolved_image_url)
         target_uri = validate_optional_viking_uris(target_uri, field_name="target_uri")
         viking_fs = self._ensure_initialized()
 
         session_info = None
-        if session:
+        if session and not resolved_image_url:
             session_info = await session.get_context_for_search(query)
 
         result = await viking_fs.search(
@@ -83,6 +110,7 @@ class SearchService:
             score_threshold=score_threshold,
             filter=filter,
             level=level,
+            image_url=resolved_image_url,
         )
         return result
 
@@ -95,6 +123,7 @@ class SearchService:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         level: Optional[List[int]] = None,
+        image_url: Optional[str] = None,
     ) -> Any:
         """Semantic search without session context.
 
@@ -109,7 +138,8 @@ class SearchService:
         Returns:
             FindResult
         """
-        _ensure_non_empty_query(query)
+        resolved_image_url = await self._resolve_image_url(image_url, ctx)
+        _ensure_non_empty_query(query, resolved_image_url)
         target_uri = validate_optional_viking_uris(target_uri, field_name="target_uri")
         viking_fs = self._ensure_initialized()
         result = await viking_fs.find(
@@ -120,5 +150,6 @@ class SearchService:
             score_threshold=score_threshold,
             filter=filter,
             level=level,
+            image_url=resolved_image_url,
         )
         return result

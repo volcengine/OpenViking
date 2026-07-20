@@ -15,6 +15,7 @@ export type OpenVikingMemoryRecallToolContext = {
   sessionId?: string;
   agentId?: string;
   senderId?: string;
+  requesterSenderId?: string;
 };
 
 export type OpenVikingMemoryRecallSession = {
@@ -22,6 +23,7 @@ export type OpenVikingMemoryRecallSession = {
   sessionKey?: string;
   ovSessionId?: string;
   agentId: string;
+  actorPeerId?: string;
 };
 
 export type OpenVikingMemoryRecallClient = {
@@ -163,7 +165,7 @@ export function registerOpenVikingMemoryRecallTools(
         const recallClient = await deps.getClient();
         if (deps.cfg.logFindRequests) {
           deps.logger.info?.(
-            `openviking: memory_recall X-OpenViking-Actor-Peer="${session.agentId}" ` +
+            `openviking: memory_recall X-OpenViking-Actor-Peer="${session.actorPeerId ?? "none"}" ` +
               `(plugin defaultAgentId="${recallClient.getDefaultAgentId()}" is unused when session context is present)`,
           );
         }
@@ -177,7 +179,7 @@ export function registerOpenVikingMemoryRecallTools(
             targetUri,
             limit: requestLimit,
             scoreThreshold: 0,
-            actorPeerId: session.agentId,
+            actorPeerId: session.actorPeerId,
           },
         );
           const traceResults = [
@@ -207,7 +209,7 @@ export function registerOpenVikingMemoryRecallTools(
                 limit: requestLimit,
                 scoreThreshold: 0,
                 contextType: search.contextType,
-                actorPeerId: session.agentId,
+                actorPeerId: session.actorPeerId,
               },
             ),
           ));
@@ -319,7 +321,7 @@ export function registerOpenVikingMemoryRecallTools(
         }
         const { lines: memoryLines } = await deps.buildMemoryLinesWithBudget(
           memories,
-          (uri) => recallClient.read(uri, session.agentId),
+          (uri) => recallClient.read(uri, session.actorPeerId),
           {
             recallPreferAbstract: false,
             recallMaxInjectedChars: queryConfig.maxInjectedChars,

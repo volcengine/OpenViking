@@ -97,12 +97,6 @@ def set_task_tracker(tracker: "TaskTracker") -> None:
         _instance = tracker
 
 
-def reset_task_tracker() -> None:
-    """Reset singleton (for testing)."""
-    global _instance
-    _instance = None
-
-
 # ── Sanitization ──
 
 _SENSITIVE_PATTERNS = re.compile(
@@ -246,17 +240,30 @@ class TaskTracker:
         *,
         account_id: str,
         user_id: str,
+        task_id: Optional[str] = None,
     ) -> TaskRecord:
         """Register a new pending task. Returns a snapshot copy."""
         self._validate_owner(account_id, user_id)
         task = TaskRecord(
-            task_id=str(uuid4()),
+            task_id=task_id or str(uuid4()),
             task_type=task_type,
             resource_id=resource_id,
             account_id=account_id,
             user_id=user_id,
         )
         async with self._async_lock:
+            if task_id:
+                with self._lock:
+                    existing = self._tasks.get(task_id)
+                if existing is not None:
+                    if not self._matches_owner(existing, account_id, user_id):
+                        raise ValueError(f"Task ID already belongs to another owner: {task_id}")
+                    return self._copy(existing)
+                existing = await self._load_from_store(task_id, account_id, user_id)
+                if existing is not None:
+                    with self._lock:
+                        self._tasks[task_id] = existing
+                    return self._copy(existing)
             await self._store.create(task)
             with self._lock:
                 self._tasks[task.task_id] = task

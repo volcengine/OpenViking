@@ -1,87 +1,25 @@
-## 一、Cursor 接入 OpenViking 操作步骤
+## 安装 Cursor 集成
 
-将 OpenViking 接入 Cursor 的流程，请在 Cursor 中按以下步骤操作：
+需要 macOS/Linux 和 Node.js 18+。以下命令会一次完成 Hook、MCP、Rule 和 Skill 安装：
 
-### 步骤 1：打开 Cursor 设置
-
-在 Cursor 主界面右上角点击 **设置（齿轮图标）**，进入设置面板
-
-![打开 Cursor 设置](https://docs.openviking.net/agents/image/cursor/02-open-settings.png)
-
-
-### 步骤 2：新增 MCP Server
-
-在左侧菜单中选择 **Tools \&amp; MCPs**，进入 MCP Servers 管理页。
-
-![进入 Tools and MCPs 页面](https://docs.openviking.net/agents/image/cursor/03-tools-and-mcps.png)
-
-
-点击 **Add Custom MCP** 按钮。
-
-![添加自定义 MCP Server](https://docs.openviking.net/agents/image/cursor/04-add-custom-mcp.png)
-
-
-### 步骤 3：粘贴配置 JSON
-
-在弹出的 **mcp\.json** 文件中粘贴以下 JSON，其中 `Authorization` 等字段已经自动填入 API Key 值：
-
-```json
-{
-  "mcpServers": {
-    "ov-mcp-server": {
-      "url": "https://api.vikingdb.cn-beijing.volces.com/openviking/mcp",
-      "headers": {
-        "Authorization": "Bearer ZGVmYXV********YzdlZjhiMg"
-      }
-    }
-  }
-}
-```
-
-### 步骤 4：确认并启用
-
-保存 mcp\.json 配置文件并关闭后，Cursor 会自动建立 MCP 连接并加载工具列表。连接成功后，**`ov\-mcp\-server`** 会出现在 **Installed MCP Servers** 列表中，同时会显示已启用的工具数量（图中的 “10 tools enabled”）。配置完成后，可直接看到 `ov\-mcp\-server` 条目旁的开关呈绿色开启状态，代表服务已正常加载并就绪：
-
-![确认并启用 MCP Server](https://docs.openviking.net/agents/image/cursor/06-enable-server.png)
-
-### 步骤 5：MCP 连通性检查
-
-接入后建议通过两个简单 query 快速验证 MCP 是否正常工作。在 Cursor 对话框中依次输入：
-
-**① ** **`ov ls`** — 列出 OpenViking 根目录内容，确认连接畅通、可正确返回目录结构：
 ```bash
-ov ls
+bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness cursor --dist tos
 ```
 
-![运行 ov ls 验证连接](https://docs.openviking.net/agents/image/cursor/07-ov-ls.png)
+安装器询问连接方式时，请选择 **火山引擎 OpenViking 云服务** 并填写 API Key。只有本机已运行 OpenViking 服务时才选择 **自建 / 本地**。
 
-**② ****`ov health`** — 调用 health 工具，确认 OpenViking 服务端状态与当前用户身份：
-```bash
-ov health
-```
+## 验证
 
-![运行 ov health 验证服务状态](https://docs.openviking.net/agents/image/cursor/08-ov-health.png)
+1. 重启 Cursor 并新建 Agent 会话。
+2. 在 **Cursor Settings → Hooks** 中确认生命周期 Hook 执行了 `cursor-hook.mjs`、URI 保护 Hook 执行了 `uri-guard.mjs`，且 prompt Hook 返回 `additional_context`。
+3. 在 **Cursor Settings → Tools & MCPs** 中确认 `openviking` 已连接。
 
+完整说明见 [Cursor 接入文档](https://github.com/volcengine/OpenViking/blob/main/docs/zh/agent-integrations/12-cursor.md)。
 
-### 步骤 6：验收标准
+## 故障排查
 
-`ov ls` 能返回 `agent / resources / session / user` 等目录；`ov health` 返回 `service initialized` 与当前用户名，即表示接入成功。
-
-
-
-## 二、配置参数说明
-
-|字段|必填|说明|
-|---|---|---|
-|`mcpServers`|是|MCP Server 配置根节点|
-|`ov\-mcp\-server`|是|服务别名，可自定义；建议保持与上下文识别一致|
-|`url`|是|OpenViking MCP 服务端点；CN 区固定为 `https://api\.vikingdb\.cn\-beijing\.volces\.com/openviking/mcp`|
-|`headers\.Authorization`|是|格式 `Bearer \&lt;API Key\&gt;`，来源见第一章|
-
-## 三、常见问题（FAQ）
-
-|问题|解决建议|
+| 问题 | 处理 |
 |---|---|
-|连接失败 / 401 Unauthorized|检查 `Authorization` 是否带 `Bearer` 前缀；确认 API Key 未过期或被重置|
-|连接失败 / 网络超时<br>|确认网络可访问 `api\.vikingdb\.cn\-beijing\.volces\.com`；企业网络请配置代理白名单|
-|Agent 无法识别工具|检查 MCP Server 是否已\&\#34;启用\&\#34;；部分客户端需重启进程后加载新配置|
+| 安装后没有触发 Hook | 完全退出并重新启动 Cursor，然后新建 Agent 会话。 |
+| 出现重复召回 | 检查 Execution Log 是否导入了旧 Claude OpenViking Hook，并按安装器提示升级或移除旧插件。 |
+| 连接或鉴权失败 | 检查 `~/.openviking/ovcli.conf`，然后重启 Cursor。 |

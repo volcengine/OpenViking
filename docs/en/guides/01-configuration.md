@@ -253,7 +253,7 @@ When the embedding provider experiences consecutive transient failures (e.g. `42
 | `doubao-embedding-vision-251215` | 1024 | multimodal | Recommended |
 | `doubao-embedding-250615` | 1024 | text | Text only |
 
-With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), and mixed content.
+With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), and mixed content. Image-to-image search requires this mode; text-only embedding models continue to index image summaries but cannot accept image queries.
 
 **Supported providers:**
 - `openai`: OpenAI Embedding API
@@ -521,6 +521,21 @@ Supported task types: `RETRIEVAL_QUERY`, `RETRIEVAL_DOCUMENT`, `SEMANTIC_SIMILAR
   }
 }
 ```
+
+Sparse output is a provider capability, not an endpoint inferred from
+`storage.vectordb.sparse_weight`. OpenViking currently implements `sparse` and
+`hybrid` embedding providers for `volcengine` and `vikingdb`. The
+OpenAI-compatible, Ollama, and built-in `local` providers are dense-only; a
+self-hosted `/v1/embeddings` endpoint is therefore not treated as a sparse
+endpoint, and OpenViking does not probe a separate
+`/v1/embeddings/sparse` route.
+
+There is no automatic BM25 or other sparse-vector fallback when the configured
+embedder returns only dense vectors. To use hybrid retrieval, configure a
+supported sparse/hybrid provider and set `storage.vectordb.sparse_weight > 0`.
+Model memory requirements are provider/model-specific and are not controlled by
+OpenViking; size self-hosted models against their provider documentation before
+enabling them in production.
 
 #### Hybrid Embedding
 
@@ -835,6 +850,7 @@ Reranking model for search result refinement. Supports VikingDB (Volcengine), Co
     "api_base": "https://dashscope.aliyuncs.com/compatible-api/v1/reranks",
     "model": "qwen3-vl-rerank",
     "timeout": 120,
+    "max_input_tokens": 2048,
     "threshold": 0.1
   }
 }
@@ -852,6 +868,7 @@ Reranking model for search result refinement. Supports VikingDB (Volcengine), Co
 | `api_base` | str | Endpoint URL (for `openai` provider) |
 | `model` | str | Model name (for `openai` providers) |
 | `timeout` | float | HTTP request timeout in seconds for OpenAI-compatible providers. Increase for slow or cold-starting local rerank servers. Default: `30.0` |
+| `max_input_tokens` | int | Maximum estimated raw-text tokens in each query-document pair sent to the reranker. Oversized inputs retain their beginning and end. `0` disables truncation. Default: `0` |
 | `threshold` | float | Score threshold between `0.0` and `1.0`; results below this are filtered out. Default: `0.1` |
 | `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
 
@@ -900,7 +917,7 @@ Grep engine configuration for content pattern search. These settings are server-
 | `engine` | str | Search engine mode: `"auto"` uses VikingDB BM25 recall when available and falls back to local filesystem search; `"fs"` forces local filesystem search only. | `"auto"` |
 | `switch_to_remote_threshold` | int | L2 record count threshold to switch to VikingDB BM25 recall. When the number of L2 files under the search scope reaches this threshold, VikingDB BM25 is used for phase-1 recall; otherwise local filesystem search is used. Set to `0` to always use VikingDB BM25. Must be ≥ 0. | `10000` |
 
-For VikingDB / Volcengine FullText grep, OpenViking writes a `content` text field for BM25 recall. The source context keeps the full content, while the vector-store write payload truncates this field to **1 MB** at the final adapter boundary to stay within backend payload limits.
+For VikingDB / Volcengine FullText grep, OpenViking writes a `content` text field for BM25 recall. The source context keeps the full content, while the vector-store write payload truncates this field to **1 MB** at the final adapter boundary to stay within backend payload limits. Only VikingDB-backed backends use `content`; on all other backends (`local`, `cuvs`, `qdrant`, `opengauss`, `http`) the field is not written.
 
 ### storage
 
@@ -1299,6 +1316,26 @@ OpenViking uses two config files:
 
 When config files are at the default path, OpenViking loads them automatically — no additional setup needed.
 
+> **Root-key two-file rule:** `server.root_api_key` in `ov.conf` is the
+> credential accepted by the server. `root_api_key` in `ovcli.conf` is the
+> client-side copy used by `ov --sudo`. If that CLI manages this server, keep
+> the two values identical and rotate both files together. The normal
+> tenant-scoped `api_key` remains a separate user/admin credential.
+
+### Reload boundary
+
+The server reads `ov.conf` during process startup and does not watch the file
+for changes. Editing `embedding`, `vlm`, `rerank`, `retrieval`, `storage`, or
+`server` settings requires restarting the OpenViking server. Queue work that is
+already running is not migrated to the new configuration, so use the normal
+service-manager restart procedure and verify with `openviking-server doctor`
+after the process comes back.
+
+`ovcli.conf` is client-side configuration. A new `ov` command or newly created
+HTTP client reads the current file; an already-running client or plugin may keep
+the values it loaded at construction time and should be restarted when its
+connection or credential settings change.
+
 If config files are at a different location, there are two ways to specify:
 
 ```bash
@@ -1605,6 +1642,7 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "api_key": "string",
     "model": "string",
     "api_base": "string",
+    "max_input_tokens": 0,
     "threshold": 0.1,
     "extra_headers": {}
   },

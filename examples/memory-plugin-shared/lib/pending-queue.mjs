@@ -181,10 +181,12 @@ async function recoverStaleProcessing(dir) {
  * @param {string} type - "addMessage" or "commitSession"
  * @param {string} sessionId - OV session ID
  * @param {object} payload - the data that failed to send
+ * @param {object} options
+ * @param {number} options.createdAt - optional queue timestamp override
  */
-export async function enqueue(type, sessionId, payload) {
+export async function enqueue(type, sessionId, payload, options = {}) {
   const dir = getPendingDir();
-  const now = Date.now();
+  const now = Number.isFinite(options.createdAt) ? options.createdAt : Date.now();
   const dedupKey = makeDedupKey(type, sessionId, payload);
   const filename = pendingFilename(dedupKey, 0);
   const entry = {
@@ -396,7 +398,7 @@ export async function replayPending(fetchJSON, log) {
       } else if (entry.type === "commitSession") {
         res = await fetchJSON(`/api/v1/sessions/${encodedSid}/commit`, {
           method: "POST",
-          body: JSON.stringify({}),
+          body: JSON.stringify(entry.payload || {}),
         });
       } else {
         await dequeue(claimedFilename);

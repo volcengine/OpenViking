@@ -10,15 +10,15 @@ test("viking uri guard blocks filesystem tools on virtual URIs", async () => {
 
   await assert.rejects(
     () => guard({ tool: "read" }, { args: { filePath: "viking://resources/project/file.md" } }),
-    /Use memread instead/,
+    /Use openviking_read instead/,
   )
   await assert.rejects(
     () => guard({ tool: "glob" }, { args: { path: "viking://resources/project/" } }),
-    /Use membrowse instead/,
+    /Use openviking_glob instead/,
   )
   await assert.rejects(
     () => guard({ tool: "grep" }, { args: { path: "viking://resources/project/", pattern: "SessionManager" } }),
-    /Use memsearch instead/,
+    /Use openviking_search instead/,
   )
 
   await assert.doesNotReject(() => guard({ tool: "read" }, { args: { filePath: "/tmp/file.md" } }))

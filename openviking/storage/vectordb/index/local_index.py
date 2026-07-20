@@ -1,19 +1,22 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 import json
+import logging
 import math
 import os
 import shutil
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 import openviking.storage.vectordb.engine as engine
 from openviking.storage.vectordb.index.cuvs_index import (
     CuVSDenseIndex,
     CuVSMemoryBudgetError,
     CuVSNativeRouteError,
+    CuVSSearchTelemetry,
     CuVSUnavailableError,
     UnsupportedCuVSFilterError,
 )
@@ -27,6 +30,9 @@ from openviking.storage.vectordb.utils.path_safety import (
 )
 from openviking.storage.vectordb.utils.validation import validate_name_str
 from openviking_cli.utils.logger import default_logger as logger
+
+_DENSE_REBUILD_MEMORY_RETRY_BASE_SECONDS = 1.0
+_DENSE_REBUILD_MEMORY_RETRY_MAX_SECONDS = 30.0
 
 
 def normalize_vector(vector: List[float]) -> List[float]:
@@ -50,6 +56,51 @@ def normalize_vector(vector: List[float]) -> List[float]:
 
     # Normalize
     return [x / norm for x in vector]
+
+
+class _ReadWriteLock:
+    """Writer-preferring lock for atomic mutation and concurrent warmed reads."""
+
+    def __init__(self):
+        self._condition = threading.Condition(threading.Lock())
+        self._readers = 0
+        self._writer = False
+        self._waiting_writers = 0
+
+    @contextmanager
+    def read(self) -> Iterator[None]:
+        with self._condition:
+            while self._writer or self._waiting_writers:
+                self._condition.wait()
+            self._readers += 1
+        try:
+            yield
+        finally:
+            with self._condition:
+                self._readers -= 1
+                if self._readers == 0:
+                    self._condition.notify_all()
+
+    @contextmanager
+    def write(self) -> Iterator[None]:
+        with self._condition:
+            self._waiting_writers += 1
+            try:
+                while self._writer or self._readers:
+                    self._condition.wait()
+                self._writer = True
+            finally:
+                self._waiting_writers -= 1
+        try:
+            yield
+        finally:
+            with self._condition:
+                self._writer = False
+                self._condition.notify_all()
+
+
+class _CuVSBackgroundRebuildPending(Exception):
+    """Internal signal used to route a dirty background index to native search."""
 
 
 class IndexEngineProxy:
@@ -111,6 +162,24 @@ class IndexEngineProxy:
         labels = search_result.labels
         scores = search_result.scores
         return labels, scores
+
+    def search_with_filter_token(
+        self,
+        query_vector: List[float],
+        limit: int,
+        filter_token: int,
+    ) -> Optional[Tuple[List[int], List[float]]]:
+        """Reuse a native scalar bitmap when the engine still owns its token."""
+
+        if not self.index_engine or filter_token <= 0:
+            return None
+        req = engine.SearchRequest()
+        req.query = normalize_vector(query_vector) if self.normalize_vector_flag else query_vector
+        req.topk = limit
+        search_result = self.index_engine.search_with_filter_token(req, filter_token)
+        if search_result is None:
+            return None
+        return search_result.labels, search_result.scores
 
     def add_data(self, cands_list: List[CandidateData]):
         if not self.index_engine:
@@ -195,13 +264,20 @@ class IndexEngineProxy:
         if result != 0:
             raise RuntimeError("Failed to register native scalar filter layout")
 
-    def evaluate_filter(self, filters: Dict[str, Any]) -> Tuple[List[int], int]:
+    def evaluate_filter(
+        self,
+        filters: Dict[str, Any],
+        max_cached_candidates: int = 0,
+    ) -> Tuple[List[int], int, int]:
         """Evaluate a native scalar filter in the registered dense-index row order."""
 
         if not self.index_engine:
             raise RuntimeError("Index engine not initialized")
-        result = self.index_engine.evaluate_filter(json.dumps(filters))
-        return result.bitset_words, result.eligible_count
+        result = self.index_engine.evaluate_filter(
+            json.dumps(filters),
+            max_cached_candidates=max_cached_candidates,
+        )
+        return result.bitset_words, result.eligible_count, result.native_filter_token
 
     def drop(self):
         """Release the index engine resources.
@@ -235,12 +311,17 @@ class LocalIndex(IIndex):
         meta: Any,
         dense_search_config: Optional[Dict[str, Any]] = None,
         initial_candidates: Optional[List[CandidateData]] = None,
+        defer_dense_rebuild_start: bool = False,
     ):
         """Initialize a local index instance.
 
         Args:
             index_path_or_json (str): Path to index files or JSON configuration
             meta: Index metadata object containing configuration
+            dense_search_config: Optional dense-search backend configuration.
+            initial_candidates: Records used to initialize the dense-search shadow state.
+            defer_dense_rebuild_start: Delay the background rebuild worker until the
+                caller has finished initializing the native index.
         """
         # Get the vector normalization flag from meta
         normalize_vector_flag = meta.inner_meta.get("VectorIndex", {}).get("NormalizeVector", False)
@@ -250,8 +331,23 @@ class LocalIndex(IIndex):
         self.meta = meta
         self.field_type_converter = DataProcessor(self.meta.collection_meta.fields_dict)
         self.dense_search: Optional[CuVSDenseIndex] = None
-        self._dense_search_lock = threading.RLock()
+        self._dense_search_lock = _ReadWriteLock()
         self._auto_cuvs = False
+        self._auto_background_rebuild = False
+        self._dense_rebuild_debounce_seconds = 0.0
+        self._dense_rebuild_event = threading.Event()
+        self._dense_rebuild_completed = threading.Event()
+        self._dense_rebuild_stop = threading.Event()
+        self._dense_rebuild_state_lock = threading.Lock()
+        self._dense_rebuild_generation = 0
+        self._dense_rebuild_debounce_deadline = 0.0
+        self._dense_rebuild_suspend_count = 0
+        self._dense_rebuild_deferred = False
+        self._dense_rebuild_failure: Optional[Tuple[type[Exception], str]] = None
+        self._dense_rebuild_memory_blocked = False
+        self._dense_rebuild_memory_retry_attempts = 0
+        self._dense_rebuild_memory_retry_not_before = 0.0
+        self._dense_rebuild_thread: Optional[threading.Thread] = None
         dense_search_config = dict(dense_search_config or {})
         dense_search_backend = dense_search_config.get("backend")
         if dense_search_backend in {"cuvs", "auto_cuvs"}:
@@ -271,11 +367,19 @@ class LocalIndex(IIndex):
                     auto_memory=self._auto_cuvs,
                 )
                 self.dense_search.add_candidates(initial_candidates or [])
+                self._auto_background_rebuild = self._auto_cuvs and bool(
+                    dense_search_config.get("auto_background_rebuild", False)
+                )
+                self._dense_rebuild_debounce_seconds = (
+                    max(0, int(dense_search_config.get("auto_rebuild_debounce_ms", 500))) / 1000.0
+                )
             except CuVSUnavailableError:
                 if not self._auto_cuvs:
                     raise
                 logger.info("cuVS auto mode unavailable; keeping native dense search")
                 self.dense_search = None
+        if not defer_dense_rebuild_start:
+            self._start_dense_rebuild_worker()
 
     def update(
         self,
@@ -296,21 +400,327 @@ class LocalIndex(IIndex):
 
     def upsert_data(self, delta_list: List[DeltaRecord]):
         if self.dense_search:
-            with self._dense_search_lock:
+            with self._dense_search_lock.write():
                 if self.engine_proxy:
                     self.engine_proxy.upsert_data(self._convert_delta_list_for_index(delta_list))
                 self.dense_search.upsert(delta_list)
+                self._schedule_dense_rebuild()
         elif self.engine_proxy:
             self.engine_proxy.upsert_data(self._convert_delta_list_for_index(delta_list))
 
     def delete_data(self, delta_list: List[DeltaRecord]):
         if self.dense_search:
-            with self._dense_search_lock:
+            with self._dense_search_lock.write():
                 if self.engine_proxy:
                     self.engine_proxy.delete_data(self._convert_delta_list_for_index(delta_list))
                 self.dense_search.delete(delta_list)
+                self._schedule_dense_rebuild()
         elif self.engine_proxy:
             self.engine_proxy.delete_data(self._convert_delta_list_for_index(delta_list))
+
+    def _schedule_dense_rebuild(self) -> None:
+        if not self._auto_background_rebuild or self.dense_search is None:
+            return
+        with self._dense_rebuild_state_lock:
+            self._dense_rebuild_generation += 1
+            self._dense_rebuild_failure = None
+            self._dense_rebuild_memory_blocked = False
+            self._dense_rebuild_memory_retry_attempts = 0
+            self._dense_rebuild_memory_retry_not_before = 0.0
+            self._dense_rebuild_completed.clear()
+            if self._dense_rebuild_suspend_count > 0:
+                self._dense_rebuild_deferred = True
+                return
+            self._dense_rebuild_debounce_deadline = (
+                time.monotonic() + self._dense_rebuild_debounce_seconds
+            )
+        self._dense_rebuild_event.set()
+
+    def begin_bulk_ingest(self) -> None:
+        """Defer background GPU rebuilds while native and shadow writes continue."""
+
+        if not self._auto_background_rebuild or self.dense_search is None:
+            return
+        with self._dense_rebuild_state_lock:
+            self._dense_rebuild_suspend_count += 1
+            if self.dense_search.needs_rebuild:
+                self._dense_rebuild_deferred = True
+                self._dense_rebuild_completed.clear()
+        # Wake a worker that may already be inside its debounce wait so it can
+        # observe the suspension before starting a build.
+        self._dense_rebuild_event.set()
+
+    def end_bulk_ingest(self) -> None:
+        """Schedule one trailing rebuild when the outermost bulk scope exits."""
+
+        if not self._auto_background_rebuild or self.dense_search is None:
+            return
+        should_wake = False
+        with self._dense_rebuild_state_lock:
+            if self._dense_rebuild_suspend_count <= 0:
+                raise RuntimeError("bulk ingest scope is not active")
+            self._dense_rebuild_suspend_count -= 1
+            if self._dense_rebuild_suspend_count == 0:
+                should_wake = self._dense_rebuild_deferred or self.dense_search.needs_rebuild
+                self._dense_rebuild_deferred = False
+                if should_wake:
+                    self._dense_rebuild_debounce_deadline = (
+                        time.monotonic() + self._dense_rebuild_debounce_seconds
+                    )
+                    self._dense_rebuild_failure = None
+                    self._dense_rebuild_memory_blocked = False
+                    self._dense_rebuild_memory_retry_attempts = 0
+                    self._dense_rebuild_memory_retry_not_before = 0.0
+                    self._dense_rebuild_completed.clear()
+        if should_wake:
+            self._dense_rebuild_event.set()
+
+    def _start_dense_rebuild_worker(self) -> None:
+        """Start the worker once native and dense initial state are aligned."""
+
+        if (
+            not self._auto_background_rebuild
+            or self.dense_search is None
+            or self._dense_rebuild_thread is not None
+            or self._dense_rebuild_stop.is_set()
+        ):
+            return
+        self._dense_rebuild_thread = threading.Thread(
+            target=self._dense_rebuild_loop,
+            name="openviking-cuvs-rebuild",
+            daemon=True,
+        )
+        self._dense_rebuild_thread.start()
+        self._schedule_dense_rebuild()
+
+    def _wake_dense_rebuild_worker(self) -> bool:
+        """Wake the worker without extending the mutation debounce window."""
+
+        if not self._auto_background_rebuild or self.dense_search is None:
+            return False
+        with self._dense_rebuild_state_lock:
+            if self._dense_rebuild_memory_blocked:
+                return False
+            self._dense_rebuild_completed.clear()
+            if self._dense_rebuild_suspend_count > 0:
+                self._dense_rebuild_deferred = True
+                return False
+        self._dense_rebuild_event.set()
+        return True
+
+    def _rearm_dense_rebuild_after_stale_candidate(self) -> None:
+        """Retry a stale build only after a fresh trailing-edge debounce."""
+
+        if not self._auto_background_rebuild or self.dense_search is None:
+            return
+        with self._dense_rebuild_state_lock:
+            self._dense_rebuild_completed.clear()
+            if self._dense_rebuild_suspend_count > 0:
+                self._dense_rebuild_deferred = True
+                return
+            self._dense_rebuild_debounce_deadline = max(
+                self._dense_rebuild_debounce_deadline,
+                time.monotonic() + self._dense_rebuild_debounce_seconds,
+            )
+        self._dense_rebuild_event.set()
+
+    def _retry_memory_blocked_rebuild(self) -> bool:
+        """Let a later query retry memory admission after bounded backoff."""
+
+        if not self._auto_background_rebuild or self.dense_search is None:
+            return False
+        with self._dense_rebuild_state_lock:
+            if not self._dense_rebuild_memory_blocked:
+                return False
+            if time.monotonic() < self._dense_rebuild_memory_retry_not_before:
+                return False
+            self._dense_rebuild_memory_blocked = False
+            self._dense_rebuild_completed.clear()
+            if self._dense_rebuild_suspend_count > 0:
+                self._dense_rebuild_deferred = True
+                return True
+        self._dense_rebuild_event.set()
+        return True
+
+    def _raise_dense_rebuild_failure(self) -> None:
+        with self._dense_rebuild_state_lock:
+            failure = self._dense_rebuild_failure
+        if failure is not None:
+            error_type, message = failure
+            try:
+                error = error_type(message)
+            except Exception:
+                error = RuntimeError(f"{error_type.__name__}: {message}")
+            raise error
+
+    def _dense_rebuild_loop(self) -> None:
+        while True:
+            self._dense_rebuild_event.wait()
+            self._dense_rebuild_event.clear()
+            if self._dense_rebuild_stop.is_set():
+                return
+
+            suspended = False
+            rebuild_generation = 0
+            while True:
+                with self._dense_rebuild_state_lock:
+                    suspended = self._dense_rebuild_suspend_count > 0
+                    if suspended:
+                        self._dense_rebuild_deferred = (
+                            bool(self.dense_search is not None and self.dense_search.needs_rebuild)
+                            or self._dense_rebuild_deferred
+                        )
+                    remaining = self._dense_rebuild_debounce_deadline - time.monotonic()
+                    if not suspended and remaining <= 0:
+                        # Claim the generation in the same critical section as
+                        # the deadline decision. A mutation cannot move the
+                        # deadline between those two observations.
+                        rebuild_generation = self._dense_rebuild_generation
+                if suspended:
+                    break
+                if remaining <= 0:
+                    break
+                self._dense_rebuild_event.wait(timeout=remaining)
+                self._dense_rebuild_event.clear()
+                if self._dense_rebuild_stop.is_set():
+                    return
+                # Always re-read the deadline after both notifications and
+                # timeouts. A mutation can move it at the timeout boundary.
+
+            if suspended:
+                continue
+
+            try:
+                committed = self._run_background_rebuild(rebuild_generation)
+            except CuVSMemoryBudgetError as exc:
+                with self._dense_rebuild_state_lock:
+                    if self._dense_rebuild_generation == rebuild_generation:
+                        self._dense_rebuild_failure = None
+                        self._dense_rebuild_memory_blocked = True
+                        self._dense_rebuild_memory_retry_attempts += 1
+                        exponent = min(self._dense_rebuild_memory_retry_attempts - 1, 5)
+                        retry_delay = min(
+                            _DENSE_REBUILD_MEMORY_RETRY_BASE_SECONDS * (2**exponent),
+                            _DENSE_REBUILD_MEMORY_RETRY_MAX_SECONDS,
+                        )
+                        self._dense_rebuild_memory_retry_not_before = time.monotonic() + retry_delay
+                logger.debug("cuVS background rebuild kept native search: %s", exc)
+            except Exception as exc:
+                with self._dense_rebuild_state_lock:
+                    if self._dense_rebuild_generation == rebuild_generation:
+                        self._dense_rebuild_failure = (type(exc), str(exc))
+                        self._dense_rebuild_memory_blocked = False
+                        self._dense_rebuild_memory_retry_attempts = 0
+                        self._dense_rebuild_memory_retry_not_before = 0.0
+                logger.warning("cuVS background rebuild failed", exc_info=True)
+            else:
+                if committed:
+                    with self._dense_rebuild_state_lock:
+                        if self._dense_rebuild_generation == rebuild_generation:
+                            self._dense_rebuild_failure = None
+                            self._dense_rebuild_memory_blocked = False
+                            self._dense_rebuild_memory_retry_attempts = 0
+                            self._dense_rebuild_memory_retry_not_before = 0.0
+            finally:
+                self._dense_rebuild_completed.set()
+
+    def _run_background_rebuild(self, expected_generation: int) -> bool:
+        dense_search = self.dense_search
+        if dense_search is None or self.engine_proxy is None:
+            return False
+        if self._dense_rebuild_stop.is_set():
+            return False
+        with self._dense_rebuild_state_lock:
+            if self._dense_rebuild_suspend_count > 0:
+                self._dense_rebuild_deferred = dense_search.needs_rebuild
+                return False
+            if self._dense_rebuild_generation != expected_generation:
+                return False
+
+        candidate = dense_search.prepare_rebuild()
+        if candidate is None:
+            return not dense_search.needs_rebuild
+
+        with self._dense_rebuild_state_lock:
+            candidate_is_stale = (
+                self._dense_rebuild_generation != expected_generation
+                or self._dense_rebuild_suspend_count > 0
+            )
+        if self._dense_rebuild_stop.is_set() or candidate_is_stale:
+            dense_search.discard_rebuild(candidate)
+            if not self._dense_rebuild_stop.is_set():
+                self._rearm_dense_rebuild_after_stale_candidate()
+            return False
+
+        with self._dense_search_lock.write():
+            with self._dense_rebuild_state_lock:
+                candidate_is_stale = (
+                    self._dense_rebuild_generation != expected_generation
+                    or self._dense_rebuild_suspend_count > 0
+                )
+            if (
+                self.dense_search is not dense_search
+                or self.engine_proxy is None
+                or self._dense_rebuild_stop.is_set()
+                or candidate_is_stale
+            ):
+                dense_search.discard_rebuild(candidate)
+                if not self._dense_rebuild_stop.is_set():
+                    self._rearm_dense_rebuild_after_stale_candidate()
+                return False
+            committed = dense_search.commit_rebuild(
+                candidate,
+                self.engine_proxy.set_filter_layout,
+            )
+        if not committed:
+            self._rearm_dense_rebuild_after_stale_candidate()
+        return committed
+
+    def _stop_dense_rebuild_worker(self) -> None:
+        thread = self._dense_rebuild_thread
+        # Retirement is durable even if publication has not started this
+        # worker yet. A concurrent replacement can otherwise stop this index
+        # in the map-swap/start window, only for the earlier publisher to start
+        # an orphan worker afterwards.
+        self._dense_rebuild_stop.set()
+        self._dense_rebuild_event.set()
+        if thread is None:
+            return
+        thread.join()
+        self._dense_rebuild_thread = None
+
+    def wait_for_background_rebuild(self, timeout: float = 5.0) -> bool:
+        if not self._auto_background_rebuild:
+            return False
+        with self._dense_rebuild_state_lock:
+            if self._dense_rebuild_suspend_count > 0:
+                return False
+        deadline = time.monotonic() + max(0.0, timeout)
+        memory_retry_attempted = False
+        while self.dense_search is not None and self.dense_search.needs_rebuild:
+            self._raise_dense_rebuild_failure()
+            with self._dense_rebuild_state_lock:
+                memory_blocked = self._dense_rebuild_memory_blocked
+            if memory_blocked:
+                # A readiness wait may retry a previously blocked admission at
+                # most once. A second rejection returns immediately instead of
+                # rebuilding an O(N) host candidate in a tight timeout loop.
+                if memory_retry_attempted:
+                    return False
+                if self._retry_memory_blocked_rebuild():
+                    memory_retry_attempted = True
+                elif not self._wake_dense_rebuild_worker():
+                    # A mutation may have cleared the blocked state between
+                    # the observation and retry. In that case the normal wake
+                    # path owns the newer generation; otherwise backoff holds.
+                    return False
+            elif not self._wake_dense_rebuild_worker():
+                return False
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not self._dense_rebuild_completed.wait(remaining):
+                return False
+            self._raise_dense_rebuild_failure()
+        return self.dense_search is not None
 
     def search(
         self,
@@ -332,36 +742,259 @@ class LocalIndex(IIndex):
             if self.field_type_converter and filters is not None:
                 filters = self.field_type_converter.convert_filter_for_index(filters)
 
-            if self.dense_search and query_vector:
-                with self._dense_search_lock:
+            cuvs_telemetry: Optional[CuVSSearchTelemetry] = None
+            telemetry_started = 0.0
+            native_filter_token = 0
+            if self.dense_search and query_vector and self._cuvs_telemetry_enabled():
+                cuvs_telemetry = CuVSSearchTelemetry(
+                    algorithm=self.dense_search.algorithm,
+                    auto_mode=self._auto_cuvs,
+                    dtype=self.dense_search.dtype,
+                    max_concurrent_gpu_searches=(self.dense_search.max_concurrent_gpu_searches),
+                )
+                telemetry_started = time.perf_counter()
+
+            try:
+                if self.dense_search and query_vector:
                     if not sparse_raw_terms and not sparse_values:
-                        try:
-                            return self.dense_search.search(
+                        background_rebuild_pending = (
+                            self._auto_background_rebuild and self.dense_search.needs_rebuild
+                        )
+                        if background_rebuild_pending:
+                            self._raise_dense_rebuild_failure()
+                            self._retry_memory_blocked_rebuild()
+                            if cuvs_telemetry is not None:
+                                cuvs_telemetry.route_reason = "native_rebuild_pending"
+                            return self._search_native(
                                 query_vector,
                                 limit,
                                 filters,
-                                self.engine_proxy.evaluate_filter,
-                                self.engine_proxy.set_filter_layout,
+                                sparse_raw_terms,
+                                sparse_values,
+                                0,
+                                cuvs_telemetry,
                             )
+                        if self._auto_cuvs and filters:
+                            queue_started = time.perf_counter()
+                            with self._dense_search_lock.read():
+                                if cuvs_telemetry is not None:
+                                    cuvs_telemetry.queue_ms += (
+                                        time.perf_counter() - queue_started
+                                    ) * 1000.0
+                                native_count = self.dense_search.preflight_native_count(
+                                    filters,
+                                    self._evaluate_cuvs_filter,
+                                    self.engine_proxy.set_filter_layout,
+                                    telemetry=cuvs_telemetry,
+                                )
+                                if native_count == 0:
+                                    if cuvs_telemetry is not None:
+                                        cuvs_telemetry.route_reason = "empty_filter"
+                                    return [], []
+                                if native_count is not None:
+                                    if cuvs_telemetry is not None:
+                                        cuvs_telemetry.route_reason = "native_filter_threshold"
+                                    native_filter_token = self.dense_search.native_filter_token(
+                                        filters
+                                    )
+                                    logger.debug(
+                                        "cuVS auto mode selected native filtered search "
+                                        "(%d candidates)",
+                                        native_count,
+                                    )
+                                    return self._search_native(
+                                        query_vector,
+                                        limit,
+                                        filters,
+                                        sparse_raw_terms,
+                                        sparse_values,
+                                        native_filter_token,
+                                        cuvs_telemetry,
+                                    )
+                        try:
+                            result = self._search_cuvs(
+                                query_vector,
+                                limit,
+                                filters,
+                                cuvs_telemetry,
+                            )
+                            if cuvs_telemetry is not None:
+                                cuvs_telemetry.route_reason = "cuvs"
+                            return result
                         except CuVSMemoryBudgetError as exc:
+                            if cuvs_telemetry is not None:
+                                cuvs_telemetry.route_reason = "native_memory_budget"
                             if not self._auto_cuvs:
                                 raise
                             logger.debug("cuVS auto mode kept native dense search: %s", exc)
+                        except _CuVSBackgroundRebuildPending:
+                            if cuvs_telemetry is not None:
+                                cuvs_telemetry.route_reason = "native_rebuild_pending"
                         except CuVSNativeRouteError as exc:
+                            if cuvs_telemetry is not None:
+                                cuvs_telemetry.route_reason = "native_filter_threshold"
+                            native_filter_token = self.dense_search.native_filter_token(filters)
                             logger.debug("cuVS auto mode selected native dense search: %s", exc)
                         except UnsupportedCuVSFilterError as exc:
+                            if cuvs_telemetry is not None:
+                                cuvs_telemetry.route_reason = "native_unsupported_filter"
                             if not self.dense_search.fallback_to_native:
                                 raise
                             logger.debug("Falling back to native dense search: %s", exc)
                     elif not self.dense_search.fallback_to_native:
+                        if cuvs_telemetry is not None:
+                            cuvs_telemetry.route_reason = "unsupported_sparse_hybrid"
                         raise ValueError(
                             "cuVS dense search does not support OpenViking sparse/hybrid queries"
                         )
+                    else:
+                        if cuvs_telemetry is not None:
+                            cuvs_telemetry.route_reason = "native_sparse_hybrid"
 
-            return self.engine_proxy.search(
-                query_vector, limit, filters, sparse_raw_terms, sparse_values
-            )
+                return self._search_native(
+                    query_vector,
+                    limit,
+                    filters,
+                    sparse_raw_terms,
+                    sparse_values,
+                    native_filter_token,
+                    cuvs_telemetry,
+                )
+            except Exception:
+                if cuvs_telemetry is not None and cuvs_telemetry.route_reason == "pending":
+                    cuvs_telemetry.route_reason = "cuvs_error"
+                raise
+            finally:
+                if cuvs_telemetry is not None:
+                    cuvs_telemetry.total_ms += (time.perf_counter() - telemetry_started) * 1000.0
+                    self._record_cuvs_telemetry(cuvs_telemetry)
         return [], []
+
+    def _search_cuvs(
+        self,
+        query_vector: List[float],
+        limit: int,
+        filters: Dict[str, Any],
+        telemetry: Optional[CuVSSearchTelemetry],
+    ) -> Tuple[List[int], List[float]]:
+        if self.dense_search is None or self.engine_proxy is None:
+            raise RuntimeError("cuVS search requires an initialized index")
+        if self._auto_background_rebuild:
+            queue_started = time.perf_counter()
+            with self._dense_search_lock.read():
+                if telemetry is not None:
+                    telemetry.queue_ms += (time.perf_counter() - queue_started) * 1000.0
+                if self.dense_search.needs_rebuild:
+                    self._raise_dense_rebuild_failure()
+                    self._retry_memory_blocked_rebuild()
+                    raise _CuVSBackgroundRebuildPending
+                return self.dense_search.search(
+                    query_vector,
+                    limit,
+                    filters,
+                    self._evaluate_cuvs_filter,
+                    self.engine_proxy.set_filter_layout,
+                    telemetry=telemetry,
+                )
+        while True:
+            queue_started = time.perf_counter()
+            with self._dense_search_lock.read():
+                if telemetry is not None:
+                    telemetry.queue_ms += (time.perf_counter() - queue_started) * 1000.0
+                if not self.dense_search.needs_rebuild:
+                    return self.dense_search.search(
+                        query_vector,
+                        limit,
+                        filters,
+                        self._evaluate_cuvs_filter,
+                        self.engine_proxy.set_filter_layout,
+                        telemetry=telemetry,
+                    )
+
+            queue_started = time.perf_counter()
+            with self._dense_search_lock.write():
+                if telemetry is not None:
+                    telemetry.queue_ms += (time.perf_counter() - queue_started) * 1000.0
+                if self.dense_search.needs_rebuild:
+                    return self.dense_search.search(
+                        query_vector,
+                        limit,
+                        filters,
+                        self._evaluate_cuvs_filter,
+                        self.engine_proxy.set_filter_layout,
+                        telemetry=telemetry,
+                    )
+
+    def _search_native(
+        self,
+        query_vector: List[float],
+        limit: int,
+        filters: Dict[str, Any],
+        sparse_raw_terms: List[str],
+        sparse_values: List[float],
+        native_filter_token: int,
+        telemetry: Optional[CuVSSearchTelemetry],
+    ) -> Tuple[List[int], List[float]]:
+        if self.engine_proxy is None:
+            return [], []
+        native_started = time.perf_counter()
+        try:
+            if native_filter_token:
+                token_result = self.engine_proxy.search_with_filter_token(
+                    query_vector,
+                    limit,
+                    native_filter_token,
+                )
+                if token_result is not None:
+                    if telemetry is not None:
+                        telemetry.native_filter_reused = True
+                    return token_result
+            return self.engine_proxy.search(
+                query_vector,
+                limit,
+                filters,
+                sparse_raw_terms,
+                sparse_values,
+            )
+        finally:
+            if telemetry is not None:
+                telemetry.native_search_ms += (time.perf_counter() - native_started) * 1000.0
+                if telemetry.route_reason == "pending":
+                    telemetry.route_reason = "native_fallback"
+
+    def _evaluate_cuvs_filter(self, filters: Dict[str, Any]) -> Tuple[List[int], int, int]:
+        if self.dense_search is None or self.engine_proxy is None:
+            raise RuntimeError("cuVS filter evaluation requires an initialized index")
+        return self.engine_proxy.evaluate_filter(
+            filters,
+            max_cached_candidates=self.dense_search.native_filter_threshold(filters),
+        )
+
+    @staticmethod
+    def _cuvs_telemetry_enabled() -> bool:
+        if logger.isEnabledFor(logging.DEBUG):
+            return True
+        try:
+            from openviking.telemetry import get_current_telemetry
+
+            return bool(get_current_telemetry().enabled)
+        except Exception:
+            return False
+
+    @staticmethod
+    def _record_cuvs_telemetry(telemetry: CuVSSearchTelemetry) -> None:
+        payload = telemetry.as_dict()
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("cuVS search telemetry: %s", json.dumps(payload, sort_keys=True))
+        try:
+            from openviking.telemetry import get_current_telemetry
+
+            operation_telemetry = get_current_telemetry()
+            if not operation_telemetry.enabled:
+                return
+            operation_telemetry.record_cuvs_search(payload)
+        except Exception:
+            logger.debug("Failed to record cuVS search telemetry", exc_info=True)
 
     def aggregate(
         self,
@@ -405,15 +1038,19 @@ class LocalIndex(IIndex):
         return agg_data
 
     def close(self):
+        self._stop_dense_rebuild_worker()
         if self.dense_search:
-            self.dense_search.close()
-            self.dense_search = None
+            with self._dense_search_lock.write():
+                self.dense_search.close()
+                self.dense_search = None
         return None
 
     def drop(self):
+        self._stop_dense_rebuild_worker()
         if self.dense_search:
-            self.dense_search.close()
-            self.dense_search = None
+            with self._dense_search_lock.write():
+                self.dense_search.close()
+                self.dense_search = None
         if self.engine_proxy:
             self.engine_proxy.drop()
         self.meta = None
@@ -509,6 +1146,7 @@ class VolatileIndex(LocalIndex):
         meta: Any,
         cands_list: Optional[List[CandidateData]] = None,
         dense_search_config: Optional[Dict[str, Any]] = None,
+        defer_dense_rebuild_start: bool = False,
     ):
         """Initialize a volatile (in-memory) index.
 
@@ -519,6 +1157,8 @@ class VolatileIndex(LocalIndex):
             meta: Index metadata containing configuration (dimensions, distance metric, etc.)
             cands_list (list): Initial list of CandidateData records to populate the index.
                 Defaults to None (empty index).
+            defer_dense_rebuild_start: Delay the optional background dense
+                rebuild worker until collection-level publication.
 
         Note:
             The index is immediately built in memory with the provided data.
@@ -539,8 +1179,13 @@ class VolatileIndex(LocalIndex):
             meta,
             dense_search_config=dense_search_config,
             initial_candidates=cands_list,
+            defer_dense_rebuild_start=True,
         )
         self.engine_proxy.add_data(self._convert_candidate_list_for_index(cands_list))
+        # Native add_data() invalidates its filter layout, so publish the first
+        # dense snapshot only after the native records are present.
+        if not defer_dense_rebuild_start:
+            self._start_dense_rebuild_worker()
 
     def need_rebuild(self) -> bool:
         """Determine if rebuild is needed.
@@ -606,6 +1251,7 @@ class PersistentIndex(LocalIndex):
         force_rebuild: bool = False,
         initial_timestamp: Optional[int] = None,
         dense_search_config: Optional[Dict[str, Any]] = None,
+        defer_dense_rebuild_start: bool = False,
     ):
         """Initialize a persistent index with versioning support.
 
@@ -621,6 +1267,9 @@ class PersistentIndex(LocalIndex):
                 Defaults to False.
             initial_timestamp (Optional[int]): Timestamp to use if creating a new index
                 from scratch. If None, uses current time. Useful for recovery scenarios.
+            dense_search_config: Optional dense-search backend configuration.
+            defer_dense_rebuild_start: Delay the background rebuild worker until
+                collection-level recovery has replayed all pending deltas.
 
         Process:
             1. Create directory structure if not exists
@@ -655,8 +1304,10 @@ class PersistentIndex(LocalIndex):
             meta,
             dense_search_config=dense_search_config,
             initial_candidates=cands_list,
+            defer_dense_rebuild_start=True,
         )
-        # Remove scheduling logic, unified scheduling by collection layer
+        if not defer_dense_rebuild_start:
+            self._start_dense_rebuild_worker()
 
     def _create_new_index(
         self,
@@ -703,6 +1354,8 @@ class PersistentIndex(LocalIndex):
         This ensures data durability and proper resource cleanup.
         After close(), the index cannot be used for further operations.
         """
+        self._stop_dense_rebuild_worker()
+
         # 1. Persist latest data first
         self.persist()
 

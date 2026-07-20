@@ -84,7 +84,12 @@ async def test_recall_endpoint_searches_by_type_quota_and_renders(
     assert '<memory_group type="events"' in result["rendered"]
     assert "<summary>Ship stdio MCP proxy.</summary>" in result["rendered"]
     assert "viking://user/test_user/memories/entities/openviking.md" in result["rendered"]
-    assert [call["target_uri"].rsplit("/", 1)[-1] for call in calls] == ["events", "entities"]
+    assert [call["target_uri"].rsplit("/", 1)[-1] for call in calls] == [
+        "events",
+        "peers",
+        "entities",
+        "peers",
+    ]
 
 
 async def test_recall_endpoint_respects_max_chars_budget(

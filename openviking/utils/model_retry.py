@@ -8,6 +8,8 @@ import threading
 import time
 from typing import Awaitable, Callable, TypeVar
 
+from openviking.utils.exceptions import AllCredentialsFailedError
+
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
@@ -147,7 +149,19 @@ def classify_api_error(error: Exception) -> str:
     - ``quota_exceeded`` is checked before ``transient`` because quota errors
       typically include "429" / "TooManyRequests" which would otherwise match
       the transient category.
+    - an aggregated ``AllCredentialsFailedError`` is classified from its
+      per-credential classes, not its concatenated message.
     """
+    if isinstance(error, AllCredentialsFailedError):
+        classes = [ec for (_cid, ec, _exc, _idx) in error.errors if ec]
+        if ERROR_CLASS_TRANSIENT in classes:
+            return ERROR_CLASS_TRANSIENT
+        if ERROR_CLASS_QUOTA_EXCEEDED in classes:
+            return ERROR_CLASS_QUOTA_EXCEEDED
+        if classes and all(ec == ERROR_CLASS_AUTH for ec in classes):
+            return ERROR_CLASS_AUTH
+        return ERROR_CLASS_UNKNOWN
+
     for exc in (error, getattr(error, "__cause__", None)):
         if exc is not None and isinstance(exc, _PERMANENT_IO_ERRORS):
             return ERROR_CLASS_PERMANENT
@@ -619,74 +633,3 @@ class OrderedCredentialSwitcher:
             self._active_idx = idx
             self._last_switch_time = time.monotonic()
             self._active_request_count = 0
-
-    def on_failure(self, idx: int, error_class: str) -> bool:
-        """Record a failure and decide whether to advance to the next credential.
-
-        Args:
-            idx: The credential index that failed
-            error_class: One of ERROR_CLASS_* constants
-
-        Returns:
-            True if the caller should advance to the next credential (idx += 1)
-            False if fail-fast (caller should re-raise the original exception)
-        """
-        # Transient errors that have exhausted retries are treated as quota_exceeded
-        if error_class == ERROR_CLASS_TRANSIENT:
-            error_class = ERROR_CLASS_QUOTA_EXCEEDED
-
-        with self._lock:
-            # Request-level errors fail fast: the same request fails on every
-            # credential of the same model, so switching credentials is useless.
-            if error_class in (
-                ERROR_CLASS_PERMANENT,
-                ERROR_CLASS_INPUT_TOO_LARGE,
-                ERROR_CLASS_CONTENT_SAFETY,
-            ):
-                logger.warning(
-                    f"Credential {idx} failed with {error_class} (request-level), fail-fast"
-                )
-                return False
-
-            if error_class == ERROR_CLASS_AUTH:
-                # Credential-level error (key invalid / no permission / overdue).
-                # In multi-credential mode, advance to the next credential since
-                # another credential may have a valid key / permission / balance.
-                # The last credential (or single-credential mode) fails fast.
-                if idx == self._active_idx and self._active_idx + 1 < self._n:
-                    self._active_idx += 1
-                    self._last_switch_time = time.monotonic()
-                    self._active_request_count = 0
-                    logger.warning(
-                        f"Credential {idx} failed with auth error; "
-                        f"advancing to {self._active_idx} (multi-credential mode)"
-                    )
-                    return True
-                logger.warning(f"Credential {idx} failed with auth error, fail-fast")
-                return False
-
-            if error_class == ERROR_CLASS_QUOTA_EXCEEDED:
-                if idx == self._active_idx:
-                    self._active_idx = min(self._active_idx + 1, self._n)
-                    self._last_switch_time = time.monotonic()
-                    self._active_request_count = 0
-                    logger.warning(
-                        f"Credential {idx} failed with quota_exceeded, advancing to {self._active_idx}"
-                    )
-                return True
-
-            # Unknown error class: default to advancing (be conservative)
-            if idx == self._active_idx:
-                self._active_idx = min(self._active_idx + 1, self._n)
-                self._last_switch_time = time.monotonic()
-                self._active_request_count = 0
-                logger.warning(
-                    f"Credential {idx} failed with unknown error class: {error_class}, advancing to {self._active_idx}"
-                )
-            return True
-
-    @property
-    def is_exhausted(self) -> bool:
-        """Check if all credentials are exhausted."""
-        with self._lock:
-            return self._active_idx >= self._n

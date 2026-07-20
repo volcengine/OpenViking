@@ -45,6 +45,7 @@ struct SearchResult {
 struct FilterResult {
   uint64_t eligible_count = 0;
   std::vector<uint32_t> bitset_words;
+  uint64_t native_filter_token = 0;
 };
 
 struct StateResult {

@@ -24,10 +24,10 @@ OpenViking 在 VikingFS 之上提供了一套基于 Git 的多版本管理能力
 
 ## API 实现介绍
 
-- HTTP 路由：[snapshot.py](file:///cloudide/workspace/OpenViking/openviking/server/routers/snapshot.py)，前缀 `/api/v1/snapshot`。
-- 命名空间（SDK）：[snapshot_namespace.py](file:///cloudide/workspace/OpenViking/openviking/snapshot_namespace.py)，暴露为 `client.snapshot.*`。
-- 底层语义实现：[viking_fs.py](file:///cloudide/workspace/OpenViking/openviking/storage/viking_fs.py) 的 `commit` / `restore` / `show` / `log`。
-- CLI 命令：[main.rs](file:///cloudide/workspace/OpenViking/crates/ov_cli/src/main.rs) 的 `SnapshotCmd`，子命令 [snapshot.rs](file:///cloudide/workspace/OpenViking/crates/ov_cli/src/commands/snapshot.rs)。
+- HTTP 路由：[snapshot.py](https://github.com/volcengine/OpenViking/blob/main/openviking/server/routers/snapshot.py)，前缀 `/api/v1/snapshot`。
+- 命名空间（SDK）：[snapshot_namespace.py](https://github.com/volcengine/OpenViking/blob/main/openviking/snapshot_namespace.py)，暴露为 `client.snapshot.*`。
+- 底层语义实现：[viking_fs.py](https://github.com/volcengine/OpenViking/blob/main/openviking/storage/viking_fs.py) 的 `commit` / `restore` / `show` / `log`。
+- CLI 命令：[main.rs](https://github.com/volcengine/OpenViking/blob/main/crates/ov_cli/src/main.rs) 的 `SnapshotCmd`，子命令 [snapshot.rs](https://github.com/volcengine/OpenViking/blob/main/crates/ov_cli/src/commands/snapshot.rs)。
 
 ## API 参考
 
@@ -53,6 +53,12 @@ result = client.snapshot.commit(
     paths=["viking://resources/my_md.md"],
 )
 print(result["commit_oid"])
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.gitCommit({ message: "Update docs", paths: ["resources/docs"] }));
 ```
 
 **HTTP API**
@@ -118,30 +124,55 @@ ov snapshot commit -m "v1 initial import" --paths viking://resources/my_md.md -o
 |------|------|------|--------|------|
 | branch | str | 否 | `main` | 要回溯的分支 |
 | limit | int | 否 | 20 | 最多返回的提交数量。HTTP 接口限制范围为 1–500 |
+| paths | List[str] | 否 | null | 只返回修改了任一指定 `viking://` URI 的提交；支持文件和目录。最多接受 32 条路径，每条 account-relative 路径最多包含 64 个层级。HTTP 接口通过重复 `paths` 查询参数传入多个 URI |
+
+过滤发生在限制返回数量之前，因此 `limit=10` 和 `paths=[X]` 表示最多返回 10 条与 X 有关的提交，而不是先取最近 10 条提交再过滤。
+
+为限制存储开销，过滤请求最多检查 1,000 条提交。如果尚未收集到请求数量的匹配结果，并且仍存在未检查的更早历史，接口将返回 `INVALID_ARGUMENT` 错误，而不是返回不完整的历史列表。非过滤请求不受该扫描预算限制，因为每检查一条提交都会推进返回数量限制。
 
 **Python SDK (Embedded / HTTP)**
 
 ```python
-history = client.snapshot.log(limit=10)
+history = client.snapshot.log(
+    limit=10,
+    paths=["viking://resources/a.md", "viking://resources/docs"],
+)
 for commit in history:
     print(commit["oid"], commit["message"])
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(
+  await client.gitLog("main", 20, [
+    "viking://resources/a.md",
+    "viking://resources/docs",
+  ]),
+);
 ```
 
 **HTTP API**
 
 ```
-GET /api/v1/snapshot/log?branch={branch}&limit={limit}
+GET /api/v1/snapshot/log?branch={branch}&limit={limit}&paths={uri1}&paths={uri2}
 ```
 
 ```bash
-curl -X GET "http://localhost:1933/api/v1/snapshot/log?branch=main&limit=10" \
+curl --get "http://localhost:1933/api/v1/snapshot/log" \
+  --data-urlencode "branch=main" \
+  --data-urlencode "limit=10" \
+  --data-urlencode "paths=viking://resources/a.md" \
+  --data-urlencode "paths=viking://resources/docs" \
   -H "X-API-Key: your-key"
 ```
 
 **CLI**
 
 ```bash
-ov snapshot log --limit 10 -o json
+ov snapshot log --limit 10 \
+  --paths viking://resources/a.md,viking://resources/docs \
+  -o json
 ```
 
 **响应**
@@ -198,6 +229,12 @@ print(meta["message"], meta["parents"])
 
 # 读取该提交中某个文件的内容
 blob = client.snapshot.show("3f2a1b9c", path="viking://resources/my_project/guide.md")
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.gitShow("main", "viking://resources/docs/api.md"));
 ```
 
 > 注意：带 `path` 读取文件内容时，**Embedded（本地）客户端**直接返回原始 `bytes`；**HTTP 客户端**返回 `{"oid": str, "size": int, "bytes": bytes}` 字典。
@@ -296,6 +333,15 @@ plan = client.snapshot.restore(
     dry_run=True,
 )
 print(plan["diff"])
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.gitRestore({
+  projectDir: "viking://resources/docs",
+  sourceCommit: "3f2a1b9c",
+}));
 ```
 
 **HTTP API**
@@ -404,6 +450,12 @@ ov snapshot restore 3f2a1b9c viking://resources/my_project --dry-run -o json
 content = client.snapshot.get_gitignore()
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.gitGetIgnore());
+```
+
 **HTTP API**
 
 ```
@@ -448,6 +500,12 @@ ov snapshot ignore-get -o json
 client.snapshot.set_gitignore(content="*.log\n")
 ```
 
+**TypeScript SDK**
+
+```typescript
+await client.gitSetIgnore("*.tmp\n.cache/\n");
+```
+
 **HTTP API**
 
 ```
@@ -486,6 +544,12 @@ ov snapshot ignore-set --file ./my-rules -o json
 
 ```python
 client.snapshot.delete_gitignore()
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.gitDeleteIgnore();
 ```
 
 **HTTP API**
@@ -544,7 +608,7 @@ client.snapshot.restore(project_dir=root, source_commit=v1["commit_oid"], messag
 client.close()
 ```
 
-更多端到端示例参见仓库中的 [examples/snapshot/](file:///cloudide/workspace/OpenViking/examples/snapshot) 目录，涵盖 SDK、HTTP、CLI 三种调用方式。
+更多端到端示例参见仓库中的 [examples/snapshot/](https://github.com/volcengine/OpenViking/tree/main/examples/snapshot) 目录，涵盖 SDK、HTTP、CLI 三种调用方式。
 
 ## 错误处理
 

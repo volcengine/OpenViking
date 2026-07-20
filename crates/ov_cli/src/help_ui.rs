@@ -455,6 +455,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 label: "ov find \"auth flow\" -u viking://projects/acme -L 1,2",
                 description: "Search a subtree and include overview/file results.",
             },
+            HelpItem {
+                label: "ov find --image ./query.png -u viking://resources/images",
+                description: "Search by image with a local file or image URI.",
+            },
         ],
         next_steps: &[
             HelpItem {
@@ -1318,6 +1322,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov reindex viking://projects/acme --mode semantic_and_vectors --wait true",
                 description: "Regenerate semantic artifacts, then vectors.",
+            },
+            HelpItem {
+                label: "ov reindex viking://projects/acme --mode prune_orphans --dry-run",
+                description: "Preview orphan vector cleanup.",
             },
         ],
         next_steps: &[
@@ -2818,7 +2826,7 @@ mod tests {
         );
 
         assert!(rendered.contains("OpenViking v"));
-        assert!(rendered.contains("ov find [OPTIONS] <query>"));
+        assert!(rendered.contains("ov find [OPTIONS] [query]"));
         assert!(rendered.contains("Examples"));
         assert!(rendered.contains("Common options"));
         assert!(rendered.contains("Next"));
@@ -2869,7 +2877,8 @@ mod tests {
                 .expect("reindex help should render"),
         );
 
-        assert!(rendered.contains("--mode <vectors_only|semantic_and_vectors>"));
+        assert!(rendered.contains("--mode <vectors_only|semantic_and_vectors|prune_orphans>"));
+        assert!(rendered.contains("--dry-run"));
         assert!(rendered.contains("Regenerate semantic artifacts, then vectors."));
     }
 
@@ -2881,7 +2890,7 @@ mod tests {
         );
 
         assert!(rendered.contains("OpenViking v"));
-        assert!(rendered.contains("ov find [OPTIONS] <query>"));
+        assert!(rendered.contains("ov find [OPTIONS] [query]"));
         assert!(rendered.contains("Usage:"));
     }
 

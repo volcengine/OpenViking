@@ -1060,6 +1060,24 @@ impl RAGFSBindingClient {
         git::show_response_to_pydict(py, resp)
     }
 
+    /// Walk snapshot history, optionally filtered to commits touching paths.
+    #[pyo3(signature = (**kwargs))]
+    fn git_log(
+        &self,
+        py: Python<'_>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Py<PyAny>> {
+        let svc = self.git_service.clone().ok_or_else(|| {
+            git::new_py_err_pub(py, "AGFSNotSupportedError", "git feature disabled".into())
+        })?;
+        let empty = PyDict::new(py);
+        let kw = kwargs.unwrap_or(&empty);
+        let req = git::parse_log_request(kw)?;
+        let resp = py_detach_blocking(py, move || self.rt.block_on(svc.log(req)))
+            .map_err(|e| git::map_git_error(py, e))?;
+        git::log_entries_to_pylist(py, resp)
+    }
+
     /// Get client capabilities.
     fn get_capabilities(&self) -> PyResult<HashMap<String, Py<PyAny>>> {
         Python::attach(|py| {

@@ -37,6 +37,7 @@ class OVCLIConfig(BaseModel):
     echo_command: Optional[bool] = None
     upload: Optional[OVCLIUploadConfig] = None
     extra_headers: Optional[Dict[str, str]] = None
+    gateway_token: Optional[str] = None
 
     model_config = {"extra": "forbid"}
 

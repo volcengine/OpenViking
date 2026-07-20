@@ -34,10 +34,11 @@ from typing import Dict, Iterator, List, Tuple
 import pytest
 
 from openviking.client.local import LocalClient
+from openviking.server.config import load_server_config
 from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
 from openviking.session.memory.utils import MemoryFileUtils
 from openviking.telemetry import tracer
-from openviking.telemetry.tracer import init_tracer_from_config
+from openviking.telemetry.tracer import init_tracer_from_server_config
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
 
@@ -260,10 +261,10 @@ class TestAgentMemoryE2E:
         - After Round 2: trajectory count grows; experience source_trajectories reference extracted trajectories.
         """
         pytest.importorskip("opentelemetry")
-        initialized = init_tracer_from_config()
+        initialized = init_tracer_from_server_config(load_server_config())
         if initialized is None or not tracer.is_enabled():
             pytest.fail(
-                "failed to initialize tracer from ov.conf; please check legacy telemetry.tracer"
+                "failed to initialize tracer; please check server.observability.traces"
             )
 
         trajectories_dir = "viking://user/alice/memories/trajectories"

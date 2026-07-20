@@ -36,6 +36,7 @@ from openviking.server.identity import Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS
 from openviking.server.oauth.provider import (
     FALLBACK_AUTHORIZE_PAGE,
+    MCP_SCOPE,
     OpenVikingOAuthProvider,
 )
 from openviking.server.oauth.router import router as oauth_router
@@ -120,7 +121,10 @@ async def app_with_oauth(tmp_path):
     sdk_routes = create_auth_routes(
         provider=provider,
         issuer_url=AnyHttpUrl(issuer),
-        client_registration_options=ClientRegistrationOptions(enabled=True),
+        # Mirror app.py's wiring: default_scopes covers DCRs that omit `scope`.
+        client_registration_options=ClientRegistrationOptions(
+            enabled=True, default_scopes=[MCP_SCOPE]
+        ),
         revocation_options=RevocationOptions(enabled=True),
     )
     app.routes.extend(sdk_routes)
@@ -215,6 +219,67 @@ async def test_dcr_registers_client(client):
     body = resp.json()
     assert body["client_id"]
     assert body["redirect_uris"] == ["https://claude.ai/cb"]
+
+
+async def _authorize_with_mcp_scope(client, client_id: str, redirect_uri: str) -> str:
+    """GET /authorize requesting scope=mcp; return the redirect Location."""
+    _, challenge = _pkce_pair()
+    resp = await client.get(
+        "/authorize",
+        params={
+            "client_id": client_id,
+            "response_type": "code",
+            "redirect_uri": redirect_uri,
+            "scope": MCP_SCOPE,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "resource": "http://127.0.0.1/mcp",
+            "state": "s1",
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302, resp.text
+    return resp.headers["location"]
+
+
+@pytest.mark.asyncio
+async def test_authorize_scope_mcp_after_scopeless_dcr(client):
+    """ChatGPT regression (#2920/#2921 follow-up): its DCR omits `scope`, then
+    it requests the "mcp" scope advertised in the PRM document at /authorize.
+    Registration must default the scope so authorize proceeds to the consent
+    redirect instead of bouncing back with error=invalid_scope."""
+    redirect_uri = "https://chatgpt.com/connector/oauth/cb"
+    reg = await client.post(
+        "/register",
+        json={
+            "redirect_uris": [redirect_uri],
+            "client_name": "ChatGPT",
+            "token_endpoint_auth_method": "none",
+        },
+    )
+    assert reg.status_code == 201, reg.text
+    assert reg.json().get("scope") == MCP_SCOPE
+
+    location = await _authorize_with_mcp_scope(client, reg.json()["client_id"], redirect_uri)
+    assert FALLBACK_AUTHORIZE_PAGE in location and "pending=" in location
+    assert not location.startswith(redirect_uri)
+
+
+@pytest.mark.asyncio
+async def test_authorize_scope_mcp_for_legacy_scopeless_client(app_with_oauth, client):
+    """Clients already registered with a NULL scope (rows predating the DCR
+    default) must clear scope validation via the get_client fallback."""
+    _, store, _ = app_with_oauth
+    redirect_uri = "https://chatgpt.com/connector/oauth/cb"
+    record = await store.register_client(
+        redirect_uris=[redirect_uri],
+        client_name="ChatGPT (legacy row)",
+        scope=None,
+    )
+
+    location = await _authorize_with_mcp_scope(client, record["client_id"], redirect_uri)
+    assert FALLBACK_AUTHORIZE_PAGE in location and "pending=" in location
+    assert not location.startswith(redirect_uri)
 
 
 # ---------------------------------------------------------------------------

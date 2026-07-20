@@ -5,7 +5,7 @@
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from openviking.parse import DocumentConverter, parse
+from openviking.parse import parse
 from openviking.parse.accessors.base import SourceType
 from openviking.parse.accessors.mime_types import IANA_MEDIA_TYPE_TO_EXTENSION
 from openviking.parse.base import ParseResult
@@ -86,11 +86,6 @@ class UnifiedResourceProcessor:
 
             self._vlm_processor = VLMProcessor()
         return self._vlm_processor
-
-    def _get_document_converter(self) -> DocumentConverter:
-        if self._document_converter is None:
-            self._document_converter = DocumentConverter()
-        return self._document_converter
 
     def _get_accessor_registry(self):
         """Lazy initialize AccessorRegistry for two-layer mode."""
@@ -207,13 +202,3 @@ class UnifiedResourceProcessor:
     def _is_url(self, source: str) -> bool:
         """Check if source is a URL."""
         return is_remote_resource_source(source)
-
-    @staticmethod
-    def _is_feishu_url(source: str) -> bool:
-        """Backward-compatible Feishu URL detector used by legacy tests/callers."""
-        try:
-            from openviking.parse.accessors.feishu_accessor import FeishuAccessor
-
-            return FeishuAccessor._is_feishu_url(source)
-        except Exception:
-            return False

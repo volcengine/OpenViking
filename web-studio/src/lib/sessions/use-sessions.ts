@@ -34,10 +34,9 @@ export function useSessionList() {
 /**
  * Session list ordered by recency (newest first).
  *
- * The list API returns sessions in name order. Each entry carries a
- * `mod_time` (filesystem mtime of the session directory) from the backend,
- * so we sort by that descending — no per-session detail requests needed.
- * Sessions without a timestamp sort to the bottom.
+ * The list API requests recent sessions before applying its storage limit.
+ * We keep a client-side sort for deterministic display and put sessions
+ * without a timestamp at the bottom.
  */
 export function useSessionListByRecency() {
   const { data: sessions, isLoading } = useSessionList()

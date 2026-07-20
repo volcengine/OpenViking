@@ -562,6 +562,10 @@ export type ReindexRequest = {
      * Wait
      */
     wait?: boolean;
+    /**
+     * Dry Run
+     */
+    dry_run?: boolean;
 };
 
 /**
@@ -1537,6 +1541,18 @@ export type GetFsLsData = {
          * Alias for node_limit
          */
         limit?: number | null;
+        /**
+         * Sort By
+         *
+         * Sort directory and file groups before applying node_limit
+         */
+        sort_by?: 'name' | 'mtime' | null;
+        /**
+         * Sort Order
+         *
+         * Sort direction
+         */
+        sort_order?: 'asc' | 'desc';
     };
     url: '/api/v1/fs/ls';
 };

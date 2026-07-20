@@ -190,10 +190,6 @@ class MochatChannelConfig(BaseChannelConfig):
     reply_delay_mode: str = "non-mention"
     reply_delay_ms: int = 120000
 
-    def _generate_default_id(self) -> str:
-        # Use agent_user_id as the ID
-        return self.agent_user_id if self.agent_user_id else "mochat"
-
 
 class DingTalkChannelConfig(BaseChannelConfig):
     """DingTalk channel configuration (multi-channel support)."""
@@ -460,10 +456,10 @@ class AgentsConfig(BaseModel):
         default=True,
         description="Enable the spawn tool so the main agent can start background subagents.",
     )
-    session_context_enabled: bool = False
+    session_context_enabled: bool = True
     session_context_token_budget: int = 3000
     commit_token_threshold: int = 200000
-    commit_keep_recent_count: int = 5
+    commit_keep_recent_count: int = 10
     gen_image_model: str = "openai/doubao-seedream-4-5-251128"
     thinking: bool = Field(
         default=True,
@@ -546,6 +542,12 @@ class OpenVikingConfig(BaseModel):
 
     _effective_auth_mode: str = PrivateAttr(default="")
 
+    _source: str = PrivateAttr(default="none")
+
+    _api_key_source: str = PrivateAttr(default="none")
+
+    _server_managed: bool = PrivateAttr(default=False)
+
     # Deprecated as user config. Kept for compatibility; load_config derives it
     # from OpenViking's effective dev auth mode.
     mode: str = "remote"
@@ -603,6 +605,34 @@ class OpenVikingConfig(BaseModel):
 
     def set_effective_auth_mode(self, auth_mode: str) -> None:
         self._effective_auth_mode = str(auth_mode or "").strip().lower()
+
+    def get_config_source(self) -> str:
+        return self._source
+
+    def set_config_source(self, source: str) -> None:
+        source = str(source or "none").strip().lower()
+        if source not in {"explicit", "inherited", "none"}:
+            source = "none"
+        self._source = source
+
+    def get_api_key_source(self) -> str:
+        return self._api_key_source
+
+    def set_api_key_source(self, source: str) -> None:
+        source = str(source or "none").strip().lower()
+        allowed = {"bot.ov_server.api_key", "server.root_api_key", "none"}
+        if source not in allowed:
+            source = "none"
+        self._api_key_source = source
+
+    def is_server_managed(self) -> bool:
+        return self._server_managed
+
+    def set_server_managed(self, value: bool) -> None:
+        self._server_managed = bool(value)
+
+    def is_available(self) -> bool:
+        return bool(str(self.server_url or "").strip())
 
 
 class WebToolsConfig(BaseModel):

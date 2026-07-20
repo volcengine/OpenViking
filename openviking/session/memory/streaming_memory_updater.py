@@ -144,10 +144,6 @@ class StreamingMemoryUpdater:
     def closed(self) -> bool:
         return self._closed
 
-    @property
-    def last_result(self) -> StreamingMemoryUpdateResult | None:
-        return self._last_result
-
     async def get_buffered_operation_count(self) -> int:
         async with self._group_batchers_lock:
             batchers = list(self._group_batchers.values())

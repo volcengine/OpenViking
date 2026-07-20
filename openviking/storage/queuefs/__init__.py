@@ -9,6 +9,7 @@ from .semantic_dag import SemanticDagExecutor
 from .semantic_msg import SemanticMsg
 from .semantic_processor import SemanticProcessor
 from .semantic_queue import SemanticQueue
+from .session_commit_msg import SessionCommitMsg
 
 __all__ = [
     "QueueManager",
@@ -24,4 +25,5 @@ __all__ = [
     "SemanticDagExecutor",
     "SemanticMsg",
     "SemanticProcessor",
+    "SessionCommitMsg",
 ]

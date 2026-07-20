@@ -21,8 +21,11 @@ class RetrievalObserver(BaseObserver):
     and formats them for display via the observer API.
     """
 
-    # A zero-result rate above this threshold is considered unhealthy.
+    # A zero-result rate at or above this threshold is suspicious.
     UNHEALTHY_ZERO_RESULT_RATE = 0.5
+    # Sparse fan-out may include expected empty branches. Treat it as unhealthy
+    # only when the aggregate workload returns fewer than one result per query.
+    MIN_HEALTHY_AVG_RESULTS_PER_QUERY = 1.0
 
     @staticmethod
     def _get_collector():
@@ -84,16 +87,24 @@ class RetrievalObserver(BaseObserver):
     def __str__(self) -> str:
         return self.get_status_table()
 
+    @classmethod
+    def _has_unhealthy_yield(cls, stats) -> bool:
+        """Return whether empty branches coincide with low aggregate yield."""
+        return (
+            stats.zero_result_rate >= cls.UNHEALTHY_ZERO_RESULT_RATE
+            and stats.avg_results_per_query < cls.MIN_HEALTHY_AVG_RESULTS_PER_QUERY
+        )
+
     def is_healthy(self) -> bool:
-        """Retrieval is healthy when the zero-result rate is acceptable."""
+        """Retrieval is healthy when empty branches still produce useful yield."""
         stats = self._get_collector().snapshot()
         if stats.total_queries == 0:
             return True
-        return stats.zero_result_rate < self.UNHEALTHY_ZERO_RESULT_RATE
+        return not self._has_unhealthy_yield(stats)
 
     def has_errors(self) -> bool:
-        """Errors are flagged when too many queries return zero results."""
+        """Errors are flagged when empty branches also have low aggregate yield."""
         stats = self._get_collector().snapshot()
         if stats.total_queries < 5:
             return False
-        return stats.zero_result_rate >= self.UNHEALTHY_ZERO_RESULT_RATE
+        return self._has_unhealthy_yield(stats)

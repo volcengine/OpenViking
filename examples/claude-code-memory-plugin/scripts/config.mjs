@@ -20,14 +20,16 @@
  *   Recall tuning:
  *     OPENVIKING_AUTO_RECALL, OPENVIKING_RECALL_LIMIT, OPENVIKING_RECALL_TOKEN_BUDGET,
  *     OPENVIKING_RECALL_MAX_CONTENT_CHARS, OPENVIKING_RECALL_PREFER_ABSTRACT,
- *     OPENVIKING_SCORE_THRESHOLD, OPENVIKING_MIN_QUERY_LENGTH, OPENVIKING_LOG_RANKING_DETAILS
+ *     OPENVIKING_SCORE_THRESHOLD, OPENVIKING_MIN_QUERY_LENGTH, OPENVIKING_LOG_RANKING_DETAILS,
+ *     OPENVIKING_RECALL_PEER_SCOPE
  *   Capture tuning:
  *     OPENVIKING_AUTO_CAPTURE, OPENVIKING_CAPTURE_MODE, OPENVIKING_CAPTURE_MAX_LENGTH,
  *     OPENVIKING_CAPTURE_ASSISTANT_TURNS, OPENVIKING_COMMIT_TOKEN_THRESHOLD,
  *     OPENVIKING_RESUME_CONTEXT_BUDGET
  *   Lifecycle / behavior:
  *     OPENVIKING_TIMEOUT_MS, OPENVIKING_CAPTURE_TIMEOUT_MS, OPENVIKING_WRITE_PATH_ASYNC,
- *     OPENVIKING_BYPASS_SESSION, OPENVIKING_BYPASS_SESSION_PATTERNS (CSV)
+ *     OPENVIKING_BYPASS_SESSION, OPENVIKING_BYPASS_SESSION_PATTERNS (CSV),
+ *     OPENVIKING_WORKSPACE_PEER
  *   Profile injection (session_start):
  *     OPENVIKING_NO_AUTO_INJECT, OPENVIKING_PROFILE_TOKEN_BUDGET
  *   Skill experience injection (PostToolUse Read):
@@ -170,6 +172,12 @@ export function loadConfig() {
   const peerId = str(process.env.OPENVIKING_PEER_ID, null)
     || str(cc.peerId, null)
     || str(cc.peer_id, "");
+  const workspacePeer = envBool("OPENVIKING_WORKSPACE_PEER") ?? (cc.workspacePeer !== false);
+  const recallPeerScopeRaw = str(
+    process.env.OPENVIKING_RECALL_PEER_SCOPE,
+    str(cc.recallPeerScope, "all"),
+  );
+  const recallPeerScope = recallPeerScopeRaw === "actor" ? "actor" : "all";
 
   // Each tuning field follows env > ovcli.conf is N/A (CLI doesn't carry tuning) >
   // ov.conf cc.* > built-in default. Env var names are flat OPENVIKING_* (no CC
@@ -208,6 +216,7 @@ export function loadConfig() {
     accountId,
     userId,
     peerId,
+    workspacePeer,
     timeoutMs,
 
     // Recall
@@ -236,6 +245,7 @@ export function loadConfig() {
       num(cc.recallTokenBudget, 2000),
     ))),
     recallPreferAbstract: envBool("OPENVIKING_RECALL_PREFER_ABSTRACT") ?? (cc.recallPreferAbstract !== false),
+    recallPeerScope,
 
     // Capture
     autoCapture: envBool("OPENVIKING_AUTO_CAPTURE") ?? (cc.autoCapture !== false),

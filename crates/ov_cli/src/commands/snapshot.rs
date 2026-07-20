@@ -1,12 +1,12 @@
 use std::io::Write;
 use std::path::PathBuf;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
+use crate::SnapshotCmd;
 use crate::client::{HttpClient, SnapshotCommitReq, SnapshotRestoreReq, SnapshotShowResult};
 use crate::error::Result;
 use crate::output::{OutputFormat, output_success};
-use crate::SnapshotCmd;
 
 pub async fn dispatch(
     client: &HttpClient,
@@ -63,8 +63,12 @@ pub async fn dispatch(
             let result = client.snapshot_show(&target_ref, path.as_deref()).await?;
             handle_show(result, out_path, output_format, compact)
         }
-        SnapshotCmd::Log { branch, limit } => {
-            let value = client.snapshot_log(&branch, limit).await?;
+        SnapshotCmd::Log {
+            branch,
+            limit,
+            paths,
+        } => {
+            let value = client.snapshot_log(&branch, limit, paths.as_deref()).await?;
             print_log(&value, output_format, compact);
             Ok(())
         }
@@ -89,10 +93,7 @@ pub async fn dispatch(
 
 /// Resolve `.ovgitignore` content: `--file` takes precedence over `--content`;
 /// if neither is given, the content is left empty (clears the rules).
-fn resolve_ignore_content(
-    content: Option<&str>,
-    file: Option<&std::path::Path>,
-) -> Result<String> {
+fn resolve_ignore_content(content: Option<&str>, file: Option<&std::path::Path>) -> Result<String> {
     if let Some(path) = file {
         use std::io::Read;
         let mut buf = String::new();
@@ -199,7 +200,12 @@ fn handle_show(
                 Some(path) => {
                     let mut f = std::fs::File::create(&path)?;
                     f.write_all(&bytes)?;
-                    eprintln!("Wrote {} bytes from {} to {}", size, &oid[..12.min(oid.len())], path.display());
+                    eprintln!(
+                        "Wrote {} bytes from {} to {}",
+                        size,
+                        &oid[..12.min(oid.len())],
+                        path.display()
+                    );
                 }
                 None => {
                     let mut out = std::io::stdout().lock();

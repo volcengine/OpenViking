@@ -47,6 +47,7 @@ async def test_message_tool_preserves_channel_metadata():
 @pytest.mark.asyncio
 async def test_spawn_tool_preserves_channel_metadata():
     metadata = {"reply_to": "oc_chat", "chat_type": "group", "message_id": "om_old"}
+    connection = {"api_key": "request-key", "account_id": "acct", "user_id": "alice"}
     calls = []
 
     class FakeSubagentManager:
@@ -58,18 +59,21 @@ async def test_spawn_tool_preserves_channel_metadata():
     context = SimpleNamespace(
         session_key=SessionKey(type="feishu", channel_id="cli_app", chat_id="oc_chat"),
         channel_metadata=metadata,
+        openviking_connection=connection,
     )
 
     result = await tool.execute(context, task="read files", label="read")
 
     assert result == "started"
     assert calls[0]["channel_metadata"] == metadata
+    assert calls[0]["openviking_connection"] is connection
 
 
 @pytest.mark.asyncio
 async def test_subagent_announcement_preserves_channel_metadata(tmp_path):
     bus = MessageBus()
     metadata = {"reply_to": "oc_chat", "chat_type": "group", "message_id": "om_old"}
+    connection = {"api_key": "request-key", "account_id": "acct", "user_id": "alice"}
     session_key = SessionKey(type="feishu", channel_id="cli_app", chat_id="oc_chat")
     manager = SubagentManager(
         provider=SimpleNamespace(get_default_model=lambda: "fake-model"),
@@ -86,11 +90,13 @@ async def test_subagent_announcement_preserves_channel_metadata(tmp_path):
         session_key,
         "ok",
         metadata,
+        connection,
     )
 
     inbound = await bus.consume_inbound()
     assert inbound.metadata == metadata
     assert inbound.metadata is not metadata
+    assert inbound.openviking_connection is connection
 
 
 @pytest.mark.asyncio
@@ -100,6 +106,8 @@ async def test_system_message_response_preserves_channel_metadata(tmp_path, monk
     monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", lambda **kwargs: SimpleNamespace())
 
     metadata = {"reply_to": "oc_chat", "chat_type": "group", "message_id": "om_old"}
+    connection = {"api_key": "request-key", "account_id": "acct", "user_id": "alice"}
+    captured = {}
     session_key = SessionKey(type="feishu", channel_id="cli_app", chat_id="oc_chat")
     config = Config(storage_workspace=str(tmp_path / "data"))
     loop = AgentLoop(
@@ -121,7 +129,15 @@ async def test_system_message_response_preserves_channel_metadata(tmp_path, monk
         return "summary", None, [], {}, 1
 
     loop._build_prompt_history = fake_build_prompt_history
-    loop.context = SimpleNamespace(build_messages=fake_build_messages)
+
+    class FakeContextBuilder:
+        def __init__(self, *args, **kwargs):
+            captured["connection"] = kwargs.get("openviking_connection")
+
+        async def build_messages(self, **kwargs):
+            return await fake_build_messages(**kwargs)
+
+    monkeypatch.setattr("vikingbot.agent.context.ContextBuilder", FakeContextBuilder)
     loop._run_agent_loop = fake_run_agent_loop
 
     outbound = await loop._process_system_message(
@@ -130,12 +146,14 @@ async def test_system_message_response_preserves_channel_metadata(tmp_path, monk
             session_key=session_key,
             content="subagent done",
             metadata=metadata,
+            openviking_connection=connection,
         )
     )
 
     assert outbound.content == "summary"
     assert outbound.metadata == metadata
     assert outbound.metadata is not metadata
+    assert captured["connection"] is connection
 
 
 @pytest.mark.asyncio

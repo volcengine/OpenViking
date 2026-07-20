@@ -317,14 +317,23 @@ class ImageConfig(ParserConfig):
         enable_vlm: Whether to use VLM for visual understanding
         ocr_lang: Language for OCR (e.g., "chi_sim", "eng")
         vlm_model: VLM model to use (e.g., "gpt-4-vision")
-        max_dimension: Maximum image dimension (resize if larger)
+        preview_max_dimension: Maximum dimension for preview resizing (resize if larger)
+        max_file_size_mb: Maximum file size before triggering large image processing
+        max_tile_dimension_px: Maximum dimension for individual tiles
+        tile_overlap_px: Number of pixels to overlap between tiles
+        large_image_threshold_dimension: Dimension threshold for large image detection
     """
 
     enable_ocr: bool = False
     enable_vlm: bool = True
     ocr_lang: str = "eng"
     vlm_model: Optional[str] = None
-    max_dimension: int = 2048
+    preview_max_dimension: int = 2048
+    # Large image processing settings
+    max_file_size_mb: float = 10.0  # 10 MB
+    max_tile_dimension_px: int = 2048  # 2048 pixels
+    tile_overlap_px: int = 2  # 2 pixels
+    large_image_threshold_dimension: int = 4096  # 4096 pixels
 
     def validate(self) -> None:
         """
@@ -337,8 +346,16 @@ class ImageConfig(ParserConfig):
         super().validate()
 
         # Validate image-specific fields
-        if self.max_dimension <= 0:
-            raise ValueError("max_dimension must be positive")
+        if self.preview_max_dimension <= 0:
+            raise ValueError("preview_max_dimension must be positive")
+        if self.max_file_size_mb <= 0:
+            raise ValueError("max_file_size_mb must be positive")
+        if self.max_tile_dimension_px <= 0:
+            raise ValueError("max_tile_dimension_px must be positive")
+        if self.tile_overlap_px < 0:
+            raise ValueError("tile_overlap_px must be non-negative")
+        if self.large_image_threshold_dimension <= 0:
+            raise ValueError("large_image_threshold_dimension must be positive")
 
 
 @dataclass
@@ -650,6 +667,14 @@ class SemanticConfig:
 
     memory_chunk_overlap: int = 200
     """Character overlap between adjacent memory chunks for context continuity."""
+
+    def __post_init__(self):
+        if self.memory_chunk_chars <= 0:
+            raise ValueError("memory_chunk_chars must be positive")
+        if self.memory_chunk_overlap < 0:
+            raise ValueError("memory_chunk_overlap must be non-negative")
+        if self.memory_chunk_overlap >= self.memory_chunk_chars:
+            raise ValueError("memory_chunk_overlap must be smaller than memory_chunk_chars")
 
 
 # Configuration registry for dynamic loading

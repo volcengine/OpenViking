@@ -64,15 +64,6 @@ def test_counter_only_increases():
         c.inc(amount=-1)
 
 
-def test_gauge_inc_dec(registry, render_prometheus):
-    g = registry.gauge("openviking_gauge")
-    g.set(1)
-    g.inc()
-    g.dec(0.5)
-    text = render_prometheus(registry)
-    assert "openviking_gauge 1.5" in text
-
-
 def test_histogram_boundary_bucket(registry, render_prometheus):
     h = registry.histogram("openviking_latency_seconds", buckets=(0.05, 0.1))
     h.observe(0.05)

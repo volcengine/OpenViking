@@ -13,6 +13,9 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::error::{Error, Result};
 
+const GATEWAY_MARKER_HEADER: &str = "X-VikingBot-Gateway";
+const GATEWAY_TOKEN_HEADER: &str = "X-Gateway-Token";
+
 fn parse_ignore_dirs(ignore_dirs: Option<&str>) -> Vec<String> {
     ignore_dirs
         .map(|s| {
@@ -162,6 +165,7 @@ pub struct BaseClient {
     pub(crate) actor_peer_id: Option<String>,
     pub(crate) profile_enabled: bool,
     pub(crate) extra_headers: Option<std::collections::HashMap<String, String>>,
+    gateway_token: Option<String>,
 }
 
 impl BaseClient {
@@ -189,7 +193,15 @@ impl BaseClient {
             actor_peer_id,
             profile_enabled,
             extra_headers,
+            gateway_token: None,
         }
+    }
+
+    pub fn with_gateway_token(mut self, gateway_token: Option<String>) -> Self {
+        self.gateway_token = gateway_token
+            .map(|token| token.trim().to_string())
+            .filter(|token| !token.is_empty());
+        self
     }
 
     fn append_profile_query<'a>(&self, params: &'a [(String, String)]) -> Vec<(String, String)> {
@@ -248,6 +260,63 @@ impl BaseClient {
             }
         }
         headers
+    }
+
+    fn is_gateway_token_challenge(response: &reqwest::Response) -> bool {
+        response.status() == StatusCode::UNAUTHORIZED
+            && response
+                .headers()
+                .get(GATEWAY_MARKER_HEADER)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+    }
+
+    pub(crate) async fn send_request(
+        &self,
+        request: reqwest::RequestBuilder,
+        error_context: &str,
+    ) -> Result<reqwest::Response> {
+        let retry = request.try_clone();
+        let response = request
+            .send()
+            .await
+            .map_err(|e| Error::Network(format!("{}: {}", error_context, e)))?;
+        if !Self::is_gateway_token_challenge(&response) {
+            return Ok(response);
+        }
+
+        let Some(gateway_token) = self.gateway_token.as_deref() else {
+            return Ok(response);
+        };
+        let Some(retry) = retry else {
+            return Ok(response);
+        };
+        retry
+            .header(GATEWAY_TOKEN_HEADER, gateway_token)
+            .send()
+            .await
+            .map_err(|e| Error::Network(format!("{}: {}", error_context, e)))
+    }
+
+    async fn headers_for_uncloneable_request(&self) -> Result<reqwest::header::HeaderMap> {
+        let mut headers = self.build_headers();
+        let Some(gateway_token) = self.gateway_token.as_deref() else {
+            return Ok(headers);
+        };
+        let health_url = format!("{}/health", self.base_url);
+        let response = self
+            .http
+            .get(health_url)
+            .headers(headers.clone())
+            .send()
+            .await
+            .map_err(|e| Error::Network(format!("Gateway detection request failed: {}", e)))?;
+        if Self::is_gateway_token_challenge(&response) {
+            if let Ok(value) = reqwest::header::HeaderValue::from_str(gateway_token) {
+                headers.insert(GATEWAY_TOKEN_HEADER, value);
+            }
+        }
+        Ok(headers)
     }
 
     pub(crate) async fn handle_response<T: DeserializeOwned + 'static>(
@@ -341,14 +410,12 @@ impl BaseClient {
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
         let params = self.append_profile_query(params);
-        let response = self
+        let request = self
             .http
             .get(&url)
             .headers(self.build_headers())
-            .query(&params)
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+            .query(&params);
+        let response = self.send_request(request, "HTTP request failed").await?;
 
         self.handle_response(response).await
     }
@@ -369,10 +436,7 @@ impl BaseClient {
         } else {
             request
         };
-        let response = request
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+        let response = self.send_request(request, "HTTP request failed").await?;
 
         self.handle_response(response).await
     }
@@ -392,10 +456,7 @@ impl BaseClient {
         } else {
             request
         };
-        let response = request
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+        let response = self.send_request(request, "HTTP request failed").await?;
 
         self.handle_response(response).await
     }
@@ -412,10 +473,7 @@ impl BaseClient {
         } else {
             request
         };
-        let response = request
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+        let response = self.send_request(request, "HTTP request failed").await?;
 
         self.handle_response(response).await
     }
@@ -427,14 +485,12 @@ impl BaseClient {
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
         let params = self.append_profile_query(params);
-        let response = self
+        let request = self
             .http
             .delete(&url)
             .headers(self.build_headers())
-            .query(&params)
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+            .query(&params);
+        let response = self.send_request(request, "HTTP request failed").await?;
 
         self.handle_response(response).await
     }
@@ -455,10 +511,7 @@ impl BaseClient {
         } else {
             request
         };
-        let response = request
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+        let response = self.send_request(request, "HTTP request failed").await?;
 
         self.handle_response(response).await
     }
@@ -471,15 +524,13 @@ impl BaseClient {
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
         let params = self.append_profile_query(params);
-        let response = self
+        let request = self
             .http
             .patch(&url)
             .headers(self.build_headers())
             .query(&params)
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+            .json(body);
+        let response = self.send_request(request, "HTTP request failed").await?;
 
         self.handle_response(response).await
     }
@@ -492,15 +543,13 @@ impl BaseClient {
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
         let params = self.append_profile_query(params);
-        let response = self
+        let request = self
             .http
             .post(&url)
             .headers(self.build_headers())
             .query(&params)
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+            .json(body);
+        let response = self.send_request(request, "HTTP request failed").await?;
 
         self.handle_response(response).await
     }
@@ -840,7 +889,7 @@ impl<'a> FileUploader<'a> {
             form = form.text("upload_mode", upload_mode.clone());
         }
 
-        let mut headers = self.client.build_headers();
+        let mut headers = self.client.headers_for_uncloneable_request().await?;
         headers.remove(reqwest::header::CONTENT_TYPE);
 
         let upload_timeout = TimeoutConfig::for_upload().calculate(file_path)?;
@@ -908,7 +957,7 @@ impl<'a> FileUploader<'a> {
             form = form.text("upload_mode", upload_mode.clone());
         }
 
-        let mut headers = self.client.build_headers();
+        let mut headers = self.client.headers_for_uncloneable_request().await?;
         headers.remove(reqwest::header::CONTENT_TYPE);
 
         let upload_timeout = TimeoutConfig::for_upload().calculate(file_path)?;

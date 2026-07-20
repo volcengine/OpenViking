@@ -1318,11 +1318,7 @@ async def test_trusted_mode_admin_can_list_users_without_account_or_user_headers
 
     resp = await trusted_admin_client.get(
         f"/api/v1/admin/accounts/{acct}/users",
-        headers={
-            "X-API-Key": ROOT_KEY,
-            "X-OpenViking-Account": acct,
-            "X-OpenViking-User": "alice",
-        },
+        headers={"X-API-Key": ROOT_KEY},
     )
     assert resp.status_code == 200
     assert any(user["user_id"] == "alice" for user in resp.json()["result"])

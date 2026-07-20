@@ -126,10 +126,6 @@ class Schema:
     def get_field_order(self) -> list[FieldMeta]:
         return self.field_orders
 
-    def get_total_byte_length(self) -> int:
-        return self.total_byte_length
-
-
 def _get_row_value(row_data: Any, field_name: str, default_value: Any) -> Any:
     if isinstance(row_data, dict):
         return row_data.get(field_name, default_value)
@@ -348,22 +344,25 @@ class SearchResult:
 
 
 class FilterResult:
-    __slots__ = ("eligible_count", "bitset_words")
+    __slots__ = ("eligible_count", "bitset_words", "native_filter_token")
 
     def __init__(
         self,
         *,
         eligible_count: int = 0,
         bitset_words: list[int] | None = None,
+        native_filter_token: int = 0,
     ):
         self.eligible_count = eligible_count
         self.bitset_words = bitset_words or []
+        self.native_filter_token = native_filter_token
 
     @classmethod
     def from_backend(cls, payload: dict[str, Any]) -> "FilterResult":
         return cls(
             eligible_count=int(payload.get("eligible_count", 0)),
             bitset_words=[int(word) for word in payload.get("bitset_words", [])],
+            native_filter_token=int(payload.get("native_filter_token", 0)),
         )
 
 
@@ -407,9 +406,6 @@ def _build_native_bytes_row_exports(backend: Any):
                 self._handle = backend._new_schema(fields)
             except RuntimeError as exc:
                 raise ValueError(str(exc)) from exc
-
-        def get_total_byte_length(self) -> int:
-            return int(backend._schema_get_total_byte_length(self._handle))
 
     class BytesRow:
         def __init__(self, schema: Schema):
@@ -459,13 +455,31 @@ def build_abi3_exports(backend: Any) -> dict[str, Any]:
         def search(self, req: SearchRequest) -> SearchResult:
             return SearchResult.from_backend(self._backend._index_engine_search(self._handle, req))
 
+        def search_with_filter_token(
+            self, req: SearchRequest, filter_token: int
+        ) -> SearchResult | None:
+            search_with_token = getattr(
+                self._backend, "_index_engine_search_with_filter_token", None
+            )
+            if search_with_token is None:
+                return None
+            payload = search_with_token(self._handle, req, filter_token)
+            return None if payload is None else SearchResult.from_backend(payload)
+
         def set_filter_layout(self, ordered_labels: list[int]) -> int:
             return int(self._backend._index_engine_set_filter_layout(self._handle, ordered_labels))
 
-        def evaluate_filter(self, dsl: str) -> FilterResult:
-            return FilterResult.from_backend(
-                self._backend._index_engine_evaluate_filter(self._handle, dsl)
-            )
+        def evaluate_filter(self, dsl: str, max_cached_candidates: int = 0) -> FilterResult:
+            evaluate_cached = getattr(self._backend, "_index_engine_evaluate_filter_cached", None)
+            if max_cached_candidates > 0 and evaluate_cached is not None:
+                payload = evaluate_cached(
+                    self._handle,
+                    dsl,
+                    max_cached_candidates,
+                )
+            else:
+                payload = self._backend._index_engine_evaluate_filter(self._handle, dsl)
+            return FilterResult.from_backend(payload)
 
         def dump(self, path: str) -> int:
             return int(self._backend._index_engine_dump(self._handle, path))
