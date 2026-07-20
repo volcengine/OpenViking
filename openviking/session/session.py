@@ -471,14 +471,14 @@ class Session:
                 int(self._meta.total_message_count or 0),
                 self._meta.commit_count + len(self._messages),
             )
-        # Auto-commit policy applies to every session as a baseline config, so
-        # backfill legacy sessions with the recommended defaults. The policy's
-        # keep_recent_count is a commit-time reservation only; it is applied when
-        # an automatic commit fires and is intentionally NOT mirrored onto
-        # meta.keep_recent_count (which tracks the plugin's pending-token window).
-        self._meta.auto_commit_policy = AutoCommitPolicy.from_dict(
-            self._meta.auto_commit_policy
-        ).to_dict()
+        # Auto-commit remains disabled when no policy is stored. When present,
+        # normalize the stored policy so missing fields are filled and bounds are
+        # clamped. The policy's keep_recent_count is a commit-time reservation
+        # only and is intentionally NOT mirrored onto meta.keep_recent_count.
+        if self._meta.auto_commit_policy is not None:
+            self._meta.auto_commit_policy = AutoCommitPolicy.from_dict(
+                self._meta.auto_commit_policy
+            ).to_dict()
         # WM v2: always rebuild pending_tokens from current messages so the
         # counter stays consistent across restarts and is also backfilled for
         # legacy sessions whose .meta.json predates these fields. O(n) once,

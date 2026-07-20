@@ -132,7 +132,7 @@ class _FakeSessionMeta:
     def __init__(
         self,
         *,
-        auto_commit_policy: dict,
+        auto_commit_policy: dict | None,
         pending_tokens: int = 0,
         message_count: int = 0,
         keep_recent_count: int = 0,
@@ -257,6 +257,23 @@ async def test_run_auto_commit_rechecks_token_threshold_before_committing(monkey
 
 
 @pytest.mark.asyncio
+async def test_run_auto_commit_skips_when_policy_is_disabled(monkeypatch):
+    session = _FakeAutoCommitSession(
+        _FakeSessionMeta(
+            auto_commit_policy=None,
+            pending_tokens=10_000,
+            message_count=1_000,
+        )
+    )
+    service = _session_service_for_auto_commit_test(monkeypatch, session)
+
+    await service.run_auto_commit("session_a", _auto_commit_ctx(), reason="message_write")
+
+    assert session.commit_calls == []
+    assert session.save_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_run_auto_commit_commits_when_token_threshold_exceeded(monkeypatch):
     session = _FakeAutoCommitSession(
         _FakeSessionMeta(
@@ -369,6 +386,26 @@ async def test_scheduler_skips_sessions_without_uncommitted_content():
                 pending_tokens=0,
                 message_count=0,
             ),
+        },
+    )
+    scheduler = SessionAutoCommitScheduler(
+        service,
+        SimpleNamespace(idle_enabled=True, check_interval_seconds=60.0),
+        check_interval=60.0,
+    )
+
+    await scheduler._scan_once()
+
+    assert service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_scheduler_skips_sessions_without_auto_commit_policy():
+    service = _FakeSessionService(
+        [_session_entry("session_disabled")],
+        {
+            "/local/acct_a/user/user_b/sessions/session_disabled/.meta.json": _meta()
+            | {"auto_commit_policy": None},
         },
     )
     scheduler = SessionAutoCommitScheduler(

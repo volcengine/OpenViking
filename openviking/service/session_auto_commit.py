@@ -273,25 +273,35 @@ def resolve_policy(policy: Optional[Dict[str, Any]]) -> AutoCommitPolicy:
 
 
 def get_idle_timeout_seconds(policy: Optional[Dict[str, Any]]) -> Optional[int]:
+    if policy is None:
+        return None
     seconds = resolve_policy(policy).idle_timeout_seconds
     return seconds if seconds > 0 else None
 
 
 def get_token_threshold(policy: Optional[Dict[str, Any]]) -> Optional[int]:
+    if policy is None:
+        return None
     threshold = resolve_policy(policy).pending_token_threshold
     return threshold if threshold > 0 else None
 
 
 def get_message_count_threshold(policy: Optional[Dict[str, Any]]) -> Optional[int]:
+    if policy is None:
+        return None
     threshold = resolve_policy(policy).message_count_threshold
     return threshold if threshold > 0 else None
 
 
 def get_min_commit_interval_seconds(policy: Optional[Dict[str, Any]]) -> int:
+    if policy is None:
+        return 0
     return max(0, resolve_policy(policy).min_commit_interval_seconds)
 
 
 def get_keep_recent_count(policy: Optional[Dict[str, Any]]) -> int:
+    if policy is None:
+        return 0
     return max(0, resolve_policy(policy).keep_recent_count)
 
 

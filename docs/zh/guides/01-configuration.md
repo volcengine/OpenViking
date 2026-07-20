@@ -1086,6 +1086,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 {
   "server": {
     "session_auto_commit": {
+      "default_enabled": false,
       "idle_enabled": false,
       "check_interval_seconds": 60.0,
       "scan_batch_size": 16,
@@ -1097,6 +1098,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
+| `default_enabled` | bool | 对未显式传入 `config.auto_commit_policy` 的新 session，是否默认开启 auto commit。为 `false` 时，这类 session 保持关闭 | `false` |
 | `idle_enabled` | bool | 是否启用服务端 idle timeout 自动 commit 调度器。关闭后，不会启动 idle scheduler；但 token / message-count 的即时触发仍然生效 | `false` |
 | `check_interval_seconds` | float | idle scheduler 的检查周期，单位秒，必须大于 `0` | `60.0` |
 | `scan_batch_size` | int | 每个 idle 扫描批次最多并发读取的 session meta 文件数量，必须大于 `0` | `16` |
@@ -1105,7 +1107,9 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 说明：
 
 - `server.session_auto_commit` 是服务端全局配置，不是单个 session 的业务 policy。
-- session 级别的自动触发参数通过 session 级 `auto_commit_policy` 设置（见下表）。它在创建 session 时通过 `POST /api/v1/sessions` 的 `config` 对象设置，之后可通过 `PATCH /api/v1/sessions/{session_id}` 编辑，并通过 `GET /api/v1/sessions/{session_id}` 查看。该 policy 通过默认值适用于所有 session（包括已存在的 session），没有单 session 的开关。
+- session 级别的自动触发参数通过 session 级 `auto_commit_policy` 设置（见下表）。它在创建 session 时通过 `POST /api/v1/sessions` 的 `config` 对象设置，之后可通过 `PATCH /api/v1/sessions/{session_id}` 编辑，并通过 `GET /api/v1/sessions/{session_id}` 查看。
+- `default_enabled=false` 时，未传 `config.auto_commit_policy` 创建的 session 保持 auto commit 关闭，返回 `auto_commit_policy: null`。显式传 `{}` 或任意 policy 字段会为该 session 开启 auto commit，并用下方默认值补齐缺失字段。
+- `default_enabled=true` 时，未传 `config.auto_commit_policy` 创建的 session 会带上下方默认 policy。
 - `idle_enabled=false` 时：
   - 不会启动 `SessionAutoCommitScheduler`
 - `idle_enabled=true` 时：
@@ -1115,7 +1119,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 
 ###### 单 session 自动 commit 策略
 
-每个 session 都带有 `auto_commit_policy`。未传的字段会回退到下方推荐默认值，该默认值同样适用于所有已存在的 session。取值会被 clamp 到 `[0, 上限]`，未知字段会以 `InvalidArgumentError` 拒绝。设置和查看方式见 [Sessions API](../api/05-sessions.md#create_session)。
+当 session 带有 `auto_commit_policy` 时，未传的字段会回退到下方推荐默认值。没有存储 policy 的 session 保持 auto commit 关闭。取值会被 clamp 到 `[0, 上限]`，未知字段会以 `InvalidArgumentError` 拒绝。设置和查看方式见 [Sessions API](../api/05-sessions.md#create_session)。
 
 | 字段 | 类型 | 默认值 | 上限 | 说明 |
 |------|------|--------|------|------|

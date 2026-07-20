@@ -128,6 +128,7 @@ def test_ensure_data_dir_lock_respects_skip_process_lock(monkeypatch, tmp_path):
 def test_session_auto_commit_config_defaults_to_idle_disabled():
     config = SessionAutoCommitConfig()
 
+    assert config.default_enabled is False
     assert config.idle_enabled is False
     assert config.check_interval_seconds == 60.0
     assert config.scan_batch_size == 16
@@ -136,12 +137,14 @@ def test_session_auto_commit_config_defaults_to_idle_disabled():
 
 def test_session_auto_commit_config_accepts_check_interval_override():
     config = SessionAutoCommitConfig(
+        default_enabled=True,
         idle_enabled=True,
         check_interval_seconds=3.5,
         scan_batch_size=8,
         scan_batch_pause_seconds=0.2,
     )
 
+    assert config.default_enabled is True
     assert config.idle_enabled is True
     assert config.check_interval_seconds == 3.5
     assert config.scan_batch_size == 8

@@ -14,7 +14,11 @@ from starlette.requests import Request
 
 from openviking.message import ImagePart, Message, TextPart
 from openviking.server.app import create_app
-from openviking.server.config import ServerConfig, ToolOutputExternalizationConfig
+from openviking.server.config import (
+    ServerConfig,
+    SessionAutoCommitConfig,
+    ToolOutputExternalizationConfig,
+)
 from openviking.server.dependencies import set_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import sessions as sessions_router
@@ -455,15 +459,31 @@ async def test_add_message_ignores_removed_auto_commit_policy_field(client: http
         },
     )
     # The per-message policy input has been removed; the field has no effect
-    # and the session keeps its default policy.
+    # and the session keeps auto commit disabled unless configured at creation.
     assert resp.status_code == 200
 
     session_resp = await client.get(f"/api/v1/sessions/{session_id}")
     policy = session_resp.json()["result"]["config"]["auto_commit_policy"]
-    assert policy["pending_token_threshold"] == 1000
+    assert policy is None
 
 
-async def test_create_session_defaults_auto_commit_policy(client: httpx.AsyncClient):
+async def test_create_session_defaults_auto_commit_policy_to_disabled(
+    client: httpx.AsyncClient,
+):
+    resp = await client.post("/api/v1/sessions", json={})
+    assert resp.status_code == 200
+    config = resp.json()["result"]["config"]
+    assert config["auto_commit_policy"] is None
+
+
+async def test_create_session_uses_default_policy_when_server_default_enabled(
+    client: httpx.AsyncClient,
+    service,
+):
+    service.sessions.set_session_auto_commit_config(
+        SessionAutoCommitConfig(default_enabled=True)
+    )
+
     resp = await client.post("/api/v1/sessions", json={})
     assert resp.status_code == 200
     config = resp.json()["result"]["config"]
@@ -524,13 +544,7 @@ async def test_get_session_returns_effective_config(client: httpx.AsyncClient):
     resp = await client.get(f"/api/v1/sessions/{session_id}")
     assert resp.status_code == 200
     config = resp.json()["result"]["config"]
-    assert set(config["auto_commit_policy"]) == {
-        "pending_token_threshold",
-        "message_count_threshold",
-        "idle_timeout_seconds",
-        "keep_recent_count",
-        "min_commit_interval_seconds",
-    }
+    assert config["auto_commit_policy"] is None
 
 
 async def test_patch_session_config_merges_policy(client: httpx.AsyncClient):
@@ -837,7 +851,7 @@ async def test_batch_add_message_ignores_removed_auto_commit_policy(client: http
 
     session_resp = await client.get(f"/api/v1/sessions/{session_id}")
     policy = session_resp.json()["result"]["config"]["auto_commit_policy"]
-    assert policy["pending_token_threshold"] == 1000
+    assert policy is None
 
 
 async def test_add_message_splits_tool_result_aggregate(client: httpx.AsyncClient):

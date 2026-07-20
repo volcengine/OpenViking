@@ -1116,6 +1116,7 @@ Legacy compatibility example:
 {
   "server": {
     "session_auto_commit": {
+      "default_enabled": false,
       "idle_enabled": false,
       "check_interval_seconds": 60.0,
       "scan_batch_size": 16,
@@ -1127,6 +1128,7 @@ Legacy compatibility example:
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
+| `default_enabled` | bool | Enables auto commit by default for newly created sessions that do not explicitly provide `config.auto_commit_policy`. When `false`, those sessions keep auto commit disabled | `false` |
 | `idle_enabled` | bool | Enables the server-side idle-timeout auto-commit scheduler. When disabled, the idle scheduler is not started. Token- and message-count immediate triggering still works | `false` |
 | `check_interval_seconds` | float | Poll interval for the idle scheduler in seconds. Must be greater than `0` | `60.0` |
 | `scan_batch_size` | int | Maximum number of session meta files read concurrently in each idle scan batch. Must be greater than `0` | `16` |
@@ -1135,7 +1137,9 @@ Legacy compatibility example:
 Notes:
 
 - `server.session_auto_commit` is a server-wide control surface, not a per-session business policy.
-- Per-session auto-commit behavior is configured through the session-level `auto_commit_policy` (see the table below). It is set when creating a session (`POST /api/v1/sessions` with a `config` object), edited later via `PATCH /api/v1/sessions/{session_id}`, and viewed via `GET /api/v1/sessions/{session_id}`. The policy applies to every session, including existing ones, through defaults; there is no per-session on/off switch.
+- Per-session auto-commit behavior is configured through the session-level `auto_commit_policy` (see the table below). It is set when creating a session (`POST /api/v1/sessions` with a `config` object), edited later via `PATCH /api/v1/sessions/{session_id}`, and viewed via `GET /api/v1/sessions/{session_id}`.
+- When `default_enabled=false`, sessions created without `config.auto_commit_policy` keep auto commit disabled and return `auto_commit_policy: null`. Providing `{}` or any policy field explicitly enables auto commit for that session and fills missing fields from the defaults below.
+- When `default_enabled=true`, sessions created without `config.auto_commit_policy` get the default policy below.
 - When `idle_enabled=false`:
   - `SessionAutoCommitScheduler` is not started
 - When `idle_enabled=true`:
@@ -1145,7 +1149,7 @@ Notes:
 
 ###### Per-session Auto Commit Policy
 
-Each session carries an `auto_commit_policy`. Any field you omit falls back to the recommended default below, which also applies to every existing session. Values are clamped into `[0, max]`, and unknown keys are rejected with `InvalidArgumentError`. See [Sessions API](../api/05-sessions.md#create_session) for how to set and view it.
+When a session carries an `auto_commit_policy`, any field you omit falls back to the recommended default below. Sessions without a stored policy keep auto commit disabled. Values are clamped into `[0, max]`, and unknown keys are rejected with `InvalidArgumentError`. See [Sessions API](../api/05-sessions.md#create_session) for how to set and view it.
 
 | Field | Type | Default | Max | Description |
 |-------|------|---------|-----|-------------|

@@ -247,6 +247,7 @@ class ToolOutputExternalizationConfig(BaseModel):
 class SessionAutoCommitConfig(BaseModel):
     """Server-wide controls for automatic session commits."""
 
+    default_enabled: bool = False
     idle_enabled: bool = False
     check_interval_seconds: float = Field(default=60.0, gt=0)
     scan_batch_size: int = Field(default=16, gt=0)

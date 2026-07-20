@@ -2,10 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Automatic session-commit policy.
 
-The policy applies to every session as a baseline configuration. There is no
-per-session on/off switch: sessions (including existing ones) fall back to the
-recommended defaults below when a field is missing. Configuration is only set
-via session create / PATCH / GET, never per message.
+Sessions without a stored policy keep automatic commits disabled. When a policy
+object is present, missing fields fall back to the recommended defaults below.
+Configuration is only set via session create / PATCH / GET, never per message.
 """
 
 from __future__ import annotations

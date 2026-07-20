@@ -44,9 +44,9 @@ Session API 按认证用户作用域访问会话，并返回 canonical user sess
 |------|------|------|--------|------|
 | session_id | str | 否 | None | 会话 ID。如果为 None，则创建一个自动生成 ID 的新会话 |
 | memory_policy | object | 否 | None | 会话默认的记忆抽取策略。可选的 `self` 和 `peer` 开关控制写入目标；可选的 `working_memory.enabled=false` 跳过 archive summary；可选的顶层 `memory_types` 将抽取限制为指定的 enabled memory schema。未传或为 `null` 时允许所有 enabled memory schema。非法结构或未知 memory type 会以 `InvalidArgumentError` 拒绝。 |
-| config | object | 否 | None | 可选的 session 配置。目前支持 `auto_commit_policy` 对象（见下表）。传入的字段会被校验并 clamp 到取值范围，然后合并到默认值之上；最终生效的策略会在响应的 `result.config` 中返回，并持久化到 session meta。 |
+| config | object | 否 | None | 可选的 session 配置。目前支持 `auto_commit_policy` 对象（见下表）。传入的字段会被校验并 clamp 到取值范围，然后合并到默认值之上；最终生效的策略会在响应的 `result.config` 中返回，并持久化到 session meta。未传 policy 时 auto commit 关闭，除非 `server.session_auto_commit.default_enabled=true`。 |
 
-`config.auto_commit_policy` 字段（均为可选；未传字段回退到默认值，默认值同样适用于所有已存在的 session）：
+`config.auto_commit_policy` 字段（均为可选；存在 policy 时，未传字段回退到默认值）：
 
 | 字段 | 类型 | 默认值 | 上限 | 说明 |
 |------|------|--------|------|------|
@@ -417,7 +417,7 @@ ov session get a1b2c3d4
 
 #### 1. API 实现介绍
 
-以局部（merge）语义更新 session 的配置。只有请求体中出现的字段会被覆盖，未出现的字段保持原值。目前唯一可配置的部分是 `auto_commit_policy`，它通过默认值适用于所有 session（包括已存在的 session）。
+以局部（merge）语义更新 session 的配置。只有请求体中出现的字段会被覆盖，未出现的字段保持原值。目前唯一可配置的部分是 `auto_commit_policy`；设置它会为该 session 开启 auto commit，并用默认值补齐未传的 policy 字段。
 
 **代码入口**：
 - `openviking/server/routers/sessions.py:update_session()` - HTTP 路由

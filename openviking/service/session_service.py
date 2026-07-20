@@ -188,8 +188,11 @@ class SessionService:
                     set(MemoryTypeRegistry().list_names(include_disabled=False))
                 )
                 session.meta.memory_policy = policy.to_dict()
-            resolved_auto_commit = AutoCommitPolicy.from_dict(auto_commit_policy)
-            session.meta.auto_commit_policy = resolved_auto_commit.to_dict()
+            if auto_commit_policy is not None or self._session_auto_commit_config.default_enabled:
+                resolved_auto_commit = AutoCommitPolicy.from_dict(auto_commit_policy)
+                session.meta.auto_commit_policy = resolved_auto_commit.to_dict()
+            else:
+                session.meta.auto_commit_policy = None
             await session.ensure_exists()
             self._record_lifecycle_metric("create", "ok")
             return session
@@ -406,9 +409,11 @@ class SessionService:
     def effective_session_config(session: Session) -> Dict[str, Any]:
         """Return the resolved session config (defaults filled) for GET responses."""
         return {
-            "auto_commit_policy": AutoCommitPolicy.from_dict(
-                session.meta.auto_commit_policy
-            ).to_dict(),
+            "auto_commit_policy": (
+                AutoCommitPolicy.from_dict(session.meta.auto_commit_policy).to_dict()
+                if session.meta.auto_commit_policy is not None
+                else None
+            ),
         }
 
     async def maybe_schedule_auto_commit(
@@ -519,6 +524,8 @@ class SessionService:
 
     def _should_run_auto_commit(self, session: Session, policy: Any, reason: str) -> bool:
         """Validate the current session state still satisfies the trigger reason."""
+        if policy is None:
+            return False
         if reason == "message_write":
             if not self._has_uncommitted_content(session):
                 return False

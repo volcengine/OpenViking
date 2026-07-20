@@ -44,9 +44,9 @@ Create a new session. Sessions are containers for conversations, storing message
 |-----------|------|----------|---------|-------------|
 | session_id | str | No | None | Session ID. Creates new session with auto-generated ID if None |
 | memory_policy | object | No | None | Default memory extraction policy for the session. Optional `self` and `peer` switches control write targets, optional `working_memory.enabled=false` skips archive summaries, and optional top-level `memory_types` limits extraction to specific enabled memory schemas. When `memory_types` is omitted or `null`, all enabled memory schemas are allowed. Invalid shapes or unknown memory types are rejected with `InvalidArgumentError`. |
-| config | object | No | None | Optional session config. Currently supports an `auto_commit_policy` object (see table below). Any provided fields are validated, clamped to their bounds, and merged over the defaults; the effective policy is returned in the response `result.config` and persisted into session metadata. |
+| config | object | No | None | Optional session config. Currently supports an `auto_commit_policy` object (see table below). Any provided fields are validated, clamped to their bounds, and merged over the defaults; the effective policy is returned in the response `result.config` and persisted into session metadata. If no policy is provided, auto commit is disabled unless `server.session_auto_commit.default_enabled=true`. |
 
-`config.auto_commit_policy` fields (all optional; omitted fields fall back to the defaults, which also apply to every existing session):
+`config.auto_commit_policy` fields (all optional; omitted fields fall back to the defaults when a policy is present):
 
 | Field | Type | Default | Max | Description |
 |-------|------|---------|-----|-------------|
@@ -417,7 +417,7 @@ ov session get a1b2c3d4
 
 #### 1. API Implementation Introduction
 
-Update a session's config with partial (merge) semantics. Only the fields present in the request body are overwritten; omitted fields keep their current values. Today the only configurable section is `auto_commit_policy`, which applies to every session (including existing ones) via defaults.
+Update a session's config with partial (merge) semantics. Only the fields present in the request body are overwritten; omitted fields keep their current values. Today the only configurable section is `auto_commit_policy`; setting it enables auto commit for that session and fills omitted policy fields from defaults.
 
 **Code Entries:**
 - `openviking/server/routers/sessions.py:update_session()` - HTTP route
