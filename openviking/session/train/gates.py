@@ -28,6 +28,8 @@ logger = get_logger(__name__)
 GateStage = Literal["post_gradient", "post_plan"]
 GateMode = Literal["enforce", "warn", "shadow"]
 GateAction = Literal["allow", "warn", "reject"]
+_EXPERIENCE_GATE_VALIDATION_KEY = "experience_gate_validation"
+_EXPERIENCE_GATE_VALIDATION_VALUE = "post_validation_hook"
 
 
 @dataclass(slots=True)
@@ -242,6 +244,12 @@ class GateRunner:
                 continue
             decision = await gate.evaluate(target)
             if decision is None:
+                _trace_gate_result(
+                    target,
+                    gate_name=gate.name,
+                    action="allow",
+                    reason="passed",
+                )
                 continue
             action = _effective_action(decision.action, gate.mode)
             if action != decision.action:
@@ -253,6 +261,12 @@ class GateRunner:
                     retriable=decision.retriable,
                     repair_prompt=decision.repair_prompt,
                 )
+            _trace_gate_result(
+                target,
+                gate_name=decision.gate_name,
+                action=decision.action,
+                reason=decision.reason,
+            )
             decisions.append(decision)
             if action == "reject":
                 rejected = True
@@ -274,6 +288,43 @@ def default_policy_gate_runner() -> GateRunner:
             ExperiencePlanQualityGate(mode="enforce"),
         ]
     )
+
+
+def mark_experience_gradients_post_validated(
+    gradients: list[SemanticGradient],
+) -> None:
+    """Mark experience gradients accepted by their extraction post-validation hook."""
+
+    for gradient in gradients:
+        if not _is_experience_gradient(gradient):
+            continue
+        metadata = getattr(gradient, "metadata", None)
+        if not isinstance(metadata, dict):
+            raise RuntimeError("experience gradient metadata must be a dictionary")
+        metadata[_EXPERIENCE_GATE_VALIDATION_KEY] = _EXPERIENCE_GATE_VALIDATION_VALUE
+
+
+def require_experience_gradients_post_validated(
+    gradients: list[SemanticGradient],
+) -> None:
+    """Fail when an experience gradient bypassed extraction post-validation."""
+
+    unvalidated = [
+        str(getattr(gradient, "target_name", "unknown"))
+        for gradient in gradients
+        if _is_experience_gradient(gradient)
+        and dict(getattr(gradient, "metadata", {}) or {}).get(_EXPERIENCE_GATE_VALIDATION_KEY)
+        != _EXPERIENCE_GATE_VALIDATION_VALUE
+    ]
+    if unvalidated:
+        raise RuntimeError(
+            "experience gradients must be validated by the extraction post-validation hook: "
+            + ", ".join(unvalidated)
+        )
+
+
+def _is_experience_gradient(gradient: SemanticGradient) -> bool:
+    return _gradient_memory_type(gradient) == "experiences"
 
 
 def default_experience_gate_contract() -> str:
@@ -2756,9 +2807,19 @@ def _log_gate_rejection(target: GateTarget, decisions: list[GateDecision]) -> No
         target.target_name,
         summary,
     )
+
+
+def _trace_gate_result(
+    target: GateTarget,
+    *,
+    gate_name: str,
+    action: GateAction,
+    reason: str,
+) -> None:
+    compact_reason = " ".join(str(reason or "").split())
     tracer.info(
-        "policy_gate.rejected "
+        "policy_gate.result "
         f"stage={target.stage} target_kind={target.target_kind} "
         f"memory_type={target.memory_type} target_name={target.target_name} "
-        f"rejections={summary}"
+        f"gate={gate_name} action={action} reason={compact_reason}"
     )

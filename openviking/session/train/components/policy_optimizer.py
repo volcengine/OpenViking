@@ -94,6 +94,7 @@ class PatchMergePolicyOptimizer:
 
         context.metadata.pop("gate_retry_reports", None)
         context.metadata.pop("post_validation_retries", None)
+        context.metadata.pop("final_gate_report", None)
         patch_gradients = list(gradients)
         if not patch_gradients:
             return PolicyUpdatePlan(
@@ -136,11 +137,14 @@ class PatchMergePolicyOptimizer:
         }
         gate_retry_reports = list(context.metadata.get("gate_retry_reports", []) or [])
         gate_retry_events = list(context.metadata.get("post_validation_retries", []) or [])
+        final_gate_report = context.metadata.get("final_gate_report")
         if gate_retry_reports:
             metadata["gate_reports"] = gate_retry_reports
             metadata["gate_retry_reports"] = gate_retry_reports
         if gate_retry_events:
             metadata["post_validation_retries"] = gate_retry_events
+        if isinstance(final_gate_report, dict):
+            metadata["gate_report"] = final_gate_report
 
         return PolicyUpdatePlan(items=items, metadata=metadata)
 
@@ -241,6 +245,7 @@ class PatchMergePolicyOptimizer:
                         retained_upserts=retained_valid_upserts,
                         retained_deletes=retained_valid_deletes,
                     )
+                context.metadata["final_gate_report"] = report.to_dict()
                 if retry_count:
                     context.metadata.setdefault("post_validation_retries", []).append(
                         _post_validation_retry_event(
@@ -283,7 +288,9 @@ class PatchMergePolicyOptimizer:
                     event["retained_count"] = len(retained_valid_upserts) + len(
                         retained_valid_deletes
                     )
+                    context.metadata["final_gate_report"] = report.to_dict()
                     return None
+                context.metadata["final_gate_report"] = report.to_dict()
                 return PostValidationRetryDecision(discard=True)
             return PostValidationRetryDecision(
                 retry=True,

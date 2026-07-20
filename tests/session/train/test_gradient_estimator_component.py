@@ -33,6 +33,11 @@ class FakeExperienceGradientEstimator(ExperienceGradientEstimator):
 
     async def _run_extract_loop(self, trajectory, context):
         self.calls.append((trajectory, context))
+        context.metadata["final_gate_report"] = GateReport(
+            stage="post_gradient",
+            evaluated_count=1,
+            allowed_count=1,
+        ).to_dict()
         return self.operations_by_trajectory_uri.get(trajectory.uri)
 
 
@@ -574,7 +579,7 @@ async def test_post_validation_gate_sees_prefetched_comparison_trajectories(monk
     gradients = await estimator.estimate(analysis, _experience_set(), _context())
 
     assert len(gradients) == 1
+    assert gradients[0].metadata["experience_gate_validation"] == "post_validation_hook"
     assert captured["post_validation_decision"] is None
-    assert captured["metadata_seen"]
-    assert all(item == comparison for item in captured["metadata_seen"])
+    assert captured["metadata_seen"] == [comparison]
     assert analysis.trajectories[0].metadata["comparison_trajectory_uris"] == [comparison[0]["uri"]]

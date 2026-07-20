@@ -13,7 +13,7 @@ import pytest
 from test_fakes import InMemoryAGFS, fake_request_context
 
 from openviking.message import Message, TextPart
-from openviking.session.memory.dataclass import StoredLink
+from openviking.session.memory.dataclass import MemoryFile, StoredLink
 from openviking.session.train import (
     Case,
     Experience,
@@ -34,6 +34,8 @@ from openviking.session.train import (
     Trajectory,
 )
 from openviking.session.train.components.reporter import ConsolePipelineReporter
+from openviking.session.train.gates import GateReport
+from openviking.session.train.gradients import PatchSemanticGradient
 from openviking.storage.transaction import init_lock_manager, reset_lock_manager
 
 
@@ -122,6 +124,31 @@ class DummyGradient:
     links: list[StoredLink]
     confidence: float
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+def _unvalidated_experience_gradient() -> PatchSemanticGradient:
+    uri = "viking://user/u/memories/experiences/direct_submission.md"
+    return PatchSemanticGradient(
+        before_file=None,
+        after_file=MemoryFile(
+            uri=uri,
+            content=(
+                "## Situation\n- Applies when: a direct experience is submitted.\n\n"
+                "## Reminder\n- Validate it first.\n\n"
+                "## Procedure\n- Before use: validate it.\n\n"
+                "## Anti-pattern\n- Do not bypass validation."
+            ),
+            memory_type="experiences",
+            extra_fields={
+                "memory_type": "experiences",
+                "experience_name": "direct_submission",
+            },
+        ),
+        base_version=None,
+        rationale="unvalidated direct experience",
+        links=[],
+        confidence=0.9,
+    )
 
 
 class DummySnapshotter:
@@ -349,6 +376,77 @@ async def test_default_policy_optimization_pipeline_runs_one_batch():
     assert len(result.epochs) == 1
     assert result.epochs[0].epoch == 0
     assert result.epochs[0].policy_snapshot_ids == ["snapshot-1"]
+
+
+@pytest.mark.asyncio
+async def test_training_engine_does_not_execute_gate_runner_outside_post_validation_hooks():
+    class FailIfCalledGateRunner:
+        async def filter_gradients(self, *args, **kwargs):
+            raise AssertionError("engine must not execute gradient gates")
+
+        async def filter_plan(self, *args, **kwargs):
+            raise AssertionError("engine must not execute plan gates")
+
+    pipeline = OfflinePolicyOptimizationPipeline(
+        snapshotter=DummySnapshotter(),
+        rollout_executor=DummyExecutor(),
+        rollout_analyzer=DummyAnalyzer(),
+        gradient_estimator=DummyEstimator(),
+        policy_optimizer=DummyOptimizer(),
+        policy_updater=DummyUpdater(),
+    )
+
+    result = await pipeline.train(
+        case_loader=ListCaseLoader([_case()]),
+        policy_set=_policy_set(),
+        context=PipelineContext(gate_runner=FailIfCalledGateRunner()),
+    )
+
+    assert len(result.gradients) == 1
+    assert result.plan.metadata == {"gradient_count": 1}
+
+
+@pytest.mark.asyncio
+async def test_streaming_trainer_rejects_unvalidated_direct_experience_gradient():
+    from openviking.session.train import StreamingPolicyTrainer, StreamingPolicyTrainerConfig
+
+    class PassthroughGateRunner:
+        async def filter_gradients(self, gradients, *, analyses, policy_set):
+            del analyses, policy_set
+            return list(gradients), GateReport(
+                stage="post_gradient",
+                evaluated_count=len(gradients),
+                allowed_count=len(gradients),
+            )
+
+        async def filter_plan(self, plan_items, *, analyses, policy_set):
+            del analyses, policy_set
+            return list(plan_items), GateReport(
+                stage="post_plan",
+                evaluated_count=len(plan_items),
+                allowed_count=len(plan_items),
+            )
+
+    trainer = StreamingPolicyTrainer(
+        policy_set=_policy_set(),
+        rollout_analyzer=DummyAnalyzer(),
+        gradient_estimator=DummyEstimator(),
+        policy_optimizer=DummyOptimizer(),
+        policy_updater=DummyUpdater(),
+        context=PipelineContext(gate_runner=PassthroughGateRunner()),
+        config=StreamingPolicyTrainerConfig(
+            max_wait_seconds=0.01,
+            timer_check_interval_seconds=0.01,
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="experience gradients must be validated by the extraction post-validation hook",
+    ):
+        await trainer.submit_gradients([_unvalidated_experience_gradient()])
+
+    assert await trainer.close() is None
 
 
 @pytest.mark.asyncio

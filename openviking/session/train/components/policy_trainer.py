@@ -31,7 +31,7 @@ from openviking.session.train.domain import (
     ScopedRolloutTrainingResult,
 )
 from openviking.session.train.engine import PolicyTrainingEngine
-from openviking.session.train.gates import default_policy_gate_runner
+from openviking.session.train.gates import require_experience_gradients_post_validated
 from openviking.session.train.interfaces import (
     GradientEstimator,
     PolicyOptimizer,
@@ -87,6 +87,9 @@ class BatchPolicyTrainer:
             analyses=analyses,
         )
         gate_reports = list(ctx.execution_metadata.get("gate_reports", []) or [])
+        final_plan_gate_report = dict(getattr(plan, "metadata", {}) or {}).get("gate_report")
+        if isinstance(final_plan_gate_report, dict):
+            gate_reports.append(final_plan_gate_report)
         gate_reports.extend(
             report
             for report in dict(getattr(plan, "metadata", {}) or {}).get("gate_reports", [])
@@ -237,16 +240,10 @@ class StreamingPolicyTrainer:
             self.policy_set,
             self.context.gradient_context,
         )
+        require_experience_gradients_post_validated(gradients)
         gate_report = _pop_latest_gate_report(analysis)
-        if gate_report is None:
-            gate_runner = self.context.gate_runner or default_policy_gate_runner()
-            gradients, gate_report_obj = await gate_runner.filter_gradients(
-                list(gradients),
-                analyses=[analysis],
-                policy_set=self.policy_set,
-            )
-            gate_report = gate_report_obj.to_dict()
-        self.context.execution_metadata.setdefault("gate_reports", []).append(gate_report)
+        if gate_report is not None:
+            self.context.execution_metadata.setdefault("gate_reports", []).append(gate_report)
         tracer.info(
             "StreamingPolicyTrainer buffered rollout "
             f"rollout_case={rollout.case.name} "
@@ -294,16 +291,10 @@ class StreamingPolicyTrainer:
             raise RuntimeError("StreamingPolicyTrainer is closed")
         gate_report = None
         if gradients:
+            require_experience_gradients_post_validated(gradients)
             gate_report = _pop_latest_gate_report(analysis) if analysis is not None else None
-            if gate_report is None:
-                gate_runner = self.context.gate_runner or default_policy_gate_runner()
-                gradients, gate_report_obj = await gate_runner.filter_gradients(
-                    list(gradients),
-                    analyses=[analysis] if analysis is not None else [],
-                    policy_set=self.policy_set,
-                )
-                gate_report = gate_report_obj.to_dict()
-            self.context.execution_metadata.setdefault("gate_reports", []).append(gate_report)
+            if gate_report is not None:
+                self.context.execution_metadata.setdefault("gate_reports", []).append(gate_report)
         if not gradients:
             # No gradients to submit — return a no-op result immediately.
             return RolloutTrainingResult(
@@ -474,7 +465,6 @@ class StreamingPolicyTrainer:
         return result
 
 
-
 def _collect_post_validation_retries(
     *,
     analyses: list[RolloutAnalysis],
@@ -482,7 +472,9 @@ def _collect_post_validation_retries(
 ) -> list[dict[str, Any]]:
     retries: list[dict[str, Any]] = []
     for analysis in analyses:
-        for item in dict(getattr(analysis, "metadata", {}) or {}).get("post_validation_retries", []):
+        for item in dict(getattr(analysis, "metadata", {}) or {}).get(
+            "post_validation_retries", []
+        ):
             if isinstance(item, dict):
                 retries.append(item)
     for plan in plans:
@@ -507,6 +499,7 @@ def _gate_summary(reports: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
         stage_summary["rejected"] += int(report.get("rejected_count") or 0)
         stage_summary["warnings"] += int(report.get("warning_count") or 0)
     return summary
+
 
 def _pop_latest_gate_report(analysis: RolloutAnalysis | None) -> dict[str, Any] | None:
     if analysis is None:

@@ -1518,6 +1518,7 @@ async def test_patch_merge_post_plan_retains_valid_sibling_after_retry_exhaustio
     assert captured["decision"] is None
     assert captured["retained_names"] == ["valid_experience"]
     assert [item.target_name for item in plan.items] == ["valid_experience"]
+    assert plan.metadata["gate_report"] == context.metadata["final_gate_report"]
     event = context.metadata["post_validation_retries"][-1]
     assert event["final_outcome"] == "accepted_valid_subset_after_max_retries"
     assert event["retained_count"] == 1

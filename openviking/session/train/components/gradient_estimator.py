@@ -42,6 +42,7 @@ from openviking.session.train.gates import (
     build_gate_retry_instruction,
     candidate_retry_draft,
     default_policy_gate_runner,
+    mark_experience_gradients_post_validated,
 )
 from openviking.session.train.gradients import PatchSemanticGradient
 from openviking.session.train.utils import first_uri, safe_int
@@ -306,14 +307,12 @@ class ExperienceGradientEstimator:
                 experience_set=request.experience_set,
                 schema=self._get_experience_schema(),
             )
-            gated, report = await _evaluate_experience_gradients(
-                gradients=gradients,
-                analysis=analysis,
-                experience_set=request.experience_set,
-            )
-            _record_gate_report(report, analysis=analysis, context=context)
-            context.metadata["final_gate_report"] = report.to_dict()
-            return gated
+            if gradients and not isinstance(context.metadata.get("final_gate_report"), dict):
+                raise RuntimeError(
+                    "experience extraction completed without post-validation gate execution"
+                )
+            mark_experience_gradients_post_validated(gradients)
+            return gradients
         finally:
             request.diagnostics.update(
                 {
@@ -409,6 +408,7 @@ class ExperienceGradientEstimator:
                         operations,
                         retained_upserts=retained_valid_upserts,
                     )
+                _record_final_gate_report(report, analysis=analysis_obj, context=context)
                 return None
             report_dict = report.to_dict()
             gate_retry_history.append(report)
@@ -437,7 +437,9 @@ class ExperienceGradientEstimator:
                     )
                     event["final_outcome"] = "accepted_valid_subset_after_max_retries"
                     event["retained_count"] = len(retained_valid_upserts)
+                    _record_final_gate_report(report, analysis=analysis_obj, context=context)
                     return None
+                _record_final_gate_report(report, analysis=analysis_obj, context=context)
                 return PostValidationRetryDecision(discard=True)
             return PostValidationRetryDecision(
                 retry=True,
@@ -634,6 +636,16 @@ def _record_gate_report(
 ) -> None:
     context.metadata.setdefault("gate_reports", []).append(report.to_dict())
     analysis.metadata.setdefault("gate_reports", []).append(report.to_dict())
+
+
+def _record_final_gate_report(
+    report: GateReport,
+    *,
+    analysis: RolloutAnalysis,
+    context: ExperienceGradientContext,
+) -> None:
+    context.metadata["final_gate_report"] = report.to_dict()
+    _record_gate_report(report, analysis=analysis, context=context)
 
 
 def _analysis_from_context_metadata(context: ExperienceGradientContext) -> RolloutAnalysis:

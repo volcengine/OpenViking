@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import openviking.session.train.gates as gates_module
 from openviking.session.memory.dataclass import MemoryFile, StoredLink
 from openviking.session.train.domain import (
     CriterionResult,
@@ -31,6 +32,7 @@ from openviking.session.train.gates import (
     ExperienceTriggerRuntimeGate,
     GateDecision,
     GateReport,
+    GateRunner,
     GateTarget,
     build_gate_retry_instruction,
     candidate_retry_draft,
@@ -239,6 +241,66 @@ def test_default_policy_gate_runner_uses_layered_experience_quality_gates():
     assert "Action is create/update" not in contract
     assert "Candidate-shape trigger" not in contract
     assert "Update safety" not in contract
+
+
+@pytest.mark.asyncio
+async def test_gate_runner_traces_each_applicable_gate_result_once(monkeypatch):
+    class AllowGate:
+        name = "allow_gate"
+        mode = "enforce"
+
+        def applies_to(self, target):
+            return True
+
+        async def evaluate(self, target):
+            return None
+
+    class RejectGate:
+        name = "reject_gate"
+        mode = "enforce"
+
+        def applies_to(self, target):
+            return True
+
+        async def evaluate(self, target):
+            return GateDecision(
+                gate_name=self.name,
+                action="reject",
+                reason="candidate\nfailed semantic review",
+            )
+
+    target, _ = _gradient_target(
+        '{"pass": true, "root_cause_quality": "sufficient", '
+        '"reason": "unused", "expected_behavior_change": "unused", '
+        '"repair_prompt": "", "risks": []}'
+    )
+    assert target.gradient is not None
+    assert target.analysis is not None
+    assert target.policy_set is not None
+    trace_events = []
+    monkeypatch.setattr(
+        gates_module.tracer,
+        "info",
+        lambda message, **kwargs: trace_events.append(str(message)),
+    )
+
+    gated, report = await GateRunner([AllowGate(), RejectGate()]).filter_gradients(
+        [target.gradient],
+        analyses=[target.analysis],
+        policy_set=target.policy_set,
+    )
+
+    assert gated == []
+    assert report.rejected_count == 1
+    assert len(trace_events) == 2
+    assert all(event.startswith("policy_gate.result ") for event in trace_events)
+    assert "gate=allow_gate" in trace_events[0]
+    assert "action=allow" in trace_events[0]
+    assert "reason=passed" in trace_events[0]
+    assert "gate=reject_gate" in trace_events[1]
+    assert "action=reject" in trace_events[1]
+    assert "candidate failed semantic review" in trace_events[1]
+    assert "\n" not in trace_events[1]
 
 
 @pytest.mark.asyncio
@@ -1025,11 +1087,11 @@ async def test_evidence_safety_gate_rejects_mandatory_unrequested_conventions():
 @pytest.mark.parametrize(
     "literal",
     [
-        'e.g., 30 standard hours per day',
-        'Evidence binding: user request specifying a 3-5 year range',
+        "e.g., 30 standard hours per day",
+        "Evidence binding: user request specifying a 3-5 year range",
         'the "STD SALES" tab',
-        'use recalc.py to validate formulas',
-        'a May Weeks 1-4 sales plan',
+        "use recalc.py to validate formulas",
+        "a May Weeks 1-4 sales plan",
     ],
 )
 async def test_portability_gate_rejects_source_case_literals(literal):
@@ -1588,9 +1650,9 @@ def test_candidate_retry_draft_keeps_only_rejected_candidates():
 
     retry_draft = candidate_retry_draft(draft, target_names={"repair_me"})
 
-    assert [
-        item.memory_fields["experience_name"] for item in retry_draft.upsert_operations
-    ] == ["repair_me"]
+    assert [item.memory_fields["experience_name"] for item in retry_draft.upsert_operations] == [
+        "repair_me"
+    ]
     assert retry_draft.delete_file_contents == []
     assert len(draft.upsert_operations) == 2
 
