@@ -30,12 +30,25 @@ export class OpenVikingTransport {
   private readonly profile: boolean;
 
   constructor(config: ClientConfig) {
-    if (!config.baseUrl?.trim())
-      throw new TypeError("OpenViking: baseUrl is required");
-    const url = new URL(config.baseUrl);
+    const baseUrl = config.baseUrl?.trim();
+    if (!baseUrl) throw new TypeError("OpenViking: baseUrl is required");
+    if (!/^https?:\/\/[^/]/i.test(baseUrl))
+      throw new TypeError(
+        "OpenViking: baseUrl must be an absolute HTTP(S) URL",
+      );
+    let url: URL;
+    try {
+      url = new URL(baseUrl);
+    } catch {
+      throw new TypeError("OpenViking: baseUrl must be an absolute URL");
+    }
     if (!/^https?:$/.test(url.protocol))
       throw new TypeError("OpenViking: baseUrl must use http or https");
-    this.baseUrl = config.baseUrl.replace(/\/+$/, "");
+    if (url.search || url.hash)
+      throw new TypeError(
+        "OpenViking: baseUrl must not include a query or fragment",
+      );
+    this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.fetcher = config.fetch ?? globalThis.fetch;
     if (!this.fetcher)
       throw new TypeError("OpenViking: fetch is not available");

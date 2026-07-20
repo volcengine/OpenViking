@@ -15,6 +15,26 @@ const ok = (result: unknown) =>
   });
 
 describe("OpenVikingClient", () => {
+  it("normalizes and validates base URLs", () => {
+    const client = new OpenVikingClient({
+      baseUrl: "  https://example.com/openviking///  ",
+      fetch: vi.fn<typeof fetch>(),
+    });
+    expect(client.baseUrl).toBe("https://example.com/openviking");
+
+    for (const baseUrl of [
+      "ftp://example.com",
+      "localhost:1933",
+      "http:///missing-host",
+      "https://example.com?profile=1",
+      "https://example.com#fragment",
+    ]) {
+      expect(
+        () => new OpenVikingClient({ baseUrl, fetch: vi.fn<typeof fetch>() }),
+      ).toThrow(TypeError);
+    }
+  });
+
   it("normalizes URIs", () => {
     expect(normalizeURI("resources/docs")).toBe("viking://resources/docs");
     expect(normalizeURI("viking://resources/docs")).toBe(
@@ -64,7 +84,9 @@ describe("OpenVikingClient", () => {
   });
 
   it("sends dry_run for prune_orphans reindex requests", async () => {
-    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok({ status: "completed" }));
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(ok({ status: "completed" }));
     const client = new OpenVikingClient({
       baseUrl: "https://example.com",
       fetch: fetcher,

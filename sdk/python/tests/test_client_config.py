@@ -50,3 +50,24 @@ def test_url_is_required_when_missing_everywhere(monkeypatch):
 
     with pytest.raises(ValueError, match="url is required"):
         AsyncHTTPClient()
+
+
+def test_url_is_trimmed_before_client_initialization():
+    client = AsyncHTTPClient(url="  https://example.com/openviking///  ")
+
+    assert client._url == "https://example.com/openviking"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "ftp://example.com",
+        "localhost:1933",
+        "http:///missing-host",
+        "https://example.com?profile=1",
+        "https://example.com#fragment",
+    ],
+)
+def test_url_rejects_invalid_base_urls(url):
+    with pytest.raises(ValueError, match="OpenViking URL"):
+        AsyncHTTPClient(url=url)

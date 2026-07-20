@@ -28,9 +28,9 @@ func NewClient(cfg Config) (*Client, error) {
 	if strings.TrimSpace(cfg.BaseURL) == "" {
 		return nil, fmt.Errorf("openviking: BaseURL is required")
 	}
-	baseURL := strings.TrimRight(cfg.BaseURL, "/")
+	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
 	parsed, err := url.Parse(baseURL)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return nil, fmt.Errorf("openviking: invalid BaseURL %q", cfg.BaseURL)
 	}
 

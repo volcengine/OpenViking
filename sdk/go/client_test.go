@@ -78,6 +78,31 @@ func requireBodyKeysAbsent(t *testing.T, body map[string]any, keys ...string) {
 	}
 }
 
+func TestNewClientNormalizesAndValidatesBaseURL(t *testing.T) {
+	client, err := NewClient(Config{BaseURL: "  https://example.com/openviking///  "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.baseURL != "https://example.com/openviking" {
+		t.Fatalf("baseURL = %q", client.baseURL)
+	}
+
+	invalid := []string{
+		"ftp://example.com",
+		"localhost:1933",
+		"http:///missing-host",
+		"https://example.com?profile=1",
+		"https://example.com#fragment",
+	}
+	for _, baseURL := range invalid {
+		t.Run(baseURL, func(t *testing.T) {
+			if _, err := NewClient(Config{BaseURL: baseURL}); err == nil {
+				t.Fatalf("NewClient(%q) succeeded", baseURL)
+			}
+		})
+	}
+}
+
 func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/search/find" {

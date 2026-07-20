@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from difflib import get_close_matches
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit
 
 OPENVIKING_CLI_CONFIG_ENV = "OPENVIKING_CLI_CONFIG_FILE"
 DEFAULT_OVCLI_CONF = Path.home() / ".openviking" / "ovcli.conf"
@@ -94,6 +95,19 @@ def _parse_extra_headers(value: object, *, path: str) -> dict[str, str]:
             raise ValueError(f"Invalid value for '{path}.{key}': expected string")
         parsed[key] = header_value
     return parsed
+
+
+def _normalize_base_url(value: str) -> str:
+    normalized = value.strip().rstrip("/")
+    try:
+        parsed = urlsplit(normalized)
+    except ValueError as exc:
+        raise ValueError(f"invalid OpenViking URL: {value!r}") from exc
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        raise ValueError(f"OpenViking URL must be an absolute HTTP(S) URL: {value!r}")
+    if parsed.query or parsed.fragment:
+        raise ValueError(f"OpenViking URL must not include a query or fragment: {value!r}")
+    return normalized
 
 
 def _unknown_field_error(path: str, key: str, allowed_keys: set[str]) -> ValueError:
@@ -223,6 +237,12 @@ def resolve_client_config(
     if profile_enabled is None and cli_config is not None:
         resolved_profile_enabled = cli_config.profile
 
+    if not resolved_url:
+        raise ValueError(
+            "url is required. Pass it explicitly, set OPENVIKING_URL, or configure ovcli.conf."
+        )
+    resolved_url = _normalize_base_url(resolved_url)
+
     resolved_extra_headers = dict(extra_headers) if extra_headers is not None else {}
     if extra_headers is None and cli_config is not None:
         resolved_extra_headers = dict(cli_config.extra_headers)
@@ -231,7 +251,7 @@ def resolve_client_config(
         cli_config is not None
         and cli_config.url
         and resolved_url
-        and cli_config.url.rstrip("/") == resolved_url.rstrip("/")
+        and cli_config.url.strip().rstrip("/") == resolved_url
     ):
         resolved_gateway_token = cli_config.gateway_token
 
@@ -239,13 +259,8 @@ def resolve_client_config(
     if resolved_upload_mode is None and cli_config is not None:
         resolved_upload_mode = cli_config.upload_mode
 
-    if not resolved_url:
-        raise ValueError(
-            "url is required. Pass it explicitly, set OPENVIKING_URL, or configure ovcli.conf."
-        )
-
     return ClientConfig(
-        url=resolved_url.rstrip("/"),
+        url=resolved_url,
         api_key=resolved_api_key,
         account=resolved_account,
         user=resolved_user,
