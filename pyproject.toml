@@ -87,6 +87,8 @@ dependencies = [
     "lark-oapi>=1.5.3",
     "mcp>=1.27.0",
     "pathspec>=1.1.1",
+    "grep-ast>=0.8.1",
+    "tree-sitter-language-pack>=1.12,<2.0",
 ]
 
 
@@ -227,6 +229,9 @@ openviking = [
     "bin/ov.exe",
     "storage/vectordb/engine/*.abi3.so",
     "storage/vectordb/engine/*.pyd",
+    "parse/parsers/code/ast/queries/**/*.md",
+    "parse/parsers/code/ast/queries/**/*.txt",
+    "parse/parsers/code/ast/queries/**/*.scm",
 ]
 vikingbot = [
     "**/*.mjs",

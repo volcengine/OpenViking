@@ -4,9 +4,10 @@
 
 import importlib
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 from openviking.parse.parsers.code.ast.languages.base import LanguageExtractor
+from openviking.parse.parsers.code.ast.languages.process_engine import ProcessAutoExtractor
 from openviking.parse.parsers.code.ast.skeleton import CodeSkeleton
 from openviking_cli.utils import get_logger
 
@@ -55,14 +56,23 @@ _EXTRACTOR_REGISTRY: Dict[str, tuple] = {
 }
 
 
+def _registry_factory(lang: str) -> LanguageExtractor:
+    """Build the handwritten rich per-language extractor."""
+    module_path, class_name, kwargs = _EXTRACTOR_REGISTRY[lang]
+    mod = importlib.import_module(module_path)
+    cls = getattr(mod, class_name)
+    return cls(**kwargs)
+
+
 class ASTExtractor:
     """Dispatches to per-language tree-sitter extractors for supported languages.
 
     Unsupported languages return None, signalling the caller to fall back to LLM.
     """
 
-    def __init__(self):
+    def __init__(self, extractor_factory: Optional[Callable[[str], LanguageExtractor]] = None):
         self._cache: Dict[str, Optional[LanguageExtractor]] = {}
+        self._factory = extractor_factory or _registry_factory
 
     def _detect_language(self, file_name: str) -> Optional[str]:
         path = Path(file_name)
@@ -78,17 +88,14 @@ class ASTExtractor:
         return None
 
     def _get_extractor(self, lang: Optional[str]) -> Optional[LanguageExtractor]:
-        if lang is None or lang not in _EXTRACTOR_REGISTRY:
+        if lang is None or lang not in _EXT_MAP.values():
             return None
 
         if lang in self._cache:
             return self._cache[lang]
 
-        module_path, class_name, kwargs = _EXTRACTOR_REGISTRY[lang]
         try:
-            mod = importlib.import_module(module_path)
-            cls = getattr(mod, class_name)
-            extractor = cls(**kwargs)
+            extractor = self._factory(lang)
             self._cache[lang] = extractor
             return extractor
         except Exception as e:
@@ -146,3 +153,14 @@ def get_extractor() -> ASTExtractor:
     if _extractor is None:
         _extractor = ASTExtractor()
     return _extractor
+
+
+_process_extractor: Optional[ProcessAutoExtractor] = None
+
+
+def get_process_extractor() -> ProcessAutoExtractor:
+    """Simplified process()-backed extractor for code_skeleton_provider='process'."""
+    global _process_extractor
+    if _process_extractor is None:
+        _process_extractor = ProcessAutoExtractor()
+    return _process_extractor
