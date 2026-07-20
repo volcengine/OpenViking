@@ -4,9 +4,6 @@
 
 from openviking.telemetry import tracer
 
-from .causal_signal import ExperienceCausalSignalGate
-from .evidence_safety import ExperienceEvidenceSafetyGate
-from .language_binding import ExperienceLanguageBindingGate
 from .models import (
     GateAction,
     GateDecision,
@@ -17,9 +14,7 @@ from .models import (
     GateTarget,
     PolicyGate,
 )
-from .name_polarity import ExperienceNamePolarityGate
 from .plan_quality import ExperiencePlanQualityGate
-from .portability import ExperiencePortabilityGate
 from .retry import (
     build_gate_retry_instruction,
     candidate_retry_draft,
@@ -32,19 +27,10 @@ from .runner import (
     mark_experience_gradients_post_validated,
     require_experience_gradients_post_validated,
 )
-from .skill_readability import ExperienceSkillReadabilityGate
-from .specificity import ExperienceSpecificityGate
 
 __all__ = [
-    "ExperienceCausalSignalGate",
-    "ExperienceEvidenceSafetyGate",
-    "ExperienceLanguageBindingGate",
-    "ExperienceNamePolarityGate",
     "ExperiencePlanQualityGate",
-    "ExperiencePortabilityGate",
     "ExperienceRootCausePreventionGate",
-    "ExperienceSkillReadabilityGate",
-    "ExperienceSpecificityGate",
     "GateAction",
     "GateDecision",
     "GateEvaluation",

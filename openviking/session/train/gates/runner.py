@@ -11,15 +11,8 @@ from openviking.session.train.interfaces import SemanticGradient
 from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
 
-from .causal_signal import ExperienceCausalSignalGate
-from .evidence_safety import ExperienceEvidenceSafetyGate
-from .language_binding import ExperienceLanguageBindingGate
 from .models import GateAction, GateDecision, GateMode, GateReport, GateTarget, PolicyGate
-from .name_polarity import ExperienceNamePolarityGate
 from .plan_quality import ExperiencePlanQualityGate
-from .portability import ExperiencePortabilityGate
-from .skill_readability import ExperienceSkillReadabilityGate
-from .specificity import ExperienceSpecificityGate
 
 _EXPERIENCE_GATE_VALIDATION_KEY = "experience_gate_validation"
 
@@ -123,20 +116,9 @@ class GateRunner:
 
 
 def default_policy_gate_runner() -> GateRunner:
-    """Default hard-coded deterministic gates used by session policy training."""
+    """Semantic review applied to materially changed final experience plans."""
 
-    return GateRunner(
-        gates=[
-            ExperienceCausalSignalGate(mode="enforce"),
-            ExperienceSkillReadabilityGate(mode="enforce"),
-            ExperienceNamePolarityGate(mode="enforce"),
-            ExperienceSpecificityGate(mode="enforce"),
-            ExperienceLanguageBindingGate(mode="enforce"),
-            ExperienceEvidenceSafetyGate(mode="enforce"),
-            ExperiencePortabilityGate(mode="enforce"),
-            ExperiencePlanQualityGate(mode="enforce"),
-        ]
-    )
+    return GateRunner(gates=[ExperiencePlanQualityGate(mode="enforce")])
 
 
 def mark_experience_gradients_post_validated(

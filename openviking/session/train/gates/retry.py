@@ -17,62 +17,10 @@ def default_experience_gate_contract() -> str:
     """Prompt-facing contract enforced by the default experience gates."""
 
     return """## Gate Contract (enforced)
-Your experience output will be rejected unless every experience satisfies these gates:
-
-1. Causal eligibility
-- Non-success trajectories are eligible for experience learning by default,
-  including creating new experiences.
-- Treat Experience Repair Signal as advisory context, not as an authorization gate:
-  legacy Action=skip, Recommended operation=skip, Existing target experience=none,
-  or Trigger boundary=none must not suppress a reusable repair for a failed or
-  partially failed trajectory.
-- Existing target experience=none only means no existing loaded memory should be modified;
-  it must not suppress creating a brand-new experience when New experience action=create
-  or when the first reward-changing mistake is reusable and preventable.
-- Do not output experiences for Outcome=success.
-
-2. Skill-loader readability
-- Experience content must include exactly the runtime-facing sections used by the
-  skill experience loader: `## Situation`, `## Reminder`, `## Procedure`, and
-  `## Anti-pattern`.
-- `## Situation` must include non-empty `Applies when`, `Does not apply when`,
-  `Evidence binding`, and `Decision boundary` fields. These let a future agent
-  decide whether and when to apply the experience using runtime-visible facts.
-- `Does not apply when` must describe a task-pattern mismatch, not a temporal
-  stage such as "still reading/writing", "before final_response", or "before
-  writes complete"; the skill loader may read the experience before the later
-   boundary where it becomes actionable.
-
-3. Specific behavior delta
-- Reject generic reminders whose entire behavior change is only to check all
-  requirements, ensure compliance, or review carefully. The experience must
-  name a discriminating runtime condition and a concrete corrective action.
-
-4. Explicit language binding
-- Never infer an output language solely from an audience's geography. Follow an
-  explicit language instruction; otherwise preserve the user's language choice
-  or ask when the choice materially affects the deliverable.
-
-5. Evidence-safe missing data
-- Do not invent required values, use guessed placeholders, or make assumptions
-  merely to fill a required schema. Only use a placeholder or assumption when
-  the user explicitly permits it; otherwise ask, preserve a clearly marked
-  unavailable value, or disclose the limitation.
-
-6. Portable runtime wording
-- Replace source-case literals such as example numbers, date/month ranges,
-  spreadsheet tab names, and helper script filenames with semantic runtime
-  bindings. Keep an exact literal only when an authoritative runtime source
-  requires that same invariant across future cases.
-
-7. Final semantic quality
-- A final experience is semantically rechecked when merge planning combines
-  multiple sources, changes an existing experience, or materially rewrites an
-  extracted candidate. It must not turn genre conventions into hidden
-  requirements, hardcode factual outputs, combine unrelated repairs, or
-  prescribe behavior unsupported by runtime evidence.
-
-If you cannot satisfy this contract, output no experience changes."""
+Every candidate must be grounded in the source trajectory and describe a behavior change that
+would prevent the failed behavior in a future similar case. A merged final experience is reviewed
+again when merge planning combines sources, changes an existing experience, or materially rewrites
+the candidate. If no supported preventive experience can be produced, output no changes."""
 
 
 def build_gate_retry_instruction(

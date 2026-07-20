@@ -32,7 +32,28 @@ from openviking.session.train.components.trajectory_analyzer import (
     _trajectory_operation_validation_issues,
     _trajectory_validation_issues,
 )
-from openviking.session.train.gates import ExperienceSkillReadabilityGate, GateRunner
+from openviking.session.train.gates import GateDecision, GateRunner
+
+
+class RejectNamedPlanGate:
+    name = "test_reject_named_plan"
+    mode = "enforce"
+
+    def applies_to(self, target):
+        return target.target_kind == "plan_item"
+
+    async def evaluate(self, target):
+        if "invalid" not in target.target_name and "bad" not in target.target_name:
+            return None
+        return GateDecision(
+            gate_name=self.name,
+            action="reject",
+            reason="test candidate requires repair",
+            evidence={"target_name": target.target_name},
+            retriable=True,
+            repair_prompt="Repair the rejected test candidate.",
+        )
+
 
 DEFAULT_TRIGGER_CODE = (
     'def should_trigger(ctx):\n    return ctx.get("candidate_tool") == "test_tool"\n'
@@ -1356,13 +1377,13 @@ async def test_patch_merge_post_plan_retry_includes_latest_draft(monkeypatch):
         policy_set,
         PatchMergePolicyOptimizerContext(
             request_context=fake_request_context(),
-            gate_runner=GateRunner([ExperienceSkillReadabilityGate()]),
+            gate_runner=GateRunner([RejectNamedPlanGate()]),
         ),
     )
 
     assert captured["decision"].retry is True
     assert captured["decision"].include_latest_draft is True
-    assert "corresponding `situation`, `reminder`, `procedure`" in captured["decision"].instruction
+    assert "Repair the rejected test candidate." in captured["decision"].instruction
 
 
 @pytest.mark.asyncio
@@ -1416,7 +1437,7 @@ async def test_patch_merge_post_plan_rechecks_retry_and_discards_invalid_final_d
 
     context = PatchMergePolicyOptimizerContext(
         request_context=fake_request_context(),
-        gate_runner=GateRunner([ExperienceSkillReadabilityGate()]),
+        gate_runner=GateRunner([RejectNamedPlanGate()]),
     )
     await PatchMergePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
         [gradient], policy_set, context
@@ -1507,7 +1528,7 @@ async def test_patch_merge_post_plan_retains_valid_sibling_after_retry_exhaustio
 
     context = PatchMergePolicyOptimizerContext(
         request_context=fake_request_context(),
-        gate_runner=GateRunner([ExperienceSkillReadabilityGate()]),
+        gate_runner=GateRunner([RejectNamedPlanGate()]),
     )
     plan = await PatchMergePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
         gradients,
@@ -1629,7 +1650,7 @@ async def test_patch_merge_post_plan_carries_valid_sibling_across_retry_drafts(m
 
     context = PatchMergePolicyOptimizerContext(
         request_context=fake_request_context(),
-        gate_runner=GateRunner([ExperienceSkillReadabilityGate()]),
+        gate_runner=GateRunner([RejectNamedPlanGate()]),
     )
     plan = await PatchMergePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
         gradients,
