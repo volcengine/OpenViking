@@ -1,0 +1,14 @@
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "cc0db51708ac1be44f6ee514df11dbea59d69eef",
+  "prompts": {},
+  "humans": {
+    "h_76fa89855b2583": {
+      "author": "ziheng.li <ziheng.li@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
