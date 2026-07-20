@@ -574,8 +574,8 @@ class SessionCompressorV3:
         strict_extract_errors: bool = False,
         collect_memory_diff: bool = False,
     ) -> dict[str, Any]:
-        runtime_messages, committed_evaluation = _separate_training_evaluation_messages(messages)
-        if not runtime_messages or ctx is None:
+        committed_evaluation = _training_evaluation_from_messages(messages)
+        if not messages or ctx is None:
             return {"case_count": 0, "submitted": 0, "reason": "missing_messages_or_ctx"}
         if not cases:
             tracer.info("No commit training case memories extracted; skipping streaming train")
@@ -598,7 +598,7 @@ class SessionCompressorV3:
             optimizer_context = PatchMergePolicyOptimizerContext(request_context=ctx)
             gradient_context = ExperienceGradientContext(
                 request_context=ctx,
-                messages=list(runtime_messages),
+                messages=list(messages),
                 strict_extract_errors=strict_extract_errors,
             )
             analysis_context = TrajectoryAnalyzerContext(
@@ -679,7 +679,7 @@ class SessionCompressorV3:
                 case_uri = _case_uri_for_case(case, case_uri_map)
                 rollout = Rollout(
                     case=case,
-                    messages=list(runtime_messages),
+                    messages=list(messages),
                     policy_snapshot_id=policy_snapshot_id,
                     evaluation=committed_evaluation,
                 )
@@ -1013,19 +1013,13 @@ def _message_text(message: Message) -> str:
 
 
 def _training_messages_after_case_spec(messages: list[Message]) -> list[Message]:
-    """Return rollout/evaluation messages after CaseSpec.
-
-    Filter legacy tau2 embedded evaluation text messages so the fast path uses
-    the canonical OpenViking OutcomeEvaluation message only once.
-    """
-    return [
-        message for message in messages[1:] if not _is_embedded_rollout_evaluation_message(message)
-    ]
+    """Return every rollout message after the consumed CaseSpec, in order."""
+    return list(messages[1:])
 
 
-def _separate_training_evaluation_messages(
+def _training_evaluation_from_messages(
     messages: list[Message],
-) -> tuple[list[Message], RubricEvaluation | None]:
+) -> RubricEvaluation | None:
     evaluation: RubricEvaluation | None = None
     for message in messages:
         text = _message_text(message).strip()
@@ -1033,7 +1027,7 @@ def _separate_training_evaluation_messages(
             parsed = _training_evaluation_from_message(text)
             if parsed is not None:
                 evaluation = parsed
-    return list(messages), evaluation
+    return evaluation
 
 
 def _training_evaluation_from_message(text: str) -> RubricEvaluation | None:

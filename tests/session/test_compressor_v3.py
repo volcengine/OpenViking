@@ -15,7 +15,7 @@ from openviking.session.compressor_v3 import (
     SessionCompressorV3,
     _experience_root_uri,
     _finalize_experience_dispositions,
-    _separate_training_evaluation_messages,
+    _training_evaluation_from_messages,
 )
 from openviking.session.memory.dataclass import (
     MemoryFile,
@@ -858,10 +858,9 @@ def test_training_outcome_evaluation_is_parsed_without_removing_message():
     )
 
     messages = [runtime_message, evaluation_message]
-    preserved_messages, evaluation = _separate_training_evaluation_messages(messages)
+    evaluation = _training_evaluation_from_messages(messages)
 
-    assert preserved_messages == [runtime_message, evaluation_message]
-    assert messages == preserved_messages
+    assert messages == [runtime_message, evaluation_message]
     assert evaluation is not None
     assert evaluation.score == pytest.approx(0.25)
     assert evaluation.criterion_results[0].feedback == ["verification missing"]
@@ -1391,7 +1390,7 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
     assert any(link["from_uri"] == case_uri for link in exp_file.backlinks)
 
 
-def test_training_messages_after_case_spec_filters_legacy_embedded_evaluation_message():
+def test_training_messages_after_case_spec_preserves_all_remaining_messages_in_order():
     from openviking.session.compressor_v3 import _training_messages_after_case_spec
 
     case_spec = _case_spec_message()
@@ -1415,5 +1414,6 @@ def test_training_messages_after_case_spec_filters_legacy_embedded_evaluation_me
         [case_spec, *rollout_messages, legacy_eval, outcome_eval]
     ) == [
         *rollout_messages,
+        legacy_eval,
         outcome_eval,
     ]

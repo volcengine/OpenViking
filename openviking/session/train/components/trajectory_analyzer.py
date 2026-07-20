@@ -279,10 +279,7 @@ class TrajectoryRolloutAnalyzer:
             latest_draft: Any = None,
         ):
             _ensure_trajectory_case_name(operations, case_name=case_name)
-            issues = _trajectory_validation_issues(
-                operations,
-                evidence_sources=evidence_sources,
-            )
+            issues = _trajectory_validation_issues(operations)
             if not issues:
                 if retry_count:
                     validation_events.append(
@@ -355,10 +352,7 @@ class TrajectoryRolloutAnalyzer:
             traj_ops, skill_ops = _split_operations_by_type(
                 operations, target_type=_TRAJECTORY_MEMORY_TYPE
             )
-            traj_ops = _filter_invalid_trajectory_operations(
-                traj_ops,
-                evidence_sources=evidence_sources,
-            )
+            traj_ops = _filter_invalid_trajectory_operations(traj_ops)
             skill_gradients = _skill_operations_to_gradients(
                 skill_ops,
                 viking_fs=viking_fs,
@@ -502,8 +496,6 @@ class TrajectoryRolloutAnalyzer:
 
 def _trajectory_validation_issues(
     operations: Any,
-    *,
-    evidence_sources: dict[str, Any] | None = None,
 ) -> list[_TrajectoryValidationIssue]:
     issues: list[_TrajectoryValidationIssue] = []
     trajectory_operations = [
@@ -525,13 +517,7 @@ def _trajectory_validation_issues(
             _normalize_trajectory_retrieval_anchor(raw_fields)
         fields = dict(raw_fields)
         name = str(fields.get("trajectory_name") or _fallback_trajectory_name(op))
-        issues.extend(
-            _trajectory_operation_validation_issues(
-                name,
-                fields,
-                evidence_sources=evidence_sources,
-            )
-        )
+        issues.extend(_trajectory_operation_validation_issues(name, fields))
     return issues
 
 
@@ -555,10 +541,7 @@ def _normalize_trajectory_retrieval_anchor(fields: dict[str, Any]) -> None:
 def _trajectory_operation_validation_issues(
     target_name: str,
     fields: dict[str, Any],
-    *,
-    evidence_sources: dict[str, Any] | None = None,
 ) -> list[_TrajectoryValidationIssue]:
-    del evidence_sources
     issues: list[_TrajectoryValidationIssue] = []
     required_fields = (
         "trajectory_name",
@@ -694,8 +677,6 @@ def _trajectory_validation_retry_instruction(issues: list[_TrajectoryValidationI
 
 def _filter_invalid_trajectory_operations(
     operations: ResolvedOperations,
-    *,
-    evidence_sources: dict[str, Any] | None = None,
 ) -> ResolvedOperations:
     valid_upserts = []
     rejected_names: list[str] = []
@@ -705,11 +686,7 @@ def _filter_invalid_trajectory_operations(
             continue
         fields = dict(op.memory_fields or {})
         name = str(fields.get("trajectory_name") or _fallback_trajectory_name(op))
-        issues = _trajectory_operation_validation_issues(
-            name,
-            fields,
-            evidence_sources=evidence_sources,
-        )
+        issues = _trajectory_operation_validation_issues(name, fields)
         if issues:
             rejected_names.append(name)
             continue

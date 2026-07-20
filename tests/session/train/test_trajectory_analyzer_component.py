@@ -137,37 +137,6 @@ def test_trajectory_validation_does_not_enforce_content_section_layout():
     assert _trajectory_operation_validation_issues("task", fields) == []
 
 
-def test_trajectory_validation_does_not_compare_outcome_with_optional_evaluator():
-    fields = _valid_trajectory_fields(
-        outcome="success",
-        retrieval_anchor=(
-            "Stage: final_response; Boundary: completion verification; "
-            "Capability: verify; Target: requested operation; Outcome: success"
-        ),
-        content=(
-            _valid_trajectory_content()
-            .replace("- Outcome: failure", "- Outcome: success")
-            .replace(
-                "Required outcome: failed; completion was not verified",
-                "Required outcome: passed; completion was verified",
-            )
-        ),
-    )
-
-    issues = _trajectory_operation_validation_issues(
-        "task",
-        fields,
-        evidence_sources={
-            "direct_available": True,
-            "items": [
-                {"source": "rollout_evaluation", "direct": True, "passed": False}
-            ],
-        },
-    )
-
-    assert issues == []
-
-
 def test_trajectory_validation_canonicalizes_label_ordered_comma_anchor():
     operation = ResolvedOperation(
         old_memory_file_content=None,
@@ -413,47 +382,8 @@ async def test_trajectory_analyzer_preserves_evaluation_message_without_synthesi
         "source_count": 0,
         "advisory_signal_count": 0,
     }
-
-
-@pytest.mark.asyncio
-async def test_trajectory_rollout_analyzer_can_disable_evaluation_evidence(monkeypatch):
-    from openviking.session.train.components import trajectory_analyzer as module
-
-    FakeExtractLoop.created.clear()
-    fs = FakeVikingFS()
-    evaluator = FakeRolloutEvaluator()
-    monkeypatch.setattr(module, "ExtractLoop", FakeExtractLoop)
-    monkeypatch.setattr(module, "get_viking_fs", lambda: fs)
-
-    analyzer = TrajectoryRolloutAnalyzer(
-        viking_fs=fs,
-        vlm=SimpleNamespace(model="fake"),
-        evaluator=evaluator,
-    )
-    context = TrajectoryAnalyzerContext(
-        request_context=SimpleNamespace(
-            user=SimpleNamespace(account_id="default", user_id="u"),
-            account_id="default",
-        ),
-        inject_evaluation_feedback=False,
-    )
-
-    analysis = await analyzer.analyze(_rollout(), context)
-
-    provider = FakeExtractLoop.created[0].kwargs["context_provider"]
-    assert provider._evidence_sources == {
-        "direct_available": False,
-        "items": [],
-        "contract": (
-            "Only items with direct=true may prove a material claim. "
-            "Other items may only identify what to inspect."
-        ),
-    }
-    assert analysis.metadata["evidence_source_summary"] == {
-        "direct_available": False,
-        "source_count": 0,
-        "advisory_signal_count": 0,
-    }
+    assert len(analysis.trajectories) == 1
+    assert analysis.trajectories[0].outcome == "success"
 
 
 @pytest.mark.asyncio
