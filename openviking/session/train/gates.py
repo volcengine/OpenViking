@@ -3,15 +3,12 @@
 """Policy training gates.
 
 Gates run inside the train framework before semantic gradients or planned
-policy updates are allowed to affect the policy set.  Most gates are lightweight
-deterministic checks; some gates may use an LLM for semantic reflection when the
-decision is about expected behavioral impact rather than static shape.
+policy updates are allowed to affect the policy set.
 """
 
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
@@ -26,55 +23,6 @@ logger = get_logger(__name__)
 GateStage = Literal["post_gradient", "post_plan"]
 GateMode = Literal["enforce", "warn", "shadow"]
 GateAction = Literal["allow", "warn", "reject"]
-
-_GATE_WRITE_SCOPE_RE = re.compile(
-    r"\b(?:cancel|cancell|upgrade|modify|change|update|write|book|reschedule)\b"
-    r"|取消|升级|修改|变更|更改|写入|预订|改签",
-    re.IGNORECASE,
-)
-_GATE_POLICY_SOURCE_RE = re.compile(r"\bpolicy\b|政策", re.IGNORECASE)
-_GATE_EXHAUSTIVE_POLICY_BRANCH_RE = re.compile(
-    r"(?:\ball\b|\bevery\b|所有|全部).{0,60}"
-    r"(?:\beligibility\b|\bcriteria\b|\bconditions?\b|\bbranches\b|资格|条件|分支)",
-    re.IGNORECASE | re.DOTALL,
-)
-_GATE_ANY_POLICY_BRANCH_RE = re.compile(
-    r"(?:\bany\b|任一|任何一项).{0,40}"
-    r"(?:\beligibility\b|\bcriterion\b|\bcriteria\b|\bconditions?\b|\bbranches\b|资格|条件|分支)"
-    r"|(?:\beligibility\b|\bcriterion\b|\bcriteria\b|\bconditions?\b|\bbranches\b|资格|条件|分支)"
-    r".{0,40}(?:\bany\b|任一|任何一项)",
-    re.IGNORECASE | re.DOTALL,
-)
-_GATE_EACH_OBJECT_RE = re.compile(
-    r"\b(?:each|every)\b.{0,40}\b(?:record|reservation|item|object)\b"
-    r"|(?:逐一|每个|每条).{0,40}(?:记录|预订|项目|对象)",
-    re.IGNORECASE | re.DOTALL,
-)
-_GATE_POLICY_OVERRIDE_RE = re.compile(
-    r"\bregardless\b.{0,40}\b(?:policy|eligib|condition)"
-    r"|\bwhether\s+or\s+not\b.{0,40}\b(?:policy|eligib|condition)"
-    r"|无论.{0,40}(?:符合|资格|条件|政策)"
-    r"|不符合.{0,40}(?:也|仍然|仍需|仍要|照样).{0,30}(?:取消|升级|修改|变更|更改|写入|预订|改签)"
-    r"|(?:用户意愿|user\s+intent).{0,40}(?:override|覆盖|优先于)",
-    re.IGNORECASE | re.DOTALL,
-)
-_GATE_REFUND_EXCEPTION_RE = re.compile(
-    r"\b(?:even\s+if|even\s+when|despite)\b.{0,40}"
-    r"(?:non[- ]?refundable|no\s+refund|without\s+(?:a\s+)?refund)"
-    r"|即使.{0,40}(?:无法退款|不可退款|不能退款|没有退款|不退款)",
-    re.IGNORECASE | re.DOTALL,
-)
-_GATE_UNCONDITIONAL_UNIVERSAL_WRITE_RE = re.compile(
-    r"\b(?:cancel|cancell|upgrade|modify|change|update|book|reschedule)\w*\b"
-    r".{0,40}\b(?:all|every)\b.{0,40}\b(?:unflown|upcoming|reservations?|records?|items?)\b"
-    r"|\b(?:all|every)\b.{0,40}\b(?:unflown|upcoming|reservations?|records?|items?)\b"
-    r".{0,40}\b(?:cancel|cancell|upgrade|modify|change|update|book|reschedule)\w*\b"
-    r"|(?:取消|升级|修改|变更|更改|预订|改签).{0,40}(?:所有|全部|每个|每一)"
-    r".{0,40}(?:未飞行|即将到来|预订|记录|项目|对象)"
-    r"|(?:所有|全部|每个|每一).{0,40}(?:未飞行|即将到来|预订|记录|项目|对象)"
-    r".{0,40}(?:执行\s*)?(?:cancel_reservation|取消|升级|修改|变更|更改|预订|改签)",
-    re.IGNORECASE | re.DOTALL,
-)
 
 
 @dataclass(slots=True)
@@ -310,33 +258,6 @@ class ExperienceRootCausePreventionGate:
         )
 
     async def evaluate(self, target: GateTarget) -> GateDecision | None:
-        if _is_observed_policy_override(target):
-            return GateDecision(
-                gate_name=self.name,
-                action="reject",
-                reason="experience overrides observed policy eligibility with a broader write scope",
-                evidence={
-                    "target_name": target.target_name,
-                    "deterministic_policy_override": True,
-                },
-                retriable=True,
-                repair_prompt=(
-                    "Preserve the observed policy's action-eligibility conditions. User acceptance "
-                    "of no refund or another unavailable benefit does not authorize applying the "
-                    "write to every in-scope object. Bind the action to observable policy branches; "
-                    "if the source does not expose a narrower runtime discriminator, output no change."
-                ),
-            )
-        if _is_observed_policy_branch_completion(target):
-            return GateDecision(
-                gate_name=self.name,
-                action="allow",
-                reason="experience deterministically completes all observed policy branches",
-                evidence={
-                    "target_name": target.target_name,
-                    "deterministic_policy_branch_completion": True,
-                },
-            )
         authoritative_behavior_anchor = _authoritative_behavior_anchor(target.analysis)
         prompt = _experience_root_cause_prevention_prompt(
             target,
@@ -874,72 +795,12 @@ def _analysis_for_trajectory(
     return None
 
 
-def _experience_structured_fields(target: GateTarget) -> dict[str, Any]:
-    fields: dict[str, Any] = {}
-    if target.gradient is not None:
-        fields = dict(getattr(target.gradient.after_file, "extra_fields", {}) or {})
-    elif target.plan_item is not None and isinstance(target.plan_item.metadata, dict):
-        for key in ("merge_memory_fields", "patch_metadata"):
-            value = target.plan_item.metadata.get(key)
-            if isinstance(value, dict):
-                fields.update(value)
-    return fields
-
-
 def _gradient_memory_type(gradient: SemanticGradient) -> str:
     fields = dict(getattr(gradient.after_file, "extra_fields", {}) or {})
     return str(
         getattr(gradient.after_file, "memory_type", "")
         or fields.get("memory_type")
         or "experiences"
-    )
-
-
-def _markdown_section(content: str, heading: str) -> str:
-    pattern = re.compile(rf"(?ims)^##\s+{re.escape(heading)}\s*\n(?P<body>.*?)(?=^##\s+|\Z)")
-    match = pattern.search(content or "")
-    return match.group("body").strip() if match else ""
-
-
-def _is_observed_policy_branch_completion(target: GateTarget) -> bool:
-    trajectory = target.trajectory
-    if trajectory is None or "observed policy text:" not in trajectory.content.lower():
-        return False
-
-    fields = _experience_structured_fields(target)
-    situation = str(fields.get("situation") or _markdown_section(target.after_content, "Situation"))
-    reminder = str(fields.get("reminder") or _markdown_section(target.after_content, "Reminder"))
-    procedure = str(fields.get("procedure") or _markdown_section(target.after_content, "Procedure"))
-    proposed_rule = f"{reminder}\n{procedure}"
-    full_content = f"{situation}\n{proposed_rule}"
-
-    return bool(
-        _GATE_POLICY_SOURCE_RE.search(situation)
-        and _GATE_EXHAUSTIVE_POLICY_BRANCH_RE.search(proposed_rule)
-        and _GATE_ANY_POLICY_BRANCH_RE.search(procedure)
-        and _GATE_EACH_OBJECT_RE.search(procedure)
-        and _GATE_WRITE_SCOPE_RE.search(procedure)
-        and not _GATE_POLICY_OVERRIDE_RE.search(full_content)
-    )
-
-
-def _is_observed_policy_override(target: GateTarget) -> bool:
-    trajectory = target.trajectory
-    if trajectory is None or "observed policy text:" not in trajectory.content.lower():
-        return False
-
-    fields = _experience_structured_fields(target)
-    situation = str(fields.get("situation") or _markdown_section(target.after_content, "Situation"))
-    reminder = str(fields.get("reminder") or _markdown_section(target.after_content, "Reminder"))
-    procedure = str(fields.get("procedure") or _markdown_section(target.after_content, "Procedure"))
-    actionable_rule = f"{situation}\n{reminder}\n{procedure}"
-
-    if _GATE_POLICY_OVERRIDE_RE.search(actionable_rule):
-        return True
-    return bool(
-        _GATE_REFUND_EXCEPTION_RE.search(actionable_rule)
-        and _GATE_UNCONDITIONAL_UNIVERSAL_WRITE_RE.search(procedure)
-        and not _GATE_ANY_POLICY_BRANCH_RE.search(procedure)
     )
 
 

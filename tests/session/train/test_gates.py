@@ -248,8 +248,13 @@ async def test_experience_root_cause_prevention_gate_allows_preventive_experienc
 
 
 @pytest.mark.asyncio
-async def test_experience_root_cause_prevention_gate_accepts_observed_policy_branch_completion():
-    target, gate = _gradient_target(RuntimeError("semantic gate must not run"))
+async def test_experience_root_cause_prevention_gate_semantically_reviews_policy_branch_completion():
+    target, gate = _gradient_target(
+        '{"pass": true, "root_cause_quality": "sufficient", '
+        '"reason": "the proposal covers the observed policy branches", '
+        '"expected_behavior_change": "check every reservation against every branch", '
+        '"repair_prompt": "", "risks": []}'
+    )
     assert target.trajectory is not None
     target.trajectory.content = (
         "## Runtime Evidence\n"
@@ -280,15 +285,18 @@ async def test_experience_root_cause_prevention_gate_accepts_observed_policy_bra
 
     decision = await gate.evaluate(target)
 
-    assert decision is not None
-    assert decision.action == "allow"
-    assert decision.evidence["deterministic_policy_branch_completion"] is True
-    assert gate.vlm.calls == []
+    assert decision is None
+    assert len(gate.vlm.calls) == 1
 
 
 @pytest.mark.asyncio
-async def test_experience_root_cause_prevention_gate_rejects_policy_override_without_vlm():
-    target, gate = _gradient_target(RuntimeError("semantic gate must not run"))
+async def test_experience_root_cause_prevention_gate_does_not_auto_reject_policy_override_text():
+    target, gate = _gradient_target(
+        '{"pass": true, "root_cause_quality": "sufficient", '
+        '"reason": "the source trajectory supports the proposed exception", '
+        '"expected_behavior_change": "apply the evaluator-required exception", '
+        '"repair_prompt": "", "risks": []}'
+    )
     assert target.trajectory is not None
     target.trajectory.content = (
         "## Runtime Evidence\n"
@@ -313,16 +321,18 @@ async def test_experience_root_cause_prevention_gate_rejects_policy_override_wit
 
     decision = await gate.evaluate(target)
 
-    assert decision is not None
-    assert decision.action == "reject"
-    assert decision.retriable is True
-    assert decision.evidence["deterministic_policy_override"] is True
-    assert gate.vlm.calls == []
+    assert decision is None
+    assert len(gate.vlm.calls) == 1
 
 
 @pytest.mark.asyncio
 async def test_experience_root_cause_prevention_gate_rejects_refund_scope_expansion():
-    target, gate = _gradient_target(RuntimeError("semantic gate must not run"))
+    target, gate = _gradient_target(
+        '{"pass": false, "root_cause_quality": "unsafe_scope", '
+        '"reason": "the proposal expands cancellation beyond supported eligibility", '
+        '"expected_behavior_change": "cancel every unflown reservation", '
+        '"repair_prompt": "retain the observed eligibility conditions", "risks": []}'
+    )
     assert target.trajectory is not None
     target.trajectory.content = (
         "## Runtime Evidence\n"
@@ -351,8 +361,8 @@ async def test_experience_root_cause_prevention_gate_rejects_refund_scope_expans
     assert decision is not None
     assert decision.action == "reject"
     assert decision.retriable is True
-    assert decision.evidence["deterministic_policy_override"] is True
-    assert gate.vlm.calls == []
+    assert "beyond supported eligibility" in decision.reason
+    assert len(gate.vlm.calls) == 1
 
 
 @pytest.mark.asyncio
