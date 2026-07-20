@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -155,6 +156,23 @@ async def test_close_preserves_data_dir_lock_when_resource_cleanup_fails(monkeyp
     monkeypatch.setattr(service, "_release_data_dir_lock", lambda: released.append(True))
 
     with pytest.raises(RuntimeError, match="cleanup failed"):
+        await service.close()
+
+    assert released == []
+
+
+@pytest.mark.asyncio
+async def test_close_preserves_data_dir_lock_when_resource_cleanup_is_cancelled(monkeypatch):
+    class _CancelledResourceService:
+        async def close_background_tasks(self) -> None:
+            raise asyncio.CancelledError
+
+    released = []
+    service = OpenVikingService.__new__(OpenVikingService)
+    service._resource_service = _CancelledResourceService()
+    monkeypatch.setattr(service, "_release_data_dir_lock", lambda: released.append(True))
+
+    with pytest.raises(asyncio.CancelledError):
         await service.close()
 
     assert released == []
