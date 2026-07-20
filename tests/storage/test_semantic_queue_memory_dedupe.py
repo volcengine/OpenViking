@@ -126,8 +126,8 @@ class _FakeVikingFS:
         del ctx
         return f"/fake/{uri.replace('://', '/').strip('/')}"
 
-    async def write_file(self, uri, content, ctx=None):
-        del ctx
+    async def write_file(self, uri, content, ctx=None, lease_ref=None):
+        del ctx, lease_ref
         self.writes.append((uri, content))
 
 
@@ -394,7 +394,7 @@ async def test_memory_directory_retries_blank_cached_summary(monkeypatch):
                     }
                 )
             if uri.endswith("/.overview.md"):
-                return "### second.md\n\nstale:second.md"
+                return ""
             raise FileNotFoundError(uri)
 
     async def generate_file_summary(file_path, llm_sem=None, ctx=None):
