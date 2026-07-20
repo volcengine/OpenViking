@@ -809,6 +809,21 @@ class ResourceService:
                 if persisted_metadata and fingerprints_match(
                     persisted_metadata, normalized_fingerprint
                 ):
+                    await self._manage_watch_if_needed(
+                        watch_manager=self._get_watch_manager(),
+                        skip_watch_management=skip_watch_management,
+                        watch_interval=watch_interval,
+                        target=target,
+                        root_uri=target.to,
+                        path=path,
+                        reason=reason,
+                        instruction=instruction,
+                        build_index=build_index,
+                        summarize=summarize,
+                        processor_kwargs=kwargs,
+                        watch_auth_state=normalized_args.watch_auth_state,
+                        ctx=ctx,
+                    )
                     await conditional_lock.close()
                     conditional_lock = NO_LOCK
                     return {

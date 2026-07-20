@@ -1,4 +1,6 @@
+from contextlib import nullcontext
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -97,6 +99,7 @@ def avoid_git_and_queue_paths(monkeypatch):
         resource_service_module,
         "get_current_telemetry",
         lambda: SimpleNamespace(
+            measure=lambda *_a, **_k: nullcontext(),
             set=lambda *_a, **_k: None,
             set_error=lambda *_a, **_k: None,
         ),
@@ -144,6 +147,33 @@ async def test_if_changed_returns_noop_under_target_lock():
         "source_sha256": "a" * 64,
         "target_revision": existing["target_revision"],
     }
+    assert processor.calls == []
+    assert processor.lock.closed
+
+
+@pytest.mark.asyncio
+async def test_if_changed_noop_preserves_zero_interval_watch_cancellation():
+    existing = build_source_metadata(_fingerprint())
+    service, processor = _service(existing)
+    service._get_watch_manager = lambda: object()
+    service._handle_watch_task_cancellation = AsyncMock()
+    ctx = _ctx()
+
+    result = await service.add_resource(
+        path="/safe/upload.md",
+        ctx=ctx,
+        to="viking://resources/stable",
+        allow_local_path_resolution=True,
+        if_changed=True,
+        source_fingerprint=_fingerprint(),
+        build_index=False,
+    )
+
+    assert result["status"] == "no-op"
+    service._handle_watch_task_cancellation.assert_awaited_once_with(
+        to_uri="viking://resources/stable",
+        ctx=ctx,
+    )
     assert processor.calls == []
     assert processor.lock.closed
 
