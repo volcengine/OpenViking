@@ -54,9 +54,7 @@ class LockContext:
                     break
         elif self._lock_mode == "exact":
             success = await self._manager.acquire_exact_path_batch(
-                self._handle,
-                self._paths,
-                timeout=self._timeout,
+                self._handle, self._paths, timeout=self._timeout
             )
         elif self._lock_mode == "mv":
             if self._mv_dst_path is None:
