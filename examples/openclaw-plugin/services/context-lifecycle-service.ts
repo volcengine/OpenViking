@@ -167,7 +167,6 @@ type ContextBudgets = {
 const BUDGET_UNLIMITED = -1;
 const ARCHIVE_BUDGET_RATIO = 0.15;
 const ARCHIVE_BUDGET_CAP = 8_000;
-const ARCHIVE_INDEX_LIMIT = 20;
 const RESERVED_MIN = 20_000;
 const RESERVED_RATIO = 0.15;
 const PHASE2_POLL_INTERVAL_MS = 800;
@@ -269,23 +268,10 @@ function buildInstructionPrompt(): { text: string; tokens: number } {
   return { text, tokens: estimateTextTokens(text) };
 }
 
-function archiveSequence(archiveId: string): number {
-  const match = archiveId.match(/archive_(\d+)/);
-  return match ? Number.parseInt(match[1] ?? "", 10) : -1;
-}
-
-function selectRecentArchiveAbstracts(
-  preAbstracts: Array<{ archive_id: string; abstract: string }>,
-): Array<{ archive_id: string; abstract: string }> {
-  return [...preAbstracts]
-    .sort((a, b) => archiveSequence(b.archive_id) - archiveSequence(a.archive_id))
-    .slice(0, ARCHIVE_INDEX_LIMIT);
-}
-
 function buildArchiveMemory(
   archiveOverview: string | undefined,
-  preAbstracts: Array<{ archive_id: string; abstract: string }>,
-  budget: number,
+  _preAbstracts: Array<{ archive_id: string; abstract: string }>,
+  _budget: number,
   roughEstimate: (messages: AgentMessage[]) => number,
 ): { messages: AgentMessage[]; tokens: number } {
   const messages: AgentMessage[] = [];
@@ -295,26 +281,6 @@ function buildArchiveMemory(
       role: "user",
       content: `[Session History Summary]\n${archiveOverview}`,
     });
-  }
-
-  const archiveIndexLines = selectRecentArchiveAbstracts(preAbstracts)
-    .map((entry) => {
-      const archiveId = String(entry.archive_id ?? "").trim();
-      const abstract = String(entry.abstract ?? "").replace(/\s+/g, " ").trim();
-      return archiveId && abstract ? `${archiveId}: ${abstract}` : "";
-    })
-    .filter(Boolean);
-
-  while (archiveIndexLines.length > 0) {
-    const indexMessage: AgentMessage = {
-      role: "user",
-      content: `[Archive Index]\n${archiveIndexLines.join("\n")}`,
-    };
-    if (budget === BUDGET_UNLIMITED || roughEstimate([...messages, indexMessage]) <= budget) {
-      messages.push(indexMessage);
-      break;
-    }
-    archiveIndexLines.pop();
   }
 
   return { messages, tokens: roughEstimate(messages) };
@@ -351,8 +317,8 @@ function buildAssembledContext(
   const instruction = hasArchives ? buildInstructionPrompt() : { text: "", tokens: 0 };
 
   // 4-layer context partitioning:
-  //   Instruction — system prompt guide (Archive Index / Session History usage)
-  //   Archive     — session history summary + per-archive one-line abstracts
+  //   Instruction — system prompt guide for summary and archive search usage
+  //   Archive     — latest session history summary
   //   Session     — active OV messages converted to AgentMessage format
   //   Reserved    — headroom for model output (not consumed here)
   const budgets = allocateContextBudget(tokenBudget, instruction.tokens);

@@ -367,11 +367,10 @@ export function registerOpenVikingArchiveTools(deps: OpenVikingArchiveToolsDeps)
       "Retrieve original messages from a compressed session archive. " +
       "Use when a session summary lacks specific details " +
       "such as exact commands, file paths, code snippets, or config values. " +
-      "Check [Archive Index] to find the right archive ID.",
+      "Use an archive ID returned by ov_archive_search.",
     parameters: Type.Object({
       archiveId: Type.String({
-        description:
-          'Archive ID from [Archive Index] (e.g. "archive_002")',
+        description: 'Archive ID returned by ov_archive_search (e.g. "archive_002")',
       }),
     }),
     async execute(_toolCallId: string, params: Record<string, unknown>) {

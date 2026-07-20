@@ -410,17 +410,9 @@ describe("context-engine assemble()", () => {
     expect(client.find).not.toHaveBeenCalled();
     expect(result.messages[0]).toEqual({
       role: "user",
-      content: [
-        {
-          type: "text",
-          text: "[Session History Summary]\n# Session Summary\nPreviously discussed repository setup.",
-        },
-        {
-          type: "text",
-          text: "[Archive Index]\narchive_001: Previously discussed repository setup.",
-        },
-      ],
+      content: "[Session History Summary]\n# Session Summary\nPreviously discussed repository setup.",
     });
+    expect(JSON.stringify(result.messages)).not.toContain("[Archive Index]");
     expect(result.messages[1]).toEqual({
       role: "assistant",
       content: [{ type: "text", text: "Stored answer from OpenViking." }],
@@ -481,17 +473,9 @@ describe("context-engine assemble()", () => {
     expect(result.systemPromptAddition).toContain("Session Context Guide");
     expect(result.messages[0]).toEqual({
       role: "user",
-      content: [
-        {
-          type: "text",
-          text: "[Session History Summary]\n# Session Summary\nPreviously discussed repository setup.",
-        },
-        {
-          type: "text",
-          text: "[Archive Index]\narchive_001: Previously discussed repository setup.",
-        },
-      ],
+      content: "[Session History Summary]\n# Session Summary\nPreviously discussed repository setup.",
     });
+    expect(JSON.stringify(result.messages)).not.toContain("[Archive Index]");
     expect(result.messages[1]).toEqual({
       role: "assistant",
       content: [

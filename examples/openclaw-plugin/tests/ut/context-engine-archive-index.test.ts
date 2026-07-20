@@ -42,8 +42,8 @@ function makeEngine(
   });
 }
 
-describe("context-engine archive index", () => {
-  it("injects archive abstracts after the session history summary", async () => {
+describe("context-engine archive context", () => {
+  it("does not expose cumulative working memory as an archive index", async () => {
     const engine = makeEngine([
       {
         archive_id: "archive_007",
@@ -59,24 +59,15 @@ describe("context-engine archive index", () => {
 
     expect(result.messages[0]).toEqual({
       role: "user",
-      content: [
-        {
-          type: "text",
-          text: "[Session History Summary]\nThe session discussed several topics.",
-        },
-        {
-          type: "text",
-          text:
-            "[Archive Index]\n" +
-            "archive_007: Tim and John discussed The Hobbit and signed basketball cards.",
-        },
-      ],
+      content: "[Session History Summary]\nThe session discussed several topics.",
     });
+    expect(JSON.stringify(result.messages)).not.toContain("[Archive Index]");
+    expect(JSON.stringify(result.messages)).not.toContain("archive_007");
     expect(result.systemPromptAddition).toContain("at most one follow-up archive search");
     expect(result.systemPromptAddition).not.toContain("at least 2 keyword variations");
   });
 
-  it("keeps the 20 most recent archive abstracts", async () => {
+  it("does not inject pre-archive snapshots regardless of archive count", async () => {
     const engine = makeEngine(
       Array.from({ length: 22 }, (_, index) => ({
         archive_id: `archive_${String(index + 1).padStart(3, "0")}`,
@@ -89,15 +80,15 @@ describe("context-engine archive index", () => {
       messages: [{ role: "user", content: "What happened recently?" }],
       availableTools: [],
     });
-    const archiveIndex = JSON.stringify(result.messages);
+    const rendered = JSON.stringify(result.messages);
 
-    expect(archiveIndex).toContain("[Archive Index]\\narchive_022:");
-    expect(archiveIndex).toContain("archive_003: Archive 3 details.");
-    expect(archiveIndex).not.toContain("archive_001:");
-    expect(archiveIndex).not.toContain("archive_002:");
+    expect(rendered).toContain("[Session History Summary]");
+    expect(rendered).not.toContain("[Archive Index]");
+    expect(rendered).not.toContain("archive_022:");
+    expect(rendered).not.toContain("Archive 3 details.");
   });
 
-  it("does not let a long Archive Index displace active messages", async () => {
+  it("does not let pre-archive snapshots displace active messages", async () => {
     const engine = makeEngine(
       [{ archive_id: "archive_001", abstract: "x".repeat(4_000) }],
       [

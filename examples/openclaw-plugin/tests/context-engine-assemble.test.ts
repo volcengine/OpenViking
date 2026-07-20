@@ -122,16 +122,7 @@ describe("context-engine assemble()", () => {
     expect(result.messages).toEqual([
       {
         role: "user",
-        content: [
-          {
-            type: "text",
-            text: "[Session History Summary]\n# Session Summary\nPreviously discussed repository setup.",
-          },
-          {
-            type: "text",
-            text: "[Archive Index]\narchive_001: Previously discussed repository setup.",
-          },
-        ],
+        content: "[Session History Summary]\n# Session Summary\nPreviously discussed repository setup.",
       },
       {
         role: "assistant",
@@ -154,6 +145,7 @@ describe("context-engine assemble()", () => {
         isError: false,
       },
     ]);
+    expect(JSON.stringify(result.messages)).not.toContain("[Archive Index]");
   });
 
   it("emits a non-error toolResult for a running tool (not a synthetic error)", async () => {

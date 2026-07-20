@@ -17,7 +17,7 @@ class _Message:
 
 
 @pytest.mark.asyncio
-async def test_get_session_context_returns_newest_archive_abstracts_within_budget():
+async def test_get_session_context_keeps_working_memory_abstracts_out_of_context():
     session = Session(viking_fs=None, session_id="budget-unit")
     session._collect_session_context_components = AsyncMock(
         return_value={
@@ -39,16 +39,13 @@ async def test_get_session_context_returns_newest_archive_abstracts_within_budge
 
     context = await session.get_session_context(token_budget=38)
 
-    assert context["pre_archive_abstracts"] == [
-        {"archive_id": "archive_003", "abstract": "third"},
-        {"archive_id": "archive_002", "abstract": "second"},
-    ]
-    assert context["estimatedTokens"] == 38
+    assert context["pre_archive_abstracts"] == []
+    assert context["estimatedTokens"] == 30
     assert context["stats"] == {
         "totalArchives": 3,
-        "includedArchives": 2,
-        "droppedArchives": 1,
+        "includedArchives": 0,
+        "droppedArchives": 3,
         "failedArchives": 0,
         "activeTokens": 10,
-        "archiveTokens": 28,
+        "archiveTokens": 20,
     }
