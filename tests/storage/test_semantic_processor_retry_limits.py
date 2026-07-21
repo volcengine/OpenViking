@@ -1,9 +1,9 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Tests for semantic processor retry limits, file existence checks, and circuit breaker config.
+"""Tests for per-URI retry limits and file existence check.
 
-Addresses issue #1595: 35.96M tokens burned from a single import due to
-infinite retry loops on failed VLM summarization.
+Transient retry + file-existence safeguard to prevent runaway token
+consumption from infinite retry loops on failed VLM summarization.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -20,18 +20,20 @@ from openviking.storage.queuefs.semantic_processor import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_msg(
     uri: str = "viking://user/default/file.txt",
     account_id: str = "default",
     user_id: str = "default",
 ) -> SemanticMsg:
     msg = SemanticMsg(uri=uri, context_type="resource", account_id=account_id, user_id=user_id)
-    msg.coalesce_key = f"{msg.context_type}:{account_id}:{user_id}::{uri}"
     return msg
+
 
 # ---------------------------------------------------------------------------
 # 1. Max retries per URI
 # ---------------------------------------------------------------------------
+
 
 class TestMaxRetriesPerUri:
     """Tests for the max-retries-per-URI safeguard."""
@@ -61,7 +63,7 @@ class TestMaxRetriesPerUri:
                             msg, {}, RuntimeError("test error")
                         )
 
-        assert processor._retry_counts[msg.coalesce_key] == 1
+        assert processor._retry_counts[SemanticProcessor._retry_key(msg)] == 1
 
     @pytest.mark.asyncio
     async def test_drops_after_max_retries(self):
@@ -69,7 +71,7 @@ class TestMaxRetriesPerUri:
         msg = _make_msg()
 
         # Pre-set retry count to max-1
-        processor._retry_counts[msg.coalesce_key] = 1
+        processor._retry_counts[SemanticProcessor._retry_key(msg)] = 1
 
         with patch.object(processor, "report_error") as mock_err:
             with patch(
@@ -83,14 +85,14 @@ class TestMaxRetriesPerUri:
         # Should have reported error, not re-enqueued
         mock_err.assert_called_once()
         # Coalesce key should be cleaned up from retry counts
-        assert msg.coalesce_key not in processor._retry_counts
+        assert SemanticProcessor._retry_key(msg) not in processor._retry_counts
 
     @pytest.mark.asyncio
     async def test_success_resets_retry_count(self):
         """Stale-message early-exit must clean up _retry_counts."""
         processor = SemanticProcessor(max_retries_per_uri=3)
         msg = _make_msg("viking://test")
-        processor._retry_counts[msg.coalesce_key] = 2
+        processor._retry_counts[SemanticProcessor._retry_key(msg)] = 2
 
         with patch(
             "openviking.storage.queuefs.semantic_processor.is_semantic_msg_stale",
@@ -104,11 +106,13 @@ class TestMaxRetriesPerUri:
                     result = await processor.on_dequeue(msg.to_dict())
 
         assert result is None
-        assert msg.coalesce_key not in processor._retry_counts
+        assert SemanticProcessor._retry_key(msg) not in processor._retry_counts
+
 
 # ---------------------------------------------------------------------------
 # 2. File existence check
 # ---------------------------------------------------------------------------
+
 
 class TestFileExistenceCheck:
     """Tests for the file-existence-before-processing safeguard."""
@@ -143,6 +147,7 @@ class TestFileExistenceCheck:
         error_msg = mock_err.call_args[0][0]
         assert "does not exist" in error_msg
 
+
 # ---------------------------------------------------------------------------
 # 3. Config support for circuit breaker and semantic processor settings
 # ---------------------------------------------------------------------------
@@ -157,9 +162,22 @@ class TestMultiTenantIsolation:
         msg_a = _make_msg("viking://shared/file.txt", account_id="tenant-a")
         msg_b = _make_msg("viking://shared/file.txt", account_id="tenant-b")
 
+        key_a = SemanticProcessor._retry_key(msg_a)
+        key_b = SemanticProcessor._retry_key(msg_b)
+        assert key_a != key_b
+
         # Exhaust retries for tenant-a
-        processor._retry_counts[msg_a.coalesce_key] = 1
+        processor._retry_counts[key_a] = 1
 
         # tenant-b should still have a fresh budget
-        assert msg_b.coalesce_key not in processor._retry_counts
-        assert processor._retry_counts.get(msg_b.coalesce_key, 0) == 0
+        assert key_b not in processor._retry_counts
+
+    def test_retry_key_with_empty_coalesce_key(self):
+        """When coalesce_key is empty, _retry_key builds from msg fields."""
+        msg = _make_msg("viking://test/file.txt", account_id="acct-x", user_id="user-y")
+        msg.coalesce_key = ""  # simulate old message without coalesce_key
+        key = SemanticProcessor._retry_key(msg)
+        assert "acct-x" in key
+        assert "user-y" in key
+        assert "viking://test/file.txt" in key
+        assert key == "resource|acct-x|user-y|default|viking://test/file.txt"

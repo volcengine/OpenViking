@@ -105,7 +105,9 @@ class SemanticProcessor(DequeueHandlerBase):
     _request_stats_order: List[str] = []
     _max_cached_stats = 256
 
-    def __init__(self, max_concurrent_llm: int = 64, max_retries_per_uri: int = DEFAULT_MAX_RETRIES_PER_URI):
+    def __init__(
+        self, max_concurrent_llm: int = 64, max_retries_per_uri: int = DEFAULT_MAX_RETRIES_PER_URI
+    ):
         """
         Initialize SemanticProcessor.
 
@@ -119,8 +121,22 @@ class SemanticProcessor(DequeueHandlerBase):
         self._circuit_breaker = CircuitBreaker()
 
         # Track consecutive retry counts per URI to prevent infinite retry loops.
-        # Maps URI -> number of consecutive failures since last success.
+        # Maps coalesce_key -> number of consecutive failures since last success.
         self._retry_counts: Dict[str, int] = {}
+
+    @staticmethod
+    def _retry_key(msg: SemanticMsg) -> str:
+        """Build a tenant-aware retry key. Uses coalesce_key if present,
+        otherwise constructs from msg fields to avoid cross-tenant collisions."""
+        if msg.coalesce_key:
+            return msg.coalesce_key
+        return build_semantic_coalesce_key(
+            context_type=msg.context_type,
+            uri=msg.uri,
+            account_id=msg.account_id or "default",
+            user_id=msg.user_id or "default",
+            peer_id=getattr(msg, "peer_id", None) or "default",
+        )
 
     @classmethod
     def _cache_dag_stats(cls, telemetry_id: str, uri: str, stats: DagStats) -> None:
@@ -259,14 +275,13 @@ class SemanticProcessor(DequeueHandlerBase):
         data: Optional[Dict[str, Any]],
         error: Exception,
     ) -> None:
-        retry_key = msg.coalesce_key or msg.uri
+        retry_key = self._retry_key(msg)
         current_count = self._retry_counts.get(retry_key, 0) + 1
         self._retry_counts[retry_key] = current_count
 
         if current_count >= self.max_retries_per_uri:
             logger.warning(
-                "Max retries (%d) reached for %s, dropping to prevent token burn. "
-                "Last error: %s",
+                "Max retries (%d) reached for %s, dropping to prevent token burn. Last error: %s",
                 self.max_retries_per_uri,
                 retry_key,
                 error,
@@ -274,10 +289,12 @@ class SemanticProcessor(DequeueHandlerBase):
             self._retry_counts.pop(retry_key, None)
             self._merge_request_stats(msg.telemetry_id, error_count=1)
             get_request_wait_tracker().mark_semantic_failed(
-                msg.telemetry_id, msg.id, f"Max retries ({self.max_retries_per_uri}) exceeded: {error}"
+                msg.telemetry_id,
+                msg.id,
+                f"Max retries ({self.max_retries_per_uri}) exceeded: {error}",
             )
             self.report_error(
-                f"Max retries ({self.max_retries_per_uri}) exceeded for {uri}: {error}",
+                f"Max retries ({self.max_retries_per_uri}) exceeded for {retry_key}: {error}",
                 data,
             )
             return
@@ -361,7 +378,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     msg.uri,
                     msg.coalesce_version,
                 )
-                retry_key = msg.coalesce_key or msg.uri
+                retry_key = self._retry_key(msg)
                 self._retry_counts.pop(retry_key, None)
                 if msg.telemetry_id and msg.id:
                     get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
@@ -391,7 +408,7 @@ class SemanticProcessor(DequeueHandlerBase):
                         "Source URI does not exist, dropping from queue: %s",
                         msg.uri,
                     )
-                    self._retry_counts.pop(msg.uri, None)
+                    self._retry_counts.pop(self._retry_key(msg), None)
                     if msg.telemetry_id and msg.id:
                         get_request_wait_tracker().mark_semantic_failed(
                             msg.telemetry_id, msg.id, "Source URI does not exist"
@@ -518,7 +535,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     logger.info(f"Completed semantic generation for: {msg.uri}")
                     self.report_success()
                     self._circuit_breaker.record_success()
-                    retry_key = msg.coalesce_key or msg.uri
+                    retry_key = self._retry_key(msg)
                     self._retry_counts.pop(retry_key, None)
                     return None
                 finally:
