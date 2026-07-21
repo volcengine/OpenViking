@@ -74,7 +74,10 @@ class ChatRequest(BaseModel):
     user_id: Optional[str] = Field(default=None, description="User identifier (optional)")
     stream: bool = Field(default=False, description="Whether to stream the response")
     context: Optional[List[ChatMessage]] = Field(
-        default=None, description="Additional context messages"
+        default=None,
+        description=(
+            "Reserved for wire compatibility; non-empty context messages are not supported"
+        ),
     )
     need_reply: bool = True
     channel_id: Optional[str] = Field(
@@ -88,6 +91,12 @@ class ChatRequest(BaseModel):
         default=None,
         description="Authenticated OpenViking connection forwarded by the server proxy",
     )
+
+    @model_validator(mode="after")
+    def reject_unsupported_context(self) -> "ChatRequest":
+        if self.context:
+            raise ValueError("context is not supported")
+        return self
 
 
 class ChatResponse(BaseModel):
