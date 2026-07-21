@@ -1,0 +1,119 @@
+README.md
+  s_8a577b324c3205::t_1ee515112ff0d0 798
+README_CN.md
+  s_8a577b324c3205::t_94607ce4e40c11 839
+README_JA.md
+  s_8a577b324c3205::t_3a3734a867b28e 473-489,538
+crates/ov_cli/src/main.rs
+  s_8a577b324c3205::t_19b044e0ebb7e1 646,714
+docs/.vitepress/config.ts
+  s_8a577b324c3205::t_596762ca569b03 103-556,559,562,567,572,578,828,830-832,848,850-852
+docs/.vitepress/theme/LlmsTxtLink.vue
+  s_8a577b324c3205::t_17c5020afe77e2 4,9,19-21,42,48,80-85,134-146,154-161
+docs/.vitepress/theme/api-example-tabs.test.ts
+  s_8a577b324c3205::t_8c43833967244e 12,21-29
+docs/.vitepress/theme/custom.css
+  s_8a577b324c3205::t_70061d81287ed2 231,237
+docs/.vitepress/theme/llms-txt.ts
+  s_8a577b324c3205::t_f04113615323d1 4-11
+docs/en/api/02-resources.md
+  s_8a577b324c3205::t_b73fb0b604b1ca 114-115,137,181
+docs/en/api/05-sessions.md
+  s_8a577b324c3205::t_1f5c09d28e21e1 325-326,328-329,332,1534,1542-1544,1550-1551
+docs/en/api/06-retrieval.md
+  s_8a577b324c3205::t_6e006f6b6da8b7 61,165-178,208-213,396,407
+docs/en/concepts/01-architecture.md
+  s_8a577b324c3205::t_810c270ba0c7d6 61,120
+docs/en/concepts/02-context-types.md
+  s_8a577b324c3205::t_9662c064ed425f 47,55-71
+docs/en/concepts/04-viking-uri.md
+  s_8a577b324c3205::t_d5666343e6a40b 97-99
+docs/en/concepts/08-session.md
+  s_8a577b324c3205::t_0f5e2fbe7b7fe1 146-150,244-246,249,251-252
+docs/en/faq/faq.md
+  s_8a577b324c3205::t_28fdb8a8370ac9 23,47-56,240,242
+docs/en/getting-started/01-introduction.md
+  s_8a577b324c3205::t_eb9c85dd1533c9 29-40,102,104,106-112
+docs/en/guides/10-prompt-guide.md
+  s_8a577b324c3205::t_8e380556153827 199-201,215-220,225
+docs/zh/api/02-resources.md
+  s_8a577b324c3205::t_816dfcbe3eb7f2 107-108,130,174
+docs/zh/api/05-sessions.md
+  s_8a577b324c3205::t_56f5c356f9cc03 325-326,328-329,332,1506,1514-1516,1522-1523
+docs/zh/api/06-retrieval.md
+  s_8a577b324c3205::t_8cb56f524ffd30 61,166-179,209-214,397,409
+docs/zh/concepts/01-architecture.md
+  s_8a577b324c3205::t_2650e7916e330c 60,119
+docs/zh/concepts/02-context-types.md
+  s_8a577b324c3205::t_8dfc6c58c33351 47,55-71
+docs/zh/concepts/04-viking-uri.md
+  s_8a577b324c3205::t_1a333bcaa2e054 95-97
+docs/zh/concepts/08-session.md
+  s_8a577b324c3205::t_0161ee636eba7a 146-150,244-246,249,251-252
+docs/zh/faq/faq.md
+  s_8a577b324c3205::t_6152835b482914 23,47-57,233,235
+docs/zh/getting-started/01-introduction.md
+  s_8a577b324c3205::t_dd8f2ea492e113 29-40,102,104,106-112
+docs/zh/guides/10-prompt-guide.md
+  s_8a577b324c3205::t_b71e6c58af2329 195,199-201,215-220,225
+examples/pi-coding-agent-extension/DESIGN.md
+  s_8a577b324c3205::t_0f6f1c5928bf90 159,161,192,231,233,235,314
+openviking/client/local.py
+  s_8a577b324c3205::t_5f9b139168c0bf 29,64-65,68-69
+openviking/eval/datasets/local_doc_example_glm5.jsonl
+  s_8a577b324c3205::t_9e13887fd9b846 3,17
+openviking/integrations/langchain/retrievers.py
+  s_8a577b324c3205::t_d698ea08476a07 92
+openviking/integrations/langchain/testing.py
+  s_8a577b324c3205::t_0932f418c43303 47,57,70,81
+openviking/parse/image_rewrite.py
+  s_8a577b324c3205::t_bd43e157be1d2b 13,39-99
+openviking/resource/feishu_watch_auth.py
+  s_8a577b324c3205::t_95e04efe5eed0d 43-46,120,130-155
+openviking/server/routers/search.py
+  s_8a577b324c3205::t_6c8b5ea653e9e1 32,73-74,77-78
+openviking/service/task_tracker.py
+  s_8a577b324c3205::t_620b3eeec73472 371-372,382-383
+openviking/storage/queuefs/add_resource_msg.py
+  s_8a577b324c3205::t_cf4177348c9ffa 40-41,113-118
+openviking/storage/queuefs/add_resource_processor.py
+  s_8a577b324c3205::t_dbdddf14ee50be 81,161
+openviking/storage/vectordb/collection/local_collection.py
+  s_8a577b324c3205::t_2903c4bdd66e3a 536-540,543-552,555-556,563-566,572-573,576,578-581,585-586,590-593,602,605-607
+openviking/storage/vectordb/store/store_manager.py
+  s_8a577b324c3205::t_ac79b5b2a4de8a 201-221
+openviking/utils/tags.py
+  s_8a577b324c3205::t_8ca16b254a152e 8,47-65
+openviking_cli/utils/config/open_viking_config.py
+  s_8a577b324c3205::t_c2f04a3c58c490 65,94
+tests/resource/test_feishu_watch_auth.py
+  s_8a577b324c3205::t_ad3aa536a3171b 8-9,38-64
+tests/server/test_api_search.py
+  s_8a577b324c3205::t_84141b2e800789 81-84,86-89,91,93,95-100,102-112,572,583,630,636-640
+tests/test_task_tracker.py
+  s_8a577b324c3205::t_08b622a904322e 154-168
+tests/unit/test_langchain_integration.py
+  s_8a577b324c3205::t_c0afbff9f3a883 101-115
+tests/unit/test_search_tags_filter.py
+  s_8a577b324c3205::t_06b7f511393b2d 1-84
+tests/vectordb/test_local_collection_projection.py
+  s_8a577b324c3205::t_8f6721202c4a9b 1-192
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "a30351927a41e4ff656428c0cfee62399abd52e4",
+  "prompts": {},
+  "sessions": {
+    "s_8a577b324c3205": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f64f7-7525-7bf0-8779-fe5c59230fae",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
