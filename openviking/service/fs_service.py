@@ -607,9 +607,7 @@ class FSService:
     ) -> Dict[str, Any]:
         """Forward to VikingFS.commit. See viking_fs.commit for semantics."""
         viking_fs = self._ensure_initialized()
-        validated = (
-            [validate_viking_uri(p) for p in paths] if paths is not None else None
-        )
+        validated = [validate_viking_uri(p) for p in paths] if paths is not None else None
         return await viking_fs.commit(
             message=message,
             paths=validated,
@@ -693,9 +691,7 @@ class FSService:
         viking_fs = self._ensure_initialized()
         return await viking_fs.get_gitignore(ctx=ctx)
 
-    async def set_gitignore(
-        self, *, content: str, ctx: RequestContext
-    ) -> None:
+    async def set_gitignore(self, *, content: str, ctx: RequestContext) -> None:
         """Forward to VikingFS.set_gitignore. Writes the account .ovgitignore
         control file (validates the size limit)."""
         viking_fs = self._ensure_initialized()
