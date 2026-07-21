@@ -4,6 +4,7 @@
 """Tests for multi-tenant authentication (openviking/server/auth.py)."""
 
 import uuid
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -21,6 +22,7 @@ from openviking.server.dependencies import set_service
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.service.core import OpenVikingService
+from openviking.service.resource_service import ResourceService
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import (
     TaskTracker,
@@ -469,6 +471,62 @@ async def test_task_endpoints_are_user_scoped():
         assert bob_list.status_code == 200
         assert {task["task_id"] for task in bob_list.json()["result"]} == {bob_task.task_id}
 
+    set_task_tracker(None)
+
+
+async def test_task_cancel_endpoint_cancels_owned_running_add_resource():
+    set_task_tracker(None)
+    _set_fake_task_tracker()
+    account_id = _uid()
+    tracker = get_task_tracker()
+    task = await tracker.create(
+        "add_resource",
+        resource_id="viking://resources/cancel-me",
+        account_id=account_id,
+        user_id="alice",
+    )
+    await tracker.start(task.task_id, account_id=account_id, user_id="alice")
+    set_service(SimpleNamespace(resources=ResourceService()))
+    app = _build_task_http_test_app(
+        ResolvedIdentity(role=Role.USER, account_id=account_id, user_id="alice")
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(f"/api/v1/tasks/{task.task_id}/cancel")
+
+    assert response.status_code == 200
+    assert response.json()["result"]["status"] == "cancelled"
+    set_service(None)
+    set_task_tracker(None)
+
+
+async def test_task_cancel_endpoint_rejects_other_task_types():
+    set_task_tracker(None)
+    _set_fake_task_tracker()
+    account_id = _uid()
+    tracker = get_task_tracker()
+    task = await tracker.create(
+        "session_commit",
+        resource_id="session-1",
+        account_id=account_id,
+        user_id="alice",
+    )
+    await tracker.start(task.task_id, account_id=account_id, user_id="alice")
+    set_service(SimpleNamespace(resources=ResourceService()))
+    app = _build_task_http_test_app(
+        ResolvedIdentity(role=Role.USER, account_id=account_id, user_id="alice")
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(f"/api/v1/tasks/{task.task_id}/cancel")
+
+    assert response.status_code == 412
+    assert response.json()["error"]["code"] == "FAILED_PRECONDITION"
+    set_service(None)
     set_task_tracker(None)
 
 

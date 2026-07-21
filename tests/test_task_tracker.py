@@ -130,6 +130,42 @@ async def test_start_task(tracker: TaskTracker):
     assert retrieved.status == TaskStatus.RUNNING
 
 
+async def test_cancel_running_task_is_terminal_and_persistent():
+    agfs = _FakeAgfs()
+    tracker = TaskTracker(store=PersistentTaskStore(agfs))
+    task = await tracker.create("add_resource", **_owner_kwargs())
+    await tracker.start(task.task_id, **_owner_kwargs())
+
+    cancelled = await tracker.cancel(task.task_id, **_owner_kwargs())
+    await tracker.complete(task.task_id, {"unexpected": True}, **_owner_kwargs())
+
+    reloaded = await TaskTracker(store=PersistentTaskStore(agfs)).get(
+        task.task_id, **_owner_kwargs()
+    )
+    assert cancelled is not None
+    assert cancelled.status == TaskStatus.CANCELLED
+    assert cancelled.stage == "cancelled"
+    assert reloaded is not None
+    assert reloaded.status == TaskStatus.CANCELLED
+    assert reloaded.result is None
+
+
+async def test_cancelled_task_is_not_reported_as_running(tracker: TaskTracker):
+    task = await tracker.create(
+        "add_resource",
+        resource_id="viking://resources/demo",
+        **_owner_kwargs(),
+    )
+    await tracker.start(task.task_id, **_owner_kwargs())
+    await tracker.cancel(task.task_id, **_owner_kwargs())
+
+    assert not await tracker.has_running(
+        "add_resource",
+        "viking://resources/demo",
+        **_owner_kwargs(),
+    )
+
+
 async def test_update_stage(tracker: TaskTracker):
     task = await tracker.create("add_resource", **_owner_kwargs())
     await tracker.start(task.task_id, stage="queued")

@@ -284,6 +284,7 @@ async def test_resource_processor_auto_candidate_skips_existing_and_busy(monkeyp
         "viking://resources/root",
         "viking://resources/root_1",
         "viking://resources/root_2",
+        "viking://resources/root_2",
     ]
     assert fake_lock_manager.tree_attempts == [
         ("/mock/resources/root_1", 0.0),

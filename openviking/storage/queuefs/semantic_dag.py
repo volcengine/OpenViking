@@ -5,7 +5,7 @@
 import asyncio
 import threading
 from dataclasses import dataclass, field
-from typing import ClassVar, Dict, List, Optional, Set
+from typing import Callable, ClassVar, Dict, List, Optional, Set
 from weakref import WeakKeyDictionary
 
 from openviking.server.identity import RequestContext
@@ -173,6 +173,7 @@ class SemanticDagExecutor:
         skip_vectorization: bool = False,
         coalesce_key: str = "",
         coalesce_version: int = 0,
+        is_cancelled: Optional[Callable[[], bool]] = None,
     ):
         self._processor = processor
         self._context_type = context_type
@@ -188,6 +189,7 @@ class SemanticDagExecutor:
         self._skip_vectorization = skip_vectorization
         self._coalesce_key = coalesce_key
         self._coalesce_version = coalesce_version
+        self._is_cancelled_callback = is_cancelled
         self._stale = False
         self._changed_paths = {
             path for key in ("added", "modified", "deleted") for path in self._changes.get(key, [])
@@ -212,6 +214,9 @@ class SemanticDagExecutor:
         self._dir_change_status: Dict[str, bool] = {}
         self._overview_cache: Dict[str, Dict[str, str]] = {}
         self._overview_cache_lock = asyncio.Lock()
+        self._active_work = 0
+        self._work_drained = asyncio.Event()
+        self._work_drained.set()
 
     async def run(self, root_uri: str) -> None:
         """Run DAG execution starting from root_uri."""
@@ -223,6 +228,15 @@ class SemanticDagExecutor:
             self._register_active()
             self._schedule_dir(root_uri, parent_uri=None)
             await self._root_done.wait()
+            if self._cancel_requested():
+                self._stale = True
+                await self._work_drained.wait()
+                if self._telemetry_id and self._semantic_msg_id:
+                    get_request_wait_tracker().mark_semantic_done(
+                        self._telemetry_id, self._semantic_msg_id, processed_delta=0
+                    )
+                await self._lock.close()
+                return
             if self._failure:
                 raise self._failure
 
@@ -230,8 +244,11 @@ class SemanticDagExecutor:
             async def wrapped_on_complete() -> None:
                 try:
                     if self._telemetry_id and self._semantic_msg_id:
+                        processed_delta = 0 if self._cancel_requested() else 1
                         get_request_wait_tracker().mark_semantic_done(
-                            self._telemetry_id, self._semantic_msg_id
+                            self._telemetry_id,
+                            self._semantic_msg_id,
+                            processed_delta=processed_delta,
                         )
                 finally:
                     await self._lock.close()
@@ -251,7 +268,13 @@ class SemanticDagExecutor:
                     metadata={"uri": root_uri},
                 )
 
+                if self._cancel_requested():
+                    await tracker.cancel(self._semantic_msg_id)
+                    return
+
                 await self._dispatch_vectorize_tasks(tasks)
+                if self._cancel_requested():
+                    await tracker.cancel(self._semantic_msg_id)
             else:
                 # No vectorize tasks — release lock immediately (via wrapped callback)
                 try:
@@ -270,7 +293,7 @@ class SemanticDagExecutor:
             self._unregister_active()
 
     def _schedule_work(self, work: DagWork) -> None:
-        if self._closed:
+        if self._closed or self._stop_if_cancelled():
             return
         if self._scheduler is None:
             self._scheduler = get_semantic_node_scheduler(self._node_concurrency)
@@ -341,6 +364,18 @@ class SemanticDagExecutor:
         return stats
 
     async def _run_work(self, work: DagWork) -> None:
+        self._active_work += 1
+        self._work_drained.clear()
+        try:
+            await self._run_work_inner(work)
+        finally:
+            self._active_work = max(0, self._active_work - 1)
+            if self._active_work == 0:
+                self._work_drained.set()
+
+    async def _run_work_inner(self, work: DagWork) -> None:
+        if self._stop_if_cancelled():
+            return
         if work.kind == "vectorize":
             await self._run_vectorize_work(work.vectorize_task)
             return
@@ -764,7 +799,23 @@ class SemanticDagExecutor:
     def _is_stale(self) -> bool:
         from openviking.storage.queuefs.semantic_queue import is_semantic_coalesce_stale
 
-        return is_semantic_coalesce_stale(self._coalesce_key, self._coalesce_version)
+        return self._cancel_requested() or is_semantic_coalesce_stale(
+            self._coalesce_key, self._coalesce_version
+        )
+
+    def _cancel_requested(self) -> bool:
+        return self._is_cancelled_callback is not None and self._is_cancelled_callback()
+
+    def _stop_if_cancelled(self) -> bool:
+        if not self._cancel_requested():
+            return False
+        self._stale = True
+        self._closed = True
+        if self._root_done:
+            self._root_done.set()
+        if self._vectorize_done:
+            self._vectorize_done.set()
+        return True
 
     async def _write_directory_semantics(
         self,
@@ -857,7 +908,7 @@ class SemanticDagExecutor:
 
     async def _add_vectorize_task(self, task: VectorizeTask) -> None:
         """Add a vectorize task to the pending list."""
-        if self._skip_vectorization:
+        if self._skip_vectorization or self._stop_if_cancelled():
             logger.info(
                 "Skipping vectorization task for %s (requested via SemanticMsg)",
                 task.uri,

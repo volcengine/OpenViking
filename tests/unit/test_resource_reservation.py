@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 
 import pytest
 
@@ -94,3 +94,37 @@ async def test_reservation_returns_first_available_lock(monkeypatch):
 
     assert uri == "viking://resources/report_1"
     assert acquired is lease
+
+
+@pytest.mark.asyncio
+async def test_reservation_does_not_treat_lock_directory_as_existing_resource(monkeypatch):
+    processor = _make_processor(monkeypatch)
+    lease = AsyncMock()
+    processor.acquire_resource_lock = AsyncMock(return_value=lease)
+    processor.target_contains_preexisting_data = AsyncMock(return_value=False)
+    viking_fs = resource_processor_module.get_viking_fs()
+    exists_calls = 0
+
+    async def exists_after_lock(_uri, *, ctx):
+        nonlocal exists_calls
+        exists_calls += 1
+        return exists_calls > 1
+
+    viking_fs.exists = exists_after_lock
+
+    try:
+        uri, acquired = await processor.reserve_unique_candidate(
+            candidate_uri="viking://resources/report",
+            ctx=object(),
+            max_attempts=0,
+        )
+    except FileExistsError:
+        pytest.fail("the reservation lock directory was mistaken for an existing resource")
+
+    assert uri == "viking://resources/report"
+    assert acquired is lease
+    processor.target_contains_preexisting_data.assert_awaited_once_with(
+        "viking://resources/report",
+        ctx=ANY,
+    )
+    lease.close.assert_not_awaited()

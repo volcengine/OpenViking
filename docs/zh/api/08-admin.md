@@ -48,7 +48,7 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 - `ov --sudo system` - 系统工具命令
 - `ov --sudo reindex` - 重建索引
 - `ov --sudo admin migrate` - legacy agent/session 迁移和 cleanup
-- `ov --sudo task status/list` - 查询 root/system 后台任务，例如迁移任务
+- `ov --sudo task status/list/cancel` - 查询 root/system 任务，并可取消 `add_resource` 任务
 
 ### 使用限制
 

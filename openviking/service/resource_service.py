@@ -28,7 +28,7 @@ from openviking.resource.feishu_watch_auth import (
     create_feishu_auth_state,
     load_feishu_app_credentials,
 )
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.server.local_input_guard import (
     is_remote_resource_source,
     require_remote_resource_source,
@@ -57,8 +57,10 @@ from openviking.utils.skill_processor import SkillProcessingPreparation, SkillPr
 from openviking_cli.exceptions import (
     ConflictError,
     DeadlineExceededError,
+    FailedPreconditionError,
     InternalError,
     InvalidArgumentError,
+    NotFoundError,
     NotInitializedError,
 )
 from openviking_cli.utils import get_logger
@@ -89,6 +91,7 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "enforce_public_remote_targets",
         "resource_lock",
         "stage_callback",
+        "source_task_id",
         "args",
         "strict",
         "source_name",
@@ -392,7 +395,7 @@ class ResourceService:
                 from openviking.parse.understanding_api import PREPARED_RESPONSE_ID_ARG
 
                 internal_kwargs[PREPARED_RESPONSE_ID_ARG] = msg.understanding_response_id
-            return await self.add_resource(
+            result = await self.add_resource(
                 path=msg.path,
                 ctx=ctx,
                 to=target_uri,
@@ -409,6 +412,7 @@ class ResourceService:
                 enforce_public_remote_targets=msg.enforce_public_remote_targets,
                 resource_lock=resource_lock,
                 stage_callback=stage_callback,
+                source_task_id=msg.task_id,
                 strict=msg.strict,
                 source_name=msg.source_name,
                 ignore_dirs=msg.ignore_dirs,
@@ -420,6 +424,11 @@ class ResourceService:
                 args=msg.args,
                 **internal_kwargs,
             )
+            target_created = result.pop("_target_created", None)
+            if msg.defer_target_resolution and isinstance(result.get("root_uri"), str):
+                msg.root_uri = result["root_uri"]
+                msg.target_created = target_created if isinstance(target_created, bool) else None
+            return result
 
         telemetry_id = get_current_telemetry().telemetry_id
         request_wait_tracker = get_request_wait_tracker()
@@ -434,6 +443,7 @@ class ResourceService:
                 resource_lock=resource_lock,
                 summarize=msg.summarize,
                 build_index=msg.build_index,
+                source_task_id=msg.task_id,
             )
             await request_wait_tracker.wait_for_request(
                 telemetry_id,
@@ -454,6 +464,67 @@ class ResourceService:
         finally:
             request_wait_tracker.cleanup(telemetry_id)
             unregister_wait_telemetry(telemetry_id)
+
+    async def cancel_add_resource_task(
+        self,
+        task_id: str,
+        *,
+        ctx: RequestContext,
+    ) -> Dict[str, Any]:
+        """Persist cancellation for an owned add-resource task."""
+        from openviking.service.task_tracker import TaskStatus, get_task_tracker
+
+        tracker = get_task_tracker()
+        task = await tracker.get(
+            task_id,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        )
+        if task is None and ctx.role == Role.ROOT:
+            task = await tracker.get(task_id)
+        if task is None:
+            raise NotFoundError(task_id, "task")
+        if task.task_type != "add_resource":
+            raise FailedPreconditionError("Only add_resource tasks can be cancelled")
+        if task.status in (TaskStatus.COMPLETED, TaskStatus.FAILED):
+            raise FailedPreconditionError(
+                f"Task is already {task.status.value} and cannot be cancelled"
+            )
+
+        cancelled = await tracker.cancel(
+            task_id,
+            account_id=task.account_id,
+            user_id=task.user_id,
+        )
+        if cancelled is None:
+            raise NotFoundError(task_id, "task")
+        if cancelled.status != TaskStatus.CANCELLED:
+            raise FailedPreconditionError(
+                f"Task is already {cancelled.status.value} and cannot be cancelled"
+            )
+        return cancelled.to_dict()
+
+    async def rollback_cancelled_add_resource(
+        self,
+        msg: Any,
+        *,
+        ctx: RequestContext,
+        resource_lock: Optional[LockLease] = None,
+    ) -> None:
+        """Remove a cancelled task's target only when that task created it."""
+        target_created = msg.target_created
+        if isinstance(msg.prepared, dict) and "target_created" in msg.prepared:
+            target_created = msg.prepared["target_created"] is True
+        if target_created is not True:
+            return
+        if self._viking_fs is None:
+            raise NotInitializedError("VikingFS")
+        await self._viking_fs.rm(
+            msg.root_uri,
+            recursive=True,
+            ctx=ctx,
+            lock_handle=resource_lock.handle if resource_lock is not None else None,
+        )
 
     async def reacquire_add_resource_job_lock(
         self,
@@ -516,7 +587,12 @@ class ResourceService:
             source_name = kwargs.get("source_name") or source_info.source_name
             if source_name:
                 kwargs["source_name"] = source_name
-            root_uri, resource_lock = await self._plan_resource_target(
+            (
+                root_uri,
+                resource_lock,
+                target_preexisting,
+                target_created,
+            ) = await self._plan_resource_target(
                 path=path,
                 ctx=ctx,
                 target=target,
@@ -558,6 +634,8 @@ class ResourceService:
                 preserve_structure=kwargs.get("preserve_structure"),
                 create_parent=bool(kwargs.get("create_parent", False)),
                 source_name=source_name,
+                target_preexisting=target_preexisting,
+                target_created=target_created,
                 args=self._sanitize_watch_processor_kwargs(processor_args),
             )
             task = await self._enqueue_add_resource_job(msg, resource_lock=resource_lock)
@@ -579,7 +657,7 @@ class ResourceService:
         target: ContentTargetSpec,
         source_name: Optional[str],
         source_info: _ResourceSourceInfo,
-    ) -> tuple[str, LockLease]:
+    ) -> tuple[str, LockLease, bool, bool]:
         if not self._resource_processor or not self._viking_fs:
             raise NotInitializedError("ResourceProcessor")
 
@@ -596,10 +674,11 @@ class ResourceService:
             create_parent=target.create_parent,
         )
         if candidate_uri:
-            return await self._resource_processor.reserve_unique_candidate(
+            root_uri, resource_lock = await self._resource_processor.reserve_unique_candidate(
                 candidate_uri=candidate_uri,
                 ctx=ctx,
             )
+            return root_uri, resource_lock, False, True
 
         from openviking.storage.transaction import get_lock_manager
 
@@ -610,7 +689,12 @@ class ResourceService:
             uri=root_uri,
             timeout=0.0,
         )
-        return root_uri, resource_lock
+        target_created = not await self._viking_fs.exists(root_uri, ctx=ctx)
+        target_preexisting = await self._resource_processor.target_contains_preexisting_data(
+            root_uri,
+            ctx=ctx,
+        )
+        return root_uri, resource_lock, target_preexisting, target_created
 
     def _should_use_understanding_api(self, path: str) -> bool:
         return self._get_parser_router().should_use_understanding_api(path)
@@ -691,6 +775,7 @@ class ResourceService:
         enforce_public_remote_targets: bool = False,
         resource_lock: Optional[LockLease] = None,
         stage_callback: Optional[Callable[[str], Any]] = None,
+        source_task_id: str = "",
         args: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
@@ -890,8 +975,20 @@ class ResourceService:
                         candidate_uri=candidate_uri,
                         ctx=ctx,
                     )
+                    target_preexisting = False
+                    target_created = True
                 elif not defer_target_resolution:
                     lock_lease = await _reserve_tree(root_uri)
+                    target_created = not await self._viking_fs.exists(root_uri, ctx=ctx)
+                    target_preexisting = (
+                        await self._resource_processor.target_contains_preexisting_data(
+                            root_uri,
+                            ctx=ctx,
+                        )
+                    )
+                else:
+                    target_preexisting = None
+                    target_created = None
 
                 enqueue_started = False
                 try:
@@ -930,6 +1027,8 @@ class ResourceService:
                         enforce_public_remote_targets=enforce_public_remote_targets,
                         args=self._sanitize_watch_processor_kwargs(queued_args),
                         source_name=source_name,
+                        target_preexisting=target_preexisting,
+                        target_created=target_created,
                         lock_handoff=lock_handoff.to_dict() if lock_handoff else None,
                         skip_watch_management=True,
                         defer_target_resolution=defer_target_resolution,
@@ -982,6 +1081,7 @@ class ResourceService:
                 build_index=build_index,
                 summarize=summarize,
                 stage_callback=stage_callback,
+                source_task_id=source_task_id,
                 allow_local_path_resolution=allow_local_path_resolution,
                 defer_post_processing=not wait,
                 **kwargs,
@@ -991,6 +1091,8 @@ class ResourceService:
                 return result
             prepared = result.pop("_post_process", None)
             deferred_lock = result.pop("_resource_lock", NO_LOCK)
+            if source_task_id and isinstance(prepared, dict):
+                result["_target_created"] = prepared.get("target_created")
             if wait:
                 if stage_callback is not None:
                     stage_result = stage_callback("processing_queue")
@@ -1070,6 +1172,8 @@ class ResourceService:
                     allow_local_path_resolution=allow_local_path_resolution,
                     enforce_public_remote_targets=enforce_public_remote_targets,
                     source_name=kwargs.get("source_name"),
+                    target_preexisting=bool(prepared.get("target_preexisting")),
+                    target_created=(prepared.get("target_created") is True),
                     skip_watch_management=True,
                 )
                 task = await self._enqueue_add_resource_job(

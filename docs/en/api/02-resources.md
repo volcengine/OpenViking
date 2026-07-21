@@ -499,6 +499,11 @@ ov add-resource ./documents/guide.md -p viking://resources/docs/{calendar:today}
 
 Use the returned `task_id` to poll `/api/v1/tasks/{task_id}` for queue completion. For Git repository sources with `wait=false`, the same endpoint tracks the full background import and the completed task result contains the full import result, including `queue_status`.
 
+To stop a pending or running `add_resource` task, run `ov task cancel <task_id>` or call
+`POST /api/v1/tasks/{task_id}/cancel`. Cancellation is durable and cooperative: semantic and embedding
+work already in flight reaches a safe stopping point before rollback. Rollback removes a target only
+when the cancelled task created it; it never deletes a target that existed before the task started.
+
 **CLI Response (Default Table Format)**
 
 ```

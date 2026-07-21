@@ -37,9 +37,10 @@ class TaskStatus(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
-_TERMINAL_STATUSES = (TaskStatus.COMPLETED, TaskStatus.FAILED)
+_TERMINAL_STATUSES = (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED)
 
 
 @dataclass
@@ -144,6 +145,7 @@ class TaskTracker:
 
     MAX_TASKS = 10_000
     TTL_COMPLETED = 86_400  # 24 hours
+    TTL_CANCELLED = 86_400  # 24 hours
     TTL_FAILED = 604_800  # 7 days
     CLEANUP_INTERVAL = 300  # 5 minutes
 
@@ -198,6 +200,11 @@ class TaskTracker:
                     if (
                         t.status == TaskStatus.COMPLETED
                         and (now - t.updated_at) > self.TTL_COMPLETED
+                    ):
+                        expired_ids.append(tid)
+                    elif (
+                        t.status == TaskStatus.CANCELLED
+                        and (now - t.updated_at) > self.TTL_CANCELLED
                     ):
                         expired_ids.append(tid)
                     elif t.status == TaskStatus.FAILED and (now - t.updated_at) > self.TTL_FAILED:
@@ -370,8 +377,8 @@ class TaskTracker:
         user_id: Optional[str] = None,
         *,
         resource_id: Optional[str] = None,
-    ) -> None:
-        """Transition task to COMPLETED with optional result."""
+    ) -> bool:
+        """Transition task to COMPLETED and report whether the transition won."""
         transitioned = False
         async with self._async_lock:
             task = await self._load_for_update(task_id, account_id, user_id)
@@ -388,6 +395,7 @@ class TaskTracker:
                 transitioned = True
         if transitioned:
             logger.info("[TaskTracker] Task %s completed", task_id)
+        return transitioned
 
     async def fail(
         self,
@@ -411,6 +419,33 @@ class TaskTracker:
                 transitioned = True
         if transitioned:
             logger.warning("[TaskTracker] Task %s failed: %s", task_id, _sanitize_error(error))
+
+    async def cancel(
+        self,
+        task_id: str,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> Optional[TaskRecord]:
+        """Transition a pending or running task to CANCELLED and return its snapshot."""
+        async with self._async_lock:
+            task = await self._load_for_update(task_id, account_id, user_id)
+            if task is None:
+                return None
+            if task.status not in _TERMINAL_STATUSES:
+                task.status = TaskStatus.CANCELLED
+                task.stage = "cancelled"
+                task.updated_at = time.time()
+                await self._store.update(task)
+                with self._lock:
+                    self._tasks[task.task_id] = task
+                logger.info("[TaskTracker] Task %s cancelled", task_id)
+            return self._copy(task)
+
+    def is_cancelled(self, task_id: str) -> bool:
+        """Return the cached cancellation state for cooperative workers."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            return task is not None and task.status == TaskStatus.CANCELLED
 
     async def get(
         self,

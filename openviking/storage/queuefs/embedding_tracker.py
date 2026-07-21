@@ -200,3 +200,12 @@ class EmbeddingTaskTracker:
         if record_to_finalize is not None:
             await self._run_on_complete(semantic_msg_id, record_to_finalize)
         return remaining
+
+    async def cancel(self, semantic_msg_id: str) -> bool:
+        """Remove a cancelled semantic task and run its completion callback."""
+        with self._lock:
+            record = self._tasks.pop(semantic_msg_id, None)
+        if record is None:
+            return False
+        await self._run_on_complete(semantic_msg_id, record)
+        return True

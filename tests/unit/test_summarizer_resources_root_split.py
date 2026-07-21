@@ -143,12 +143,14 @@ async def test_explicit_subpath_not_split():
             resource_uris=["viking://resources/foo"],
             ctx=ctx,
             temp_uris=["viking://temp/import_root"],
+            source_task_id="task-1",
         )
 
     assert res["status"] == "success"
     assert res["enqueued_count"] == 1
     assert queue.msgs[0].target_uri == "viking://resources/foo"
     assert queue.msgs[0].uri == "viking://temp/import_root"
+    assert queue.msgs[0].source_task_id == "task-1"
 
 
 @pytest.mark.asyncio

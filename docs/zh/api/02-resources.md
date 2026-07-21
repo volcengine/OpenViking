@@ -489,6 +489,11 @@ ov add-resource ./documents/guide.md -p viking://resources/docs/{calendar:today}
 
 使用返回的 `task_id` 轮询 `/api/v1/tasks/{task_id}` 可查看队列完成情况。对于 `wait=false` 的 Git 仓库来源，同一个端点会跟踪完整后台导入，任务完成后的 `result` 会包含完整导入结果，包括 `queue_status`。
 
+要停止 pending 或 running 状态的 `add_resource` 任务，可运行 `ov task cancel <task_id>`，
+或调用 `POST /api/v1/tasks/{task_id}/cancel`。取消状态会持久化，并与下游队列协作：已经开始的
+semantic/embedding 工作会先到达安全停止点，再执行回滚。只有目标由本任务创建时才会回滚删除；
+任务开始前已经存在的目标永远不会被删除。
+
 **CLI 响应 (默认表格格式)**
 
 ```

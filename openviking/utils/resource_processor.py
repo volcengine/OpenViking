@@ -118,6 +118,7 @@ class ResourceProcessor:
         parent: Optional[str] = None,
         summarize: bool = False,
         stage_callback: Optional[Callable[[str], Any]] = None,
+        source_task_id: str = "",
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -279,6 +280,7 @@ class ResourceProcessor:
             candidate_uri = getattr(context_tree, "_candidate_uri", None) if context_tree else None
             resource_lock: LockLease = preacquired_lock
             target_preexisting = False
+            target_created = False
             source_committed = False
 
             if root_uri and temp_uri:
@@ -290,6 +292,7 @@ class ResourceProcessor:
                 lock_manager = get_lock_manager()
                 try:
                     if candidate_uri:
+                        target_created = True
                         if resource_lock.active:
                             root_uri = candidate_uri
                         else:
@@ -304,32 +307,16 @@ class ResourceProcessor:
                                     f"Tip: Use --to <path> to specify exact target."
                                 )
                     else:
-                        target_preexisting = await viking_fs.exists(root_uri, ctx=ctx)
-                        if target_preexisting:
-                            try:
-                                stat = await viking_fs.stat(root_uri, ctx=ctx)
-                                if isinstance(stat, dict) and stat.get("isDir"):
-                                    entries = await viking_fs.ls(
-                                        root_uri,
-                                        show_all_hidden=True,
-                                        node_limit=LS_ALL_NODES,
-                                        ctx=ctx,
-                                    )
-                                    names: list[str] = []
-                                    for entry in entries:
-                                        name = entry.get("name", "")
-                                        if not name or name in {".", ".."}:
-                                            continue
-                                        names.append(str(name))
-                                    if all(name in STORAGE_INTERNAL_ENTRY_NAMES for name in names):
-                                        target_preexisting = False
-                            except Exception:
-                                pass
                         if not resource_lock.active:
                             dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
                             resource_lock = await self.acquire_resource_lock(
                                 lock_manager, dst_path, uri=root_uri
                             )
+                        target_created = not await viking_fs.exists(root_uri, ctx=ctx)
+                        target_preexisting = await self.target_contains_preexisting_data(
+                            root_uri,
+                            ctx=ctx,
+                        )
                     if not target_preexisting:
                         await viking_fs.persist_temp_tree(temp_uri, root_uri, ctx=ctx)
                         await rewrite_image_uris(
@@ -367,6 +354,7 @@ class ResourceProcessor:
                 "temp_dir_path": parse_result.temp_dir_path,
                 "source_committed": source_committed,
                 "target_preexisting": target_preexisting,
+                "target_created": target_created,
                 "is_code_repo": parse_result.source_format == "repository",
             }
             if defer_post_processing:
@@ -378,6 +366,7 @@ class ResourceProcessor:
                     ctx=ctx,
                     resource_lock=resource_lock,
                     summarize=summarize,
+                    source_task_id=source_task_id,
                     **kwargs,
                 )
                 if post_result.get("warnings"):
@@ -488,6 +477,9 @@ class ResourceProcessor:
                 resource_lock = await self.acquire_resource_lock(
                     lock_manager, dst_path, uri=root_uri, timeout=0.0
                 )
+                if await self.target_contains_preexisting_data(root_uri, ctx=ctx):
+                    await resource_lock.close()
+                    continue
                 return root_uri, resource_lock
             except ResourceBusyError as exc:
                 last_busy_error = exc
@@ -505,6 +497,36 @@ class ResourceProcessor:
         raise FileExistsError(
             f"Cannot resolve unique name for {candidate_uri} after {max_attempts} attempts"
         )
+
+    @staticmethod
+    async def target_contains_preexisting_data(
+        uri: str,
+        *,
+        ctx: RequestContext,
+    ) -> bool:
+        """Check target ownership while its lifecycle lock is held."""
+        viking_fs = get_viking_fs()
+        if not await viking_fs.exists(uri, ctx=ctx):
+            return False
+        try:
+            stat = await viking_fs.stat(uri, ctx=ctx)
+            if not isinstance(stat, dict) or not stat.get("isDir"):
+                return True
+            entries = await viking_fs.ls(
+                uri,
+                show_all_hidden=True,
+                node_limit=LS_ALL_NODES,
+                ctx=ctx,
+            )
+            names = [
+                str(entry.get("name", ""))
+                for entry in entries
+                if entry.get("name", "") not in {"", ".", ".."}
+            ]
+            return any(name not in STORAGE_INTERNAL_ENTRY_NAMES for name in names)
+        except Exception:
+            # Unknown ownership is pre-existing by default: cancellation must not delete it.
+            return True
 
     @staticmethod
     async def acquire_resource_lock(

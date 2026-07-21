@@ -1093,6 +1093,11 @@ impl HttpClient {
         self.get(&path, &[]).await
     }
 
+    pub async fn cancel_task(&self, task_id: &str) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/tasks/{}/cancel", task_id);
+        self.post(&path, &serde_json::json!({})).await
+    }
+
     pub async fn list_tasks(
         &self,
         task_type: Option<&str>,

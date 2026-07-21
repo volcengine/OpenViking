@@ -1230,6 +1230,7 @@ Query background task status for APIs that return `task_id`, such as session com
 - `running`: Task in progress
 - `completed`: Task successfully completed
 - `failed`: Task failed
+- `cancelled`: An `add_resource` task was cancelled
 
 **Code Entries:**
 - `openviking/server/routers/tasks.py:get_task()` - HTTP route
@@ -1345,6 +1346,60 @@ if task != nil {
 
 ---
 
+### cancel_task()
+
+#### 1. API Implementation Introduction
+
+Cancel a pending or running `add_resource` task. The endpoint durably records `cancelled` before it
+returns; cooperative worker drain and safe rollback may still be finishing afterward.
+
+Repeating cancellation for an already-cancelled task is idempotent. Tasks owned by another user
+return `NOT_FOUND`; completed, failed, and non-`add_resource` tasks return `FAILED_PRECONDITION`.
+Root administrators can use `ov --sudo task cancel` with the configured tenant identity.
+
+**Code Entries:**
+- `openviking/server/routers/tasks.py:cancel_task()` - HTTP route
+- `openviking/service/resource_service.py:ResourceService.cancel_add_resource_task()` - ownership and state validation
+
+#### 2. Interface and Parameter Description
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| task_id | str | Yes | - | Task ID returned by `add_resource` |
+
+#### 3. Usage Examples
+
+```http
+POST /api/v1/tasks/{task_id}/cancel
+```
+
+```bash
+ov task cancel uuid-xxx
+
+curl -X POST http://localhost:1933/api/v1/tasks/uuid-xxx/cancel \
+  -H "X-API-Key: your-key"
+```
+
+**Response Example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "task_id": "uuid-xxx",
+    "task_type": "add_resource",
+    "status": "cancelled",
+    "resource_id": "viking://resources/guide",
+    "stage": "cancelled"
+  }
+}
+```
+
+Rollback deletes a target only when this task created it. Pre-existing targets and legacy tasks with
+unknown ownership are never deleted.
+
+---
+
 ### list_tasks()
 
 #### 1. API Implementation Introduction
@@ -1362,7 +1417,7 @@ List background tasks visible to the current caller, supporting filtering by typ
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | task_type | str | No | None | Filter by task type, for example `session_commit` |
-| status | str | No | None | Filter by task status: `pending`, `running`, `completed`, `failed` |
+| status | str | No | None | Filter by task status: `pending`, `running`, `completed`, `failed`, `cancelled` |
 | resource_id | str | No | None | Filter by task resource ID, for example a session ID |
 | limit | int | No | 50 | Maximum number of task records to return |
 
