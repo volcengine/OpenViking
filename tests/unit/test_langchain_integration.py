@@ -1677,3 +1677,50 @@ def test_langgraph_middleware_clears_pending_context_on_duplicate_retry():
 
     unrelated_assistant_parts = client.sessions["middleware-pending-cleanup"][-1]["parts"]
     assert unrelated_assistant_parts == [{"type": "text", "text": "Unrelated turn stored."}]
+
+
+def test_langgraph_middleware_retries_failed_batch_with_pending_context():
+    class FailFirstBatchClient(InMemoryOpenVikingClient):
+        def __init__(self):
+            super().__init__({"viking://user/memories/profile.md": "Retained retry context."})
+            self.batch_attempts = 0
+
+        def batch_add_messages(self, session_id, messages, **kwargs):
+            self.batch_attempts += 1
+            if self.batch_attempts == 1:
+                raise RuntimeError("batch write failed")
+            return super().batch_add_messages(session_id, messages, **kwargs)
+
+    client = FailFirstBatchClient()
+    middleware = OpenVikingContextMiddleware(
+        client=client,
+        target_uri="viking://user/memories",
+        session_id_resolver=lambda state, runtime: "middleware-batch-retry",
+    )
+
+    class Request:
+        messages = [HumanMessage(content="What retry context?")]
+        system_message = None
+
+        def override(self, **overrides):
+            new_request = Request()
+            new_request.messages = overrides.get("messages", self.messages)
+            new_request.system_message = overrides.get("system_message", self.system_message)
+            return new_request
+
+    middleware.wrap_model_call(Request(), lambda request: AIMessage(content="ok"))
+    state = {
+        "messages": [
+            HumanMessage(content="What retry context?"),
+            AIMessage(content="Retry context stored."),
+        ]
+    }
+
+    with pytest.raises(RuntimeError, match="batch write failed"):
+        middleware.after_agent(state, runtime=None)
+    middleware.after_agent(state, runtime=None)
+
+    assert client.batch_attempts == 2
+    assert len(client.sessions["middleware-batch-retry"]) == 2
+    assistant_parts = client.sessions["middleware-batch-retry"][1]["parts"]
+    assert sum(part["type"] == "context" for part in assistant_parts) == 1
