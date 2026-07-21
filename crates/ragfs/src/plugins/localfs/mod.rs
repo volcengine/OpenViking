@@ -81,6 +81,9 @@ impl LocalFileSystem {
 
         // Remove leading slash to make it relative
         let relative = path.strip_prefix('/').unwrap_or(path);
+        if Path::new(relative).is_absolute() {
+            return Err(Error::invalid_path(path));
+        }
 
         // Join with base path
         if relative.is_empty() {
@@ -1152,7 +1155,8 @@ impl FileSystem for LocalFileSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::FileSystem;
+    use crate::core::{ConfigValue, FileSystem, MountableFS};
+    use std::collections::HashMap;
     use std::path::Path;
     use tempfile::TempDir;
 
@@ -1205,6 +1209,28 @@ mod tests {
         let fs = LocalFileSystem::new(mount.to_str().unwrap()).unwrap();
 
         let err = fs.read("/../secret.txt", 0, 0).await.unwrap_err();
+        assert!(matches!(err, Error::InvalidPath(_)));
+    }
+
+    #[tokio::test]
+    async fn test_localfs_mount_rejects_absolute_remainder() {
+        let dir = TempDir::new().unwrap();
+        let mount = dir.path().join("mount");
+        std::fs::create_dir(&mount).unwrap();
+        write_file(dir.path(), "secret.txt", "secret");
+
+        let fs = MountableFS::new();
+        fs.register_plugin(LocalFSPlugin::new()).await;
+        let params = HashMap::from([(
+            "local_dir".to_string(),
+            ConfigValue::String(mount.to_string_lossy().into_owned()),
+        )]);
+        fs.mount(PluginConfig::single_backend("localfs", "/local", params))
+            .await
+            .unwrap();
+
+        let escape_path = format!("/local/{}", dir.path().join("secret.txt").display());
+        let err = fs.read(&escape_path, 0, 0).await.unwrap_err();
         assert!(matches!(err, Error::InvalidPath(_)));
     }
 
