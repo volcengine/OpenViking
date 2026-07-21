@@ -85,7 +85,7 @@ Suitable for development and single-node deployments:
 
 **Initialization command**:
 ```bash
-ov system crypto init-key --output ~/.openviking/master.key
+ov system crypto init-key --output-file ~/.openviking/master.key
 ```
 
 ### Vault (HashiCorp Vault)

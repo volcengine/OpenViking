@@ -85,7 +85,7 @@ OpenViking 支持三种密钥提供程序，适应不同的部署场景：
 
 **初始化命令**：
 ```bash
-ov system crypto init-key --output ~/.openviking/master.key
+ov system crypto init-key --output-file ~/.openviking/master.key
 ```
 
 ### Vault（HashiCorp Vault）
