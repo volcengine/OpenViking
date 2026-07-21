@@ -75,7 +75,7 @@ class ParserRegistry:
         self.register("zip", ZipParser())
         self.register("directory", DirectoryParser())
 
-        self.register("image", ImageParser())
+        self.register("image", ImageParser(config=self._parser_configs.get("image")))
         self.register("audio", AudioParser())
         self.register("video", VideoParser())
 
@@ -184,10 +184,6 @@ class ParserRegistry:
                     del self._extension_map[ext.lower()]
             del self._parsers[name]
 
-    def get_parser(self, name: str) -> Optional[BaseParser]:
-        """Get parser by name."""
-        return self._parsers.get(name)
-
     def get_parser_for_file(self, path: Union[str, Path]) -> Optional[BaseParser]:
         """
         Get appropriate parser for a file.
@@ -295,6 +291,7 @@ def get_registry() -> ParserRegistry:
                 "powerpoint": config.markdown,
                 "excel": config.markdown,
                 "epub": config.markdown,
+                "image": config.image,
             }
         except Exception:
             parser_configs = None

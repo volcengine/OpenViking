@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Writable } from "node:stream";
 import test from "node:test";
 import { createOpenVikingMcpProxy } from "./mcp-proxy.mjs";
@@ -39,7 +42,7 @@ async function withServer(handler, fn) {
   }
 }
 
-function makeProxy({ url, configOverrides = {}, stdout } = {}) {
+function makeProxy({ url, configOverrides = {}, stdout, localToolProvider, readConfig } = {}) {
   const out = [];
   const writable = stdout || new Writable({
     write(chunk, _encoding, callback) {
@@ -49,7 +52,7 @@ function makeProxy({ url, configOverrides = {}, stdout } = {}) {
   });
   const proxy = createOpenVikingMcpProxy({
     stdout: writable,
-    readConfig: () => ({
+    readConfig: readConfig || (() => ({
       mcpUrl: url,
       apiKey: "test-key",
       account: "default",
@@ -62,8 +65,9 @@ function makeProxy({ url, configOverrides = {}, stdout } = {}) {
       credentialPath: "",
       watchedPaths: [],
       ...configOverrides,
-    }),
+    })),
     loggerFactory: () => ({ log() {}, logError() {} }),
+    localToolProvider,
   });
   return {
     proxy,
@@ -189,6 +193,152 @@ test("uses independent POST requests for concurrent calls", async () => {
     assert.deepEqual(ids, [1, 2]);
     assert.equal(requests.length, 2);
   });
+});
+
+test("appends local tools to the upstream tools/list result", async () => {
+  const localTools = [
+    { name: "search_experience", description: "Search experiences", inputSchema: { type: "object" } },
+    { name: "read_experience", description: "Read an experience", inputSchema: { type: "object" } },
+  ];
+  await withServer((_req, res, entry) => {
+    assert.equal(entry.body.method, "tools/list");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(jsonRpc(entry.body.id, {
+      tools: [{ name: "find", description: "Find context", inputSchema: { type: "object" } }],
+    })));
+  }, async ({ url, requests }) => {
+    const { proxy, messages } = makeProxy({
+      url,
+      localToolProvider: {
+        listTools: () => localTools,
+        async callTool() { return null; },
+      },
+    });
+
+    await proxy.handleMessage({ jsonrpc: "2.0", id: 20, method: "tools/list" });
+
+    const [response] = await messages();
+    assert.deepEqual(response.result.tools.map((tool) => tool.name), [
+      "find",
+      "search_experience",
+      "read_experience",
+    ]);
+    assert.equal(requests.length, 1);
+  });
+});
+
+test("replaces an upstream tool definition when the local tool has the same name", async () => {
+  const localTool = {
+    name: "search_experience",
+    description: "Local experience search",
+    inputSchema: { type: "object", required: ["query"] },
+  };
+  await withServer((_req, res, entry) => {
+    assert.equal(entry.body.method, "tools/list");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(jsonRpc(entry.body.id, {
+      tools: [
+        { name: "find", description: "Find context", inputSchema: { type: "object" } },
+        {
+          name: "search_experience",
+          description: "Upstream experience search",
+          inputSchema: { type: "object", required: ["text"] },
+        },
+      ],
+    })));
+  }, async ({ url }) => {
+    const { proxy, messages } = makeProxy({
+      url,
+      localToolProvider: {
+        listTools: () => [localTool],
+        async callTool() { return null; },
+      },
+    });
+
+    await proxy.handleMessage({ jsonrpc: "2.0", id: 22, method: "tools/list" });
+
+    const [response] = await messages();
+    assert.deepEqual(response.result.tools, [
+      { name: "find", description: "Find context", inputSchema: { type: "object" } },
+      localTool,
+    ]);
+  });
+});
+
+test("handles local tools without forwarding tools/call upstream", async () => {
+  const calls = [];
+  const { proxy, messages } = makeProxy({
+    url: "http://127.0.0.1:1/mcp",
+    localToolProvider: {
+      listTools: () => [{ name: "search_experience" }],
+      async callTool(params, context) {
+        calls.push({ params, context });
+        return { content: [{ type: "text", text: '{"results":[]}' }] };
+      },
+    },
+  });
+
+  await proxy.handleMessage({
+    jsonrpc: "2.0",
+    id: 21,
+    method: "tools/call",
+    params: { name: "search_experience", arguments: { query: "换货" } },
+  });
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].params, {
+    name: "search_experience",
+    arguments: { query: "换货" },
+  });
+  assert.equal(calls[0].context.config.user, "zeus");
+  assert.deepEqual(await messages(), [
+    jsonRpc(21, { content: [{ type: "text", text: '{"results":[]}' }] }),
+  ]);
+});
+
+test("reloads changed credential files before calling a local tool", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "openviking-mcp-proxy-"));
+  const credentialPath = join(dir, "ovcli.conf");
+  writeFileSync(credentialPath, "old-key", "utf-8");
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+  let apiKey = "old-key";
+  const receivedKeys = [];
+  const readConfig = () => ({
+    mcpUrl: "http://127.0.0.1:1/mcp",
+    apiKey,
+    account: "default",
+    user: "zeus",
+    peerId: "peer-a",
+    timeoutMs: 5000,
+    debug: false,
+    debugLogPath: "",
+    credentialSource: "ovcli",
+    credentialPath,
+    watchedPaths: [credentialPath],
+  });
+  const { proxy, messages } = makeProxy({
+    readConfig,
+    localToolProvider: {
+      listTools: () => [{ name: "search_experience" }],
+      async callTool(_params, context) {
+        receivedKeys.push(context.config.apiKey);
+        return { content: [{ type: "text", text: '{"results":[]}' }] };
+      },
+    },
+  });
+
+  apiKey = "new-key";
+  writeFileSync(credentialPath, "new-key-with-different-size", "utf-8");
+  await proxy.handleMessage({
+    jsonrpc: "2.0",
+    id: 22,
+    method: "tools/call",
+    params: { name: "search_experience", arguments: { query: "换货" } },
+  });
+
+  assert.deepEqual(receivedKeys, ["new-key"]);
+  assert.equal((await messages())[0].id, 22);
 });
 
 test("reinitializes after 404 and retries the original request once", async () => {

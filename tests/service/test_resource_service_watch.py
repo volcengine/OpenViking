@@ -13,7 +13,7 @@ from openviking.resource.watch_manager import WatchManager
 from openviking.server.identity import RequestContext, Role
 from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
-from openviking_cli.exceptions import ConflictError
+from openviking_cli.exceptions import ConflictError, InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -92,15 +92,6 @@ def isolate_service_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest_asyncio.fixture
-async def watch_manager() -> AsyncGenerator[WatchManager, None]:
-    """Create WatchManager instance without VikingFS for testing."""
-    manager = WatchManager(viking_fs=None)
-    await manager.initialize()
-    yield manager
-    await manager.clear_all_tasks()
-
-
-@pytest_asyncio.fixture
 async def resource_service(watch_manager: WatchManager) -> AsyncGenerator[ResourceService, None]:
     """Create ResourceService instance with watch support."""
     scheduler = MagicMock()
@@ -154,6 +145,26 @@ class TestWatchTaskCreation:
         assert task.instruction == "Monitor for changes"
         assert task.watch_interval == 30.0
         assert task.is_active is True
+
+    @pytest.mark.asyncio
+    async def test_watch_interval_rejected_for_uploaded_snapshot_source(
+        self, resource_service: ResourceService, request_context: RequestContext
+    ):
+        """A temp-upload source is a one-time snapshot: watching it would silently
+        re-process stale content forever, so creation must fail loudly."""
+        to_uri = "viking://resources/uploaded_resource"
+
+        with pytest.raises(InvalidArgumentError, match="uploaded content"):
+            await resource_service.add_resource(
+                path="/app/.openviking/workspace/temp/upload/upload_abc123.zip",
+                ctx=request_context,
+                to=to_uri,
+                watch_interval=30.0,
+                args={"temp_file_id": "upload_abc123.zip"},
+            )
+
+        task = await get_task_by_uri(resource_service, to_uri, request_context)
+        assert task is None
 
     @pytest.mark.asyncio
     async def test_watch_interval_auto_binds_root_uri_when_to_omitted(
@@ -346,9 +357,9 @@ class TestWatchTaskConflict:
         self, resource_service: ResourceService, request_context: RequestContext
     ):
         """A rejected watch request must not leave behind a user-invisible task."""
-        from openviking.service.task_tracker import get_task_tracker, reset_task_tracker
+        from openviking.service.task_tracker import get_task_tracker, set_task_tracker
 
-        reset_task_tracker()
+        set_task_tracker(None)
         to_uri = "viking://resources/conflict_no_task"
 
         await resource_service.add_resource(

@@ -68,6 +68,20 @@ def test_typescript_source_is_not_a_transport_stream(tmp_path: Path):
     assert get_media_type(str(source), "markdown") is None
 
 
+def test_printable_typescript_with_sync_byte_cadence_stays_text(tmp_path: Path):
+    source = tmp_path / "generated.ts"
+    content = bytearray(b" " * 800)
+    content[:2] = b"/*"
+    content[-2:] = b"*/"
+    for packet_index in range(4):
+        content[2 + packet_index * 188] = 0x47
+    source.write_bytes(content)
+
+    assert not is_mpeg_transport_stream_bytes(bytes(content))
+    assert not is_mpeg_transport_stream_file(source)
+    assert isinstance(ParserRegistry().get_parser_for_file(source), TextParser)
+
+
 def test_real_transport_stream_keeps_video_parser(tmp_path: Path):
     source = tmp_path / "clip.ts"
     source.write_bytes(_transport_stream())

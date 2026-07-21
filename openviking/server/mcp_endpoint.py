@@ -323,7 +323,7 @@ async def recall(
     max_chars: int = DEFAULT_MAX_CHARS,
     min_score: float = DEFAULT_MIN_SCORE,
     peer_scope: str = "all",
-    other_peer_penalty: Optional[Any] = None,
+    other_peer_penalty: Optional[Union[float, Dict[str, float]]] = None,
 ) -> str:
     """Type-quota memory recall. Searches events, entities, preferences, and experiences separately, then returns a bounded memory_group block."""
     service = get_service()
@@ -970,6 +970,94 @@ async def health() -> str:
         return f"OpenViking is healthy (service initialized, storage: {type(service.viking_fs).__name__})"
     except Exception as e:
         return f"OpenViking is unhealthy: {e}"
+
+
+# ---------------------------------------------------------------------------
+# Portable tool schemas
+# ---------------------------------------------------------------------------
+#
+# FastMCP derives tool input schemas from Python type hints, so Optional/Union
+# parameters become `anyOf` nodes with no top-level `type`, and nested models
+# become `$ref`/`$defs`. That is valid JSON Schema, but several LLM function
+# calling APIs (notably Gemini's OpenAPI 3.0 subset) require an explicit
+# `type` on every schema node and reject `anyOf`/`$ref`, so MCP clients that
+# forward our schemas verbatim get the whole request rejected. Rewrite the
+# advertised schemas into a plain-typed form: drop null branches, collapse
+# unions to their most general branch, and inline $refs. Runtime argument
+# validation still uses the original function signatures, so union parameters
+# keep accepting every branch (e.g. `read` still takes a bare URI string even
+# though the schema advertises an array).
+
+_PORTABLE_TYPE_PREFERENCE = ("array", "object", "string", "number", "integer", "boolean")
+
+
+def _portable_schema(schema: Any, defs: Optional[Dict[str, Any]] = None) -> Any:
+    if not isinstance(schema, dict):
+        return schema
+    if defs is None:
+        defs = schema.get("$defs") or {}
+    node = {k: v for k, v in schema.items() if k != "$defs"}
+
+    ref = node.pop("$ref", None)
+    if isinstance(ref, str) and ref.startswith("#/$defs/"):
+        target = defs.get(ref.rsplit("/", 1)[-1])
+        if isinstance(target, dict):
+            return _portable_schema({**target, **node}, defs)
+
+    any_of = node.pop("anyOf", None)
+    if isinstance(any_of, list):
+        branches = [
+            b
+            for b in (_portable_schema(b, defs) for b in any_of)
+            if isinstance(b, dict) and b.get("type") != "null"
+        ]
+        if branches:
+
+            def _rank(branch: Dict[str, Any]) -> int:
+                branch_type = branch.get("type")
+                if branch_type in _PORTABLE_TYPE_PREFERENCE:
+                    return _PORTABLE_TYPE_PREFERENCE.index(branch_type)
+                return len(_PORTABLE_TYPE_PREFERENCE)
+
+            node = {**min(branches, key=_rank), **node}
+        # A null default contradicts the collapsed non-null type; omission
+        # already means "not provided", so drop it.
+        if node.get("default", "") is None:
+            node.pop("default")
+
+    if isinstance(node.get("properties"), dict):
+        node["properties"] = {
+            key: _portable_schema(value, defs) for key, value in node["properties"].items()
+        }
+    for key in ("items", "additionalProperties"):
+        if isinstance(node.get(key), dict):
+            node[key] = _portable_schema(node[key], defs)
+
+    if "type" not in node:
+        if "properties" in node:
+            node["type"] = "object"
+        elif "items" in node:
+            node["type"] = "array"
+        else:
+            enum_values = node.get("enum") or ([node["const"]] if "const" in node else [])
+            sample = enum_values[0] if enum_values else ""
+            if isinstance(sample, bool):
+                node["type"] = "boolean"
+            elif isinstance(sample, int):
+                node["type"] = "integer"
+            elif isinstance(sample, float):
+                node["type"] = "number"
+            else:
+                node["type"] = "string"
+    return node
+
+
+def _apply_portable_schemas() -> None:
+    for tool in mcp._tool_manager.list_tools():
+        tool.parameters = _portable_schema(tool.parameters)
+
+
+_apply_portable_schemas()
 
 
 # ---------------------------------------------------------------------------

@@ -495,11 +495,6 @@ impl MultiWriteWrappedFSBuilder {
         self
     }
 
-    /// Accept the legacy read-route cache TTL option as a no-op.
-    pub fn read_route_cache_ttl(self, _read_route_cache_ttl: Duration) -> Self {
-        self
-    }
-
     /// Configure the context resolver used by retry and admin background paths.
     pub fn ctx_resolver(mut self, ctx_resolver: Arc<dyn FsContextResolver>) -> Self {
         self.ctx_resolver = ctx_resolver;

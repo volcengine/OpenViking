@@ -235,45 +235,6 @@ class AgentLoop:
             self._mcp_stack = None
         self._mcp_connected = False
 
-    async def _publish_thinking_event(
-        self, session_key: SessionKey, event_type: OutboundEventType, content: str
-    ) -> None:
-        """
-        Publish a thinking event to the message bus.
-
-        Thinking events are used to communicate the agent's internal processing
-        state to the user, such as when the agent is executing a tool or
-        processing a complex request.
-
-        Args:
-            session_key: The session key identifying the conversation.
-            event_type: The type of thinking event (e.g., THINKING, TOOL_START).
-            content: The message content to display to the user.
-
-        Note:
-            This is an internal method used by the agent loop to communicate
-            progress to users during long-running operations.
-
-        Example:
-            async def notify_tool_call() -> None:
-                await self._publish_thinking_event(
-                    session_key=SessionKey(
-                        type="telegram",
-                        channel_id="default",
-                        chat_id="123",
-                    ),
-                    event_type=OutboundEventType.TOOL_CALL,
-                    content="Executing web search...",
-                )
-        """
-        await self.bus.publish_outbound(
-            OutboundMessage(
-                session_key=session_key,
-                content=content,
-                event_type=event_type,
-            )
-        )
-
     async def _publish_auto_memory_context(
         self,
         session_key: SessionKey,

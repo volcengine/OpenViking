@@ -255,3 +255,30 @@ def test_load_server_config_preserves_otlp_headers_fields(tmp_path):
     assert config.observability.metrics.exporters.otel.headers == {
         "X-ByteAPM-AppKey": "metric-appkey",
     }
+
+
+def test_load_server_config_trace_local_defaults(tmp_path):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "server": {
+                    "observability": {
+                        "traces": {
+                            "enabled": True,
+                            "protocol": "local",
+                        }
+                    }
+                }
+            }
+        )
+    )
+
+    config = load_server_config(str(config_path))
+
+    traces = config.observability.traces
+    assert traces.enabled is True
+    assert traces.protocol == "local"
+    assert traces.local_path == "~/.openviking/logs/traces.jsonl"
+    assert traces.local_rotation_mb == 40
+    assert traces.local_backup_count == 2

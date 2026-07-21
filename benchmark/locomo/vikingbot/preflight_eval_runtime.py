@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import getpass
 import json
 import os
 import shlex
@@ -18,13 +19,38 @@ from openviking_cli.utils.config.consts import (
     OPENVIKING_CONFIG_ENV,
 )
 
+_USE_COLOR = (
+    hasattr(sys.stdout, "isatty")
+    and sys.stdout.isatty()
+    and os.environ.get("TERM", "dumb") != "dumb"
+    and "NO_COLOR" not in os.environ
+)
+
+
+def _color(text: str, code: str) -> str:
+    if not _USE_COLOR:
+        return text
+    return f"\033[{code}m{text}\033[0m"
+
 
 def _log(message: str) -> None:
-    print(f"[preflight] {message}")
+    print(_color(f"  │ {message}", "2"))
+
+
+def _fact(message: str) -> None:
+    print(f"  {_color('◆', '36')} {message}")
+
+
+def _ok(message: str) -> None:
+    print(f"  {_color('✓', '32')} {message}")
+
+
+def _warn(message: str) -> None:
+    print(f"  {_color('!', '33')} {message}")
 
 
 def _error(message: str) -> None:
-    print(f"[preflight] {message}", file=sys.stderr)
+    print(f"  {_color('✗', '31')} {message}", file=sys.stderr)
 
 
 class UserKeyValidationError(RuntimeError):
@@ -44,21 +70,30 @@ def _is_interactive() -> bool:
 
 
 def _prompt_text(prompt: str) -> str:
+    print(f"\n  {_color('?', '33')} {prompt}")
     try:
         with open("/dev/tty", "r", encoding="utf-8") as tty_in:
-            print(prompt, end="", flush=True)
+            print(f"    {_color('>', '32')} ", end="", flush=True)
             return tty_in.readline().strip()
     except Exception:
-        return input(prompt).strip()
+        return input(f"    {_color('>', '32')} ").strip()
+
+
+def _prompt_secret(prompt: str) -> str:
+    print(f"\n  {_color('?', '33')} {prompt}")
+    try:
+        return getpass.getpass(f"    {_color('>', '32')} ").strip()
+    except Exception:
+        return _prompt_text("请输入密钥").strip()
 
 
 def _prompt_api_key() -> str:
-    return _prompt_text("[preflight] 请输入 OpenViking User API key: ")
+    return _prompt_secret("请输入 OpenViking User API key（输入内容不会显示）")
 
 
 def _prompt_root_api_key() -> str:
-    return _prompt_text(
-        "[preflight] 请输入 OpenViking Root API key，用于自动创建 default User key: "
+    return _prompt_secret(
+        "请输入 OpenViking Root API key，用于自动创建 default User key（输入内容不会显示）"
     )
 
 
@@ -66,7 +101,7 @@ def _prompt_yes_no(prompt: str, default: bool = False) -> bool:
     if not _is_interactive():
         return False
     suffix = "Y/n" if default else "y/N"
-    answer = _prompt_text(f"{prompt} [{suffix}]: ").strip().lower()
+    answer = _prompt_text(f"{prompt} [{suffix}]").strip().lower()
     if not answer:
         return default
     return answer in {"y", "yes", "1", "true"}
@@ -170,7 +205,7 @@ def _sync_bot_identity(account_id: str, user_id: str, api_key: str, *, auth_mode
             changed = True
     if changed:
         _write_json_with_backup(path, ov_data)
-        _log(
+        _ok(
             "已同步 bot.ov_server: "
             f"api_key_type={desired['api_key_type']}, account_id={account_id}, admin_user_id={user_id}"
         )
@@ -337,7 +372,7 @@ def _ensure_default_user_key(url: str, root_api_key: str) -> tuple[str, str, str
         item.get("account_id") == account_id for item in accounts if isinstance(item, dict)
     )
     if not account_exists:
-        _log("default account 不存在，将使用 Root key 创建 account=default。")
+        _warn("default account 不存在，将使用 Root key 创建 account=default。")
         _admin_request(
             url,
             root_api_key,
@@ -360,7 +395,7 @@ def _ensure_default_user_key(url: str, root_api_key: str) -> tuple[str, str, str
         None,
     )
     if default_user is None:
-        _log("default User 不存在，将注册 account=default, user=default, role=user。")
+        _warn("default User 不存在，将注册 account=default, user=default, role=user。")
         created = _admin_request(
             url,
             root_api_key,
@@ -372,7 +407,7 @@ def _ensure_default_user_key(url: str, root_api_key: str) -> tuple[str, str, str
     else:
         role = str(default_user.get("role") or "").strip().lower()
         if role != "user":
-            _log(f"default User 当前 role={role or 'unknown'}，将调整为 role=user。")
+            _warn(f"default User 当前 role={role or 'unknown'}，将调整为 role=user。")
             _admin_request(
                 url,
                 root_api_key,
@@ -403,13 +438,13 @@ def _ensure_server_and_user_key_ready(
         raise UserKeyValidationError(f"当前 API key 解析为 role={role}。评测需要普通 User key。")
 
     if selected_account and selected_account != "default" and selected_account != account_id:
-        _log(
+        _warn(
             f"ovcli.conf.account={selected_account} "
             f"与 API key 归属 account={account_id} 不一致；"
             "本次评测使用 API key 归属 account。"
         )
 
-    _log(
+    _ok(
         "OpenViking server 可用，User key 身份: "
         f"account={account_id}, user={user_id}, role={role}。"
     )
@@ -422,9 +457,11 @@ def _ensure_trusted_server_ready(
     payload = _request_health(url, api_key, account_id=account_id, user_id=user_id)
     health_account, health_user, role = _parse_health_identity_payload(payload)
     if role != "user":
-        raise UserKeyValidationError(f"当前 trusted 身份解析为 role={role}。评测需要普通 User 身份。")
+        raise UserKeyValidationError(
+            f"当前 trusted 身份解析为 role={role}。评测需要普通 User 身份。"
+        )
 
-    _log(
+    _ok(
         "OpenViking server 可用，trusted 身份: "
         f"account={health_account}, user={health_user}, role={role}。"
     )
@@ -465,12 +502,10 @@ def _resolve_ready_user_identity(
             return account, user_id, api_key, "api_key"
         except UserKeyValidationError as exc:
             _error(str(exc))
-            prompt = (
-                "[preflight] 当前 User key 不可用，是否使用 Root key 自动生成 default User API key"
-            )
+            prompt = "当前 User key 不可用，是否使用 Root key 自动生成 default User API key"
     else:
         _error("未配置 OpenViking API key。")
-        prompt = "[preflight] 是否使用 Root key 自动生成 default User API key"
+        prompt = "是否使用 Root key 自动生成 default User API key"
 
     if not _prompt_yes_no(prompt, default=False):
         _error("请配置可用的 bot.ov_server.api_key 或 ovcli.conf.api_key 后重试。")
@@ -493,7 +528,7 @@ def _resolve_ready_user_identity(
     except UserKeyValidationError as exc:
         _error(str(exc))
         raise SystemExit(1) from exc
-    _log("已生成可用的 default User API key。")
+    _ok("已生成可用的 default User API key。")
     return checked_account or account, checked_user_id or user_id, user_key, "api_key"
 
 
@@ -523,13 +558,15 @@ def main() -> int:
     openviking_url = _resolve_openviking_url()
     api_key, key_source = _resolve_openviking_api_key()
 
-    _log(f"本次导入使用 OpenViking URL: {openviking_url}")
+    _fact(f"本次导入使用 OpenViking URL: {openviking_url}")
 
     account, user_id, api_key, auth_mode = _resolve_ready_user_identity(
         openviking_url, selected_account, selected_user, api_key, key_source
     )
     _sync_bot_identity(account, user_id, api_key, auth_mode=auth_mode)
-    _write_env_file(Path(args.output_env_file), account, openviking_url, api_key, user_id, auth_mode)
+    _write_env_file(
+        Path(args.output_env_file), account, openviking_url, api_key, user_id, auth_mode
+    )
     return 0
 
 

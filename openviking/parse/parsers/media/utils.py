@@ -25,31 +25,30 @@ def _is_svg(data: bytes) -> bool:
     return data[:4] == b"<svg" or (data[:5] == b"<?xml" and b"<svg" in data[:100])
 
 
-# SVG to PNG conversion (disabled by default)
-# Uncomment and install dependencies if you need SVG support:
-#   Ubuntu/Debian: sudo apt-get install libcairo2 && pip install cairosvg
-#   macOS: brew install cairo && pip install cairosvg
-#   Or use ImageMagick: sudo apt-get install libmagickwand-dev && pip install Wand
-#
-# def _convert_svg_to_png(svg_data: bytes) -> Optional[bytes]:
-#     """Convert SVG to PNG using cairosvg or wand."""
-#     try:
-#         import cairosvg
-#         return cairosvg.svg2png(bytestring=svg_data)
-#     except ImportError:
-#         pass
-#     except OSError:
-#         pass  # libcairo not installed
-#
-#     try:
-#         from wand.image import Image as WandImage
-#         with WandImage(blob=svg_data, format='svg') as img:
-#             img.format = 'png'
-#             return img.make_blob()
-#     except ImportError:
-#         pass
-#
-#     return None
+def _convert_svg_to_png(svg_data: bytes) -> Optional[bytes]:
+    """Convert SVG to PNG using cairosvg or wand.
+
+    Dependencies:
+      Ubuntu/Debian: sudo apt-get install libcairo2 && pip install cairosvg
+      macOS: brew install cairo && pip install cairosvg
+    """
+    try:
+        import cairosvg
+        return cairosvg.svg2png(bytestring=svg_data)
+    except ImportError:
+        pass
+    except OSError:
+        pass  # libcairo not installed
+
+    try:
+        from wand.image import Image as WandImage
+        with WandImage(blob=svg_data, format='svg') as img:
+            img.format = 'png'
+            return img.make_blob()
+    except ImportError:
+        pass
+
+    return None
 
 
 def get_media_type(source_path: Optional[str], source_format: Optional[str]) -> Optional[str]:

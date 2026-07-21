@@ -17,7 +17,6 @@ from openviking.service.task_tracker import (
     TaskTracker,
     _sanitize_error,
     get_task_tracker,
-    reset_task_tracker,
     set_task_tracker,
 )
 from openviking_cli.session.user_id import UserIdentifier
@@ -28,9 +27,9 @@ pytestmark = pytest.mark.asyncio
 @pytest.fixture(autouse=True)
 def clean_singleton():
     """Reset singleton before and after each test."""
-    reset_task_tracker()
+    set_task_tracker(None)
     yield
-    reset_task_tracker()
+    set_task_tracker(None)
 
 
 @pytest.fixture
@@ -422,7 +421,7 @@ async def test_singleton():
 
 async def test_singleton_reset():
     t1 = _set_fake_global_tracker()
-    reset_task_tracker()
+    set_task_tracker(None)
     t2 = _set_fake_global_tracker()
     assert t1 is not t2
 

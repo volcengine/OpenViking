@@ -254,69 +254,6 @@ class ResourceNode:
                 texts.append(child.get_text(include_children=True))
         return "\n".join(texts)
 
-    def get_abstract(self, max_length: int = 256) -> str:
-        """
-        Generate L0 abstract for this node.
-
-        Args:
-            max_length: Maximum character length
-
-        Returns:
-            Abstract text
-        """
-        if "abstract" in self.meta:
-            return self.meta["abstract"]
-        if self.title:
-            abstract = self.title
-        else:
-            content = self.get_content()
-            abstract = content[:max_length] if content else ""
-
-        if len(abstract) > max_length:
-            abstract = abstract[: max_length - 3] + "..."
-
-        return abstract
-
-    def get_overview(self, max_length: int = 4000) -> str:
-        """
-        Generate L1 overview for this node.
-
-        Args:
-            max_length: Maximum character length
-
-        Returns:
-            Overview text including structure summary
-        """
-        if "overview" in self.meta:
-            return self.meta["overview"]
-        # Default overview generation
-        parts = []
-        if self.title:
-            parts.append(f"**{self.title}**")
-
-        # Add content preview
-        content = self.get_content()
-        if content:
-            content_preview = content[:1000]
-            if len(content) > 1000:
-                content_preview += "..."
-            parts.append(content_preview)
-
-        # Add children summary
-        if self.children:
-            parts.append(f"\n[Contains {len(self.children)} sub-sections]")
-            for child in self.children[:5]:  # First 5 children
-                child_abstract = child.get_abstract(max_length=100)
-                parts.append(f"  - {child_abstract}")
-            if len(self.children) > 5:
-                parts.append(f"  ... and {len(self.children) - 5} more")
-
-        overview = "\n".join(parts)
-        if len(overview) > max_length:
-            overview = overview[: max_length - 3] + "..."
-
-        return overview
-
     def to_dict(self) -> Dict[str, Any]:
         """Convert node to dictionary."""
         return {

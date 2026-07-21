@@ -13,6 +13,18 @@ _MIN_SYNC_PACKETS = 4
 MPEG_TS_SNIFF_BYTES = max(_MPEG_TS_PACKET_SIZES) * (_MIN_SYNC_PACKETS + 1)
 
 
+def _looks_like_utf8_text(data: bytes) -> bool:
+    """Return whether a bounded prefix is entirely ordinary UTF-8 text."""
+
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return bool(data) and not any(
+        byte < 0x20 and byte not in (0x09, 0x0A, 0x0D) for byte in data
+    )
+
+
 @dataclass(frozen=True)
 class AmbiguousMediaRule:
     """Describe how one ambiguous suffix is routed using bounded content sniffing."""
@@ -78,7 +90,10 @@ def is_mpeg_transport_stream_bytes(data: bytes) -> bool:
     TypeScript source as video based on the ambiguous ``.ts`` suffix alone.
     """
 
-    if len(data) < min(_MPEG_TS_PACKET_SIZES) * _MIN_SYNC_PACKETS:
+    if (
+        len(data) < min(_MPEG_TS_PACKET_SIZES) * _MIN_SYNC_PACKETS
+        or _looks_like_utf8_text(data)
+    ):
         return False
 
     for packet_size in _MPEG_TS_PACKET_SIZES:

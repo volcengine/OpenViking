@@ -1388,55 +1388,6 @@ class ReindexExecutor:
                     counters.failed_records += 1
                     counters.warnings.append(f"Failed to reindex {skill_file_uri} vector: {exc}")
 
-    async def _reindex_memory_directory_vectors(
-        self,
-        *,
-        uri: str,
-        counters: _ReindexCounters,
-        ctx: RequestContext,
-    ) -> None:
-        counters.scanned_records += 1
-        abstract = await self._read_directory_abstract(uri, ctx=ctx)
-        overview = await self._read_directory_overview(uri, ctx=ctx)
-        if not abstract and not overview:
-            counters.unsupported_records += 1
-            counters.warnings.append(f"No semantic source found for {uri}")
-            return
-
-        parent_uri = VikingURI(uri).parent.uri
-        if abstract:
-            try:
-                await self._upsert_context(
-                    uri=uri,
-                    parent_uri=parent_uri,
-                    abstract=abstract,
-                    vector_text=abstract,
-                    is_leaf=False,
-                    context_type=ContextType.MEMORY.value,
-                    level=ContextLevel.ABSTRACT,
-                    ctx=ctx,
-                )
-                counters.rebuilt_records += 1
-            except Exception as exc:
-                counters.failed_records += 1
-                counters.warnings.append(f"Failed to reindex {uri} L0 vector: {exc}")
-        if overview:
-            try:
-                await self._upsert_context(
-                    uri=uri,
-                    parent_uri=parent_uri,
-                    abstract=abstract,
-                    vector_text=overview,
-                    is_leaf=False,
-                    context_type=ContextType.MEMORY.value,
-                    level=ContextLevel.OVERVIEW,
-                    ctx=ctx,
-                )
-                counters.rebuilt_records += 1
-            except Exception as exc:
-                counters.failed_records += 1
-                counters.warnings.append(f"Failed to reindex {uri} L1 vector: {exc}")
-
     async def _reindex_memory_vectors(
         self,
         *,
