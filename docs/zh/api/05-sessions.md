@@ -82,6 +82,13 @@ result = await client.create_session(session_id="my-custom-session-id")
 print(f"Session ID: {result['session_id']}")
 ```
 
+**TypeScript SDK**
+
+```typescript
+const session = await client.createSession();
+console.log(session);
+```
+
 **Go SDK**
 
 ```go
@@ -159,6 +166,12 @@ client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
 sessions = await client.list_sessions()
 for s in sessions:
     print(f"{s['session_id']} -> {s['uri']}")
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.listSessions());
 ```
 
 **Go SDK**
@@ -258,6 +271,12 @@ print(f"Commits: {info['commit_count']}")
 
 # 获取或创建会话
 info = await client.get_session("a1b2c3d4", auto_create=True)
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.getSession("session-id"));
 ```
 
 **Go SDK**
@@ -386,6 +405,12 @@ print(context["latest_archive_overview"])
 print(len(context["messages"]))
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.getSessionContext("session-id"));
+```
+
 **Go SDK**
 
 ```go
@@ -488,6 +513,12 @@ archive = await client.get_session_archive("a1b2c3d4", "archive_002")
 print(archive["archive_id"])
 print(archive["overview"])
 print(len(archive["messages"]))
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.getSessionArchive("session-id", "archive-id"));
 ```
 
 **Go SDK**
@@ -594,6 +625,12 @@ client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
 
 # 删除会话
 await client.delete_session("a1b2c3d4")
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.deleteSession("session-id");
 ```
 
 **Go SDK**
@@ -765,6 +802,12 @@ await client.add_message(
 )
 ```
 
+**TypeScript SDK**
+
+```typescript
+await client.addMessage("session-id", { role: "user", content: "Hello" });
+```
+
 **Go SDK**
 
 ```go
@@ -866,6 +909,15 @@ result = await client.batch_add_messages(
     ],
 )
 print(f"Added: {result['added']}, Total: {result['message_count']}")
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.batchAddMessages("session-id", [
+  { role: "user", content: "Hello" },
+  { role: "assistant", content: "Hi" },
+]);
 ```
 
 **Go SDK**
@@ -1037,6 +1089,12 @@ if task["status"] == "completed":
     print(f"Memories extracted: {total}")
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.commitSession("session-id"));
+```
+
 **Go SDK**
 
 ```go
@@ -1181,6 +1239,12 @@ task = await client.get_task(task_id="uuid-xxx")
 print(f"Status: {task['status']}")
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.getTask("task-id"));
+```
+
 **Go SDK**
 
 ```go
@@ -1298,6 +1362,12 @@ tasks = await client.list_tasks(
 )
 for task in tasks:
     print(task["task_id"], task["status"])
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.listTasks());
 ```
 
 **Go SDK**

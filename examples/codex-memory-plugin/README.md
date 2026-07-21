@@ -9,7 +9,7 @@ This is the Codex counterpart to [`claude-code-memory-plugin`](../claude-code-me
 - **Commit on `PreCompact`**: trigger OpenViking's memory extractor on the full pre-compact transcript before Codex summarizes it.
 - **Commit on `SessionStart` (source=startup|clear)**: active-window heuristic — if exactly one *other* state file was touched within the last 2 min, commit it (the just-ended session). On `≥2`, defer to idle-TTL sweep at the tail. `source=resume` never commits or sweeps; if the live OV session was already committed, it may inject the latest archive summary for continuity. See `DESIGN.md` for the full decision tree.
 
-It also starts a local stdio MCP proxy that forwards to OpenViking's native `/mcp` endpoint with credentials resolved from env / `ovcli.conf`, so the model has direct access to the `search`, `store`, `read`, `list`, `grep`, `glob`, `forget`, `add_resource`, and `health` tools.
+It also starts a local stdio MCP proxy that forwards to OpenViking's native `/mcp` endpoint with credentials resolved from env / `ovcli.conf`, so the model has direct access to the server's retrieval, memory, resource, watch, filesystem, and code-navigation tools.
 
 ## Quick Start
 
@@ -154,14 +154,14 @@ Earlier plugin versions configured tuning fields under a `codex` block in `~/.op
       │                 │                │                   │
       │             ┌───▼────────────────▼───────────────────▼──┐
       └────────────►│        OpenViking REST API                │
-                    │ /api/v1/search/search                      │
+                    │ /api/v1/search/{recall,search}             │
                     │ /api/v1/sessions [+/{id}/{messages,commit}]│
                     │ /api/v1/content/read                      │
                     └─────────────────┬─────────────────────────┘
                                       │
-   Codex ◄── stdio MCP proxy ──► /mcp (search, store, read, list,
-              (env/ovcli.conf)      grep, glob, forget,
-                                  add_resource, health)
+   Codex ◄── stdio MCP proxy ──► /mcp (find, search, recall,
+              (env/ovcli.conf)      remember, resources, watches,
+                                  filesystem, code navigation)
 ```
 
 The checked-in `.mcp.json` starts `servers/mcp-proxy.mjs` with `node`. The proxy keeps stdout protocol-clean, reads the same credential sources as the hooks, sends auth and identity headers to `/mcp`, caches the server `mcp-session-id`, and transparently reinitializes once if the server restarts.
@@ -192,7 +192,7 @@ On `resume`, the script skips commit/sweep. If local state has no live `ovSessio
 
 ### Auto-recall (every UserPromptSubmit)
 
-`auto-recall.mjs` reads `prompt` and `session_id` from stdin, derives the long-lived OpenViking session id (`cx-<safe-session-id>`) directly from the Codex session id (no plugin state read, so a corrupt state file can't crash recall), calls `/api/v1/search/search` with that `session_id`, ranks results, reads full content for top-ranked leaves, and emits:
+`auto-recall.mjs` reads `prompt` and `session_id` from stdin. It first asks `/api/v1/search/recall` for bounded, type-quota candidates and passes those entries through the same relevance compressor used by the fallback path. If that endpoint is unavailable, the hook derives the long-lived OpenViking session id (`cx-<safe-session-id>`) directly from the Codex session id (no plugin state read, so a corrupt state file can't crash recall), calls `/api/v1/search/search` with that `session_id`, ranks results, and reads full content for top-ranked leaves before compression.
 
 ```json
 { "hookSpecificOutput": { "hookEventName": "UserPromptSubmit", "additionalContext": "<openviking-context source=\"auto-recall\" format=\"digest\">\nOpenViking memory digest:\n- ...\n</openviking-context>" } }

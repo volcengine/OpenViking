@@ -30,6 +30,7 @@ from openviking.session.memory.streaming_memory_updater import (
     StreamingMemoryUpdateResult,
     classify_memory_merge_mode,
     enforce_merge_group_peer_id,
+    get_streaming_memory_updater,
     merge_one_memory_type_operations,
     operation_to_patch,
     render_operation_after_file_content,
@@ -316,6 +317,88 @@ async def test_streaming_memory_updater_submit_applies_fast_path(monkeypatch):
     written_uri, written_content, _ = fs.writes[0]
     assert written_uri.endswith("/memories/cases/重复预订处理.md")
     assert "重复预订处理" in written_content
+
+
+@pytest.mark.asyncio
+async def test_cached_updater_restores_vectorization_for_tool_and_skill_memories(monkeypatch):
+    fs = InMemoryVikingFS({})
+    fs.search = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.get_viking_fs",
+        lambda: fs,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.memory_updater.get_viking_fs",
+        lambda: fs,
+    )
+
+    registry = _registry()
+    for memory_type, name_field in (("tools", "tool_name"), ("skills", "skill_name")):
+        registry.register(
+            MemoryTypeSchema(
+                memory_type=memory_type,
+                description=f"{memory_type} memory",
+                directory=f"viking://user/{{{{ user_space }}}}/memories/{memory_type}",
+                filename_template=f"{{{{ {name_field} }}}}.md",
+                operation_mode="add_only",
+                content_template=f"{memory_type}: {{{{ {name_field} }}}}",
+                fields=[
+                    MemoryField(
+                        name=name_field,
+                        field_type=FieldType.STRING,
+                        merge_op=MergeOp.IMMUTABLE,
+                    )
+                ],
+            )
+        )
+
+    key = ("cached-updater-vectorization", id(fs))
+    degraded = await get_streaming_memory_updater(
+        key=key,
+        registry=registry,
+        vikingdb=None,
+    )
+    vikingdb = AsyncMock()
+    vikingdb.enqueue_embedding_msg.return_value = True
+    restored = await get_streaming_memory_updater(
+        key=key,
+        registry=registry,
+        vikingdb=vikingdb,
+    )
+
+    assert restored is degraded
+    assert restored.vikingdb is vikingdb
+
+    operations = []
+    for memory_type, name_field, name in (
+        ("tools", "tool_name", "terminal"),
+        ("skills", "skill_name", "analyze_code"),
+    ):
+        operations.append(
+            ResolvedOperation(
+                old_memory_file_content=None,
+                memory_type=memory_type,
+                uris=[f"viking://user/u/memories/{memory_type}/{name}.md"],
+                memory_fields={name_field: name},
+            )
+        )
+
+    result = await restored.submit(
+        MemoryUpdateRequest(
+            operations=ResolvedOperations(
+                upsert_operations=operations,
+                delete_file_contents=[],
+                errors=[],
+            ),
+            messages=[Message(id="m1", role="user", parts=[TextPart("use tools and skills")])],
+            ctx=_ctx(),
+        )
+    )
+
+    assert sorted(result.apply_result.written_uris) == sorted(
+        operation.uris[0] for operation in operations
+    )
+    assert vikingdb.enqueue_embedding_msg.await_count == 2
 
 
 @pytest.mark.asyncio

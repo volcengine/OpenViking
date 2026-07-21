@@ -25,6 +25,10 @@ from openviking.storage import VikingDBManager, VikingDBManagerProxy
 from openviking.storage.expr import FilterExpr
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import parse_iso_datetime
+from openviking.utils.token_estimation import (
+    estimate_text_tokens,
+    truncate_text_to_token_budget,
+)
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.retrieve.types import (
     ContextType,
@@ -71,6 +75,7 @@ class HierarchicalRetriever:
         self.vector_store = storage
         self.embedder = embedder
         self.rerank_config = rerank_config
+        self.rerank_max_input_tokens = rerank_config.max_input_tokens if rerank_config else 0
         self.retrieval_config = retrieval_config or RetrievalConfig()
         self.hotness_alpha = self.retrieval_config.hotness_alpha
         self.score_propagation_alpha = self.retrieval_config.score_propagation_alpha
@@ -346,23 +351,44 @@ class HierarchicalRetriever:
         if not self._rerank_client or not documents:
             return fallback_scores
 
+        rerank_query = query
+        rerank_documents = [
+            (index, document) for index, document in enumerate(documents) if document.strip()
+        ]
+        if not rerank_documents:
+            return fallback_scores
+
+        if self.rerank_max_input_tokens > 0:
+            max_query_tokens = self.rerank_max_input_tokens * 3 // 4
+            if estimate_text_tokens(query) > max_query_tokens:
+                rerank_query = truncate_text_to_token_budget(query, max_query_tokens)
+            document_tokens = self.rerank_max_input_tokens - estimate_text_tokens(rerank_query)
+            rerank_documents = [
+                (index, truncate_text_to_token_budget(document, document_tokens))
+                for index, document in rerank_documents
+            ]
+
         try:
-            scores = await asyncio.to_thread(self._rerank_client.rerank_batch, query, documents)
+            scores = await asyncio.to_thread(
+                self._rerank_client.rerank_batch,
+                rerank_query,
+                [document for _, document in rerank_documents],
+            )
         except Exception as e:
             logger.warning(
                 "[HierarchicalRetriever] Rerank failed, fallback to vector scores: %s", e
             )
             return fallback_scores
 
-        if not scores or len(scores) != len(documents):
+        if not scores or len(scores) != len(rerank_documents):
             logger.warning(
                 "[HierarchicalRetriever] Invalid rerank result, fallback to vector scores"
             )
             return fallback_scores
 
-        normalized_scores: List[float] = []
-        for score, fallback in zip(scores, fallback_scores, strict=True):
-            normalized_scores.append(self._finite_score(score, fallback))
+        normalized_scores = list(fallback_scores)
+        for score, (index, _) in zip(scores, rerank_documents, strict=True):
+            normalized_scores[index] = self._finite_score(score, fallback_scores[index])
         return normalized_scores
 
     async def _recursive_search(

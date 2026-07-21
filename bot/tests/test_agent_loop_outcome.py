@@ -1,4 +1,3 @@
-import json
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -13,7 +12,6 @@ from vikingbot.agent.loop import AgentLoop
 from vikingbot.bus.events import InboundMessage, OutboundEventType
 from vikingbot.bus.queue import MessageBus
 from vikingbot.config.schema import AgentsConfig, Config, SessionKey
-from vikingbot.heartbeat.service import HEARTBEAT_METADATA_KEY
 from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 
@@ -102,6 +100,10 @@ def test_agents_config_temperature_schema_caps_at_two():
 
 def test_agents_config_enables_subagents_by_default():
     assert AgentsConfig().subagent_enabled is True
+
+
+def test_agents_config_keeps_ten_recent_openviking_messages_by_default():
+    assert AgentsConfig().commit_keep_recent_count == 10
 
 
 def test_agent_loop_omits_spawn_tool_when_subagents_disabled(temp_dir: Path, monkeypatch):
@@ -206,14 +208,26 @@ async def test_agent_loop_makes_final_no_tool_call_when_iteration_limit_reached(
             )
             if len(self.calls) == 1:
                 return LLMResponse(
-                    content=None,
+                    content="Let me check these sources.",
                     tool_calls=[
                         ToolCallRequest(
                             id="call-1",
                             name="lookup_fact",
-                            arguments={"query": "current facts"},
+                            arguments={"query": "current facts 1"},
                             tokens=3,
-                        )
+                        ),
+                        ToolCallRequest(
+                            id="call-2",
+                            name="lookup_fact",
+                            arguments={"query": "current facts 2"},
+                            tokens=3,
+                        ),
+                        ToolCallRequest(
+                            id="call-3",
+                            name="lookup_fact",
+                            arguments={"query": "current facts 3"},
+                            tokens=3,
+                        ),
                     ],
                     usage={"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
                 )
@@ -259,10 +273,12 @@ async def test_agent_loop_makes_final_no_tool_call_when_iteration_limit_reached(
     loop.tools = tools
 
     session_key = SessionKey(type="cli", channel_id="default", chat_id="session-limit")
+    captured_turns = []
     final_content, _reasoning, tools_used, token_usage, iteration = await loop._run_agent_loop(
         messages=[{"role": "user", "content": "please answer with lookup"}],
         session_key=session_key,
         publish_events=False,
+        captured_turns=captured_turns,
     )
 
     assert final_content == "final answer from gathered tool results"
@@ -277,62 +293,26 @@ async def test_agent_loop_makes_final_no_tool_call_when_iteration_limit_reached(
         message.get("content") == "tool result: useful context"
         for message in provider.calls[1]["messages"]
     )
-    assert len(tools.execute_calls) == 1
-    assert tools.execute_calls[0][:2] == ("lookup_fact", {"query": "current facts"})
-    assert [tool["tool_name"] for tool in tools_used] == ["lookup_fact"]
+    assert len(tools.execute_calls) == 3
+    assert tools.execute_calls[0][:2] == ("lookup_fact", {"query": "current facts 1"})
+    assert [tool["tool_name"] for tool in tools_used] == [
+        "lookup_fact",
+        "lookup_fact",
+        "lookup_fact",
+    ]
+    assert len(captured_turns) == 1
+    assert captured_turns[0]["content"] == "Let me check these sources."
+    assert [tool["tool_call_id"] for tool in captured_turns[0]["tool_calls"]] == [
+        "call-1",
+        "call-2",
+        "call-3",
+    ]
+    assert [tool["result"] for tool in captured_turns[0]["tool_calls"]] == [
+        "tool result: useful context",
+        "tool result: useful context",
+        "tool result: useful context",
+    ]
     assert token_usage == {"prompt_tokens": 17, "completion_tokens": 7, "total_tokens": 24}
-
-
-@pytest.mark.asyncio
-async def test_agent_loop_evaluates_previous_response_outcome_before_new_user_turn(
-    temp_dir: Path, monkeypatch
-):
-    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
-    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
-    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
-
-    bus = MessageBus()
-    config = Config(storage_workspace=str(temp_dir))
-    loop = AgentLoop(
-        bus=bus,
-        provider=_FakeProvider(),
-        workspace=temp_dir / "workspace",
-        config=config,
-    )
-
-    session_key = SessionKey(type="cli", channel_id="default", chat_id="session-1")
-    session = loop.sessions.get_or_create(session_key, skip_heartbeat=True)
-    session.add_message(
-        "assistant",
-        "hello",
-        sender_id="user-1",
-        response_id="resp-123",
-        timestamp="2026-04-30T00:00:00",
-    )
-    await loop.sessions.save(session)
-
-    response = await loop._process_message(
-        InboundMessage(
-            session_key=session_key,
-            sender_id="user-1",
-            content="that did not help",
-            need_reply=False,
-            timestamp=datetime.fromisoformat("2026-04-30T00:05:00"),
-        )
-    )
-
-    assert response is not None
-    assert response.event_type == OutboundEventType.NO_REPLY
-    assert bus.outbound_size == 1
-
-    outcome_event = await bus.consume_outbound()
-    assert outcome_event.event_type == OutboundEventType.RESPONSE_OUTCOME_EVALUATED
-    assert outcome_event.response_id == "resp-123"
-    assert outcome_event.metadata["response_outcome_evaluated"]["outcome_label"] == "reasked"
-    assert outcome_event.metadata["response_outcome_evaluated"]["reask_within_10m"] is True
-
-    persisted_session = loop.sessions.get_or_create(session_key, skip_heartbeat=True)
-    assert persisted_session.metadata["response_outcomes"]["resp-123"]["outcome_label"] == "reasked"
 
 
 @pytest.mark.asyncio
@@ -400,53 +380,6 @@ async def test_agent_loop_evaluates_previous_response_outcome_before_openviking_
     assert outcome_event.response_id == "resp-123"
     persisted_session = loop.sessions.get_or_create(session_key, skip_heartbeat=True)
     assert persisted_session.metadata["response_outcomes"]["resp-123"]["outcome_label"] == "reasked"
-
-
-@pytest.mark.asyncio
-async def test_agent_loop_ignores_heartbeat_when_evaluating_previous_response_outcome(
-    temp_dir: Path, monkeypatch
-):
-    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
-    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
-    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
-
-    bus = MessageBus()
-    config = Config(storage_workspace=str(temp_dir))
-    loop = AgentLoop(
-        bus=bus,
-        provider=_FakeProvider(),
-        workspace=temp_dir / "workspace",
-        config=config,
-    )
-
-    session_key = SessionKey(type="cli", channel_id="default", chat_id="session-1")
-    session = loop.sessions.get_or_create(session_key, skip_heartbeat=False)
-    session.add_message(
-        "assistant",
-        "hello",
-        sender_id="user-1",
-        response_id="resp-123",
-        timestamp="2026-04-30T00:00:00",
-    )
-    await loop.sessions.save(session)
-
-    response = await loop._process_message(
-        InboundMessage(
-            session_key=session_key,
-            sender_id="user-1",
-            content="Read HEARTBEAT.md if needed",
-            need_reply=False,
-            timestamp=datetime.fromisoformat("2026-04-30T00:05:00"),
-            metadata={HEARTBEAT_METADATA_KEY: True},
-        )
-    )
-
-    assert response is not None
-    assert response.event_type == OutboundEventType.NO_REPLY
-    assert bus.outbound_size == 0
-
-    persisted_session = loop.sessions.get_or_create(session_key, skip_heartbeat=False)
-    assert "response_outcomes" not in persisted_session.metadata
 
 
 @pytest.mark.asyncio
@@ -552,6 +485,68 @@ async def test_agent_loop_build_prompt_history_skips_tail_when_sync_cursor_is_pa
     history = await loop._build_prompt_history(session)
 
     assert [message["content"] for message in history] == ["OV user turn"]
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_build_prompt_history_enforces_token_budget_for_live_tool_outputs(
+    temp_dir: Path, monkeypatch
+):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    tool_output = "x" * 10_000
+    fake_ov_client = _FakeOVClient(
+        context_payload={
+            "messages": [
+                {"role": "user", "parts": [{"type": "text", "text": "original query"}]},
+                *[
+                    {
+                        "role": "assistant",
+                        "parts": [
+                            {"type": "text", "text": f"turn {index}"},
+                            {"type": "tool", "tool_output": tool_output},
+                        ],
+                    }
+                    for index in range(10)
+                ],
+                {"role": "assistant", "parts": [{"type": "text", "text": "final answer"}]},
+            ]
+        }
+    )
+
+    async def fake_get_ov_client(self, session_key, openviking_connection=None, actor_peer_id=None):
+        del self, session_key, openviking_connection, actor_peer_id
+        return fake_ov_client
+
+    monkeypatch.setattr(AgentLoop, "_get_ov_client", fake_get_ov_client)
+
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_FakeProvider(),
+        workspace=temp_dir / "workspace",
+        config=Config(
+            storage_workspace=str(temp_dir),
+            ov_server={"server_url": "http://127.0.0.1:1933"},
+            agents={"session_context_enabled": True, "session_context_token_budget": 3000},
+        ),
+    )
+    session = loop.sessions.get_or_create(
+        SessionKey(type="cli", channel_id="default", chat_id="session-large-tools"),
+        skip_heartbeat=True,
+    )
+    session.metadata["openviking"] = {
+        "session_id": "ov-session-large-tools",
+        "last_synced_local_index": -1,
+    }
+
+    history = await loop._build_prompt_history(session)
+
+    assert fake_ov_client.context_calls == [("ov-session-large-tools", 3000)]
+    assert sum(loop._history_message_tokens(message) for message in history) <= 3000
+    assert history[-1]["content"] == "final answer"
+    assert sum(str(message.get("content", "")).count("x") for message in history) < 100_000
+    assert any("History truncated" in str(message.get("content", "")) for message in history)
 
 
 @pytest.mark.asyncio
@@ -981,153 +976,3 @@ async def test_agent_loop_post_turn_clears_local_session_after_openviking_commit
     assert persisted_session.metadata["openviking"]["session_id"] == session_key.safe_name()
     assert persisted_session.metadata["openviking"]["last_synced_local_index"] == -1
     assert persisted_session.metadata["openviking"]["last_commit_local_index"] == -1
-
-
-@pytest.mark.asyncio
-async def test_agent_loop_emits_normalized_response_completed_payload(temp_dir: Path, monkeypatch):
-    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
-    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
-    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
-
-    fake_langfuse = _FakeLangfuseClient()
-    monkeypatch.setattr(
-        "vikingbot.agent.loop.LangfuseClient.get_instance",
-        staticmethod(lambda: fake_langfuse),
-    )
-
-    async def fake_run_agent_loop(self, **kwargs):
-        return (
-            "final answer",
-            None,
-            [{"tool_name": "search_docs"}, {"tool_name": "fetch_page"}],
-            {"prompt_tokens": 12, "completion_tokens": 8},
-            3,
-        )
-
-    class FakeContextBuilder:
-        def __init__(self, *args, **kwargs):
-            self.latest_relevant_memories = None
-
-        async def build_messages(self, **kwargs):
-            return [{"role": "user", "content": kwargs["current_message"]}]
-
-    monkeypatch.setattr("vikingbot.agent.context.ContextBuilder", FakeContextBuilder)
-    monkeypatch.setattr(AgentLoop, "_run_agent_loop", fake_run_agent_loop)
-
-    bus = MessageBus()
-    config = Config(
-        storage_workspace=str(temp_dir),
-        ov_server={"server_url": "http://127.0.0.1:1933"},
-    )
-    loop = AgentLoop(
-        bus=bus,
-        provider=_FakeProvider(),
-        workspace=temp_dir / "workspace",
-        config=config,
-    )
-
-    session_key = SessionKey(type="cli", channel_id="default", chat_id="session-1")
-    response = await loop._process_message(
-        InboundMessage(
-            session_key=session_key,
-            sender_id="user-1",
-            content="please help",
-            timestamp=datetime.fromisoformat("2026-04-30T00:05:00"),
-        )
-    )
-
-    assert response is not None
-    assert response.content == "final answer"
-    assert response.response_id is not None
-    assert bus.outbound_size == 1
-
-    completed_event = await bus.consume_outbound()
-    assert completed_event.event_type == OutboundEventType.RESPONSE_COMPLETED
-    payload = completed_event.metadata["response_completed"]
-    assert payload["response_id"] == response.response_id
-    assert payload["session_id"] == "cli__default__session-1"
-    assert payload["channel"] == "cli__default"
-    assert payload["session_type"] == "cli"
-    assert payload["user_id"] == "user-1"
-    assert payload["prompt_tokens"] == 12
-    assert payload["completion_tokens"] == 8
-    assert payload["total_tokens"] == 20
-    assert payload["iteration_count"] == 3
-    assert payload["tool_count"] == 2
-    assert payload["tools_used_names"] == ["search_docs", "fetch_page"]
-    assert payload["response_length"] == len("final answer")
-    assert payload["has_reasoning"] is False
-    assert payload["time_cost_ms"] >= 0
-    assert payload["created_at"]
-    assert fake_langfuse.calls == [(response.response_id, payload)]
-
-    session_path = temp_dir / "bot" / "sessions" / "cli__default__session-1.jsonl"
-    metadata = json.loads(session_path.read_text().splitlines()[0])
-    assert metadata["metadata"]["response_facts"][response.response_id] == payload
-
-
-@pytest.mark.asyncio
-async def test_auto_openviking_memory_uses_distinct_tool_name(temp_dir: Path, monkeypatch):
-    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
-    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
-    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
-
-    fake_langfuse = _FakeLangfuseClient()
-    monkeypatch.setattr(
-        "vikingbot.agent.loop.LangfuseClient.get_instance",
-        staticmethod(lambda: fake_langfuse),
-    )
-
-    class FakeContextBuilder:
-        def __init__(self, *args, **kwargs):
-            self.latest_relevant_memories = "remembered fact"
-
-        async def build_messages(self, **kwargs):
-            return [{"role": "user", "content": kwargs["current_message"]}]
-
-    async def fake_run_agent_loop(self, **kwargs):
-        return (
-            "final answer",
-            None,
-            [],
-            {"prompt_tokens": 12, "completion_tokens": 8},
-            1,
-        )
-
-    monkeypatch.setattr("vikingbot.agent.context.ContextBuilder", FakeContextBuilder)
-    monkeypatch.setattr(AgentLoop, "_run_agent_loop", fake_run_agent_loop)
-
-    bus = MessageBus()
-    config = Config(
-        storage_workspace=str(temp_dir),
-        ov_server={"server_url": "http://127.0.0.1:1933"},
-    )
-    loop = AgentLoop(
-        bus=bus,
-        provider=_FakeProvider(),
-        workspace=temp_dir / "workspace",
-        config=config,
-    )
-
-    session_key = SessionKey(type="cli", channel_id="default", chat_id="session-1")
-    response = await loop._process_message(
-        InboundMessage(
-            session_key=session_key,
-            sender_id="user-1",
-            content="please help",
-            timestamp=datetime.fromisoformat("2026-04-30T00:05:00"),
-        )
-    )
-
-    assert response is not None
-    assert response.tools_used_names == ["auto_memory_search"]
-
-    completed_payload = None
-    while bus.outbound_size:
-        event = await bus.consume_outbound()
-        if event.event_type == OutboundEventType.RESPONSE_COMPLETED:
-            completed_payload = event.metadata["response_completed"]
-
-    assert completed_payload is not None
-    assert completed_payload["tool_count"] == 1
-    assert completed_payload["tools_used_names"] == ["auto_memory_search"]

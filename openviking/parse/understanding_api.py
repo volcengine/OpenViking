@@ -17,19 +17,30 @@ import json
 import mimetypes
 import tempfile
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse
 
 import httpx
 
 from openviking.parse.base import NodeType, ParseResult, ResourceNode
+from openviking.parse.image_rewrite import (
+    IMAGE_MAPPINGS_FILENAME,
+    build_artifact_image_mappings,
+)
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.parse.parsers.media.constants import (
+    AUDIO_EXTENSIONS,
+    IMAGE_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+)
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.utils.zip_safe import safe_extract_zip
+from openviking.utils.zip_safe import normalize_zip_filenames, safe_extract_zip
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+PREPARED_RESPONSE_ID_ARG = "understanding_response_id"
 
 
 class UnderstandingAPI(BaseParser):
@@ -59,9 +70,9 @@ class UnderstandingAPI(BaseParser):
         if not self._api_key:
             raise ValueError("parser_api.api_key is required for UnderstandingAPI")
 
-        self._video_exts = {"mp4", "mov", "avi", "flv", "mkv", "wmv", "webm"}
-        self._audio_exts = {"mp3", "wav", "m4a", "flac", "aac", "ogg"}
-        self._image_exts = {"jpg", "jpeg", "png", "webp", "gif", "bmp"}
+        self._video_exts = {e.lstrip(".") for e in VIDEO_EXTENSIONS}
+        self._audio_exts = {e.lstrip(".") for e in AUDIO_EXTENSIONS}
+        self._image_exts = {e.lstrip(".") for e in IMAGE_EXTENSIONS}
 
     @property
     def supported_extensions(self) -> List[str]:
@@ -77,6 +88,21 @@ class UnderstandingAPI(BaseParser):
         source_str = str(source)
         original_source = kwargs.get("original_source")
         candidate = original_source if isinstance(original_source, str) else source_str
+        explicit_name = kwargs.get("resource_name") or kwargs.get("source_name")
+        prepared_response_id = kwargs.get(PREPARED_RESPONSE_ID_ARG)
+        if prepared_response_id is not None:
+            if not isinstance(prepared_response_id, str) or not prepared_response_id.strip():
+                raise ValueError(f"{PREPARED_RESPONSE_ID_ARG} must be a non-empty string")
+            prepared_response_id = prepared_response_id.strip()
+        lark_file = self._normalize_lark_file(kwargs)
+        # Legacy accessor output may keep a Feishu URL in original_source while
+        # the actual parser input is a local Markdown file. Only direct URL
+        # routing may use the parser API Lark protocol.
+        is_feishu_url = self._is_feishu_url(source_str)
+        if is_feishu_url and not lark_file and not prepared_response_id:
+            raise ValueError(
+                "exactly one Feishu user or tenant access token is required for parser API imports"
+            )
 
         url: Optional[str] = None
         local_path: Optional[Path] = None
@@ -85,6 +111,12 @@ class UnderstandingAPI(BaseParser):
             parsed = urlparse(url)
             doc_name = Path(parsed.path).stem or "resource"
             doc_type = Path(parsed.path).suffix.lower().lstrip(".") or "unknown"
+            if is_feishu_url:
+                path_parts = [part for part in parsed.path.split("/") if part]
+                doc_type = {
+                    "sheets": "sheet",
+                    "base": "bitable",
+                }.get(path_parts[0], path_parts[0])
         else:
             local_path = Path(candidate)
             if not local_path.is_file():
@@ -95,9 +127,14 @@ class UnderstandingAPI(BaseParser):
             doc_name = local_path.stem or "resource"
             doc_type = local_path.suffix.lower().lstrip(".") or "unknown"
 
+        if explicit_name:
+            doc_name = Path(str(explicit_name)).name or doc_name
+
         task_meta: Dict[str, Any] = {}
 
-        if url is None and local_path is not None:
+        if prepared_response_id:
+            response_id = prepared_response_id
+        elif url is None and local_path is not None:
             file_obj = await self._create_file(local_path=local_path)
             file_id = file_obj.get("id")
             if not file_id:
@@ -109,13 +146,19 @@ class UnderstandingAPI(BaseParser):
         else:
             if url is None:
                 raise RuntimeError("missing url for url mode")
-            response_obj = await self._create_response_for_url(url=url, doc_type=doc_type)
-
-        response_id = response_obj.get("id")
-        if not response_id:
-            raise RuntimeError(
-                f"responses api missing id: {self._safe_error_summary(response_obj)}"
+            response_obj = await self._create_response_for_url(
+                url=url,
+                doc_type=doc_type,
+                lark_file=lark_file if is_feishu_url else None,
             )
+
+        if not prepared_response_id:
+            response_id_value = response_obj.get("id")
+            if not response_id_value:
+                raise RuntimeError(
+                    f"responses api missing id: {self._safe_error_summary(response_obj)}"
+                )
+            response_id = str(response_id_value)
         task_meta["response_id"] = response_id
 
         response_obj = await self._poll_response(response_id=response_id)
@@ -127,6 +170,10 @@ class UnderstandingAPI(BaseParser):
 
         zip_path = await self._download_zip(zip_url)
         try:
+            if is_feishu_url and not explicit_name:
+                archive_root = self._single_zip_root_name(zip_path)
+                if archive_root:
+                    doc_name = archive_root
             temp_dir_path = await self._unpack_zip_to_temp_dir(
                 zip_path=zip_path,
                 resource_name=doc_name,
@@ -155,7 +202,9 @@ class UnderstandingAPI(BaseParser):
             meta={
                 "source_title": doc_name,
                 "semantic_name": doc_name,
-                "original_filename": f"{doc_name}.{doc_type}" if doc_type else doc_name,
+                "original_filename": (
+                    f"{doc_name}.{doc_type}" if doc_type and doc_type != "unknown" else doc_name
+                ),
             },
             content_type=content_type,
         )
@@ -171,6 +220,39 @@ class UnderstandingAPI(BaseParser):
 
         logger.info("[UnderstandingAPI] done")
         return result
+
+    async def submit_url(self, source: str, **kwargs) -> str:
+        """Submit a URL without persisting its credentials in a queue payload."""
+        if not isinstance(source, str) or not source.startswith(("http://", "https://")):
+            raise ValueError("UnderstandingAPI URL submission requires an http(s) URL")
+
+        is_feishu_url = self._is_feishu_url(source)
+        lark_file = self._normalize_lark_file(kwargs)
+        if is_feishu_url and not lark_file:
+            raise ValueError(
+                "exactly one Feishu user or tenant access token is required for parser API imports"
+            )
+
+        parsed = urlparse(source)
+        doc_type = Path(parsed.path).suffix.lower().lstrip(".") or "unknown"
+        if is_feishu_url:
+            path_parts = [part for part in parsed.path.split("/") if part]
+            doc_type = {
+                "sheets": "sheet",
+                "base": "bitable",
+            }.get(path_parts[0], path_parts[0])
+
+        response_obj = await self._create_response_for_url(
+            url=source,
+            doc_type=doc_type,
+            lark_file=lark_file if is_feishu_url else None,
+        )
+        response_id = response_obj.get("id")
+        if not response_id:
+            raise RuntimeError(
+                f"responses api missing id: {self._safe_error_summary(response_obj)}"
+            )
+        return str(response_id)
 
     async def parse_content(
         self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs
@@ -251,7 +333,13 @@ class UnderstandingAPI(BaseParser):
         self._raise_if_error(body, context="responses api error")
         return body
 
-    async def _create_response_for_url(self, *, url: str, doc_type: str) -> Dict[str, Any]:
+    async def _create_response_for_url(
+        self,
+        *,
+        url: str,
+        doc_type: str,
+        lark_file: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
         if doc_type in self._video_exts:
             content: Dict[str, Any] = {"type": "input_video", "video_url": url}
         elif doc_type in self._image_exts:
@@ -260,6 +348,8 @@ class UnderstandingAPI(BaseParser):
             content = {"type": "input_audio", "audio_url": url}
         else:
             content = {"type": "input_file", "file_url": url}
+        if lark_file:
+            content["lark_file"] = dict(lark_file)
         payload = {
             "input": [{"role": "user", "content": [content]}],
             "tools": [{"type": "understanding"}],
@@ -277,6 +367,53 @@ class UnderstandingAPI(BaseParser):
         body = rsp.json()
         self._raise_if_error(body, context="responses api error")
         return body
+
+    @staticmethod
+    def _is_feishu_url(source: str) -> bool:
+        try:
+            from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+
+            return FeishuAccessor._is_feishu_url(source)
+        except Exception:
+            return False
+
+    @staticmethod
+    def _normalize_lark_file(kwargs: Dict[str, Any]) -> Optional[Dict[str, str]]:
+        raw_lark_file = kwargs.get("lark_file")
+        if raw_lark_file is None:
+            raw_lark_file = {"user_access_token": kwargs.get("feishu_access_token")}
+        if not isinstance(raw_lark_file, dict):
+            raise ValueError("lark_file must be an object")
+
+        auth = {}
+        for key in ("user_access_token", "tenant_access_token"):
+            value = raw_lark_file.get(key)
+            if isinstance(value, str) and value.strip():
+                auth[key] = value.strip()
+        if len(auth) > 1:
+            raise ValueError(
+                "lark_file must contain exactly one of user_access_token or tenant_access_token"
+            )
+        return auth or None
+
+    @staticmethod
+    def _single_zip_root_name(zip_path: Path) -> Optional[str]:
+        roots = set()
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            normalize_zip_filenames(zf)
+            for info in zf.infolist():
+                raw_name = info.filename.rstrip("/")
+                if not raw_name:
+                    continue
+                path = PurePosixPath(raw_name)
+                if path.is_absolute() or not path.parts or path.parts[0] in {".", ".."}:
+                    return None
+                roots.add(path.parts[0])
+                if len(path.parts) == 1 and not info.is_dir():
+                    return None
+        if len(roots) != 1:
+            return None
+        return next(iter(roots))
 
     async def _poll_response(self, *, response_id: str) -> Dict[str, Any]:
         deadline = asyncio.get_running_loop().time() + float(self._timeout_sec)
@@ -469,8 +606,10 @@ class UnderstandingAPI(BaseParser):
             else:
                 root_dir = extract_path
 
+            image_mappings = await asyncio.to_thread(build_artifact_image_mappings, root_dir)
+
             for child in root_dir.iterdir():
-                if child.name in {".", ".."}:
+                if child.name in {".", "..", IMAGE_MAPPINGS_FILENAME}:
                     continue
                 if child.is_dir():
                     sub_uri = f"{temp_doc_uri}/{child.name}"
@@ -481,6 +620,12 @@ class UnderstandingAPI(BaseParser):
                         f"{temp_doc_uri}/{child.name}", child.read_bytes()
                     )
 
+            if image_mappings:
+                await viking_fs.write_file(
+                    f"{temp_doc_uri}/{IMAGE_MAPPINGS_FILENAME}",
+                    json.dumps(image_mappings, ensure_ascii=False),
+                )
+
         return temp_uri
 
     async def _copy_dir_to_fs(self, local_dir: Path, fs_uri: str):
@@ -490,7 +635,7 @@ class UnderstandingAPI(BaseParser):
         viking_fs = get_viking_fs()
 
         for item in local_dir.iterdir():
-            if item.name in [".", ".."]:
+            if item.name in [".", "..", IMAGE_MAPPINGS_FILENAME]:
                 continue
 
             if item.is_dir():

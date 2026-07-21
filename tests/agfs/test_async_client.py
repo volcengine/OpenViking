@@ -31,7 +31,7 @@ async def test_async_agfs_client_hides_threadpool(monkeypatch):
     sync_agfs = _SyncAGFS()
     agfs = AsyncAGFSClient(sync_agfs)
 
-    assert agfs.sync_client is sync_agfs
+    assert agfs._client is sync_agfs
     assert await agfs.write("/tasks/1", b"data") == (
         "write",
         "/tasks/1",

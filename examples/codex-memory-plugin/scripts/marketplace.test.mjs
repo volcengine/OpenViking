@@ -21,9 +21,14 @@ const pluginDir = resolve(scriptsDir, "..");
 const repoRoot = resolve(scriptsDir, "..", "..", "..");
 const catalogPath = join(repoRoot, ".agents", "plugins", "marketplace.json");
 const manifestPath = join(pluginDir, ".codex-plugin", "plugin.json");
+const mcpEndpointPath = join(repoRoot, "openviking", "server", "mcp_endpoint.py");
 
 const PLUGIN_NAME = "openviking-memory";
-const REAL_MCP_TOOLS = ["recall", "search", "store", "read", "list", "grep", "glob", "forget", "add_resource", "health"];
+const REAL_MCP_TOOLS = [
+  "find", "search", "recall", "read", "list", "remember", "add_resource",
+  "list_watches", "cancel_watch", "grep", "glob", "forget", "code_outline",
+  "code_search", "code_expand", "health",
+];
 const LEGACY_TOOL_NAMES = ["openviking_recall", "openviking_store", "openviking_forget", "openviking_health"];
 
 function readJson(path) {
@@ -114,14 +119,35 @@ test("required plugin files are present", () => {
   }
 });
 
-test("plugin.json describes the real MCP tools, not the legacy names", () => {
-  const manifest = readJson(manifestPath);
-  const longDesc = manifest.interface?.longDescription || "";
-  for (const legacy of LEGACY_TOOL_NAMES) {
-    assert.ok(!longDesc.includes(legacy), `longDescription must not reference legacy tool name "${legacy}"`);
+test("plugin bundles the Experience Memory skill", () => {
+  const skillPath = join(pluginDir, "skills", "ov-experience-memory", "SKILL.md");
+  assert.ok(existsSync(skillPath), `missing bundled skill: ${skillPath}`);
+  const content = readFileSync(skillPath, "utf-8");
+  assert.match(content, /^---[\s\S]*name:\s*ov-experience-memory[\s\S]*---/);
+  assert.match(content, /`search_experience`/);
+  assert.match(content, /`read_experience`/);
+});
+
+test("Experience Memory skill examples match the search_experience input schema", () => {
+  const skillPaths = [
+    join(pluginDir, "skills", "ov-experience-memory", "SKILL.md"),
+    join(repoRoot, "examples", "skills", "ov-experience-memory", "SKILL.md"),
+  ];
+  for (const skillPath of skillPaths) {
+    const content = readFileSync(skillPath, "utf-8");
+    const section = content.match(/## Tool: search_experience([\s\S]*?)## Tool: read_experience/)?.[1];
+    assert.ok(section, `missing search_experience section in ${skillPath}`);
+    const inputExample = section.match(/Input schema:\s*```json\s*([\s\S]*?)```/)?.[1];
+    assert.ok(inputExample, `missing search_experience input example in ${skillPath}`);
+    assert.deepEqual(Object.keys(JSON.parse(inputExample)).sort(), ["limit", "query"]);
   }
-  for (const tool of ["recall", "search", "add_resource", "health"]) {
-    assert.ok(longDesc.includes(tool), `longDescription should mention real tool "${tool}"`);
+});
+
+test("plugin.json does not describe legacy MCP tool names", () => {
+  const manifest = readJson(manifestPath);
+  const interfaceText = JSON.stringify(manifest.interface || {});
+  for (const legacy of LEGACY_TOOL_NAMES) {
+    assert.ok(!interfaceText.includes(legacy), `plugin interface must not reference legacy tool name "${legacy}"`);
   }
 });
 
@@ -155,7 +181,16 @@ test(".mcp.json starts the stdio MCP proxy from the plugin root", () => {
   execFileSync("node", ["--check", join(pluginDir, "servers", "mcp-proxy.mjs")], { stdio: "pipe" });
 });
 
-test("plugin.json keeps the canonical tool list available for reference", () => {
-  // Sanity: the documented tool set is the one we assert against above.
-  assert.equal(REAL_MCP_TOOLS.length, 10);
+test("Codex MCP entrypoint wires the Experience tool provider", () => {
+  const entrypoint = readFileSync(join(pluginDir, "servers", "mcp-proxy.mjs"), "utf-8");
+  assert.match(entrypoint, /createExperienceToolProvider/);
+  assert.match(entrypoint, /localToolProvider/);
+});
+
+test("canonical MCP tool list matches server registrations", () => {
+  const source = readFileSync(mcpEndpointPath, "utf-8");
+  const registered = [
+    ...source.matchAll(/@mcp\.tool\((?:name="([a-z_]+)")?\)\s*\nasync def ([a-z_]+)\(/g),
+  ].map((match) => match[1] || match[2]);
+  assert.deepEqual(registered, REAL_MCP_TOOLS);
 });

@@ -120,6 +120,7 @@ EXPLICIT_LITELLM_PREFIXES: tuple[str, ...] = (
     "sagemaker_chat/",
     "sagemaker_nova/",
     "vertex_ai/",
+    "github_copilot/",
 )
 
 # These explicit routes normally authenticate through cloud-native credential
@@ -351,6 +352,9 @@ class LiteLLMVLMProvider(VLMBase):
 
     def _build_vlm_response(self, response, has_tools: bool) -> Union[str, VLMResponse]:
         """Build response from LiteLLM response. Returns str or VLMResponse based on has_tools."""
+        if isinstance(response, str):
+            return VLMResponse(content=response) if has_tools else response
+
         choice = response.choices[0]
         message = choice.message
 

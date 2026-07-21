@@ -123,7 +123,7 @@ test("auto-capture commits when pending tokens cross threshold", async () => {
         writeJson(res, { status: "ok", result: { ok: true } });
         return;
       }
-      if (req.method === "POST" && url.pathname.endsWith("/messages")) {
+      if (req.method === "POST" && url.pathname.endsWith("/messages/batch")) {
         calls[calls.length - 1].body = await readRequestBody(req);
         writeJson(res, { status: "ok", result: { ok: true } });
         return;
@@ -157,6 +157,7 @@ test("auto-capture commits when pending tokens cross threshold", async () => {
           OPENVIKING_COMMIT_TOKEN_THRESHOLD: "1000",
           OPENVIKING_COMMIT_KEEP_RECENT_COUNT: "7",
           OPENVIKING_MIN_QUERY_LENGTH: "1",
+          OPENVIKING_WRITE_PATH_ASYNC: "0",
           OPENVIKING_TIMEOUT_MS: "5000",
           OPENVIKING_URL: baseUrl,
         },
@@ -171,9 +172,11 @@ test("auto-capture commits when pending tokens cross threshold", async () => {
     assert.ok(commitCall, `expected threshold commit call; calls=${JSON.stringify(calls)} debug=${debugLog}`);
     assert.deepEqual(commitCall.body, { keep_recent_count: 7 });
 
+    const batchCall = calls.find((call) => call.path.endsWith("/messages/batch"));
+    assert.ok(batchCall, `expected batch add-message call; calls=${JSON.stringify(calls)}`);
     const messageBodies = calls
-      .filter((call) => call.path.endsWith("/messages"))
-      .map((call) => call.body);
+      .filter((call) => call.path.endsWith("/messages") || call.path.endsWith("/messages/batch"))
+      .flatMap((call) => call.body?.messages ?? [call.body]);
     const toolCallBody = messageBodies.find((body) =>
       body.parts?.some((part) => part.type === "tool" && part.tool_status === "running")
     );

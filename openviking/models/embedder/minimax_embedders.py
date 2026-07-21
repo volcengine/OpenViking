@@ -231,49 +231,6 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
         )
         return result
 
-    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
-        """Batch embedding"""
-        if not texts:
-            return []
-
-        # MiniMax might have batch size limits, but let's assume the caller handles batching or use safe defaults
-        # For now, we pass through. If needed, we can implement internal chunking.
-        vectors = self._call_api(texts, is_query=is_query)
-        results = [EmbedResult(dense_vector=v) for v in vectors]
-        # Estimate token usage for batch
-        total_tokens = sum(self._estimate_tokens(text) for text in texts)
-        self.update_token_usage(
-            model_name=self.model_name,
-            provider="minimax",
-            prompt_tokens=total_tokens,
-            completion_tokens=0,
-        )
-        return results
-
-    async def embed_batch_async(
-        self, texts: List[str], is_query: bool = False
-    ) -> List[EmbedResult]:
-        if not texts:
-            return []
-
-        async def _call() -> List[EmbedResult]:
-            vectors = await self._call_api_async(texts, is_query=is_query)
-            return [EmbedResult(dense_vector=v) for v in vectors]
-
-        results = await self._run_with_async_retry(
-            _call,
-            logger=logger,
-            operation_name="MiniMax async batch embedding",
-        )
-        total_tokens = sum(self._estimate_tokens(text) for text in texts)
-        self.update_token_usage(
-            model_name=self.model_name,
-            provider="minimax",
-            prompt_tokens=total_tokens,
-            completion_tokens=0,
-        )
-        return results
-
     def get_dimension(self) -> int:
         """Get embedding dimension"""
         return self._dimension

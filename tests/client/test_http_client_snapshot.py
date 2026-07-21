@@ -205,9 +205,30 @@ async def test_git_log_gets_with_params():
     client._handle_response = lambda resp: [{"oid": "d" * 40, "message": "x"}]
     fake.next_response = object()
 
-    result = await client.git_log(branch="main", limit=5)
+    result = await client.git_log(
+        branch="main",
+        limit=5,
+        paths=["viking://resources/a.md", "viking://resources/docs"],
+    )
 
     assert result == [{"oid": "d" * 40, "message": "x"}]
+    call = fake.calls[-1]
+    assert call["method"] == "GET"
+    assert call["path"] == "/api/v1/snapshot/log"
+    assert call["params"] == {
+        "branch": "main",
+        "limit": 5,
+        "paths": ["viking://resources/a.md", "viking://resources/docs"],
+    }
+
+
+async def test_git_log_empty_paths_is_unfiltered():
+    client, fake = _client_with_fake()
+    client._handle_response = lambda resp: [{"oid": "d" * 40, "message": "x"}]
+    fake.next_response = object()
+
+    await client.git_log(branch="main", limit=5, paths=[])
+
     call = fake.calls[-1]
     assert call["method"] == "GET"
     assert call["path"] == "/api/v1/snapshot/log"

@@ -10,6 +10,11 @@ import subprocess
 import time
 from typing import Any, Dict, Optional
 
+try:
+    from .cli_diagnostics import format_openclaw_cli_failure
+except ImportError:  # pragma: no cover - direct test utility import
+    from cli_diagnostics import format_openclaw_cli_failure
+
 logger = logging.getLogger(__name__)
 
 OPENCLAW_HOME = os.path.expanduser("~/.openclaw")
@@ -103,14 +108,18 @@ class OpenClawCLIClient:
             _wait_for_session_lock_release(target_session_id)
 
             if result.returncode != 0:
-                error_msg = f"命令执行失败: {result.stderr}"
+                error_msg = format_openclaw_cli_failure(
+                    "命令执行失败", result.stderr, result.returncode
+                )
                 logger.error("=" * 80)
                 logger.error(error_msg)
                 logger.error("=" * 80)
                 return {"error": error_msg, "success": False}
 
             if not result.stdout.strip():
-                error_msg = "命令返回空输出"
+                error_msg = format_openclaw_cli_failure(
+                    "命令返回空输出", result.stderr, result.returncode
+                )
                 logger.error("=" * 80)
                 logger.error(error_msg)
                 logger.error("=" * 80)

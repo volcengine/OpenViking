@@ -252,7 +252,7 @@ transformContext auto recall 流程：
 | `POST /api/v1/system/wait` | 等待 semantic/vector 队列处理完成 | 暂未单独封装；`/add-resource`、opt-in `add_resource`、`add_skill` 可用 `wait=true` | 导入后马上检索时建议等待 |
 | `GET /api/v1/observer/queue` | 队列指标 | 暂未封装 | 排查资源/skill 处理积压 |
 | `GET /api/v1/observer/vikingdb` | VikingDB collection/vector 状态 | 暂未封装 | 排查向量库连接和索引数量 |
-| `GET /api/v1/observer/vlm` | VLM token 用量 | 暂未封装 | 观测摘要、抽取、视觉处理成本 |
+| `GET /api/v1/observer/models` | 模型状态 | 暂未封装 | 观测 VLM、Embedding 和 Rerank 模型状态 |
 | `GET /api/v1/observer/system` | 汇总 observer 状态 | 暂未封装 | 生产监控推荐项 |
 | `GET /api/v1/debug/health` | 认证版健康检查 | 暂未封装 | 返回 `{ healthy: true/false }` |
 

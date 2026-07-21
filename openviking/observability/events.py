@@ -99,11 +99,6 @@ def unregister_event_subscriber(name: str) -> None:
     _GLOBAL_EVENT_BUS.unregister(name)
 
 
-def reset_event_bus_for_tests() -> None:
-    """Clear all subscribers from the process-global bus."""
-    _GLOBAL_EVENT_BUS.clear()
-
-
 def _metadata_from_context(payload: dict[str, Any]) -> dict[str, str | None]:
     """Build event metadata from payload first, then current root context."""
     root = get_observability_context().root

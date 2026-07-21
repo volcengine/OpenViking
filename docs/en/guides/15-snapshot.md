@@ -94,7 +94,7 @@ Configuration reference:
 
 After editing the config, restart the OpenViking service (or re-initialize the SDK client) for it to take effect.
 
-> The repository ships ready-to-use examples: [ov.conf.git-local.example](file:///cloudide/workspace/OpenViking/examples/snapshot/ov.conf.git-local.example) and [ov.conf.git-s3-tos.example](file:///cloudide/workspace/OpenViking/examples/snapshot/ov.conf.git-s3-tos.example).
+> The repository ships ready-to-use examples: [ov.conf.git-local.example](https://github.com/volcengine/OpenViking/blob/main/examples/snapshot/ov.conf.git-local.example) and [ov.conf.git-s3-tos.example](https://github.com/volcengine/OpenViking/blob/main/examples/snapshot/ov.conf.git-s3-tos.example).
 
 ## Directory Layout Change: the `.ovgit` Directory
 

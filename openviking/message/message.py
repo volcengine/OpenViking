@@ -182,17 +182,6 @@ class Message:
             created_at=data.get("created_at"),
         )
 
-    def get_tool_parts(self) -> List[ToolPart]:
-        """Get all ToolParts."""
-        return [p for p in self.parts if isinstance(p, ToolPart)]
-
-    def find_tool_part(self, tool_id: str) -> Optional[ToolPart]:
-        """Find ToolPart by tool_id."""
-        for p in self.parts:
-            if isinstance(p, ToolPart) and p.tool_id == tool_id:
-                return p
-        return None
-
     def to_jsonl(self) -> str:
         """Serialize to JSONL string."""
         return json.dumps(self.to_dict(), ensure_ascii=False)

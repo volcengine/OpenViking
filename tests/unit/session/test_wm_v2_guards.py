@@ -70,6 +70,21 @@ class TestExtractAbstractFromSummary:
 
         assert self._extract(summary) == "Meaningful title"
 
+    def test_structured_title_skips_template_placeholder(self):
+        summary = (
+            "# Working Memory\n\n"
+            "## Session Title\n"
+            "_A short and distinctive 5-10 word descriptive title._\n"
+            "Meaningful title"
+        )
+
+        assert self._extract(summary) == "Meaningful title"
+
+    def test_structured_title_is_bounded(self):
+        summary = _make_wm(session_title="x" * 250)
+
+        assert self._extract(summary) == "x" * 200
+
     def test_legacy_bold_key_format_is_preserved(self):
         assert self._extract("**Overview**: Legacy abstract\nBody") == "Legacy abstract"
 

@@ -148,6 +148,7 @@ def get_resource_content_type(file_name: str) -> Optional[ResourceContentType]:
         ".json",
         ".jsonl",
         ".xml",
+        ".svg",
         ".py",
         ".js",
         ".ts",
@@ -200,9 +201,9 @@ def get_resource_content_type(file_name: str) -> Optional[ResourceContentType]:
         ".jl",
         ".mm",
     }
-    image_extensions = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp"}
-    video_extensions = {".mp4", ".avi", ".mov", ".wmv", ".flv"}
-    audio_extensions = {".mp3", ".wav", ".aac", ".flac"}
+    image_extensions = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
+    video_extensions = {".mp4", ".avi", ".mov", ".wmv", ".flv", ".mkv", ".webm"}
+    audio_extensions = {".mp3", ".wav", ".aac", ".flac", ".ogg", ".m4a", ".opus", ".ac3"}
 
     if any(file_name.endswith(ext) for ext in text_extensions):
         return ResourceContentType.TEXT

@@ -92,6 +92,8 @@ class FSService:
         show_all_hidden: bool = False,
         node_limit: int = 1000,
         level_limit: int = 3,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
     ) -> List[Any]:
         """List directory contents.
 
@@ -103,6 +105,8 @@ class FSService:
             abs_limit: int = 256 if output == "agent" else ignore
             show_all_hidden: bool = False (list all hidden files, like -a)
             node_limit: int = 1000 (maximum number of nodes to list)
+            sort_by: Optional sort field for non-recursive listings
+            sort_order: Sort direction, "asc" or "desc"
         """
         viking_fs = self._ensure_initialized()
         uri = validate_viking_uri(uri)
@@ -125,6 +129,8 @@ class FSService:
                     output="original",
                     show_all_hidden=show_all_hidden,
                     node_limit=node_limit,
+                    sort_by=sort_by,
+                    sort_order=sort_order,
                 )
             return [e.get("uri", "") for e in entries]
 
@@ -146,6 +152,8 @@ class FSService:
                 abs_limit=abs_limit,
                 show_all_hidden=show_all_hidden,
                 node_limit=node_limit,
+                sort_by=sort_by,
+                sort_order=sort_order,
             )
         return entries
 
@@ -404,37 +412,6 @@ class FSService:
             rollback_resource=lambda: viking_fs.mv(to_uri, from_uri, ctx=ctx),
         )
 
-    async def _plan_watch_before_mv(self, from_uri: str, to_uri: str) -> None:
-        if context_type_for_uri(from_uri) != "resource":
-            return
-        if context_type_for_uri(to_uri) != "resource":
-            return
-        if is_watch_task_control_uri(from_uri) or is_watch_task_control_uri(to_uri):
-            return
-        watch_manager = self._get_watch_manager()
-        if not watch_manager:
-            return
-        await watch_manager.plan_move_tasks_under_uri_internal(from_uri, to_uri)
-
-    async def _sync_watch_after_mv(self, from_uri: str, to_uri: str) -> None:
-        if context_type_for_uri(from_uri) != "resource":
-            return
-        if context_type_for_uri(to_uri) != "resource":
-            return
-        if is_watch_task_control_uri(from_uri) or is_watch_task_control_uri(to_uri):
-            return
-        watch_manager = self._get_watch_manager()
-        if not watch_manager:
-            return
-        updated = await watch_manager.move_tasks_under_uri_internal(from_uri, to_uri)
-        if updated:
-            logger.info(
-                "Updated %d watch task target URI(s) after moving %s to %s",
-                len(updated),
-                from_uri,
-                to_uri,
-            )
-
     async def _sync_watch_after_rm(self, uri: str, *, context_type: str) -> None:
         if context_type != "resource":
             return
@@ -691,10 +668,15 @@ class FSService:
         *,
         branch: str = "main",
         limit: int = 20,
+        paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Forward to VikingFS.log. Walks parents[0] up to limit commits."""
         viking_fs = self._ensure_initialized()
-        return await viking_fs.log(branch=branch, limit=limit, ctx=ctx)
+        if paths is not None:
+            paths = [validate_viking_uri(path, field_name="paths") for path in paths]
+            if not paths:
+                paths = None
+        return await viking_fs.log(branch=branch, limit=limit, paths=paths, ctx=ctx)
 
     async def get_gitignore(self, *, ctx: RequestContext) -> str:
         """Forward to VikingFS.get_gitignore. Returns the account .ovgitignore

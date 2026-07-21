@@ -198,6 +198,27 @@ class StoreManager:
         ]
         return cands_list
 
+    def fetch_cands_fields(self, label_list: List[int]) -> List[Optional[str]]:
+        """Fetch only the serialized scalar fields for candidate labels.
+
+        This avoids materializing dense and sparse vectors when a caller only
+        needs projected scalar fields. The returned list preserves the input
+        order and uses ``None`` for missing candidates, matching
+        :meth:`fetch_cands_data`.
+        """
+        bytes_list = self.storage.read(
+            [str(label) for label in label_list],
+            StoreManager.CandsTable,
+        )
+        return [
+            (
+                CandidateData.bytes_row.deserialize_field(bytes_data, "fields")
+                if bytes_data
+                else None
+            )
+            for bytes_data in bytes_list
+        ]
+
     def get_all_cands_data(self) -> List[CandidateData]:
         """Get all candidate data from the store.
 

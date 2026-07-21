@@ -47,6 +47,24 @@ Explain the purpose of this API, point to the corresponding code entry, and brie
 
 #### 3. Usage Examples
 
+**Python SDK**
+
+```python
+<SDK call example>
+```
+
+**TypeScript SDK**
+
+```typescript
+<SDK call example>
+```
+
+**Go SDK**
+
+```go
+<SDK call example>
+```
+
 **HTTP API**
 
 ```
@@ -55,18 +73,6 @@ Explain the purpose of this API, point to the corresponding code entry, and brie
 
 ```bash
 <curl example>
-```
-
-**Python SDK**
-
-```python
-<SDK call example>
-```
-
-**Go SDK**
-
-```go
-<SDK call example>
 ```
 
 **CLI**
@@ -128,12 +134,16 @@ Each API is organized in the following three parts:
 
 #### 3. Usage Examples
 
-Provide in order:
-- HTTP API (method + path + curl example)
+When an operation presents all transports together, prefer this order:
 - Python SDK example
+- TypeScript SDK example
 - Go SDK example, when it adds endpoint-specific value and can stay concise
+- HTTP API (method + path + curl example)
 - CLI example
 - Response example
+
+For an existing operation with a workflow-specific structure, keep the local
+structure stable and place TypeScript next to the other SDK examples.
 
 Keep API documentation organized around API modules and individual operations,
 not around client languages. SDK snippets should be short call examples inside

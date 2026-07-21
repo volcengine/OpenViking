@@ -10,7 +10,7 @@ test("viking uri guard blocks filesystem tools on virtual URIs", async () => {
 
   await assert.rejects(
     () => guard({ tool: "read" }, { args: { filePath: "viking://resources/project/file.md" } }),
-    /Use openviking_read instead/,
+    /openviking_read\(uris=\["viking:\/\/resources\/project\/file\.md"\]\)/,
   )
   await assert.rejects(
     () => guard({ tool: "glob" }, { args: { path: "viking://resources/project/" } }),

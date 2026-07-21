@@ -232,6 +232,9 @@ async with await registry.access("https://github.com/user/repo") as resource:
 ### 自定义 Accessor
 
 ```python
+import tempfile
+from pathlib import Path
+
 from openviking.parse.accessors import DataAccessor, LocalResource
 
 class MyAccessor(DataAccessor):
@@ -244,7 +247,7 @@ class MyAccessor(DataAccessor):
 
     async def access(self, source: str, **kwargs) -> LocalResource:
         # 获取数据到本地...
-        temp_path = self._create_temp_dir()
+        temp_path = Path(tempfile.mkdtemp(prefix="openviking_"))
         # ... 下载逻辑 ...
         return LocalResource(
             path=temp_path,

@@ -53,6 +53,17 @@ class TestLiteLLMVLMProviderDetection:
         assert _vlm(model)._resolve_model(model) == model
 
     @pytest.mark.parametrize(
+        "model",
+        [
+            "github_copilot/claude-opus-4.8",
+            "github_copilot/gpt-4o",
+        ],
+    )
+    def test_github_copilot_route_is_left_alone(self, model):
+        assert detect_provider_by_model(model) is None
+        assert _vlm(model)._resolve_model(model) == model
+
+    @pytest.mark.parametrize(
         ("model", "provider"),
         [
             ("gemini-3.1-flash-lite-preview", "gemini"),

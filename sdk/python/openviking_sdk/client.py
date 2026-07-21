@@ -78,6 +78,25 @@ def _image_to_data_uri(data: bytes | bytearray | memoryview, file_name: str = ""
     return f"data:{_image_mime_type(file_name)};base64,{encoded}"
 
 
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    temporary = tempfile.NamedTemporaryFile(
+        mode="wb",
+        dir=path.parent,
+        prefix=f".{path.name}-",
+        suffix=".tmp",
+        delete=False,
+    )
+    temporary_path = Path(temporary.name)
+    try:
+        with temporary:
+            temporary.write(data)
+        os.replace(temporary_path, path)
+    except BaseException:
+        temporary.close()
+        temporary_path.unlink(missing_ok=True)
+        raise
+
+
 def _normalize_image_input(image: Any) -> Optional[str]:
     if image is None:
         return None
@@ -863,19 +882,25 @@ class AsyncHTTPClient:
         abs_limit: int = 256,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
     ) -> List[Any]:
+        params: Dict[str, Any] = {
+            "uri": VikingURI.normalize(uri),
+            "simple": simple,
+            "recursive": recursive,
+            "output": output,
+            "abs_limit": abs_limit,
+            "show_all_hidden": show_all_hidden,
+            "node_limit": node_limit,
+        }
+        if sort_by is not None:
+            params["sort_by"] = sort_by
+            params["sort_order"] = sort_order
         response = await self._request(
             "GET",
             "/api/v1/fs/ls",
-            params={
-                "uri": VikingURI.normalize(uri),
-                "simple": simple,
-                "recursive": recursive,
-                "output": output,
-                "abs_limit": abs_limit,
-                "show_all_hidden": show_all_hidden,
-                "node_limit": node_limit,
-            },
+            params=params,
         )
         return self._handle_response(response)
 
@@ -1273,8 +1298,7 @@ class AsyncHTTPClient:
         )
         if not response.is_success:
             self._handle_response(response)
-        with open(to_path, "wb") as f:
-            f.write(response.content)
+        _atomic_write_bytes(to_path, response.content)
         return str(to_path)
 
     async def backup_ovpack(self, to: str, include_vectors: bool = False) -> str:
@@ -1289,8 +1313,7 @@ class AsyncHTTPClient:
         )
         if not response.is_success:
             self._handle_response(response)
-        with open(to_path, "wb") as f:
-            f.write(response.content)
+        _atomic_write_bytes(to_path, response.content)
         return str(to_path)
 
     async def import_ovpack(
@@ -1357,11 +1380,12 @@ class AsyncHTTPClient:
         uri: str,
         mode: str = "vectors_only",
         wait: bool = True,
+        dry_run: bool = False,
     ) -> Dict[str, Any]:
         response = await self._request(
             "POST",
             "/api/v1/content/reindex",
-            json={"uri": uri, "mode": mode, "wait": wait},
+            json={"uri": uri, "mode": mode, "wait": wait, "dry_run": dry_run},
         )
         return self._handle_response(response)
 
@@ -1556,12 +1580,16 @@ class AsyncHTTPClient:
         *,
         branch: str = "main",
         limit: int = 20,
+        paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Walk commit history newest-first."""
+        params: Dict[str, Any] = {"branch": branch, "limit": limit}
+        if paths:
+            params["paths"] = paths
         response = await self._request(
             "GET",
             "/api/v1/snapshot/log",
-            params={"branch": branch, "limit": limit},
+            params=params,
         )
         return self._handle_response(response)
 
@@ -1842,6 +1870,8 @@ class SyncHTTPClient:
         abs_limit: int = 256,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
     ) -> List[Any]:
         return run_async(
             self._async_client.ls(
@@ -1852,6 +1882,8 @@ class SyncHTTPClient:
                 abs_limit=abs_limit,
                 show_all_hidden=show_all_hidden,
                 node_limit=node_limit,
+                sort_by=sort_by,
+                sort_order=sort_order,
             )
         )
 
@@ -2186,8 +2218,9 @@ class SyncHTTPClient:
         uri: str,
         mode: str = "vectors_only",
         wait: bool = True,
+        dry_run: bool = False,
     ) -> Dict[str, Any]:
-        return run_async(self._async_client.reindex(uri=uri, mode=mode, wait=wait))
+        return run_async(self._async_client.reindex(uri=uri, mode=mode, wait=wait, dry_run=dry_run))
 
     def admin_create_account(
         self,
@@ -2331,8 +2364,9 @@ class AsyncHTTPSnapshotNamespace:
         *,
         branch: str = "main",
         limit: int = 20,
+        paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        return await self._client.git_log(branch=branch, limit=limit)
+        return await self._client.git_log(branch=branch, limit=limit, paths=paths)
 
     async def get_gitignore(self) -> str:
         return await self._client.git_get_ignore()
@@ -2408,8 +2442,9 @@ class SyncHTTPSnapshotNamespace:
         *,
         branch: str = "main",
         limit: int = 20,
+        paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        return run_async(self._ns().log(branch=branch, limit=limit))
+        return run_async(self._ns().log(branch=branch, limit=limit, paths=paths))
 
     def get_gitignore(self) -> str:
         return run_async(self._ns().get_gitignore())

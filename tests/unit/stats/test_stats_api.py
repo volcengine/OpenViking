@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from openviking.server.auth import get_request_context
 from openviking.server.routers.stats import router
 
 
@@ -27,7 +28,7 @@ def mock_service():
     mock_stats.contexts_used = 2
     mock_stats.skills_used = 1
     mock_session.stats = mock_stats
-    service.sessions.session.return_value = mock_session
+    service.sessions.get = AsyncMock(return_value=mock_session)
 
     return service
 
@@ -42,12 +43,10 @@ def mock_ctx():
 def client(mock_service, mock_ctx):
     """Create a test client with mocked dependencies."""
     app = FastAPI()
+    app.dependency_overrides[get_request_context] = lambda: mock_ctx
     app.include_router(router)
 
-    with (
-        patch("openviking.server.routers.stats.get_service", return_value=mock_service),
-        patch("openviking.server.routers.stats.get_request_context", return_value=mock_ctx),
-    ):
+    with patch("openviking.server.routers.stats.get_service", return_value=mock_service):
         yield TestClient(app)
 
 
@@ -101,7 +100,7 @@ class TestGetSessionStats:
 
     def test_session_not_found(self, client, mock_service):
         """Missing session returns NOT_FOUND error."""
-        mock_service.sessions.session.side_effect = KeyError("nonexistent")
+        mock_service.sessions.get.side_effect = KeyError("nonexistent")
         response = client.get("/api/v1/stats/sessions/nonexistent")
         assert response.status_code == 200
         data = response.json()
@@ -110,7 +109,7 @@ class TestGetSessionStats:
 
     def test_session_internal_error(self, client, mock_service):
         """Unexpected exception returns INTERNAL_ERROR, not NOT_FOUND."""
-        mock_service.sessions.session.side_effect = RuntimeError("db timeout")
+        mock_service.sessions.get.side_effect = RuntimeError("db timeout")
         response = client.get("/api/v1/stats/sessions/some-session")
         assert response.status_code == 200
         data = response.json()
