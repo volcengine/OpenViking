@@ -34,6 +34,7 @@ from openviking.parse.parsers.media.utils import (
 from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.errors import LockAcquisitionError
+from openviking.storage.internal_names import MEMORY_SUMMARY_CACHE_FILENAME
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
 from openviking.storage.queuefs.semantic_lock import SemanticLockScope
@@ -58,7 +59,6 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-MEMORY_SUMMARY_CACHE_FILENAME = ".summary_cache.json"
 MEMORY_SUMMARY_CACHE_VERSION = 1
 
 

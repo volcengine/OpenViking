@@ -909,6 +909,21 @@ async def test_create_mode_invalid_extension_raises_400(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["create", "replace"])
+async def test_memory_summary_cache_rejects_direct_writes(mode):
+    coordinator = ContentWriteCoordinator(viking_fs=object())
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+
+    with pytest.raises(InvalidArgumentError, match="cannot write derived semantic file directly"):
+        await coordinator.write(
+            uri="viking://user/default/memories/preferences/.summary_cache.json",
+            content='{"version": 1, "entries": {"profile.md": "injected"}}',
+            mode=mode,
+            ctx=ctx,
+        )
+
+
+@pytest.mark.asyncio
 async def test_create_mode_parent_dirs_auto_created(monkeypatch):
     file_uri = "viking://user/default/memories/new_subdir/test.md"
     root_uri = "viking://user/default/memories"
