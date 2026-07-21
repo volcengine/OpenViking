@@ -233,7 +233,7 @@ class TestWatchManager:
         )
 
         deactivated = await watch_manager_no_fs.deactivate_tasks_under_uri_internal(
-            "viking://resources/codeask/wiki"
+            "viking://resources/codeask/wiki", TEST_ACCOUNT_ID
         )
 
         assert {task.task_id for task in deactivated} == {root.task_id, child.task_id}
@@ -261,6 +261,7 @@ class TestWatchManager:
                 "viking://resources/codeask/wiki-renamed",
                 move_resource=move_resource,
                 rollback_resource=rollback_resource,
+                account_id=TEST_ACCOUNT_ID,
             )
 
         move_resource.assert_awaited_once()
@@ -269,6 +270,38 @@ class TestWatchManager:
         assert restored is not None
         assert restored.to_uri == "viking://resources/codeask/wiki"
         assert restored.parent_uri is None
+
+    @pytest.mark.asyncio
+    async def test_uri_index_move_and_deactivate_are_account_scoped(self):
+        manager = WatchManager()
+        uri = "viking://resources/shared"
+        task_a = await manager.create_task(
+            path="/a", account_id="account-a", to_uri=uri
+        )
+        task_b = await manager.create_task(
+            path="/b", account_id="account-b", to_uri=uri
+        )
+        with pytest.raises(ConflictError):
+            await manager.create_task(path="/duplicate", account_id="account-a", to_uri=uri)
+
+        await manager.sync_tasks_with_resource_move_internal(
+            uri,
+            f"{uri}-moved",
+            move_resource=AsyncMock(),
+            account_id="account-a",
+        )
+        deactivated = await manager.deactivate_tasks_under_uri_internal(uri, "account-b")
+
+        assert task_a.to_uri == f"{uri}-moved"
+        assert task_a.is_active is True
+        assert task_b.to_uri == uri
+        assert task_b.is_active is False
+        assert deactivated == [task_b]
+        moved = await manager.get_task_by_uri(
+            f"{uri}-moved", "account-a", "default", "root"
+        )
+        assert moved is task_a
+        assert await manager.get_task_by_uri(uri, "account-b", "default", "root") is task_b
 
     @pytest.mark.asyncio
     async def test_auth_state_persisted_and_hidden_from_public_dict(
