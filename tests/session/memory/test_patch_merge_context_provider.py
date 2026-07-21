@@ -243,6 +243,7 @@ async def test_patch_merge_context_provider_hides_last_update_trace_id_from_patc
                         "memory_type": "experiences",
                         "experience_name": "booking",
                         "last_update_trace_id": "trace_old",
+                        "provenance": {"sources": [{"extraction_id": "extract_old"}]},
                     },
                 ),
                 after_file=MemoryFile(
@@ -253,6 +254,7 @@ async def test_patch_merge_context_provider_hides_last_update_trace_id_from_patc
                         "memory_type": "experiences",
                         "experience_name": "booking",
                         "last_update_trace_id": "trace_new",
+                        "provenance": {"sources": [{"extraction_id": "extract_new"}]},
                     },
                 ),
             )
@@ -265,6 +267,9 @@ async def test_patch_merge_context_provider_hides_last_update_trace_id_from_patc
     assert "last_update_trace_id" not in content
     assert "trace_old" not in content
     assert "trace_new" not in content
+    assert "provenance" not in content
+    assert "extract_old" not in content
+    assert "extract_new" not in content
     assert "(no changes)" in content
 
 

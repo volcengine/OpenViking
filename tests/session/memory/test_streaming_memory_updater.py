@@ -678,6 +678,42 @@ def test_operation_ranges_narrow_provenance_to_original_message_ids():
     assert op.source.message_ids == ["msg-1", "msg-2"]
 
 
+def test_request_metadata_backfills_partial_source_for_same_extraction():
+    op = _note_op("partial_source")
+    op.memory_fields["ranges"] = "1"
+    op.source = MemoryOperationSource(extraction_id="extract-partial")
+    request = MemoryUpdateRequest(
+        operations=ResolvedOperations(
+            upsert_operations=[op],
+            delete_file_contents=[],
+            errors=[],
+        ),
+        messages=[
+            Message(id="msg-0", role="user", parts=[TextPart("zero")]),
+            Message(id="msg-1", role="assistant", parts=[TextPart("one")]),
+        ],
+        ctx=_ctx(),
+        metadata={
+            "source_extraction_id": "extract-partial",
+            "session_id": "session-partial",
+            "archive_uri": "viking://user/u/sessions/session-partial/history/archive-1",
+            "trace_id": "trace-partial",
+        },
+    )
+
+    attach_source_to_request_operations(request)
+
+    assert op.source == MemoryOperationSource(
+        extraction_id="extract-partial",
+        session_id="session-partial",
+        message_ids=["msg-1"],
+        archive_uri="viking://user/u/sessions/session-partial/history/archive-1",
+        trace_id="trace-partial",
+    )
+    assert op.memory_fields["source_extraction_id"] == "extract-partial"
+    assert op.memory_fields["last_update_trace_id"] == "trace-partial"
+
+
 def test_split_request_by_merge_group_groups_by_peer_and_memory_type():
     self_op = _note_op("self_note")
     peer_op = _peer_note_op("peer_note", "web-visitor-alice")

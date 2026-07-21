@@ -1286,19 +1286,40 @@ def attach_source_to_request_operations(request: MemoryUpdateRequest) -> None:
     messages = list(getattr(request, "messages", []) or [])
     extract_context = ExtractContext(messages)
     for op in list(getattr(request.operations, "upsert_operations", []) or []):
-        if getattr(op, "source", None) is None:
-            message_ids = list(source.message_ids)
-            ranges = dict(getattr(op, "memory_fields", {}) or {}).get("ranges")
-            if ranges is not None:
-                try:
-                    ranged_ids = extract_context.read_message_ranges(
-                        str(ranges)
-                    ).source_message_ids()
-                    if ranged_ids:
-                        message_ids = ranged_ids
-                except (TypeError, ValueError):
-                    pass
+        message_ids = list(source.message_ids)
+        ranges = dict(getattr(op, "memory_fields", {}) or {}).get("ranges")
+        if ranges is not None:
+            try:
+                ranged_ids = extract_context.read_message_ranges(str(ranges)).source_message_ids()
+                if ranged_ids:
+                    message_ids = ranged_ids
+            except (TypeError, ValueError):
+                pass
+
+        operation_source = getattr(op, "source", None)
+        if operation_source is None:
             op.source = source.model_copy(deep=True, update={"message_ids": message_ids})
+        elif operation_source.extraction_id in (None, source.extraction_id):
+            # Some producers attach the extraction id before the request-level
+            # archive/session metadata is available.  Backfill only missing
+            # fields for the same extraction so the persisted audit record is
+            # complete without overwriting operation-specific provenance.
+            source_updates = {
+                field: getattr(source, field)
+                for field in (
+                    "extraction_id",
+                    "session_id",
+                    "archive_uri",
+                    "task_id",
+                    "trace_id",
+                    "extracted_at",
+                )
+                if not getattr(operation_source, field, None) and getattr(source, field, None)
+            }
+            if not operation_source.message_ids and message_ids:
+                source_updates["message_ids"] = message_ids
+            if source_updates:
+                op.source = operation_source.model_copy(deep=True, update=source_updates)
         source_extraction_id = getattr(op.source, "extraction_id", None)
         if source_extraction_id:
             op.memory_fields.setdefault("source_extraction_id", source_extraction_id)
