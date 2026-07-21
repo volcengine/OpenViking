@@ -168,8 +168,10 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
     def _standard_input_fusion(self, contents: List[Dict[str, str]]) -> Optional[bool]:
         if len(contents) <= 1:
             return None
-        if self.model_name.startswith(("qwen3-vl-embedding", "qwen2.5-vl-embedding")):
+        if self.model_name.startswith("qwen3-vl-embedding"):
             return True
+        if self.model_name.startswith("qwen2.5-vl-embedding"):
+            return None
         raise ValueError(f"{self.model_name} cannot fuse multiple multimodal input parts")
 
     def _multimodal_params(self) -> Dict[str, Any]:
