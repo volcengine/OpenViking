@@ -239,13 +239,19 @@ class TestDashScopeMultimodalEmbed:
 
     @patch("openviking.models.embedder.dashscope_embedders.openai.OpenAI")
     @patch("openviking.models.embedder.dashscope_embedders.httpx.Client")
-    def test_embed_routes_standard_multimodal_parts(self, mock_httpx_class, mock_openai):
+    @pytest.mark.parametrize(
+        ("model_name", "expected_fusion"),
+        [("qwen3-vl-embedding", True), ("qwen2.5-vl-embedding", None)],
+    )
+    def test_embed_routes_standard_multimodal_parts(
+        self, mock_httpx_class, mock_openai, model_name, expected_fusion
+    ):
         mock_response = MagicMock()
         mock_response.json.return_value = {
             "output": {"embeddings": [{"embedding": [0.1] * 2560}]}
         }
         mock_httpx_class.return_value.post.return_value = mock_response
-        embedder = DashScopeDenseEmbedder("qwen3-vl-embedding", api_key="sk-test")
+        embedder = DashScopeDenseEmbedder(model_name, api_key="sk-test")
 
         embedder.embed(
             [
@@ -259,7 +265,7 @@ class TestDashScopeMultimodalEmbed:
             {"text": "cat"},
             {"image": "https://example.com/cat.png"},
         ]
-        assert body["parameters"]["enable_fusion"] is True
+        assert body["parameters"].get("enable_fusion") is expected_fusion
 
     @patch("openviking.models.embedder.dashscope_embedders.openai.OpenAI")
     @patch("openviking.models.embedder.dashscope_embedders.httpx.Client")
