@@ -73,6 +73,11 @@ class WatchTask(BaseModel):
     sync_state: Dict[str, Any] = Field(
         default_factory=dict, description="Private source synchronization state"
     )
+    revision: int = Field(
+        default=0,
+        ge=0,
+        description="Private revision used to reject stale scheduler commits",
+    )
     auth_state: Optional[Dict[str, Any]] = Field(
         default=None, description="Private authentication state for scheduled re-processing"
     )
@@ -117,6 +122,7 @@ class WatchTask(BaseModel):
     def to_storage_dict(self) -> Dict[str, Any]:
         """Convert task to dictionary for watch-task persistence."""
         data = self.to_dict()
+        data["revision"] = self.revision
         if self.sync_state:
             data["sync_state"] = self.sync_state
         if self.auth_state is not None:
@@ -560,6 +566,7 @@ class WatchManager:
                 if to_uri:
                     self._uri_to_task[to_uri] = task_id
 
+            task.revision += 1
             await self._save_tasks()
 
             logger.info(f"[WatchManager] Updated task {task_id} by user {account_id}/{user_id}")
@@ -666,9 +673,7 @@ class WatchManager:
         """Deactivate watch tasks whose target URI is deleted."""
         async with self._lock:
             matched = [
-                task
-                for task in self._tasks.values()
-                if _uri_matches_prefix(task.to_uri, uri)
+                task for task in self._tasks.values() if _uri_matches_prefix(task.to_uri, uri)
             ]
             if not matched:
                 return []
@@ -813,19 +818,33 @@ class WatchManager:
         self,
         task_id: str,
         *,
+        expected_revision: Optional[int] = None,
         sync_state_updates: Optional[Dict[str, Any]] = None,
-    ) -> None:
+    ) -> bool:
         """Update task execution time after execution.
 
         Args:
             task_id: Task ID to update
+            expected_revision: Revision captured by the execution. When the
+                stored task has changed, leave it due and reject the stale
+                timestamp/fingerprint commit.
             sync_state_updates: Private source state to persist atomically with
                 the successful execution timestamp.
+
+        Returns:
+            True when the execution state was committed, False when the task
+            no longer exists or its revision changed.
         """
         async with self._lock:
             task = self._tasks.get(task_id)
             if not task:
-                return
+                return False
+
+            if expected_revision is not None and task.revision != expected_revision:
+                if task.is_active and task.watch_interval > 0:
+                    task.next_execution_time = datetime.now()
+                    await self._save_tasks()
+                return False
 
             if sync_state_updates:
                 task.sync_state.update(sync_state_updates)
@@ -834,12 +853,13 @@ class WatchManager:
                 task.is_active = False
                 task.next_execution_time = None
                 await self._save_tasks()
-                return
+                return True
 
             task.last_execution_time = datetime.now()
             task.next_execution_time = task.calculate_next_execution_time()
 
             await self._save_tasks()
+            return True
 
     async def get_due_tasks(self, account_id: Optional[str] = None) -> List[WatchTask]:
         """Get all tasks that are due for execution.

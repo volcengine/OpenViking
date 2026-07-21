@@ -239,6 +239,7 @@ class WatchScheduler:
         deactivation_reason = ""
         feishu_source_version: Optional[int] = None
         feishu_sync_fingerprint: Optional[str] = None
+        feishu_auth_context: Optional[Dict[str, Any]] = None
         require_queue_status = False
         skip_resource_sync = False
         resource_sync_succeeded = False
@@ -305,6 +306,10 @@ class WatchScheduler:
                             processor_kwargs.get(_FEISHU_ACCESS_TOKEN_KEY),
                         )
                         if feishu_source_version is not None:
+                            feishu_auth_context = self._capture_feishu_auth_context(
+                                task,
+                                processor_kwargs=processor_kwargs,
+                            )
                             destination_state = await self._fetch_destination_sync_state(
                                 task.to_uri,
                                 ctx,
@@ -314,6 +319,7 @@ class WatchScheduler:
                                 processor_kwargs=processor_kwargs,
                                 source_version=feishu_source_version,
                                 destination_state=destination_state,
+                                auth_context=feishu_auth_context,
                             )
                             require_queue_status = feishu_sync_fingerprint is not None
                         previous_fingerprint = (getattr(task, "sync_state", {}) or {}).get(
@@ -392,7 +398,11 @@ class WatchScheduler:
                         )
                     else:
                         sync_state_updates = None
-                        if resource_sync_succeeded and not skip_resource_sync:
+                        if (
+                            resource_sync_succeeded
+                            and not skip_resource_sync
+                            and require_queue_status
+                        ):
                             destination_state = await self._fetch_destination_sync_state(
                                 task.to_uri,
                                 ctx,
@@ -402,6 +412,7 @@ class WatchScheduler:
                                 processor_kwargs=processor_kwargs,
                                 source_version=feishu_source_version,
                                 destination_state=destination_state,
+                                auth_context=feishu_auth_context,
                             )
                             if feishu_sync_fingerprint is not None:
                                 sync_state_updates = {
@@ -409,17 +420,25 @@ class WatchScheduler:
                                 }
                         if sync_state_updates is None:
                             update_execution_time = self._watch_manager.update_execution_time(
-                                task.task_id
+                                task.task_id,
+                                expected_revision=task.revision,
                             )
                         else:
                             update_execution_time = self._watch_manager.update_execution_time(
                                 task.task_id,
+                                expected_revision=task.revision,
                                 sync_state_updates=sync_state_updates,
                             )
-                        await asyncio.shield(update_execution_time)
-                        logger.info(
-                            f"[WatchScheduler] Updated execution time for task {task.task_id}"
-                        )
+                        execution_state_committed = await asyncio.shield(update_execution_time)
+                        if execution_state_committed:
+                            logger.info(
+                                f"[WatchScheduler] Updated execution time for task {task.task_id}"
+                            )
+                        else:
+                            logger.info(
+                                f"[WatchScheduler] Rejected stale execution state for task "
+                                f"{task.task_id}; task remains due"
+                            )
             except Exception as e:
                 logger.error(
                     f"[WatchScheduler] Failed to update task {task.task_id}: {e}",
@@ -550,33 +569,14 @@ class WatchScheduler:
         processor_kwargs: Dict[str, Any],
         source_version: Optional[int],
         destination_state: Optional[Dict[str, Any]],
+        auth_context: Optional[Dict[str, Any]],
     ) -> Optional[str]:
-        if source_version is None or destination_state is None:
+        if source_version is None or destination_state is None or auth_context is None:
             return None
 
         try:
             stable_kwargs = dict(processor_kwargs)
-            explicit_access_token = stable_kwargs.pop(_FEISHU_ACCESS_TOKEN_KEY, None)
-            auth_state = getattr(task, "auth_state", None)
-            if is_feishu_auth_state(auth_state):
-                auth_context = {
-                    "mode": "user",
-                    "provider": auth_state.get("provider"),
-                    "refresh_token_digest": self._secret_digest(auth_state.get("refresh_token")),
-                }
-            elif explicit_access_token:
-                auth_context = {
-                    "mode": "user",
-                    "access_token_digest": self._secret_digest(explicit_access_token),
-                }
-            else:
-                credentials = load_feishu_app_credentials()
-                auth_context = {
-                    "mode": "app",
-                    "app_id": credentials.app_id,
-                    "domain": credentials.domain,
-                    "app_secret_digest": self._secret_digest(credentials.app_secret),
-                }
+            stable_kwargs.pop(_FEISHU_ACCESS_TOKEN_KEY, None)
 
             payload = {
                 "schema": "feishu_watch_sync_fingerprint_v1",
@@ -614,6 +614,44 @@ class WatchScheduler:
             )
             return None
         return hashlib.sha256(encoded).hexdigest()
+
+    def _capture_feishu_auth_context(
+        self,
+        task,
+        *,
+        processor_kwargs: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Capture one immutable auth identity for this synchronization."""
+        try:
+            explicit_access_token = processor_kwargs.get(_FEISHU_ACCESS_TOKEN_KEY)
+            auth_state = getattr(task, "auth_state", None)
+            if is_feishu_auth_state(auth_state):
+                return {
+                    "mode": "user",
+                    "provider": auth_state.get("provider"),
+                    "refresh_token_digest": self._secret_digest(auth_state.get("refresh_token")),
+                }
+            if explicit_access_token:
+                return {
+                    "mode": "user",
+                    "access_token_digest": self._secret_digest(explicit_access_token),
+                }
+
+            credentials = load_feishu_app_credentials()
+            return {
+                "mode": "app",
+                "app_id": credentials.app_id,
+                "domain": credentials.domain,
+                "app_secret_digest": self._secret_digest(credentials.app_secret),
+            }
+        except Exception as exc:
+            logger.warning(
+                "[WatchScheduler] Failed to capture Feishu auth context for %s: %s; "
+                "falling back to full synchronization",
+                task.path,
+                exc,
+            )
+            return None
 
     @staticmethod
     def _secret_digest(value: Any) -> Optional[str]:

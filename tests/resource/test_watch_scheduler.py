@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -110,7 +111,10 @@ class TestWatchSchedulerResourceExistence:
         assert updated is not None
         assert updated.is_active is True
         assert resource_service.calls and resource_service.calls[0]["to"] == task.to_uri
-        manager.update_execution_time.assert_awaited_once_with(task.task_id)
+        manager.update_execution_time.assert_awaited_once_with(
+            task.task_id,
+            expected_revision=task.revision,
+        )
 
 
 class TestWatchSchedulerFeishuPrecheck:
@@ -295,6 +299,29 @@ class TestWatchSchedulerFeishuPrecheck:
         assert updated.sync_state == {}
 
     @pytest.mark.asyncio
+    async def test_pre_destination_stat_failure_cannot_baseline_async_sync(self, monkeypatch):
+        resource_service, scheduler, manager, task, viking_fs = await self._setup_task(monkeypatch)
+        scheduler._fetch_feishu_latest_modify_time = AsyncMock(return_value=100)
+        original_stat = viking_fs.stat
+        failed_precheck = False
+
+        async def fail_first_sync_state_stat(uri, ctx=None, skip_count=False):
+            nonlocal failed_precheck
+            if skip_count and not failed_precheck:
+                failed_precheck = True
+                raise RuntimeError("transient destination stat failure")
+            return await original_stat(uri, ctx=ctx, skip_count=skip_count)
+
+        viking_fs.stat = fail_first_sync_state_stat
+
+        await scheduler._execute_task(task)
+
+        updated = await manager.get_task(task.task_id)
+        assert failed_precheck is True
+        assert resource_service.calls[0]["wait"] is False
+        assert updated.sync_state == {}
+
+    @pytest.mark.asyncio
     async def test_accessor_construction_failure_falls_back_to_full_sync(self, monkeypatch):
         resource_service, scheduler, _, task, _ = await self._setup_task(monkeypatch)
         monkeypatch.setattr(
@@ -404,6 +431,8 @@ class TestWatchSchedulerFeishuPrecheck:
             return await original_add_resource(**kwargs)
 
         resource_service.add_resource = blocking_add_resource
+        task.next_execution_time = datetime.now() - timedelta(seconds=1)
+        executed_revision = task.revision
         execution = asyncio.create_task(scheduler._execute_task(task))
         await add_started.wait()
 
@@ -427,6 +456,10 @@ class TestWatchSchedulerFeishuPrecheck:
         assert first_call["build_index"] is True
 
         updated = await manager.get_task(task.task_id)
+        assert updated.revision == executed_revision + 1
+        assert updated.last_execution_time is None
+        assert updated.sync_state == {}
+        assert [due.task_id for due in await manager.get_due_tasks()] == [task.task_id]
         resource_service.calls.clear()
         await scheduler._execute_task(updated)
 
@@ -436,12 +469,67 @@ class TestWatchSchedulerFeishuPrecheck:
         assert resource_service.calls[0]["instruction"] == updated.instruction
         assert resource_service.calls[0]["build_index"] is False
 
+    @pytest.mark.asyncio
+    async def test_app_auth_context_is_captured_once_per_execution(self, monkeypatch):
+        resource_service, scheduler, manager, task, _ = await self._setup_task(monkeypatch)
+        scheduler._fetch_feishu_latest_modify_time = AsyncMock(return_value=100)
+        credentials = [
+            type(
+                "Credentials",
+                (),
+                {
+                    "app_id": "app-old",
+                    "app_secret": "secret-old",
+                    "domain": "https://open.feishu.cn",
+                },
+            )(),
+            type(
+                "Credentials",
+                (),
+                {
+                    "app_id": "app-new",
+                    "app_secret": "secret-new",
+                    "domain": "https://open.feishu.cn",
+                },
+            )(),
+        ]
+        credential_reads = 0
+
+        def rotating_credentials():
+            nonlocal credential_reads
+            value = credentials[min(credential_reads, len(credentials) - 1)]
+            credential_reads += 1
+            return value
+
+        monkeypatch.setattr(
+            "openviking.resource.watch_scheduler.load_feishu_app_credentials",
+            rotating_credentials,
+        )
+
+        await scheduler._execute_task(task)
+
+        assert credential_reads == 1
+        first_fingerprint = (await manager.get_task(task.task_id)).sync_state[
+            "feishu_sync_fingerprint_v1"
+        ]
+        resource_service.calls.clear()
+
+        await scheduler._execute_task(task)
+
+        updated = await manager.get_task(task.task_id)
+        assert credential_reads == 2
+        assert len(resource_service.calls) == 1
+        assert updated.sync_state["feishu_sync_fingerprint_v1"] != first_fingerprint
+
     def test_sync_state_is_private_but_persisted(self):
         task = WatchTask(
             path="https://example.feishu.cn/docx/doc_token",
             sync_state={"feishu_sync_fingerprint_v1": "abc123"},
+            revision=7,
         )
 
         assert "sync_state" not in task.to_dict()
+        assert "revision" not in task.to_dict()
         restored = WatchTask.from_dict(task.to_storage_dict())
         assert restored.sync_state == {"feishu_sync_fingerprint_v1": "abc123"}
+        assert restored.revision == 7
