@@ -80,6 +80,8 @@ class TestDashScopeInit:
         assert embedder.api_key == "sk-test"
         assert embedder.api_base == "https://dashscope.aliyuncs.com"
         assert embedder.provider == "dashscope"
+        assert embedder.supports_multimodal is False
+        assert embedder.prepare_embedding_input([{"type": "text", "text": "cat"}]) == "cat"
 
     @patch("openviking.models.embedder.dashscope_embedders.openai.OpenAI")
     @patch("openviking.models.embedder.dashscope_embedders.httpx.Client")
@@ -257,6 +259,7 @@ class TestDashScopeMultimodalEmbed:
             {"text": "cat"},
             {"image": "https://example.com/cat.png"},
         ]
+        assert body["parameters"]["enable_fusion"] is True
 
     @patch("openviking.models.embedder.dashscope_embedders.openai.OpenAI")
     @patch("openviking.models.embedder.dashscope_embedders.httpx.Client")
