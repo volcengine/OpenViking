@@ -32,6 +32,7 @@ from openviking.session.train import (
     Rollout,
     RubricEvaluation,
 )
+from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -216,7 +217,7 @@ def _make_tau2_tool(
     return Tau2Tool(schema, provider)
 
 
-def _make_search_experience_tool():
+def _make_search_experience_tool(case_lookup: dict[str, Any] | None = None):
     Tool = _vikingbot_imports()["Tool"]
 
     class SearchExperienceTool(Tool):
@@ -247,6 +248,13 @@ def _make_search_experience_tool():
                             "or add speculative alternatives."
                         ),
                     },
+                    "task_signature": {
+                        "type": "string",
+                        "description": (
+                            "Optional stable Case task_signature supplied by Runtime Case "
+                            "context. Pass it exactly when provided; do not infer or modify it."
+                        ),
+                    },
                     "limit": {
                         "type": "integer",
                         "description": "Maximum candidate cases to inspect and return.",
@@ -257,15 +265,40 @@ def _make_search_experience_tool():
             }
 
         async def execute(
-            self, tool_context: Any, situation: str, limit: int = 2, **kwargs: Any
+            self,
+            tool_context: Any,
+            situation: str,
+            task_signature: str | None = None,
+            limit: int = 2,
+            **kwargs: Any,
         ) -> str:
-            del kwargs
+            del tool_context, kwargs
             client = None
             try:
                 from vikingbot.openviking_mount.ov_server import VikingClient
 
                 client = await VikingClient.create()
                 target_uri = _current_cases_uri(client)
+                exact_item = await _find_exact_case_item(
+                    client,
+                    case_lookup=case_lookup,
+                    task_signature=task_signature,
+                    cases_root_uri=target_uri,
+                )
+                if exact_item is not None:
+                    candidate = await _experience_search_summary(client, exact_item, rank=1)
+                    candidates = _deduplicate_candidate_experiences([candidate])
+                    _trace_experience_recall(
+                        match_type="exact_case",
+                        task_signature=task_signature,
+                        candidates=candidates,
+                    )
+                    return _format_search_experience_response(
+                        situation=situation,
+                        task_signature=task_signature,
+                        match_type="exact_case",
+                        candidates=candidates,
+                    )
                 result = await client.search(
                     situation,
                     target_uri=target_uri,
@@ -276,8 +309,21 @@ def _make_search_experience_tool():
                     await _experience_search_summary(client, item, rank)
                     for rank, item in enumerate(memories, start=1)
                 ]
+                candidates = _deduplicate_candidate_experiences(candidates)
+                fallback_reason = (
+                    "task_signature_not_found" if str(task_signature or "").strip() else None
+                )
+                _trace_experience_recall(
+                    match_type="semantic",
+                    task_signature=task_signature,
+                    candidates=candidates,
+                    fallback_reason=fallback_reason,
+                )
                 return _format_search_experience_response(
                     situation=situation,
+                    task_signature=task_signature,
+                    match_type="semantic",
+                    fallback_reason=fallback_reason,
                     candidates=candidates,
                 )
             except Exception as exc:
@@ -290,7 +336,14 @@ def _make_search_experience_tool():
     return SearchExperienceTool()
 
 
-def _format_search_experience_response(*, situation: str, candidates: list[dict[str, Any]]) -> str:
+def _format_search_experience_response(
+    *,
+    situation: str,
+    candidates: list[dict[str, Any]],
+    match_type: str = "semantic",
+    task_signature: str | None = None,
+    fallback_reason: str | None = None,
+) -> str:
     """Render search_experience output for the agent.
 
     Keep only task-facing information. Internal search roots and duplicate counts are omitted
@@ -298,14 +351,56 @@ def _format_search_experience_response(*, situation: str, candidates: list[dict[
     applicability.
     """
 
-    return json.dumps(
-        {
-            "situation": situation,
-            "candidates": candidates,
-        },
-        ensure_ascii=False,
-        indent=2,
-    )
+    payload: dict[str, Any] = {
+        "match_type": match_type,
+        "situation": situation,
+        "candidates": candidates,
+    }
+    if task_signature:
+        payload["task_signature"] = task_signature
+    if fallback_reason:
+        payload["fallback_reason"] = fallback_reason
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def _deduplicate_candidate_experiences(
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    seen_uris: set[str] = set()
+    for candidate in candidates:
+        deduplicated: list[dict[str, Any]] = []
+        for experience in candidate.get("experiences") or []:
+            uri = str(experience.get("uri") or "")
+            if uri and uri in seen_uris:
+                continue
+            if uri:
+                seen_uris.add(uri)
+            deduplicated.append(experience)
+        candidate["experiences"] = deduplicated
+    return candidates
+
+
+def _trace_experience_recall(
+    *,
+    match_type: str,
+    task_signature: str | None,
+    candidates: list[dict[str, Any]],
+    fallback_reason: str | None = None,
+) -> None:
+    payload: dict[str, Any] = {
+        "event": "experience_recall",
+        "match_type": match_type,
+        "candidate_count": len(candidates),
+        "experience_count": sum(
+            len(candidate.get("experiences") or []) for candidate in candidates
+        ),
+    }
+    if task_signature:
+        payload["task_signature"] = task_signature
+        payload["exact_case_found"] = match_type == "exact_case"
+    if fallback_reason:
+        payload["fallback_reason"] = fallback_reason
+    tracer.info(json.dumps(payload, ensure_ascii=False))
 
 
 def _make_read_experience_tool():
@@ -371,6 +466,37 @@ def _make_read_experience_tool():
 
 def _current_cases_uri(client: Any) -> str:
     return f"{client._memory_target_uri(None).rstrip('/')}/cases"
+
+
+async def _find_exact_case_item(
+    client: Any,
+    *,
+    case_lookup: dict[str, Any] | None,
+    task_signature: str | None,
+    cases_root_uri: str,
+) -> dict[str, Any] | None:
+    task_signature = str(task_signature or "").strip()
+    if not task_signature or not case_lookup:
+        return None
+
+    from vikingbot.agent.memory import MemoryStore
+
+    lookup = MemoryStore._normalize_case_lookup(case_lookup)
+    if task_signature != str(lookup.get("task_signature") or ""):
+        return None
+
+    for case_uri in MemoryStore._case_uri_candidates(cases_root_uri, lookup):
+        content = await client.read_content(case_uri, level="read")
+        if not content:
+            continue
+        if not MemoryStore._case_matches_lookup(content, lookup, uri=case_uri):
+            continue
+        return {
+            "uri": case_uri,
+            "score": 1.0,
+            "abstract": "",
+        }
+    return None
 
 
 def _case_uri(item: Any) -> str:
@@ -620,6 +746,8 @@ class VikingBotTau2RolloutExecutor:
         await asyncio.to_thread(provider.reset)
         timings.record("provider_reset", stage_started_at)
 
+        case_lookup = _tau2_case_lookup(case)
+
         stage_started_at = time.perf_counter()
         agent = await asyncio.to_thread(
             _build_agent,
@@ -638,6 +766,7 @@ class VikingBotTau2RolloutExecutor:
             task_id=task_id,
             task_no=task_no,
             data_split=data_split,
+            case_lookup=case_lookup,
         )
         timings.record("configure_tools", stage_started_at)
 
@@ -682,7 +811,7 @@ class VikingBotTau2RolloutExecutor:
             direct_experience_name=self.direct_experience_name,
             direct_experience_uri=self.direct_experience_uri,
             timings=timings,
-            case_lookup=_tau2_case_lookup(case),
+            case_lookup=case_lookup,
         )
 
         reward = None
@@ -962,6 +1091,7 @@ def _configure_tools(
     task_id: str | None = None,
     task_no: int | None = None,
     data_split: str | None = None,
+    case_lookup: dict[str, Any] | None = None,
 ) -> None:
     # Tau2 rollout may keep generic VikingBot tools, but OpenViking access is
     # restricted to automatic experience recall during prompt construction.
@@ -972,7 +1102,7 @@ def _configure_tools(
         if str(tool_name).startswith("openviking_"):
             agent.tools.unregister(tool_name)
     if loader_mode == "skill":
-        agent.tools.register(_make_search_experience_tool())
+        agent.tools.register(_make_search_experience_tool(case_lookup=case_lookup))
         agent.tools.register(_make_read_experience_tool())
     tool_lock = _AsyncRWLock()
     write_tool_names = _classify_write_tools(provider)
@@ -1136,6 +1266,7 @@ async def _prepare_experience_loader_skill(
     agent: Any,
     session_key: Any,
     system_prompt_profile: VikingBotSystemPromptProfile = DEFAULT_SYSTEM_PROMPT_PROFILE,
+    task_signature: str | None = None,
 ) -> Any:
     """Install the generic experience_loader skill into the rollout sandbox.
 
@@ -1151,6 +1282,19 @@ async def _prepare_experience_loader_skill(
         else agent.context.workspace
     )
     skill_content = _read_experience_loader_template_file("SKILL.md")
+    task_signature = str(task_signature or "").strip()
+    if task_signature:
+        skill_content = "\n".join(
+            [
+                skill_content.rstrip(),
+                "",
+                "## Runtime Case context",
+                "",
+                f"- `task_signature`: `{task_signature}`",
+                "- Pass this exact value to `search_experience`; do not infer or modify it.",
+                "",
+            ]
+        )
     if sandbox_manager:
         try:
             sandbox = await sandbox_manager.get_sandbox(session_key)
@@ -1271,13 +1415,13 @@ async def _run_agent(
     loader_mode = normalize_tau2_experience_loader_mode(loader_mode)
     system_prompt_profile = normalize_system_prompt_profile(system_prompt_profile)
     message_context = agent.context
-    del case_lookup
     experience_loader_skill = None
     if loader_mode == "skill":
         message_context = await _prepare_experience_loader_skill(
             agent=agent,
             session_key=session_key,
             system_prompt_profile=system_prompt_profile,
+            task_signature=str((case_lookup or {}).get("task_signature") or "") or None,
         )
         experience_loader_skill = getattr(
             message_context,

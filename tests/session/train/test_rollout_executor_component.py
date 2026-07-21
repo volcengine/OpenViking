@@ -512,6 +512,47 @@ def test_tau2_configure_tools_removes_only_openviking_tools():
     assert normalize_tau2_experience_loader_mode("direct_experience") == "direct_experience"
 
 
+def test_tau2_configure_tools_binds_case_lookup_to_search_experience(monkeypatch):
+    import benchmark.tau2.train.rollout_executor_vikingbot as module
+
+    observed = {}
+
+    class FakeTool:
+        name = "search_experience"
+
+    def fake_make_search_experience_tool(case_lookup=None):
+        observed["case_lookup"] = case_lookup
+        return FakeTool()
+
+    monkeypatch.setattr(module, "_make_search_experience_tool", fake_make_search_experience_tool)
+
+    class FakeTools:
+        tool_names = []
+
+        def unregister(self, name):
+            raise AssertionError(f"unexpected unregister: {name}")
+
+        def register(self, tool):
+            return None
+
+    class FakeAgent:
+        tools = FakeTools()
+
+    class FakeProvider:
+        def list_openai_tools(self):
+            return []
+
+    case_lookup = _tau2_exact_case_lookup()
+    module._configure_tools(
+        FakeAgent(),
+        FakeProvider(),
+        keep_default_tools=True,
+        case_lookup=case_lookup,
+    )
+
+    assert observed["case_lookup"] == case_lookup
+
+
 @pytest.mark.asyncio
 async def test_tau2_search_experience_summary_only_exposes_case_name_and_experience_snippets():
     from benchmark.tau2.train.rollout_executor_vikingbot import _experience_search_summary
@@ -588,6 +629,7 @@ def test_tau2_search_experience_response_hides_internal_search_metadata():
     )
 
     assert payload == {
+        "match_type": "semantic",
         "situation": "The user wants to cancel all upcoming reservations.",
         "candidates": [
             {
@@ -642,6 +684,7 @@ async def test_tau2_search_experience_uses_declarative_situation(monkeypatch):
 
     assert tool.parameters["required"] == ["situation"]
     assert "situation" in tool.parameters["properties"]
+    assert "task_signature" in tool.parameters["properties"]
     assert "query" not in tool.parameters["properties"]
     description = tool.parameters["properties"]["situation"]["description"]
     assert "current conversation" in description
@@ -662,9 +705,324 @@ async def test_tau2_search_experience_uses_declarative_situation(monkeypatch):
         "closed": True,
     }
     assert payload == {
+        "match_type": "semantic",
         "situation": "The user wants to cancel all upcoming reservations.",
         "candidates": [],
     }
+
+
+def _tau2_exact_case_lookup() -> dict:
+    return {
+        "strict": True,
+        "case_names": ["tau2_airline_train_22"],
+        "domain": "airline",
+        "split": "train",
+        "data_split": "airline_train",
+        "task_no": "22",
+        "task_id": "39",
+        "case_name": "tau2_airline_train_22",
+        "task_signature": "tau2:airline:train:39",
+        "expected_fields": {
+            "input.domain": "airline",
+            "input.split": "train",
+            "input.data_split": "airline_train",
+            "input.task_no": "22",
+            "input.task_id": "39",
+        },
+    }
+
+
+def _tau2_exact_case_content(*, linked_experience_uri: str | None = None) -> str:
+    linked = f"- [cancel_without_refund]({linked_experience_uri})" if linked_experience_uri else ""
+    return (
+        "# tau2_airline_train_22\n\n"
+        "## Task Signature\n"
+        "tau2:airline:train:39\n\n"
+        "## Input\n"
+        '{"domain":"airline","split":"train","data_split":"airline_train",'
+        '"task_no":22,"task_id":"39"}\n\n'
+        "## Linked Experiences\n"
+        f"{linked}\n"
+    )
+
+
+@pytest.mark.asyncio
+async def test_tau2_search_experience_returns_exact_case_without_semantic_search(monkeypatch):
+    import json
+
+    import vikingbot.openviking_mount.ov_server as ov_server
+
+    import benchmark.tau2.train.rollout_executor_vikingbot as module
+
+    trace_messages = []
+    monkeypatch.setattr(
+        module,
+        "tracer",
+        SimpleNamespace(info=lambda message: trace_messages.append(message)),
+        raising=False,
+    )
+
+    case_uri = "viking://user/u/memories/cases/tau2_airline_train_22.md"
+    exp_uri = "viking://user/u/memories/experiences/cancel_without_refund.md"
+
+    class FakeClient:
+        search_calls = []
+
+        @classmethod
+        async def create(cls):
+            return cls()
+
+        def _memory_target_uri(self, uri):
+            assert uri is None
+            return "viking://user/u/memories"
+
+        async def read_content(self, uri, level="read"):
+            assert level == "read"
+            if uri == case_uri:
+                return _tau2_exact_case_content(linked_experience_uri=exp_uri)
+            if uri == exp_uri:
+                return "## Situation\n- Applies when: the user accepts no refund\n"
+            return ""
+
+        async def search(self, situation, *, target_uri, limit):
+            self.search_calls.append((situation, target_uri, limit))
+            return {"memories": []}
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(ov_server, "VikingClient", FakeClient)
+    tool = module._make_search_experience_tool(case_lookup=_tau2_exact_case_lookup())
+
+    payload = json.loads(
+        await tool.execute(
+            None,
+            situation="The user wants to cancel all upcoming reservations.",
+            task_signature="tau2:airline:train:39",
+        )
+    )
+
+    assert payload == {
+        "match_type": "exact_case",
+        "task_signature": "tau2:airline:train:39",
+        "situation": "The user wants to cancel all upcoming reservations.",
+        "candidates": [
+            {
+                "rank": 1,
+                "case_name": "tau2_airline_train_22",
+                "experiences": [
+                    {
+                        "uri": exp_uri,
+                        "situation": "- Applies when: the user accepts no refund",
+                    }
+                ],
+            }
+        ],
+    }
+    assert FakeClient.search_calls == []
+    assert [json.loads(message) for message in trace_messages] == [
+        {
+            "event": "experience_recall",
+            "match_type": "exact_case",
+            "task_signature": "tau2:airline:train:39",
+            "exact_case_found": True,
+            "candidate_count": 1,
+            "experience_count": 1,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tau2_search_experience_returns_exact_empty_case_without_semantic_search(
+    monkeypatch,
+):
+    import json
+
+    import vikingbot.openviking_mount.ov_server as ov_server
+
+    from benchmark.tau2.train.rollout_executor_vikingbot import _make_search_experience_tool
+
+    case_uri = "viking://user/u/memories/cases/tau2_airline_train_22.md"
+
+    class FakeClient:
+        search_calls = []
+
+        @classmethod
+        async def create(cls):
+            return cls()
+
+        def _memory_target_uri(self, uri):
+            assert uri is None
+            return "viking://user/u/memories"
+
+        async def read_content(self, uri, level="read"):
+            assert level == "read"
+            return _tau2_exact_case_content() if uri == case_uri else ""
+
+        async def search(self, situation, *, target_uri, limit):
+            self.search_calls.append((situation, target_uri, limit))
+            return {"memories": []}
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(ov_server, "VikingClient", FakeClient)
+    tool = _make_search_experience_tool(case_lookup=_tau2_exact_case_lookup())
+
+    payload = json.loads(
+        await tool.execute(
+            None,
+            situation="The user wants to cancel all upcoming reservations.",
+            task_signature="tau2:airline:train:39",
+        )
+    )
+
+    assert payload["match_type"] == "exact_case"
+    assert payload["candidates"] == [
+        {
+            "rank": 1,
+            "case_name": "tau2_airline_train_22",
+            "experiences": [],
+        }
+    ]
+    assert FakeClient.search_calls == []
+
+
+@pytest.mark.asyncio
+async def test_tau2_search_experience_falls_back_when_task_signature_case_file_is_missing(
+    monkeypatch,
+):
+    import json
+
+    import vikingbot.openviking_mount.ov_server as ov_server
+
+    from benchmark.tau2.train.rollout_executor_vikingbot import _make_search_experience_tool
+
+    semantic_case_uri = "viking://user/u/memories/cases/semantic_case.md"
+
+    class FakeClient:
+        search_calls = []
+
+        @classmethod
+        async def create(cls):
+            return cls()
+
+        def _memory_target_uri(self, uri):
+            assert uri is None
+            return "viking://user/u/memories"
+
+        async def read_content(self, uri, level="read"):
+            assert level == "read"
+            if uri == semantic_case_uri:
+                return "# semantic_case\n\n## Linked Experiences\n"
+            return ""
+
+        async def search(self, situation, *, target_uri, limit):
+            self.search_calls.append((situation, target_uri, limit))
+            return {"memories": [{"uri": semantic_case_uri, "score": 0.8}]}
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(ov_server, "VikingClient", FakeClient)
+    tool = _make_search_experience_tool(case_lookup=_tau2_exact_case_lookup())
+
+    payload = json.loads(
+        await tool.execute(
+            None,
+            situation="The user wants to cancel all upcoming reservations.",
+            task_signature="tau2:airline:train:39",
+            limit=2,
+        )
+    )
+
+    assert payload["match_type"] == "semantic"
+    assert payload["fallback_reason"] == "task_signature_not_found"
+    assert payload["candidates"][0]["case_name"] == "semantic_case"
+    assert FakeClient.search_calls == [
+        (
+            "The user wants to cancel all upcoming reservations.",
+            "viking://user/u/memories/cases",
+            2,
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tau2_search_experience_deduplicates_experiences_across_semantic_cases(
+    monkeypatch,
+):
+    import json
+
+    import vikingbot.openviking_mount.ov_server as ov_server
+
+    from benchmark.tau2.train.rollout_executor_vikingbot import _make_search_experience_tool
+
+    case_uris = [
+        "viking://user/u/memories/cases/case_one.md",
+        "viking://user/u/memories/cases/case_two.md",
+    ]
+    exp_uri = "viking://user/u/memories/experiences/shared.md"
+
+    class FakeClient:
+        @classmethod
+        async def create(cls):
+            return cls()
+
+        def _memory_target_uri(self, uri):
+            assert uri is None
+            return "viking://user/u/memories"
+
+        async def read_content(self, uri, level="read"):
+            assert level == "read"
+            if uri in case_uris:
+                return f"# case\n\n## Linked Experiences\n- [shared]({exp_uri})\n"
+            if uri == exp_uri:
+                return "## Situation\n- Applies to both cases\n"
+            return ""
+
+        async def search(self, situation, *, target_uri, limit):
+            return {"memories": [{"uri": uri, "score": 0.9} for uri in case_uris]}
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(ov_server, "VikingClient", FakeClient)
+    tool = _make_search_experience_tool()
+
+    payload = json.loads(await tool.execute(None, situation="A related situation", limit=2))
+
+    returned_experiences = [
+        experience for candidate in payload["candidates"] for experience in candidate["experiences"]
+    ]
+    assert returned_experiences == [
+        {
+            "uri": exp_uri,
+            "situation": "- Applies to both cases",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tau2_search_experience_returns_error_when_client_creation_fails(monkeypatch):
+    import vikingbot.openviking_mount.ov_server as ov_server
+
+    from benchmark.tau2.train.rollout_executor_vikingbot import _make_search_experience_tool
+
+    class FakeClient:
+        @classmethod
+        async def create(cls):
+            raise RuntimeError("service unavailable")
+
+    monkeypatch.setattr(ov_server, "VikingClient", FakeClient)
+
+    result = await _make_search_experience_tool(case_lookup=_tau2_exact_case_lookup()).execute(
+        None,
+        situation="The user wants to cancel all upcoming reservations.",
+        task_signature="tau2:airline:train:39",
+    )
+
+    assert result == "Error searching experience candidates: service unavailable"
 
 
 def test_tau2_rollout_backend_factory_defaults_to_native():
@@ -865,6 +1223,7 @@ async def test_tau2_prepare_experience_loader_skill_writes_required_skill(tmp_pa
     context_builder = await module._prepare_experience_loader_skill(
         agent=FakeAgent(),
         session_key=SimpleNamespace(),
+        task_signature="tau2:airline:train:39",
     )
 
     skill_path = tmp_path / "skills" / "experience_loader" / "SKILL.md"
@@ -873,8 +1232,11 @@ async def test_tau2_prepare_experience_loader_skill_writes_required_skill(tmp_pa
     assert "name: experience_loader" in content
     assert "search_experience" in content
     assert "read_experience" in content
-    assert "search_experience(situation, limit=2)" in content
+    assert "search_experience(situation, task_signature=None, limit=2)" in content
     assert "search_experience(query" not in content
+    assert "## Runtime Case context" in content
+    assert "`task_signature`: `tau2:airline:train:39`" in content
+    assert "do not infer or modify it" in content
     assert "keyword list" in content
     assert "current conversation" in content
     assert "Situation snippets" in content or "`situation` as a filter only" in content
@@ -890,6 +1252,26 @@ async def test_tau2_prepare_experience_loader_skill_writes_required_skill(tmp_pa
     assert fake_sandbox.writes
     assert fake_sandbox.writes[0][0] == "skills/experience_loader/SKILL.md"
     assert context_builder.latest_experience_loader_skill_content == content
+
+
+@pytest.mark.asyncio
+async def test_tau2_prepare_experience_loader_skill_omits_runtime_case_without_signature(
+    tmp_path,
+):
+    import benchmark.tau2.train.rollout_executor_vikingbot as module
+
+    class FakeAgent:
+        sandbox_manager = None
+        context = SimpleNamespace(workspace=tmp_path)
+
+    context_builder = await module._prepare_experience_loader_skill(
+        agent=FakeAgent(),
+        session_key=SimpleNamespace(),
+        task_signature=None,
+    )
+
+    content = context_builder.latest_experience_loader_skill_content
+    assert "## Runtime Case context" not in content
 
 
 @pytest.mark.asyncio
