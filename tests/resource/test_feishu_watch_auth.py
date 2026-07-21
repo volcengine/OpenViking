@@ -5,6 +5,8 @@
 from datetime import datetime, timedelta, timezone
 
 from openviking.resource.feishu_watch_auth import (
+    FeishuAppCredentials,
+    FeishuOAuthClient,
     FeishuRefreshedToken,
     apply_feishu_refreshed_token,
     create_feishu_auth_state,
@@ -33,3 +35,30 @@ def test_feishu_auth_state_refresh_window():
         "expires_at": (now + timedelta(minutes=4)).isoformat(),
     }
     assert feishu_auth_state_needs_refresh(near_expiry, now=now) is True
+
+
+def test_get_tenant_access_token_uses_configured_app(monkeypatch):
+    seen = {}
+
+    def fake_get_token(config):
+        seen["config"] = config
+        return " t-test "
+
+    monkeypatch.setattr(
+        "lark_oapi.core.token.TokenManager.get_self_tenant_token",
+        fake_get_token,
+    )
+    client = FeishuOAuthClient(
+        FeishuAppCredentials(
+            app_id="cli-test",
+            app_secret="secret-test",
+            domain="https://open.feishu.cn",
+            request_timeout=12,
+        )
+    )
+
+    assert client._get_tenant_access_token_sync() == "t-test"
+    assert seen["config"].app_id == "cli-test"
+    assert seen["config"].app_secret == "secret-test"
+    assert seen["config"].domain == "https://open.feishu.cn"
+    assert seen["config"].timeout == 12

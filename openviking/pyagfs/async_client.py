@@ -66,10 +66,6 @@ class AsyncAGFSClient:
     def __init__(self, client: AGFSSyncClientProtocol):
         self._client = client
 
-    @property
-    def sync_client(self) -> AGFSSyncClientProtocol:
-        return self._client
-
     async def run(self, method_name: str, /, *args: Any, **kwargs: Any) -> Any:
         """Run a sync client method in a worker thread, preserving ctx when supported."""
         try:

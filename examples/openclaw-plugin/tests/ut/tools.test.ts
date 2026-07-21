@@ -473,7 +473,7 @@ describe("Tool: memory_store (behavioral)", () => {
       return okResponse({});
     });
 
-    const { factoryTools, api } = setupPlugin();
+    const { factoryTools, api } = setupPlugin(undefined, { peer_role: "person" });
     (api as any).openVikingTransport = openVikingTransport;
     contextEnginePlugin.register(api as any);
     const factory = factoryTools.get("memory_store");

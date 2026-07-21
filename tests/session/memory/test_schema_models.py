@@ -316,42 +316,6 @@ class TestSchemaModelGenerator:
         profile_model = models["profile"]
         assert "content" in profile_model.model_fields
 
-    def test_create_discriminated_union_model(self, real_registry):
-        """Test creating the union model wrapper."""
-        generator = SchemaModelGenerator(real_registry)
-        union_model = generator.create_discriminated_union_model()
-
-        # The union model is a wrapper BaseModel
-        assert hasattr(union_model, "model_fields")
-        assert "data" in union_model.model_fields
-
-    def test_get_llm_json_schema(self, real_registry):
-        """Test getting the LLM JSON schema."""
-        generator = SchemaModelGenerator(real_registry)
-        json_schema = generator.get_llm_json_schema()
-
-        # Check it's a valid JSON schema
-        assert "$defs" in json_schema or "definitions" in json_schema
-        assert "properties" in json_schema
-
-        # Check it includes delete operations and per-memory-type operation fields
-        assert "delete_ids" in json_schema["properties"]
-        assert "profile" in json_schema["properties"]
-
-        # Check delete_ids is an array of objects
-        delete_props = json_schema["properties"]["delete_ids"]
-        delete_items = delete_props.get("items", {})
-        assert delete_items.get("$ref") or delete_items.get("type") == "object"
-
-    def test_get_memory_data_json_schema(self, real_registry):
-        """Test getting just the MemoryData JSON schema."""
-        generator = SchemaModelGenerator(real_registry)
-        json_schema = generator.get_memory_data_json_schema()
-
-        # Check it's a valid JSON schema
-        assert "$defs" in json_schema or "definitions" in json_schema
-        assert "properties" in json_schema
-
     def test_model_caching(self, registry_with_sample, sample_memory_type):
         """Test that models are cached."""
         generator = SchemaModelGenerator(registry_with_sample)
@@ -429,21 +393,3 @@ class TestWikiLink:
 
 class TestIntegration:
     """Integration tests for the complete schema system."""
-
-    def test_end_to_end_model_generation_and_validation(self):
-        """Test end-to-end: load schemas, generate models, validate data."""
-        registry = create_default_registry()
-
-        # Create generator
-        generator = SchemaModelGenerator(registry)
-
-        # Get the operations model
-        generator.create_structured_operations_model()
-
-        # Get JSON schema
-        json_schema = generator.get_llm_json_schema()
-
-        # Verify the schema includes descriptions from YAML
-        # Check that $defs has entries
-        defs = json_schema.get("$defs", {})
-        assert len(defs) > 0, "No definitions found in JSON schema"

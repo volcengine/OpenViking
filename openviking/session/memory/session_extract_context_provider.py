@@ -6,12 +6,10 @@ Session Extract Context Provider - 会话提取 Provider 实现
 从会话消息中提取记忆的实现。
 """
 
-import os
 import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.message.part import TextPart, ToolPart
-from openviking.prompts.manager import PromptManager
 from openviking.server.identity import RequestContext, ToolContext
 from openviking.session.memory.core import ExtractContextProvider
 from openviking.session.memory.dataclass import MemoryFile
@@ -22,7 +20,6 @@ from openviking.session.memory.memory_isolation_handler import (
 )
 from openviking.session.memory.memory_type_registry import (
     MemoryTypeRegistry,
-    resolve_memory_templates_dir,
 )
 from openviking.session.memory.tools import (
     add_tool_call_pair_to_messages,
@@ -303,7 +300,6 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             user utterances and can leak environment/database state into user
             memories. Agent-scope providers enable tool evidence explicitly.
             """
-            from openviking.message.part import ToolPart
 
             parts = getattr(msg, "parts", [])
             formatted_parts: List[str] = []
@@ -619,29 +615,6 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         if self._isolation_handler:
             schemas = [s for s in schemas if self._isolation_handler.allows_schema(s)]
         return schemas
-
-    def get_schema_directories(self) -> List[str]:
-        """返回需要加载的 schema 目录"""
-        if self._schema_directories is None:
-            memory_templates_dir = str(PromptManager._get_bundled_templates_dir() / "memory")
-            config = get_openviking_config()
-            custom_dir = config.memory.custom_templates_dir
-            self._schema_directories = [memory_templates_dir]
-            if getattr(config.memory, "experimental_memory_switch", False):
-                experimental_memory_dir = os.path.join(memory_templates_dir, "experimental_memory")
-                if os.path.exists(experimental_memory_dir):
-                    self._schema_directories.append(experimental_memory_dir)
-            if custom_dir:
-                custom_dir_expanded = os.path.expanduser(custom_dir)
-                if os.path.exists(custom_dir_expanded):
-                    self._schema_directories.append(custom_dir_expanded)
-            else:
-                memory_templates_dir = str(resolve_memory_templates_dir())
-                if memory_templates_dir != str(
-                    PromptManager._get_bundled_templates_dir() / "memory"
-                ) and os.path.exists(memory_templates_dir):
-                    self._schema_directories.append(memory_templates_dir)
-        return self._schema_directories
 
     def _get_registry(self) -> MemoryTypeRegistry:
         """内部获取 registry（自动在初始化时加载）"""

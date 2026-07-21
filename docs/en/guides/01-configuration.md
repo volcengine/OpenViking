@@ -850,6 +850,7 @@ Reranking model for search result refinement. Supports VikingDB (Volcengine), Co
     "api_base": "https://dashscope.aliyuncs.com/compatible-api/v1/reranks",
     "model": "qwen3-vl-rerank",
     "timeout": 120,
+    "max_input_tokens": 2048,
     "threshold": 0.1
   }
 }
@@ -867,6 +868,7 @@ Reranking model for search result refinement. Supports VikingDB (Volcengine), Co
 | `api_base` | str | Endpoint URL (for `openai` provider) |
 | `model` | str | Model name (for `openai` providers) |
 | `timeout` | float | HTTP request timeout in seconds for OpenAI-compatible providers. Increase for slow or cold-starting local rerank servers. Default: `30.0` |
+| `max_input_tokens` | int | Maximum estimated raw-text tokens in each query-document pair sent to the reranker. Oversized inputs retain their beginning and end. `0` disables truncation. Default: `0` |
 | `threshold` | float | Score threshold between `0.0` and `1.0`; results below this are filtered out. Default: `0.1` |
 | `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
 
@@ -1640,6 +1642,7 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "api_key": "string",
     "model": "string",
     "api_base": "string",
+    "max_input_tokens": 0,
     "threshold": 0.1,
     "extra_headers": {}
   },

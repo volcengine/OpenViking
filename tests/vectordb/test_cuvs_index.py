@@ -3,10 +3,13 @@
 
 import threading
 import time
+from array import array
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 
 import pytest
 
+from openviking.storage.vectordb.index import cuvs_index as cuvs_index_module
 from openviking.storage.vectordb.index.cuvs_index import (
     CuVSDenseIndex,
     CuVSMemoryBudgetError,
@@ -15,6 +18,7 @@ from openviking.storage.vectordb.index.cuvs_index import (
     CuVSUnavailableError,
     UnsupportedCuVSFilterError,
     _CuVSRuntime,
+    _PackedFP32Rows,
     estimate_cuvs_memory,
     matches_filter,
 )
@@ -33,6 +37,8 @@ class FakeCuVSRuntime:
         self.free_memory_bytes = 1 << 60
         self.total_memory_bytes = 1 << 60
         self.release_count = 0
+        self.close_count = 0
+        self.close_error = None
 
     def build(self, dataset):
         self.dataset = [list(vector) for vector in dataset]
@@ -73,6 +79,11 @@ class FakeCuVSRuntime:
         return False
 
     def close(self):
+        self.close_count += 1
+        if self.close_error is not None:
+            error = self.close_error
+            self.close_error = None
+            raise error
         self.closed = True
 
 
@@ -92,6 +103,7 @@ def test_cuvs_runtime_uses_captured_device_from_worker_thread():
             self.resource_count = 0
             self.fail_build = False
             self.fail_search = False
+            self.fail_host_copy = False
 
         def set_current(self, device_id):
             self.local.current = device_id
@@ -181,6 +193,8 @@ def test_cuvs_runtime_uses_captured_device_from_worker_thread():
         @staticmethod
         def asnumpy(values):
             spy.require_captured_device("asnumpy")
+            if spy.fail_host_copy:
+                raise RuntimeError("injected host copy failure")
             return values
 
         @staticmethod
@@ -247,8 +261,10 @@ def test_cuvs_runtime_uses_captured_device_from_worker_thread():
     runtime._owned_resources = []
     runtime._resource_limit = 1
     runtime._resources_closed = False
-    runtime._use_explicit_resources = False
-    runtime.set_max_concurrent_searches(2)
+    # The default serialized setting must still use an explicit synchronized
+    # resource.  This is the production shape used when benchmark callers
+    # churn worker threads while GPU admission remains at one search.
+    runtime.set_max_concurrent_searches(1)
     constructing_thread = threading.get_ident()
 
     def use_runtime_from_worker():
@@ -293,6 +309,11 @@ def test_cuvs_runtime_uses_captured_device_from_worker_thread():
         assert spy.current() == 9
         assert spy.releases == [("resources-1", 3)]
         assert runtime.search(runtime_index, [1.0, 0.0], 1, [True]) == ([0], [0.25])
+        spy.fail_host_copy = True
+        with pytest.raises(RuntimeError, match="injected host copy failure"):
+            runtime.search(runtime_index, [1.0, 0.0], 1, [True])
+        spy.fail_host_copy = False
+        assert spy.releases == [("resources-1", 3), ("resources-2", 3)]
         runtime.release_index()
         assert spy.current() == 9
         return runtime_index
@@ -317,18 +338,23 @@ def test_cuvs_runtime_uses_captured_device_from_worker_thread():
         assert not thread.is_alive()
 
     assert churn_errors == []
-    assert spy.resource_count == 2
-    assert len(runtime._owned_resources) <= 2
+    assert spy.resource_count == 3
+    assert len(runtime._owned_resources) <= 1
     assert len(runtime._available_resources) == 1
 
-    # A failed search discarded the first resource under device 3. The bounded
-    # pool reused the replacement across short-lived threads and retains it
-    # until close can also destroy it on the captured device.
-    assert spy.releases == [("resources-1", 3)]
+    # Search and post-sync host-copy failures discarded the first two resources
+    # under device 3. The bounded pool reuses the replacement across
+    # short-lived threads and retains it until close can also destroy it on the
+    # captured device.
+    assert spy.releases == [("resources-1", 3), ("resources-2", 3)]
     spy.set_current(9)
     runtime.close()
     assert spy.current() == 9
-    assert spy.releases == [("resources-1", 3), ("resources-2", 3)]
+    assert spy.releases == [
+        ("resources-1", 3),
+        ("resources-2", 3),
+        ("resources-3", 3),
+    ]
 
     assert {
         "memory_info",
@@ -354,6 +380,170 @@ def delta(label, vector, **fields):
     import json
 
     return DeltaRecord(label=label, vector=vector, fields=json.dumps(fields))
+
+
+def wait_for_preflight_participants(index, expected, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with index._lock:
+            if any(flight.participants >= expected for flight in index._preflight_flights.values()):
+                return
+        time.sleep(0.001)
+    raise AssertionError(f"Timed out waiting for {expected} preflight participants")
+
+
+class _PreflightAbort(BaseException):
+    """Model an asynchronous owner abort that ordinary Exception misses."""
+
+
+def test_cuvs_host_shadow_is_immutable_compact_fp32():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={},
+        config={"dtype": "float16"},
+        runtime=runtime,
+    )
+    source = [0.1, -3.25]
+    index.add_candidates([candidate(10, source), candidate(20, [2.0, 4.0])])
+
+    assert index.host_shadow_nbytes == 2 * 2 * 4
+    stored = index._records[10].vector
+    assert isinstance(stored, bytes)
+    assert len(stored) == 2 * 4
+    assert list(memoryview(stored).cast("f")) == pytest.approx([0.1, -3.25])
+
+    # The host snapshot owns FP32 values instead of references to caller-owned
+    # Python floats, even when the configured device dataset uses FP16.
+    source[:] = [9.0, 9.0]
+    rebuild = index.prepare_rebuild()
+    assert rebuild is not None
+    assert rebuild.labels == (10, 20)
+    assert runtime.dataset[0] == pytest.approx([0.1, -3.25])
+    assert index.commit_rebuild(rebuild)
+
+    # Updating an existing label keeps dict/row order; delete plus reinsert
+    # retains the previous append-at-end behavior.
+    index.upsert([delta(10, [5.0, 6.0])])
+    replacement = index.prepare_rebuild()
+    assert replacement is not None
+    assert replacement.labels == (10, 20)
+    assert runtime.dataset[0] == pytest.approx([5.0, 6.0])
+    assert index.commit_rebuild(replacement)
+    index.delete([DeltaRecord(label=10)])
+    index.upsert([delta(10, [7.0, 8.0])])
+    reinserted = index.prepare_rebuild()
+    assert reinserted is not None
+    assert reinserted.labels == (20, 10)
+    assert runtime.dataset[1] == pytest.approx([7.0, 8.0])
+
+    index.close()
+    assert index.size == 0
+    assert index.host_shadow_nbytes == 0
+    assert runtime.closed
+
+
+@pytest.mark.parametrize(
+    ("dtype", "expected_upload_dtype"),
+    [("float32", "float32"), ("float16", "float16")],
+)
+def test_cuvs_runtime_uploads_packed_rows_in_bounded_batches(
+    monkeypatch, dtype, expected_upload_dtype
+):
+    class DeviceDataset:
+        def __init__(self, shape, device_dtype):
+            self.rows = [[None] * shape[1] for _ in range(shape[0])]
+            self.dtype = device_dtype
+            self.upload_dtypes = []
+
+        def __getitem__(self, row_slice):
+            owner = self
+
+            class DeviceSlice:
+                def set(self, host_rows):
+                    owner.upload_dtypes.append(str(host_rows.dtype))
+                    owner.rows[row_slice] = host_rows.tolist()
+
+            return DeviceSlice()
+
+    class FakeCuPy:
+        float16 = "float16"
+        float32 = "float32"
+
+        @staticmethod
+        def empty(shape, dtype):
+            return DeviceDataset(shape, dtype)
+
+    class FakeBruteForce:
+        @staticmethod
+        def build(dataset, metric):
+            assert metric == "inner_product"
+            return dataset
+
+    runtime = _CuVSRuntime.__new__(_CuVSRuntime)
+    runtime.cp = FakeCuPy()
+    runtime.device_scope = lambda: nullcontext()
+    runtime.device_dtype = FakeCuPy.float16 if dtype == "float16" else FakeCuPy.float32
+    runtime.dtype = dtype
+    runtime.algorithm = "brute_force"
+    runtime.metric = "inner_product"
+    runtime.brute_force = FakeBruteForce()
+    runtime.cagra = object()
+    runtime.build_params = {}
+
+    rows = _PackedFP32Rows(
+        tuple(array("f", values).tobytes() for values in ([1, 2], [3, 4], [5, 6])),
+        dimension=2,
+    )
+    monkeypatch.setattr(cuvs_index_module, "_FP32_UPLOAD_BATCH_BYTES", 8)
+    built = runtime.build(rows)
+
+    assert built.dataset.rows == [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]
+    assert built.dataset.upload_dtypes == [expected_upload_dtype] * 3
+    assert rows.nbytes == 3 * 2 * 4
+    assert [end - start for start, end, _payload in rows.iter_packed_batches(8)] == [1, 1, 1]
+
+
+def test_mutation_during_packed_rebuild_keeps_candidate_snapshot_immutable():
+    class BlockingRuntime(FakeCuVSRuntime):
+        def __init__(self):
+            super().__init__()
+            self.first_build_started = threading.Event()
+            self.resume_first_build = threading.Event()
+
+        def build(self, dataset):
+            if self.build_count == 0:
+                self.first_build_started.set()
+                assert self.resume_first_build.wait(timeout=5)
+            return super().build(dataset)
+
+    runtime = BlockingRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={},
+        config={},
+        runtime=runtime,
+    )
+    index.add_candidates([candidate(1, [1.0, 0.0])])
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        pending = executor.submit(index.prepare_rebuild)
+        assert runtime.first_build_started.wait(timeout=5)
+        index.upsert([delta(1, [0.0, 1.0])])
+        runtime.resume_first_build.set()
+        stale = pending.result(timeout=5)
+
+    assert stale is not None
+    assert runtime.dataset == [[1.0, 0.0]]
+    assert index.commit_rebuild(stale) is False
+    replacement = index.prepare_rebuild()
+    assert replacement is not None
+    assert runtime.dataset == [[0.0, 1.0]]
+    assert index.commit_rebuild(replacement)
 
 
 def test_cuvs_rebuild_objects_are_released_on_the_captured_device():
@@ -429,6 +619,84 @@ def test_cuvs_rebuild_objects_are_released_on_the_captured_device():
     index.close()
     assert runtime.closed is True
     assert ("build-4", 3) in runtime.released
+    assert runtime.current_device == 9
+
+
+def test_prepared_filter_lru_and_close_release_on_captured_device():
+    class DeviceOwnedFilter:
+        def __init__(self, runtime, name, values):
+            self.runtime = runtime
+            self.name = name
+            self.values = values
+
+        def __getitem__(self, index):
+            return self.values[index]
+
+        def __del__(self):
+            self.runtime.released.append((self.name, self.runtime.current_device))
+
+    class LifecycleRuntime(FakeCuVSRuntime):
+        def __init__(self):
+            super().__init__()
+            self.current_device = 9
+            self.prepared_count = 0
+            self.released = []
+
+        def device_scope(self):
+            runtime = self
+
+            class DeviceContext:
+                def __enter__(self):
+                    self.previous = runtime.current_device
+                    runtime.current_device = 3
+
+                def __exit__(self, _exc_type, _exc, _traceback):
+                    runtime.current_device = self.previous
+
+            return DeviceContext()
+
+        def prepare_filter_words(self, words):
+            with self.device_scope():
+                self.prepared_count += 1
+                values = tuple(bool(words[0] & (1 << row)) for row in range(2))
+                return DeviceOwnedFilter(self, f"filter-{self.prepared_count}", values)
+
+        def close(self):
+            assert self.current_device == 3
+            super().close()
+
+    runtime = LifecycleRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"filter_cache_size": 1},
+        runtime=runtime,
+    )
+    index.add_candidates(
+        [
+            candidate(1, [1.0, 0.0], account_id="a"),
+            candidate(2, [0.0, 1.0], account_id="b"),
+        ]
+    )
+
+    def resolve(filters):
+        return ([0b01], 1) if filters["conds"][0] == "a" else ([0b10], 1)
+
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    filter_b = {"op": "must", "field": "account_id", "conds": ["b"]}
+
+    def registrar(_labels):
+        return None
+
+    assert index.search([1.0, 0.0], 1, filter_a, resolve, registrar)[0] == [1]
+    assert runtime.released == []
+    assert index.search([0.0, 1.0], 1, filter_b, resolve, registrar)[0] == [2]
+    assert runtime.released == [("filter-1", 3)]
+
+    index.close()
+    assert runtime.released == [("filter-1", 3), ("filter-2", 3)]
     assert runtime.current_device == 9
 
 
@@ -758,6 +1026,363 @@ def test_cuvs_gpu_search_gate_serializes_kernels_by_default():
 
     assert runtime.peak_active == 1
     assert max(item.queue_ms for item in telemetry) > 0
+    assert max(item.gpu_gate_queue_ms for item in telemetry) > 0
+    assert all(item.queue_ms >= item.gpu_gate_queue_ms for item in telemetry)
+
+
+def test_native_filter_resolution_runs_before_gpu_search_admission():
+    class BlockingRuntime(FakeCuVSRuntime):
+        def __init__(self):
+            super().__init__()
+            self.block_next = False
+            self.search_started = threading.Event()
+            self.resume_search = threading.Event()
+
+        def search(self, index, query, limit, mask):
+            if self.block_next:
+                self.block_next = False
+                self.search_started.set()
+                assert self.resume_search.wait(timeout=5)
+            return super().search(index, query, limit, mask)
+
+    runtime = BlockingRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={},
+        runtime=runtime,
+    )
+    index.add_candidates([candidate(1, [1.0, 0.0], account_id="a")])
+    assert index.search([1.0, 0.0], 1, None)[0] == [1]
+
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    resolver_ran = threading.Event()
+    telemetry = CuVSSearchTelemetry(algorithm="brute_force", auto_mode=False)
+
+    def resolve(_filters):
+        resolver_ran.set()
+        return [0b1], 1
+
+    runtime.block_next = True
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        occupying = executor.submit(index.search, [1.0, 0.0], 1, None)
+        assert runtime.search_started.wait(timeout=5)
+        filtered = executor.submit(
+            index.search,
+            [1.0, 0.0],
+            1,
+            filter_a,
+            resolve,
+            lambda _labels: None,
+            telemetry,
+        )
+        # The resolver is host work and must complete while the sole GPU
+        # admission permit is still occupied by the first search.
+        assert resolver_ran.wait(timeout=5)
+        runtime.resume_search.set()
+        assert occupying.result(timeout=5)[0] == [1]
+        assert filtered.result(timeout=5)[0] == [1]
+
+    assert telemetry.gpu_gate_queue_ms > 0
+    assert telemetry.queue_ms >= telemetry.gpu_gate_queue_ms
+
+
+def test_explicit_same_filter_host_resolution_is_singleflight():
+    class WordPreparingRuntime(FakeCuVSRuntime):
+        def __init__(self):
+            super().__init__()
+            self.prepare_filter_words_count = 0
+
+        def prepare_filter_words(self, words):
+            self.prepare_filter_words_count += 1
+            return (bool(words[0] & 1),)
+
+    runtime = WordPreparingRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"filter_cache_size": 2},
+        runtime=runtime,
+    )
+    index.add_candidates([candidate(1, [1.0, 0.0], account_id="a")])
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    start = threading.Barrier(2)
+    resolver_started = threading.Event()
+    release_resolver = threading.Event()
+    resolver_calls = 0
+
+    def resolve(_filters):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        resolver_started.set()
+        assert release_resolver.wait(timeout=5)
+        return [0b1], 1
+
+    def invoke():
+        start.wait(timeout=5)
+        return index.search(
+            [1.0, 0.0],
+            1,
+            filter_a,
+            resolve,
+            lambda _labels: None,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(invoke) for _ in range(2)]
+        assert resolver_started.wait(timeout=5)
+        wait_for_preflight_participants(index, 2)
+        release_resolver.set()
+        assert [future.result(timeout=5)[0] for future in futures] == [[1], [1]]
+
+    assert resolver_calls == 1
+    assert runtime.prepare_filter_words_count == 1
+    assert not index._preflight_flights
+
+
+def test_mutation_discards_host_filter_resolved_for_old_generation():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"filter_cache_size": 2},
+        runtime=runtime,
+    )
+    index.add_candidates([candidate(1, [1.0, 0.0], account_id="old")])
+    filter_new = {"op": "must", "field": "account_id", "conds": ["new"]}
+    resolver_started = threading.Event()
+    release_resolver = threading.Event()
+    resolver_calls = 0
+    registered_layouts = []
+
+    def resolve(_filters):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        if resolver_calls == 1:
+            resolver_started.set()
+            assert release_resolver.wait(timeout=5)
+            return [0b0], 0
+        return [0b10], 1
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            index.search,
+            [0.0, 1.0],
+            1,
+            filter_new,
+            resolve,
+            lambda labels: registered_layouts.append(list(labels)),
+        )
+        assert resolver_started.wait(timeout=5)
+        index.add_candidates([candidate(2, [0.0, 1.0], account_id="new")])
+        release_resolver.set()
+        assert future.result(timeout=5)[0] == [2]
+
+    assert resolver_calls == 2
+    assert registered_layouts == [[1], [1, 2]]
+    assert runtime.build_count == 1
+
+
+def test_close_during_host_filter_resolution_rejects_search_before_gpu_admission():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={},
+        runtime=runtime,
+    )
+    index.add_candidates([candidate(1, [1.0, 0.0], account_id="a")])
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    resolver_started = threading.Event()
+    release_resolver = threading.Event()
+
+    def resolve(_filters):
+        resolver_started.set()
+        assert release_resolver.wait(timeout=5)
+        return [0b1], 1
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            index.search,
+            [1.0, 0.0],
+            1,
+            filter_a,
+            resolve,
+            lambda _labels: None,
+        )
+        assert resolver_started.wait(timeout=5)
+        index.close()
+        release_resolver.set()
+        with pytest.raises(RuntimeError, match="dense index is closed"):
+            future.result(timeout=5)
+
+    assert runtime.build_count == 0
+    assert runtime.closed
+
+
+def test_close_while_warmed_filter_waits_for_gpu_gate_does_not_borrow_device_cache():
+    class BlockingWordRuntime(FakeCuVSRuntime):
+        def __init__(self):
+            super().__init__()
+            self.block_next = False
+            self.search_started = threading.Event()
+            self.resume_search = threading.Event()
+
+        def prepare_filter_words(self, words):
+            return (bool(words[0] & 1),)
+
+        def search(self, index, query, limit, mask):
+            if self.block_next:
+                self.block_next = False
+                self.search_started.set()
+                assert self.resume_search.wait(timeout=5)
+            return super().search(index, query, limit, mask)
+
+    runtime = BlockingWordRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={},
+        runtime=runtime,
+    )
+    index.add_candidates([candidate(1, [1.0, 0.0], account_id="a")])
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+
+    def resolver(_filters):
+        return [0b1], 1
+
+    def registrar(_labels):
+        return None
+
+    assert index.search([1.0, 0.0], 1, filter_a, resolver, registrar)[0] == [1]
+
+    host_prepared = threading.Event()
+    original_prepare = index._prepare_host_filter
+
+    def observe_prepare(*args, **kwargs):
+        prepared = original_prepare(*args, **kwargs)
+        host_prepared.set()
+        return prepared
+
+    index._prepare_host_filter = observe_prepare
+    runtime.block_next = True
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        occupying = executor.submit(index.search, [1.0, 0.0], 1, None)
+        assert runtime.search_started.wait(timeout=5)
+        waiting = executor.submit(
+            index.search,
+            [1.0, 0.0],
+            1,
+            filter_a,
+            resolver,
+            registrar,
+        )
+        assert host_prepared.wait(timeout=5)
+
+        closing = executor.submit(index.close)
+        deadline = time.monotonic() + 5
+        while not index._closed and time.monotonic() < deadline:
+            time.sleep(0.001)
+        assert index._closed
+
+        runtime.resume_search.set()
+        assert occupying.result(timeout=5)[0] == [1]
+        with pytest.raises(RuntimeError, match="dense index is closed"):
+            waiting.result(timeout=5)
+        closing.result(timeout=5)
+
+    assert runtime.closed
+
+
+def test_device_cache_eviction_before_admission_uses_one_in_gate_fallback():
+    class WordPreparingRuntime(FakeCuVSRuntime):
+        def __init__(self):
+            super().__init__()
+            self.prepare_filter_words_count = 0
+
+        def prepare_filter_words(self, words):
+            self.prepare_filter_words_count += 1
+            return tuple(bool(words[0] & (1 << row)) for row in range(2))
+
+    runtime = WordPreparingRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"filter_cache_size": 1, "max_concurrent_gpu_searches": 2},
+        runtime=runtime,
+    )
+    index.add_candidates(
+        [
+            candidate(1, [1.0, 0.0], account_id="a"),
+            candidate(2, [0.0, 1.0], account_id="b"),
+        ]
+    )
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    filter_b = {"op": "must", "field": "account_id", "conds": ["b"]}
+    resolver_calls = {"a": 0, "b": 0}
+
+    def resolve(filters):
+        account_id = filters["conds"][0]
+        resolver_calls[account_id] += 1
+        return ([0b01], 1) if account_id == "a" else ([0b10], 1)
+
+    def registrar(_labels):
+        return None
+
+    # Warm A so the delayed search below initially observes a device-cache hit.
+    assert index.search([1.0, 0.0], 1, filter_a, resolve, registrar)[0] == [1]
+    assert resolver_calls == {"a": 1, "b": 0}
+
+    a_host_prepared = threading.Event()
+    release_a = threading.Event()
+    original_prepare = index._prepare_host_filter
+
+    def pause_a_after_host_prepare(filters, *args, **kwargs):
+        prepared = original_prepare(filters, *args, **kwargs)
+        if filters == filter_a:
+            a_host_prepared.set()
+            assert release_a.wait(timeout=5)
+        return prepared
+
+    index._prepare_host_filter = pause_a_after_host_prepare
+    eviction_telemetry = CuVSSearchTelemetry(algorithm="brute_force", auto_mode=False)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        delayed_a = executor.submit(
+            index.search,
+            [1.0, 0.0],
+            1,
+            filter_a,
+            resolve,
+            registrar,
+            eviction_telemetry,
+        )
+        assert a_host_prepared.wait(timeout=5)
+
+        # Materializing B evicts A from the size-one device LRU after A's host
+        # context was captured but before A consumes an admission permit.
+        assert index.search([0.0, 1.0], 1, filter_b, resolve, registrar)[0] == [2]
+        release_a.set()
+        assert delayed_a.result(timeout=5)[0] == [1]
+
+    # A resolves once to warm and exactly once in the admitted eviction
+    # fallback; it does not loop under alternating hot-key churn.
+    assert resolver_calls == {"a": 2, "b": 1}
+    assert runtime.prepare_filter_words_count == 3
+    assert eviction_telemetry.filter_cache_hit is False
+    assert eviction_telemetry.filter_cache_eviction_fallback is True
+    assert eviction_telemetry.as_dict()["filter_cache_eviction_fallback"] is True
 
 
 def test_inflight_search_keeps_immutable_snapshot_during_rebuild():
@@ -957,6 +1582,44 @@ def test_auto_cuvs_retries_after_gpu_memory_becomes_available():
     assert admitted.memory_free_bytes == 16
 
 
+def test_auto_cuvs_checks_memory_before_materializing_host_dataset():
+    runtime = FakeCuVSRuntime()
+    runtime.free_memory_bytes = 15
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={},
+        config={
+            "algorithm": "brute_force",
+            "filter_cache_size": 0,
+            "auto_memory_reserve_mb": 0,
+            "auto_memory_safety_factor": 1.0,
+        },
+        runtime=runtime,
+        auto_memory=True,
+    )
+    index.add_candidates([candidate(1, [1.0, 0.0]), candidate(2, [0.0, 1.0])])
+    vector_accesses = []
+
+    class _TrackedRecord:
+        fields = {}
+
+        @property
+        def vector(self):
+            vector_accesses.append(True)
+            raise AssertionError("host dataset was materialized before memory admission")
+
+    with index._lock:
+        index._records = {label: _TrackedRecord() for label in index._records}
+
+    with pytest.raises(CuVSMemoryBudgetError, match="estimated GPU peak"):
+        index.prepare_rebuild()
+
+    assert vector_accesses == []
+    assert runtime.build_count == 0
+
+
 def test_auto_cuvs_converts_gpu_allocation_failure_to_native_fallback_signal():
     class OutOfMemoryRuntime(FakeCuVSRuntime):
         def build(self, _dataset):
@@ -1093,6 +1756,245 @@ def test_auto_mode_caches_native_route_for_selective_filter():
     assert runtime.build_count == 0
     assert runtime.release_count == 0
     assert runtime.prepare_filter_count == 0
+
+
+@pytest.mark.parametrize(
+    ("evaluation", "expected_route"),
+    [(([], 1), 1), (([0b11], 2), None)],
+    ids=["narrow-native", "broad-gpu"],
+)
+def test_auto_mode_same_key_preflight_is_singleflight(evaluation, expected_route):
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"auto_filter_native_threshold": 1},
+        runtime=runtime,
+        auto_memory=True,
+    )
+    index.add_candidates(
+        [
+            candidate(10, [1.0, 0.0], account_id="a"),
+            candidate(20, [0.0, 1.0], account_id="a"),
+        ]
+    )
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    start = threading.Barrier(4)
+    resolver_started = threading.Event()
+    release_resolver = threading.Event()
+    resolver_calls = 0
+
+    def resolve(_filters):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        resolver_started.set()
+        assert release_resolver.wait(timeout=5)
+        return evaluation
+
+    def invoke():
+        start.wait(timeout=5)
+        return index.preflight_native_count(
+            filter_a,
+            resolve,
+            lambda _labels: None,
+        )
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [executor.submit(invoke) for _ in range(4)]
+        assert resolver_started.wait(timeout=5)
+        wait_for_preflight_participants(index, 4)
+        release_resolver.set()
+        routes = [future.result(timeout=5) for future in futures]
+
+    assert routes == [expected_route] * 4
+    assert resolver_calls == 1
+    assert not index._preflight_flights
+
+
+@pytest.mark.parametrize(
+    "error_type",
+    [RuntimeError, _PreflightAbort],
+    ids=["exception", "base-exception"],
+)
+def test_auto_mode_same_key_preflight_broadcasts_error_and_allows_retry(error_type):
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"auto_filter_native_threshold": 1},
+        runtime=runtime,
+        auto_memory=True,
+    )
+    index.add_candidates([candidate(10, [1.0, 0.0], account_id="a")])
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    start = threading.Barrier(4)
+    resolver_started = threading.Event()
+    release_resolver = threading.Event()
+    resolver_calls = 0
+
+    def failing_resolve(_filters):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        resolver_started.set()
+        assert release_resolver.wait(timeout=5)
+        raise error_type("preflight failed")
+
+    def invoke():
+        start.wait(timeout=5)
+        return index.preflight_native_count(
+            filter_a,
+            failing_resolve,
+            lambda _labels: None,
+        )
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [executor.submit(invoke) for _ in range(4)]
+        assert resolver_started.wait(timeout=5)
+        wait_for_preflight_participants(index, 4)
+        release_resolver.set()
+        for future in futures:
+            with pytest.raises(error_type, match="preflight failed"):
+                future.result(timeout=5)
+
+    assert resolver_calls == 1
+    assert not index._preflight_flights
+    assert (
+        index.preflight_native_count(
+            filter_a,
+            lambda _filters: ([], 1),
+            lambda _labels: None,
+        )
+        == 1
+    )
+
+
+def test_auto_mode_mutation_wakes_same_key_preflight_waiters_and_drops_old_result():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"auto_filter_native_threshold": 1},
+        runtime=runtime,
+        auto_memory=True,
+    )
+    index.add_candidates([candidate(10, [1.0, 0.0], account_id="a")])
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    start = threading.Barrier(2)
+    resolver_started = threading.Event()
+    release_resolver = threading.Event()
+    resolver_calls = 0
+
+    def resolve(_filters):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        resolver_started.set()
+        assert release_resolver.wait(timeout=5)
+        return [], 1
+
+    def invoke():
+        start.wait(timeout=5)
+        return index.preflight_native_count(
+            filter_a,
+            resolve,
+            lambda _labels: None,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(invoke) for _ in range(2)]
+        assert resolver_started.wait(timeout=5)
+        wait_for_preflight_participants(index, 2)
+        index.add_candidates([candidate(20, [0.0, 1.0], account_id="a")])
+
+        deadline = time.monotonic() + 5
+        while not any(future.done() for future in futures) and time.monotonic() < deadline:
+            time.sleep(0.001)
+        assert any(future.done() for future in futures)
+
+        release_resolver.set()
+        assert [future.result(timeout=5) for future in futures] == [None, None]
+
+    assert resolver_calls == 1
+    assert not index._preflight_flights
+    assert (
+        index.preflight_native_count(
+            filter_a,
+            lambda _filters: ([0b11], 2),
+            lambda _labels: None,
+        )
+        is None
+    )
+
+
+def test_auto_mode_close_wakes_same_key_preflight_waiters():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"auto_filter_native_threshold": 1},
+        runtime=runtime,
+        auto_memory=True,
+    )
+    index.add_candidates([candidate(10, [1.0, 0.0], account_id="a")])
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    start = threading.Barrier(2)
+    resolver_started = threading.Event()
+    release_resolver = threading.Event()
+
+    def resolve(_filters):
+        resolver_started.set()
+        assert release_resolver.wait(timeout=5)
+        return [], 1
+
+    def invoke():
+        start.wait(timeout=5)
+        return index.preflight_native_count(
+            filter_a,
+            resolve,
+            lambda _labels: None,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(invoke) for _ in range(2)]
+        assert resolver_started.wait(timeout=5)
+        wait_for_preflight_participants(index, 2)
+        index.close()
+        assert runtime.closed
+        assert not index._preflight_flights
+        release_resolver.set()
+        assert [future.result(timeout=5) for future in futures] == [None, None]
+
+
+def test_close_retries_runtime_cleanup_and_rejects_new_searches():
+    runtime = FakeCuVSRuntime()
+    runtime.close_error = RuntimeError("close failed")
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={},
+        config={},
+        runtime=runtime,
+    )
+
+    with pytest.raises(RuntimeError, match="close failed"):
+        index.close()
+    assert not index._close_complete
+    with pytest.raises(RuntimeError, match="dense index is closed"):
+        index.search([1.0, 0.0], 1, None)
+
+    index.close()
+    index.close()
+    assert index._close_complete
+    assert runtime.closed
+    assert runtime.close_count == 2
 
 
 def test_auto_mode_preflights_different_filters_concurrently():
@@ -1326,6 +2228,105 @@ def test_auto_mode_wide_filter_reuses_preflight_bitmap_after_build():
     assert labels == [10, 20]
     assert resolve_count == 1
     assert runtime.build_count == 1
+
+
+@pytest.mark.parametrize("words", [[], [0xFFFFFFFF]], ids=["empty", "short"])
+def test_auto_mode_rejects_incomplete_gpu_filter_bitset(words):
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"auto_filter_native_threshold": 1},
+        runtime=runtime,
+        auto_memory=True,
+    )
+    index.add_candidates([candidate(label, [1.0, 0.0], account_id="a") for label in range(33)])
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+
+    with pytest.raises(RuntimeError, match="incomplete bitset for GPU routing"):
+        index.preflight_native_count(
+            filter_a,
+            lambda _filters: (words, 33),
+            lambda _labels: None,
+        )
+
+
+def test_explicit_mode_rejects_short_gpu_bitset_below_auto_threshold():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"auto_filter_native_threshold": 100},
+        runtime=runtime,
+        auto_memory=False,
+    )
+    index.add_candidates([candidate(label, [1.0, 0.0], account_id="a") for label in range(33)])
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+
+    with pytest.raises(RuntimeError, match="incomplete bitset for GPU routing"):
+        index.search(
+            [1.0, 0.0],
+            1,
+            filter_a,
+            lambda _filters: ([0b1], 1),
+            lambda _labels: None,
+        )
+
+
+def test_auto_mode_accepts_omitted_bitset_for_native_route():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"auto_filter_native_threshold": 1},
+        runtime=runtime,
+        auto_memory=True,
+    )
+    index.add_candidates([candidate(label, [1.0, 0.0], account_id="a") for label in range(33)])
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+
+    assert (
+        index.preflight_native_count(
+            filter_a,
+            lambda _filters: ([], 1),
+            lambda _labels: None,
+        )
+        == 1
+    )
+
+
+def test_auto_mode_does_not_validate_stale_filter_projection_after_mutation():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"auto_filter_native_threshold": 1},
+        runtime=runtime,
+        auto_memory=True,
+    )
+    index.add_candidates([candidate(label, [1.0, 0.0], account_id="a") for label in range(32)])
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+
+    def resolve_and_mutate(_filters):
+        index.add_candidates([candidate(1000, [0.0, 1.0], account_id="a")])
+        return [0xFFFFFFFF], 32
+
+    assert (
+        index.preflight_native_count(
+            filter_a,
+            resolve_and_mutate,
+            lambda _labels: None,
+        )
+        is None
+    )
 
 
 def test_auto_mode_retains_native_filter_token_for_selective_route():

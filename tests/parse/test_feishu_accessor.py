@@ -7,7 +7,7 @@ import sys
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
-from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+from openviking.parse.accessors.feishu_accessor import FeishuAccessor, _title_as_filename
 
 
 class _SuccessResponse:
@@ -249,6 +249,10 @@ def test_guess_image_ext_defaults_to_png_when_unknown():
     assert accessor._guess_image_ext(b"anything", "image/gif") == ".gif"
 
 
+def test_title_as_filename_preserves_prefix_around_path_separators():
+    assert _title_as_filename("API Docs/Overview\\v2") == "API Docs_Overview_v2"
+
+
 def test_access_offloads_synchronous_download_to_thread(monkeypatch):
     """access() must not run the synchronous _resolve_image_refs on the event loop."""
     import threading
@@ -332,3 +336,28 @@ def test_access_writes_downloaded_images_next_to_markdown(monkeypatch):
         resource.cleanup()
 
     assert not resource.path.parent.exists()
+
+
+def test_access_keeps_raw_title_but_exposes_safe_original_filename(monkeypatch):
+    accessor = FeishuAccessor()
+    accessor._config = SimpleNamespace(download_images=False)
+
+    async def fake_fetch_document(*_args, **_kwargs):
+        from openviking.parse.accessors.feishu_accessor import FeishuDocument
+
+        return FeishuDocument(
+            doc_type="docx",
+            token="doc_token",
+            markdown_content="# API Docs/Overview",
+            title="API Docs/Overview",
+            meta={},
+        )
+
+    monkeypatch.setattr(accessor, "_fetch_document", fake_fetch_document)
+
+    resource = asyncio.run(accessor.access("https://example.feishu.cn/docx/doc_token"))
+    try:
+        assert resource.meta["feishu_title"] == "API Docs/Overview"
+        assert resource.meta["original_filename"] == "API Docs_Overview"
+    finally:
+        resource.cleanup()

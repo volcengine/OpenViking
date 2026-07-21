@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 
 import { resolveOpenVikingCredentials } from "./credentials.mjs";
 import { createLogger } from "./debug-log.mjs";
+import { sendSessionMessages } from "./batch-send.mjs";
 import { enqueue, replayPending } from "./pending-queue.mjs";
 import { buildProfileBlock } from "./profile-inject.mjs";
 import { buildRecallBlock } from "./recall-core.mjs";
@@ -201,6 +202,10 @@ export async function addAgentMessage(fetchJSON, sessionId, payload) {
   });
   if (!result.ok && retryable(result)) await enqueue("addMessage", sessionId, payload);
   return result;
+}
+
+export async function addAgentMessages(fetchJSON, sessionId, payloads) {
+  return sendSessionMessages(fetchJSON, sessionId, payloads, { enqueueOnRetryable: true });
 }
 
 export async function commitAgentSession(fetchJSON, sessionId) {

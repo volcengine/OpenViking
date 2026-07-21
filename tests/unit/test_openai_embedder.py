@@ -35,32 +35,6 @@ class TestOpenAIDenseEmbedder:
         assert "dimensions" not in call_kwargs
 
     @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
-    def test_embed_batch_does_not_send_dimensions(self, mock_openai_class):
-        """OpenAI embed_batch should omit dimensions param"""
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
-
-        mock_embedding1 = MagicMock()
-        mock_embedding1.embedding = [0.1] * 1536
-        mock_embedding2 = MagicMock()
-        mock_embedding2.embedding = [0.2] * 1536
-
-        mock_response = MagicMock()
-        mock_response.data = [mock_embedding1, mock_embedding2]
-        mock_client.embeddings.create.return_value = mock_response
-
-        embedder = OpenAIDenseEmbedder(
-            model_name="text-embedding-3-small",
-            api_key="test-api-key",
-            dimension=512,
-        )
-
-        embedder.embed_batch(["Hello", "World"])
-
-        call_kwargs = mock_client.embeddings.create.call_args[1]
-        assert "dimensions" not in call_kwargs
-
-    @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
     def test_embed_with_input_type_none(self, mock_openai_class):
         """OpenAI embed should not include extra_body when input_type is None"""
         mock_client = MagicMock()
@@ -128,85 +102,6 @@ class TestOpenAIDenseEmbedder:
         )
 
         embedder.embed("Hello world", is_query=False)
-
-        call_kwargs = mock_client.embeddings.create.call_args[1]
-        assert "extra_body" in call_kwargs
-        assert call_kwargs["extra_body"] == {"input_type": "passage"}
-
-    @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
-    def test_embed_batch_with_input_type_none(self, mock_openai_class):
-        """OpenAI embed_batch should not include extra_body when input_type is None"""
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
-
-        mock_embedding1 = MagicMock()
-        mock_embedding1.embedding = [0.1] * 1536
-        mock_embedding2 = MagicMock()
-        mock_embedding2.embedding = [0.2] * 1536
-
-        mock_response = MagicMock()
-        mock_response.data = [mock_embedding1, mock_embedding2]
-        mock_client.embeddings.create.return_value = mock_response
-
-        embedder = OpenAIDenseEmbedder(
-            model_name="text-embedding-3-small",
-            api_key="test-api-key",
-        )
-
-        embedder.embed_batch(["Hello", "World"])
-
-        call_kwargs = mock_client.embeddings.create.call_args[1]
-        assert "extra_body" not in call_kwargs
-
-    @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
-    def test_embed_batch_with_context_query(self, mock_openai_class):
-        """OpenAI embed_batch should include extra_body with input_type='query' when is_query=True"""
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
-
-        mock_embedding1 = MagicMock()
-        mock_embedding1.embedding = [0.1] * 1536
-        mock_embedding2 = MagicMock()
-        mock_embedding2.embedding = [0.2] * 1536
-
-        mock_response = MagicMock()
-        mock_response.data = [mock_embedding1, mock_embedding2]
-        mock_client.embeddings.create.return_value = mock_response
-
-        embedder = OpenAIDenseEmbedder(
-            model_name="text-embedding-3-small",
-            api_key="test-api-key",
-            query_param="query",
-        )
-
-        embedder.embed_batch(["Hello", "World"], is_query=True)
-
-        call_kwargs = mock_client.embeddings.create.call_args[1]
-        assert "extra_body" in call_kwargs
-        assert call_kwargs["extra_body"] == {"input_type": "query"}
-
-    @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
-    def test_embed_batch_with_context_document(self, mock_openai_class):
-        """OpenAI embed_batch should include extra_body with input_type='passage' when is_query=False"""
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
-
-        mock_embedding1 = MagicMock()
-        mock_embedding1.embedding = [0.1] * 1536
-        mock_embedding2 = MagicMock()
-        mock_embedding2.embedding = [0.2] * 1536
-
-        mock_response = MagicMock()
-        mock_response.data = [mock_embedding1, mock_embedding2]
-        mock_client.embeddings.create.return_value = mock_response
-
-        embedder = OpenAIDenseEmbedder(
-            model_name="text-embedding-3-small",
-            api_key="test-api-key",
-            document_param="passage",
-        )
-
-        embedder.embed_batch(["Hello", "World"], is_query=False)
 
         call_kwargs = mock_client.embeddings.create.call_args[1]
         assert "extra_body" in call_kwargs

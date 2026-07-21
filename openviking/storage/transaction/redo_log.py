@@ -26,23 +26,6 @@ class RedoLog:
     def _task_path(self, task_id: str) -> str:
         return f"{_REDO_ROOT}/{task_id}/redo.json"
 
-    async def _ensure_dirs_async(self, dir_path: str) -> None:
-        parts = dir_path.strip("/").split("/")
-        current = ""
-        for part in parts:
-            current = f"{current}/{part}"
-            try:
-                await self._async_agfs.mkdir(current)
-            except Exception:
-                pass
-
-    async def write_pending_async(self, task_id: str, info: Dict[str, Any]) -> None:
-        """Write a redo marker before the operation starts."""
-        dir_path = f"{_REDO_ROOT}/{task_id}"
-        await self._ensure_dirs_async(dir_path)
-        data = json.dumps(info, default=str).encode("utf-8")
-        await self._async_agfs.write(self._task_path(task_id), data)
-
     async def mark_done_async(self, task_id: str) -> None:
         """Delete the redo marker after a successful operation."""
         try:

@@ -63,8 +63,12 @@ pub async fn dispatch(
             let result = client.snapshot_show(&target_ref, path.as_deref()).await?;
             handle_show(result, out_path, output_format, compact)
         }
-        SnapshotCmd::Log { branch, limit } => {
-            let value = client.snapshot_log(&branch, limit).await?;
+        SnapshotCmd::Log {
+            branch,
+            limit,
+            paths,
+        } => {
+            let value = client.snapshot_log(&branch, limit, paths.as_deref()).await?;
             print_log(&value, output_format, compact);
             Ok(())
         }

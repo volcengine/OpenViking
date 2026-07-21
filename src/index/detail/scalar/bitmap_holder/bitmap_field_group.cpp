@@ -320,6 +320,12 @@ int FieldBitmapGroup::parse_from_stream(std::ifstream& input) {
 
       dir_index_ = std::make_shared<DirIndex>();
       dir_index_->parse_from_stream(input);
+      // Runtime leaf-to-bitmap bindings are intentionally not serialized. The
+      // on-disk format remains compatible; rebuild the non-owning links after
+      // both the bitmap map and trie have been loaded.
+      for (const auto& entry : bitmap_group_) {
+        dir_index_->add_key(entry.first, entry.second.get());
+      }
     }
   } catch (std::exception& e) {
     // SPDLOG_ERROR("FieldBitmapGroup parse_from_stream exception {}",
@@ -469,20 +475,8 @@ BitmapPtr FieldBitmapGroupSet::make_path_field_copy(
   }
 
   std::vector<const Bitmap*> bitmaps_to_union;
-  std::unordered_set<std::string> all_unique_bitmaps;
-
   for (const auto& path_prefix : keys) {
-    std::unordered_set<std::string> unique_bitmaps;
-    dip->get_merged_bitmap(path_prefix, depth, unique_bitmaps);
-    all_unique_bitmaps.insert(unique_bitmaps.begin(), unique_bitmaps.end());
-  }
-
-  bitmaps_to_union.reserve(all_unique_bitmaps.size());
-  for (const auto& bitmap_key : all_unique_bitmaps) {
-    const Bitmap* bm = group->get_bitmap(bitmap_key);
-    if (bm) {
-      bitmaps_to_union.push_back(bm);
-    }
+    dip->get_merged_bitmaps(path_prefix, depth, bitmaps_to_union);
   }
 
   auto final_bitmap = std::make_shared<Bitmap>();

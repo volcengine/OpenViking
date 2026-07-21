@@ -26,7 +26,7 @@ from openviking.telemetry.execution import (
 )
 from openviking.utils.image_search import normalize_client_image_input
 from openviking.utils.search_filters import SearchContextTypeInput, merge_search_filter
-from openviking.utils.tags import normalize_search_tags
+from openviking.utils.tags import build_search_tags_filter
 from openviking_cli.client.base import BaseClient
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
@@ -61,11 +61,12 @@ def _resolve_search_filter(
         until=until,
         time_field=time_field,
     )
-    normalized_tags = normalize_search_tags(tags)
-    if not normalized_tags:
+    tag_filter = build_search_tags_filter(tags)
+    if not tag_filter:
         return merged
-    tag_filter = {"op": "must", "field": "search_tags", "conds": normalized_tags}
     if merged:
+        if tag_filter.get("op") == "and" and isinstance(tag_filter.get("conds"), list):
+            return {"op": "and", "conds": [merged, *tag_filter["conds"]]}
         return {"op": "and", "conds": [merged, tag_filter]}
     return tag_filter
 
@@ -1179,9 +1180,10 @@ class LocalClient(BaseClient):
         *,
         branch: str = "main",
         limit: int = 20,
+        paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Walk back along parents[0] up to limit commits."""
-        return await self._service.fs.log(branch=branch, limit=limit, ctx=self._ctx)
+        return await self._service.fs.log(branch=branch, limit=limit, paths=paths, ctx=self._ctx)
 
     async def git_get_ignore(self) -> str:
         """Return the account .ovgitignore content (empty string if absent)."""

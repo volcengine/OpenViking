@@ -1,5 +1,6 @@
 const MEMORY_URI_PATTERNS = [
   /^viking:\/\/user\/(?:[^/]+(?:\/agent\/[^/]+)?\/)?memories(?:\/|$)/,
+  /^viking:\/\/user\/[^/]+\/peers\/[^/]+\/memories(?:\/|$)/,
   /^viking:\/\/agent\/(?:[^/]+(?:\/user\/[^/]+)?\/)?memories(?:\/|$)/,
 ];
 

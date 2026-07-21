@@ -6,6 +6,7 @@ export type OpenVikingCommandSession = {
   sessionKey?: string;
   ovSessionId?: string;
   agentId: string;
+  actorPeerId?: string;
 };
 
 export type OpenVikingCommandToolResult = {
@@ -217,7 +218,7 @@ export function createOpenVikingCommandDefinitions(
           }
           const session = deps.resolvePluginSessionRouting(ctx);
           const input = deps.parseAddResourceCommandArgs(ctx.args ?? "");
-          return toCommandResult(await deps.addResourceOpenViking(input, session.agentId));
+          return toCommandResult(await deps.addResourceOpenViking(input, session.actorPeerId));
         } catch (err) {
           return { text: `OpenViking add resource failed: ${err instanceof Error ? err.message : String(err)}` };
         }
@@ -234,7 +235,7 @@ export function createOpenVikingCommandDefinitions(
           }
           const session = deps.resolvePluginSessionRouting(ctx);
           const input = deps.parseAddSkillCommandArgs(ctx.args ?? "");
-          return toCommandResult(await deps.addSkillOpenViking(input, session.agentId));
+          return toCommandResult(await deps.addSkillOpenViking(input, session.actorPeerId));
         } catch (err) {
           return { text: `OpenViking add skill failed: ${err instanceof Error ? err.message : String(err)}` };
         }
@@ -251,7 +252,7 @@ export function createOpenVikingCommandDefinitions(
           }
           const session = deps.resolvePluginSessionRouting(ctx);
           const input = deps.parseOVSearchCommandArgs(ctx.args ?? "");
-          return toCommandResult(await deps.searchOpenViking(input, session.agentId, session));
+          return toCommandResult(await deps.searchOpenViking(input, session.actorPeerId, session));
         } catch (err) {
           return { text: `OpenViking search failed: ${err instanceof Error ? err.message : String(err)}` };
         }

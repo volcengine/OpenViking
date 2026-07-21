@@ -203,11 +203,6 @@ class ProgressPrinter:
         sys.stdout.write(f"[{self.label}] {self.description}\n")
         sys.stdout.flush()
 
-    def _elapsed_seconds(self) -> float:
-        if self._started_at is None:
-            return 0.0
-        return max(0.0, time.monotonic() - self._started_at)
-
     def _ensure_rich_started(self) -> None:
         if self._progress is not None:
             return
