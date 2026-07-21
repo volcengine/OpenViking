@@ -6,6 +6,9 @@ version: "3.8"
 #   .env example for local-only (leave unset or empty):
 #     # no .env needed — just `docker compose up -d`
 #
+#   .env example for a custom OpenViking port:
+#     OPENVIKING_SERVER_PORT=2000
+#
 #   .env example for public HTTPS:
 #     OPENVIKING_PUBLIC_BASE_URL=https://ov.your-domain.com
 #     OV_ACME_EMAIL=admin@your-domain.com
@@ -19,13 +22,14 @@ services:
     # Direct access (optional — caddy:1934 is the recommended single entry
     # point). Comment this out once Caddy is your only ingress.
     ports:
-      - "1933:1933"
+      - "${OPENVIKING_SERVER_PORT:-1933}:${OPENVIKING_SERVER_PORT:-1933}"
     volumes:
       - ~/.openviking:/app/.openviking
     environment:
       OPENVIKING_PUBLIC_BASE_URL: ${OPENVIKING_PUBLIC_BASE_URL:-}
+      OPENVIKING_SERVER_PORT: ${OPENVIKING_SERVER_PORT:-1933}
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:1933/health || exit 1"]
+      test: ["CMD", "openviking-entrypoint", "--healthcheck"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -54,6 +58,7 @@ services:
       # - caddy_config:/config
     environment:
       OPENVIKING_PUBLIC_BASE_URL: ${OPENVIKING_PUBLIC_BASE_URL:-}
+      OPENVIKING_SERVER_PORT: ${OPENVIKING_SERVER_PORT:-1933}
       OV_ACME_EMAIL: ${OV_ACME_EMAIL:-}
     depends_on:
       - openviking
