@@ -8,6 +8,8 @@ use clap::Subcommand;
 use dirs::home_dir;
 use std::fs::OpenOptions;
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 
 /// Crypto subcommands.
@@ -63,9 +65,11 @@ async fn handle_init_key(output_file: Option<PathBuf>) -> Result<()> {
     let hex_key = hex::encode(&key);
 
     // Write to file
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options
         .open(&key_path)
         .map_err(|e| Error::Client(format!("Failed to create key file: {}", e)))?;
 
@@ -106,5 +110,24 @@ fn get_key_path(output_file: Option<PathBuf>) -> Result<PathBuf> {
                 .ok_or_else(|| Error::Client("Failed to determine home directory".to_string()))?;
             Ok(home.join(".openviking").join("master.key"))
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[tokio::test]
+    async fn init_key_creates_owner_only_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("master.key");
+
+        handle_init_key(Some(path.clone())).await.unwrap();
+
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 }
