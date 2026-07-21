@@ -87,7 +87,7 @@ def _create_export_temp(to: str) -> tuple[int, str]:
         except FileExistsError:
             continue
     try:
-        os.fchmod(fd, stat.S_IMODE(os.stat(to).st_mode))
+        os.chmod(temp_to, stat.S_IMODE(os.stat(to).st_mode))
     except FileNotFoundError:
         pass
     except BaseException:

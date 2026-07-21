@@ -612,8 +612,9 @@ async def test_export_failure_preserves_existing_archive(
 
 @pytest.mark.asyncio
 async def test_export_preserves_existing_archive_permissions(
-    temp_ovpack_path: Path, request_ctx: RequestContext
+    temp_ovpack_path: Path, request_ctx: RequestContext, monkeypatch: pytest.MonkeyPatch
 ):
+    monkeypatch.delattr(os, "fchmod", raising=False)
     temp_ovpack_path.chmod(0o640)
 
     await export_ovpack(
