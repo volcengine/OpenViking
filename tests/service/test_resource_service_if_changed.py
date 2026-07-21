@@ -8,6 +8,7 @@ from openviking.resource.source_metadata import build_source_metadata, encode_so
 from openviking.server.identity import RequestContext, Role
 from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -123,6 +124,17 @@ def _async_return(value):
         return value
 
     return _return
+
+
+@pytest.mark.parametrize(
+    "reserved_field",
+    ["if_changed", "source_fingerprint", "understanding_response_id"],
+)
+def test_conditional_and_understanding_fields_cannot_bypass_core_arguments(reserved_field):
+    service, _ = _service()
+
+    with pytest.raises(InvalidArgumentError, match=reserved_field):
+        service._normalize_add_resource_args({reserved_field: "unexpected"}, watch_interval=0)
 
 
 @pytest.mark.asyncio

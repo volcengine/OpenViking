@@ -44,7 +44,7 @@ results = client.find(
 
 ## Memory（记忆）
 
-记忆分为用户记忆和Agent记忆，是 Agent 关于用户和世界的学习知识。
+记忆是 Agent 从交互和任务执行中学到的持久化知识。记忆存储在当前用户或 Peer 命名空间，不使用独立的 `viking://agent/memories` 目录。
 
 ### 特点
 
@@ -52,18 +52,23 @@ results = client.find(
 - **动态更新：**由 Agent 从交互中持续更新
 - **个性化：**针对特定用户和稳定 peer 学习记录
 
-### 8 种分类
+### 内置记忆类型
 
-| 分类 | 位置 | 说明 | 更新策略 |
-|------|------|------|----------|
-| **profile** | `user/memories/profile.md` | 用户基本信息 | ✅ 合并到单文件 |
-| **preferences** | `user/memories/preferences/` | 按主题的用户偏好 | ✅ 可追加 |
-| **entities** | `user/memories/entities/` | 实体记忆（人物、项目） | ✅ 可追加 |
-| **events** | `user/memories/events/` | 事件记录（决策、里程碑） | ❌ 不更新 |
-| **trajectories** | `user/memories/trajectories/` | 可复用的操作契约 | ❌ 不更新 |
-| **experiences** | `user/memories/experiences/` | 可复用的执行经验 | ✅ 可合并 |
-| **tools** | `user/memories/tools/` | 工具使用经验与最佳实践 | ✅ 可合并 |
-| **skills** | `user/memories/skills/` | 技能执行经验与工作流策略 | ✅ 可合并 |
+| 类型 | 默认位置 | 说明 |
+|------|----------|------|
+| **profile** | `user/memories/profile.md` | 用户基本信息 |
+| **preferences** | `user/memories/preferences/` | 按主题组织的用户偏好 |
+| **entities** | `user/memories/entities/` | 人物、项目、组织等实体知识 |
+| **events** | `user/memories/events/` | 决策、里程碑等事件记录 |
+| **identity** | `user/memories/identity.md` | 助手的名称、形象、气质和自我介绍 |
+| **soul** | `user/memories/soul.md` | 助手的核心原则、边界、风格和连续性 |
+| **cases** | `user/memories/cases/` | 用于训练和评估的任务案例 |
+| **trajectories** | `user/memories/trajectories/` | 可复用的任务执行轨迹 |
+| **experiences** | `user/memories/experiences/` | 从执行结果中提炼的可复用经验 |
+| **tools** | `user/memories/tools/` | 工具使用经验与最佳实践 |
+| **skills** | `user/memories/skills/` | 技能执行经验与工作流策略 |
+
+表中的 `user/...` 是当前用户短路径，服务端会将其解析为 `viking://user/{user_id}/...`。当记忆策略允许 Peer 记忆时，支持 Peer 的类型会写入 `viking://user/{user_id}/peers/{peer_id}/memories/...`。记忆类型可通过自定义模板扩展或调整。
 
 ### 使用
 

@@ -109,6 +109,7 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "request_validator",
         "if_changed",
         "source_fingerprint",
+        "understanding_response_id",
         "defer_post_processing",
     }
 )
@@ -364,7 +365,7 @@ class ResourceService:
         tracker = get_task_tracker()
         task = await tracker.create(
             "add_resource",
-            resource_id=msg.root_uri,
+            resource_id=None if msg.defer_target_resolution else msg.root_uri,
             account_id=msg.account_id,
             user_id=msg.user_id,
             task_id=msg.task_id,
@@ -388,10 +389,23 @@ class ResourceService:
         """Execute one durable add-resource job inside its QueueFS consumer."""
         resource_lock = resource_lock or NO_LOCK
         if msg.prepared is None:
+            target_uri = msg.root_uri
+            parent_uri = None
+            internal_kwargs: Dict[str, Any] = {}
+            if msg.defer_target_resolution:
+                from openviking_cli.utils.uri import VikingURI
+
+                target_uri = None
+                parent_uri = VikingURI(msg.root_uri).parent.uri
+            if msg.understanding_response_id is not None:
+                from openviking.parse.understanding_api import PREPARED_RESPONSE_ID_ARG
+
+                internal_kwargs[PREPARED_RESPONSE_ID_ARG] = msg.understanding_response_id
             return await self.add_resource(
                 path=msg.path,
                 ctx=ctx,
-                to=msg.root_uri,
+                to=target_uri,
+                parent=parent_uri,
                 reason=msg.reason,
                 instruction=msg.instruction,
                 wait=True,
@@ -413,6 +427,7 @@ class ResourceService:
                 preserve_structure=msg.preserve_structure,
                 create_parent=msg.create_parent,
                 args=msg.args,
+                **internal_kwargs,
             )
 
         telemetry_id = get_current_telemetry().telemetry_id
@@ -608,6 +623,15 @@ class ResourceService:
 
     def _should_use_understanding_api(self, path: str) -> bool:
         return self._get_parser_router().should_use_understanding_api(path)
+
+    @staticmethod
+    def _is_feishu_url(path: str) -> bool:
+        try:
+            from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+
+            return FeishuAccessor._is_feishu_url(path)
+        except Exception:
+            return False
 
     @staticmethod
     def _target_doc_name(
@@ -924,6 +948,12 @@ class ResourceService:
                     source_format=source_info.source_format,
                     create_parent=target.create_parent,
                 )
+                defer_target_resolution = bool(
+                    candidate_uri
+                    and not source_name
+                    and not watch_enabled
+                    and self._is_feishu_url(path)
+                )
                 if self._viking_fs is None:
                     raise NotInitializedError("VikingFS")
                 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
@@ -946,44 +976,62 @@ class ResourceService:
                             retryable=True,
                         ) from exc
 
-                if candidate_uri:
+                if candidate_uri and not defer_target_resolution:
                     root_uri, lock_lease = await self._resource_processor.reserve_unique_candidate(
                         candidate_uri=candidate_uri,
                         ctx=ctx,
                     )
-                else:
+                elif not defer_target_resolution:
                     lock_lease = await _reserve_tree(root_uri)
 
-                lock_handoff = lock_lease.to_handoff()
-                msg = AddResourceMsg(
-                    task_id=str(uuid4()),
-                    telemetry_id=telemetry_id or None,
-                    path=path,
-                    root_uri=root_uri,
-                    account_id=ctx.account_id,
-                    user_id=ctx.user.user_id,
-                    role=str(ctx.role),
-                    actor_peer_id=ctx.actor_peer_id,
-                    reason=reason,
-                    instruction=instruction,
-                    timeout=timeout,
-                    build_index=build_index,
-                    summarize=summarize,
-                    strict=bool(kwargs.get("strict", False)),
-                    ignore_dirs=kwargs.get("ignore_dirs"),
-                    include=kwargs.get("include"),
-                    exclude=kwargs.get("exclude"),
-                    directly_upload_media=bool(kwargs.get("directly_upload_media", True)),
-                    preserve_structure=kwargs.get("preserve_structure"),
-                    create_parent=bool(kwargs.get("create_parent", False)),
-                    allow_local_path_resolution=allow_local_path_resolution,
-                    enforce_public_remote_targets=enforce_public_remote_targets,
-                    args=self._sanitize_watch_processor_kwargs(normalized_args.processor_kwargs),
-                    source_name=source_name,
-                    lock_handoff=lock_handoff.to_dict() if lock_handoff else None,
-                    skip_watch_management=True,
-                )
-                task = await self._enqueue_add_resource_job(msg, resource_lock=lock_lease)
+                enqueue_started = False
+                try:
+                    queued_args = dict(normalized_args.processor_kwargs)
+                    feishu_access_token = queued_args.pop(FEISHU_ACCESS_TOKEN_ARG, None)
+                    understanding_response_id = None
+                    if self._is_feishu_url(path) and feishu_access_token:
+                        understanding_response_id = await self._get_parser_router().submit_url(
+                            path,
+                            feishu_access_token=feishu_access_token,
+                        )
+
+                    lock_handoff = lock_lease.to_handoff()
+                    msg = AddResourceMsg(
+                        task_id=str(uuid4()),
+                        telemetry_id=telemetry_id or None,
+                        path=path,
+                        root_uri=root_uri,
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                        role=str(ctx.role),
+                        actor_peer_id=ctx.actor_peer_id,
+                        reason=reason,
+                        instruction=instruction,
+                        timeout=timeout,
+                        build_index=build_index,
+                        summarize=summarize,
+                        strict=bool(kwargs.get("strict", False)),
+                        ignore_dirs=kwargs.get("ignore_dirs"),
+                        include=kwargs.get("include"),
+                        exclude=kwargs.get("exclude"),
+                        directly_upload_media=bool(kwargs.get("directly_upload_media", True)),
+                        preserve_structure=kwargs.get("preserve_structure"),
+                        create_parent=bool(kwargs.get("create_parent", False)),
+                        allow_local_path_resolution=allow_local_path_resolution,
+                        enforce_public_remote_targets=enforce_public_remote_targets,
+                        args=self._sanitize_watch_processor_kwargs(queued_args),
+                        source_name=source_name,
+                        lock_handoff=lock_handoff.to_dict() if lock_handoff else None,
+                        skip_watch_management=True,
+                        defer_target_resolution=defer_target_resolution,
+                        understanding_response_id=understanding_response_id,
+                    )
+                    enqueue_started = True
+                    task = await self._enqueue_add_resource_job(msg, resource_lock=lock_lease)
+                except BaseException:
+                    if not enqueue_started:
+                        await lock_lease.close()
+                    raise
                 lock_lease = NO_LOCK
                 job_enqueued = True
                 logger.info(
@@ -1006,11 +1054,13 @@ class ResourceService:
                     watch_auth_state=normalized_args.watch_auth_state,
                     ctx=ctx,
                 )
-                return {
+                response = {
                     "status": "success",
-                    "root_uri": root_uri,
                     "task_id": task.task_id,
                 }
+                if not defer_target_resolution:
+                    response["root_uri"] = root_uri
+                return response
 
             result = await self._resource_processor.process_resource(
                 path=path,
