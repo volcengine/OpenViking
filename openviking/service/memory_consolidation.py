@@ -25,7 +25,8 @@ if TYPE_CHECKING:
     from openviking.server.identity import RequestContext
     from openviking.service.fs_service import FSService
 
-EXACT_DUPLICATE_CONSOLIDATOR_VERSION = "exact-normalized-v1"
+EXACT_DUPLICATE_CONSOLIDATOR_VERSION = "exact-normalized-v2"
+_SELF_URI_SENTINEL = "$source-memory"
 
 
 class ConsolidationSource(BaseModel):
@@ -76,6 +77,30 @@ def _sha256(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def _relationship_identity(
+    relationships: list[dict[str, object]],
+    *,
+    self_field: str,
+    source_uri: str,
+) -> list[dict[str, object]]:
+    """Preserve relationship structure while abstracting the member's own URI.
+
+    A persisted forward link naturally uses the current file as ``from_uri``;
+    a backlink naturally uses it as ``to_uri``.  Those endpoints differ for
+    every duplicate candidate even when the relationship is otherwise the
+    same.  Only that exact self endpoint is replaced.  The other endpoint and
+    all relationship metadata remain part of the conservative fingerprint.
+    """
+
+    normalized: list[dict[str, object]] = []
+    for relationship in relationships:
+        item = dict(relationship)
+        if item.get(self_field) == source_uri:
+            item[self_field] = _SELF_URI_SENTINEL
+        normalized.append(item)
+    return normalized
+
+
 def _identity_payload(raw_content: str, *, uri: str) -> tuple[str, str, int]:
     """Return a conservative identity digest plus persisted revision evidence.
 
@@ -94,6 +119,16 @@ def _identity_payload(raw_content: str, *, uri: str) -> tuple[str, str, int]:
     version = memory_version_from_fields(extra_fields)
     extra_fields.pop("version", None)
     metadata["extra_fields"] = extra_fields
+    metadata["links"] = _relationship_identity(
+        metadata.get("links") or [],
+        self_field="from_uri",
+        source_uri=uri,
+    )
+    metadata["backlinks"] = _relationship_identity(
+        metadata.get("backlinks") or [],
+        self_field="to_uri",
+        source_uri=uri,
+    )
     identity = {
         "content": _normalized_content(memory_file.content),
         "metadata": metadata,

@@ -41,7 +41,7 @@ def test_plan_is_stable_and_selects_lexicographic_canonical():
 
     assert forward == reverse
     assert forward.schema_version == "memory_consolidation_dry_run_plan_v1"
-    assert forward.consolidator_version == "exact-normalized-v1"
+    assert forward.consolidator_version == "exact-normalized-v2"
     assert forward.scanned_files == 2
     assert forward.groups[0].candidate_id.startswith("exact:")
     assert forward.groups[0].canonical.uri == f"{SCOPE}/alpha.md"
@@ -85,7 +85,11 @@ def test_persisted_link_metadata_remains_part_of_conservative_fingerprint():
         "to_uri": "viking://resources/a.md",
         "link_type": "related_to",
     }
-    second_link = {**first_link, "to_uri": "viking://resources/b.md"}
+    second_link = {
+        **first_link,
+        "from_uri": f"{SCOPE}/two.md",
+        "to_uri": "viking://resources/b.md",
+    }
 
     plan = build_exact_duplicate_dry_run_plan(
         scope_uri=SCOPE,
@@ -97,6 +101,37 @@ def test_persisted_link_metadata_remains_part_of_conservative_fingerprint():
     )
 
     assert plan.groups == []
+
+
+@pytest.mark.parametrize(
+    ("field", "self_endpoint", "other_endpoint"),
+    [
+        ("links", "from_uri", "to_uri"),
+        ("backlinks", "to_uri", "from_uri"),
+    ],
+)
+def test_persisted_links_compare_structure_without_source_uri(field, self_endpoint, other_endpoint):
+    first_link = {
+        self_endpoint: f"{SCOPE}/one.md",
+        other_endpoint: "viking://resources/a.md",
+        "link_type": "related_to",
+    }
+    second_link = {
+        **first_link,
+        self_endpoint: f"{SCOPE}/two.md",
+    }
+
+    plan = build_exact_duplicate_dry_run_plan(
+        scope_uri=SCOPE,
+        memory_type="events",
+        sources=[
+            _source("one", "same body", metadata={field: [first_link]}),
+            _source("two", "same body", metadata={field: [second_link]}),
+        ],
+    )
+
+    assert len(plan.groups) == 1
+    assert plan.groups[0].canonical.uri == f"{SCOPE}/one.md"
 
 
 def test_revision_changes_when_source_version_changes():
