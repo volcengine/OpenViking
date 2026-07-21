@@ -238,9 +238,14 @@ def _make_search_experience_tool():
             return {
                 "type": "object",
                 "properties": {
-                    "query": {
+                    "situation": {
                         "type": "string",
-                        "description": "Natural-language query describing the current task intent, target object, operation, policy/tool keywords.",
+                        "description": (
+                            "Concise declarative Situation based only on facts in the current "
+                            "conversation. Preserve the user's known goal, target, scope, and "
+                            "explicit constraints in natural language; do not use a keyword list "
+                            "or add speculative alternatives."
+                        ),
                     },
                     "limit": {
                         "type": "integer",
@@ -248,11 +253,11 @@ def _make_search_experience_tool():
                         "default": 2,
                     },
                 },
-                "required": ["query"],
+                "required": ["situation"],
             }
 
         async def execute(
-            self, tool_context: Any, query: str, limit: int = 2, **kwargs: Any
+            self, tool_context: Any, situation: str, limit: int = 2, **kwargs: Any
         ) -> str:
             del kwargs
             client = None
@@ -261,13 +266,20 @@ def _make_search_experience_tool():
 
                 client = await VikingClient.create()
                 target_uri = _current_cases_uri(client)
-                result = await client.search(query, target_uri=target_uri, limit=max(1, int(limit)))
+                result = await client.search(
+                    situation,
+                    target_uri=target_uri,
+                    limit=max(1, int(limit)),
+                )
                 memories = result.get("memories", []) if isinstance(result, dict) else []
                 candidates = [
                     await _experience_search_summary(client, item, rank)
                     for rank, item in enumerate(memories, start=1)
                 ]
-                return _format_search_experience_response(query=query, candidates=candidates)
+                return _format_search_experience_response(
+                    situation=situation,
+                    candidates=candidates,
+                )
             except Exception as exc:
                 logger.warning("search_experience failed: %s", exc)
                 return f"Error searching experience candidates: {exc}"
@@ -278,7 +290,7 @@ def _make_search_experience_tool():
     return SearchExperienceTool()
 
 
-def _format_search_experience_response(*, query: str, candidates: list[dict[str, Any]]) -> str:
+def _format_search_experience_response(*, situation: str, candidates: list[dict[str, Any]]) -> str:
     """Render search_experience output for the agent.
 
     Keep only task-facing information. Internal search roots and duplicate counts are omitted
@@ -288,7 +300,7 @@ def _format_search_experience_response(*, query: str, candidates: list[dict[str,
 
     return json.dumps(
         {
-            "query": query,
+            "situation": situation,
             "candidates": candidates,
         },
         ensure_ascii=False,

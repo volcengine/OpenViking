@@ -571,7 +571,7 @@ def test_tau2_search_experience_response_hides_internal_search_metadata():
 
     payload = json.loads(
         _format_search_experience_response(
-            query="cancel flight reservations",
+            situation="The user wants to cancel all upcoming reservations.",
             candidates=[
                 {
                     "rank": 1,
@@ -588,7 +588,7 @@ def test_tau2_search_experience_response_hides_internal_search_metadata():
     )
 
     assert payload == {
-        "query": "cancel flight reservations",
+        "situation": "The user wants to cancel all upcoming reservations.",
         "candidates": [
             {
                 "rank": 1,
@@ -604,6 +604,67 @@ def test_tau2_search_experience_response_hides_internal_search_metadata():
     }
     assert "target_uri" not in payload
     assert "count" not in payload
+    assert "query" not in payload
+
+
+@pytest.mark.asyncio
+async def test_tau2_search_experience_uses_declarative_situation(monkeypatch):
+    import json
+
+    import vikingbot.openviking_mount.ov_server as ov_server
+
+    from benchmark.tau2.train.rollout_executor_vikingbot import _make_search_experience_tool
+
+    observed = {}
+
+    class FakeClient:
+        @classmethod
+        async def create(cls):
+            return cls()
+
+        def _memory_target_uri(self, uri):
+            assert uri is None
+            return "viking://user/u/memories"
+
+        async def search(self, situation, *, target_uri, limit):
+            observed.update(
+                situation=situation,
+                target_uri=target_uri,
+                limit=limit,
+            )
+            return {"memories": []}
+
+        async def close(self):
+            observed["closed"] = True
+
+    monkeypatch.setattr(ov_server, "VikingClient", FakeClient)
+    tool = _make_search_experience_tool()
+
+    assert tool.parameters["required"] == ["situation"]
+    assert "situation" in tool.parameters["properties"]
+    assert "query" not in tool.parameters["properties"]
+    description = tool.parameters["properties"]["situation"]["description"]
+    assert "current conversation" in description
+    assert "keyword" in description
+
+    payload = json.loads(
+        await tool.execute(
+            None,
+            situation="The user wants to cancel all upcoming reservations.",
+            limit=3,
+        )
+    )
+
+    assert observed == {
+        "situation": "The user wants to cancel all upcoming reservations.",
+        "target_uri": "viking://user/u/memories/cases",
+        "limit": 3,
+        "closed": True,
+    }
+    assert payload == {
+        "situation": "The user wants to cancel all upcoming reservations.",
+        "candidates": [],
+    }
 
 
 def test_tau2_rollout_backend_factory_defaults_to_native():
@@ -812,6 +873,10 @@ async def test_tau2_prepare_experience_loader_skill_writes_required_skill(tmp_pa
     assert "name: experience_loader" in content
     assert "search_experience" in content
     assert "read_experience" in content
+    assert "search_experience(situation, limit=2)" in content
+    assert "search_experience(query" not in content
+    assert "keyword list" in content
+    assert "current conversation" in content
     assert "Situation snippets" in content or "`situation` as a filter only" in content
     assert "Read by default" in content
     assert "call `read_experience` unless" in content

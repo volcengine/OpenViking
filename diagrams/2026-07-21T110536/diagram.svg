@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1660 1200">
+  <rect x="0" y="0" width="1660" height="1200" fill="#FFFFFF"/>
+
+  <text x="80" y="82" fill="#0055A4" font-size="48" font-weight="700">Tau2 Airline 总体曲线</text>
+  <text x="80" y="126" fill="#0055A4" font-size="22">六个训练周期 · 准确率与经验覆盖率</text>
+
+  <rect x="80" y="154" width="440" height="66" rx="6" fill="#DCF4A2"/>
+  <text x="104" y="197" fill="#0055A4" font-size="26" font-weight="700">E0 训练 → E5 评测  +10.83pp</text>
+
+  <rect x="1280" y="42" width="300" height="146" rx="6" fill="#0055A4"/>
+  <text x="1308" y="82" fill="#FFFFFF" font-size="20" font-weight="600">最终评测准确率</text>
+  <text x="1308" y="148" fill="#DCF4A2" font-size="58" font-weight="700">92.92%</text>
+  <text x="1518" y="166" fill="#FFFFFF" font-size="18">E5</text>
+
+  <text x="80" y="275" fill="#0055A4" font-size="28" font-weight="700">准确率</text>
+  <text x="80" y="307" fill="#0055A4" font-size="18">80%–95%</text>
+
+  <line x1="355" y1="284" x2="413" y2="284" stroke="#7AABD5" stroke-width="5" stroke-dasharray="12 10"/>
+  <circle cx="384" cy="284" r="8" fill="#FFFFFF" stroke="#7AABD5" stroke-width="4"/>
+  <text x="429" y="292" fill="#0055A4" font-size="21">训练准确率</text>
+  <line x1="618" y1="284" x2="676" y2="284" stroke="#0055A4" stroke-width="6"/>
+  <circle cx="647" cy="284" r="9" fill="#DCF4A2" stroke="#0055A4" stroke-width="4"/>
+  <text x="692" y="292" fill="#0055A4" font-size="21">评测准确率</text>
+
+  <line x1="180" y1="340" x2="1490" y2="340" stroke="#D7E7F4" stroke-width="2"/>
+  <line x1="180" y1="480" x2="1490" y2="480" stroke="#D7E7F4" stroke-width="2"/>
+  <line x1="180" y1="620" x2="1490" y2="620" stroke="#D7E7F4" stroke-width="2"/>
+  <line x1="180" y1="760" x2="1490" y2="760" stroke="#0055A4" stroke-width="3"/>
+  <text x="126" y="348" fill="#0055A4" font-size="20">95%</text>
+  <text x="126" y="488" fill="#0055A4" font-size="20">90%</text>
+  <text x="126" y="628" fill="#0055A4" font-size="20">85%</text>
+  <text x="126" y="768" fill="#0055A4" font-size="20">80%</text>
+
+  <line x1="220" y1="702" x2="470" y2="562" stroke="#7AABD5" stroke-width="5" stroke-dasharray="12 10"/>
+  <line x1="470" y1="562" x2="720" y2="538" stroke="#7AABD5" stroke-width="5" stroke-dasharray="12 10"/>
+  <line x1="720" y1="538" x2="970" y2="643" stroke="#7AABD5" stroke-width="5" stroke-dasharray="12 10"/>
+  <line x1="970" y1="643" x2="1220" y2="562" stroke="#7AABD5" stroke-width="5" stroke-dasharray="12 10"/>
+  <line x1="1220" y1="562" x2="1470" y2="515" stroke="#7AABD5" stroke-width="5" stroke-dasharray="12 10"/>
+
+  <circle cx="220" cy="702" r="10" fill="#FFFFFF" stroke="#7AABD5" stroke-width="5"/>
+  <circle cx="720" cy="538" r="10" fill="#FFFFFF" stroke="#7AABD5" stroke-width="5"/>
+  <circle cx="970" cy="643" r="10" fill="#FFFFFF" stroke="#7AABD5" stroke-width="5"/>
+  <circle cx="1220" cy="562" r="10" fill="#FFFFFF" stroke="#7AABD5" stroke-width="5"/>
+  <circle cx="1470" cy="515" r="10" fill="#FFFFFF" stroke="#7AABD5" stroke-width="5"/>
+
+  <text x="220" y="735" text-anchor="middle" fill="#0055A4" font-size="18">82.08</text>
+  <text x="720" y="571" text-anchor="middle" fill="#0055A4" font-size="18">87.92</text>
+  <text x="970" y="676" text-anchor="middle" fill="#0055A4" font-size="18">84.17</text>
+  <text x="1220" y="595" text-anchor="middle" fill="#0055A4" font-size="18">87.08</text>
+  <text x="1470" y="548" text-anchor="middle" fill="#0055A4" font-size="18">88.75</text>
+
+  <line x1="220" y1="573" x2="470" y2="562" stroke="#0055A4" stroke-width="6"/>
+  <line x1="470" y1="562" x2="720" y2="480" stroke="#0055A4" stroke-width="6"/>
+  <line x1="720" y1="480" x2="970" y2="503" stroke="#0055A4" stroke-width="6"/>
+  <line x1="970" y1="503" x2="1220" y2="457" stroke="#0055A4" stroke-width="6"/>
+  <line x1="1220" y1="457" x2="1470" y2="398" stroke="#0055A4" stroke-width="6"/>
+
+  <circle cx="220" cy="573" r="11" fill="#DCF4A2" stroke="#0055A4" stroke-width="5"/>
+  <circle cx="470" cy="562" r="11" fill="#DCF4A2" stroke="#0055A4" stroke-width="5"/>
+  <circle cx="720" cy="480" r="11" fill="#DCF4A2" stroke="#0055A4" stroke-width="5"/>
+  <circle cx="970" cy="503" r="11" fill="#DCF4A2" stroke="#0055A4" stroke-width="5"/>
+  <circle cx="1220" cy="457" r="11" fill="#DCF4A2" stroke="#0055A4" stroke-width="5"/>
+  <circle cx="1470" cy="398" r="14" fill="#DCF4A2" stroke="#0055A4" stroke-width="6"/>
+
+  <text x="220" y="553" text-anchor="middle" fill="#0055A4" font-size="18" font-weight="600">86.67</text>
+  <text x="470" y="542" text-anchor="middle" fill="#0055A4" font-size="18" font-weight="600">87.08</text>
+  <text x="720" y="460" text-anchor="middle" fill="#0055A4" font-size="18" font-weight="600">90.00</text>
+  <text x="970" y="483" text-anchor="middle" fill="#0055A4" font-size="18" font-weight="600">89.17</text>
+  <text x="1220" y="437" text-anchor="middle" fill="#0055A4" font-size="18" font-weight="600">90.83</text>
+
+  <rect x="1360" y="302" width="220" height="62" rx="6" fill="#0055A4"/>
+  <text x="1470" y="342" text-anchor="middle" fill="#DCF4A2" font-size="27" font-weight="700">E5 · 92.92%</text>
+  <line x1="1470" y1="364" x2="1470" y2="382" stroke="#0055A4" stroke-width="4"/>
+
+  <text x="220" y="804" text-anchor="middle" fill="#0055A4" font-size="20" font-weight="600">E0</text>
+  <text x="470" y="804" text-anchor="middle" fill="#0055A4" font-size="20" font-weight="600">E1</text>
+  <text x="720" y="804" text-anchor="middle" fill="#0055A4" font-size="20" font-weight="600">E2</text>
+  <text x="970" y="804" text-anchor="middle" fill="#0055A4" font-size="20" font-weight="600">E3</text>
+  <text x="1220" y="804" text-anchor="middle" fill="#0055A4" font-size="20" font-weight="600">E4</text>
+  <text x="1470" y="804" text-anchor="middle" fill="#0055A4" font-size="20" font-weight="600">E5</text>
+
+  <rect x="80" y="846" width="1500" height="320" rx="8" fill="#F4F9E8" stroke="#DCF4A2" stroke-width="3"/>
+  <text x="112" y="894" fill="#0055A4" font-size="27" font-weight="700">经验覆盖率</text>
+  <text x="112" y="925" fill="#0055A4" font-size="18">独立尺度 · 0%–60%</text>
+
+  <line x1="180" y1="950" x2="1490" y2="950" stroke="#D7E7F4" stroke-width="2"/>
+  <line x1="180" y1="1025" x2="1490" y2="1025" stroke="#D7E7F4" stroke-width="2"/>
+  <line x1="180" y1="1100" x2="1490" y2="1100" stroke="#0055A4" stroke-width="3"/>
+  <text x="126" y="958" fill="#0055A4" font-size="18">60%</text>
+  <text x="126" y="1033" fill="#0055A4" font-size="18">30%</text>
+  <text x="136" y="1108" fill="#0055A4" font-size="18">0%</text>
+
+  <line x1="220" y1="1031" x2="470" y2="997" stroke="#0055A4" stroke-width="5"/>
+  <line x1="470" y1="997" x2="720" y2="1000" stroke="#0055A4" stroke-width="5"/>
+  <line x1="720" y1="1000" x2="970" y2="955" stroke="#0055A4" stroke-width="5"/>
+  <line x1="970" y1="955" x2="1220" y2="957" stroke="#0055A4" stroke-width="5"/>
+  <line x1="1220" y1="957" x2="1470" y2="966" stroke="#0055A4" stroke-width="5"/>
+
+  <circle cx="220" cy="1031" r="10" fill="#DCF4A2" stroke="#0055A4" stroke-width="4"/>
+  <circle cx="470" cy="997" r="10" fill="#DCF4A2" stroke="#0055A4" stroke-width="4"/>
+  <circle cx="720" cy="1000" r="10" fill="#DCF4A2" stroke="#0055A4" stroke-width="4"/>
+  <circle cx="970" cy="955" r="10" fill="#DCF4A2" stroke="#0055A4" stroke-width="4"/>
+  <circle cx="1220" cy="957" r="10" fill="#DCF4A2" stroke="#0055A4" stroke-width="4"/>
+  <circle cx="1470" cy="966" r="10" fill="#DCF4A2" stroke="#0055A4" stroke-width="4"/>
+
+  <text x="220" y="1009" text-anchor="middle" fill="#0055A4" font-size="17" font-weight="600">27.50</text>
+  <text x="470" y="975" text-anchor="middle" fill="#0055A4" font-size="17" font-weight="600">41.25</text>
+  <text x="720" y="978" text-anchor="middle" fill="#0055A4" font-size="17" font-weight="600">40.00</text>
+  <text x="970" y="933" text-anchor="middle" fill="#0055A4" font-size="17" font-weight="600">57.92</text>
+  <text x="1220" y="935" text-anchor="middle" fill="#0055A4" font-size="17" font-weight="600">57.08</text>
+  <text x="1470" y="944" text-anchor="middle" fill="#0055A4" font-size="17" font-weight="600">53.75</text>
+
+  <text x="220" y="1145" text-anchor="middle" fill="#0055A4" font-size="18" font-weight="600">E0</text>
+  <text x="470" y="1145" text-anchor="middle" fill="#0055A4" font-size="18" font-weight="600">E1</text>
+  <text x="720" y="1145" text-anchor="middle" fill="#0055A4" font-size="18" font-weight="600">E2</text>
+  <text x="970" y="1145" text-anchor="middle" fill="#0055A4" font-size="18" font-weight="600">E3</text>
+  <text x="1220" y="1145" text-anchor="middle" fill="#0055A4" font-size="18" font-weight="600">E4</text>
+  <text x="1470" y="1145" text-anchor="middle" fill="#0055A4" font-size="18" font-weight="600">E5</text>
+</svg>

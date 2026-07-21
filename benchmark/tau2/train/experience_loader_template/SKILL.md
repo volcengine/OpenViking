@@ -10,8 +10,8 @@ filters by the short `situation` snippet, then loads the full applicable experie
 
 ## Required workflow
 
-1. Before taking task actions, call `search_experience` with a natural-language query that describes the current task.
-2. Build the query from the current domain, user intent, target object, requested operation, policy keywords, and likely tool/action family. Avoid vague queries such as "help user".
+1. Before taking task actions, call `search_experience` with a concise natural-language `situation` that describes what is currently true.
+2. Build the `situation` only from facts in the current conversation. Use declarative sentences, preserve the user's known goal, target, scope, and explicit constraints, and prefer the user's original terms. Do not write a keyword list, infer unstated facts, or add speculative alternatives and unrelated negative examples.
 3. Review the returned candidates. Each candidate has a `case_name` and linked experience entries; each experience entry has an experience `uri` and a short `situation` snippet describing applicability and exclusions.
 4. Treat `situation` as a filter only, not as the full experience. Do not rely on the snippet as sufficient guidance.
 5. **Read by default.** For each linked experience, call `read_experience` unless its `situation` explicitly excludes the current task family, object type, policy branch, or requested operation. Do not skip reading merely because the experience may apply later rather than at the opening request.
@@ -25,5 +25,5 @@ filters by the short `situation` snippet, then loads the full applicable experie
 
 ## Tools
 
-- `search_experience(query, limit=2)`: searches OpenViking `memories/cases` under the current user, reads each matched case's `## Linked Experiences` section, and returns JSON candidates with `case_name` and linked experience entries. Each experience entry contains only `uri` and a `situation` snippet from that experience's `## Situation` section.
+- `search_experience(situation, limit=2)`: searches OpenViking `memories/cases` under the current user using the declarative current Situation, reads each matched case's `## Linked Experiences` section, and returns JSON candidates with `case_name` and linked experience entries. Each experience entry contains only `uri` and a `situation` snippet from that experience's `## Situation` section.
 - `read_experience(experience_uri)`: reads one OpenViking experience memory by full URI and returns Markdown.
