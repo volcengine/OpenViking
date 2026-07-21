@@ -61,6 +61,20 @@ from openviking_cli.utils.logger import init_otel_log_handler_from_server_config
 
 logger = get_logger(__name__)
 
+WORKER_WITH_BOT_ENV = "OPENVIKING_WORKER_WITH_BOT"
+WORKER_BOT_API_URL_ENV = "OPENVIKING_WORKER_BOT_API_URL"
+
+
+def create_worker_app() -> FastAPI:
+    """Load file config and replay parent-process Bot CLI overrides."""
+    config = load_server_config()
+    with_bot = os.environ.get(WORKER_WITH_BOT_ENV)
+    if with_bot is not None:
+        config.with_bot = with_bot == "1"
+    bot_api_url = os.environ.get(WORKER_BOT_API_URL_ENV)
+    if bot_api_url is not None:
+        config.bot_api_url = bot_api_url
+    return create_app(config)
 
 
 async def _initialize_auth_plugin(
