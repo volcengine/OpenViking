@@ -162,11 +162,6 @@ def _is_agent_scope_uri(target_uri: str) -> bool:
     return parts and parts[0] == "agent" and len(parts) >= 2 and parts[1] in {"skills", "endpoints", "tools", "payments"}
 
 
-def _with_suffix(root: str, suffix: List[str]) -> str:
-    if not suffix:
-        return root
-    return f"{root}/{'/'.join(suffix)}"
-
 
 def _resolve_peer_target(
     target_uri: str,

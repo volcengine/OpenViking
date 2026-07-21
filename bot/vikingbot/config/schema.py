@@ -190,10 +190,6 @@ class MochatChannelConfig(BaseChannelConfig):
     reply_delay_mode: str = "non-mention"
     reply_delay_ms: int = 120000
 
-    def _generate_default_id(self) -> str:
-        # Use agent_user_id as the ID
-        return self.agent_user_id if self.agent_user_id else "mochat"
-
 
 class DingTalkChannelConfig(BaseChannelConfig):
     """DingTalk channel configuration (multi-channel support)."""

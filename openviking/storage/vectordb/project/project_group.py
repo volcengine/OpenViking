@@ -157,15 +157,6 @@ class ProjectGroup:
         """
         return self.projects.get(project_name)
 
-    def list_projects(self):
-        """
-        List all project names
-
-        Returns:
-            Project name list
-        """
-        return self.projects.list_names()
-
     def get_projects(self) -> Dict[str, LocalProject]:
         """
         Get all projects

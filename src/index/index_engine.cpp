@@ -50,6 +50,18 @@ FilterResult IndexEngine::evaluate_filter(
   return result;
 }
 
+FilterResult IndexEngine::evaluate_filter_for_routing(
+    const std::string& dsl, uint64_t native_threshold) {
+  FilterResult result;
+  const int ret =
+      impl_->evaluate_filter_for_routing(dsl, native_threshold, result);
+  if (ret != 0) {
+    throw std::runtime_error(
+        "Failed to evaluate native scalar filter for routing");
+  }
+  return result;
+}
+
 int IndexEngine::add_data(const std::vector<AddDataRequest>& data_list) {
   return impl_->add_data(data_list);
 }

@@ -13,6 +13,9 @@ import {
   replayPending,
 } from "./shared/pending-queue.mjs"
 import {
+  sendSessionMessages,
+} from "./shared/batch-send.mjs"
+import {
   log,
   effectivePeerId,
   fetchJSON,
@@ -26,7 +29,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   let saveTimer = null
 
   async function init() {
-    await migrateLegacySessionMap()
+    if (config.autoCapture) await migrateLegacySessionMap()
     await loadState()
     const health = await fetchJSON(config, "/health", {}, { timeoutMs: 5000 })
     if (health.ok) {
@@ -137,9 +140,9 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       await handleSessionCompacted(event)
     } else if (event.type === "session.idle") {
       await handleSessionIdle(event)
-    } else if (event.type === "message.updated") {
+    } else if (event.type === "message.updated" && config.autoCapture) {
       await handleMessageUpdated(event)
-    } else if (event.type === "message.part.updated") {
+    } else if (event.type === "message.part.updated" && config.autoCapture) {
       await handleMessagePartUpdated(event)
     }
   }
@@ -256,7 +259,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     if (!state) return false
 
     const added = await flushPendingMessages(opencodeSessionId, state)
-    if (commit) {
+    if (commit && config.autoCapture) {
       await commitOvSession(state.ovSessionId, { force: true, reason })
     } else if (added > 0) {
       await maybeCommitByThreshold(state)
@@ -358,7 +361,8 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   }
 
   async function flushPendingMessages(opencodeSessionId, state) {
-    let added = 0
+    if (!config.autoCapture) return 0
+    const toSend = []
     for (const [messageId, message] of state.messages.entries()) {
       if (message.captured) continue
       const body = buildCapturePayload(message)
@@ -366,40 +370,45 @@ export function createMemorySessionManager({ config, pluginRoot }) {
         message.captured = true
         continue
       }
-      const ok = await addMessageToSession(state.ovSessionId, body)
-      if (!ok) break
-      message.captured = true
-      added += 1
+      toSend.push({ messageId, message, body })
+    }
+    if (toSend.length === 0) return 0
+
+    let added = 0
+    const health = await fetchJSON(config, "/health", {}, { timeoutMs: 5000 })
+    if (!health.ok) {
+      for (const item of toSend) {
+        const queued = await enqueue("addMessage", state.ovSessionId, item.body)
+        if (!queued.ok) break
+        item.message.captured = true
+        added += 1
+      }
+    } else {
+      const res = await sendSessionMessages(
+        (endpoint, init = {}, options = {}) => fetchJSON(config, endpoint, init, { timeoutMs: 10000, ...options }),
+        state.ovSessionId,
+        toSend.map((item) => item.body),
+        { enqueueOnRetryable: true },
+      )
+      added = res.sent + res.queued
+      for (const item of toSend.slice(0, added)) {
+        item.message.captured = true
+      }
+      if (res.failed > 0 || res.enqueueFailed > 0) {
+        log("ERROR", "message", "Failed to add message to OpenViking session", {
+          openviking_session: state.ovSessionId,
+          status: res.lastError?.status,
+          error: res.lastError,
+          failed: res.failed,
+          enqueueFailed: res.enqueueFailed,
+        })
+      }
     }
     if (added > 0) {
       state.lastActivityAt = Date.now()
       debouncedSaveState()
     }
     return added
-  }
-
-  async function addMessageToSession(ovSessionId, body) {
-    const health = await fetchJSON(config, "/health", {}, { timeoutMs: 5000 })
-    if (!health.ok) {
-      await enqueue("addMessage", ovSessionId, body)
-      return true
-    }
-    const res = await fetchJSON(config, `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/messages`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    }, { timeoutMs: 10000 })
-    if (res.ok) return true
-    if (isRetryableFailure(res)) {
-      const queued = await enqueue("addMessage", ovSessionId, body)
-      return Boolean(queued.ok)
-    }
-    log("ERROR", "message", "Failed to add message to OpenViking session", {
-      openviking_session: ovSessionId,
-      role: body.role,
-      status: res.status,
-      error: res.error,
-    })
-    return false
   }
 
   async function maybeCommitByThreshold(state) {

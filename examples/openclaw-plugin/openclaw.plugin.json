@@ -3,6 +3,7 @@
   "name": "OpenViking",
   "kind": "context-engine",
   "description": "OpenClaw context-engine plugin for memory management — powered by OpenViking",
+  "icon": "https://raw.githubusercontent.com/volcengine/OpenViking/main/docs/images/ov-logo-icon.png",
   "activation": {
     "onStartup": true,
     "onCapabilities": [
@@ -12,6 +13,7 @@
   },
   "contracts": {
     "tools": [
+      "add_resource",
       "add_skill",
       "ov_search",
       "ov_read",

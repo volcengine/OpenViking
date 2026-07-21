@@ -199,6 +199,7 @@ export function loadConfig() {
       process.env.OPENVIKING_CAPTURE_TOOL_MAX_CHARS,
       num(cx.captureToolMaxChars, 2000),
     ))),
+    writePathAsync: envBool("OPENVIKING_WRITE_PATH_ASYNC") ?? (cx.writePathAsync !== false),
     // Default true: a "memory plugin" without assistant-side capture only sees half the
     // conversation, which makes extraction noticeably worse. Mirrors the claude-code plugin
     // (examples/claude-code-memory-plugin/scripts/config.mjs). Operators who want the old

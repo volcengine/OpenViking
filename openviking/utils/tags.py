@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import Iterable
+from typing import Any, Iterable
 
 from openviking_cli.exceptions import InvalidArgumentError
 
@@ -42,6 +42,25 @@ def normalize_search_tags(tags: Iterable[str] | None) -> list[str]:
         seen.add(value)
         normalized.append(value)
     return normalized
+
+
+def build_search_tags_filter(tags: Iterable[str] | None) -> dict[str, Any] | None:
+    """Build a metadata filter that requires every explicit search tag."""
+    normalized_tags = normalize_search_tags(tags)
+    if not normalized_tags:
+        return None
+
+    tag_filters = [
+        {
+            "op": "must",
+            "field": "search_tags",
+            "conds": [tag],
+        }
+        for tag in normalized_tags
+    ]
+    if len(tag_filters) == 1:
+        return tag_filters[0]
+    return {"op": "and", "conds": tag_filters}
 
 
 def merge_search_tags(existing: Iterable[str] | None, incoming: Iterable[str] | None) -> list[str]:

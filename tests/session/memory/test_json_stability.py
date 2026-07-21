@@ -17,7 +17,6 @@ from openviking.session.memory.utils import (
     extract_json_content,
     parse_json_with_stability,
     parse_memory_file_with_fields,
-    remove_json_trailing_content,
     value_fault_tolerance,
 )
 
@@ -76,19 +75,6 @@ Trailing content."""
         """Test empty string input returns empty string."""
         assert extract_json_content("") == ""
         assert extract_json_content("   ") == "   "
-
-
-class TestRemoveJsonTrailingContent:
-    """Tests for deprecated remove_json_trailing_content (alias for extract_json_content)."""
-
-    def test_alias_works(self):
-        """Test that remove_json_trailing_content is an alias for extract_json_content."""
-        content = """Alright, let's see.
-{"reasonning": "test"}
-And then some."""
-        result1 = extract_json_content(content)
-        result2 = remove_json_trailing_content(content)
-        assert result1 == result2
 
 
 class TestValueFaultTolerance:

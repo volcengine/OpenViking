@@ -4,7 +4,8 @@
 VikingDB Manager class that extends VikingVectorIndexBackend with queue management functionality.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 from openviking.server.identity import RequestContext
 from openviking.storage.expr import FilterExpr
@@ -293,6 +294,16 @@ class VikingDBManagerProxy:
         fields that are omitted from ``data`` before writing.
         """
         return await self._manager.upsert(data, ctx=self._ctx, partial_update=partial_update)
+
+    async def upsert_many(self, data_list: List[Dict[str, Any]]) -> List[str]:
+        """Bulk full-record upsert with the proxy's bound request context."""
+        return await self._manager.upsert_many(data_list, ctx=self._ctx)
+
+    @asynccontextmanager
+    async def bulk_ingest(self) -> AsyncIterator[None]:
+        """Bind the proxy context to a bulk-ingest maintenance scope."""
+        async with self._manager.bulk_ingest(ctx=self._ctx):
+            yield
 
     async def get(self, ids: List[str]) -> List[Dict[str, Any]]:
         return await self._manager.get(ids, ctx=self._ctx)

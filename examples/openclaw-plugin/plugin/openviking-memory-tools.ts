@@ -2,6 +2,10 @@ import { Type } from "@sinclair/typebox";
 
 import type { CommitSessionResult, FindResultItem } from "../client.js";
 import { clampScore, postProcessMemories } from "../memory-ranking.js";
+import {
+  resolveOpenVikingMessagePeerId,
+  type OpenVikingPeerRole,
+} from "../routing/identity-routing.js";
 import { isMemoryUri } from "../routing/memory-uri.js";
 
 export type OpenVikingMemoryToolContext = {
@@ -17,6 +21,7 @@ export type OpenVikingMemorySession = {
   sessionKey?: string;
   ovSessionId?: string;
   agentId: string;
+  actorPeerId?: string;
 };
 
 export type OpenVikingMemoryClient = {
@@ -30,7 +35,7 @@ export type OpenVikingMemoryClient = {
   ) => Promise<void>;
   commitSession: (
     sessionId: string,
-    options: { wait: true; agentId: string; keepRecentCount: number },
+    options: { wait: true; agentId?: string; keepRecentCount: number },
   ) => Promise<CommitSessionResult>;
   deleteUri: (uri: string, agentId?: string) => Promise<void>;
   find: (
@@ -45,8 +50,7 @@ export type OpenVikingMemoryToolsDeps = {
   getClient: () => Promise<OpenVikingMemoryClient>;
   normalizeSessionId: (sessionId: string) => string;
   createTempSessionId: () => string;
-  extractSenderId: (ctx?: OpenVikingMemoryToolContext) => string | undefined;
-  toRoleId: (senderId?: string) => string | undefined;
+  peerRole: OpenVikingPeerRole;
   resolvePluginSessionRouting: (ctx?: OpenVikingMemoryToolContext) => OpenVikingMemorySession;
   isBypassedSession: (ctx?: OpenVikingMemoryToolContext) => boolean;
   makeBypassedToolResult: (toolName: string) => unknown;
@@ -107,18 +111,22 @@ export function registerOpenVikingMemoryTools(deps: OpenVikingMemoryToolsDeps): 
             sessionId = deps.createTempSessionId();
             usedTempSession = true;
           }
-          const roleId = role === "user" ? deps.toRoleId(deps.extractSenderId(ctx)) : undefined;
+          const peerId = resolveOpenVikingMessagePeerId({
+            peerRole: deps.peerRole,
+            role,
+            personPeerId: session.actorPeerId,
+            assistantPeerId: session.actorPeerId,
+          });
           await client.addSessionMessage(
             sessionId,
             role,
             [{ type: "text", text }],
-            session.agentId,
             undefined,
-            roleId,
+            undefined,
+            peerId,
           );
           const commitResult = await client.commitSession(sessionId, {
             wait: true,
-            agentId: session.agentId,
             keepRecentCount: 0,
           });
           const memoriesCount = totalCommitMemories(commitResult);
@@ -216,7 +224,7 @@ export function registerOpenVikingMemoryTools(deps: OpenVikingMemoryToolsDeps): 
               details: { action: "rejected", uri },
             };
           }
-          await client.deleteUri(uri, session.agentId);
+          await client.deleteUri(uri, session.actorPeerId);
           return {
             content: [{ type: "text", text: `Forgotten: ${uri}` }],
             details: { action: "deleted", uri },
@@ -252,7 +260,7 @@ export function registerOpenVikingMemoryTools(deps: OpenVikingMemoryToolsDeps): 
             limit: requestLimit,
             scoreThreshold: 0,
           },
-          session.agentId,
+          session.actorPeerId,
         );
         const candidates = postProcessMemories(result.memories ?? [], {
           limit: requestLimit,
@@ -272,7 +280,7 @@ export function registerOpenVikingMemoryTools(deps: OpenVikingMemoryToolsDeps): 
         }
         const top = candidates[0];
         if (candidates.length === 1 && clampScore(top.score) >= 0.85) {
-          await client.deleteUri(top.uri, session.agentId);
+          await client.deleteUri(top.uri, session.actorPeerId);
           return {
             content: [{ type: "text", text: `Forgotten: ${top.uri}` }],
             details: { action: "deleted", uri: top.uri, score: top.score ?? 0 },

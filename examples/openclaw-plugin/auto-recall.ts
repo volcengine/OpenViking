@@ -313,6 +313,7 @@ export async function buildAutoRecallContext(params: {
   queryConfig?: EffectiveQueryConfig;
   client: OpenVikingClient;
   agentId: string;
+  actorPeerId?: string;
   queryText: string;
   logger: Logger;
   verbose?: (message: string) => void;
@@ -324,14 +325,14 @@ export async function buildAutoRecallContext(params: {
   queryTruncated?: boolean;
   resourceTypes?: RecallResourceType[];
 }): Promise<{ block?: string; memoryCount: number; estimatedTokens: number }> {
-  const { cfg, client, agentId, queryText, logger, verbose } = params;
+  const { cfg, client, agentId, actorPeerId, queryText, logger, verbose } = params;
   const queryConfig = params.queryConfig;
 
   if (!cfg.autoRecall || queryText.length < 5) {
     return { memoryCount: 0, estimatedTokens: 0 };
   }
 
-  const precheck = await quickRecallPrecheck(client, agentId);
+  const precheck = await quickRecallPrecheck(client, actorPeerId);
   if (!precheck.ok) {
     verbose?.(`openviking: skipping auto-recall because precheck failed (${precheck.reason})`);
     return { memoryCount: 0, estimatedTokens: 0 };
@@ -369,7 +370,7 @@ export async function buildAutoRecallContext(params: {
           limit: candidateLimit,
           scoreThreshold: 0,
           contextType: search.contextType,
-          actorPeerId: agentId,
+          actorPeerId,
         });
         return {
           resourceType: search.resourceType,
@@ -484,7 +485,7 @@ export async function buildAutoRecallContext(params: {
 
       const { lines: memoryLines, estimatedTokens } = await buildMemoryLinesWithBudget(
         memories,
-        (uri) => client.read(uri, agentId),
+        (uri) => client.read(uri, actorPeerId),
         {
           recallPreferAbstract,
           recallMaxInjectedChars: maxInjectedChars,

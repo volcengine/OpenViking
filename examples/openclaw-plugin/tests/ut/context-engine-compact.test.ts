@@ -115,7 +115,7 @@ describe("context-engine commitOVSession()", () => {
   });
 
   it("uses sessionKey-derived OV session ID for commitOVSession", async () => {
-    const { engine, client, resolveAgentId } = makeEngine({
+    const { engine, client } = makeEngine({
       status: "completed",
       archived: false,
       memories_extracted: {},
@@ -128,7 +128,6 @@ describe("context-engine commitOVSession()", () => {
 
     const ovSessionId = openClawSessionToOvStorageId("plain-session", "agent:main:main");
     expect(client.commitSession.mock.calls[0][0]).toBe(ovSessionId);
-    expect(resolveAgentId).toHaveBeenCalledWith("plain-session", "agent:main:main", ovSessionId);
   });
 
   it("logs memories extracted count", async () => {
@@ -394,7 +393,7 @@ describe("context-engine compact()", () => {
     expect(resolveAgentId).toHaveBeenCalledWith("plain-session", "agent:top:main", ovSessionId);
   });
 
-  it("passes agentId to commitSession", async () => {
+  it("omits actor peer from aggregate session commits", async () => {
     const { engine, client } = makeEngine({
       status: "completed",
       archived: false,
@@ -403,8 +402,9 @@ describe("context-engine compact()", () => {
 
     await engine.compact({ sessionId: "s1", sessionFile: "" });
 
-    expect(client.commitSession.mock.calls[0][1]).toMatchObject({
-      agentId: "test-agent",
+    expect(client.commitSession).toHaveBeenCalledWith("s1", {
+      wait: true,
+      keepRecentCount: 0,
     });
   });
 

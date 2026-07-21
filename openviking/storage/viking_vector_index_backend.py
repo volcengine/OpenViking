@@ -6,9 +6,10 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from typing import Any, Dict, List, Optional
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator, Dict, List, Optional
 
-from openviking.core.namespace import canonicalize_uri, visible_roots
+from openviking.core.namespace import canonicalize_uri, uri_parts, visible_roots
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
 from openviking.storage.vectordb.collection.collection import Collection
@@ -67,6 +68,28 @@ URI_REWRITE_OUTPUT_FIELDS = [
 ]
 
 VIKINGDB_CONTENT_MAX_SIZE = 1024 * 1024
+
+
+async def _wait_for_task_completion_despite_cancellation(
+    task: asyncio.Task[Any],
+) -> Optional[asyncio.CancelledError]:
+    """Wait for an offloaded lifecycle operation without leaking its state."""
+
+    pending_cancellation: Optional[asyncio.CancelledError] = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as exc:
+            # A child that cancels itself did not complete the lifecycle
+            # operation and must still be reported by ``task.result()``.
+            if not task.cancelled() and pending_cancellation is None:
+                pending_cancellation = exc
+        except BaseException:
+            # Read the task's exception below so the caller can apply the
+            # lifecycle-specific exception ordering.
+            if not task.done():
+                raise
+    return pending_cancellation
 
 
 class _AsyncVectorAdapter:
@@ -136,9 +159,6 @@ class _SingleAccountBackend:
             self._meta_data_cache = coll.get_meta_data() or {}
         return self._meta_data_cache
 
-    def _refresh_meta_data(self, coll: Collection) -> None:
-        self._meta_data_cache = coll.get_meta_data() or {}
-
     def _filter_known_fields(self, data: Dict[str, Any]) -> Dict[str, Any]:
         try:
             coll = self._get_collection()
@@ -178,6 +198,32 @@ class _SingleAccountBackend:
             result.pop("content", None)
 
         return result
+
+    def _prepare_upsert_payloads(self, data_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Prepare a batch in one worker-thread handoff."""
+        return [self._prepare_upsert_payload(data) for data in data_list]
+
+    def _bind_upsert_payload(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Copy a record, enforce its bound account, and apply write defaults."""
+        payload = dict(data)
+        if self._bound_account_id:
+            account_id = payload.get("account_id")
+            if account_id and account_id != self._bound_account_id:
+                raise PermissionError(
+                    "record account_id does not match the request context account_id"
+                )
+            payload["account_id"] = self._bound_account_id
+
+        context_type = payload.get("context_type")
+        if context_type and context_type not in VikingVectorIndexBackend.ALLOWED_CONTEXT_TYPES:
+            raise ValueError(
+                f"Invalid context_type: {context_type}. "
+                f"Must be one of {sorted(VikingVectorIndexBackend.ALLOWED_CONTEXT_TYPES)}"
+            )
+
+        if not payload.get("id"):
+            payload["id"] = str(uuid.uuid4())
+        return payload
 
     @staticmethod
     def _is_not_found_error(exc: Exception) -> bool:
@@ -265,27 +311,11 @@ class _SingleAccountBackend:
     # =========================================================================
 
     async def upsert(self, data: Dict[str, Any], partial_update: bool = False) -> str:
-        payload = dict(data)
-        logger.debug(
-            f"[_SingleAccountBackend.upsert] Input data.account_id={payload.get('account_id')}, bound_account_id={self._bound_account_id}"
-        )
-        if self._bound_account_id and not payload.get("account_id"):
-            payload["account_id"] = self._bound_account_id
-        logger.debug(
-            f"[_SingleAccountBackend.upsert] Final payload.account_id={payload.get('account_id')}"
-        )
-
-        context_type = payload.get("context_type")
-        if context_type and context_type not in VikingVectorIndexBackend.ALLOWED_CONTEXT_TYPES:
-            logger.warning(
-                "Invalid context_type: %s. Must be one of %s",
-                context_type,
-                sorted(VikingVectorIndexBackend.ALLOWED_CONTEXT_TYPES),
-            )
+        try:
+            payload = self._bind_upsert_payload(data)
+        except (PermissionError, ValueError) as exc:
+            logger.warning("Rejecting upsert: %s", exc)
             return ""
-
-        if not payload.get("id"):
-            payload["id"] = str(uuid.uuid4())
 
         if partial_update:
             try:
@@ -308,6 +338,49 @@ class _SingleAccountBackend:
         payload = await self._async_adapter.run(self._prepare_upsert_payload, payload)
         ids = await self._async_adapter.call("upsert", payload)
         return ids[0] if ids else ""
+
+    async def upsert_many(self, data_list: List[Dict[str, Any]]) -> List[str]:
+        """Bulk full-record upsert through one adapter call.
+
+        The batch is validated before the adapter is invoked. Partial-update
+        semantics intentionally remain on :meth:`upsert`, where each existing
+        record is read and merged independently. Returned IDs preserve input
+        order; invalid batches raise before the adapter is invoked.
+        """
+        if not data_list:
+            return []
+
+        payloads: List[Dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for index, data in enumerate(data_list):
+            try:
+                payload = self._bind_upsert_payload(data)
+            except PermissionError as exc:
+                raise PermissionError(f"record at index {index}: {exc}") from exc
+            except ValueError as exc:
+                raise ValueError(f"record at index {index}: {exc}") from exc
+            record_id = str(payload["id"])
+            if record_id in seen_ids:
+                raise ValueError(f"duplicate record id at index {index}")
+            seen_ids.add(record_id)
+            payloads.append(payload)
+
+        payloads = await self._async_adapter.run(self._prepare_upsert_payloads, payloads)
+        ids = await self._async_adapter.call("upsert", payloads)
+        normalized_ids = [str(item) for item in (ids or []) if item is not None]
+        expected_ids = [str(payload["id"]) for payload in payloads]
+        if normalized_ids != expected_ids:
+            raise RuntimeError(
+                "bulk upsert adapter returned IDs that do not match the input count and order "
+                f"(expected {len(expected_ids)}, got {len(normalized_ids)})"
+            )
+        return normalized_ids
+
+    async def begin_bulk_ingest(self) -> None:
+        await self._async_adapter.call("begin_bulk_ingest")
+
+    async def end_bulk_ingest(self) -> None:
+        await self._async_adapter.call("end_bulk_ingest")
 
     async def update(self, data: Dict[str, Any]) -> UpdateResult:
         """Strict update path. The target record must already exist."""
@@ -776,17 +849,79 @@ class VikingVectorIndexBackend:
         fields before issuing the final upsert.
         """
         logger.debug(
-            f"[VikingVectorIndexBackend.upsert] Called with ctx.account_id={ctx.account_id}, partial_update={partial_update}, data={data}"
+            "[VikingVectorIndexBackend.upsert] Called with ctx.account_id=%s, "
+            "partial_update=%s, data=%s",
+            ctx.account_id,
+            partial_update,
+            data,
         )
         backend = self._get_backend_for_context(ctx)
         logger.debug(
-            f"[VikingVectorIndexBackend.upsert] Using backend for account_id={ctx.account_id}"
+            "[VikingVectorIndexBackend.upsert] Using backend for account_id=%s",
+            ctx.account_id,
         )
         result = await backend.upsert(data, partial_update=partial_update)
         logger.debug(
-            f"[VikingVectorIndexBackend.upsert] Completed with partial_update={partial_update}, result={result}"
+            "[VikingVectorIndexBackend.upsert] Completed with partial_update=%s, result=%s",
+            partial_update,
+            result,
         )
         return result
+
+    async def upsert_many(
+        self, data_list: List[Dict[str, Any]], *, ctx: RequestContext
+    ) -> List[str]:
+        """Bulk full-record upsert.
+
+        All records are validated for the bound account before one adapter
+        invocation is made. Adapters may split that invocation into multiple
+        data-plane requests, so this API does not guarantee transaction
+        atomicity. Use :meth:`upsert` with ``partial_update=True`` when omitted
+        fields must be preserved from existing records.
+        """
+        logger.debug(
+            "[VikingVectorIndexBackend.upsert_many] Called with ctx.account_id=%s, count=%s",
+            ctx.account_id,
+            len(data_list),
+        )
+        backend = self._get_backend_for_context(ctx)
+        result = await backend.upsert_many(data_list)
+        logger.debug(
+            "[VikingVectorIndexBackend.upsert_many] Completed with count=%s, result_count=%s",
+            len(data_list),
+            len(result),
+        )
+        return result
+
+    @asynccontextmanager
+    async def bulk_ingest(self, *, ctx: RequestContext) -> AsyncIterator[None]:
+        """Coalesce optional derived-index rebuilds across many write calls.
+
+        The scope is a performance hint only. It does not make the enclosed
+        writes transactional or atomic, and adapters that do not maintain a
+        derived local index treat it as a no-op.
+        """
+        backend = self._get_backend_for_context(ctx)
+        begin_task = asyncio.create_task(backend.begin_bulk_ingest())
+        entry_cancellation = await _wait_for_task_completion_despite_cancellation(begin_task)
+        # A failed or self-cancelled begin did not acquire the scope, so it
+        # must not be balanced with an end call.
+        begin_task.result()
+        if entry_cancellation is not None:
+            end_task = asyncio.create_task(backend.end_bulk_ingest())
+            await _wait_for_task_completion_despite_cancellation(end_task)
+            # Cleanup failures take priority because they mean the suspension
+            # may still be live. Otherwise preserve the original cancellation.
+            end_task.result()
+            raise entry_cancellation
+        try:
+            yield
+        finally:
+            end_task = asyncio.create_task(backend.end_bulk_ingest())
+            exit_cancellation = await _wait_for_task_completion_despite_cancellation(end_task)
+            end_task.result()
+            if exit_cancellation is not None:
+                raise exit_cancellation
 
     async def update(self, data: Dict[str, Any], *, ctx: RequestContext) -> UpdateResult:
         """Strict update path. The target record must already exist."""
@@ -1334,16 +1469,22 @@ class VikingVectorIndexBackend:
         if context_type:
             filters.append(Eq("context_type", context_type))
 
+        canonical_targets = [
+            canonicalize_uri(target_dir, ctx)
+            for target_dir in target_directories or []
+            if target_dir
+        ]
         tenant_filter = self._tenant_filter(ctx, context_type=context_type)
+        if tenant_filter and self._targets_within_visible_roots(ctx, canonical_targets):
+            # The target scopes are already narrower than the tenant-visible
+            # roots. Keep account isolation, but avoid recursively evaluating
+            # the broader path scopes as an additional filter.
+            tenant_filter = Eq("account_id", ctx.account_id)
         if tenant_filter:
             filters.append(tenant_filter)
 
-        if target_directories:
-            uri_conds = [
-                PathScope("uri", canonicalize_uri(target_dir, ctx), depth=-1)
-                for target_dir in target_directories
-                if target_dir
-            ]
+        if canonical_targets:
+            uri_conds = [PathScope("uri", target_dir, depth=-1) for target_dir in canonical_targets]
             if uri_conds:
                 filters.append(Or(uri_conds))
 
@@ -1357,6 +1498,20 @@ class VikingVectorIndexBackend:
             filters.append(In("level", level))
 
         return self._merge_filters(*filters)
+
+    @staticmethod
+    def _targets_within_visible_roots(ctx: RequestContext, canonical_targets: List[str]) -> bool:
+        if not canonical_targets:
+            return False
+
+        root_parts = [tuple(uri_parts(root)) for root in visible_roots(ctx)]
+        return all(
+            any(
+                len(target_parts) >= len(root) and target_parts[: len(root)] == root
+                for root in root_parts
+            )
+            for target_parts in (tuple(uri_parts(target)) for target in canonical_targets)
+        )
 
     @staticmethod
     def _tenant_filter(

@@ -331,14 +331,6 @@ class VLMFactory:
 
             return LiteLLMVLMProvider(config)
 
-    @staticmethod
-    def get_available_providers() -> List[str]:
-        """Get list of available providers"""
-        from .registry import get_all_provider_names
-
-        return get_all_provider_names()
-
-
 def _annotate_vlm_error(exc: Exception, vlm_instance: "VLMBase") -> None:
     """Attach model and api_base info to an exception for better error diagnostics.
 
@@ -824,11 +816,6 @@ class MultiCredentialVLM(VLMBase):
             tool_choice=tool_choice,
             messages=messages,
         )
-
-    @property
-    def active_credential_index(self) -> int:
-        """Get the index of the currently active credential."""
-        return self._switcher.get_active_index()
 
     @property
     def active_credential_id(self) -> str:

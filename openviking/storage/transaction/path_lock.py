@@ -168,6 +168,9 @@ class PathLockEngine:
                 await self._async_agfs.mkdir(path)
                 logger.debug(f"Directory created: {path}")
             except Exception as e:
+                if await self._is_existing_directory_async(path):
+                    logger.debug(f"Directory created concurrently: {path}")
+                    return True
                 logger.warning(f"Failed to create directory {path}: {e}")
                 return False
         return True

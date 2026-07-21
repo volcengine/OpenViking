@@ -132,25 +132,6 @@ class MemoryTypeRegistry:
             return list(self._types.keys())
         return [mt.memory_type for mt in self._types.values() if mt.enabled]
 
-    def list_search_uris(self, user_space: str) -> List[str]:
-        """List all directory URIs for search scope.
-
-        Args:
-            user_space: User space name
-
-        Returns:
-            List of directory URIs from enabled schemas
-        """
-        uris = []
-        for schema in self.list_all(include_disabled=False):
-            if schema.directory:
-                dir_path = TemplateUtils.render(
-                    schema.directory,
-                    {"user_space": user_space},
-                )
-                uris.append(dir_path)
-        return uris
-
     def load_from_yaml(self, yaml_path: str, replace: bool = False) -> None:
         """
         Load memory type from a YAML file.

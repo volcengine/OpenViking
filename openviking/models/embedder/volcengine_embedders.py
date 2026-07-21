@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Volcengine Embedder Implementation"""
 
-import asyncio
 from typing import Any, Dict, List, Optional
 
 import volcenginesdkarkruntime
@@ -260,38 +259,6 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"Volcengine embedding failed: {str(e)}") from e
 
-    def embed_batch(
-        self, contents: List["EmbeddingInput"], is_query: bool = False
-    ) -> List[EmbedResult]:
-        """Batch embedding
-
-        Args:
-            contents: List of texts or multimodal content parts
-            is_query: Flag to indicate if these are query embeddings
-
-        Returns:
-            List[EmbedResult]: List of embedding results
-
-        Raises:
-            RuntimeError: When API call fails
-        """
-        if not contents:
-            return []
-        return [self.embed(content, is_query=is_query) for content in contents]
-
-    async def embed_batch_async(
-        self, contents: List["EmbeddingInput"], is_query: bool = False
-    ) -> List[EmbedResult]:
-        if not contents:
-            return []
-
-        # Embed each content individually and run them concurrently.
-        return list(
-            await asyncio.gather(
-                *(self.embed_async(content, is_query=is_query) for content in contents)
-            )
-        )
-
     def get_dimension(self) -> int:
         return self._dimension
 
@@ -435,39 +402,6 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
             )
         except Exception as e:
             raise RuntimeError(f"Volcengine sparse embedding failed: {str(e)}") from e
-
-    def embed_batch(
-        self, contents: List["EmbeddingInput"], is_query: bool = False
-    ) -> List[EmbedResult]:
-        """Batch sparse embedding
-
-        Args:
-            contents: List of texts or multimodal content parts
-            is_query: Flag to indicate if these are query embeddings
-
-        Returns:
-            List[EmbedResult]: List of embedding results
-
-        Raises:
-            RuntimeError: When API call fails
-        """
-        if not contents:
-            return []
-        return [self.embed(content, is_query=is_query) for content in contents]
-
-    async def embed_batch_async(
-        self, contents: List["EmbeddingInput"], is_query: bool = False
-    ) -> List[EmbedResult]:
-        if not contents:
-            return []
-
-        # The multimodal endpoint embeds a single content per call; run the items
-        # concurrently while sharing the async client.
-        return list(
-            await asyncio.gather(
-                *(self.embed_async(content, is_query=is_query) for content in contents)
-            )
-        )
 
     @property
     def supports_multimodal(self) -> bool:
@@ -632,39 +566,6 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
             )
         except Exception as e:
             raise RuntimeError(f"Volcengine hybrid embedding failed: {str(e)}") from e
-
-    def embed_batch(
-        self, contents: List["EmbeddingInput"], is_query: bool = False
-    ) -> List[EmbedResult]:
-        """Batch hybrid embedding
-
-        Args:
-            contents: List of texts or multimodal content parts
-            is_query: Flag to indicate if these are query embeddings
-
-        Returns:
-            List[EmbedResult]: List of embedding results
-
-        Raises:
-            RuntimeError: When API call fails
-        """
-        if not contents:
-            return []
-        return [self.embed(content, is_query=is_query) for content in contents]
-
-    async def embed_batch_async(
-        self, contents: List["EmbeddingInput"], is_query: bool = False
-    ) -> List[EmbedResult]:
-        if not contents:
-            return []
-
-        # The multimodal endpoint embeds a single content per call; run the items
-        # concurrently while sharing the async client.
-        return list(
-            await asyncio.gather(
-                *(self.embed_async(content, is_query=is_query) for content in contents)
-            )
-        )
 
     def get_dimension(self) -> int:
         return self._dimension

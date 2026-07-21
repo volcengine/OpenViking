@@ -54,6 +54,36 @@ def _get_config_warning_logger():
     return logging.getLogger(__name__)
 
 
+class ConnectorConfig(BaseModel):
+    """Configuration for external Connector service."""
+
+    enable: bool = False
+    connector: str = ""
+    tracker: str = ""
+    timeout_seconds: int = 3600
+    poll_interval_ms: int = 5000
+    allowed_add_types: List[str] = Field(default_factory=lambda: ["tos"])
+
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def _validate(self) -> "ConnectorConfig":
+        if self.enable:
+            for name, url in (("connector", self.connector), ("tracker", self.tracker)):
+                if not url.strip():
+                    raise ValueError(f"connector.{name} is required when connector.enable=true")
+                if "://" not in url:
+                    raise ValueError(
+                        f"connector.{name} must be a full endpoint URL including scheme "
+                        "(e.g., http://...)"
+                    )
+        if self.timeout_seconds <= 0:
+            raise ValueError("connector.timeout_seconds must be > 0")
+        if self.poll_interval_ms <= 0:
+            raise ValueError("connector.poll_interval_ms must be > 0")
+        return self
+
+
 class ParserApiConfig(BaseModel):
     """Configuration for the Understanding files/responses API."""
 
@@ -61,6 +91,7 @@ class ParserApiConfig(BaseModel):
     extensions: List[str] = Field(default_factory=list)
     host: str = ""
     api_key: str = ""
+    enable_feishu_url: bool = False
     enable_resumable_upload: bool = False
     upload_simple_max_bytes: int = 512 * 1024 * 1024
     upload_part_size_bytes: int = 8 * 1024 * 1024
@@ -200,6 +231,11 @@ class OpenVikingConfig(BaseModel):
     parser_api: ParserApiConfig = Field(
         default_factory=ParserApiConfig,
         description="Third-party parser API configuration (files/responses)",
+    )
+
+    connector: ConnectorConfig = Field(
+        default_factory=ConnectorConfig,
+        description="External Connector service configuration for data import",
     )
 
     auto_generate_l0: bool = Field(

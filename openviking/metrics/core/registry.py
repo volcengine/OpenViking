@@ -636,11 +636,6 @@ class _Gauge:
         """Increase one series in the bound gauge family by a positive delta."""
         self._family.add(labels=labels, delta=amount)
 
-    def dec(self, amount: float = 1.0, *, labels: Mapping[str, str] | None = None) -> None:
-        """Decrease one series in the bound gauge family by a positive amount."""
-        self._family.add(labels=labels, delta=-amount)
-
-
 class _Histogram:
     """Public lightweight handle used by callers to mutate one histogram family."""
 

@@ -3,6 +3,7 @@
 
 """Tests for APIKeyManager (openviking/server/api_keys.py)."""
 
+import asyncio
 import hashlib
 import uuid
 
@@ -11,8 +12,10 @@ import pytest_asyncio
 
 from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.api_keys import APIKeyManager
+from openviking.server.api_keys.legacy import ACCOUNTS_PATH
 from openviking.server.identity import Role
 from openviking.service.core import OpenVikingService
+from openviking.storage.transaction import LockContext, get_lock_manager
 from openviking_cli.exceptions import (
     AlreadyExistsError,
     InvalidArgumentError,
@@ -163,6 +166,36 @@ async def test_register_user(manager: APIKeyManager):
     assert identity.role == Role.USER
     assert identity.account_id == acct
     assert identity.user_id == "bob"
+
+
+async def test_concurrent_registry_writes_wait_for_locks(manager: APIKeyManager):
+    first_account = _uid()
+    second_account = _uid()
+
+    async with LockContext(get_lock_manager(), [ACCOUNTS_PATH], lock_mode="exact"):
+        account_tasks = [
+            asyncio.create_task(manager.create_account(first_account, "alice")),
+            asyncio.create_task(manager.create_account(second_account, "bob")),
+        ]
+        await asyncio.sleep(0.05)
+        assert all(not task.done() for task in account_tasks)
+
+    await asyncio.gather(*account_tasks)
+    accounts = await manager._read_json(ACCOUNTS_PATH)
+    assert {first_account, second_account} <= set(accounts["accounts"])
+
+    users_path = f"/local/{first_account}/_system/users.json"
+    async with LockContext(get_lock_manager(), [users_path], lock_mode="exact"):
+        user_tasks = [
+            asyncio.create_task(manager.register_user(first_account, "bob")),
+            asyncio.create_task(manager.register_user(first_account, "carol")),
+        ]
+        await asyncio.sleep(0.05)
+        assert all(not task.done() for task in user_tasks)
+
+    await asyncio.gather(*user_tasks)
+    users = await manager._read_json(users_path)
+    assert set(users["users"]) == {"alice", "bob", "carol"}
 
 
 async def test_register_duplicate_user_raises(manager: APIKeyManager):

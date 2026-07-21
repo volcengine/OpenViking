@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from openviking.observability.events import reset_event_bus_for_tests, try_publish_event
+from openviking.observability.events import _GLOBAL_EVENT_BUS, try_publish_event
 from openviking.observability.usage_audit import (
     init_usage_audit_from_server_config,
     shutdown_usage_audit,
@@ -17,7 +17,7 @@ from openviking.server.config import ObservabilityConfig, ServerConfig, UsageAud
 
 @pytest.mark.asyncio
 async def test_usage_audit_runtime_subscribes_to_shared_event_bus(tmp_path):
-    reset_event_bus_for_tests()
+    _GLOBAL_EVENT_BUS.clear()
     app = SimpleNamespace(state=SimpleNamespace())
     config = ServerConfig(
         observability=ObservabilityConfig(
@@ -55,7 +55,7 @@ async def test_usage_audit_runtime_subscribes_to_shared_event_bus(tmp_path):
         audit = await runtime.store.query_audit_logs(account_id="acct-runtime")
     finally:
         await shutdown_usage_audit(app=app)
-        reset_event_bus_for_tests()
+        _GLOBAL_EVENT_BUS.clear()
 
     assert retrievals["find"] == 1
     assert audit["total"] == 1

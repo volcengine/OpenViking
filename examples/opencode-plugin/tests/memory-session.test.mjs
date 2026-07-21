@@ -26,7 +26,7 @@ async function withCaptureServer(fn) {
     res.setHeader("Content-Type", "application/json")
     if (req.url === "/health") {
       res.end(JSON.stringify({ status: "ok" }))
-    } else if (req.url?.startsWith("/api/v1/sessions/") && req.url.endsWith("/messages")) {
+    } else if (req.url?.startsWith("/api/v1/sessions/") && req.url.endsWith("/messages/batch")) {
       res.end(JSON.stringify({ status: "ok", result: { accepted: true } }))
     } else if (req.url?.startsWith("/api/v1/sessions/")) {
       res.end(JSON.stringify({ status: "ok", result: { pending_tokens: 0 } }))
@@ -53,6 +53,7 @@ function baseConfig(endpoint) {
     user: "",
     peerId: "",
     timeoutMs: 5000,
+    autoCapture: true,
     captureAssistantTurns: true,
     captureToolMaxChars: 2000,
     captureMode: "semantic",
@@ -61,6 +62,73 @@ function baseConfig(endpoint) {
     commitKeepRecentCount: 10,
   }
 }
+
+test("autoCapture=false prevents OpenCode messages from being captured", async () => {
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-session-", async (dir) => {
+      const manager = createMemorySessionManager({
+        config: { ...baseConfig(endpoint), autoCapture: false },
+        pluginRoot: dir,
+      })
+
+      await manager.init()
+      await manager.handleEvent({ type: "session.created", properties: { info: { id: "oc-session-disabled" } } })
+      await manager.handleEvent({
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "msg-user-disabled",
+            sessionID: "oc-session-disabled",
+            role: "user",
+          },
+        },
+      })
+      await manager.handleEvent({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "part-user-disabled",
+            messageID: "msg-user-disabled",
+            sessionID: "oc-session-disabled",
+            type: "text",
+            text: "This message must not be captured.",
+          },
+        },
+      })
+
+      await manager.handleEvent({ type: "session.idle", sessionID: "oc-session-disabled" })
+      await manager.flushAll({ commit: false })
+
+      assert.equal(
+        requests.some((request) => request.url?.endsWith("/messages/batch")),
+        false,
+        "disabled automatic capture must never POST session messages",
+      )
+    })
+  })
+})
+
+test("autoCapture=false skips lifecycle commits but preserves explicit commits", async () => {
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-session-", async (dir) => {
+      const manager = createMemorySessionManager({
+        config: { ...baseConfig(endpoint), autoCapture: false },
+        pluginRoot: dir,
+      })
+
+      await manager.init()
+      await manager.handleEvent({ type: "session.created", properties: { info: { id: "oc-session-disabled" } } })
+      await manager.handleEvent({ type: "session.compacted", sessionID: "oc-session-disabled" })
+      await manager.flushAll({ commit: true })
+      await manager.commitSession("oc-explicit-manual")
+
+      const commitUrls = requests
+        .filter((request) => request.method === "POST" && request.url?.endsWith("/commit"))
+        .map((request) => request.url)
+      assert.deepEqual(commitUrls, ["/api/v1/sessions/oc-explicit-manual/commit"])
+    })
+  })
+})
 
 test("session.idle event flushes pending OpenCode capture", async () => {
   await withCaptureServer(async ({ endpoint, requests }) => {
@@ -94,11 +162,11 @@ test("session.idle event flushes pending OpenCode capture", async () => {
 
       await manager.handleEvent({ type: "session.idle", sessionID: "oc-session-1" })
 
-      const addMessage = requests.find((request) => request.url === "/api/v1/sessions/oc-oc-session-1/messages")
+      const addMessage = requests.find((request) => request.url === "/api/v1/sessions/oc-oc-session-1/messages/batch")
       assert.ok(addMessage, "session.idle should POST pending messages")
       const body = JSON.parse(addMessage.body)
-      assert.equal(body.role, "user")
-      assert.match(body.content, /idle events must flush captures/)
+      assert.equal(body.messages[0].role, "user")
+      assert.match(body.messages[0].content, /idle events must flush captures/)
       await manager.flushAll({ commit: false })
     })
   })
@@ -136,11 +204,11 @@ test("assistant messages are captured even when finish is not stop", async () =>
 
       await manager.handleEvent({ type: "session.idle", properties: { sessionID: "oc-session-2" } })
 
-      const addMessage = requests.find((request) => request.url === "/api/v1/sessions/oc-oc-session-2/messages")
+      const addMessage = requests.find((request) => request.url === "/api/v1/sessions/oc-oc-session-2/messages/batch")
       assert.ok(addMessage, "session.idle should capture non-stop assistant messages")
       const body = JSON.parse(addMessage.body)
-      assert.equal(body.role, "assistant")
-      assert.match(body.content, /Partial assistant output/)
+      assert.equal(body.messages[0].role, "assistant")
+      assert.match(body.messages[0].content, /Partial assistant output/)
       await manager.flushAll({ commit: false })
     })
   })
