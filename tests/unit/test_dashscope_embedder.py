@@ -443,6 +443,33 @@ class TestDashScopeAsync:
 
     @patch("openviking.models.embedder.dashscope_embedders.openai.OpenAI")
     @patch("openviking.models.embedder.dashscope_embedders.httpx.Client")
+    @pytest.mark.anyio
+    async def test_embed_compat_downgrades_non_fusing_multimodal_model(
+        self, mock_httpx, mock_openai
+    ):
+        response = MagicMock()
+        response.json.return_value = {
+            "output": {"embeddings": [{"embedding": [0.2] * 768}]}
+        }
+        client = MagicMock()
+        client.post = AsyncMock(return_value=response)
+        embedder = DashScopeDenseEmbedder(
+            "tongyi-embedding-vision-flash", api_key="sk-test"
+        )
+        embedder._get_async_httpx_client = MagicMock(return_value=client)
+        parts = [
+            {"type": "text", "text": "cat"},
+            {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+        ]
+
+        await embed_compat(embedder, parts, is_query=False)
+
+        assert embedder.supports_multimodal is False
+        body = client.post.call_args.kwargs["json"]
+        assert body["input"]["contents"] == [{"text": "cat"}]
+
+    @patch("openviking.models.embedder.dashscope_embedders.openai.OpenAI")
+    @patch("openviking.models.embedder.dashscope_embedders.httpx.Client")
     @patch("openviking.models.embedder.dashscope_embedders.openai.AsyncOpenAI")
     @pytest.mark.anyio
     async def test_embed_async_text_error_raises_runtime_error(
