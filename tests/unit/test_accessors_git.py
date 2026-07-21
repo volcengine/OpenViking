@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Unit tests for GitAccessor."""
 
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -194,15 +195,29 @@ class TestGitAccessor:
         assert "--recursive" not in clone_args
 
     async def test_git_clone_marker_does_not_store_oauth_credentials(
-        self, accessor: GitAccessor, tmp_path: Path
+        self, accessor: GitAccessor, tmp_path: Path, monkeypatch
     ) -> None:
         source = "https://oauth2:secret@gitlab.com/group/subgroup/repo.git"
+        global_config = tmp_path / "existing-global.config"
+        global_config.write_text("[test]\n\tinherited = preserved\n", encoding="utf-8")
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(global_config))
+        monkeypatch.setenv("GIT_CONFIG_COUNT", "0")
         observed = {}
 
         async def _capture_git(args, cwd=None, env=None):
             observed["args"] = args
-            observed["auth_config"] = Path(env["GIT_CONFIG_GLOBAL"])
+            auth_config_index = int(env["GIT_CONFIG_COUNT"]) - 1
+            assert env[f"GIT_CONFIG_KEY_{auth_config_index}"] == "include.path"
+            observed["auth_config"] = Path(env[f"GIT_CONFIG_VALUE_{auth_config_index}"])
             observed["auth_content"] = observed["auth_config"].read_text(encoding="utf-8")
+            observed["global_config"] = env["GIT_CONFIG_GLOBAL"]
+            observed["inherited"] = subprocess.run(
+                ["git", "config", "--get", "test.inherited"],
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
             return ""
 
         with patch.object(accessor, "_run_git", side_effect=_capture_git):
@@ -211,10 +226,37 @@ class TestGitAccessor:
         assert source not in observed["args"]
         assert "secret" not in " ".join(observed["args"])
         assert "Authorization: Basic b2F1dGgyOnNlY3JldA==" in observed["auth_content"]
+        assert observed["global_config"] == str(global_config)
+        assert observed["inherited"] == "preserved"
         assert not observed["auth_config"].exists()
         assert (tmp_path / ".git_source_repo").read_text(encoding="utf-8") == (
             "https://gitlab.com/group/subgroup/repo.git"
         )
+
+    async def test_git_clone_removes_auth_config_when_chmod_fails(
+        self, accessor: GitAccessor, tmp_path: Path
+    ) -> None:
+        source = "https://oauth2:secret@gitlab.com/group/subgroup/repo.git"
+        auth_config_path = tmp_path / "auth.config"
+
+        def _open_auth_config(**kwargs):
+            del kwargs
+            return auth_config_path.open("w", encoding="utf-8")
+
+        with (
+            patch(
+                "openviking.parse.accessors.git_accessor.tempfile.NamedTemporaryFile",
+                side_effect=_open_auth_config,
+            ),
+            patch(
+                "openviking.parse.accessors.git_accessor.os.chmod",
+                side_effect=OSError("chmod failed"),
+            ),
+        ):
+            with pytest.raises(OSError, match="chmod failed"):
+                await accessor._git_clone(source, str(tmp_path / "repo"))
+
+        assert not auth_config_path.exists()
 
     async def test_git_clone_preserves_ssh_transport_username(
         self, accessor: GitAccessor, tmp_path: Path
@@ -254,19 +296,50 @@ class TestGitAccessor:
     ) -> None:
         source = "https://oauth2:secret@gitlab.com/group/subgroup/repo.git"
         with patch(
-            "openviking.parse.accessors.git_accessor.urllib.request.urlopen",
-            side_effect=OSError("failed https://oauth2:secret@gitlab.com/group/subgroup/repo.git"),
-        ) as urlopen:
+            "openviking.parse.accessors.git_accessor.urllib.request.build_opener"
+        ) as build_opener:
+            build_opener.return_value.open.side_effect = OSError(
+                "failed https://oauth2:secret@gitlab.com/group/subgroup/repo.git"
+            )
             with pytest.raises(RuntimeError) as exc_info:
                 await accessor._gitlab_zip_download(source, "main", str(tmp_path))
 
-        request = urlopen.call_args.args[0]
+        request = build_opener.return_value.open.call_args.args[0]
         assert request.full_url.endswith(
             "/api/v4/projects/group%2Fsubgroup%2Frepo/repository/archive.zip?sha=main"
         )
         assert "oauth2:secret@" not in request.full_url
         assert request.get_header("Authorization") == "Bearer secret"
         assert "oauth2:secret@" not in str(exc_info.value)
+
+    async def test_authenticated_gitlab_archive_rejects_cross_origin_redirect(
+        self, accessor: GitAccessor, tmp_path: Path
+    ) -> None:
+        source = "https://oauth2:secret@gitlab.com/group/subgroup/repo.git"
+
+        class RedirectingOpener:
+            def __init__(self, redirect_handler):
+                self.redirect_handler = redirect_handler
+
+            def open(self, request, timeout):
+                del timeout
+                return self.redirect_handler.redirect_request(
+                    request,
+                    None,
+                    302,
+                    "Found",
+                    {},
+                    "https://objects.example.test/archive.zip",
+                )
+
+        with patch(
+            "openviking.parse.accessors.git_accessor.urllib.request.build_opener",
+            side_effect=lambda handler: RedirectingOpener(handler),
+        ):
+            with pytest.raises(RuntimeError, match="Refusing cross-origin redirect") as exc_info:
+                await accessor._gitlab_zip_download(source, "main", str(tmp_path))
+
+        assert "secret" not in str(exc_info.value)
 
     async def test_github_archive_encodes_fragment_in_ref(
         self, accessor: GitAccessor, tmp_path: Path

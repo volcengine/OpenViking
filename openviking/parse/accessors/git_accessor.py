@@ -14,11 +14,12 @@ import re
 import shutil
 import stat
 import tempfile
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any, Optional, Tuple, Union
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import quote, unquote, urljoin, urlparse
 
 from openviking.utils import is_github_url, is_gitlab_url, parse_code_hosting_url
 from openviking.utils.code_hosting_utils import (
@@ -35,6 +36,37 @@ from openviking_cli.utils.logger import get_logger
 from .base import DataAccessor, LocalResource, SourceType
 
 logger = get_logger(__name__)
+
+
+def _url_origin(url: str) -> tuple[str, str, Optional[int]]:
+    parsed = urlparse(url)
+    if not parsed.scheme or parsed.hostname is None:
+        raise ValueError("URL must include a scheme and host")
+    scheme = parsed.scheme.lower()
+    port = parsed.port
+    if port is None:
+        port = {"http": 80, "https": 443}.get(scheme)
+    return scheme, parsed.hostname.lower(), port
+
+
+class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Reject redirects that would forward an authenticated request off-origin."""
+
+    def __init__(self, url: str):
+        self._allowed_origin = _url_origin(url)
+        super().__init__()
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        redirect_url = urljoin(req.full_url, newurl)
+        if _url_origin(redirect_url) != self._allowed_origin:
+            raise urllib.error.HTTPError(
+                req.full_url,
+                code,
+                "Refusing cross-origin redirect for authenticated GitLab archive request",
+                headers,
+                fp,
+            )
+        return super().redirect_request(req, fp, code, msg, headers, redirect_url)
 
 
 class GitAccessor(DataAccessor):
@@ -415,33 +447,42 @@ class GitAccessor(DataAccessor):
 
         git_env = None
         auth_config_path = None
-        parsed = urlparse(url)
-        if parsed.username is not None and parsed.password is not None:
-            username = unquote(parsed.username)
-            password = unquote(parsed.password)
-            if "\n" in username + password or "\x00" in username + password:
-                raise ValueError("Invalid newline or NUL in repository credentials")
-
-            credentials = base64.b64encode(f"{username}:{password}".encode()).decode()
-            public_parsed = urlparse(public_url)
-            auth_scope = f"{public_parsed.scheme}://{public_parsed.netloc}/"
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                prefix="ov_git_auth_",
-                suffix=".config",
-                delete=False,
-            ) as auth_config:
-                auth_config.write(
-                    f'[http "{auth_scope}"]\n\textraHeader = Authorization: Basic {credentials}\n'
-                )
-                auth_config_path = auth_config.name
-            os.chmod(auth_config_path, stat.S_IRUSR | stat.S_IWUSR)
-            git_env = os.environ.copy()
-            git_env["GIT_CONFIG_GLOBAL"] = auth_config_path
-            git_env["GIT_TERMINAL_PROMPT"] = "0"
-
         try:
+            parsed = urlparse(url)
+            if parsed.username is not None and parsed.password is not None:
+                username = unquote(parsed.username)
+                password = unquote(parsed.password)
+                if "\n" in username + password or "\x00" in username + password:
+                    raise ValueError("Invalid newline or NUL in repository credentials")
+
+                credentials = base64.b64encode(f"{username}:{password}".encode()).decode()
+                public_parsed = urlparse(public_url)
+                auth_scope = f"{public_parsed.scheme}://{public_parsed.netloc}/"
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    prefix="ov_git_auth_",
+                    suffix=".config",
+                    delete=False,
+                ) as auth_config:
+                    auth_config_path = auth_config.name
+                    auth_config.write(
+                        f'[http "{auth_scope}"]\n'
+                        f"\textraHeader = Authorization: Basic {credentials}\n"
+                    )
+                os.chmod(auth_config_path, stat.S_IRUSR | stat.S_IWUSR)
+                git_env = os.environ.copy()
+                try:
+                    config_count = int(git_env.get("GIT_CONFIG_COUNT", "0"))
+                except ValueError as exc:
+                    raise ValueError("GIT_CONFIG_COUNT must be an integer") from exc
+                if config_count < 0:
+                    raise ValueError("GIT_CONFIG_COUNT must not be negative")
+                git_env["GIT_CONFIG_COUNT"] = str(config_count + 1)
+                git_env[f"GIT_CONFIG_KEY_{config_count}"] = "include.path"
+                git_env[f"GIT_CONFIG_VALUE_{config_count}"] = auth_config_path
+                git_env["GIT_TERMINAL_PROMPT"] = "0"
+
             clone_args = [
                 "git",
                 "clone",
@@ -656,7 +697,12 @@ class GitAccessor(DataAccessor):
                 headers["Authorization"] = f"Bearer {oauth_token}"
 
             req = urllib.request.Request(public_zip_url, headers=headers)
-            with urllib.request.urlopen(req, timeout=1800) as resp, open(zip_path, "wb") as f:
+            if oauth_token is None:
+                response = urllib.request.urlopen(req, timeout=1800)
+            else:
+                opener = urllib.request.build_opener(_SameOriginRedirectHandler(public_zip_url))
+                response = opener.open(req, timeout=1800)
+            with response as resp, open(zip_path, "wb") as f:
                 shutil.copyfileobj(resp, f)
 
         try:
