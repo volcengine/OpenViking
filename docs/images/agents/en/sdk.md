@@ -3,7 +3,7 @@
 Run the following command to install OpenViking:
 
 ```bash
-pip install openviking --upgrade --force-reinstall
+pip install -U openviking
 ```
 
 ## Step 2: Initialize the client

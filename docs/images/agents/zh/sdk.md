@@ -2,7 +2,7 @@
 执行以下命令以安装 OpenViking
 
 ```bash
-pip install openviking --upgrade --force-reinstall
+pip install -U openviking
 ```
 
 ## 步骤 2 初始化客户端
