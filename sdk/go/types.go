@@ -203,6 +203,7 @@ type FindOptions struct {
 	Until          string
 	TimeField      string
 	Level          []int
+	Tags           []string
 }
 
 // SearchOptions controls Search.
@@ -220,6 +221,7 @@ type SearchOptions struct {
 	Until          string
 	TimeField      string
 	Level          []int
+	Tags           []string
 }
 
 // GrepOptions controls Grep.
