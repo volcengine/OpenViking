@@ -9,7 +9,7 @@ import json
 import pytest
 
 from openviking import AsyncOpenViking
-from openviking.message import TextPart
+from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.transaction import LockContext, get_lock_manager
@@ -187,3 +187,56 @@ class TestCommitRace:
             ctx=session.ctx,
         )
         assert json.loads(raw_meta)["pending_tokens"] == 123
+
+    async def test_auto_commit_success_meta_merge_preserves_concurrent_message_meta(
+        self, client: AsyncOpenViking
+    ):
+        """Auto-commit success fields must not overwrite newer add_message meta."""
+        session = client.session(session_id="race_test_auto_commit_success_meta_merge")
+        session.add_message("user", [TextPart("Original message")])
+
+        original_write_live = session._write_to_agfs_async
+        concurrent_last_message_at = "2099-01-01T00:00:00.000Z"
+
+        async def write_live_then_concurrent_meta(messages):
+            await original_write_live(messages)
+            concurrent_msg = Message(
+                id="msg_concurrent_meta_merge",
+                role="user",
+                parts=[TextPart("Concurrent message during commit meta save")],
+                created_at=concurrent_last_message_at,
+            )
+            await session._viking_fs.write_file(
+                f"{session._session_uri}/messages.jsonl",
+                concurrent_msg.to_jsonl() + "\n",
+                ctx=session.ctx,
+            )
+            latest = session.meta.to_dict()
+            latest.update(
+                {
+                    "message_count": 1,
+                    "pending_tokens": 77,
+                    "last_message_at": concurrent_last_message_at,
+                }
+            )
+            await session._viking_fs.write_file(
+                f"{session._session_uri}/.meta.json",
+                json.dumps(latest),
+                ctx=session.ctx,
+            )
+
+        session._write_to_agfs_async = write_live_then_concurrent_meta
+
+        result = await session.commit_async(record_auto_commit_success=True)
+
+        assert result.get("archived") is True
+        raw_meta = await session._viking_fs.read_file(
+            f"{session._session_uri}/.meta.json",
+            ctx=session.ctx,
+        )
+        meta = json.loads(raw_meta)
+        assert meta["message_count"] == 1
+        assert meta["pending_tokens"] == 77
+        assert meta["last_message_at"] == concurrent_last_message_at
+        assert meta["last_auto_commit_at"] != ""
+        assert meta["auto_commit_last_error"] == ""

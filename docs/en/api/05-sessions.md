@@ -164,13 +164,7 @@ ov session new
       "user_id": "alice"
     },
     "config": {
-      "auto_commit_policy": {
-        "pending_token_threshold": 10000,
-        "message_count_threshold": 50,
-        "idle_timeout_seconds": 86400,
-        "keep_recent_count": 2,
-        "min_commit_interval_seconds": 0
-      }
+      "auto_commit_policy": null
     }
   },
   "time": 0.1

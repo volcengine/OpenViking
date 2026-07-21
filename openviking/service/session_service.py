@@ -62,6 +62,7 @@ class SessionService:
         self._usage_reporter: Optional["UsageReporter"] = None
         self._session_auto_commit_config = SessionAutoCommitConfig()
         self._auto_commit_claims: set[tuple[str, str, str]] = set()
+        self._auto_commit_pending_tasks: dict[tuple[str, str, str], asyncio.Task[None]] = {}
         self._auto_commit_claims_lock = asyncio.Lock()
 
     def set_dependencies(
@@ -443,11 +444,53 @@ class SessionService:
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
             ):
+                self._schedule_auto_commit_recheck_locked(claim, ctx, reason_hint)
                 return False
             self._auto_commit_claims.add(claim)
 
         asyncio.create_task(self.run_auto_commit(session_id, ctx, reason=reason_hint))
         return True
+
+    def _schedule_auto_commit_recheck_locked(
+        self,
+        claim: tuple[str, str, str],
+        ctx: RequestContext,
+        reason: str,
+    ) -> None:
+        """Schedule one deferred recheck after an existing commit task finishes."""
+        if claim in self._auto_commit_pending_tasks:
+            return
+        task = asyncio.create_task(self._run_auto_commit_when_not_running(claim, ctx, reason))
+        self._auto_commit_pending_tasks[claim] = task
+        task.add_done_callback(lambda _task: self._auto_commit_pending_tasks.pop(claim, None))
+
+    async def _run_auto_commit_when_not_running(
+        self,
+        claim: tuple[str, str, str],
+        ctx: RequestContext,
+        reason: str,
+    ) -> None:
+        account_id, user_id, session_id = claim
+        tracker = get_task_tracker()
+        while await tracker.has_running(
+            "session_commit",
+            session_id,
+            account_id=account_id,
+            user_id=user_id,
+        ):
+            await asyncio.sleep(max(0.1, self._session_auto_commit_config.check_interval_seconds))
+        async with self._auto_commit_claims_lock:
+            if claim in self._auto_commit_claims:
+                return
+            if await tracker.has_running(
+                "session_commit",
+                session_id,
+                account_id=account_id,
+                user_id=user_id,
+            ):
+                return
+            self._auto_commit_claims.add(claim)
+        await self.run_auto_commit(session_id, ctx, reason=reason)
 
     async def run_auto_commit(self, session_id: str, ctx: RequestContext, *, reason: str) -> None:
         """Run one best-effort automatic commit and release process-local claim."""
@@ -474,16 +517,13 @@ class SessionService:
                 result = await session.commit_async(
                     keep_recent_count=0,
                     persist_keep_recent_count=False,
+                    record_auto_commit_success=True,
                 )
             else:
                 result = await session.commit_async(
                     keep_recent_count=get_keep_recent_count(policy),
+                    record_auto_commit_success=True,
                 )
-            if result.get("archived"):
-                session.meta.auto_commit_last_error = ""
-                session.meta.auto_commit_last_error_at = ""
-                session.meta.last_auto_commit_at = get_current_timestamp()
-            await session._save_meta()
         except Exception as exc:
             logger.warning("Automatic session commit failed for %s: %s", session_id, exc)
             try:

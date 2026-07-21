@@ -1099,6 +1099,7 @@ class Session:
         *,
         memory_policy: Optional[Dict[str, Any]] = None,
         persist_keep_recent_count: bool = True,
+        record_auto_commit_success: bool = False,
     ) -> Dict[str, Any]:
         """Archive immediately and enqueue restart-safe Phase 2 processing.
 
@@ -1118,6 +1119,8 @@ class Session:
                 is remembered in meta for subsequent add_message() accounting. The
                 idle full-commit path passes ``False`` with ``keep_recent_count=0``
                 so a one-off full archive does not wipe the stored keep preference.
+            record_auto_commit_success: When ``True``, persist auto-commit success
+                status in the same meta update as the archive boundary.
 
         Returns a task_id for tracking Phase 2 progress.
         """
@@ -1235,19 +1238,15 @@ class Session:
                 self._messages = list(messages_to_archive) + list(retained_messages)
                 self._compression.compression_index -= 1
                 raise
+
         # Lock released; live session now contains only the retained tail.
 
-        # WM v2: live session is now the retained tail; pending_tokens resets
-        # because anything that was pending has been archived.
-        self._meta.message_count = len(self._messages)
-        self._meta.pending_tokens = 0
-        self._meta.keep_recent_count = stored_keep_recent_count
-        self._meta.commit_count = max(
-            self._meta.commit_count,
-            self._compression.compression_index,
+        await self._merge_and_save_commit_boundary_meta(
+            archive_index=self._compression.compression_index,
+            retained_message_count=len(self._messages),
+            stored_keep_recent_count=stored_keep_recent_count,
+            record_auto_commit_success=record_auto_commit_success,
         )
-        self._meta.last_commit_at = get_current_timestamp()
-        await self._save_meta()
 
         self._compression.original_count += len(messages_to_archive)
         logger.info(
@@ -2195,6 +2194,46 @@ class Session:
             )
         latest_meta.last_commit_at = get_current_timestamp()
         latest_meta.message_count = await self._read_live_message_count()
+        self._meta = latest_meta
+        await self._save_meta()
+
+    async def _read_latest_meta_or_current(self) -> SessionMeta:
+        latest_meta = self._meta
+        try:
+            meta_content = await self._viking_fs.read_file(
+                f"{self._session_uri}/.meta.json",
+                ctx=self.ctx,
+            )
+            latest_meta = SessionMeta.from_dict(json.loads(meta_content))
+        except Exception:
+            latest_meta = self._meta
+        return latest_meta
+
+    async def _merge_and_save_commit_boundary_meta(
+        self,
+        *,
+        archive_index: int,
+        retained_message_count: int,
+        stored_keep_recent_count: int,
+        record_auto_commit_success: bool,
+    ) -> None:
+        """Persist Phase 1 commit metadata without clobbering newer message meta."""
+        latest_meta = await self._read_latest_meta_or_current()
+        live_message_count = await self._read_live_message_count()
+
+        if live_message_count <= retained_message_count:
+            latest_meta.message_count = retained_message_count
+            latest_meta.pending_tokens = 0
+        else:
+            latest_meta.message_count = live_message_count
+
+        latest_meta.keep_recent_count = stored_keep_recent_count
+        latest_meta.commit_count = max(latest_meta.commit_count, archive_index)
+        latest_meta.last_commit_at = get_current_timestamp()
+        if record_auto_commit_success:
+            latest_meta.auto_commit_last_error = ""
+            latest_meta.auto_commit_last_error_at = ""
+            latest_meta.last_auto_commit_at = get_current_timestamp()
         self._meta = latest_meta
         await self._save_meta()
 

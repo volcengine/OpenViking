@@ -64,34 +64,18 @@ async def test_async_http_client_batch_add_messages_posts_batch_payload():
 
 
 @pytest.mark.asyncio
-async def test_async_http_client_add_message_posts_auto_commit_policy():
+async def test_async_http_client_add_message_does_not_post_auto_commit_policy():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
     client._http = fake_http
     client._handle_response_data = lambda _response: {"result": {"message_id": "msg-1"}}
 
-    policy = {
-        "enabled": True,
-        "token_threshold": 128,
-        "idle_timeout_seconds": 30,
-        "keep_recent_count": 2,
-    }
-
-    result = await client.add_message(
-        "demo-session",
-        role="user",
-        content="hello",
-        auto_commit_policy=policy,
-    )
+    result = await client.add_message("demo-session", role="user", content="hello")
 
     assert result == {"message_id": "msg-1"}
     fake_http.post.assert_awaited_once_with(
         "/api/v1/sessions/demo-session/messages",
-        json={
-            "role": "user",
-            "content": "hello",
-            "auto_commit_policy": policy,
-        },
+        json={"role": "user", "content": "hello"},
     )
 
 
@@ -121,7 +105,7 @@ async def test_async_http_client_batch_add_messages_url_encodes_session_id():
 
 
 @pytest.mark.asyncio
-async def test_async_http_client_batch_add_messages_posts_top_level_auto_commit_policy():
+async def test_async_http_client_batch_add_messages_does_not_post_auto_commit_policy():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
     client._http = fake_http
@@ -130,22 +114,49 @@ async def test_async_http_client_batch_add_messages_posts_top_level_auto_commit_
     }
 
     messages = [{"role": "user", "content": "hello"}]
-    policy = {
-        "enabled": True,
-        "idle_timeout_seconds": 45,
-        "keep_recent_count": 1,
-    }
 
-    result = await client.batch_add_messages(
-        "batch-session",
-        messages,
-        auto_commit_policy=policy,
-    )
+    result = await client.batch_add_messages("batch-session", messages)
 
     assert result == {"session_id": "batch-session", "message_count": 2, "added": 2}
     fake_http.post.assert_awaited_once_with(
         "/api/v1/sessions/batch-session/messages/batch",
-        json={"messages": messages, "auto_commit_policy": policy},
+        json={"messages": messages},
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_create_session_posts_config():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {"result": {"session_id": "s1"}}
+
+    config = {"auto_commit_policy": {"pending_token_threshold": 100}}
+
+    result = await client.create_session(config=config)
+
+    assert result == {"session_id": "s1"}
+    fake_http.post.assert_awaited_once_with(
+        "/api/v1/sessions",
+        json={"config": config},
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_update_session_config_patches_config():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(patch=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {"result": {"session_id": "s1"}}
+
+    config = {"auto_commit_policy": {"message_count_threshold": 10}}
+
+    result = await client.update_session_config("s1", config)
+
+    assert result == {"session_id": "s1"}
+    fake_http.patch.assert_awaited_once_with(
+        "/api/v1/sessions/s1",
+        json={"config": config},
     )
 
 
@@ -232,37 +243,27 @@ def test_sync_http_client_batch_add_messages_forwards_to_async_client():
     mock_batch.assert_called_once_with(
         "batch-session",
         messages,
-        auto_commit_policy=None,
     )
 
 
-def test_sync_http_client_batch_add_messages_forwards_auto_commit_policy():
+def test_sync_http_client_update_session_config_forwards_to_async_client():
     client = SyncHTTPClient(url="http://localhost:1933")
-    messages = [{"role": "user", "content": "hello"}]
-    policy = {"enabled": True, "idle_timeout_seconds": 20}
+    config = {"auto_commit_policy": {"idle_timeout_seconds": 20}}
 
     with patch.object(
         client._async_client,
-        "batch_add_messages",
-        return_value={"session_id": "batch-session", "message_count": 1, "added": 1},
-    ) as mock_batch:
+        "update_session_config",
+        return_value={"session_id": "demo-session", "config": config},
+    ) as mock_update:
         with patch(
             "openviking_sdk.client.run_async",
-            return_value={"session_id": "batch-session", "message_count": 1, "added": 1},
+            return_value={"session_id": "demo-session", "config": config},
         ) as mock_run:
-            result = client.batch_add_messages(
-                "batch-session",
-                messages,
-                auto_commit_policy=policy,
-            )
+            result = client.update_session_config("demo-session", config)
 
-    assert result == {"session_id": "batch-session", "message_count": 1, "added": 1}
+    assert result == {"session_id": "demo-session", "config": config}
     assert mock_run.called
-    mock_batch.assert_called_once_with(
-        "batch-session",
-        messages,
-        auto_commit_policy=policy,
-    )
+    mock_update.assert_called_once_with("demo-session", config)
 
 
 def test_sync_http_client_session_returns_sync_session_wrapper():
@@ -298,35 +299,26 @@ def test_sync_session_add_message_wraps_async_client():
         parts=None,
         created_at=None,
         peer_id=None,
-        auto_commit_policy=None,
     )
 
 
-def test_sync_session_add_message_wraps_auto_commit_policy():
+def test_sync_session_update_config_wraps_async_client():
     client = SyncHTTPClient(url="http://localhost:1933")
     session = client.session("demo-session")
-    policy = {"enabled": True, "token_threshold": 64}
+    config = {"auto_commit_policy": {"pending_token_threshold": 64}}
 
     with patch.object(
-        client._async_client, "add_message", Mock(return_value=object())
-    ) as mock_add_message:
+        client._async_client, "update_session_config", Mock(return_value=object())
+    ) as mock_update:
         with patch(
             "openviking_sdk.client.run_async",
-            return_value={"message_id": "msg-1"},
+            return_value={"session_id": "demo-session", "config": config},
         ) as mock_run:
-            result = session.add_message("user", content="hello", auto_commit_policy=policy)
+            result = session.update_config(config)
 
-    assert result == {"message_id": "msg-1"}
+    assert result == {"session_id": "demo-session", "config": config}
     assert mock_run.called
-    mock_add_message.assert_called_once_with(
-        "demo-session",
-        role="user",
-        content="hello",
-        parts=None,
-        created_at=None,
-        peer_id=None,
-        auto_commit_policy=policy,
-    )
+    mock_update.assert_called_once_with("demo-session", config)
 
 
 def test_sync_session_commit_and_context_are_sync():

@@ -104,17 +104,17 @@ Enable session auto commit from the SDK:
 
 ```python
 policy = {
-    "enabled": True,
-    "token_threshold": 512,
+    "pending_token_threshold": 512,
     "idle_timeout_seconds": 60,
     "keep_recent_count": 2,
 }
 
-client.session("demo-session").add_message(
-    "user",
-    "remember this automatically",
-    auto_commit_policy=policy,
+client.update_session_config(
+    "demo-session",
+    {"auto_commit_policy": policy},
 )
+
+client.session("demo-session").add_message("user", "remember this automatically")
 ```
 
 ## Quick Start: Async Client
