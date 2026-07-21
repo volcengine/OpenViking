@@ -1,0 +1,131 @@
+bot/tests/test_compile.py
+  s_416615144c3c47::t_45e801f41cb198 1-532
+bot/tests/test_openapi_auth.py
+  s_416615144c3c47::t_52ea7de4deb36f 19,54-96,738-812
+bot/vikingbot/agent/loop.py
+  s_416615144c3c47::t_cdf692744a82a4 791-794,826-829,861,884,945-951,960,1026-1027,1047,1099,1146-1194
+bot/vikingbot/agent/tools/compile.py
+  s_416615144c3c47::t_00c72db43a4f0c 1-228
+bot/vikingbot/agent/tools/ov_file.py
+  s_416615144c3c47::t_4b0bdf1c11a928 201,212-216
+bot/vikingbot/channels/openapi.py
+  s_416615144c3c47::t_8758a5ec3d657d 144,149,371-380,854-857,970-1002
+bot/vikingbot/cli/commands.py
+  s_416615144c3c47::t_a0ccaef033fdcb 426-429,436,455,584-589,615
+bot/vikingbot/compile/__init__.py
+  s_416615144c3c47::t_3e9e089c4710b3 1
+bot/vikingbot/compile/models.py
+  s_416615144c3c47::t_dce7123c708926 1-156
+bot/vikingbot/compile/renderer.py
+  s_416615144c3c47::t_3e01814be38b9f 1-357
+bot/vikingbot/compile/router.py
+  s_416615144c3c47::t_6a26ff2c7ea356 1-76
+bot/vikingbot/compile/service.py
+  s_416615144c3c47::t_3d3d60490bc865 1-782
+bot/vikingbot/compile/store.py
+  s_416615144c3c47::t_cd8564b589bead 1-101
+bot/vikingbot/openviking_mount/ov_server.py
+  s_416615144c3c47::t_00ee4795438c43 590-593,598,601-644
+crates/ov_cli/src/base_client.rs
+  s_416615144c3c47::t_46fc19b71a0c08 328
+crates/ov_cli/src/client.rs
+  s_416615144c3c47::t_dfdafe571e3711 100-154,319-338,2069-2111
+crates/ov_cli/src/commands/compile.rs
+  s_416615144c3c47::t_8af488f0521dd7 1-150
+crates/ov_cli/src/commands/mod.rs
+  s_416615144c3c47::t_13903ccd840801 3
+crates/ov_cli/src/help_ui.rs
+  s_416615144c3c47::t_5d2030021eaf4e 92,845-856
+crates/ov_cli/src/main.rs
+  s_416615144c3c47::t_06dd3fe24e7d17 944-969,3091-3112,3421-3484
+docs/design/ov-compile-design.md
+  s_416615144c3c47::t_8c854593d9c866 1-669
+examples/ov-compile-one-page/resources/01-foundation/01-product-scope.md
+  s_416615144c3c47::t_89552b123a80da 1-17
+examples/ov-compile-one-page/resources/01-foundation/02-supported-formats.md
+  s_416615144c3c47::t_c3038be54fc7e4 1-14
+examples/ov-compile-one-page/resources/01-foundation/03-api-sdk-integration.md
+  s_416615144c3c47::t_5fbab148b331db 1-19
+examples/ov-compile-one-page/resources/02-parsing/04-ocr-low-quality-scans.md
+  s_416615144c3c47::t_bd3145085b6eab 1-15
+examples/ov-compile-one-page/resources/02-parsing/05-layout-reading-order.md
+  s_416615144c3c47::t_e0c9dbbb809801 1-14
+examples/ov-compile-one-page/resources/02-parsing/06-complex-table-recovery.md
+  s_416615144c3c47::t_db72065414cb81 1-15
+examples/ov-compile-one-page/resources/02-parsing/07-formulas-charts.md
+  s_416615144c3c47::t_f2ce66f7b7e9b0 1-13
+examples/ov-compile-one-page/resources/03-knowledge/08-semantic-chunking.md
+  s_416615144c3c47::t_2261f321a92191 1-16
+examples/ov-compile-one-page/resources/03-knowledge/09-metadata-permissions.md
+  s_416615144c3c47::t_d49094523d4544 1-14
+examples/ov-compile-one-page/resources/03-knowledge/10-multimodal-assets.md
+  s_416615144c3c47::t_472b920e20f7bd 1-15
+examples/ov-compile-one-page/resources/04-quality/11-quality-evaluation.md
+  s_416615144c3c47::t_e0fe88118d8edd 1-18
+examples/ov-compile-one-page/resources/04-quality/12-competitor-comparison.md
+  s_416615144c3c47::t_cb55b8a3ab45a6 1-17
+examples/ov-compile-one-page/resources/04-quality/13-observability-slo.md
+  s_416615144c3c47::t_7fb5e429b2aa8f 1-18
+examples/ov-compile-one-page/resources/05-engineering/14-performance-cost.md
+  s_416615144c3c47::t_a984ed98324ff3 1-16
+examples/ov-compile-one-page/resources/05-engineering/15-private-deployment.md
+  s_416615144c3c47::t_56920178060418 1-17
+examples/ov-compile-one-page/resources/05-engineering/16-security-compliance.md
+  s_416615144c3c47::t_ac47a7419c2f9f 1-16
+examples/ov-compile-one-page/resources/06-operations/17-troubleshooting-runbook.md
+  s_416615144c3c47::t_2b088cb41a4f2f 1-17
+examples/ov-compile-one-page/resources/06-operations/18-roadmap.md
+  s_416615144c3c47::t_d5397851dbcc77 1-21
+examples/ov-compile-one-page/skills/build-one-page-index/SKILL.md
+  s_416615144c3c47::t_156265c5de2fa1 1-57
+openviking/core/skill_loader.py
+  s_416615144c3c47::t_3d4a3a2b05bad8 44-50,56-57,77-82
+openviking/server/models.py
+  s_416615144c3c47::t_b661f5a5ac8688 53-59
+openviking/server/routers/bot.py
+  s_416615144c3c47::t_f957244c4bc6ae 12,17-18,139-235
+openviking/server/routers/content.py
+  s_416615144c3c47::t_214ea02e75d8f3 5,10,50-82,274-302
+openviking/service/fs_service.py
+  s_416615144c3c47::t_b3e5ac8d1dcc64 569-589
+openviking/session/memory/extract_loop.py
+  s_416615144c3c47::t_3d28b7590ca7d3 550,552-553,555-561,563
+openviking/session/memory/memory_updater.py
+  s_416615144c3c47::t_49dafa5f766b63 726,743-744,755,774-775
+openviking/session/memory/utils/link_renderer.py
+  s_416615144c3c47::t_ff66cba2119b39 28-48,53,57-58,63,71,91-98,101,106,117-119,133-137,146
+openviking/session/memory/utils/link_resolver.py
+  s_416615144c3c47::t_c5d195b147bc86 1-93
+openviking/session/memory/utils/memory_file_utils.py
+  s_416615144c3c47::t_975b09b4d6939b 79,105,140,149
+openviking/storage/content_write.py
+  s_416615144c3c47::t_ff19c0e45bb8a5 7,9,12-19,36,40,44-45,59-62,134-510,884-885,887,889-890
+openviking/utils/path_safety.py
+  s_416615144c3c47::t_e2b8d1c12dc630 6,14-23,39,43-56
+sdk/python/openviking_sdk/client.py
+  s_416615144c3c47::t_7b04efd3faca28 976-1000,1036-1062,1984-1989,2016-2033
+tests/server/test_bot_proxy_auth.py
+  s_416615144c3c47::t_87504b98f7de7c 6,223-309
+tests/server/test_content_batch_write.py
+  s_416615144c3c47::t_3cae136070cd4c 1-374
+tests/unit/session/memory/test_extract_loop_match_text.py
+  s_416615144c3c47::t_116fb7cce5163e 79,93,142-163
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "1b4265879ba93ca40627f1a2c70b9fe41afd92cf",
+  "prompts": {},
+  "sessions": {
+    "s_416615144c3c47": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7fd5-8038-7b43-821f-92b54d6bdc51",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
