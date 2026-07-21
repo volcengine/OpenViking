@@ -1724,3 +1724,29 @@ def test_langgraph_middleware_retries_failed_batch_with_pending_context():
     assert len(client.sessions["middleware-batch-retry"]) == 2
     assistant_parts = client.sessions["middleware-batch-retry"][1]["parts"]
     assert sum(part["type"] == "context" for part in assistant_parts) == 1
+
+
+def test_langgraph_middleware_chunks_batches_at_server_limit():
+    class CappedBatchClient(InMemoryOpenVikingClient):
+        def __init__(self):
+            super().__init__()
+            self.batch_sizes = []
+
+        def batch_add_messages(self, session_id, messages, **kwargs):
+            if len(messages) > 100:
+                raise RuntimeError("server batch limit exceeded")
+            self.batch_sizes.append(len(messages))
+            return super().batch_add_messages(session_id, messages, **kwargs)
+
+    client = CappedBatchClient()
+    middleware = OpenVikingContextMiddleware(
+        client=client,
+        session_id_resolver=lambda state, runtime: "middleware-large-batch",
+    )
+    state = {"messages": [HumanMessage(content=f"Message {index}") for index in range(101)]}
+
+    middleware.after_agent(state, runtime=None)
+    middleware.after_agent(state, runtime=None)
+
+    assert client.batch_sizes == [100, 1]
+    assert len(client.sessions["middleware-large-batch"]) == 101

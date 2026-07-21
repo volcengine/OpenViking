@@ -41,6 +41,7 @@ from openviking.integrations.langchain.retrievers import OpenVikingRetriever
 
 logger = logging.getLogger(__name__)
 
+_BATCH_ADD_MESSAGES_LIMIT = 100
 _SESSION_ID_ERROR = (
     "OpenVikingContextMiddleware requires a LangGraph session id. Pass "
     'config={"configurable": {"thread_id": "..."}}, set state["session_id"], '
@@ -210,12 +211,12 @@ class OpenVikingContextMiddleware(AgentMiddleware):
                 if peer_id is not None:
                     payload["peer_id"] = peer_id
                 batch.append(payload)
-        if batch:
+        for start in range(0, len(batch), _BATCH_ADD_MESSAGES_LIMIT):
             call_openviking(
                 client,
                 "batch_add_messages",
                 session_id=session_id,
-                messages=batch,
+                messages=batch[start : start + _BATCH_ADD_MESSAGES_LIMIT],
             )
         self._pending_context_parts.pop(capture_key, None)
         self._captured_signatures[capture_key] = current_signatures
