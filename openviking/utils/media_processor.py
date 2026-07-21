@@ -140,6 +140,25 @@ class UnifiedResourceProcessor:
                 "direct host filesystem paths are not allowed."
             )
 
+        if self._should_bypass_feishu_accessor(source, kwargs):
+            parse_kwargs = dict(kwargs)
+            parse_kwargs["instruction"] = instruction
+            parse_kwargs["vlm_processor"] = self._get_vlm_processor()
+            parse_kwargs["storage"] = self.storage
+            parse_kwargs["_source_meta"] = {
+                "source_type": SourceType.FEISHU,
+                "original_url": source,
+            }
+            parse_kwargs["original_source"] = source
+            parse_kwargs.pop("feishu_access_token", None)
+            if not self._has_prepared_understanding_response(kwargs):
+                parse_kwargs["lark_file"] = await self._resolve_feishu_parser_auth(kwargs)
+
+            explicit_name = kwargs.get("resource_name") or kwargs.get("source_name")
+            if explicit_name:
+                parse_kwargs["resource_name"] = _smart_stem(explicit_name)
+            return await self._get_parser_router().parse(source, **parse_kwargs)
+
         # Phase 1: Accessor - get local resource
         registry = self._get_accessor_registry()
         local_resource = await registry.access(source, **kwargs)
@@ -202,3 +221,49 @@ class UnifiedResourceProcessor:
     def _is_url(self, source: str) -> bool:
         """Check if source is a URL."""
         return is_remote_resource_source(source)
+
+    @staticmethod
+    def _is_feishu_url(source: str) -> bool:
+        """Backward-compatible Feishu URL detector used by legacy tests/callers."""
+        try:
+            from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+
+            return FeishuAccessor._is_feishu_url(source)
+        except Exception:
+            return False
+
+    def _should_bypass_feishu_accessor(self, source: str, kwargs: dict) -> bool:
+        token = kwargs.get("feishu_access_token")
+        if not self._is_feishu_url(source):
+            return False
+        if not self._get_parser_router().should_use_understanding_api(source):
+            return False
+        if self._has_prepared_understanding_response(kwargs):
+            return True
+        if isinstance(token, str) and token.strip():
+            return True
+        try:
+            from openviking.resource.feishu_watch_auth import load_feishu_app_credentials
+
+            load_feishu_app_credentials()
+            return True
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _has_prepared_understanding_response(kwargs: dict) -> bool:
+        from openviking.parse.understanding_api import PREPARED_RESPONSE_ID_ARG
+
+        value = kwargs.get(PREPARED_RESPONSE_ID_ARG)
+        return isinstance(value, str) and bool(value.strip())
+
+    @staticmethod
+    async def _resolve_feishu_parser_auth(kwargs: dict) -> dict[str, str]:
+        token = kwargs.get("feishu_access_token")
+        if isinstance(token, str) and token.strip():
+            return {"user_access_token": token.strip()}
+
+        from openviking.resource.feishu_watch_auth import FeishuOAuthClient
+
+        tenant_access_token = await FeishuOAuthClient.from_config().get_tenant_access_token()
+        return {"tenant_access_token": tenant_access_token}
