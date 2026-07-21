@@ -1516,6 +1516,8 @@ HTTP Sink 使用本地持久化队列重试，同一事件可能被重复发送�
 
 启动方式和部署详情见 [服务部署](./03-deployment.md)，认证详情见 [认证](./04-authentication.md)。
 
+<a id="encryption"></a>
+
 ## encryption 段
 
 启用静态数据加密，确保多租户环境下的数据安全与隔离。加密功能对用户完全透明，API 无变化。

@@ -115,6 +115,8 @@ Filesystem operations and semantic retrieval are tenant-aware:
 
 This keeps "what you can search" aligned with "what you can read."
 
+<a id="peer-restricted-view"></a>
+
 ### Peer Collection Filter
 
 `peer_id` is a content scope inside the current user boundary. It never changes the
