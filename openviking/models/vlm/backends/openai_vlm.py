@@ -218,61 +218,35 @@ class OpenAIVLM(VLMBase):
     def _extract_from_chunk(self, chunk):
         """Extract content and usage from a single streaming chunk."""
         content = None
-        prompt_tokens = 0
-        completion_tokens = 0
 
         if chunk.choices and chunk.choices[0].delta:
             content = getattr(chunk.choices[0].delta, "content", None)
-        if hasattr(chunk, "usage") and chunk.usage:
-            prompt_tokens = chunk.usage.prompt_tokens or 0
-            completion_tokens = chunk.usage.completion_tokens or 0
+        return content, chunk if getattr(chunk, "usage", None) else None
 
-        return content, prompt_tokens, completion_tokens
-
-    def _process_streaming_response(self, response):
+    def _process_streaming_response(self, response, duration_seconds: float = 0.0):
         """Aggregate a synchronous stream and record its final usage."""
         content_parts = []
-        prompt_tokens = 0
-        completion_tokens = 0
+        usage_response = None
         for chunk in response:
-            content, pt, ct = self._extract_from_chunk(chunk)
+            content, chunk_usage = self._extract_from_chunk(chunk)
             if content:
                 content_parts.append(content)
-            if pt > 0:
-                prompt_tokens = pt
-            if ct > 0:
-                completion_tokens = ct
-
-        if prompt_tokens > 0 or completion_tokens > 0:
-            self.update_token_usage(
-                model_name=self.model or "gpt-4o-mini",
-                provider=self.provider,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-            )
+            usage_response = chunk_usage or usage_response
+        if usage_response:
+            self._update_token_usage_from_response(usage_response, duration_seconds)
         return "".join(content_parts)
 
-    async def _process_streaming_response_async(self, response):
+    async def _process_streaming_response_async(self, response, duration_seconds: float = 0.0):
         """Aggregate an asynchronous stream and record its final usage."""
         content_parts = []
-        prompt_tokens = 0
-        completion_tokens = 0
+        usage_response = None
         async for chunk in response:
-            content, pt, ct = self._extract_from_chunk(chunk)
+            content, chunk_usage = self._extract_from_chunk(chunk)
             if content:
                 content_parts.append(content)
-            if pt > 0:
-                prompt_tokens = pt
-            if ct > 0:
-                completion_tokens = ct
-
-        if prompt_tokens > 0 or completion_tokens > 0:
-            self.update_token_usage(
-                model_name=self.model or "gpt-4o-mini",
-                provider=self.provider,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-            )
+            usage_response = chunk_usage or usage_response
+        if usage_response:
+            self._update_token_usage_from_response(usage_response, duration_seconds)
         return "".join(content_parts)
 
     def _build_text_kwargs(
@@ -287,11 +261,14 @@ class OpenAIVLM(VLMBase):
         kwargs_messages = messages or [{"role": "user", "content": prompt}]
         model = self.model or "gpt-4o-mini"
         is_reasoning = _is_reasoning_model(model)
+        effective_stream = self.stream and not tools
         kwargs: Dict[str, Any] = {
             "model": model,
             "messages": kwargs_messages,
-            "stream": self.stream,
+            "stream": effective_stream,
         }
+        if effective_stream:
+            kwargs["stream_options"] = {"include_usage": True}
         if is_reasoning:
             kwargs["reasoning_effort"] = self.reasoning_effort
         else:
@@ -326,11 +303,14 @@ class OpenAIVLM(VLMBase):
 
         model = self.model or "gpt-4o-mini"
         is_reasoning = _is_reasoning_model(model)
+        effective_stream = self.stream and not tools
         kwargs: Dict[str, Any] = {
             "model": model,
             "messages": kwargs_messages,
-            "stream": self.stream,
+            "stream": effective_stream,
         }
+        if effective_stream:
+            kwargs["stream_options"] = {"include_usage": True}
         if is_reasoning:
             kwargs["reasoning_effort"] = self.reasoning_effort
         else:
@@ -345,7 +325,7 @@ class OpenAIVLM(VLMBase):
 
     def _extract_completion_content(self, response, elapsed: float) -> str:
         if self.stream:
-            content = self._process_streaming_response(response)
+            content = self._process_streaming_response(response, elapsed)
         else:
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
             content = self._extract_content_from_response(response)
@@ -353,7 +333,7 @@ class OpenAIVLM(VLMBase):
 
     async def _extract_completion_content_async(self, response, elapsed: float) -> str:
         if self.stream:
-            content = await self._process_streaming_response_async(response)
+            content = await self._process_streaming_response_async(response, elapsed)
         else:
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
             content = self._extract_content_from_response(response)
