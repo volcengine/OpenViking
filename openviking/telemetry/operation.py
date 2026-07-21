@@ -17,6 +17,7 @@ _CUVS_TIMING_FIELDS = (
     "total_ms",
     "preflight_ms",
     "queue_ms",
+    "gpu_gate_queue_ms",
     "build_ms",
     "filter_prepare_ms",
     "gpu_search_ms",
@@ -306,6 +307,12 @@ class TelemetrySummaryBuilder:
                     "routes": cls._counter_breakdown("vector.cuvs.routes", counters),
                     "filter_kinds": cls._counter_breakdown("vector.cuvs.filter_kinds", counters),
                     "filter_cache_hits": cls._i(counters.get("vector.cuvs.filter_cache_hits"), 0),
+                    "filter_cache_eviction_fallbacks": cls._i(
+                        counters.get("vector.cuvs.filter_cache_eviction_fallbacks"), 0
+                    ),
+                    "packed_filter_queries": cls._i(
+                        counters.get("vector.cuvs.packed_filter_queries"), 0
+                    ),
                     "native_filter_reuses": cls._i(
                         counters.get("vector.cuvs.native_filter_reuses"), 0
                     ),
@@ -499,6 +506,10 @@ class OperationTelemetry:
                 self._counters["vector.cuvs.auto_mode_searches"] += 1
             if TelemetrySummaryBuilder._bool(metrics.get("filter_cache_hit"), False):
                 self._counters["vector.cuvs.filter_cache_hits"] += 1
+            if TelemetrySummaryBuilder._bool(metrics.get("filter_cache_eviction_fallback"), False):
+                self._counters["vector.cuvs.filter_cache_eviction_fallbacks"] += 1
+            if TelemetrySummaryBuilder._bool(metrics.get("filter_words_packed"), False):
+                self._counters["vector.cuvs.packed_filter_queries"] += 1
             if TelemetrySummaryBuilder._bool(metrics.get("native_filter_reused"), False):
                 self._counters["vector.cuvs.native_filter_reuses"] += 1
             if TelemetrySummaryBuilder._bool(metrics.get("build_performed"), False):

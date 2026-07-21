@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
@@ -9,6 +9,7 @@ const pluginRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const manifest = JSON.parse(
   readFileSync(resolve(pluginRoot, "openclaw.plugin.json"), "utf8"),
 ) as {
+  icon?: string;
   activation?: { onStartup?: boolean; onCapabilities?: string[] };
   contracts?: { tools?: string[] };
   configSchema?: { properties?: Record<string, unknown> };
@@ -79,6 +80,17 @@ function collectRegisteredToolNames(): string[] {
 }
 
 describe("OpenClaw 5.2 manifest contracts", () => {
+  it("declares an optimized HTTPS catalog icon", () => {
+    expect(manifest.icon).toBe(
+      "https://raw.githubusercontent.com/volcengine/OpenViking/main/docs/images/ov-logo-icon.png",
+    );
+    expect(new URL(manifest.icon as string).protocol).toBe("https:");
+
+    const iconPath = resolve(pluginRoot, "../..", "docs/images/ov-logo-icon.png");
+    expect(existsSync(iconPath)).toBe(true);
+    expect(statSync(iconPath).size).toBeLessThan(100_000);
+  });
+
   it("declares every registerable runtime tool in contracts.tools", () => {
     expect(manifest.contracts?.tools?.toSorted()).toEqual(collectRegisteredToolNames());
   });

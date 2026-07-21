@@ -1,9 +1,6 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 #include "dir_index.h"
-#include <deque>
-#include <unordered_set>
-#include "index/detail/scalar/bitmap_holder/bitmap_field_group.h"
 
 namespace vectordb {
 
@@ -38,38 +35,51 @@ TrieNode* DirIndex::find_node(const std::string& path) const {
   return node;
 }
 
-void DirIndex::get_merged_bitmap(
+void DirIndex::bind_leaf_bitmap(TrieNode* node, const Bitmap* bitmap) {
+  if (!node || !bitmap) {
+    return;
+  }
+  if (!node->leaf_bitmap_) {
+    node->leaf_bitmap_ = bitmap;
+    return;
+  }
+  if (node->leaf_bitmap_ == bitmap) {
+    return;
+  }
+
+  auto& collisions = leaf_bitmap_collisions_[node];
+  if (std::find(collisions.begin(), collisions.end(), bitmap) ==
+      collisions.end()) {
+    collisions.push_back(bitmap);
+  }
+}
+
+void DirIndex::get_merged_bitmaps(
     const std::string& path_prefix, int depth,
-    std::unordered_set<std::string>& unique_bitmaps) const {
+    std::vector<const Bitmap*>& bitmaps) const {
   TrieNode* start_node = find_node(path_prefix);
   if (!start_node) {
     return;
   }
 
-  std::string path_buffer = path_prefix.empty() ? "" : path_prefix;
-  if (!path_buffer.empty() && path_buffer[0] != '/') {
-    path_buffer.insert(path_buffer.begin(), '/');
-  }
-  while (path_buffer.size() > 1 && path_buffer.back() == '/') {
-    path_buffer.pop_back();
-  }
-
-  collect_bitmaps_recursive_optimized(start_node, 0, depth, unique_bitmaps,
-                                      path_buffer);
+  collect_bitmaps_recursive(start_node, 0, depth, bitmaps);
 }
 
-void DirIndex::collect_bitmaps_recursive_optimized(
+void DirIndex::collect_bitmaps_recursive(
     const TrieNode* node, int current_depth, int max_depth,
-    std::unordered_set<std::string>& bitmaps, std::string& path_buffer) const {
+    std::vector<const Bitmap*>& bitmaps) const {
   if (!node) {
     return;
   }
 
   if (node->is_leaf_) {
-    if (path_buffer.empty() || path_buffer == "/") {
-      bitmaps.insert("/");
-    } else {
-      bitmaps.insert(path_buffer);
+    if (node->leaf_bitmap_) {
+      bitmaps.push_back(node->leaf_bitmap_);
+    }
+    const auto collision_it = leaf_bitmap_collisions_.find(node);
+    if (collision_it != leaf_bitmap_collisions_.end()) {
+      bitmaps.insert(bitmaps.end(), collision_it->second.begin(),
+                     collision_it->second.end());
     }
   }
 
@@ -78,19 +88,9 @@ void DirIndex::collect_bitmaps_recursive_optimized(
   }
 
   for (const auto& child_pair : node->children_) {
-    const auto& segment = child_pair.first;
     const auto& child_node = child_pair.second;
-    size_t original_size = path_buffer.length();
-
-    if (path_buffer.empty() || path_buffer == "/") {
-      path_buffer = "/" + segment;
-    } else {
-      path_buffer += "/" + segment;
-    }
-
-    collect_bitmaps_recursive_optimized(child_node.get(), current_depth + 1,
-                                        max_depth, bitmaps, path_buffer);
-    path_buffer.resize(original_size);
+    collect_bitmaps_recursive(child_node.get(), current_depth + 1, max_depth,
+                              bitmaps);
   }
 }
 
@@ -129,6 +129,7 @@ std::unique_ptr<TrieNode> DirIndex::parse_recursive(std::ifstream& input,
   return node;
 }
 void DirIndex::parse_from_stream(std::ifstream& input) {
+  leaf_bitmap_collisions_.clear();
   root_ = parse_recursive(input, nullptr);
 }
 
