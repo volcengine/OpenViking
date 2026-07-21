@@ -3,13 +3,17 @@ import json
 
 import pytest
 
+from openviking.server.identity import RequestContext, Role
 from openviking.service.memory_consolidation import (
     ConsolidationSource,
     build_exact_duplicate_dry_run_plan,
     build_exact_duplicate_dry_run_plan_from_fs,
 )
+from openviking_cli.exceptions import PermissionDeniedError
+from openviking_cli.session.user_id import UserIdentifier
 
 SCOPE = "viking://user/alice/memories/events"
+CTX = RequestContext(user=UserIdentifier("test", "alice"), role=Role.USER)
 
 
 def _source(
@@ -41,7 +45,7 @@ def test_plan_is_stable_and_selects_lexicographic_canonical():
 
     assert forward == reverse
     assert forward.schema_version == "memory_consolidation_dry_run_plan_v1"
-    assert forward.consolidator_version == "exact-normalized-v2"
+    assert forward.consolidator_version == "exact-normalized-v3"
     assert forward.scanned_files == 2
     assert forward.groups[0].candidate_id.startswith("exact:")
     assert forward.groups[0].canonical.uri == f"{SCOPE}/alpha.md"
@@ -103,6 +107,49 @@ def test_persisted_link_metadata_remains_part_of_conservative_fingerprint():
     assert plan.groups == []
 
 
+def test_system_provenance_does_not_block_structural_duplicate_grouping():
+    plan = build_exact_duplicate_dry_run_plan(
+        scope_uri=SCOPE,
+        memory_type="events",
+        sources=[
+            _source(
+                "one",
+                "same body",
+                metadata={
+                    "source_extraction_id": "extract-one",
+                    "source_extraction_ids": ["extract-one"],
+                    "last_update_trace_id": "trace-one",
+                },
+            ),
+            _source(
+                "two",
+                "same body",
+                metadata={
+                    "source_extraction_id": "extract-two",
+                    "source_extraction_ids": ["extract-two"],
+                    "last_update_trace_id": "trace-two",
+                },
+            ),
+        ],
+    )
+
+    assert len(plan.groups) == 1
+    assert plan.groups[0].canonical.content_sha256 != plan.groups[0].duplicates[0].content_sha256
+
+
+def test_domain_metadata_remains_part_of_structural_identity():
+    plan = build_exact_duplicate_dry_run_plan(
+        scope_uri=SCOPE,
+        memory_type="events",
+        sources=[
+            _source("one", "same body", metadata={"event_name": "launch"}),
+            _source("two", "same body", metadata={"event_name": "review"}),
+        ],
+    )
+
+    assert plan.groups == []
+
+
 @pytest.mark.parametrize(
     ("field", "self_endpoint", "other_endpoint"),
     [
@@ -134,6 +181,44 @@ def test_persisted_links_compare_structure_without_source_uri(field, self_endpoi
     assert plan.groups[0].canonical.uri == f"{SCOPE}/one.md"
 
 
+@pytest.mark.parametrize(
+    ("field", "self_endpoint", "other_endpoint"),
+    [
+        ("links", "from_uri", "to_uri"),
+        ("backlinks", "to_uri", "from_uri"),
+    ],
+)
+def test_relationship_order_and_creation_time_are_provenance(field, self_endpoint, other_endpoint):
+    def relationship(source_name: str, target: str, created_at: str) -> dict:
+        return {
+            self_endpoint: f"{SCOPE}/{source_name}.md",
+            other_endpoint: target,
+            "link_type": "related_to",
+            "created_at": created_at,
+        }
+
+    first = [
+        relationship("one", "viking://resources/a.md", "2026-01-01T00:00:00Z"),
+        relationship("one", "viking://resources/b.md", "2026-01-02T00:00:00Z"),
+    ]
+    second = [
+        relationship("two", "viking://resources/b.md", "2026-02-02T00:00:00Z"),
+        relationship("two", "viking://resources/a.md", "2026-02-01T00:00:00Z"),
+    ]
+
+    plan = build_exact_duplicate_dry_run_plan(
+        scope_uri=SCOPE,
+        memory_type="events",
+        sources=[
+            _source("one", "same body", metadata={field: first}),
+            _source("two", "same body", metadata={field: second}),
+        ],
+    )
+
+    assert len(plan.groups) == 1
+    assert plan.groups[0].canonical.content_sha256 != plan.groups[0].duplicates[0].content_sha256
+
+
 def test_revision_changes_when_source_version_changes():
     first = build_exact_duplicate_dry_run_plan(
         scope_uri=SCOPE,
@@ -163,6 +248,11 @@ def test_revision_changes_when_source_version_changes():
                 uri="viking://user/bob/memories/events/one.md",
                 raw_content="body",
             ),
+        ),
+        (
+            "viking://resources/archive/memories/events",
+            "events",
+            _source("one", "body"),
         ),
     ],
 )
@@ -214,7 +304,7 @@ def test_fs_dry_run_reads_only_memory_files_and_skips_sidecars():
     plan = asyncio.run(
         build_exact_duplicate_dry_run_plan_from_fs(
             fs_service=fs,
-            ctx=object(),
+            ctx=CTX,
             scope_uri=SCOPE,
             memory_type="events",
         )
@@ -236,9 +326,69 @@ def test_fs_dry_run_fails_closed_when_node_limit_is_reached():
         asyncio.run(
             build_exact_duplicate_dry_run_plan_from_fs(
                 fs_service=fs,
-                ctx=object(),
+                ctx=CTX,
                 scope_uri=SCOPE,
                 memory_type="events",
                 node_limit=2,
             )
         )
+
+
+def test_fs_dry_run_canonicalizes_short_scope_before_listing_and_revision():
+    one = _source("one", "same")
+    two = _source("two", "same")
+    fs = _FakeFSService(
+        entries=[
+            {"uri": two.uri, "isDir": False},
+            {"uri": one.uri, "isDir": False},
+        ],
+        contents={one.uri: one.raw_content, two.uri: two.raw_content},
+    )
+
+    plan = asyncio.run(
+        build_exact_duplicate_dry_run_plan_from_fs(
+            fs_service=fs,
+            ctx=CTX,
+            scope_uri="viking://user/memories/events",
+            memory_type="events",
+        )
+    )
+
+    assert plan.scope_uri == SCOPE
+    assert fs.calls[0][0:2] == ("ls", SCOPE)
+
+
+def test_fs_dry_run_rejects_inaccessible_scope_before_storage_calls():
+    fs = _FakeFSService(entries=[], contents={})
+
+    with pytest.raises(PermissionDeniedError, match="Access denied"):
+        asyncio.run(
+            build_exact_duplicate_dry_run_plan_from_fs(
+                fs_service=fs,
+                ctx=CTX,
+                scope_uri="viking://user/bob/memories/events",
+                memory_type="events",
+            )
+        )
+
+    assert fs.calls == []
+
+
+def test_fs_dry_run_rejects_outside_entries_before_reading():
+    outside_uri = "viking://user/alice/resources/archive.md"
+    fs = _FakeFSService(
+        entries=[{"uri": outside_uri, "isDir": False}],
+        contents={outside_uri: "must not be read"},
+    )
+
+    with pytest.raises(ValueError, match="outside consolidation scope"):
+        asyncio.run(
+            build_exact_duplicate_dry_run_plan_from_fs(
+                fs_service=fs,
+                ctx=CTX,
+                scope_uri=SCOPE,
+                memory_type="events",
+            )
+        )
+
+    assert [call[0] for call in fs.calls] == ["ls"]
