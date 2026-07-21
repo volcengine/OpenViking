@@ -85,7 +85,8 @@ bot:
 # ${persistence.mountPath}/ov.conf.
 config:
   storage:
-    workspace: /app/.openviking/openviking_workspace
+    # Defaults to <persistence.mountPath>/openviking_workspace when empty.
+    workspace: ""
     vectordb:
       name: context
       backend: local

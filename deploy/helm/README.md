@@ -176,8 +176,8 @@ multiple pods accessing the same RocksDB volume simultaneously.
 helm uninstall openviking
 ```
 
-Note: The PersistentVolumeClaim is not deleted automatically. To remove stored
-data:
+Note: The PersistentVolumeClaim is retained by Helm and becomes orphaned after
+uninstall. Delete it explicitly to remove the stored data:
 
 ```bash
 kubectl delete pvc openviking-data
