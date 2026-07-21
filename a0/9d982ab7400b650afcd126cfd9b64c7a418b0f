@@ -1,0 +1,43 @@
+crates/ov_cli/src/config_command_ui.rs
+  s_1cfb36e6160bae::t_c7454c829066b3 407,418-419,427,436,445-447,456-458,465
+crates/ov_cli/src/error.rs
+  s_1cfb36e6160bae::t_3d7e135f5151ee 1,18-20,23,25,57,59,66-80,82,86-130
+crates/ov_cli/src/main.rs
+  s_862ac2678ba7ac::t_442a2c26c7862d 2404-2427,2556,2561-2567,2590-2596,2677-2683,2700-2706,3256-3262,3275-3276,3307-3313
+crates/ov_cli/src/status_ui.rs
+  s_1cfb36e6160bae::t_5ffdf1ca9e4bbb 207,214,218,227,240-244,279-292,910-914,923
+openviking/parse/accessors/feishu_accessor.py
+  s_1cfb36e6160bae::t_c0cecf7ad7b491 33,83-90,92,94-97
+openviking/server/error_mapping.py
+  s_1cfb36e6160bae::t_04a74a9517ccd2 24,42,507-508
+tests/parse/test_feishu_errors.py
+  s_1cfb36e6160bae::t_22fb75557614a3 52-67
+tests/server/test_error_mapping.py
+  s_1cfb36e6160bae::t_4f5d58869e2910 10,92-98
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "a09d982ab7400b650afcd126cfd9b64c7a418b0f",
+  "prompts": {},
+  "sessions": {
+    "s_1cfb36e6160bae": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6b15-d3ec-75b0-9466-fcfdf6eac1c3",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    },
+    "s_862ac2678ba7ac": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f834d-1e17-71d0-96fc-29450f81a902",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
