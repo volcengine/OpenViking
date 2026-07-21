@@ -604,3 +604,21 @@ async def test_post_validation_gate_sees_prefetched_comparison_trajectories(monk
     assert captured["post_validation_decision"] is None
     assert captured["metadata_seen"] == [comparison]
     assert analysis.trajectories[0].metadata["comparison_trajectory_uris"] == [comparison[0]["uri"]]
+    assert analysis.metadata["gate_attempts"] == [
+        {
+            "stage": "post_gradient",
+            "index": 0,
+            "result": "passed",
+            "targets": [
+                {
+                    "name": "scope_total",
+                    "uri": "viking://user/u/memories/experiences/scope_total.md",
+                    "outcome": "allowed",
+                    "decisions": [],
+                }
+            ],
+        }
+    ]
+    disposition = analysis.metadata["experience_dispositions"][0]
+    assert "gate_report" not in disposition
+    assert "retry_events" not in disposition

@@ -99,6 +99,7 @@ class BatchPolicyTrainer:
             analyses=analyses,
             plans=[plan],
         )
+        gate_attempts = _collect_gate_attempts(analyses=analyses, plans=[plan])
         return RolloutTrainingResult(
             analyses=analyses,
             gradients=gradients,
@@ -114,6 +115,7 @@ class BatchPolicyTrainer:
                 "gate_reports": gate_reports,
                 "gate_summary": _gate_summary(gate_reports),
                 "post_validation_retries": post_validation_retries,
+                "gate_attempts": gate_attempts,
             },
         )
 
@@ -433,6 +435,7 @@ class StreamingPolicyTrainer:
             if isinstance(report, dict)
         )
         post_validation_retries = _collect_post_validation_retries(analyses=analyses, plans=plans)
+        gate_attempts = _collect_gate_attempts(analyses=analyses, plans=plans)
         gate_reports = [*gradient_gate_reports, *plan_gate_reports]
         result = RolloutTrainingResult(
             analyses=analyses,
@@ -452,6 +455,7 @@ class StreamingPolicyTrainer:
                 "gate_reports": gate_reports,
                 "gate_summary": _gate_summary(gate_reports),
                 "post_validation_retries": post_validation_retries,
+                "gate_attempts": gate_attempts,
             },
         )
         tracer.info(
@@ -482,6 +486,27 @@ def _collect_post_validation_retries(
             if isinstance(item, dict):
                 retries.append(item)
     return retries
+
+
+def _collect_gate_attempts(
+    *,
+    analyses: list[RolloutAnalysis],
+    plans: list[PolicyUpdatePlan],
+) -> list[dict[str, Any]]:
+    attempts: list[dict[str, Any]] = []
+    for analysis in analyses:
+        attempts.extend(
+            item
+            for item in dict(getattr(analysis, "metadata", {}) or {}).get("gate_attempts", [])
+            if isinstance(item, dict)
+        )
+    for plan in plans:
+        attempts.extend(
+            item
+            for item in dict(getattr(plan, "metadata", {}) or {}).get("gate_attempts", [])
+            if isinstance(item, dict)
+        )
+    return attempts
 
 
 def _gate_summary(reports: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
@@ -604,6 +629,18 @@ def _scope_training_result_to_submitter(
     scoped_post_validation_retries = list(
         dict(getattr(scoped_plan, "metadata", {}) or {}).get("post_validation_retries", []) or []
     )
+    scoped_gate_attempts = [
+        *[
+            item
+            for item in dict(getattr(analysis, "metadata", {}) or {}).get("gate_attempts", [])
+            if isinstance(item, dict)
+        ],
+        *[
+            item
+            for item in dict(getattr(scoped_plan, "metadata", {}) or {}).get("gate_attempts", [])
+            if isinstance(item, dict)
+        ],
+    ]
     metadata.update(
         {
             "batch_rollout_count": metadata.get("rollout_count"),
@@ -617,6 +654,7 @@ def _scope_training_result_to_submitter(
             "gate_reports": scoped_gate_reports,
             "gate_summary": _gate_summary(scoped_gate_reports),
             "post_validation_retries": scoped_post_validation_retries,
+            "gate_attempts": scoped_gate_attempts,
             **(
                 {"gate_report": submitter.gate_report}
                 if getattr(submitter, "gate_report", None) is not None
@@ -660,6 +698,7 @@ def _scope_plan_to_analysis(
     ]
     scoped_gate_reports: list[dict[str, Any]] = []
     scoped_retries: list[dict[str, Any]] = []
+    scoped_gate_attempts: list[dict[str, Any]] = []
     for chunk in scoped_chunks:
         if isinstance(chunk.get("gate_report"), dict):
             scoped_gate_reports.append(dict(chunk["gate_report"]))
@@ -673,6 +712,11 @@ def _scope_plan_to_analysis(
             for event in chunk.get("post_validation_retries", []) or []
             if isinstance(event, dict)
         )
+        scoped_gate_attempts.extend(
+            dict(attempt)
+            for attempt in chunk.get("gate_attempts", []) or []
+            if isinstance(attempt, dict)
+        )
     metadata.update(
         {
             "scoped_to_trajectory_uris": sorted(trajectory_uris),
@@ -680,6 +724,7 @@ def _scope_plan_to_analysis(
             "chunks": scoped_chunks,
             "gate_reports": scoped_gate_reports,
             "post_validation_retries": scoped_retries,
+            "gate_attempts": scoped_gate_attempts,
         }
     )
     metadata.pop("gate_report", None)

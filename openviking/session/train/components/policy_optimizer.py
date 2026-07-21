@@ -35,6 +35,7 @@ from openviking.session.train.gates import (
     GateRunner,
     build_gate_retry_instruction,
     candidate_retry_draft,
+    make_gate_audit_attempt,
 )
 from openviking.session.train.interfaces import SemanticGradient
 from openviking.session.train.utils import first_uri, safe_int
@@ -95,6 +96,7 @@ class PatchMergePolicyOptimizer:
         context.metadata.pop("gate_retry_reports", None)
         context.metadata.pop("post_validation_retries", None)
         context.metadata.pop("final_gate_report", None)
+        context.metadata.pop("gate_attempts", None)
         patch_gradients = list(gradients)
         if not patch_gradients:
             return PolicyUpdatePlan(
@@ -137,12 +139,15 @@ class PatchMergePolicyOptimizer:
         }
         gate_retry_reports = list(context.metadata.get("gate_retry_reports", []) or [])
         gate_retry_events = list(context.metadata.get("post_validation_retries", []) or [])
+        gate_attempts = list(context.metadata.get("gate_attempts", []) or [])
         final_gate_report = context.metadata.get("final_gate_report")
         if gate_retry_reports:
             metadata["gate_reports"] = gate_retry_reports
             metadata["gate_retry_reports"] = gate_retry_reports
         if gate_retry_events:
             metadata["post_validation_retries"] = gate_retry_events
+        if gate_attempts:
+            metadata["gate_attempts"] = gate_attempts
         if isinstance(final_gate_report, dict):
             metadata["gate_report"] = final_gate_report
 
@@ -237,6 +242,22 @@ class PatchMergePolicyOptimizer:
                 prior_reports=gate_retry_history,
             )
             if not instruction:
+                result = (
+                    "passed"
+                    if not report.rejected_count
+                    else "partial_accepted"
+                    if retained_valid_upserts or retained_valid_deletes
+                    else "discarded"
+                )
+                context.metadata.setdefault("gate_attempts", []).append(
+                    make_gate_audit_attempt(
+                        report=report,
+                        candidates=items,
+                        allowed_candidates=gated,
+                        index=retry_count,
+                        result=result,
+                    )
+                )
                 if report.rejected_count or (
                     retry_count and (retained_valid_upserts or retained_valid_deletes)
                 ):
@@ -265,6 +286,23 @@ class PatchMergePolicyOptimizer:
                 "discarded_after_max_retries"
                 if retry_count >= _EXPERIENCE_PLAN_POST_VALIDATION_MAX_RETRIES
                 else "retry_requested"
+            )
+            attempt_result = (
+                "partial_accepted"
+                if retry_count >= _EXPERIENCE_PLAN_POST_VALIDATION_MAX_RETRIES
+                and (retained_valid_upserts or retained_valid_deletes)
+                else "discarded"
+                if retry_count >= _EXPERIENCE_PLAN_POST_VALIDATION_MAX_RETRIES
+                else "retry_requested"
+            )
+            context.metadata.setdefault("gate_attempts", []).append(
+                make_gate_audit_attempt(
+                    report=report,
+                    candidates=items,
+                    allowed_candidates=gated,
+                    index=retry_count,
+                    result=attempt_result,
+                )
             )
             context.metadata.setdefault("post_validation_retries", []).append(
                 _post_validation_retry_event(

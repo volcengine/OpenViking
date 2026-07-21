@@ -6,6 +6,7 @@ from openviking.telemetry import tracer
 
 from .models import (
     GateAction,
+    GateAuditResult,
     GateDecision,
     GateEvaluation,
     GateMode,
@@ -13,6 +14,7 @@ from .models import (
     GateStage,
     GateTarget,
     PolicyGate,
+    make_gate_audit_attempt,
 )
 from .plan_quality import ExperiencePlanQualityGate
 from .retry import (
@@ -32,6 +34,7 @@ __all__ = [
     "ExperiencePlanQualityGate",
     "ExperienceRootCausePreventionGate",
     "GateAction",
+    "GateAuditResult",
     "GateDecision",
     "GateEvaluation",
     "GateMode",
@@ -45,5 +48,6 @@ __all__ = [
     "default_experience_gate_contract",
     "default_policy_gate_runner",
     "mark_experience_gradients_post_validated",
+    "make_gate_audit_attempt",
     "require_experience_gradients_post_validated",
 ]

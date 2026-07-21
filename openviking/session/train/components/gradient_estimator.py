@@ -42,6 +42,7 @@ from openviking.session.train.gates import (
     build_gate_retry_instruction,
     candidate_retry_draft,
     default_policy_gate_runner,
+    make_gate_audit_attempt,
     mark_experience_gradients_post_validated,
 )
 from openviking.session.train.gradients import PatchSemanticGradient
@@ -248,7 +249,6 @@ class ExperienceGradientEstimator:
                         "merge/apply"
                     ),
                     experience_uris=[gradient.target_uri for gradient in gradients],
-                    gate_report=report_dict,
                 )
             elif int(report_dict.get("rejected_count") or 0):
                 _record_experience_disposition(
@@ -256,7 +256,6 @@ class ExperienceGradientEstimator:
                     request.trajectory,
                     disposition="gradient_gate_rejected",
                     reason="all experience candidates were rejected by the post-gradient gate",
-                    gate_report=report_dict,
                 )
             else:
                 _record_experience_disposition(
@@ -264,7 +263,6 @@ class ExperienceGradientEstimator:
                     request.trajectory,
                     disposition="no_change_proposed",
                     reason=_no_change_reason(request.trajectory),
-                    gate_report=report_dict,
                 )
         return [gradient for batch in gradient_batches for gradient in batch]
 
@@ -403,6 +401,22 @@ class ExperienceGradientEstimator:
                 prior_reports=gate_retry_history,
             )
             if not instruction:
+                result = (
+                    "passed"
+                    if not report.rejected_count
+                    else "partial_accepted"
+                    if retained_valid_upserts
+                    else "discarded"
+                )
+                context.metadata.setdefault("gate_attempts", []).append(
+                    make_gate_audit_attempt(
+                        report=report,
+                        candidates=gradients,
+                        allowed_candidates=gated,
+                        index=retry_count,
+                        result=result,
+                    )
+                )
                 if report.rejected_count or (retry_count and retained_valid_upserts):
                     _restore_gated_experience_operations(
                         operations,
@@ -417,6 +431,22 @@ class ExperienceGradientEstimator:
                 "discarded_after_max_retries"
                 if retry_count >= _EXPERIENCE_POST_VALIDATION_MAX_RETRIES
                 else "retry_requested"
+            )
+            attempt_result = (
+                "partial_accepted"
+                if retry_count >= _EXPERIENCE_POST_VALIDATION_MAX_RETRIES and retained_valid_upserts
+                else "discarded"
+                if retry_count >= _EXPERIENCE_POST_VALIDATION_MAX_RETRIES
+                else "retry_requested"
+            )
+            context.metadata.setdefault("gate_attempts", []).append(
+                make_gate_audit_attempt(
+                    report=report,
+                    candidates=gradients,
+                    allowed_candidates=gated,
+                    index=retry_count,
+                    result=attempt_result,
+                )
             )
             event = _post_validation_retry_event(
                 stage="post_gradient",
@@ -714,7 +744,6 @@ def _record_experience_disposition(
     disposition: str,
     reason: str,
     experience_uris: list[str] | None = None,
-    gate_report: dict[str, Any] | None = None,
 ) -> None:
     records = analysis.metadata.setdefault("experience_dispositions", [])
     trajectory_uri = str(trajectory.uri or "")
@@ -729,10 +758,7 @@ def _record_experience_disposition(
         "disposition": disposition,
         "reason": reason,
         "experience_uris": list(dict.fromkeys(experience_uris or [])),
-        "retry_events": list(trajectory.metadata.get("post_validation_retries") or []),
     }
-    if gate_report:
-        record["gate_report"] = gate_report
     for index, existing in enumerate(records):
         if isinstance(existing, dict) and existing.get("trajectory_uri") == trajectory_uri:
             records[index] = record

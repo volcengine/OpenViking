@@ -20,6 +20,9 @@ GateMode = Literal["enforce", "warn", "shadow"]
 GateAction = Literal["allow", "warn", "reject"]
 
 
+GateAuditResult = Literal["passed", "retry_requested", "partial_accepted", "discarded"]
+
+
 @dataclass(slots=True)
 class GateDecision:
     gate_name: str
@@ -110,6 +113,52 @@ class GateReport:
                 and _decision_target_name(decision) not in blocked_targets
             )
         )
+
+
+def make_gate_audit_attempt(
+    *,
+    report: GateReport,
+    candidates: list[Any],
+    allowed_candidates: list[Any],
+    index: int,
+    result: GateAuditResult,
+) -> dict[str, Any]:
+    """Build the compact, canonical audit record for one Gate execution."""
+
+    decisions_by_target: dict[str, list[dict[str, Any]]] = {}
+    for decision in report.decisions:
+        if decision.action not in {"warn", "reject"}:
+            continue
+        target_name = _decision_target_name(decision)
+        decisions_by_target.setdefault(target_name, []).append(
+            {
+                "gate": decision.gate_name,
+                "action": decision.action,
+                "reason": decision.reason,
+                "retriable": decision.retriable,
+            }
+        )
+
+    allowed_ids = {id(candidate) for candidate in allowed_candidates}
+    targets: list[dict[str, Any]] = []
+    for candidate in candidates:
+        name = str(getattr(candidate, "target_name", "") or "unknown")
+        target = {
+            "name": name,
+            "outcome": "allowed" if id(candidate) in allowed_ids else "rejected",
+            "decisions": decisions_by_target.get(name, []),
+        }
+        uri = str(getattr(candidate, "target_uri", "") or "")
+        if uri:
+            target["uri"] = uri
+        targets.append(target)
+
+    return {
+        "stage": report.stage,
+        "index": index,
+        "result": result,
+        "targets": targets,
+    }
 
 
 @dataclass(slots=True)

@@ -1382,6 +1382,7 @@ viking://user/{user_id}/sessions/{session_id}/
 ```json
 {
   "archive_uri": "viking://user/{user_id}/sessions/{session_id}/history/archive_001",
+  "trace_id": "0123456789abcdef",
   "extracted_at": "2026-04-21T10:00:00Z",
   "operations": {
     "adds": [
@@ -1407,6 +1408,21 @@ viking://user/{user_id}/sessions/{session_id}/
       }
     ]
   },
+  "gates": [
+    {
+      "stage": "post_gradient",
+      "index": 0,
+      "result": "passed",
+      "targets": [
+        {
+          "name": "avoid_duplicate_booking",
+          "uri": "viking://user/alice/memories/experiences/avoid_duplicate_booking.md",
+          "outcome": "allowed",
+          "decisions": []
+        }
+      ]
+    }
+  ],
   "summary": {
     "total_adds": 1,
     "total_updates": 1,
@@ -1418,15 +1434,23 @@ viking://user/{user_id}/sessions/{session_id}/
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `archive_uri` | str | 本次提交的归档目录 URI |
+| `trace_id` | str 或 null | 包含完整抽取过程和 Gate 诊断信息的 Trace |
 | `extracted_at` | str | 提取时间的 ISO 8601 格式 |
 | `operations.adds` | array | 新增记忆（`uri`、`memory_type`、`after`） |
 | `operations.updates` | array | 修改记忆（`uri`、`memory_type`、`before`、`after`） |
 | `operations.deletes` | array | 删除记忆（`uri`、`memory_type`、`deleted_content`） |
+| `gates` | array | Gate 执行记录，每次校验只记录一个 attempt |
+| `gates[].stage` | str | 校验阶段：`post_gradient` 或 `post_plan` |
+| `gates[].index` | int | 当前阶段内从 0 开始的 attempt 序号 |
+| `gates[].result` | str | `passed`、`retry_requested`、`partial_accepted` 或 `discarded` |
+| `gates[].targets` | array | 候选结果以及精简后的警告/拒绝决策 |
 | `summary.total_adds` | int | 新增记忆数 |
 | `summary.total_updates` | int | 修改记忆数 |
 | `summary.total_deletes` | int | 删除记忆数 |
 
 如果长记忆抽取已运行但没有产生记忆操作，也会写入空结构的 `memory_diff.json`（所有计数为零）。
+Gate 数量由 `gates[].targets` 动态计算，不再单独落盘。候选预览、修正提示、原始证据和
+完整 Gate 报告通过 `trace_id` 查询，不在审计文件中重复保存。
 
 ---
 

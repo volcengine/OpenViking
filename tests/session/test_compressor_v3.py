@@ -15,6 +15,7 @@ from openviking.session.compressor_v3 import (
     SessionCompressorV3,
     _experience_root_uri,
     _finalize_experience_dispositions,
+    _merge_memory_diffs,
     _training_evaluation_from_messages,
 )
 from openviking.session.memory.dataclass import (
@@ -275,6 +276,82 @@ def test_final_disposition_uses_applied_split_plan_after_gate_retry():
     assert records[0]["disposition"] == "experience_created"
     assert records[0]["experience_uris"] == experience_uris
     assert "gate_rejections" not in records[0]
+
+
+@pytest.mark.asyncio
+async def test_training_memory_diff_serializes_gate_attempts_once_without_legacy_views():
+    attempt = {
+        "stage": "post_plan",
+        "index": 0,
+        "result": "retry_requested",
+        "targets": [
+            {
+                "name": "combined_repair",
+                "outcome": "rejected",
+                "decisions": [
+                    {
+                        "gate": "experience_plan_quality",
+                        "action": "reject",
+                        "reason": "retry the combined candidate",
+                        "retriable": True,
+                    }
+                ],
+            }
+        ],
+    }
+    result = RolloutTrainingResult(
+        analyses=[],
+        gradients=[],
+        plan=PolicyUpdatePlan(items=[], metadata={"gate_attempts": [attempt]}),
+        apply_result=PolicyApplyResult(
+            updated_policy_set=ExperienceSet(
+                root_uri="viking://user/u/memories/experiences",
+                policies=[],
+            )
+        ),
+        metadata={"gate_attempts": [attempt]},
+    )
+
+    diff = await SessionCompressorV3(
+        vikingdb=None,
+        rollout_analyzer=SimpleNamespace(),
+    )._build_training_memory_diff(
+        training_result=result,
+        viking_fs=SimpleNamespace(),
+        ctx=_ctx(),
+        archive_uri="viking://user/u/sessions/s1/history/archive_001",
+    )
+
+    assert diff["gates"] == [attempt]
+    assert "gate_rejections" not in diff
+    assert "gate_summary" not in diff
+    assert "post_validation_retries" not in diff
+    assert all(not key.startswith("total_gate") for key in diff["summary"])
+    assert "total_post_validation_retries" not in diff["summary"]
+
+
+def test_merge_memory_diffs_concatenates_gate_attempts_without_legacy_views():
+    first = {
+        "operations": {"adds": [], "updates": [], "deletes": []},
+        "gates": [{"stage": "post_gradient", "index": 0, "result": "passed", "targets": []}],
+    }
+    second = {
+        "operations": {"adds": [], "updates": [], "deletes": []},
+        "gates": [{"stage": "post_gradient", "index": 0, "result": "passed", "targets": []}],
+    }
+
+    merged = _merge_memory_diffs(
+        [first, second],
+        archive_uri="viking://user/u/sessions/s1/history/archive_001",
+    )
+
+    assert merged["gates"] == [
+        first["gates"][0],
+        {**second["gates"][0], "index": 1},
+    ]
+    assert "gate_rejections" not in merged
+    assert "gate_summary" not in merged
+    assert "post_validation_retries" not in merged
 
 
 def test_case_experience_links_require_policy_root_uri():
