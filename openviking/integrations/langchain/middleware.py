@@ -197,8 +197,8 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             start = len(previous_signatures)
 
         client = ensure_client(self._connection)
-        added = 0
-        pending_context_parts = list(self._pending_context_parts.pop(capture_key, []))
+        batch = []
+        pending_context_parts = list(self._pending_context_parts.get(capture_key, []))
         for message in messages[start:]:
             if OPENVIKING_CONTEXT_MARKER in _message_content(message):
                 continue
@@ -207,17 +207,19 @@ class OpenVikingContextMiddleware(AgentMiddleware):
                 if pending_context_parts and payload["role"] == "assistant":
                     payload["parts"].extend(pending_context_parts)
                     pending_context_parts = []
-                call_openviking(
-                    client,
-                    "add_message",
-                    session_id=session_id,
-                    role=payload["role"],
-                    parts=payload["parts"],
-                    peer_id=peer_id,
-                )
-                added += 1
+                if peer_id is not None:
+                    payload["peer_id"] = peer_id
+                batch.append(payload)
+        if batch:
+            call_openviking(
+                client,
+                "batch_add_messages",
+                session_id=session_id,
+                messages=batch,
+            )
+        self._pending_context_parts.pop(capture_key, None)
         self._captured_signatures[capture_key] = current_signatures
-        if added:
+        if batch:
             apply_commit_policy(client, session_id, self.commit_policy)
         return None
 
