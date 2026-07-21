@@ -25,7 +25,8 @@
  *   Capture tuning:
  *     OPENVIKING_AUTO_CAPTURE, OPENVIKING_CAPTURE_MODE, OPENVIKING_CAPTURE_MAX_LENGTH,
  *     OPENVIKING_CAPTURE_ASSISTANT_TURNS, OPENVIKING_COMMIT_TOKEN_THRESHOLD,
- *     OPENVIKING_RESUME_CONTEXT_BUDGET
+ *     OPENVIKING_RESUME_CONTEXT_BUDGET, OPENVIKING_TOOL_INPUT_COMPACTION,
+ *     OPENVIKING_TOOL_INPUT_MAX_CHARS
  *   Lifecycle / behavior:
  *     OPENVIKING_TIMEOUT_MS, OPENVIKING_CAPTURE_TIMEOUT_MS, OPENVIKING_WRITE_PATH_ASYNC,
  *     OPENVIKING_BYPASS_SESSION, OPENVIKING_BYPASS_SESSION_PATTERNS (CSV),
@@ -261,6 +262,16 @@ export function loadConfig() {
     // behavior. Operators who want the old user-only behavior can still set
     // OPENVIKING_CAPTURE_ASSISTANT_TURNS=0 or claude_code.captureAssistantTurns=false.
     captureAssistantTurns: envBool("OPENVIKING_CAPTURE_ASSISTANT_TURNS") ?? (cc.captureAssistantTurns !== false),
+    // Tool input compaction — reduce Write/Edit/Bash input to structural summaries
+    // (file path + preview) instead of full file contents. Dramatically reduces session
+    // storage (~5x), improves vector signal-to-noise ratio, and saves VLM tokens during
+    // memory extraction. Operators who need full replay-style archives can set
+    // OPENVIKING_TOOL_INPUT_COMPACTION=false to restore the old verbatim behavior.
+    toolInputCompaction: envBool("OPENVIKING_TOOL_INPUT_COMPACTION") ?? (cc.toolInputCompaction !== false),
+    toolInputMaxChars: Math.max(0, Math.floor(num(
+      process.env.OPENVIKING_TOOL_INPUT_MAX_CHARS,
+      num(cc.toolInputMaxChars, 2000),
+    ))),
     // P0-2: client-driven commit threshold (ported from openclaw afterTurn).
     // Default 20000 aligns with openclaw; lower values produce archives faster.
     commitTokenThreshold: Math.max(1000, Math.floor(num(
