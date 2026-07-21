@@ -646,13 +646,14 @@ class TestCompressorV2:
                 return SimpleNamespace(user_ids=["default"])
 
         provider = DummyProvider()
+        refresh_seen = asyncio.Event()
 
         class DummyOrchestrator:
             context_provider = provider
             _transaction_handle = None
 
             async def run(self):
-                await asyncio.sleep(0.12)
+                await asyncio.wait_for(refresh_seen.wait(), timeout=1.0)
                 return None, []
 
         handle = SimpleNamespace(id="handle-lease", locks=["/memories"])
@@ -664,6 +665,7 @@ class TestCompressorV2:
 
         async def refresh_lock(_handle):
             events.append("refresh")
+            refresh_seen.set()
 
         async def release(_handle):
             events.append("release")
@@ -743,12 +745,14 @@ class TestCompressorV2:
             def _get_registry(self):
                 return object()
 
+        refresh_seen = asyncio.Event()
+
         class DummyExtractLoop:
             def __init__(self, **kwargs):
                 pass
 
             async def run(self):
-                await asyncio.sleep(0.12)
+                await asyncio.wait_for(refresh_seen.wait(), timeout=1.0)
                 return (
                     ResolvedOperations(
                         upsert_operations=[
@@ -790,6 +794,7 @@ class TestCompressorV2:
 
         async def refresh_lock(_handle):
             events.append("refresh")
+            refresh_seen.set()
 
         lock_manager = SimpleNamespace(
             _path_lock=SimpleNamespace(_lock_expire=0.02),
