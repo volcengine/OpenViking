@@ -8,12 +8,22 @@ use async_trait::async_trait;
 use regex::Regex;
 use std::any::Any;
 use std::cmp::Ordering;
+use std::path::{Component, Path};
 
 use super::errors::{Error, Result};
-use super::glob::{
-    compare_rel_paths, decode_offset_token, encode_offset_token, PreparedGlob,
-};
+use super::glob::{compare_rel_paths, decode_offset_token, encode_offset_token, PreparedGlob};
 use super::types::{FileInfo, GlobEntry, GlobPage, GrepResult, TreeEntry, WriteFlag};
+
+/// Reject virtual paths that can escape a mounted backend lexically.
+pub(crate) fn validate_virtual_path(path: &str) -> Result<()> {
+    if Path::new(path)
+        .components()
+        .any(|component| matches!(component, Component::ParentDir | Component::Prefix(_)))
+    {
+        return Err(Error::invalid_path(path));
+    }
+    Ok(())
+}
 
 /// Normalize a path for prefix comparisons.
 ///

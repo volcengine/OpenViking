@@ -21,7 +21,7 @@ const PATH_LOCK_FILE: &str = ".path.ovlock";
 
 use super::encryption_wrapper::EncryptionWrappedFS;
 use super::errors::{Error, Result};
-use super::filesystem::{sort_directory_entries, FileSystem};
+use super::filesystem::{sort_directory_entries, validate_virtual_path, FileSystem};
 use super::multibackend_wrapper::MultiWriteWrappedFS;
 use super::plugin::ServicePlugin;
 use super::stats::{FilesystemStats, StatsCollector};
@@ -611,6 +611,7 @@ impl MountableFS {
     /// # Errors
     /// * `Error::MountPointNotFound` - If no mount point matches the path
     async fn find_mount(&self, path: &str) -> Result<(MountInfo, String)> {
+        validate_virtual_path(path)?;
         let normalized_path = normalize_path(path);
         let mounts = self.mounts.read().await;
 
