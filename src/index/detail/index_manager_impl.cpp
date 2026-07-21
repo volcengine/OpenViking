@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 #include "index/detail/index_manager_impl.h"
+#include <algorithm>
 #include <stdexcept>
 #include <memory>
 #include <chrono>
@@ -19,6 +20,9 @@ const std::string kMetaFile = "manager_meta.json";
 const std::string kVectorIndexDir = "vector_index";
 const std::string kScalarIndexDir = "scalar_index";
 constexpr size_t kFilterTokenCacheCapacity = 32;
+constexpr uint64_t kFilterLayoutInverseMaxSpanFactor = 4;
+constexpr uint32_t kMissingFilterLayoutOffset =
+    std::numeric_limits<uint32_t>::max();
 
 IndexManagerImpl::IndexManagerImpl(const std::string& path_or_json) {
   int ret = 0;
@@ -233,14 +237,51 @@ int IndexManagerImpl::search_with_filter_token(const SearchRequest& req,
 int IndexManagerImpl::set_filter_layout(
     const std::vector<uint64_t>& ordered_labels) {
   std::unique_lock<std::shared_mutex> lock(rw_mutex_);
-  filter_layout_offsets_.clear();
+  clear_filter_layout_();
   filter_layout_offsets_.reserve(ordered_labels.size());
+  uint64_t valid_offset_count = 0;
+  uint32_t min_offset = kMissingFilterLayoutOffset;
+  uint32_t max_offset = 0;
   for (const uint64_t label : ordered_labels) {
     const int offset = vector_index_->get_offset_by_label(label);
-    filter_layout_offsets_.push_back(
-        offset >= 0 ? static_cast<uint32_t>(offset)
-                    : std::numeric_limits<uint32_t>::max());
+    if (offset < 0) {
+      filter_layout_offsets_.push_back(kMissingFilterLayoutOffset);
+      continue;
+    }
+    const auto logical_offset = static_cast<uint32_t>(offset);
+    filter_layout_offsets_.push_back(logical_offset);
+    ++valid_offset_count;
+    min_offset = std::min(min_offset, logical_offset);
+    max_offset = std::max(max_offset, logical_offset);
   }
+
+  if (valid_offset_count == 0) {
+    return 0;
+  }
+  const uint64_t inverse_span =
+      static_cast<uint64_t>(max_offset) - min_offset + 1;
+  if (inverse_span >
+      kFilterLayoutInverseMaxSpanFactor * valid_offset_count) {
+    return 0;
+  }
+
+  filter_layout_rows_by_offset_.assign(
+      static_cast<size_t>(inverse_span), kMissingFilterLayoutOffset);
+  for (size_t row = 0; row < filter_layout_offsets_.size(); ++row) {
+    const uint32_t offset = filter_layout_offsets_[row];
+    if (offset == kMissingFilterLayoutOffset) {
+      continue;
+    }
+    const size_t inverse_row = static_cast<size_t>(offset - min_offset);
+    if (filter_layout_rows_by_offset_[inverse_row] !=
+        kMissingFilterLayoutOffset) {
+      filter_layout_rows_by_offset_.clear();
+      return 0;
+    }
+    filter_layout_rows_by_offset_[inverse_row] = static_cast<uint32_t>(row);
+  }
+  filter_layout_inverse_base_ = min_offset;
+  filter_layout_inverse_ready_ = true;
   return 0;
 }
 
@@ -284,6 +325,106 @@ int IndexManagerImpl::evaluate_filter(const std::string& dsl,
   return 0;
 }
 
+int IndexManagerImpl::evaluate_filter_for_routing(
+    const std::string& dsl, uint64_t native_threshold,
+    FilterResult& result) {
+  if (native_threshold == 0) {
+    return evaluate_filter(dsl, 0, result);
+  }
+
+  SearchContext ctx;
+  if (int ret = parse_dsl_query(dsl, ctx); ret != 0) {
+    SPDLOG_ERROR(
+        "IndexManagerImpl::evaluate_filter_for_routing [{}] parse failed",
+        dsl);
+    return ret;
+  }
+
+  std::shared_lock<std::shared_mutex> lock(rw_mutex_);
+  BitmapPtr bitmap = nullptr;
+  if (ctx.filter_op) {
+    bitmap = calculate_filter_bitmap(ctx, dsl);
+    if (!bitmap) {
+      SPDLOG_DEBUG(
+          "IndexManagerImpl::evaluate_filter_for_routing "
+          "calculate_filter_bitmap returned null");
+      return -1;
+    }
+  }
+
+  result.eligible_count = 0;
+  result.bitset_words.clear();
+  result.native_filter_token = 0;
+
+  // A selective scalar bitmap can be projected through the inverse layout in
+  // O(bitmap cardinality), without scanning every external dense-index row.
+  if (bitmap && filter_layout_inverse_ready_ &&
+      bitmap->nbit() <= native_threshold) {
+    std::vector<uint32_t> eligible_offsets;
+    bitmap->get_set_list(eligible_offsets);
+    for (const uint32_t offset : eligible_offsets) {
+      if (offset < filter_layout_inverse_base_) {
+        continue;
+      }
+      const uint64_t inverse_row =
+          static_cast<uint64_t>(offset) - filter_layout_inverse_base_;
+      if (inverse_row >= filter_layout_rows_by_offset_.size() ||
+          filter_layout_rows_by_offset_[inverse_row] ==
+              kMissingFilterLayoutOffset) {
+        continue;
+      }
+      ++result.eligible_count;
+    }
+    if (result.eligible_count > 0) {
+      result.native_filter_token = cache_filter_bitmap_(bitmap);
+    }
+    return 0;
+  }
+
+  // Keep at most threshold + 1 row ids while counting. If the filter is wide,
+  // allocate the full projection only after the route decision is known.
+  std::vector<uint32_t> narrow_rows;
+  const bool cannot_exceed_threshold =
+      native_threshold >= filter_layout_offsets_.size();
+  if (!cannot_exceed_threshold) {
+    narrow_rows.reserve(static_cast<size_t>(native_threshold + 1));
+  }
+  for (size_t row = 0; row < filter_layout_offsets_.size(); ++row) {
+    const uint32_t offset = filter_layout_offsets_[row];
+    const bool eligible = offset != kMissingFilterLayoutOffset &&
+                          (!bitmap || bitmap->Isset(offset));
+    if (!eligible) {
+      continue;
+    }
+    ++result.eligible_count;
+    if (cannot_exceed_threshold) {
+      continue;
+    }
+    if (result.bitset_words.empty()) {
+      narrow_rows.push_back(static_cast<uint32_t>(row));
+      if (result.eligible_count <= native_threshold) {
+        continue;
+      }
+      result.bitset_words.assign((filter_layout_offsets_.size() + 31) / 32,
+                                 0);
+      for (const uint32_t narrow_row : narrow_rows) {
+        result.bitset_words[narrow_row / 32] |=
+            static_cast<uint32_t>(1U << (narrow_row % 32));
+      }
+      narrow_rows.clear();
+      continue;
+    }
+    result.bitset_words[row / 32] |=
+        static_cast<uint32_t>(1U << (row % 32));
+  }
+
+  if (bitmap && result.eligible_count > 0 &&
+      result.eligible_count <= native_threshold) {
+    result.native_filter_token = cache_filter_bitmap_(bitmap);
+  }
+  return 0;
+}
+
 uint64_t IndexManagerImpl::cache_filter_bitmap_(const BitmapPtr& bitmap) {
   std::lock_guard<std::mutex> lock(filter_token_mutex_);
   uint64_t token = next_filter_token_++;
@@ -303,6 +444,13 @@ void IndexManagerImpl::clear_filter_token_cache_() {
   std::lock_guard<std::mutex> lock(filter_token_mutex_);
   filter_token_cache_.clear();
   filter_token_order_.clear();
+}
+
+void IndexManagerImpl::clear_filter_layout_() {
+  filter_layout_offsets_.clear();
+  filter_layout_rows_by_offset_.clear();
+  filter_layout_inverse_base_ = 0;
+  filter_layout_inverse_ready_ = false;
 }
 
 BitmapPtr IndexManagerImpl::calculate_filter_bitmap(const SearchContext& ctx,
@@ -415,7 +563,7 @@ int IndexManagerImpl::add_data(const std::vector<AddDataRequest>& data_list) {
                                 parsed_old_fields_list[i]);
   }
   if (has_update) {
-    filter_layout_offsets_.clear();
+    clear_filter_layout_();
     clear_filter_token_cache_();
     auto duration = std::chrono::system_clock::now().time_since_epoch();
     manager_meta_->update_timestamp =
@@ -459,7 +607,7 @@ int IndexManagerImpl::delete_data(
     vector_index_->stream_delete_data(data.label);
   }
   if (has_update) {
-    filter_layout_offsets_.clear();
+    clear_filter_layout_();
     clear_filter_token_cache_();
     auto duration = std::chrono::system_clock::now().time_since_epoch();
     manager_meta_->update_timestamp =

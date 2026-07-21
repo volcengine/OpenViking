@@ -9,13 +9,22 @@ import {
   preferredLanguage,
   shouldSynchronizeExampleTabs
 } from './api-example-tabs.ts'
-import { hasPageLlmsTxt } from './llms-txt.ts'
+import { absoluteLlmsTxtUrl, hasPageLlmsTxt, pageLlmsTxtPath } from './llms-txt.ts'
 
 test('hides llms.txt actions on index pages without generated artifacts', () => {
   assert.equal(hasPageLlmsTxt('index.md'), false)
   assert.equal(hasPageLlmsTxt('en/index.md'), false)
   assert.equal(hasPageLlmsTxt('zh/index.md'), false)
   assert.equal(hasPageLlmsTxt('en/api/01-overview.md'), true)
+})
+
+test('builds the absolute per-page llms.txt link copied by the page action', () => {
+  const path = pageLlmsTxtPath('zh/guides/03-cli-config.md')
+  assert.equal(path, '/zh/guides/03-cli-config/llms.txt')
+  assert.equal(
+    absoluteLlmsTxtUrl(`/OpenViking${path}`, 'https://docs.openviking.net'),
+    'https://docs.openviking.net/OpenViking/zh/guides/03-cli-config/llms.txt'
+  )
 })
 
 test('recognizes language headings with punctuation and qualifiers', () => {

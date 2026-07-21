@@ -9,7 +9,7 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple, Union
 
 import openviking.storage.vectordb.engine as engine
 from openviking.storage.vectordb.index.cuvs_index import (
@@ -279,6 +279,51 @@ class IndexEngineProxy:
         )
         return result.bitset_words, result.eligible_count, result.native_filter_token
 
+    def evaluate_filter_for_routing(
+        self,
+        filters: Dict[str, Any],
+        native_threshold: int,
+    ) -> Tuple[List[int], int, int]:
+        """Evaluate only the projection needed for an adaptive route decision."""
+
+        if not self.index_engine:
+            raise RuntimeError("Index engine not initialized")
+        result = self.index_engine.evaluate_filter_for_routing(
+            json.dumps(filters),
+            native_threshold=native_threshold,
+        )
+        return result.bitset_words, result.eligible_count, result.native_filter_token
+
+    def evaluate_filter_packed(
+        self,
+        filters: Dict[str, Any],
+        max_cached_candidates: int = 0,
+    ) -> Tuple[Union[List[int], bytes], int, int]:
+        """Evaluate a cuVS filter using packed words when the engine supports it."""
+
+        if not self.index_engine:
+            raise RuntimeError("Index engine not initialized")
+        result = self.index_engine.evaluate_filter_packed(
+            json.dumps(filters),
+            max_cached_candidates=max_cached_candidates,
+        )
+        return result.bitset_words, result.eligible_count, result.native_filter_token
+
+    def evaluate_filter_for_routing_packed(
+        self,
+        filters: Dict[str, Any],
+        native_threshold: int,
+    ) -> Tuple[Union[List[int], bytes], int, int]:
+        """Evaluate a cuVS route using packed words when available."""
+
+        if not self.index_engine:
+            raise RuntimeError("Index engine not initialized")
+        result = self.index_engine.evaluate_filter_for_routing_packed(
+            json.dumps(filters),
+            native_threshold=native_threshold,
+        )
+        return result.bitset_words, result.eligible_count, result.native_filter_token
+
     def drop(self):
         """Release the index engine resources.
 
@@ -310,7 +355,7 @@ class LocalIndex(IIndex):
         index_path_or_json: str,
         meta: Any,
         dense_search_config: Optional[Dict[str, Any]] = None,
-        initial_candidates: Optional[List[CandidateData]] = None,
+        initial_candidates: Optional[Iterable[CandidateData]] = None,
         defer_dense_rebuild_start: bool = False,
     ):
         """Initialize a local index instance.
@@ -319,7 +364,7 @@ class LocalIndex(IIndex):
             index_path_or_json (str): Path to index files or JSON configuration
             meta: Index metadata object containing configuration
             dense_search_config: Optional dense-search backend configuration.
-            initial_candidates: Records used to initialize the dense-search shadow state.
+            initial_candidates: Records consumed to initialize the dense-search shadow state.
             defer_dense_rebuild_start: Delay the background rebuild worker until the
                 caller has finished initializing the native index.
         """
@@ -352,6 +397,7 @@ class LocalIndex(IIndex):
         dense_search_backend = dense_search_config.get("backend")
         if dense_search_backend in {"cuvs", "auto_cuvs"}:
             self._auto_cuvs = dense_search_backend == "auto_cuvs"
+            candidate_iterable = initial_candidates if initial_candidates is not None else ()
             vector_meta = meta.inner_meta.get("VectorIndex", {})
             field_types = {
                 name: DataProcessor.normalize_field_type(field_meta.get("FieldType", ""))
@@ -366,7 +412,7 @@ class LocalIndex(IIndex):
                     config=dense_search_config,
                     auto_memory=self._auto_cuvs,
                 )
-                self.dense_search.add_candidates(initial_candidates or [])
+                self.dense_search.add_candidates(candidate_iterable)
                 self._auto_background_rebuild = self._auto_cuvs and bool(
                     dense_search_config.get("auto_background_rebuild", False)
                 )
@@ -374,10 +420,34 @@ class LocalIndex(IIndex):
                     max(0, int(dense_search_config.get("auto_rebuild_debounce_ms", 500))) / 1000.0
                 )
             except CuVSUnavailableError:
+                failed_dense_search = self.dense_search
+                self.dense_search = None
+                if failed_dense_search is not None:
+                    try:
+                        failed_dense_search.close()
+                    except Exception:
+                        logger.warning(
+                            "Failed to close unavailable cuVS dense search", exc_info=True
+                        )
                 if not self._auto_cuvs:
                     raise
                 logger.info("cuVS auto mode unavailable; keeping native dense search")
+            except Exception:
+                failed_dense_search = self.dense_search
                 self.dense_search = None
+                if failed_dense_search is not None:
+                    try:
+                        failed_dense_search.close()
+                    except Exception:
+                        logger.warning("Failed to close partial cuVS dense search", exc_info=True)
+                raise
+            finally:
+                close_candidates = getattr(candidate_iterable, "close", None)
+                if callable(close_candidates):
+                    try:
+                        close_candidates()
+                    except Exception:
+                        logger.warning("Failed to close dense recovery iterator", exc_info=True)
         if not defer_dense_rebuild_start:
             self._start_dense_rebuild_worker()
 
@@ -783,7 +853,7 @@ class LocalIndex(IIndex):
                                     ) * 1000.0
                                 native_count = self.dense_search.preflight_native_count(
                                     filters,
-                                    self._evaluate_cuvs_filter,
+                                    self._evaluate_cuvs_filter_for_routing,
                                     self.engine_proxy.set_filter_layout,
                                     telemetry=cuvs_telemetry,
                                 )
@@ -879,6 +949,11 @@ class LocalIndex(IIndex):
     ) -> Tuple[List[int], List[float]]:
         if self.dense_search is None or self.engine_proxy is None:
             raise RuntimeError("cuVS search requires an initialized index")
+        filter_resolver = (
+            self._evaluate_cuvs_filter_for_routing
+            if self._auto_cuvs
+            else self._evaluate_cuvs_filter
+        )
         if self._auto_background_rebuild:
             queue_started = time.perf_counter()
             with self._dense_search_lock.read():
@@ -892,7 +967,7 @@ class LocalIndex(IIndex):
                     query_vector,
                     limit,
                     filters,
-                    self._evaluate_cuvs_filter,
+                    filter_resolver,
                     self.engine_proxy.set_filter_layout,
                     telemetry=telemetry,
                 )
@@ -906,7 +981,7 @@ class LocalIndex(IIndex):
                         query_vector,
                         limit,
                         filters,
-                        self._evaluate_cuvs_filter,
+                        filter_resolver,
                         self.engine_proxy.set_filter_layout,
                         telemetry=telemetry,
                     )
@@ -920,7 +995,7 @@ class LocalIndex(IIndex):
                         query_vector,
                         limit,
                         filters,
-                        self._evaluate_cuvs_filter,
+                        filter_resolver,
                         self.engine_proxy.set_filter_layout,
                         telemetry=telemetry,
                     )
@@ -962,12 +1037,24 @@ class LocalIndex(IIndex):
                 if telemetry.route_reason == "pending":
                     telemetry.route_reason = "native_fallback"
 
-    def _evaluate_cuvs_filter(self, filters: Dict[str, Any]) -> Tuple[List[int], int, int]:
+    def _evaluate_cuvs_filter(
+        self, filters: Dict[str, Any]
+    ) -> Tuple[Union[List[int], bytes], int, int]:
         if self.dense_search is None or self.engine_proxy is None:
             raise RuntimeError("cuVS filter evaluation requires an initialized index")
-        return self.engine_proxy.evaluate_filter(
+        return self.engine_proxy.evaluate_filter_packed(
             filters,
             max_cached_candidates=self.dense_search.native_filter_threshold(filters),
+        )
+
+    def _evaluate_cuvs_filter_for_routing(
+        self, filters: Dict[str, Any]
+    ) -> Tuple[Union[List[int], bytes], int, int]:
+        if self.dense_search is None or self.engine_proxy is None:
+            raise RuntimeError("cuVS filter evaluation requires an initialized index")
+        return self.engine_proxy.evaluate_filter_for_routing_packed(
+            filters,
+            native_threshold=self.dense_search.native_filter_threshold(filters),
         )
 
     @staticmethod
@@ -1247,7 +1334,7 @@ class PersistentIndex(LocalIndex):
         name: str,
         meta: Any,
         path: str,
-        cands_list: Optional[List[CandidateData]] = None,
+        cands_list: Optional[Iterable[CandidateData]] = None,
         force_rebuild: bool = False,
         initial_timestamp: Optional[int] = None,
         dense_search_config: Optional[Dict[str, Any]] = None,
@@ -1262,7 +1349,9 @@ class PersistentIndex(LocalIndex):
             name (str): Name identifier for the index (used as subdirectory name)
             meta: Index metadata containing configuration
             path (str): Parent directory path where index data will be stored
-            cands_list (list): Initial data for creating a new index. Defaults to None.
+            cands_list: Initial records for a new native index or dense-search shadow.
+                Existing native snapshots consume this iterable only when the configured
+                dense-search backend needs to rehydrate its shadow state.
             force_rebuild (bool): If True, rebuilds the index even if it exists.
                 Defaults to False.
             initial_timestamp (Optional[int]): Timestamp to use if creating a new index
@@ -1282,7 +1371,7 @@ class PersistentIndex(LocalIndex):
                - Apply any pending delta updates from collection
         """
         if cands_list is None:
-            cands_list = []
+            cands_list = ()
 
         validate_name_str(name)
         self.index_dir = str(safe_join_name(path, name))
@@ -1294,6 +1383,11 @@ class PersistentIndex(LocalIndex):
 
         # At this point, there is no index, need to create a new one
         if not newest_version or force_rebuild:
+            # Building a new native index needs both len() and another pass when
+            # initializing an optional dense shadow.  Recovery of an existing
+            # snapshot stays single-pass and does not take this fallback.
+            if not isinstance(cands_list, list):
+                cands_list = list(cands_list)
             self._create_new_index(name, meta, cands_list, initial_timestamp)
         else:
             self.now_version = str(newest_version)

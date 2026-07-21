@@ -192,13 +192,13 @@ peer_enabled: true
 
 ### Memory
 
-这一类 YAML 定义不同记忆类型的结构，不是单次推理 prompt。它们共同决定用户记忆和 agent 记忆如何落盘、如何更新、如何被后续检索使用。
+这一类 YAML 定义不同记忆类型的结构，不是单次推理 prompt。它们共同决定当前用户或 Peer 的记忆如何落盘、如何更新、如何被后续检索使用。
 
 - `cases`
   - 生效环节：案例型记忆落盘与更新阶段
-  - 影响能力：问题到解决方案的案例沉淀与复用
-  - 作用：定义“遇到了什么问题、如何解决”的案例型记忆
-  - 关键字段：`case_name`、`problem`、`solution`、`content`
+  - 影响能力：可训练、可评估的任务案例沉淀
+  - 作用：定义具体任务输入、评估标准和支撑证据
+  - 关键字段：`case_name`、`task_signature`、`input`、`rubric`、`evidence`
 
 - `entities`
   - 生效环节：实体型记忆落盘与更新阶段
@@ -212,17 +212,17 @@ peer_enabled: true
   - 作用：定义事件摘要、目标、时间范围等结构化事件记忆
   - 关键字段：`event_name`、`goal`、`summary`、`ranges`
 
+- `experiences`
+  - 生效环节：经验型记忆落盘与更新阶段
+  - 影响能力：从任务结果中沉淀可复用指导
+  - 作用：记录持久的执行经验及其替代的旧记忆
+  - 关键字段：`experience_name`、`content`、`supersedes`
+
 - `identity`
   - 生效环节：agent identity 记忆落盘阶段
   - 影响能力：agent 身份设定的长期一致性
   - 作用：定义 agent 的名字、形象、风格、自我介绍等身份字段
-  - 关键字段：`name`、`creature`、`vibe`、`emoji`、`avatar`
-
-- `patterns`
-  - 生效环节：模式型记忆落盘与更新阶段
-  - 影响能力：可复用流程和方法的长期积累
-  - 作用：定义“在什么情况下按什么流程处理”的模式记忆
-  - 关键字段：`pattern_name`、`pattern_type`、`content`
+  - 关键字段：`name`、`creature`、`vibe`、`emoji`、`avatar`、`introduction`
 
 - `preferences`
   - 生效环节：偏好型记忆落盘与更新阶段
