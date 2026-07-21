@@ -170,7 +170,7 @@ test("archive fallback is user-scoped, bounded, cited, and strips tool output", 
             {
               uri: "viking://user/alice/sessions/cx-1/history/archive_001/messages.jsonl",
               line: 9,
-              content: '{"type":"tool_result","content":"secret output"}',
+              content: '{"role":"user","parts":[{"type":"tool","tool_name":"shell","tool_input":{"cmd":"cat private.txt"},"tool_output":"secret output"}]}',
             },
           ],
         },
@@ -197,6 +197,7 @@ test("archive fallback is user-scoped, bounded, cited, and strips tool output", 
   assert.match(block, /quoted reference data/i);
   assert.match(block, /archive_001\/\.overview\.md#L8/);
   assert.match(block, /> Used deploy-3258 with \.\/scripts\/release\.sh --safe\./);
+  assert.doesNotMatch(block, /cat private\.txt|tool_output/);
   assert.doesNotMatch(block, /secret output/);
   assert.ok(block.length <= 2000);
   assert.equal(logs.at(-1).stage, "archive_fallback_result");

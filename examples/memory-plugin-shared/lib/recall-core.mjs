@@ -20,7 +20,7 @@ const ARCHIVE_ANCHOR_STOPWORDS = new Set([
   "about", "before", "command", "conversation", "did", "earlier", "history", "historical",
   "last", "previous", "previously", "prior", "session", "time", "use", "used", "we", "were",
 ]);
-const ARCHIVE_TOOL_OUTPUT_RE = /(?:"type"\s*:\s*"tool_(?:result|use)"|<tool_(?:result|use)\b|\btool_output_ref\b)/i;
+const ARCHIVE_TOOL_OUTPUT_RE = /(?:"type"\s*:\s*"tool(?:_(?:result|use))?"|"role"\s*:\s*"tool"|"tool_(?:input|output|output_ref)"\s*:|<tool_(?:result|use)\b|\btool_output_ref\b)/i;
 const ARCHIVE_BASE64_RE = /(?:data:[^;,\s]+;base64,)?[A-Za-z0-9+/]{120,}={0,2}/g;
 
 let userSpaceCache = "";

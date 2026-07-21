@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import openviking.server.bootstrap as bootstrap
 from openviking.server.config import ServerConfig
 from openviking.utils.agfs_utils import resolve_queuefs_mount_point
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 from openviking_cli.utils.config.storage_config import StorageConfig
 
 
@@ -118,6 +119,59 @@ def test_main_coerces_cli_host_all_to_none(monkeypatch):
 
     assert captured["host"] is None
     assert captured["port"] == 1933
+
+
+def test_main_enables_bot_logging_when_with_bot_comes_from_config(monkeypatch):
+    config = ServerConfig(host="127.0.0.1", port=1933, with_bot=True)
+    captured: dict[str, object] = {}
+    bot_process = object()
+
+    monkeypatch.setattr(bootstrap, "load_server_config", lambda config_path: config)
+    monkeypatch.setattr(bootstrap, "create_app", lambda config: "app")
+    monkeypatch.setattr(bootstrap, "configure_uvicorn_logging", lambda: None)
+    monkeypatch.setattr(
+        OpenVikingConfigSingleton,
+        "initialize",
+        classmethod(lambda cls, config_path: None),
+    )
+    monkeypatch.setattr(
+        bootstrap.argparse.ArgumentParser,
+        "parse_args",
+        lambda self: SimpleNamespace(
+            host=None,
+            port=None,
+            config=None,
+            workers=None,
+            bot=False,
+            with_bot=False,
+            bot_port=bootstrap.VIKINGBOT_DEFAULT_PORT,
+            enable_bot_logging=None,
+            bot_log_dir="/tmp/bot-logs",
+        ),
+    )
+    monkeypatch.setattr(bootstrap, "_abort_if_port_in_use", lambda port, label: None)
+
+    def _fake_start(enable_logging, log_dir, port, **kwargs):
+        captured.update(
+            {
+                "enable_logging": enable_logging,
+                "log_dir": log_dir,
+                "port": port,
+            }
+        )
+        return bot_process
+
+    monkeypatch.setattr(bootstrap, "_start_vikingbot_gateway", _fake_start)
+    monkeypatch.setattr(bootstrap, "_stop_vikingbot_gateway", lambda process: None)
+    monkeypatch.setattr(bootstrap.uvicorn, "run", lambda *args, **kwargs: None)
+
+    bootstrap.main()
+
+    assert captured == {
+        "enable_logging": True,
+        "log_dir": "/tmp/bot-logs",
+        "port": bootstrap.VIKINGBOT_DEFAULT_PORT,
+    }
 
 
 def test_resolve_queuefs_mount_point_defaults_to_shared():
