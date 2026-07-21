@@ -626,8 +626,11 @@ class UnderstandingAPI(BaseParser):
                         f"{temp_doc_uri}/{IMAGE_MAPPINGS_FILENAME}",
                         json.dumps(image_mappings, ensure_ascii=False),
                     )
-        except Exception:
-            await viking_fs.delete_temp(temp_uri)
+        except BaseException:
+            try:
+                await asyncio.shield(viking_fs.delete_temp(temp_uri))
+            except BaseException:
+                logger.exception("Failed to clean up Understanding API temp tree %s", temp_uri)
             raise
 
         return temp_uri

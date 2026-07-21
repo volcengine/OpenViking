@@ -611,6 +611,22 @@ async def test_export_failure_preserves_existing_archive(
 
 
 @pytest.mark.asyncio
+async def test_export_preserves_existing_archive_permissions(
+    temp_ovpack_path: Path, request_ctx: RequestContext
+):
+    temp_ovpack_path.chmod(0o640)
+
+    await export_ovpack(
+        FakeExportVikingFS(),
+        "viking://resources/demo",
+        str(temp_ovpack_path),
+        ctx=request_ctx,
+    )
+
+    assert temp_ovpack_path.stat().st_mode & 0o777 == 0o640
+
+
+@pytest.mark.asyncio
 async def test_backup_restore_contract(temp_ovpack_path: Path, request_ctx: RequestContext):
     await backup_ovpack(
         FakeBackupVikingFS(),

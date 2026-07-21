@@ -1,3 +1,4 @@
+import asyncio
 import json
 import zipfile
 from pathlib import Path
@@ -100,3 +101,41 @@ async def test_unpack_failure_deletes_temp_tree(tmp_path: Path):
         await api._unpack_zip_to_temp_dir(zip_path, "resource")
 
     assert fake_fs.deleted == ["viking://temp/artifact"]
+
+
+@pytest.mark.asyncio
+async def test_unpack_cancellation_deletes_temp_tree(tmp_path: Path):
+    fake_fs = _FakeVikingFS()
+
+    async def cancel(_uri, exist_ok=False):
+        raise asyncio.CancelledError
+
+    fake_fs.mkdir = cancel
+    api = UnderstandingAPI.__new__(UnderstandingAPI)
+
+    with (
+        patch("openviking.parse.understanding_api.get_viking_fs", return_value=fake_fs),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await api._unpack_zip_to_temp_dir(tmp_path / "unused.zip", "resource")
+
+    assert fake_fs.deleted == ["viking://temp/artifact"]
+
+
+@pytest.mark.asyncio
+async def test_unpack_cleanup_failure_preserves_original_error(tmp_path: Path):
+    zip_path = tmp_path / "broken.zip"
+    zip_path.write_bytes(b"not a zip")
+    fake_fs = _FakeVikingFS()
+
+    async def fail_cleanup(_uri):
+        raise RuntimeError("cleanup failed")
+
+    fake_fs.delete_temp = fail_cleanup
+    api = UnderstandingAPI.__new__(UnderstandingAPI)
+
+    with (
+        patch("openviking.parse.understanding_api.get_viking_fs", return_value=fake_fs),
+        pytest.raises(zipfile.BadZipFile),
+    ):
+        await api._unpack_zip_to_temp_dir(zip_path, "resource")
