@@ -1,0 +1,315 @@
+benchmark/locomo/vikingbot/preflight_eval_config.py
+  s_8a577b324c3205::t_b5b3dc039ac880 14-19,29,33,37,41,49-52
+benchmark/locomo/vikingbot/preflight_eval_runtime.py
+  s_8a577b324c3205::t_70c847782a56fb 4,22-34,37-49,53,73,76,79-87,91,95-96,104,208,375,398,410,441,447,460-462,464,505,508,531,561,567-569
+benchmark/locomo/vikingbot/run_full_eval.sh
+  s_8a577b324c3205::t_aacfe580514a28 15,19-72,89-91,101-103,110,114-116,129-132,150-152,159,176,191-200,215-220,225,237,263,268-277,283-292,299,303,337,433,439,443-444,453,465,469,476,480-481,487-489,495,505,507,511,516-520,522,525-530,533-537,541-543,552,573,577,583-584,588,590,603,609,611,626,631,633,635,638,674-675,692,696,698,710,716,718,731,736,738,740,744,746,751-753
+benchmark/vectordb_perf/README.md
+  s_8a577b324c3205::t_68b0d82ba7d101 207,219-226,229-230
+benchmark/vectordb_perf/run.py
+  s_8a577b324c3205::t_caacd7e966e257 47,1200-1223,1334-1356,1392-1418
+crates/ov_cli/src/client.rs
+  s_8a577b324c3205::t_67ec61714348b3 1613-1619,1623-1627
+crates/ov_cli/src/commands/snapshot.rs
+  s_8a577b324c3205::t_2efc40d741b039 66-71
+crates/ov_cli/src/main.rs
+  s_8a577b324c3205::t_4caabce55444f1 1134-1136
+crates/ragfs-python/src/git.rs
+  s_8a577b324c3205::t_298f8097bc394e 162-169,171,173-175,177-182,184-195,197-206,210-229,296-297,329-337,380-388,513-531,700-768,893-914,951-987
+crates/ragfs-python/src/lib.rs
+  s_8a577b324c3205::t_9140b2fe61d171 1063-1080
+crates/ragfs/src/git/error.rs
+  s_8a577b324c3205::t_15644fc1ef1ec6 137-159
+crates/ragfs/src/git/mod.rs
+  s_8a577b324c3205::t_9f23f3ccc3fe6d 52-53
+crates/ragfs/src/git/service.rs
+  s_8a577b324c3205::t_27855b0817ddf1 32-33,37-40,828-920,1407-1489,3169-3379,5387-5435
+crates/ragfs/src/git/types.rs
+  s_8a577b324c3205::t_d8a06252839ec3 56-86
+docs/design/openviking-cuvs-integration-plan.md
+  s_8a577b324c3205::t_b510515124ae96 365-368
+docs/design/openviking-usage-reporter-sink-design.md
+  s_8a577b324c3205::t_b5e223ec73f118 1-223
+docs/design/resource-ingestion-routing.md
+  s_c2efe1f8754877::t_d15cf29d858659 27,34,65,144,181,213,237
+docs/en/agent-integrations/05-hermes.md
+  s_8a577b324c3205::t_ca789e9ea89d47 5-15
+docs/en/api/11-snapshot.md
+  s_8a577b324c3205::t_b4837d2f6bb496 126-131,136-139,147-152,158,162-166,173-175
+docs/en/guides/01-configuration.md
+  s_8a577b324c3205::t_09017b053339c5 853,871,1645
+docs/en/guides/16-cuvs.md
+  s_8a577b324c3205::t_21546644b9c020 92-101
+docs/zh/agent-integrations/05-hermes.md
+  s_8a577b324c3205::t_40a4dfeae11d2c 5-13
+docs/zh/api/11-snapshot.md
+  s_8a577b324c3205::t_bc178bfbf48853 127-131,136-139,147-152,158,162-166,173-175
+docs/zh/guides/01-configuration.md
+  s_8a577b324c3205::t_ae2216d4ed63c7 822,840,1612
+docs/zh/guides/16-cuvs.md
+  s_8a577b324c3205::t_54bd5cb93ef0b5 124-131
+examples/claude-code-memory-plugin/scripts/shared/mcp-proxy-core.mjs
+  s_8a577b324c3205::t_dcd91547a54225 145,183-219,422-428,444
+examples/codex-memory-plugin/.codex-plugin/plugin.json
+  s_8a577b324c3205::t_0135c11f0dc6cf 3,33-34
+examples/codex-memory-plugin/scripts/auto-recall.mjs
+  s_8a577b324c3205::t_02c192a3d62d54 20,418-419,441-449
+examples/codex-memory-plugin/scripts/auto-recall.test.mjs
+  s_8a577b324c3205::t_94e319be2f2648 9,13-39,144-151,187,190,193,389-427
+examples/codex-memory-plugin/scripts/capture-utils.mjs
+  s_8a577b324c3205::t_8d441880a41bc1 1-4,6-109
+examples/codex-memory-plugin/scripts/capture-utils.test.mjs
+  s_8a577b324c3205::t_571bf57a12539c 1-188
+examples/codex-memory-plugin/scripts/codex-launch.mjs
+  s_8a577b324c3205::t_707f4f9d3cc3d9 1-75
+examples/codex-memory-plugin/scripts/marketplace.test.mjs
+  s_8a577b324c3205::t_f985a130cc34e0 122-145,184-189
+examples/codex-memory-plugin/scripts/shared/mcp-proxy-core.mjs
+  s_8a577b324c3205::t_06bebe4e10a0d0 145,183-219,422-428,444
+examples/codex-memory-plugin/servers/experience-tools.mjs
+  s_8a577b324c3205::t_40f0f36f96ca03 1-199
+examples/codex-memory-plugin/servers/experience-tools.test.mjs
+  s_8a577b324c3205::t_d265a00c14499c 1-240
+examples/codex-memory-plugin/servers/mcp-proxy.mjs
+  s_8a577b324c3205::t_7f0a1c8fcad3cf 19,47,71-76
+examples/codex-memory-plugin/servers/mcp-proxy.test.mjs
+  s_8a577b324c3205::t_526396e9031494 2,4-5,45,55,68,70,198-343
+examples/codex-memory-plugin/skills/ov-experience-memory/SKILL.md
+  s_8a577b324c3205::t_379906c7c7599e 1-156
+examples/memory-plugin-shared/lib/mcp-proxy-core.mjs
+  s_8a577b324c3205::t_2a6aca82e83232 144,182-218,421-427,443
+examples/openclaw-plugin/openclaw.plugin.json
+  s_8a577b324c3205::t_39af690e202c2a 6,16
+examples/openclaw-plugin/tests/ut/manifest-contracts.test.ts
+  s_8a577b324c3205::t_e6d55a79731970 1,12,57,83-94
+examples/opencode-plugin/lib/config.mjs
+  s_8a577b324c3205::t_415ec67bc23189 236-243
+examples/opencode-plugin/lib/memory-session.mjs
+  s_8a577b324c3205::t_ae2573cfdb29cb 32,143,145,262,364
+examples/opencode-plugin/lib/shared/mcp-proxy-core.mjs
+  s_8a577b324c3205::t_bc2a8020efcf92 145,183-219,422-428,444
+examples/opencode-plugin/lib/viking-uri-guard.mjs
+  s_8a577b324c3205::t_0b479f347ca452 7
+examples/opencode-plugin/tests/config.test.mjs
+  s_8a577b324c3205::t_66c673e14c315a 144-189
+examples/opencode-plugin/tests/memory-session.test.mjs
+  s_8a577b324c3205::t_b4a15255d00d69 56,66-132
+examples/opencode-plugin/tests/viking-uri-guard.test.mjs
+  s_8a577b324c3205::t_6cc2409cdf11b6 13
+examples/ov.conf.example
+  s_8a577b324c3205::t_07734b3ba93231 230-234
+examples/skills/ov-experience-memory/SKILL.md
+  s_8a577b324c3205::t_1457eadfe28901 1-156
+openviking/client/local.py
+  s_8a577b324c3205::t_6b0c7849b04853 1182,1185
+openviking/models/rerank/base.py
+  s_8a577b324c3205::t_5a675ed6d24f39 12,52-53
+openviking/models/rerank/litellm_rerank.py
+  s_8a577b324c3205::t_e149f21799be9d 9,17-27,70,100,108-109
+openviking/models/vlm/backends/litellm_vlm.py
+  s_8a577b324c3205::t_d99a8cf9bfa1dc 355-357
+openviking/models/vlm/backends/openai_vlm.py
+  s_8a577b324c3205::t_f2af7a224833eb 194-196
+openviking/models/vlm/backends/volcengine_vlm.py
+  s_8a577b324c3205::t_56dcb67dad73bd 61-63
+openviking/parse/accessors/feishu_accessor.py
+  s_8a577b324c3205::t_c3da2c5dc487f8 37-46,272
+openviking/parse/parsers/media/constants.py
+  s_8a577b324c3205::t_803a9c4dacf916 6
+openviking/parse/parsers/media/image.py
+  s_8a577b324c3205::t_3c867be24f7d3b 13,22-26,28-29,64,84-89,99-100,110-157,163-165,167,183,187-246,254-258
+openviking/parse/parsers/media/large_image_processor.py
+  s_8a577b324c3205::t_88e9fe08d9f02a 1-513
+openviking/parse/parsers/media/utils.py
+  s_8a577b324c3205::t_355545e40de6c9 28-51
+openviking/parse/registry.py
+  s_c2efe1f8754877::t_445d65ab4c466d 71,176
+openviking/retrieve/hierarchical_retriever.py
+  s_8a577b324c3205::t_ae47c57b9aeb4e 28-31,78,354,361-370,374
+openviking/server/api_keys/legacy.py
+  s_8a577b324c3205::t_c9f3c763a54bba 19-20,656-672,677-690
+openviking/server/app.py
+  s_8a577b324c3205::t_33269d43e2acce 205-216,218-224,227,238,319-320
+openviking/server/bootstrap.py
+  s_8a577b324c3205::t_52cd36f3886be2 259-264
+openviking/server/config.py
+  s_8a577b324c3205::t_e71cb77421e437 176-195,260
+openviking/server/routers/snapshot.py
+  s_8a577b324c3205::t_3f1831e9e70d3e 29-30,60,72-79,85,88,140,174
+openviking/service/core.py
+  s_8a577b324c3205::t_ea1ce6cd756bb8 31,419-421,424
+openviking/service/fs_service.py
+  s_8a577b324c3205::t_6a6a8f8bc1efdf 671,675-679
+openviking/service/resource_service.py
+  s_c2efe1f8754877::t_85c6de6fbd2b26 18,104,211-223,322,331-453,485,505-516,519-521,531-539,541,749-760,816-817,862,924-962,964,1002,1009-1010,1058-1098,1137,1140-1141
+openviking/service/session_service.py
+  s_8a577b324c3205::t_9d5f0d77752b0d 31,47,66-69,129
+openviking/service/task_tracker.py
+  s_8a577b324c3205::t_08e234f4f2c1ca 42-44,339,358,373,376,384-386,396,399,407-409
+openviking/session/memory/memory_updater.py
+  s_8a577b324c3205::t_0d4c194487018d 13,55-73,166,170-174,176-177,181-183,191,193-197,200-202,205,210,221-230,354-485,540,546-550,552-625,811-822,829,865-871
+openviking/session/memory/streaming_memory_updater.py
+  s_8a577b324c3205::t_a56158cf5a1cde 1829-1834
+openviking/session/session.py
+  s_8a577b324c3205::t_c2e36c9dd8471e 50,366,396,1305-1326,1347,1377-1383,1682,2038-2045
+openviking/snapshot_namespace.py
+  s_8a577b324c3205::t_29334210dedd6d 84,87,173,175
+openviking/storage/queuefs/add_resource_msg.py
+  s_8a577b324c3205::t_8fddd4ba965d05 3,9-10,13-18,23,31-32,36,38-39,42-45,48-49,54-63,67-68,73,75,89,97-102,105-106,108-110
+openviking/storage/queuefs/add_resource_processor.py
+  s_8a577b324c3205::t_0f15ae7f5fbddf 3,6,8,11,13-14,16-17,24-25,27,29-38,40-42,44-49,51-52,54-56,58,60-70,72,78-88,90-94,96-103,107,110-120,122,124,128,130-131,133-134,138,146-148,150,154,156,165,168,177-204
+openviking/storage/queuefs/queue_manager.py
+  s_8a577b324c3205::t_571782739fb2b5 72-73,161
+openviking/storage/queuefs/semantic_processor.py
+  s_8a577b324c3205::t_6d82a24bc187df 751-754,761-763
+openviking/storage/transaction/lock_context.py
+  s_8a577b324c3205::t_1bdb801fac8e94 5,10,28,36,50-52,56-58,67
+openviking/storage/transaction/path_lock.py
+  s_8a577b324c3205::t_4e9d97801ad4bb 171-173
+openviking/storage/vectordb/collection/collection.py
+  s_8a577b324c3205::t_c28df926b43c61 41-46,253-268
+openviking/storage/vectordb/collection/local_collection.py
+  s_8a577b324c3205::t_024c9866cee5a1 8,10,12,59-158,227-229,264-268,273,293-411,421-457,467-470,481-486,831-834,836-837,839,895-898,900-901,903,916-943,945-950,952-953,955-972,974,988-991,993-994,996,1076-1085,1087-1088,1093-1098,1104-1110,1112-1127,1129-1131,1136-1145,1217,1238,1246,1434-1436,1467,1480
+openviking/storage/vectordb/index/cuvs_index.py
+  s_8a577b324c3205::t_4140d3ba3135fb 1047-1079,1087,1096,1099,1102-1108,1112-1119,1121-1129
+openviking/storage/vectordb/index/index.py
+  s_8a577b324c3205::t_6c1fae7707a638 276-281
+openviking/storage/vectordb/index/local_index.py
+  s_8a577b324c3205::t_4db1c27ac47b01 34-36,344-345,348-349,428-429,431-450,453-477,496,499-513,518-524,528,535-536,539-541,559,563-565,567-572,574-579,581,583,587-591,594,600-606,613-614,622-623,627,631-639,643-649,651-652,654,656-660,665,668-669,676,681-684,687-688,692-724,1149,1160-1161,1187-1188
+openviking/storage/vectordb_adapters/base.py
+  s_8a577b324c3205::t_69067e8b53bf44 211-220
+openviking/storage/vectordb_adapters/local_adapter.py
+  s_8a577b324c3205::t_81382104f781cf 90-95
+openviking/storage/viking_fs.py
+  s_8a577b324c3205::t_9a7b5133f39823 4045,4056-4062,4064-4066
+openviking/storage/viking_vector_index_backend.py
+  s_8a577b324c3205::t_942453a977aa9d 9-10,73-94,379-384,896-925
+openviking/storage/vikingdb_manager.py
+  s_8a577b324c3205::t_5865d7ea6aacd5 7-8,302-307
+openviking/usage_reporter/__init__.py
+  s_8a577b324c3205::t_600cd86fc88918 1-17
+openviking/usage_reporter/config.py
+  s_8a577b324c3205::t_923da60b77404b 1-52
+openviking/usage_reporter/extractors.py
+  s_8a577b324c3205::t_58d8b1a911e7fb 1-192
+openviking/usage_reporter/models.py
+  s_8a577b324c3205::t_0f6fb0274f20a4 1-61
+openviking/usage_reporter/reporter.py
+  s_8a577b324c3205::t_4de4a8e9416175 1-119
+openviking/usage_reporter/sinks.py
+  s_8a577b324c3205::t_800a348b974e25 1-13
+openviking/utils/resource_processor.py
+  s_8a577b324c3205::t_7aae6e0c621c7d 162,389-409,417-490
+openviking/utils/token_estimation.py
+  s_8a577b324c3205::t_9a5da170b5a5d4 50-90
+openviking_cli/client/base.py
+  s_8a577b324c3205::t_81749ed6bff53a 592
+openviking_cli/utils/config/parser_config.py
+  s_8a577b324c3205::t_217e0ff008f0dc 303-307,314-319,332-341
+openviking_cli/utils/config/rerank_config.py
+  s_8a577b324c3205::t_042d7eb1493116 50-58,75-77
+openviking_cli/utils/config/transaction_config.py
+  s_8a577b324c3205::t_e2c2b8bb126376 25
+sdk/python/openviking_sdk/client.py
+  s_8a577b324c3205::t_92fc35c0cd7e04 1583,1586-1588,1592,2367,2369,2445,2447
+sdk/typescript/src/client.ts
+  s_8a577b324c3205::t_f1b38a832c48c9 861,863
+sdk/typescript/src/transport.ts
+  s_8a577b324c3205::t_c33fb5960393db 74-79,81
+sdk/typescript/tests/client.test.ts
+  s_8a577b324c3205::t_f3d6c310f66a23 557,574-582,595-604
+tests/agfs/test_viking_fs_git.py
+  s_8a577b324c3205::t_929099726723f5 221-274
+tests/benchmark/test_vectordb_perf_run.py
+  s_8a577b324c3205::t_5e755fd9530c51 19,102-219
+tests/cli/test_cli_snapshot.py
+  s_8a577b324c3205::t_2d4be1325436af 15-23,28-32,35,55,60-66,107-148
+tests/client/test_git_versioning.py
+  s_8a577b324c3205::t_b059be6f65d33f 222-256
+tests/client/test_git_versioning_http.py
+  s_8a577b324c3205::t_1a2abd65429ac9 185-229
+tests/client/test_http_client_snapshot.py
+  s_8a577b324c3205::t_289c108b13c786 208-212,215-231
+tests/parse/test_feishu_accessor.py
+  s_c2efe1f8754877::t_bcbedc88646240 10,274-277,622-646
+tests/retrieve/test_hierarchical_retriever_rerank.py
+  s_8a577b324c3205::t_79f7bc3406afb2 14,242-247,298-352
+tests/server/test_admin_api.py
+  s_8a577b324c3205::t_793097a7b2941a 46-58,150-156
+tests/server/test_api_key_manager.py
+  s_8a577b324c3205::t_202603e43f5063 6,15,18,171-200
+tests/server/test_api_snapshot.py
+  s_8a577b324c3205::t_a7460b6c5f6de8 5-8,12-17,35-52,88-165
+tests/server/test_bootstrap.py
+  s_8a577b324c3205::t_f9b442973f7dfb 12,124-176
+tests/service/test_resource_service_understanding_routing.py
+  s_c2efe1f8754877::t_7e2f6d194d4687 11,98-102
+tests/service/test_resource_service_watch.py
+  s_8a577b324c3205::t_7adaba4edc4817 16,149-168
+tests/session/memory/test_memory_updater.py
+  s_8a577b324c3205::t_d7173224f28c4a 7,13,83-158,418,421-424,430-433,435,439-446,448-449,456-523
+tests/session/memory/test_streaming_memory_updater.py
+  s_8a577b324c3205::t_8fe6f2707d7a88 33,322-403
+tests/session/test_session_context.py
+  s_8a577b324c3205::t_7f3dc2dc5c852f 570-631
+tests/session/test_session_usage_reporter.py
+  s_8a577b324c3205::t_e5272db76e9ea7 1-68
+tests/storage/test_bulk_upsert.py
+  s_8a577b324c3205::t_6630f6f4f96973 4-5,204-320,388-415
+tests/storage/test_semantic_processor_target_preexisting.py
+  s_8a577b324c3205::t_988be44db8f026 152-171
+tests/test_token_estimation.py
+  s_8a577b324c3205::t_7a50154718b6e4 8-11,21-30
+tests/transaction/test_exact_path_lock.py
+  s_8a577b324c3205::t_1c0a3e095b0512 5-7,91-127,151-180
+tests/unit/config/test_transaction_config.py
+  s_8a577b324c3205::t_4194a552b7f48e 1-5
+tests/unit/models/rerank/test_litellm_rerank.py
+  s_8a577b324c3205::t_578b2f8502f67e 1-88
+tests/unit/test_fs_service_git_forwarders.py
+  s_8a577b324c3205::t_6ebbae19616ad0 122,129-152
+tests/unit/test_local_client_git.py
+  s_8a577b324c3205::t_2c1726f8bc34ed 126-128,134-144
+tests/unit/test_snapshot_namespace.py
+  s_8a577b324c3205::t_a0ea81580b320c 108-110,116-119,157
+tests/unit/test_vikingbot_vlm_adapter_retry.py
+  s_8a577b324c3205::t_397310ccf0fee0 9-10,114-144
+tests/unit/test_vlm_response_formats.py
+  s_8a577b324c3205::t_797e4b14381410 9-12,63-113
+tests/unit/usage_reporter/test_memory_usage_extractor.py
+  s_8a577b324c3205::t_a2bb18710b4e23 1-334
+tests/unit/usage_reporter/test_reporter.py
+  s_8a577b324c3205::t_42dc3ca0938b60 1-165
+tests/unit/usage_reporter/test_usage_reporter_config.py
+  s_8a577b324c3205::t_5c2e43b0b1aebf 1-140
+tests/vectordb/test_cuvs_collection.py
+  s_8a577b324c3205::t_443a67056ef0e7 433-905
+tests/vectordb/test_cuvs_index.py
+  s_8a577b324c3205::t_d6b86367e13d73 960-997
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "d060a7e135192702ebb624a0a298bb525364a494",
+  "prompts": {},
+  "sessions": {
+    "s_8a577b324c3205": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f64f7-7525-7bf0-8779-fe5c59230fae",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    },
+    "s_c2efe1f8754877": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f64f7-7452-7790-8205-20f489377bbb",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
