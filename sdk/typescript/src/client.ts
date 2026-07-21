@@ -347,6 +347,7 @@ export class OpenVikingClient {
         time_field: options.timeField,
         level: options.level,
         tags: options.tags,
+        include_provenance: options.includeProvenance || undefined,
       }),
     });
   }

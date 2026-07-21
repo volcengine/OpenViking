@@ -101,6 +101,7 @@ export interface SearchOptions {
   timeField?: string;
   level?: number[];
   tags?: string[];
+  includeProvenance?: boolean;
 }
 /** Content grep options. */
 export interface GrepOptions {
@@ -169,6 +170,7 @@ export interface FindResult {
   memories?: unknown[];
   resources?: unknown[];
   skills?: unknown[];
+  provenance?: JsonObject[];
   [key: string]: unknown;
 }
 /** Error payload returned by OpenViking. */

@@ -40,12 +40,38 @@ describe("OpenVikingClient", () => {
     expect(new Headers(init?.headers).get("X-OpenViking-Actor-Peer")).toBe(
       "peer",
     );
-    expect(JSON.parse(String(init?.body))).toMatchObject({
+    const body = JSON.parse(String(init?.body));
+    expect(body).toMatchObject({
       query: "hello",
       target_uri: "viking://resources",
       limit: 5,
     });
+    expect(body).not.toHaveProperty("include_provenance");
   });
+
+  it.each(["find", "search"] as const)(
+    "forwards includeProvenance through %s",
+    async (method) => {
+      const fetcher = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(ok({ resources: [], provenance: [] }));
+      const client = new OpenVikingClient({
+        baseUrl: "https://example.com",
+        fetch: fetcher,
+      });
+
+      const result = await client[method]("hello", {
+        includeProvenance: true,
+      });
+
+      expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toMatchObject(
+        {
+          include_provenance: true,
+        },
+      );
+      expect(result.provenance).toEqual([]);
+    },
+  );
 
   it("uses the Python/Go empty default retrieval target", async () => {
     const fetcher = vi
@@ -64,7 +90,9 @@ describe("OpenVikingClient", () => {
   });
 
   it("sends dry_run for prune_orphans reindex requests", async () => {
-    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok({ status: "completed" }));
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(ok({ status: "completed" }));
     const client = new OpenVikingClient({
       baseUrl: "https://example.com",
       fetch: fetcher,
