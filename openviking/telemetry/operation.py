@@ -46,12 +46,6 @@ class TelemetrySnapshot:
     telemetry_id: str
     summary: Dict[str, Any]
 
-    def to_usage_dict(self) -> Dict[str, Any]:
-        return {
-            "duration_ms": self.summary.get("duration_ms", 0),
-            "token_total": self.summary.get("tokens", {}).get("total", 0),
-        }
-
     def to_dict(
         self,
         *,

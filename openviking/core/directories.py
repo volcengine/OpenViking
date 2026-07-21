@@ -224,22 +224,6 @@ class DirectoryInitializer:
 
         return count
 
-    async def initialize_agent_directories(self, ctx: RequestContext) -> int:
-        """Deprecated compatibility hook; agent directories are no longer initialized."""
-        return 0
-
-    async def _ensure_container_directory(
-        self,
-        uri: str,
-        parent_uri: Optional[str],
-        ctx: RequestContext,
-    ) -> None:
-        """Ensure an intermediate namespace container exists without seeding vectors."""
-        try:
-            await self._get_viking_fs().mkdir(uri, exist_ok=True, ctx=ctx)
-        except Exception:
-            pass
-
     async def _ensure_directory(
         self,
         uri: str,

@@ -208,6 +208,16 @@ class CollectionAdapter(ABC):
             self._collection.close()
             self._collection = None
 
+    def begin_bulk_ingest(self) -> None:
+        """Begin a derived-index maintenance suppression scope.
+
+        Remote adapters and backends without derived indexes intentionally use
+        this default no-op implementation.
+        """
+
+    def end_bulk_ingest(self) -> None:
+        """End a matching bulk-ingest maintenance scope."""
+
     def get_collection_info(self) -> Optional[Dict[str, Any]]:
         if not self.collection_exists():
             return None
@@ -391,39 +401,6 @@ class CollectionAdapter(ABC):
         raise TypeError(f"Unsupported filter expr type: {type(expr)!r}")
 
     # Backward-compatible aliases: keep old non-underscore names callable.
-    def sanitize_scalar_index_fields(
-        self,
-        scalar_index_fields: list[str],
-        fields_meta: list[dict[str, Any]],
-    ) -> list[str]:
-        return self._sanitize_scalar_index_fields(
-            scalar_index_fields=scalar_index_fields,
-            fields_meta=fields_meta,
-        )
-
-    def build_default_index_meta(
-        self,
-        *,
-        index_name: str,
-        distance: str,
-        use_sparse: bool,
-        sparse_weight: float,
-        scalar_index_fields: list[str],
-    ) -> Dict[str, Any]:
-        return self._build_default_index_meta(
-            index_name=index_name,
-            distance=distance,
-            use_sparse=use_sparse,
-            sparse_weight=sparse_weight,
-            scalar_index_fields=scalar_index_fields,
-        )
-
-    def normalize_record_for_read(self, record: Dict[str, Any]) -> Dict[str, Any]:
-        return self._normalize_record_for_read(record)
-
-    def compile_filter(self, expr: FilterExpr | Dict[str, Any] | None) -> Dict[str, Any]:
-        return self._compile_filter(expr)
-
     def upsert(self, data: Dict[str, Any] | list[Dict[str, Any]]) -> list[str]:
         coll = self.get_collection()
         records = [data] if isinstance(data, dict) else data

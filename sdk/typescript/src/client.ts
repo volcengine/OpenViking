@@ -858,9 +858,9 @@ export class OpenVikingClient {
     );
   }
   /** Return snapshot history from newest to oldest. */
-  gitLog(branch = "main", limit = 20): Promise<JsonObject[]> {
+  gitLog(branch = "main", limit = 20, paths?: string[]): Promise<JsonObject[]> {
     return this.request("GET", "/api/v1/snapshot/log", {
-      query: { branch, limit },
+      query: { branch, limit, paths },
     });
   }
   /** Return the account `.ovgitignore` content. */

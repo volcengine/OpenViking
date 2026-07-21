@@ -567,6 +567,68 @@ class TestGetSessionContext:
         assert context["stats"]["includedArchives"] == 0
         assert context["stats"]["droppedArchives"] == 1
 
+    async def test_get_session_context_returns_pending_messages_while_commit_running(
+        self, client: AsyncOpenViking
+    ):
+        """Regression for #3129: when an archive has been written (Phase 1 done,
+        commit_count advanced) but its ``.done`` marker has not been written yet
+        (Phase 2 still running), ``get_session_context`` must still surface the
+        archived messages.
+
+        This test sets up the post-Phase-1 filesystem state directly — archive
+        directory + ``messages.jsonl`` + updated ``.meta.json``, no ``.done`` —
+        and then loads a fresh session from that state.  It does **not** go
+        through ``commit_async``, so it is deterministic regardless of the
+        queue-worker architecture."""
+        session_id = "deterministic_pending_archive_test"
+        session = client.session(session_id=session_id)
+
+        # Add messages to the session (in-memory only at this point).
+        session.add_message("user", [TextPart("Pending user message")])
+        session.add_message("assistant", [TextPart("Pending assistant response")])
+
+        # Build the post-Phase-1 filesystem state directly.
+        vfs = session._viking_fs
+        session_uri = session._session_uri
+
+        # Serialise current in-memory messages as JSONL for the archive.
+        archive_messages_jsonl = "\n".join(msg.to_jsonl() for msg in list(session.messages)) + "\n"
+
+        # Write archive directory + messages (Phase 1 done).
+        archive_dir = f"{session_uri}/history/archive_001"
+        await vfs.mkdir(archive_dir, exist_ok=True, ctx=session.ctx)
+        await vfs.write_file(
+            f"{archive_dir}/messages.jsonl",
+            archive_messages_jsonl,
+            ctx=session.ctx,
+        )
+
+        # Update .meta.json: bump commit_count to match the archive index.
+        meta = session._meta
+        meta.commit_count = 1
+        meta.message_count = 0
+        await vfs.write_file(
+            f"{session_uri}/.meta.json",
+            json.dumps(meta.to_dict(), ensure_ascii=False),
+            ctx=session.ctx,
+        )
+
+        # Clear live messages (Phase 1 trims these after archiving).
+        await vfs.write_file(f"{session_uri}/messages.jsonl", "", ctx=session.ctx)
+
+        # Crucially: do NOT write .done or .failed.json — Phase 2 is still
+        # running, so the archive must be treated as pending.
+
+        # Load a fresh session from the filesystem state we just wrote.
+        fresh_session = client.session(session_id=session_id)
+
+        # The pending archive's messages must be visible.
+        context = await fresh_session.get_session_context()
+        assert [m["parts"][0]["text"] for m in context["messages"]] == [
+            "Pending user message",
+            "Pending assistant response",
+        ]
+
 
 class TestGetSessionArchive:
     """Test get_session_archive"""

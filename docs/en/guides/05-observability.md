@@ -222,6 +222,149 @@ For the full field reference, supported operations, and more examples, see:
 
 - [Operation Telemetry Reference](07-operation-telemetry.md)
 
+## Generate a local trace and submit it for troubleshooting
+
+If `telemetry.summary` in the response is not enough to diagnose a problem, you can ask OpenViking to write OpenTelemetry traces to a local JSONL file. The user submits the JSONL file and the problematic `trace_id` to an administrator/support engineer, and the administrator uploads it to the troubleshooting environment for analysis. This is useful for offline customer environments, environments that cannot directly reach an OTLP backend, or cases where support needs the exact reproduction trace.
+
+### 1. Enable local trace output
+
+On the machine running OpenViking Server, edit `~/.openviking/ov.conf` (or the config file passed with `--config`) and add or adjust:
+
+```json
+{
+  "server": {
+    "observability": {
+      "traces": {
+        "enabled": true,
+        "protocol": "local",
+        "service_name": "openviking-server",
+        "local_path": "~/.openviking/logs/traces.jsonl",
+        "local_rotation_mb": 40,
+        "local_backup_count": 2
+      }
+    }
+  }
+}
+```
+
+Restart OpenViking Server after editing the config. The default local trace file is:
+
+```text
+~/.openviking/logs/traces.jsonl
+```
+
+When the file reaches `local_rotation_mb`, it rotates like this:
+
+```text
+~/.openviking/logs/traces.jsonl.2
+~/.openviking/logs/traces.jsonl.1
+~/.openviking/logs/traces.jsonl
+```
+
+### 2. Reproduce the issue and confirm that traces were written
+
+After restarting the server, run the operation that reproduces the issue, such as `find`, resource ingestion, `session commit`, or an agent call. When the operation finishes, wait a few seconds, or gracefully stop the server so the batch exporter can flush, then check the file:
+
+```bash
+ls -lh ~/.openviking/logs/traces.jsonl*
+tail -n 3 ~/.openviking/logs/traces.jsonl
+```
+
+If no file is created or the file is empty, check:
+
+- the server was restarted and loaded the updated `ov.conf`
+- `server.observability.traces.enabled` is `true`
+- `server.observability.traces.protocol` is `"local"`
+- the process can write to `~/.openviking/logs`
+
+### 3. Submit the trace file to an administrator
+
+This step is normally split between the **user who submits the evidence** and the **administrator/support engineer who uploads and investigates it**:
+
+1. The user does not need to upload directly to the troubleshooting backend. Submit the local JSONL file to the administrator/support engineer.
+2. If you already know the problematic `trace_id`, submit it together with the JSONL file.
+3. If you do not know the exact `trace_id`, provide the reproduction time window, steps, and related request/error logs so the administrator can locate it in the file.
+
+Submit the current file and rotated files when available:
+
+```text
+~/.openviking/logs/traces.jsonl
+~/.openviking/logs/traces.jsonl.1
+~/.openviking/logs/traces.jsonl.2
+```
+
+You can also package them first:
+
+```bash
+cd ~/.openviking/logs
+tar czf /tmp/openviking-traces.tgz traces.jsonl*
+```
+
+Include the following for the administrator/support engineer:
+
+- the `traces.jsonl*` files, or the packaged `openviking-traces.tgz`
+- the problematic `trace_id`, if known
+- the time window and steps used to reproduce the issue
+- OpenViking version/commit, startup command, and relevant config with secrets removed
+- related error logs or request IDs, if available
+
+#### Administrator upload reference
+
+From the repository root on a machine with the OpenViking source checkout and access to the remote OTLP troubleshooting environment, the administrator runs:
+
+```bash
+python tests/upload_offline_trace.py \
+  --file /path/to/traces.jsonl
+```
+
+The upload tool reads the current environment's `ov.conf` as the **upload target configuration**, so that config must use a remote OTLP trace exporter, for example:
+
+```json
+{
+  "server": {
+    "observability": {
+      "traces": {
+        "enabled": true,
+        "protocol": "grpc",
+        "tls": {
+          "insecure": true
+        },
+        "endpoint": "otel-collector:4317",
+        "service_name": "openviking-server",
+        "headers": {}
+      }
+    }
+  }
+}
+```
+
+If the current `ov.conf` is not the upload target config, prepare a separate upload config and pass it with `--config`:
+
+```bash
+python tests/upload_offline_trace.py \
+  --file /path/to/traces.jsonl \
+  --config /path/to/upload-ov.conf
+```
+
+By default, rotated files are uploaded from old to new, for example `traces.jsonl.2`, `traces.jsonl.1`, and `traces.jsonl`. To upload only the current file:
+
+```bash
+python tests/upload_offline_trace.py \
+  --file /path/to/traces.jsonl \
+  --no-include-rotated
+```
+
+After a successful upload, the tool prints the uploaded trace IDs. The administrator can continue troubleshooting with the `trace_id` submitted by the user or with the reproduction time window:
+
+```text
+Uploaded:
+  batches: 12
+  spans: 345
+  trace_ids: 3
+    0123456789abcdef0123456789abcdef
+    ...
+```
+
 ## Use `/metrics` for time-series observability
 
 `/metrics` is OpenViking's time-series metrics endpoint for the Prometheus scraping model. It is well suited for questions like:

@@ -957,6 +957,44 @@ def test_auto_cuvs_retries_after_gpu_memory_becomes_available():
     assert admitted.memory_free_bytes == 16
 
 
+def test_auto_cuvs_checks_memory_before_materializing_host_dataset():
+    runtime = FakeCuVSRuntime()
+    runtime.free_memory_bytes = 15
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={},
+        config={
+            "algorithm": "brute_force",
+            "filter_cache_size": 0,
+            "auto_memory_reserve_mb": 0,
+            "auto_memory_safety_factor": 1.0,
+        },
+        runtime=runtime,
+        auto_memory=True,
+    )
+    index.add_candidates([candidate(1, [1.0, 0.0]), candidate(2, [0.0, 1.0])])
+    vector_accesses = []
+
+    class _TrackedRecord:
+        fields = {}
+
+        @property
+        def vector(self):
+            vector_accesses.append(True)
+            raise AssertionError("host dataset was materialized before memory admission")
+
+    with index._lock:
+        index._records = {label: _TrackedRecord() for label in index._records}
+
+    with pytest.raises(CuVSMemoryBudgetError, match="estimated GPU peak"):
+        index.prepare_rebuild()
+
+    assert vector_accesses == []
+    assert runtime.build_count == 0
+
+
 def test_auto_cuvs_converts_gpu_allocation_failure_to_native_fallback_signal():
     class OutOfMemoryRuntime(FakeCuVSRuntime):
         def build(self, _dataset):

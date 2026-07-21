@@ -9,10 +9,8 @@ from openviking.core.namespace import (
     canonicalize_uri,
     classify_uri,
     context_type_for_uri,
-    is_content_namespace_root_uri,
     is_content_root_uri,
     is_session_uri,
-    legacy_session_uri,
     owner_space_for_uri,
     visible_roots,
 )
@@ -111,7 +109,6 @@ def test_session_uri_helpers_use_user_namespace():
         canonicalize_uri("viking://session/s1/history/archive_001/messages.jsonl", ctx)
         == "viking://user/alice/sessions/s1/history/archive_001/messages.jsonl"
     )
-    assert legacy_session_uri("s1") == "viking://session/s1"
     assert is_session_uri("viking://user/alice/sessions/s1")
     assert is_session_uri("viking://user/sessions/s1")
     assert is_session_uri("viking://session/s1")
@@ -144,8 +141,4 @@ def test_current_user_short_content_roots_are_canonicalized_from_content_segment
     assert canonicalize_uri("viking://user/alice/resources", ctx) == (
         "viking://user/alice/resources"
     )
-    assert is_content_namespace_root_uri("viking://user/resources", ctx)
-    assert is_content_namespace_root_uri("viking://user/resources/", ctx)
-    assert is_content_namespace_root_uri("viking://resources", ctx)
     assert is_content_root_uri("viking://resources", ctx, kind="resource")
-    assert not is_content_namespace_root_uri("viking://user/resources/docs", ctx)

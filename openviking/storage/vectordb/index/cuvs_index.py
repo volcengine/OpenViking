@@ -1044,6 +1044,39 @@ class CuVSDenseIndex:
         self._cache_filter(cache_key, cached)
         return cached
 
+    def _check_auto_memory_budget(
+        self,
+        vector_count: int,
+        telemetry: Optional[CuVSSearchTelemetry],
+    ) -> None:
+        """Raise before a cuVS build when the estimated GPU peak is unsafe."""
+
+        estimate = estimate_cuvs_memory(
+            vector_count=vector_count,
+            dimension=self.dimension,
+            algorithm=self.algorithm,
+            build_params=self._build_params,
+            filter_cache_size=self.filter_cache_size,
+            safety_factor=self.auto_memory_safety_factor,
+            dtype=self.dtype,
+        )
+        if telemetry is not None:
+            telemetry.memory_estimated_peak_bytes = estimate.estimated_peak_bytes
+        try:
+            free_bytes, total_bytes = self._runtime.memory_info()
+        except Exception as exc:
+            raise CuVSMemoryBudgetError("cuVS auto mode could not read free GPU memory") from exc
+        usable_bytes = max(0, free_bytes - self.auto_memory_reserve_bytes)
+        if telemetry is not None:
+            telemetry.memory_free_bytes = free_bytes
+            telemetry.memory_usable_bytes = usable_bytes
+        if estimate.estimated_peak_bytes > usable_bytes:
+            raise CuVSMemoryBudgetError(
+                "cuVS auto mode kept native search because the estimated GPU peak "
+                f"({estimate.estimated_peak_bytes} bytes) exceeds the usable free "
+                f"memory ({usable_bytes} of {total_bytes} bytes after reserve)"
+            )
+
     def prepare_rebuild(
         self,
         telemetry: Optional[CuVSSearchTelemetry] = None,
@@ -1051,9 +1084,8 @@ class CuVSDenseIndex:
         with self._lock:
             if not self._dirty:
                 return None
-            labels = tuple(self._records)
+            vector_count = len(self._records)
             generation = self._records_generation
-            dataset = [self._records[label].vector for label in labels]
             can_release_unused = self._active_searches == 0
             if can_release_unused:
                 with self._runtime_device_scope():
@@ -1061,44 +1093,40 @@ class CuVSDenseIndex:
 
         build_started = time.perf_counter()
         try:
-            if not labels:
+            if vector_count == 0:
                 return _CuVSBuildCandidate(
                     runtime_index=None,
-                    labels=labels,
+                    labels=(),
                     generation=generation,
                 )
-            with _CUVS_MEMORY_COORDINATOR.build_lock(self._runtime):
-                if self.auto_memory:
+
+            # Reject stable, known-insufficient budgets before copying every
+            # Python vector into a build dataset. Do not hold ``self._lock``
+            # while taking the device build lock: foreground rebuilds already
+            # use the opposite order through ``_search_admitted``.
+            if self.auto_memory:
+                with _CUVS_MEMORY_COORDINATOR.build_lock(self._runtime):
                     release_index = getattr(self._runtime, "release_index", None)
                     if release_index is not None and can_release_unused:
                         release_index()
-                    estimate = estimate_cuvs_memory(
-                        vector_count=len(labels),
-                        dimension=self.dimension,
-                        algorithm=self.algorithm,
-                        build_params=self._build_params,
-                        filter_cache_size=self.filter_cache_size,
-                        safety_factor=self.auto_memory_safety_factor,
-                        dtype=self.dtype,
+                    self._check_auto_memory_budget(vector_count, telemetry)
+
+            with self._lock:
+                if self._records_generation != generation:
+                    return _CuVSBuildCandidate(
+                        runtime_index=None,
+                        labels=(),
+                        generation=generation,
                     )
-                    if telemetry is not None:
-                        telemetry.memory_estimated_peak_bytes = estimate.estimated_peak_bytes
-                    try:
-                        free_bytes, total_bytes = self._runtime.memory_info()
-                    except Exception as exc:
-                        raise CuVSMemoryBudgetError(
-                            "cuVS auto mode could not read free GPU memory"
-                        ) from exc
-                    usable_bytes = max(0, free_bytes - self.auto_memory_reserve_bytes)
-                    if telemetry is not None:
-                        telemetry.memory_free_bytes = free_bytes
-                        telemetry.memory_usable_bytes = usable_bytes
-                    if estimate.estimated_peak_bytes > usable_bytes:
-                        raise CuVSMemoryBudgetError(
-                            "cuVS auto mode kept native search because the estimated GPU peak "
-                            f"({estimate.estimated_peak_bytes} bytes) exceeds the usable free "
-                            f"memory ({usable_bytes} of {total_bytes} bytes after reserve)"
-                        )
+                labels = tuple(self._records)
+                dataset = [self._records[label].vector for label in labels]
+
+            with _CUVS_MEMORY_COORDINATOR.build_lock(self._runtime):
+                # Admission is checked again while the per-device build lock is
+                # held. Another collection may have allocated GPU memory while
+                # this collection materialized its host dataset.
+                if self.auto_memory:
+                    self._check_auto_memory_budget(len(labels), telemetry)
                 try:
                     if telemetry is not None:
                         telemetry.build_performed = True

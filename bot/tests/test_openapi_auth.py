@@ -1116,67 +1116,6 @@ class TestOpenAPIAuth:
         assert pending.events[0]["type"] == "response"
         assert pending.events[0]["data"] == {"content": "hello", "response_id": "resp-123"}
 
-    def test_feedback_persists_event_and_emits_feedback_submitted(
-        self, message_bus, temp_workspace
-    ):
-        channel = OpenAPIChannel(
-            OpenAPIChannelConfig(),
-            message_bus,
-            workspace_path=temp_workspace,
-        )
-        session_key = SessionKey(type="cli", channel_id="default", chat_id="session-1")
-        session = channel._session_manager.get_or_create(session_key)
-        session.add_message(
-            "assistant",
-            "hello",
-            sender_id="user-1",
-            response_id="resp-123",
-            timestamp="2026-04-30T00:00:00",
-        )
-        asyncio.run(channel._session_manager.save(session))
-
-        client = _make_client(channel)
-        response = client.post(
-            "/bot/v1/feedback",
-            json={
-                "session_id": "session-1",
-                "response_id": "resp-123",
-                "feedback_type": "thumb_up",
-                "feedback_text": "helpful",
-            },
-        )
-
-        assert response.status_code == 200
-        body = response.json()
-        assert body["accepted"] is True
-        assert body["response_id"] == "resp-123"
-        assert body["session_id"] == "session-1"
-        assert body["feedback_type"] == "thumb_up"
-        assert message_bus.outbound_size == 2
-
-        first_outbound = asyncio.run(message_bus.consume_outbound())
-        second_outbound = asyncio.run(message_bus.consume_outbound())
-        assert first_outbound.event_type == OutboundEventType.RESPONSE_OUTCOME_EVALUATED
-        assert first_outbound.response_id == "resp-123"
-        assert (
-            first_outbound.metadata["response_outcome_evaluated"]["outcome_label"]
-            == "positive_feedback"
-        )
-        assert second_outbound.event_type == OutboundEventType.FEEDBACK_SUBMITTED
-        assert second_outbound.response_id == "resp-123"
-        assert second_outbound.metadata["feedback_submitted"]["feedback_type"] == "thumb_up"
-        assert second_outbound.metadata["feedback_submitted"]["feedback_text"] == "helpful"
-
-        session_path = temp_workspace / "sessions" / "cli__default__session-1.jsonl"
-        lines = session_path.read_text(encoding="utf-8").splitlines()
-        metadata = json.loads(lines[0])
-        assert metadata["metadata"]["feedback_events"][0]["response_id"] == "resp-123"
-        assert metadata["metadata"]["feedback_events"][0]["feedback_type"] == "thumb_up"
-        assert (
-            metadata["metadata"]["response_outcomes"]["resp-123"]["outcome_label"]
-            == "positive_feedback"
-        )
-
     def test_feedback_requires_existing_response(self, message_bus, temp_workspace):
         channel = OpenAPIChannel(
             OpenAPIChannelConfig(),
@@ -1216,66 +1155,6 @@ class TestOpenAPIAuth:
 
         assert response.status_code == 422
         assert "feedback_score is required when feedback_type is rating" in response.text
-
-    def test_rating_feedback_persists_score_and_emits_outcome(self, message_bus, temp_workspace):
-        channel = OpenAPIChannel(
-            OpenAPIChannelConfig(),
-            message_bus,
-            workspace_path=temp_workspace,
-        )
-        session_key = SessionKey(type="cli", channel_id="default", chat_id="session-1")
-        session = channel._session_manager.get_or_create(session_key)
-        session.add_message(
-            "assistant",
-            "hello",
-            sender_id="user-1",
-            response_id="resp-123",
-            timestamp="2026-04-30T00:00:00",
-        )
-        asyncio.run(channel._session_manager.save(session))
-
-        client = _make_client(channel)
-        response = client.post(
-            "/bot/v1/feedback",
-            json={
-                "session_id": "session-1",
-                "response_id": "resp-123",
-                "feedback_type": "rating",
-                "feedback_score": -1,
-                "feedback_text": "bad answer",
-            },
-        )
-
-        assert response.status_code == 200
-        body = response.json()
-        assert body["accepted"] is True
-        assert body["feedback_type"] == "rating"
-        assert message_bus.outbound_size == 2
-
-        first_outbound = asyncio.run(message_bus.consume_outbound())
-        second_outbound = asyncio.run(message_bus.consume_outbound())
-        assert first_outbound.event_type == OutboundEventType.RESPONSE_OUTCOME_EVALUATED
-        assert (
-            first_outbound.metadata["response_outcome_evaluated"]["outcome_label"]
-            == "negative_feedback"
-        )
-        assert (
-            first_outbound.metadata["response_outcome_evaluated"]["evidence"]["feedback_score"]
-            == -1.0
-        )
-        assert second_outbound.event_type == OutboundEventType.FEEDBACK_SUBMITTED
-        assert second_outbound.metadata["feedback_submitted"]["feedback_type"] == "rating"
-        assert second_outbound.metadata["feedback_submitted"]["feedback_score"] == -1
-
-        session_path = temp_workspace / "sessions" / "cli__default__session-1.jsonl"
-        lines = session_path.read_text(encoding="utf-8").splitlines()
-        metadata = json.loads(lines[0])
-        assert metadata["metadata"]["feedback_events"][0]["feedback_type"] == "rating"
-        assert metadata["metadata"]["feedback_events"][0]["feedback_score"] == -1
-        assert (
-            metadata["metadata"]["response_outcomes"]["resp-123"]["outcome_label"]
-            == "negative_feedback"
-        )
 
     def test_feedback_reloads_session_after_stale_cached_miss(self, message_bus, temp_workspace):
         channel = OpenAPIChannel(

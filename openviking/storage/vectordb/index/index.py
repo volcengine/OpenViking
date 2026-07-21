@@ -273,6 +273,12 @@ class IIndex(ABC):
         """
         return True
 
+    def begin_bulk_ingest(self) -> None:
+        """Suspend optional derived-index rebuilds across a bulk write scope."""
+
+    def end_bulk_ingest(self) -> None:
+        """Resume optional derived-index rebuilds after a bulk write scope."""
+
 
 class Index:
     """
