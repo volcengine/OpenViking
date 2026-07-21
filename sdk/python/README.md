@@ -47,6 +47,7 @@ Common client fields:
 - `user_id`: legacy alias for `user`
 - `actor_peer_id`: optional actor peer override
 - `agent_id`: legacy alias for `actor_peer_id`
+- `event_hooks`: optional `httpx.AsyncClient` event hooks, such as async request or response hooks
 
 Compatibility notes:
 

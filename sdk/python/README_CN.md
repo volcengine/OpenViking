@@ -47,6 +47,7 @@ SDK 支持三种配置方式，优先级从高到低如下：
 - `user_id`：`user` 的兼容旧别名
 - `actor_peer_id`：可选的 actor peer 覆盖
 - `agent_id`：`actor_peer_id` 的兼容旧别名
+- `event_hooks`：可选的 `httpx.AsyncClient` 事件钩子，例如异步 request 或 response hook
 
 兼容性说明：
 

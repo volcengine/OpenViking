@@ -159,7 +159,6 @@ async def test_async_http_client_retries_gateway_token_only_after_marked_challen
         return httpx.Response(200, json={"status": "ok"})
 
     client = AsyncHTTPClient()
-    await client.initialize()
     await client._http.aclose()
     client._http = httpx.AsyncClient(
         base_url=client._url,

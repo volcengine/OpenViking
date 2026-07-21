@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import inspect
 import mimetypes
@@ -9,7 +10,7 @@ import uuid
 import zipfile
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 from urllib.parse import quote
 
 import httpx
@@ -268,6 +269,7 @@ class AsyncHTTPClient:
         extra_headers: Optional[Dict[str, str]] = None,
         profile_enabled: Optional[bool] = None,
         upload_mode: Optional[str] = None,
+        event_hooks: Optional[Dict[str, List[Callable[..., Any]]]] = None,
     ):
         if actor_peer_id and agent_id:
             raise ValueError("actor_peer_id cannot be used with agent_id")
@@ -294,11 +296,36 @@ class AsyncHTTPClient:
         self._extra_headers = config.extra_headers
         self._profile_enabled = config.profile_enabled
         self._upload_mode = config.upload_mode
+        self._event_hooks = {
+            event: list(hooks) for event, hooks in (event_hooks or {}).items()
+        }
         self._http: Optional[httpx.AsyncClient] = None
+        self._initialized = False
         self._observer: Optional[_HTTPObserver] = None
         self._snapshot: Optional["AsyncHTTPSnapshotNamespace"] = None
+        self.initialize()
 
-    async def initialize(self) -> None:
+    def __del__(self) -> None:
+        if not getattr(self, "_http", None):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            try:
+                asyncio.run(self.close())
+            except Exception:
+                pass
+            return
+
+        close_coro = self.close()
+        try:
+            loop.create_task(close_coro)
+        except Exception:
+            close_coro.close()
+
+    def initialize(self) -> None:
+        if self._initialized:
+            return
         headers: Dict[str, str] = {}
         if self._api_key:
             headers["X-API-Key"] = self._api_key
@@ -313,9 +340,11 @@ class AsyncHTTPClient:
             base_url=self._url,
             headers=headers,
             timeout=self._timeout,
+            event_hooks=self._event_hooks,
             params={"profile": "1"} if self._profile_enabled else None,
         )
         self._observer = _HTTPObserver(self)
+        self._initialized = True
 
     @staticmethod
     def _has_header(headers: Dict[str, str], name: str) -> bool:
@@ -395,6 +424,8 @@ class AsyncHTTPClient:
             except RuntimeError:
                 pass
             self._http = None
+        self._observer = None
+        self._initialized = False
 
     @staticmethod
     def _path_segment(value: str) -> str:
@@ -1624,16 +1655,27 @@ class AsyncHTTPClient:
 class SyncHTTPClient:
     def __init__(self, *args, **kwargs):
         self._async_client = AsyncHTTPClient(*args, **kwargs)
-        self._initialized = False
+        self._initialized = True
         self._snapshot: Optional["SyncHTTPSnapshotNamespace"] = None
 
     def initialize(self) -> None:
-        run_async(self._async_client.initialize())
+        if self._initialized:
+            return
+        self._async_client.initialize()
         self._initialized = True
 
     def close(self) -> None:
         run_async(self._async_client.close())
         self._initialized = False
+
+    def __del__(self) -> None:
+        async_client = self.__dict__.get("_async_client")
+        if async_client is None or getattr(async_client, "_http", None) is None:
+            return
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def session(self, session_id: Optional[str] = None, must_exist: bool = False) -> SyncSession:
         if session_id and must_exist:
