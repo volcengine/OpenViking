@@ -135,72 +135,7 @@ Scan the QR code below to add the assistant on WeChat, mention "OpenViking" and 
 
 ### Ways to Participate
 
-We provide multiple participation channels to meet different collaboration needs:
-
-#### 1. Code Contributions
-- **Submit Issues**: report bugs, propose features, or discuss technical solutions
-- **Submit Pull Requests**: contribute code improvements, documentation updates, or test cases
-- **Code Review**: participate in reviews to improve code quality
-
-#### 2. Documentation Contributions
-- **Improve documentation**: enhance user guides, API docs, or tutorials
-- **Translation support**: help translate documentation into other languages
-- **Example code**: provide usage examples and best practices
-
-#### 3. Community Support
-- **Technical sharing**: share experiences and technical insights
-- **Q&A**: help other developers solve usage problems
-- **Ecosystem building**: promote integration of OpenViking with other open-source projects
-
-#### 4. Ecosystem Expansion
-- **Plugin development**: develop third-party plugins or feature extensions
-- **Integration adaptation**: drive deep integration with mainstream frameworks
-- **Application cases**: share real-world adoption experiences
-
-## Discussion and Collaboration
-
-### Official Channels
-
-#### GitHub Platform
-- **Issues**: feature suggestions, bug reports, and technical discussions
-- **Pull Requests**: code contributions and documentation updates
-- **Discussions**: design discussions and community exchange
-
-#### Repository
-- **Main repository**: `https://github.com/volcengine/openviking`
-- **Issue tracking**: `https://github.com/volcengine/openviking/issues`
-
-### Real-Time Communication
-
-#### Lark Group
-- **Technical discussion**: real-time technical exchange and Q&A
-- **Code review**: fast feedback and collaborative development
-- **Event notice**: community activities and technical sharing
-
-### Social Media
-
-We follow major technical communities and social media platforms and respond promptly to user feedback:
-- **Technical blog**: regular technical articles and project updates
-- **Social media**: share project news and usage cases
-- **Technical conferences**: participate in industry events to share engineering practice
-
-### Community Goals
-
-We aim to achieve the following goals through the open-source community:
-
-1. **Technology democratization**: enable more developers to use advanced context engineering technologies
-2. **Innovation acceleration**: accelerate innovation and product iteration through collaboration
-3. **Standards building**: promote technical standards and best practices in context engineering
-4. **Talent development**: cultivate more talent in the context engineering field
-
-### Open Collaboration
-
-OpenViking welcomes collaboration from developers, research institutions, and companies. We look forward to:
-
-- **Technical collaboration**: deep technical cooperation with academia and industry
-- **Ecosystem integration**: establish integrations with related open-source projects and commercial products
-- **Application promotion**: jointly promote the application of context engineering technologies across more scenarios
-
----
-
-**Join us to build the context infrastructure for the AI Agent era!**
+- **Code**: report bugs and propose features in [Issues](https://github.com/volcengine/OpenViking/issues), contribute fixes and features through [pull requests](https://github.com/volcengine/OpenViking/pulls), and join code reviews.
+- **Documentation**: improve guides and API docs, add examples, or help translate.
+- **Community support**: answer questions and share how you use OpenViking.
+- **Ecosystem**: build plugins, drive integrations with other frameworks, and share real-world cases in [Discussions](https://github.com/volcengine/OpenViking/discussions).

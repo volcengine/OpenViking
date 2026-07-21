@@ -68,33 +68,14 @@ This command ensures that `setup.py` is re-executed, triggering rebuilds for AGF
 
 ### 3. Configure Environment
 
-Create a configuration file `~/.openviking/ov.conf`:
-
-```json
-{
-  "embedding": {
-    "dense": {
-      "provider": "volcengine",
-      "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-251215",
-      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-      "dimension": 1024,
-      "input": "multimodal"
-    }
-  },
-  "vlm": {
-    "api_key": "your-api-key",
-    "model": "doubao-seed-2-0-lite-260428",
-    "api_base": "https://ark.cn-beijing.volces.com/api/v3"
-  }
-}
-```
-
-Set the environment variable:
+Run the interactive wizard to pick providers and write `~/.openviking/ov.conf`, then validate:
 
 ```bash
-export OPENVIKING_CONFIG_FILE=~/.openviking/ov.conf
+openviking-server init
+openviking-server doctor
 ```
+
+Manual `ov.conf` templates, per-provider examples, and environment variables are in the [Configuration guide](https://docs.openviking.ai/en/guides/01-configuration). The config file is auto-loaded from `~/.openviking/ov.conf`; set `OPENVIKING_CONFIG_FILE` only if you keep it somewhere else.
 
 ### 4. Verify Installation
 
