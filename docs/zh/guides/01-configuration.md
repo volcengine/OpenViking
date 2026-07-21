@@ -13,7 +13,7 @@ openviking-server doctor
 
 ## 快速开始
 
-在项目目录创建 `~/.openviking/ov.conf`：
+在用户配置目录 `~/.openviking/` 下创建 `ov.conf`：
 
 ```json
 {
