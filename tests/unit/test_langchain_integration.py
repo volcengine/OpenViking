@@ -1750,3 +1750,39 @@ def test_langgraph_middleware_chunks_batches_at_server_limit():
 
     assert client.batch_sizes == [100, 1]
     assert len(client.sessions["middleware-large-batch"]) == 101
+
+
+def test_langgraph_middleware_retries_only_failed_batch_chunk():
+    class FailSecondBatchClient(InMemoryOpenVikingClient):
+        def __init__(self):
+            super().__init__()
+            self.batch_sizes = []
+
+        def batch_add_messages(self, session_id, messages, **kwargs):
+            self.batch_sizes.append(len(messages))
+            if len(self.batch_sizes) == 2:
+                raise RuntimeError("second batch failed")
+            return super().batch_add_messages(session_id, messages, **kwargs)
+
+    client = FailSecondBatchClient()
+    middleware = OpenVikingContextMiddleware(
+        client=client,
+        session_id_resolver=lambda state, runtime: "middleware-chunk-retry",
+    )
+    middleware._pending_context_parts[("middleware-chunk-retry", "")] = [
+        {"type": "context", "uri": "viking://resources/retry.md"}
+    ]
+    messages = [HumanMessage(content="First"), AIMessage(content="Context holder")]
+    messages.extend(HumanMessage(content=f"Message {index}") for index in range(98))
+    messages.append(AIMessage(content="Retry only this message"))
+    state = {"messages": messages}
+
+    with pytest.raises(RuntimeError, match="second batch failed"):
+        middleware.after_agent(state, runtime=None)
+    middleware.after_agent(state, runtime=None)
+    middleware.after_agent(state, runtime=None)
+
+    assert client.batch_sizes == [100, 1, 1]
+    stored = client.sessions["middleware-chunk-retry"]
+    assert len(stored) == 101
+    assert sum(part["type"] == "context" for message in stored for part in message["parts"]) == 1
