@@ -44,6 +44,7 @@ class InMemoryOpenVikingClient:
         limit: int = 10,
         score_threshold: float | None = None,
         filter: dict[str, Any] | None = None,
+        tags: list[str] | None = None,
         **_: Any,
     ) -> dict[str, Any]:
         self.find_calls.append(
@@ -53,6 +54,7 @@ class InMemoryOpenVikingClient:
                 "limit": limit,
                 "score_threshold": score_threshold,
                 "filter": filter,
+                "tags": tags,
             }
         )
         return self._search(query, target_uri, limit, score_threshold)
@@ -65,6 +67,7 @@ class InMemoryOpenVikingClient:
         limit: int = 10,
         score_threshold: float | None = None,
         filter: dict[str, Any] | None = None,
+        tags: list[str] | None = None,
         **_: Any,
     ) -> dict[str, Any]:
         self.search_calls.append(
@@ -75,6 +78,7 @@ class InMemoryOpenVikingClient:
                 "limit": limit,
                 "score_threshold": score_threshold,
                 "filter": filter,
+                "tags": tags,
             }
         )
         session_text = " ".join(

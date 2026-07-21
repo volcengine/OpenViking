@@ -78,32 +78,38 @@ async def test_find_with_target_uri(client_with_resource):
     assert resp.json()["status"] == "ok"
 
 
-async def test_find_with_target_uri_and_tags_after_set_tags(client_with_resource):
-    client, uri = client_with_resource
+async def test_find_with_target_uri_and_tags_passes_target_and_filter(
+    client: httpx.AsyncClient, service, monkeypatch
+):
+    captured = {}
 
-    set_tags_resp = await client.post(
-        "/api/v1/fs/attrs/set_tags",
-        json={"uri": uri, "tags": ["team=search"]},
-    )
-    assert set_tags_resp.status_code == 200
-    assert set_tags_resp.json()["status"] == "ok"
+    async def fake_find(*, target_uri=None, filter=None, **kwargs):
+        captured["target_uri"] = target_uri
+        captured["filter"] = filter
+        return {"items": []}
 
-    untagged_resp = await client.post(
+    monkeypatch.setattr(service.search, "find", fake_find)
+
+    resp = await client.post(
         "/api/v1/search/find",
-        json={"query": "sample", "target_uri": uri, "limit": 10},
+        json={
+            "query": "sample",
+            "target_uri": "viking://resources/sample",
+            "tags": ["team=search", "env=prod"],
+            "limit": 10,
+        },
     )
-    assert untagged_resp.status_code == 200
-    assert untagged_resp.json()["status"] == "ok"
-    untagged_total = untagged_resp.json()["result"]["total"]
-    assert untagged_total > 0
 
-    tagged_resp = await client.post(
-        "/api/v1/search/find",
-        json={"query": "sample", "target_uri": uri, "tags": ["team=search"], "limit": 10},
-    )
-    assert tagged_resp.status_code == 200
-    assert tagged_resp.json()["status"] == "ok"
-    assert tagged_resp.json()["result"]["total"] > 0
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert captured["target_uri"] == "viking://resources/sample"
+    assert captured["filter"] == {
+        "op": "and",
+        "conds": [
+            {"op": "must", "field": "search_tags", "conds": ["team=search"]},
+            {"op": "must", "field": "search_tags", "conds": ["env=prod"]},
+        ],
+    }
 
 
 async def test_find_with_level_passes_to_service(client: httpx.AsyncClient, service, monkeypatch):
@@ -563,7 +569,7 @@ async def test_find_combines_tags_with_existing_filter(
         json={
             "query": "sample",
             "filter": {"op": "must", "field": "kind", "conds": ["email"]},
-            "tags": ["Env=Prod", " env=prod "],
+            "tags": ["Env=Prod", " env=prod ", "team=Search"],
         },
     )
 
@@ -574,6 +580,7 @@ async def test_find_combines_tags_with_existing_filter(
         "conds": [
             {"op": "must", "field": "kind", "conds": ["email"]},
             {"op": "must", "field": "search_tags", "conds": ["env=prod"]},
+            {"op": "must", "field": "search_tags", "conds": ["team=search"]},
         ],
     }
 
@@ -620,15 +627,17 @@ async def test_search_compiles_tags_only_filter(client: httpx.AsyncClient, servi
 
     resp = await client.post(
         "/api/v1/search/search",
-        json={"query": "sample", "tags": ["Team=Search"]},
+        json={"query": "sample", "tags": ["Team=Search", "env=prod"]},
     )
 
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
     assert captured["filter"] == {
-        "op": "must",
-        "field": "search_tags",
-        "conds": ["team=search"],
+        "op": "and",
+        "conds": [
+            {"op": "must", "field": "search_tags", "conds": ["team=search"]},
+            {"op": "must", "field": "search_tags", "conds": ["env=prod"]},
+        ],
     }
 
 
