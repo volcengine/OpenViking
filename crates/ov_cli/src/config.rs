@@ -247,6 +247,7 @@ impl Config {
         let config: Config = serde_json::from_str(&content)
             .map_err(|e| Error::Config(format!("Failed to parse config file: {}", e)))?;
         config.validate_identity_mode()?;
+        config.validate_timeout()?;
         Ok(config)
     }
 
@@ -304,6 +305,16 @@ impl Config {
             return Err(Error::Config(
                 "actor_peer_id cannot be used with agent_id".to_string(),
             ));
+        }
+        Ok(())
+    }
+
+    fn validate_timeout(&self) -> Result<()> {
+        if self.timeout <= 0.0 || std::time::Duration::try_from_secs_f64(self.timeout).is_err() {
+            return Err(Error::Config(format!(
+                "Invalid timeout value {}: timeout must be a positive finite number of seconds",
+                self.timeout
+            )));
         }
         Ok(())
     }
@@ -456,6 +467,20 @@ mod tests {
             .expect_err("mixed identity mode should fail");
 
         assert!(error.to_string().contains("actor_peer_id cannot be used"));
+    }
+
+    #[test]
+    fn config_file_rejects_invalid_timeout() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let path = dir.path().join("ovcli.conf");
+
+        for timeout in ["-1", "0", "1e300"] {
+            std::fs::write(&path, format!(r#"{{"timeout": {timeout}}}"#))
+                .expect("config file should be written");
+            let error = Config::from_file(&path.to_string_lossy())
+                .expect_err("invalid timeout should fail");
+            assert!(error.to_string().contains("Invalid timeout value"));
+        }
     }
 
     #[test]

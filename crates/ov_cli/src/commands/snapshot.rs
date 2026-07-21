@@ -189,11 +189,11 @@ fn handle_show(
         SnapshotShowResult::Blob { oid, bytes, size } => {
             if matches!(output_format, OutputFormat::Json) {
                 let envelope = serde_json::json!({"oid": oid, "size": size});
-                output_success(&envelope, output_format, compact);
                 if let Some(path) = out_path {
                     let mut f = std::fs::File::create(&path)?;
                     f.write_all(&bytes)?;
                 }
+                output_success(&envelope, output_format, compact);
                 return Ok(());
             }
             match out_path {
