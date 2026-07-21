@@ -523,38 +523,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
         operations.resolved_links = resolved_links
 
-    def _pair_link_uris(self, from_uris: List[str], to_uris: List[str]) -> List[tuple[str, str]]:
-        namespace_pairs = []
-        seen_pairs = set()
-
-        for from_uri in from_uris:
-            from_namespace = from_uri.split("/memories/", 1)[0]
-            for to_uri in to_uris:
-                if from_uri == to_uri:
-                    continue
-                if from_namespace != to_uri.split("/memories/", 1)[0]:
-                    continue
-                pair = (from_uri, to_uri)
-                if pair in seen_pairs:
-                    continue
-                seen_pairs.add(pair)
-                namespace_pairs.append(pair)
-
-        if namespace_pairs:
-            return namespace_pairs
-
-        all_pairs = []
-        for from_uri in from_uris:
-            for to_uri in to_uris:
-                if from_uri == to_uri:
-                    continue
-                pair = (from_uri, to_uri)
-                if pair in seen_pairs:
-                    continue
-                seen_pairs.add(pair)
-                all_pairs.append(pair)
-        return all_pairs
-
     def _resolve_links(self, raw_links: List, upsert_operations: List = None) -> List[StoredLink]:
         """Resolve WikiLinks with page_ids to StoredLinks with URIs.
 
@@ -562,8 +530,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
         Links go into from_uri's "links" field; backlinks go into to_uri's "backlinks" field.
         The routing is handled by memory_updater based on which file each link belongs to.
         """
-        from datetime import datetime, timezone
-
         if not raw_links:
             return []
 
@@ -581,67 +547,20 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
         if not page_id_map._id_to_uri and not op_page_map:
             return []
-
-        resolved_links = []
-        seen_links = set()
-        now = datetime.now(timezone.utc).isoformat()
-
+        page_uri_map = {page_id: list(uris) for page_id, uris in op_page_map.items()}
         for link in raw_links:
-            if link.f is None or link.t is None:
-                tracer.info(f"Skipping link with null page_ids: f={link.f}, t={link.t}")
-                continue
-
-            from_uris = []
-            to_uris = []
-
-            from_uri = page_id_map.resolve(link.f)
-            to_uri = page_id_map.resolve(link.t)
-            if from_uri:
-                from_uris.append(from_uri)
-            if to_uri:
-                to_uris.append(to_uri)
-
-            for uri in op_page_map.get(link.f, []):
-                if uri not in from_uris:
-                    from_uris.append(uri)
-            for uri in op_page_map.get(link.t, []):
-                if uri not in to_uris:
-                    to_uris.append(uri)
-
-            if not from_uris or not to_uris:
-                tracer.info(
-                    f"Skipping link with unresolved page_ids: f={link.f}, t={link.t}, "
-                    f"from_uri={from_uris[0] if from_uris else None}, "
-                    f"to_uri={to_uris[0] if to_uris else None}, "
-                    f"op_page_map_keys={list(op_page_map.keys())}"
-                )
-                continue
-
-            for from_uri, to_uri in self._pair_link_uris(from_uris, to_uris):
-                link_key = (
-                    from_uri,
-                    to_uri,
-                    link.link_type,
-                    link.weight,
-                    link.match_text,
-                    link.description,
-                )
-                if link_key in seen_links:
+            for page_id in (link.f, link.t):
+                if page_id is None:
                     continue
-                seen_links.add(link_key)
+                uri = page_id_map.resolve(page_id)
+                if uri:
+                    page_uri_map.setdefault(page_id, [])
+                    if uri not in page_uri_map[page_id]:
+                        page_uri_map[page_id].insert(0, uri)
 
-                stored_link = StoredLink(
-                    from_uri=from_uri,
-                    to_uri=to_uri,
-                    link_type=link.link_type,
-                    weight=link.weight,
-                    match_text=link.match_text,
-                    description=link.description,
-                    created_at=now,
-                )
-                resolved_links.append(stored_link)
+        from openviking.session.memory.utils.link_resolver import resolve_wiki_links
 
-        return resolved_links
+        return resolve_wiki_links(raw_links, page_uri_map)
 
     @tracer("extract_loop.execute_tool_calls")
     async def _execute_tool_calls(self, messages, tool_calls, tools_used) -> bool:

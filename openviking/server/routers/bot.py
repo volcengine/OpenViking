@@ -9,11 +9,13 @@ from typing import AsyncGenerator, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from openviking.server.auth import _auth_mode, get_request_context
 from openviking.server.config import get_server_url_from_server_data
 from openviking.server.identity import RequestContext
+from openviking.server.models import Response
+from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils.logger import get_logger
 
 router = APIRouter(prefix="", tags=["bot"])
@@ -132,6 +134,103 @@ def _attach_openviking_connection(
         server_url=server_url,
     )
     return enriched
+
+
+def _bot_gateway_headers(*, connection: dict | None = None) -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    if BOT_API_KEY:
+        headers["X-Gateway-Token"] = BOT_API_KEY
+    if connection:
+        mapping = {
+            "api_key": "X-API-Key",
+            "account_id": "X-OpenViking-Account",
+            "user_id": "X-OpenViking-User",
+            "actor_peer_id": "X-OpenViking-Actor-Peer",
+        }
+        for field, header in mapping.items():
+            value = str(connection.get(field) or "").strip()
+            if value:
+                headers[header] = value
+    return headers
+
+
+def _raise_compile_proxy_error(response: httpx.Response) -> None:
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    detail = payload.get("detail") if isinstance(payload, dict) else None
+    if isinstance(detail, dict):
+        code = str(detail.get("code") or "UNAVAILABLE")
+        message = str(detail.get("message") or "Bot service error")
+    else:
+        code = "UNAVAILABLE" if response.status_code >= 500 else "INVALID_ARGUMENT"
+        message = str(detail or response.text or "Bot service error")
+    raise OpenVikingError(message, code=code)
+
+
+@router.post("/compile", status_code=status.HTTP_202_ACCEPTED)
+async def create_compile(
+    request: Request,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Create a VikingBot compile task with the authenticated OV identity."""
+    bot_url = get_bot_url()
+    try:
+        body = await request.json()
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid JSON in request body",
+        ) from exc
+    enriched = _attach_openviking_connection(body, request, _ctx)
+    try:
+        async with _create_bot_proxy_client() as client:
+            response = await client.post(
+                f"{bot_url}/bot/v1/compile",
+                json=enriched,
+                headers=_bot_gateway_headers(),
+                timeout=30.0,
+            )
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Bot service unavailable: {exc}",
+        ) from exc
+    if not response.is_success:
+        _raise_compile_proxy_error(response)
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content=Response(status="ok", result=response.json()).model_dump(mode="json"),
+    )
+
+
+@router.get("/compile/{task_id}")
+async def get_compile(
+    task_id: str,
+    request: Request,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Read compile status without exposing tasks owned by another principal."""
+    bot_url = get_bot_url()
+    connection = _attach_openviking_connection({}, request, _ctx).get(
+        "openviking_connection"
+    )
+    try:
+        async with _create_bot_proxy_client() as client:
+            response = await client.get(
+                f"{bot_url}/bot/v1/compile/{task_id}",
+                headers=_bot_gateway_headers(connection=connection),
+                timeout=30.0,
+            )
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Bot service unavailable: {exc}",
+        ) from exc
+    if not response.is_success:
+        _raise_compile_proxy_error(response)
+    return Response(status="ok", result=response.json())
 
 
 @router.get("/health")

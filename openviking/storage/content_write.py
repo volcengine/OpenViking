@@ -4,10 +4,19 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
+from collections import defaultdict
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from openviking.core.namespace import NamespaceShapeError, canonicalize_uri, context_type_for_uri
+from openviking.core.namespace import (
+    NamespaceShapeError,
+    canonicalize_uri,
+    classify_uri,
+    context_type_for_uri,
+    relative_uri_path,
+    uri_parts,
+)
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
 from openviking.session.memory.memory_updater import MemoryUpdater
@@ -24,12 +33,16 @@ from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import build_queue_status_payload
+from openviking.utils.path_safety import validate_safe_viking_uri_path
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import (
     AlreadyExistsError,
+    ConflictError,
     DeadlineExceededError,
     InvalidArgumentError,
     NotFoundError,
+    OpenVikingError,
+    ResourceExhaustedError,
 )
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.logger import get_logger
@@ -43,6 +56,10 @@ _DERIVED_FILENAMES = frozenset({".abstract.md", ".overview.md", ".relations.json
 _CREATE_ALLOWED_EXTENSIONS = frozenset(
     {".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".py", ".js", ".ts"}
 )
+_BATCH_MAX_OPERATIONS = 128
+_BATCH_MAX_FILE_BYTES = 8 * 1024 * 1024
+_BATCH_MAX_TOTAL_BYTES = 16 * 1024 * 1024
+_SHA256_PREFIX = "sha256:"
 
 
 class ContentWriteCoordinator:
@@ -113,6 +130,383 @@ class ContentWriteCoordinator:
             written_bytes=written_bytes,
             telemetry_id=telemetry_id,
         )
+
+    async def batch_write(
+        self,
+        *,
+        root_uri: str,
+        operations: list[dict[str, Any]],
+        ctx: RequestContext,
+        wait: bool = True,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Write a preconditioned bundle under one directory, then refresh it as a batch.
+
+        Preconditions are checked for every non-idempotent operation while the target
+        tree lock is held and before the first new write.  Refresh runs only after that
+        lock is released so semantic processing can safely acquire descendant locks.
+        """
+        normalized_root = self._canonicalize(root_uri, ctx=ctx, field_name="root_uri")
+        await self._validate_batch_root(normalized_root, ctx=ctx)
+        normalized_operations = self._normalize_batch_operations(
+            normalized_root, operations, ctx=ctx
+        )
+
+        lock_manager = get_lock_manager()
+        handle = lock_manager.create_handle()
+        root_path = self._viking_fs._uri_to_path(normalized_root, ctx=ctx)
+        acquired = await lock_manager.acquire_tree(handle, root_path)
+        if not acquired:
+            await lock_manager.release(handle)
+            raise ResourceBusyError(
+                f"resource is busy and cannot be written now: {normalized_root}",
+                uri=normalized_root,
+            )
+
+        created: list[str] = []
+        updated: list[str] = []
+        unchanged: list[str] = []
+        refresh_kinds: dict[str, str] = {}
+        pending: list[tuple[dict[str, Any], bool]] = []
+        conflict: ConflictError | None = None
+        write_error: Exception | None = None
+        lock_released = False
+        try:
+            for operation in normalized_operations:
+                uri = operation["uri"]
+                stat = await self._safe_stat(uri, ctx=ctx, allow_not_found=True)
+                exists = not stat.get("not_found")
+                if exists and stat.get("isDir"):
+                    raise InvalidArgumentError(f"batch-write target must be a file: {uri}")
+
+                current = await self._viking_fs.read_file(uri, ctx=ctx) if exists else None
+                desired_hash = self._content_hash(operation["content"])
+                if current is not None and self._content_hash(current) == desired_hash:
+                    unchanged.append(uri)
+                    refresh_kinds[uri] = (
+                        "added"
+                        if operation["precondition"]["kind"] == "create_if_absent"
+                        else "modified"
+                    )
+                    continue
+
+                precondition = operation["precondition"]
+                if precondition["kind"] == "create_if_absent":
+                    if exists and conflict is None:
+                        conflict = ConflictError(
+                            "Batch write create precondition failed; target already exists.",
+                            resource=uri,
+                        )
+                    pending.append((operation, exists))
+                    continue
+
+                if not exists:
+                    if conflict is None:
+                        conflict = ConflictError(
+                            "Batch write replace precondition failed; target does not exist.",
+                            resource=uri,
+                        )
+                    pending.append((operation, exists))
+                    continue
+                if self._content_hash(current or "") != precondition["base_hash"]:
+                    if conflict is None:
+                        conflict = ConflictError(
+                            "Batch write replace precondition failed; content hash changed.",
+                            resource=uri,
+                        )
+                pending.append((operation, exists))
+
+            if conflict is None:
+                for operation, existed in pending:
+                    uri = operation["uri"]
+                    try:
+                        await self._viking_fs.write_file(
+                            uri,
+                            operation["content"],
+                            ctx=ctx,
+                            lock_handle=handle,
+                        )
+                    except Exception as exc:
+                        write_error = exc
+                        break
+                    if existed:
+                        updated.append(uri)
+                        refresh_kinds[uri] = "modified"
+                    else:
+                        created.append(uri)
+                        refresh_kinds[uri] = "added"
+        finally:
+            await lock_manager.release(handle)
+            lock_released = True
+
+        assert lock_released
+        telemetry_id = get_current_telemetry().telemetry_id
+        request_registered = False
+        try:
+            if refresh_kinds:
+                if wait and telemetry_id:
+                    get_request_wait_tracker().register_request(telemetry_id)
+                    request_registered = True
+                try:
+                    queue_status = await self._refresh_batch(
+                        refresh_kinds=refresh_kinds,
+                        ctx=ctx,
+                        wait=wait,
+                        timeout=timeout,
+                        telemetry_id=telemetry_id,
+                    )
+                except Exception:
+                    if conflict is not None or write_error is not None:
+                        logger.error(
+                            "Batch refresh failed while preserving an earlier write error",
+                            exc_info=True,
+                        )
+                        queue_status = None
+                    else:
+                        raise
+            else:
+                queue_status = None
+        finally:
+            if request_registered:
+                get_request_wait_tracker().cleanup(telemetry_id)
+
+        if conflict is not None:
+            raise conflict
+        if write_error is not None:
+            raise write_error
+        return {
+            "root_uri": normalized_root,
+            "created": created,
+            "updated": updated,
+            "unchanged": unchanged,
+            "queue_status": queue_status,
+        }
+
+    def _canonicalize(self, uri: str, *, ctx: RequestContext, field_name: str) -> str:
+        try:
+            return validate_safe_viking_uri_path(canonicalize_uri(uri, ctx))
+        except (NamespaceShapeError, ValueError) as exc:
+            raise InvalidArgumentError(f"invalid {field_name}: {exc}") from exc
+
+    async def _validate_batch_root(self, root_uri: str, *, ctx: RequestContext) -> None:
+        classification = classify_uri(root_uri)
+        parts = uri_parts(root_uri)
+        if classification.context_type not in {"resource", "memory"}:
+            raise InvalidArgumentError("batch-write root must be a resource or memory directory")
+        if classification.context_type == "memory":
+            if (
+                classification.content_index is None
+                or len(parts) <= classification.content_index + 1
+            ):
+                raise InvalidArgumentError("batch-write root must be inside a memory type directory")
+        elif parts == ["resources"] or (
+            classification.content_index is not None
+            and len(parts) <= classification.content_index + 1
+        ):
+            raise InvalidArgumentError("batch-write root must be inside a resource directory")
+        self._viking_fs._ensure_mutable_access(root_uri, ctx)
+        stat = await self._safe_stat(root_uri, ctx=ctx)
+        if not stat.get("isDir"):
+            raise InvalidArgumentError(f"batch-write root must be an existing directory: {root_uri}")
+
+    def _normalize_batch_operations(
+        self,
+        root_uri: str,
+        operations: list[dict[str, Any]],
+        *,
+        ctx: RequestContext,
+    ) -> list[dict[str, Any]]:
+        if not operations:
+            raise InvalidArgumentError("batch-write operations must not be empty")
+        if len(operations) > _BATCH_MAX_OPERATIONS:
+            raise ResourceExhaustedError(
+                f"batch-write supports at most {_BATCH_MAX_OPERATIONS} operations"
+            )
+
+        context_type = context_type_for_uri(root_uri)
+        normalized: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        total_bytes = 0
+        for raw in operations:
+            if not isinstance(raw, dict):
+                raise InvalidArgumentError("batch-write operation must be an object")
+            uri = self._canonicalize(raw.get("uri", ""), ctx=ctx, field_name="operation uri")
+            if uri in seen:
+                raise InvalidArgumentError(f"duplicate batch-write target: {uri}")
+            seen.add(uri)
+            if not relative_uri_path(root_uri, uri):
+                raise InvalidArgumentError(f"batch-write target is outside root_uri: {uri}")
+            if context_type_for_uri(uri) != context_type:
+                raise InvalidArgumentError(f"batch-write target has a different context type: {uri}")
+            self._validate_target_uri(uri)
+            self._viking_fs._ensure_mutable_access(uri, ctx)
+
+            content = raw.get("content")
+            if not isinstance(content, str):
+                raise InvalidArgumentError(f"batch-write content must be a string: {uri}")
+            content_bytes = len(content.encode("utf-8"))
+            if content_bytes > _BATCH_MAX_FILE_BYTES:
+                raise ResourceExhaustedError(f"batch-write file exceeds size limit: {uri}")
+            total_bytes += content_bytes
+            if total_bytes > _BATCH_MAX_TOTAL_BYTES:
+                raise ResourceExhaustedError("batch-write total content exceeds size limit")
+
+            precondition = raw.get("precondition")
+            if not isinstance(precondition, dict):
+                raise InvalidArgumentError(f"batch-write precondition is required: {uri}")
+            kind = precondition.get("kind")
+            if kind == "create_if_absent":
+                if set(precondition) != {"kind"}:
+                    raise InvalidArgumentError(f"invalid create_if_absent precondition: {uri}")
+                self._validate_create_extension(uri)
+                normalized_precondition = {"kind": kind}
+            elif kind == "replace_if_hash":
+                if set(precondition) != {"kind", "base_hash"}:
+                    raise InvalidArgumentError(f"invalid replace_if_hash precondition: {uri}")
+                base_hash = precondition.get("base_hash")
+                if not self._is_content_hash(base_hash):
+                    raise InvalidArgumentError(f"invalid replace_if_hash base_hash: {uri}")
+                normalized_precondition = {"kind": kind, "base_hash": base_hash}
+            else:
+                raise InvalidArgumentError(f"unsupported batch-write precondition: {kind}")
+            normalized.append(
+                {"uri": uri, "content": content, "precondition": normalized_precondition}
+            )
+        return sorted(normalized, key=lambda operation: operation["uri"])
+
+    @staticmethod
+    def _content_hash(content: str) -> str:
+        return _SHA256_PREFIX + hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _is_content_hash(value: Any) -> bool:
+        if not isinstance(value, str) or not value.startswith(_SHA256_PREFIX):
+            return False
+        digest = value[len(_SHA256_PREFIX) :]
+        return len(digest) == 64 and all(char in "0123456789abcdef" for char in digest)
+
+    async def _refresh_batch(
+        self,
+        *,
+        refresh_kinds: dict[str, str],
+        ctx: RequestContext,
+        wait: bool,
+        timeout: Optional[float],
+        telemetry_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        resource_groups: dict[tuple[str, str], dict[str, list[str]]] = defaultdict(
+            lambda: {"added": [], "modified": []}
+        )
+        memory_groups: dict[str, list[str]] = defaultdict(list)
+        for uri, change_type in sorted(refresh_kinds.items()):
+            context_type = context_type_for_uri(uri)
+            if context_type == "memory":
+                parent = VikingURI(uri).parent
+                memory_groups[parent.uri if parent is not None else uri].append(uri)
+                continue
+            refresh_root = await self._resolve_root_uri(
+                uri, ctx=ctx, anchor_to_parent=True
+            )
+            resource_groups[(refresh_root, context_type)][change_type].append(uri)
+
+        for (refresh_root, context_type), changes in sorted(resource_groups.items()):
+            await self._enqueue_semantic_refresh_changes(
+                root_uri=refresh_root,
+                context_type=context_type,
+                changes=changes,
+                ctx=ctx,
+            )
+
+        embedding_requested = False
+        for directory_uri, uris in sorted(memory_groups.items()):
+            await MemoryUpdater.refresh_schema_overview(
+                viking_fs=self._viking_fs,
+                directory_uri=directory_uri,
+                ctx=ctx,
+                strict=True,
+            )
+            for uri in uris:
+                requested = await MemoryUpdater.refresh_file_embedding(
+                    viking_fs=self._viking_fs,
+                    vikingdb=self._vikingdb,
+                    uri=uri,
+                    memory_type=MemoryUpdater.memory_type_from_uri(uri),
+                    ctx=ctx,
+                    strict=True,
+                )
+                embedding_requested = embedding_requested or requested
+
+        if not wait or (not resource_groups and not embedding_requested):
+            return None
+        queue_status = await self._wait_for_request(
+            telemetry_id=telemetry_id,
+            timeout=timeout,
+        )
+        self._raise_refresh_errors(queue_status)
+        return queue_status
+
+    async def _enqueue_semantic_refresh_changes(
+        self,
+        *,
+        root_uri: str,
+        context_type: str,
+        changes: dict[str, list[str]],
+        ctx: RequestContext,
+        target_uri: str = "",
+        recursive: bool = False,
+    ) -> None:
+        queue_manager = get_queue_manager()
+        semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
+        telemetry = get_current_telemetry()
+        msg = SemanticMsg(
+            uri=root_uri,
+            target_uri=target_uri,
+            context_type=context_type,
+            recursive=recursive,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+            role=str(ctx.role),
+            skip_vectorization=False,
+            telemetry_id=telemetry.telemetry_id,
+            coalesce_key=(
+                build_semantic_coalesce_key(
+                    context_type=context_type,
+                    uri=root_uri,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                if context_type in {"resource", "skill"}
+                else ""
+            ),
+            changes={
+                change_type: sorted(changes.get(change_type, []))
+                for change_type in ("added", "modified")
+                if changes.get(change_type)
+            },
+        )
+        if msg.telemetry_id:
+            get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)
+        try:
+            await semantic_queue.enqueue(msg)
+        except Exception as exc:
+            if msg.telemetry_id:
+                get_request_wait_tracker().mark_semantic_failed(
+                    msg.telemetry_id, msg.id, str(exc)
+                )
+            raise
+
+    @staticmethod
+    def _raise_refresh_errors(queue_status: Dict[str, Any]) -> None:
+        for name in ("Semantic", "Embedding"):
+            status = queue_status.get(name, {}) if isinstance(queue_status, dict) else {}
+            if isinstance(status, dict) and (
+                int(status.get("error_count", 0) or 0) > 0 or bool(status.get("errors"))
+            ):
+                raise OpenVikingError(
+                    f"Batch write {name.lower()} refresh failed",
+                    code="INTERNAL",
+                    details={"queue_status": queue_status},
+                )
 
     async def set_tags(
         self,
@@ -487,39 +881,14 @@ class ContentWriteCoordinator:
         target_uri: str = "",
         recursive: bool = False,
     ) -> None:
-        queue_manager = get_queue_manager()
-        semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
-        telemetry = get_current_telemetry()
-        msg = SemanticMsg(
-            uri=root_uri,
-            target_uri=target_uri,
+        await self._enqueue_semantic_refresh_changes(
+            root_uri=root_uri,
             context_type=context_type,
-            recursive=recursive,
-            account_id=ctx.account_id,
-            user_id=ctx.user.user_id,
-            role=str(ctx.role),
-            skip_vectorization=False,
-            telemetry_id=telemetry.telemetry_id,
-            coalesce_key=(
-                build_semantic_coalesce_key(
-                    context_type=context_type,
-                    uri=root_uri,
-                    account_id=ctx.account_id,
-                    user_id=ctx.user.user_id,
-                )
-                if context_type in {"resource", "skill"}
-                else ""
-            ),
+            ctx=ctx,
             changes={change_type: [changed_uri]},
+            target_uri=target_uri,
+            recursive=recursive,
         )
-        if msg.telemetry_id:
-            get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)
-        try:
-            await semantic_queue.enqueue(msg)
-        except Exception as e:
-            if msg.telemetry_id:
-                get_request_wait_tracker().mark_semantic_failed(msg.telemetry_id, msg.id, str(e))
-            raise
 
     async def _wait_for_queues(self, *, timeout: Optional[float]) -> Dict[str, Any]:
         queue_manager = get_queue_manager()

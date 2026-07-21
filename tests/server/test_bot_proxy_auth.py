@@ -3,6 +3,7 @@
 
 """Regression tests for bot proxy endpoint auth enforcement."""
 
+import json
 from types import SimpleNamespace
 
 import httpx
@@ -219,3 +220,90 @@ async def test_chat_proxy_forwards_trusted_request_without_root_api_key(monkeypa
     }
     assert "X-Gateway-Token" not in forwarded["headers"]
     assert forwarded["timeout"] == 300.0
+
+
+@pytest.mark.asyncio
+async def test_compile_proxy_forwards_create_and_status_identity(monkeypatch):
+    forwarded = []
+
+    class FakeResponse:
+        def __init__(self, payload, status_code=200):
+            self._payload = payload
+            self.status_code = status_code
+            self.text = json.dumps(payload)
+
+        @property
+        def is_success(self):
+            return 200 <= self.status_code < 300
+
+        def json(self):
+            return self._payload
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, json, headers, timeout):
+            forwarded.append(("POST", url, json, headers, timeout))
+            return FakeResponse(
+                {
+                    "task_id": "cmp_1",
+                    "status": "accepted",
+                    "to": "viking://resources/wiki",
+                },
+                202,
+            )
+
+        async def get(self, url, headers, timeout):
+            forwarded.append(("GET", url, None, headers, timeout))
+            return FakeResponse(
+                {
+                    "task_id": "cmp_1",
+                    "status": "running",
+                    "stage": "agent",
+                    "created_at": "2026-07-20T00:00:00Z",
+                    "updated_at": "2026-07-20T00:00:01Z",
+                }
+            )
+
+    monkeypatch.setattr(bot_router_module, "BOT_API_URL", "http://127.0.0.1:18790")
+    monkeypatch.setattr(bot_router_module, "BOT_API_KEY", "gateway-secret")
+    monkeypatch.setattr(bot_router_module, "_create_bot_proxy_client", lambda: FakeClient())
+
+    app = FastAPI()
+    app.state.config = ServerConfig(auth_mode="trusted", host="127.0.0.1", port=1944)
+    app.state.auth_plugin = TrustedAuthPlugin()
+    app.include_router(bot_router_module.router, prefix="/bot/v1")
+    transport = httpx.ASGITransport(app=app)
+    headers = {
+        "X-API-Key": "active-user-key",
+        "X-OpenViking-Account": "acct",
+        "X-OpenViking-User": "alice",
+    }
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        created = await client.post(
+            "/bot/v1/compile",
+            headers=headers,
+            json={
+                "from": ["viking://resources/source"],
+                "to": "viking://resources/wiki",
+                "skill": "viking://agent/skills/wiki",
+            },
+        )
+        status_response = await client.get("/bot/v1/compile/cmp_1", headers=headers)
+
+    assert created.status_code == 202
+    assert created.json()["result"]["task_id"] == "cmp_1"
+    assert status_response.json()["result"]["stage"] == "agent"
+    post = forwarded[0]
+    assert post[1].endswith("/bot/v1/compile")
+    assert post[2]["openviking_connection"]["api_key"] == "active-user-key"
+    get = forwarded[1]
+    assert get[1].endswith("/bot/v1/compile/cmp_1")
+    assert get[3]["X-Gateway-Token"] == "gateway-secret"
+    assert get[3]["X-API-Key"] == "active-user-key"
+    assert get[3]["X-OpenViking-Account"] == "acct"
+    assert get[3]["X-OpenViking-User"] == "alice"

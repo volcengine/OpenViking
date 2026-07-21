@@ -325,7 +325,7 @@ impl BaseClient {
     ) -> Result<T> {
         let status = response.status();
 
-        if status == StatusCode::NO_CONTENT || status == StatusCode::ACCEPTED {
+        if status == StatusCode::NO_CONTENT {
             return serde_json::from_value(Value::Null)
                 .map_err(|e| Error::Parse(format!("Failed to parse empty response: {}", e)));
         }

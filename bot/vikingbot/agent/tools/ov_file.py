@@ -198,6 +198,7 @@ class VikingListTool(OVFileTool):
         tool_context: "ToolContext",
         uri: str = "viking://",
         recursive: bool = False,
+        node_limit: int = 1000,
         **kwargs: Any,
     ) -> str:
         client = None
@@ -208,7 +209,11 @@ class VikingListTool(OVFileTool):
             for target_uri in target_uris:
                 try:
                     entries.extend(
-                        await client.list_resources(path=target_uri, recursive=recursive)
+                        await client.list_resources(
+                            path=target_uri,
+                            recursive=recursive,
+                            node_limit=node_limit,
+                        )
                     )
                 except Exception as exc:
                     if len(target_uris) == 1:

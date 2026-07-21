@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod chat;
+pub mod compile;
 pub mod content;
 pub mod crypto;
 pub mod filesystem;

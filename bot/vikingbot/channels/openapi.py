@@ -141,10 +141,12 @@ class OpenAPIChannel(BaseChannel):
         workspace_path: Path | None = None,
         app: "FastAPI | None" = None,
         global_config: Config | None = None,
+        compile_service: Any | None = None,
     ):
         super().__init__(config, bus, workspace_path)
         self.config = config
         self._global_config = global_config
+        self._compile_service = compile_service
         # Regular OpenAPI pending and sessions
         self._pending: Dict[str, PendingResponse] = {}
         self._sessions: Dict[str, Dict[str, Any]] = {}
@@ -365,6 +367,16 @@ class OpenAPIChannel(BaseChannel):
                 request.stream = True
             await channel._prepare_chat_request(http_request, request, auth)
             return await channel._handle_chat_stream(request)
+
+        if channel._compile_service is not None:
+            from vikingbot.compile.router import register_compile_routes
+
+            register_compile_routes(
+                router,
+                channel=channel,
+                verify_gateway_request=verify_gateway_request,
+                service=channel._compile_service,
+            )
 
         @router.post("/feedback", response_model=FeedbackResponse)
         async def submit_feedback(
@@ -839,7 +851,10 @@ class OpenAPIChannel(BaseChannel):
         if not self._ov_server_url():
             return None
         api_key = self._extract_api_key(request)
-        if not api_key:
+        configured_api_key = str(
+            getattr(getattr(self._global_config, "ov_server", None), "api_key", "") or ""
+        ).strip()
+        if not api_key and configured_api_key:
             raise HTTPException(status_code=401, detail="OpenViking API key header required")
         account_id = str(request.headers.get("X-OpenViking-Account") or "").strip()
         user_id = str(request.headers.get("X-OpenViking-User") or "").strip()
@@ -951,6 +966,39 @@ class OpenAPIChannel(BaseChannel):
         chat_request._principal_scope = scope
         if connection:
             chat_request.openviking_connection = OpenVikingConnection(**connection)
+
+    async def _prepare_compile_request(
+        self,
+        http_request: Request,
+        compile_request: Any,
+        auth: GatewayRequestAuth,
+    ) -> None:
+        """Resolve Compile identity using the same rules as chat."""
+        if compile_request.openviking_connection is not None:
+            if not auth.can_trust_forwarded_connection:
+                raise HTTPException(
+                    status_code=403,
+                    detail="openviking_connection is only accepted from trusted server proxy",
+                )
+            if not self._ov_server_url():
+                raise HTTPException(
+                    status_code=503,
+                    detail=OPENVIKING_UPSTREAM_NOT_CONFIGURED_DETAIL,
+                )
+            await self._assert_runtime_upstream_auth_mode(
+                self._identity_headers_from_connection(
+                    compile_request.openviking_connection
+                )
+            )
+            compile_request._principal_scope = self._connection_principal_scope(
+                compile_request.openviking_connection
+            )
+            return
+
+        connection, scope = await self._resolve_request_identity(http_request, auth)
+        compile_request._principal_scope = scope
+        if connection:
+            compile_request.openviking_connection = OpenVikingConnection(**connection)
 
     async def _resolve_request_identity(
         self,

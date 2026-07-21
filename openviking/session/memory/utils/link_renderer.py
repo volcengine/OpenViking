@@ -25,22 +25,42 @@ class LinkRenderer:
         return bool(char and LinkRenderer._ASCII_WORD_CHAR_RE.fullmatch(char))
 
     @staticmethod
-    def _find_match_span(content: str, match_text: str) -> Optional[tuple[int, int]]:
+    def protected_markdown_spans(content: str) -> List[tuple[int, int]]:
+        """Return spans where Compile must never insert a generated WikiLink."""
+        spans = [(m.start(), m.end()) for m in LinkRenderer._RELATIVE_LINK_RE.finditer(content)]
+        spans.extend(
+            (m.start(), m.end())
+            for m in re.finditer(r"(?ms)^(?:```|~~~).*?^(?:```|~~~)[ \t]*$", content)
+        )
+        spans.extend((m.start(), m.end()) for m in re.finditer(r"`+[^\n`]*?`+", content))
+
+        for match in re.finditer(r"(?m)^# Citations[ \t]*$", content):
+            if not any(start <= match.start() < end for start, end in spans):
+                spans.append((match.start(), len(content)))
+                break
+        return sorted(spans)
+
+    @staticmethod
+    def _find_match_span(
+        content: str,
+        match_text: str,
+        protected_spans: Optional[List[tuple[int, int]]] = None,
+    ) -> Optional[tuple[int, int]]:
         escaped = re.escape(match_text)
         # Character spans already covered by an existing [text](target) link. A match
         # inside one is already linked, so wrapping it again would produce a broken
         # nested link like "[[Frank](..) Ocean](..)"; skip those candidates.
-        linked_spans = [
+        linked_spans = protected_spans or [
             (m.start(), m.end()) for m in LinkRenderer._RELATIVE_LINK_RE.finditer(content)
         ]
 
-        def _inside_existing_link(start: int, end: int) -> bool:
-            return any(ls <= start and end <= le for ls, le in linked_spans)
+        def _overlaps_protected_span(start: int, end: int) -> bool:
+            return any(not (end <= span_start or start >= span_end) for span_start, span_end in linked_spans)
 
         if LinkRenderer._contains_cjk(match_text):
             for match in re.finditer(escaped, content):
                 start, end = match.start(), match.end()
-                if _inside_existing_link(start, end):
+                if _overlaps_protected_span(start, end):
                     continue
                 return start, end
             return None
@@ -48,7 +68,7 @@ class LinkRenderer:
         pattern = re.compile(escaped, re.IGNORECASE)
         for match in pattern.finditer(content):
             start, end = match.start(), match.end()
-            if _inside_existing_link(start, end):
+            if _overlaps_protected_span(start, end):
                 continue
             left_char = content[start - 1] if start > 0 else ""
             right_char = content[end] if end < len(content) else ""
@@ -68,13 +88,22 @@ class LinkRenderer:
             source_uri: The viking:// URI of the file being written.
             links: List of link dicts (from links + backlinks in MEMORY_FIELDS).
         """
+        rendered, _count = LinkRenderer.render_links_with_count(content, source_uri, links)
+        return rendered
+
+    @staticmethod
+    def render_links_with_count(
+        content: str, source_uri: str, links: List[Dict]
+    ) -> tuple[str, int]:
+        """Render links outside protected Markdown spans and return the inserted count."""
         eligible = [l for l in links if l.get("match_text")]
         if not eligible:
-            return content
+            return content, 0
 
         eligible.sort(key=lambda l: l.get("weight", 0), reverse=True)
 
         replacements: List[tuple] = []  # (start, end, replacement_text)
+        protected_spans = LinkRenderer.protected_markdown_spans(content)
         for link in eligible:
             match_text = link["match_text"]
             to_uri = link["to_uri"]
@@ -85,7 +114,9 @@ class LinkRenderer:
             rel = LinkRenderer.relative_path(source_uri, to_uri)
             link_target = rel if rel is not None else to_uri
 
-            match_span = LinkRenderer._find_match_span(content, match_text)
+            match_span = LinkRenderer._find_match_span(
+                content, match_text, protected_spans=protected_spans
+            )
             if not match_span:
                 continue
 
@@ -99,7 +130,11 @@ class LinkRenderer:
             # would otherwise be ambiguous). We accept the literal-space form when
             # matching existing links, but always emit the encoded form when
             # generating new ones.
-            encoded_target = link_target.replace(" ", "%20")
+            encoded_target = (
+                link_target.replace(" ", "%20")
+                .replace("(", "%28")
+                .replace(")", "%29")
+            )
             rendered = f"[{content[start:end]}]({encoded_target})"
             replacements.append((start, end, rendered))
 
@@ -108,7 +143,7 @@ class LinkRenderer:
         for start, end, repl in sorted(replacements, key=lambda x: x[0], reverse=True):
             result[start:end] = list(repl)
 
-        return "".join(result)
+        return "".join(result), len(replacements)
 
     @staticmethod
     def strip_links(content: str) -> str:

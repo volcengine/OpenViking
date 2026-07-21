@@ -41,12 +41,20 @@ class SkillLoader:
         if "description" not in meta:
             raise ValueError("Skill must have 'description' field")
 
+        allowed_tools_declared = "allowed-tools" in meta
+        allowed_tools = meta.get("allowed-tools", [])
+        if not isinstance(allowed_tools, list) or any(
+            not isinstance(tool, str) for tool in allowed_tools
+        ):
+            raise ValueError("Skill 'allowed-tools' must be an array of strings")
+
         return {
             "name": meta["name"],
             "description": meta["description"],
             "content": body.strip(),
             "source_path": source_path,
-            "allowed_tools": meta.get("allowed-tools", []),
+            "allowed_tools": allowed_tools,
+            "allowed_tools_declared": allowed_tools_declared,
             "tags": meta.get("tags", []),
         }
 
@@ -66,8 +74,12 @@ class SkillLoader:
             "description": skill_dict.get("description", ""),
         }
 
-        allowed_tools = skill_dict.get("allowed_tools") or skill_dict.get("allowed-tools") or []
-        if allowed_tools:
+        allowed_tools = skill_dict.get("allowed_tools")
+        if allowed_tools is None:
+            allowed_tools = skill_dict.get("allowed-tools")
+        if allowed_tools is None:
+            allowed_tools = []
+        if allowed_tools or skill_dict.get("allowed_tools_declared"):
             frontmatter["allowed-tools"] = allowed_tools
 
         tags = skill_dict.get("tags") or []

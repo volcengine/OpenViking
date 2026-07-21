@@ -566,6 +566,27 @@ class FSService:
             timeout=timeout,
         )
 
+    async def batch_write(
+        self,
+        *,
+        root_uri: str,
+        operations: list[dict[str, Any]],
+        ctx: RequestContext,
+        wait: bool = True,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Apply a preconditioned multi-file write and aggregate downstream refresh."""
+        root_uri = validate_viking_uri(root_uri, field_name="root_uri")
+        viking_fs = self._ensure_initialized()
+        coordinator = ContentWriteCoordinator(viking_fs=viking_fs, vikingdb=self._vikingdb)
+        return await coordinator.batch_write(
+            root_uri=root_uri,
+            operations=operations,
+            ctx=ctx,
+            wait=wait,
+            timeout=timeout,
+        )
+
     async def set_tags(
         self,
         uri: str,

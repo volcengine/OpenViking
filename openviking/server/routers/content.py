@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Content endpoints for OpenViking HTTP Server."""
 
+from typing import Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, Query
 from fastapi.responses import Response as FastAPIResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from openviking.core.namespace import (
     canonicalize_uri,
@@ -42,6 +43,39 @@ class WriteContentRequest(BaseModel):
     content: str
     mode: str = "replace"
     wait: bool = False
+    timeout: float | None = None
+    telemetry: TelemetryRequest = False
+
+
+class BatchWritePrecondition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["create_if_absent", "replace_if_hash"]
+    base_hash: str | None = None
+
+    @model_validator(mode="after")
+    def validate_hash_shape(self) -> "BatchWritePrecondition":
+        if self.kind == "replace_if_hash" and not self.base_hash:
+            raise ValueError("base_hash is required for replace_if_hash")
+        if self.kind == "create_if_absent" and self.base_hash is not None:
+            raise ValueError("base_hash is not allowed for create_if_absent")
+        return self
+
+
+class BatchWriteOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    uri: str
+    content: str
+    precondition: BatchWritePrecondition
+
+
+class BatchWriteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    root_uri: str
+    operations: list[BatchWriteOperation]
+    wait: bool = True
     timeout: float | None = None
     telemetry: TelemetryRequest = False
 
@@ -226,6 +260,35 @@ async def write(
             content=request.content,
             ctx=_ctx,
             mode=request.mode,
+            wait=request.wait,
+            timeout=request.timeout,
+        ),
+    )
+    return Response(
+        status="ok",
+        result=execution.result,
+        telemetry=execution.telemetry,
+    ).model_dump(exclude_none=True)
+
+
+@router.post("/batch-write")
+async def batch_write(
+    request: BatchWriteRequest = Body(...),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Apply preconditioned file writes and refresh their indexes as one request."""
+    service = get_service()
+    root_uri = resolve_path_variables(request.root_uri)
+    operations = [operation.model_dump(exclude_none=True) for operation in request.operations]
+    for operation in operations:
+        operation["uri"] = resolve_path_variables(operation["uri"])
+    execution = await run_operation(
+        operation="content.batch_write",
+        telemetry=request.telemetry,
+        fn=lambda: service.fs.batch_write(
+            root_uri=root_uri,
+            operations=operations,
+            ctx=_ctx,
             wait=request.wait,
             timeout=request.timeout,
         ),

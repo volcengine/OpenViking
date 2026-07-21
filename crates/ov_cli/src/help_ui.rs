@@ -89,6 +89,7 @@ const IMPORT_EXPORT_SESSIONS: &[HelpCommand] = help_commands![
 const INTERACTIVE_ADMIN: &[HelpCommand] = help_commands![
     "tui",
     "chat",
+    "compile",
     "admin",
     "system",
     "reindex",
@@ -839,6 +840,18 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         next_steps: &[HelpItem {
             label: "ov find \"topic\"",
             description: "Search context directly.",
+        }],
+    },
+    CommandHelpSpec {
+        path: &["compile"],
+        purpose: "Use a required VikingBot Skill to organize OpenViking materials into Wiki pages.",
+        examples: &[HelpItem {
+            label: "ov compile --from viking://resources/weekly --to viking://resources/wiki --skill viking://agent/skills/monthly_wiki --wait",
+            description: "Compile one source directory and wait for the result.",
+        }],
+        next_steps: &[HelpItem {
+            label: "ov tree <target-uri>",
+            description: "Inspect the generated Wiki pages.",
         }],
     },
     CommandHelpSpec {
