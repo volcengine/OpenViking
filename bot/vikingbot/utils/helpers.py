@@ -97,6 +97,9 @@ def get_mounts_path() -> Path:
 
 def get_source_workspace_path() -> Path:
     """Get the source workspace path from the codebase."""
+    package_workspace = Path(__file__).parent.parent / "workspace"
+    if package_workspace.is_dir():
+        return package_workspace
     return Path(__file__).parent.parent.parent / "workspace"
 
 
@@ -117,7 +120,7 @@ def ensure_workspace_templates(workspace: Path) -> None:
 
     if not has_any_file:
         # Workspace is empty, copy templates from source
-        source_dir = Path(__file__).parent.parent.parent / "workspace"
+        source_dir = get_source_workspace_path()
 
         if not source_dir.exists():
             # Fallback: create minimal templates

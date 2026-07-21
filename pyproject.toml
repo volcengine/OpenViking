@@ -233,6 +233,7 @@ vikingbot = [
     "**/*.mjs",
     "skills/**/*.md",
     "skills/**/*.sh",
+    "workspace/**/*",
     "bridge/**/*",
 ]
 
