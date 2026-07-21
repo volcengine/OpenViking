@@ -1538,6 +1538,8 @@ Task record files are stored under the owning account's system directory:
 /local/{account_id}/_system/tasks/{user_id}/{task_id}.json
 ```
 
+<a id="encryption"></a>
+
 ## encryption Section
 
 Enable at-rest data encryption to ensure data security and isolation in multi-tenant environments. Encryption is completely transparent to users with no API changes.
