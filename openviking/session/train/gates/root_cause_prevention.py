@@ -267,28 +267,25 @@ Pass only when all are true:
    final answer before or at the failing boundary.
 3. The experience is injectable: it is a runtime reminder, not a case audit,
    evaluator diagnosis, broad SOP, hidden answer, or generic "check everything" rule.
-4. `## Situation` is specific enough for the skill loader path: it tells a future
-   agent when to read/apply the experience, when not to apply it, and which
-   runtime source binding supports the rule.
-5. The experience covers one reusable root failure pattern. Multiple symptoms
+4. The experience covers one reusable root failure pattern. Multiple symptoms
    are combined only when they share the same first divergence, decisive
    evidence, decision boundary, and minimal repair. Do not fail an otherwise
    complete experience merely because the trajectory also contains unrelated
    failures that should become separate experiences.
-6. When evaluation proves a reusable requirement failure but the internal cause
+5. When evaluation proves a reusable requirement failure but the internal cause
    is unknown, a narrow verification reminder at the earliest observable output
    or action boundary is acceptable; do not invent a hidden cause.
-7. `Does not apply when` names a real task-pattern mismatch, not a temporal
+6. `Does not apply when` names a real task-pattern mismatch, not a temporal
    loader stage such as still reading/writing, before final_response, or before
    writes complete. Temporal wording would make the future agent skip reading an
    experience that must be available from task start.
-8. Every mandatory behavior is supported by the user request, an authoritative
+7. Every mandatory behavior is supported by the user request, an authoritative
    source, or observable runtime evidence. A genre convention, evaluator-only
    preference, or hardcoded factual value cannot become a hidden requirement.
-9. A mandatory output element is guarded by the same explicit runtime requirement
-   that justifies it. Do not infer a required section, artifact, field, or language
+8. A mandatory output element is guarded by the same explicit runtime requirement
+   that justifies it. Do not infer a required section, artifact, or field
    from a merely related input concept, audience, locale, or genre convention.
-10. Runtime bindings name semantic roles and read their exact values from the future
+9. Runtime bindings name semantic roles and read their exact values from the future
    request, source, or available tools. Never require source-case example numbers,
    dates, tab names, paths, filenames, or tool identifiers in the experience or in
    a repair instruction when a capability or semantic source role is sufficient.

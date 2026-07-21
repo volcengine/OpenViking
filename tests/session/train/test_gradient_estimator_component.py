@@ -267,12 +267,7 @@ async def test_experience_gradient_estimator_audits_missing_trajectory():
     )
 
     assert gradients == []
-    disposition = analysis.metadata["experience_dispositions"][0]
-    assert disposition["disposition"] == "no_valid_trajectory"
-    assert disposition["case_name"] == "case_17"
-    assert disposition["evidence_source_summary"]["direct_available"] is False
-    assert "structural/evidence validation" in disposition["reason"]
-    assert disposition["retry_events"][0]["final_outcome"] == ("discarded_after_max_retries")
+    assert "experience_dispositions" not in analysis.metadata
 
 
 @pytest.mark.asyncio
@@ -294,7 +289,7 @@ async def test_experience_gradient_estimator_skips_success_trajectories():
 
     assert gradients == []
     assert estimator.calls == []
-    assert analysis.metadata["experience_dispositions"][0]["disposition"] == ("success_no_learning")
+    assert "experience_dispositions" not in analysis.metadata
 
 
 @pytest.mark.asyncio
@@ -351,7 +346,7 @@ async def test_experience_gradient_estimator_converts_experience_operations():
     assert gradient.metadata["rubric_passed"] is False
     assert gradient.metadata["training_category"] == "booking"
     assert len(estimator.calls) == 1
-    assert analysis.metadata["experience_dispositions"][0]["disposition"] == ("gradient_proposed")
+    assert "experience_dispositions" not in analysis.metadata
 
 
 @pytest.mark.asyncio
@@ -428,9 +423,7 @@ async def test_experience_gradient_estimator_skips_empty_content_and_handles_ext
     estimator._run_extract_loop = raise_error
 
     assert await estimator.estimate(analysis, _experience_set(), _context()) == []
-    assert analysis.metadata["experience_dispositions"][0]["disposition"] == (
-        "extract_parse_failed"
-    )
+    assert "experience_dispositions" not in analysis.metadata
 
     strict_context = ExperienceGradientContext(
         request_context=RequestContext(UserIdentifier("account", "u"), Role.USER),
@@ -619,6 +612,4 @@ async def test_post_validation_gate_sees_prefetched_comparison_trajectories(monk
             ],
         }
     ]
-    disposition = analysis.metadata["experience_dispositions"][0]
-    assert "gate_report" not in disposition
-    assert "retry_events" not in disposition
+    assert "experience_dispositions" not in analysis.metadata

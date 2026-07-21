@@ -2215,9 +2215,13 @@ def test_rollout_artifact_event_recorder_enriches_commit_result(tmp_path):
 async def test_rollout_artifact_recorder_writes_epoch_commit_artifacts_under_commit_dir(tmp_path):
     from openviking.session.train import RolloutArtifactRecorder
 
+    read_uris: list[str] = []
+
     class CommitArtifactClient:
         async def read(self, uri):
-            assert uri == "viking://archive/memory_diff.json"
+            read_uris.append(uri)
+            if uri != "viking://archive/memory_diff.json":
+                raise FileNotFoundError(uri)
             return json.dumps(
                 {
                     "operations": {
@@ -2300,6 +2304,9 @@ async def test_rollout_artifact_recorder_writes_epoch_commit_artifacts_under_com
     assert status["commit_path"] == str(commit_dir)
     assert status["memory_diff_path"] == str(commit_dir / "memory_diff.json")
     assert status["memory_diff_markdown_path"] == str(commit_dir / "memory_diff.md")
+    assert "experience_extraction_report_path" not in status
+    assert not (commit_dir / "experience_extraction_report.jsonl").exists()
+    assert read_uris == ["viking://archive/memory_diff.json"]
 
 
 class DelayedSessionCommitClient(FakeSessionCommitClient):

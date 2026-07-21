@@ -448,6 +448,8 @@ async def test_experience_root_cause_prevention_gate_allows_preventive_experienc
     assert "Direct evaluation evidence" in prompt
     assert "unrelated failures" in prompt
     assert "evaluation-only language" not in prompt
+    assert "language" not in prompt
+    assert "specific enough for the skill loader path" not in prompt
     assert "evaluation_as_runtime_trigger" not in prompt
     assert "temporal non-applicability" in prompt
     assert "canonical total/payment field" not in prompt

@@ -166,38 +166,11 @@ class ExperienceGradientEstimator:
             raise ValueError("ExperienceGradientContext.request_context is required")
 
         if not analysis.trajectories:
-            analysis.metadata.setdefault("experience_dispositions", []).append(
-                {
-                    "trajectory_uri": "",
-                    "trajectory_name": "",
-                    "outcome": "unknown",
-                    "case_name": str(analysis.metadata.get("case_name") or ""),
-                    "evidence_source_summary": dict(
-                        analysis.metadata.get("evidence_source_summary") or {}
-                    ),
-                    "disposition": "no_valid_trajectory",
-                    "reason": (
-                        "trajectory extraction produced no valid persisted trajectory; "
-                        "the model returned no operation or every candidate failed "
-                        "structural/evidence validation"
-                    ),
-                    "experience_uris": [],
-                    "retry_events": list(
-                        analysis.metadata.get("trajectory_post_validation_retries") or []
-                    ),
-                }
-            )
             return []
 
         requests: list[ExperienceGradientEstimateRequest] = []
         for trajectory in analysis.trajectories:
             if not _should_update_experience_from_trajectory(trajectory):
-                _record_experience_disposition(
-                    analysis,
-                    trajectory,
-                    disposition="success_no_learning",
-                    reason="successful trajectories do not create failure-repair experiences",
-                )
                 continue
             requests.append(
                 ExperienceGradientEstimateRequest(
@@ -222,48 +195,14 @@ class ExperienceGradientEstimator:
             except Exception as exc:
                 logger.exception("Experience gradient estimation failed")
                 request.diagnostics["estimate_error"] = f"{type(exc).__name__}: {exc}"
-                _record_experience_disposition(
-                    analysis,
-                    request.trajectory,
-                    disposition="extract_parse_failed",
-                    reason=f"{type(exc).__name__}: {exc}",
-                )
                 if context.strict_extract_errors:
                     raise
                 return []
 
         gradient_batches = await asyncio.gather(*(estimate_one(request) for request in requests))
-        for request, gradients in zip(requests, gradient_batches, strict=True):
+        for request in requests:
             _merge_diagnostics(context.metadata, request.diagnostics)
             _merge_diagnostics(analysis.metadata, request.diagnostics)
-            if request.diagnostics.get("estimate_error"):
-                continue
-            report_dict = dict(request.diagnostics.get("final_gate_report") or {})
-            if gradients:
-                _record_experience_disposition(
-                    analysis,
-                    request.trajectory,
-                    disposition="gradient_proposed",
-                    reason=(
-                        "at least one experience candidate passed extraction gates and awaits "
-                        "merge/apply"
-                    ),
-                    experience_uris=[gradient.target_uri for gradient in gradients],
-                )
-            elif int(report_dict.get("rejected_count") or 0):
-                _record_experience_disposition(
-                    analysis,
-                    request.trajectory,
-                    disposition="gradient_gate_rejected",
-                    reason="all experience candidates were rejected by the post-gradient gate",
-                )
-            else:
-                _record_experience_disposition(
-                    analysis,
-                    request.trajectory,
-                    disposition="no_change_proposed",
-                    reason=_no_change_reason(request.trajectory),
-                )
         return [gradient for batch in gradient_batches for gradient in batch]
 
     @replay.entry("memory.experience.estimate_gradients")
@@ -735,42 +674,6 @@ def _merge_diagnostics(target: dict[str, Any], diagnostics: dict[str, Any]) -> N
             target.setdefault(key, {}).update(value)
         else:
             target[key] = value
-
-
-def _record_experience_disposition(
-    analysis: RolloutAnalysis,
-    trajectory: Trajectory,
-    *,
-    disposition: str,
-    reason: str,
-    experience_uris: list[str] | None = None,
-) -> None:
-    records = analysis.metadata.setdefault("experience_dispositions", [])
-    trajectory_uri = str(trajectory.uri or "")
-    record = {
-        "trajectory_uri": trajectory_uri,
-        "trajectory_name": str(trajectory.name or ""),
-        "outcome": str(trajectory.outcome or "unknown"),
-        "case_name": str(
-            trajectory.metadata.get("case_name") or analysis.metadata.get("case_name") or ""
-        ),
-        "evidence_source_summary": dict(analysis.metadata.get("evidence_source_summary") or {}),
-        "disposition": disposition,
-        "reason": reason,
-        "experience_uris": list(dict.fromkeys(experience_uris or [])),
-    }
-    for index, existing in enumerate(records):
-        if isinstance(existing, dict) and existing.get("trajectory_uri") == trajectory_uri:
-            records[index] = record
-            return
-    records.append(record)
-
-
-def _no_change_reason(trajectory: Trajectory) -> str:
-    return (
-        "extractor proposed no experience; the failure was successful, already covered, "
-        "case-specific, unsupported, not preventable, or lacked sufficient evidence"
-    )
 
 
 def _context_with_analysis_messages(

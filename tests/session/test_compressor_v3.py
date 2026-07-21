@@ -14,10 +14,10 @@ from openviking.session import create_session_compressor
 from openviking.session.compressor_v3 import (
     SessionCompressorV3,
     _experience_root_uri,
-    _finalize_experience_dispositions,
     _memory_diff_has_changes,
     _merge_memory_diffs,
     _training_evaluation_from_messages,
+    _trajectory_only_training_result,
 )
 from openviking.session.memory.dataclass import (
     MemoryFile,
@@ -187,98 +187,6 @@ def test_retain_case_links_keeps_latest_five_per_outcome_class():
     )
 
 
-def test_final_disposition_uses_applied_split_plan_after_gate_retry():
-    trajectory_uri = "viking://user/u/memories/trajectories/literature_review.md"
-    experience_uris = [
-        "viking://user/u/memories/experiences/repair_definition.md",
-        "viking://user/u/memories/experiences/repair_measurement.md",
-    ]
-    analysis = RolloutAnalysis(
-        evaluation=RubricEvaluation(
-            passed=False,
-            score=0.8,
-            criterion_results=[],
-            feedback=[],
-        ),
-        trajectories=[
-            Trajectory(
-                name="literature_review",
-                uri=trajectory_uri,
-                content="trajectory",
-                outcome="partial",
-                retrieval_anchor="",
-            )
-        ],
-        gradients=[],
-        metadata={
-            "experience_dispositions": [
-                {
-                    "disposition": "gradient_proposed",
-                    "experience_uris": ["viking://user/u/memories/experiences/combined_repair.md"],
-                }
-            ]
-        },
-    )
-    plan = PolicyUpdatePlan(
-        items=[
-            PolicyPlanItem(
-                kind="upsert",
-                memory_type="experiences",
-                target_name=uri.rsplit("/", 1)[-1].removesuffix(".md"),
-                target_uri=uri,
-                before_content=None,
-                after_content="experience",
-                links=[
-                    StoredLink(
-                        from_uri=uri,
-                        to_uri=trajectory_uri,
-                        link_type="derived_from",
-                        weight=1.0,
-                    )
-                ],
-            )
-            for uri in experience_uris
-        ]
-    )
-    result = RolloutTrainingResult(
-        analyses=[analysis],
-        gradients=[],
-        plan=plan,
-        apply_result=PolicyApplyResult(
-            updated_policy_set=ExperienceSet(
-                root_uri="viking://user/u/memories/experiences",
-                policies=[],
-            ),
-            written_uris=experience_uris,
-        ),
-        metadata={
-            "gate_reports": [
-                {
-                    "stage": "post_plan",
-                    "decisions": [
-                        {
-                            "action": "reject",
-                            "gate_name": "experience_plan_quality",
-                            "reason": "retry the combined candidate",
-                            "evidence": {"target_name": "combined_repair"},
-                        }
-                    ],
-                }
-            ]
-        },
-    )
-
-    records = _finalize_experience_dispositions(
-        analysis=analysis,
-        training_result=result,
-        session_id="s1",
-    )
-
-    assert records[0]["disposition"] == "experience_created"
-    assert records[0]["experience_uris"] == experience_uris
-    assert "gate_rejections" not in records[0]
-
-
 @pytest.mark.asyncio
 async def test_training_memory_diff_serializes_gate_attempts_once_without_legacy_views():
     attempt = {
@@ -324,6 +232,9 @@ async def test_training_memory_diff_serializes_gate_attempts_once_without_legacy
     )
 
     assert diff["gates"] == [attempt]
+    assert "experience_dispositions" not in diff
+    assert "experience_disposition_summary" not in diff
+    assert "total_experience_dispositions" not in diff["summary"]
     assert "gate_rejections" not in diff
     assert "gate_summary" not in diff
     assert "post_validation_retries" not in diff
@@ -369,6 +280,34 @@ def test_memory_diff_with_only_gate_attempts_is_not_dropped():
             ],
         }
     )
+
+
+def test_trajectory_only_training_result_preserves_analysis_gate_attempts():
+    attempt = {
+        "stage": "post_gradient",
+        "index": 0,
+        "result": "discarded",
+        "targets": [
+            {
+                "name": "candidate",
+                "outcome": "rejected",
+                "decisions": [],
+            }
+        ],
+    }
+    analysis = SimpleNamespace(trajectories=[], metadata={"gate_attempts": [attempt]})
+    rollout = SimpleNamespace(case=SimpleNamespace(name="case"))
+
+    result = _trajectory_only_training_result(
+        analysis=analysis,
+        rollout=rollout,
+        policy_set=ExperienceSet(
+            root_uri="viking://user/u/memories/experiences",
+            policies=[],
+        ),
+    )
+
+    assert result.metadata["gate_attempts"] == [attempt]
 
 
 def test_case_experience_links_require_policy_root_uri():
@@ -1057,14 +996,6 @@ async def test_v3_fast_path_writes_final_memory_diff_with_case_traj_and_exp(monk
                     "deletes": [],
                 },
                 "summary": {"total_adds": 1, "total_updates": 1, "total_deletes": 0},
-                "experience_dispositions": [
-                    {
-                        "session_id": "s1",
-                        "trajectory_uri": "viking://user/u/memories/trajectories/duplicate_booking.md",
-                        "disposition": "experience_updated",
-                        "reason": "experience plan passed gates and was applied",
-                    }
-                ],
             },
         }
 
@@ -1091,13 +1022,10 @@ async def test_v3_fast_path_writes_final_memory_diff_with_case_traj_and_exp(monk
         "total_adds": 2,
         "total_updates": 1,
         "total_deletes": 0,
-        "total_experience_dispositions": 1,
     }
-    report_lines = writes[f"{archive_uri}/experience_extraction_report.jsonl"].splitlines()
-    assert len(report_lines) == 1
-    report = __import__("json").loads(report_lines[0])
-    assert report["disposition"] == "experience_updated"
-    assert report["session_id"] == "s1"
+    assert "experience_dispositions" not in diff
+    assert "experience_disposition_summary" not in diff
+    assert f"{archive_uri}/experience_extraction_report.jsonl" not in writes
 
 
 @pytest.mark.asyncio
