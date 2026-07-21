@@ -15,7 +15,9 @@ import base64
 import os
 import secrets
 import struct
+import sys
 import tempfile
+from types import ModuleType
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -63,6 +65,20 @@ def vault_mock_provider():
     provider._ensure_root_key_exists = AsyncMock()
 
     yield provider
+
+
+@pytest.fixture
+def vault_invalid_path(monkeypatch):
+    class InvalidPath(Exception):
+        pass
+
+    hvac = ModuleType("hvac")
+    exceptions = ModuleType("hvac.exceptions")
+    exceptions.InvalidPath = InvalidPath
+    hvac.exceptions = exceptions
+    monkeypatch.setitem(sys.modules, "hvac", hvac)
+    monkeypatch.setitem(sys.modules, "hvac.exceptions", exceptions)
+    return InvalidPath
 
 
 @pytest.fixture
@@ -197,6 +213,47 @@ class TestVaultProviderMock:
             ciphertext = await encryptor.encrypt(account_id, plaintext)
             assert ciphertext.startswith(b"OVE1")
             assert ciphertext[5] == PROVIDER_VAULT
+
+    @pytest.mark.asyncio
+    async def test_root_key_read_failure_never_creates(
+        self, vault_mock_provider, vault_invalid_path
+    ):
+        client = Mock()
+        client.secrets.kv.v1.read_secret.side_effect = RuntimeError("Vault unavailable")
+        vault_mock_provider._get_client = AsyncMock(return_value=client)
+
+        with pytest.raises(RuntimeError, match="Vault unavailable"):
+            await vault_mock_provider._get_or_create_root_key()
+
+        client.secrets.kv.v1.create_or_update_secret.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_missing_root_key_is_created(self, vault_mock_provider, vault_invalid_path):
+        client = Mock()
+        client.secrets.kv.v1.read_secret.side_effect = vault_invalid_path()
+        vault_mock_provider._get_client = AsyncMock(return_value=client)
+        vault_mock_provider._encrypt_with_vault = AsyncMock(return_value=b"vault:ciphertext")
+
+        root_key = await vault_mock_provider._get_or_create_root_key()
+
+        assert len(root_key) == 32
+        client.secrets.kv.v1.create_or_update_secret.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_root_key_decrypt_failure_never_creates(
+        self, vault_mock_provider, vault_invalid_path
+    ):
+        client = Mock()
+        client.secrets.kv.v1.read_secret.return_value = {
+            "data": {"encrypted_root_key": base64.b64encode(b"vault:ciphertext").decode()}
+        }
+        vault_mock_provider._get_client = AsyncMock(return_value=client)
+        vault_mock_provider._decrypt_with_vault = AsyncMock(side_effect=RuntimeError("bad key"))
+
+        with pytest.raises(RuntimeError, match="bad key"):
+            await vault_mock_provider._get_or_create_root_key()
+
+        client.secrets.kv.v1.create_or_update_secret.assert_not_called()
 
 
 class TestVolcengineKMSProviderMock:

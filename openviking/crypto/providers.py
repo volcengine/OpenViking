@@ -415,6 +415,8 @@ class VaultProvider(BaseProvider):
         client = await self._get_client()
         import base64
 
+        from hvac.exceptions import InvalidPath
+
         try:
             # Try to read encrypted root key from Vault kv
             if self.kv_version == 2:
@@ -423,19 +425,13 @@ class VaultProvider(BaseProvider):
                     path=self.encrypted_root_key_key,
                     mount_point=self.kv_mount_path,
                 )
-                encrypted_root_key_b64 = response["data"]["data"]["encrypted_root_key"]
             else:
                 response = await asyncio.to_thread(
                     client.secrets.kv.v1.read_secret,
                     path=self.encrypted_root_key_key,
                     mount_point=self.kv_mount_path,
                 )
-                encrypted_root_key_b64 = response["data"]["encrypted_root_key"]
-
-            encrypted_root_key = base64.b64decode(encrypted_root_key_b64)
-            self._root_key = await self._decrypt_with_vault(encrypted_root_key)
-            logger.info("Loaded existing root key from Vault")
-        except Exception:
+        except InvalidPath:
             # Generate new root key
             import secrets
 
@@ -472,6 +468,15 @@ class VaultProvider(BaseProvider):
                     f"Failed to persist root key to Vault. "
                     f"Refusing to start with ephemeral key (data loss risk): {e}"
                 )
+            return self._root_key
+
+        if self.kv_version == 2:
+            encrypted_root_key_b64 = response["data"]["data"]["encrypted_root_key"]
+        else:
+            encrypted_root_key_b64 = response["data"]["encrypted_root_key"]
+        encrypted_root_key = base64.b64decode(encrypted_root_key_b64)
+        self._root_key = await self._decrypt_with_vault(encrypted_root_key)
+        logger.info("Loaded existing root key from Vault")
 
         return self._root_key
 
