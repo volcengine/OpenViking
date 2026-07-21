@@ -13,8 +13,8 @@ import openai
 
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
-    EmbedResult,
     EmbeddingInput,
+    EmbedResult,
     truncate_and_normalize,
 )
 from openviking.telemetry import get_current_telemetry
@@ -150,7 +150,9 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
 
     @property
     def supports_multimodal(self) -> bool:
-        return self._input_type == "multimodal"
+        return self._input_type == "multimodal" and self.model_name.startswith(
+            ("qwen3-vl-embedding", "qwen2.5-vl-embedding")
+        )
 
     @staticmethod
     def _to_dashscope_contents(content: List[Dict[str, Any]]) -> List[Dict[str, str]]:
