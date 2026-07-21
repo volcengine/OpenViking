@@ -212,8 +212,8 @@ class ContentBackfillEnumerator:
     def _list_dir_names(self, path: str) -> list[str]:
         try:
             entries = self._raw_agfs.ls(path)
-        except Exception:
-            return []
+        except Exception as exc:
+            raise RuntimeError(f"failed to list AGFS directory {path}") from exc
         names: list[str] = []
         for entry in entries or []:
             if entry.get("isDir", entry.get("is_dir", False)) and entry.get("name"):
@@ -236,8 +236,10 @@ class ContentBackfillEnumerator:
                 node_limit=node_limit,
                 level_limit=None,
             )
-        except Exception:
-            return
+        except Exception as exc:
+            raise RuntimeError(
+                f"failed to enumerate account {account_id} tree at {root_uri}"
+            ) from exc
 
         for entry in entries:
             uri = entry.get("uri")
@@ -330,7 +332,6 @@ class BackfillOptions:
     run_dir: Path
     execute: bool = False
     rewrite_non_empty: bool = False
-    batch_size: int = 100
     limit: int | None = None
     cutoff: datetime | None = None
     fail_fast: bool = False
@@ -551,7 +552,6 @@ def build_options(args: argparse.Namespace) -> BackfillOptions:
         run_dir=Path(args.run_dir),
         execute=bool(args.execute),
         rewrite_non_empty=bool(getattr(args, "rewrite_non_empty", False)),
-        batch_size=int(args.batch_size),
         limit=getattr(args, "limit", None),
         cutoff=datetime.now(),
         fail_fast=bool(getattr(args, "fail_fast", False)),
@@ -563,10 +563,6 @@ def build_options(args: argparse.Namespace) -> BackfillOptions:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", type=Path, default=default_run_dir())
-    parser.add_argument("--batch-size", type=int, default=100)
-    parser.add_argument("--page-size", type=int, default=500)
-    parser.add_argument("--read-concurrency", type=int, default=8)
-    parser.add_argument("--update-sleep-ms", type=int, default=0)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--rewrite-non-empty", action="store_true")

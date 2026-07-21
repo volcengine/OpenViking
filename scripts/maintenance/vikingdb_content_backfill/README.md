@@ -96,15 +96,6 @@ Then execute the update:
   --execute
 ```
 
-Optional throttling:
-
-```bash
-./venv/bin/python scripts/maintenance/vikingdb_content_backfill/backfill_vikingdb_content.py \
-  --execute \
-  --batch-size 100 \
-  --limit 10000
-```
-
 ## Output Files
 
 Each run writes to a timestamped directory under `result/`.
