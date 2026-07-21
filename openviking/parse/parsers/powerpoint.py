@@ -69,8 +69,9 @@ class PowerPointParser(BaseParser):
             )
 
             caller_media_dirs = parse_kwargs.pop("allowed_media_dirs", None) or []
+            resource_media_root = storage.get_resource_media_dir(resource_name, "images").parent
             allowed_media_dirs = []
-            for media_dir in [*caller_media_dirs, storage.media_dir]:
+            for media_dir in [resource_media_root, *caller_media_dirs]:
                 media_path = Path(media_dir)
                 if media_path not in allowed_media_dirs:
                     allowed_media_dirs.append(media_path)
@@ -229,7 +230,12 @@ class PowerPointParser(BaseParser):
             image_path = storage.save_image(
                 resource_name, image_bytes, filename=filename, extension=extension
             )
-            rel_path = image_path.relative_to(storage.media_dir)
+            # Keep generated references independent of the resource directory
+            # name. Besides avoiding Markdown delimiter characters in that
+            # name, this lets parse() authorize only this resource's media root
+            # instead of the global media directory shared by sibling inputs.
+            resource_media_root = storage.get_resource_media_dir(resource_name, "images").parent
+            rel_path = image_path.relative_to(resource_media_root)
             return f"![{filename}]({rel_path})"
         except Exception as e:
             logger.warning(f"[PowerPointParser] Failed to save embedded picture: {e}")

@@ -148,11 +148,16 @@ async def test_excel_parser_offloads_xls_conversion(monkeypatch, tmp_path: Path)
 
 @pytest.mark.asyncio
 async def test_powerpoint_parser_offloads_pptx_conversion(monkeypatch, tmp_path: Path):
+    from openviking_cli.utils import storage as storage_module
+    from openviking_cli.utils.storage import StoragePath
+
     parser = powerpoint.PowerPointParser()
     seen = _stub_markdown_parse(parser)
     calls = _patch_to_thread(monkeypatch, powerpoint)
     fake_pptx = SimpleNamespace()
     monkeypatch.setitem(sys.modules, "pptx", fake_pptx)
+    storage = StoragePath(base_path=tmp_path / "storage")
+    monkeypatch.setattr(storage_module, "get_storage", lambda: storage)
 
     def convert(path: Path, pptx_module, resource_name=None, storage=None) -> str:
         assert pptx_module is fake_pptx
@@ -180,7 +185,11 @@ async def test_powerpoint_parser_offloads_pptx_conversion(monkeypatch, tmp_path:
     assert seen["kwargs"]["base_dir"] == tmp_path
     assert seen["kwargs"]["enable_link_rewrite"] is True
     assert seen["kwargs"]["link_rewrite_root"] == rewrite_root
-    assert seen["kwargs"]["allowed_media_dirs"][0] == caller_media_dir
+    assert (
+        seen["kwargs"]["allowed_media_dirs"][0]
+        == storage.get_resource_media_dir("sample", "images").parent
+    )
+    assert seen["kwargs"]["allowed_media_dirs"][1] == caller_media_dir
     assert len(seen["kwargs"]["allowed_media_dirs"]) == 2
     assert result.source_format == "pptx"
     assert result.parser_name == "PowerPointParser"
