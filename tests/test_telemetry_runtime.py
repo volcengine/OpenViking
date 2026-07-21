@@ -300,6 +300,8 @@ def test_cuvs_telemetry_aggregation_is_completion_order_independent():
             "auto_mode": False,
             "route_reason": "cuvs",
             "filter_kind": "none",
+            "filter_cache_eviction_fallback": True,
+            "filter_words_packed": True,
             "build_performed": True,
             "records_generation": 2,
             "index_size": 100,
@@ -308,6 +310,7 @@ def test_cuvs_telemetry_aggregation_is_completion_order_independent():
             "memory_usable_bytes": 7000,
             "total_ms": 12,
             "queue_ms": 2,
+            "gpu_gate_queue_ms": 1.5,
             "build_ms": 5,
             "gpu_search_ms": 5,
         },
@@ -343,8 +346,11 @@ def test_cuvs_telemetry_aggregation_is_completion_order_independent():
     assert forward == reverse
     assert forward["routes"] == {"cuvs": 1, "native_filter_threshold": 1}
     assert forward["builds"] == 1
+    assert forward["filter_cache_eviction_fallbacks"] == 1
+    assert forward["packed_filter_queries"] == 1
     assert forward["memory"]["free_bytes_min"] == 6000
     assert forward["timings_ms"]["total"] == {"sum": 15.0, "max": 12.0}
+    assert forward["timings_ms"]["gpu_gate_queue"] == {"sum": 1.5, "max": 1.5}
 
 
 def test_cuvs_telemetry_timing_sum_is_strictly_order_independent():

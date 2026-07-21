@@ -126,6 +126,7 @@ class Schema:
     def get_field_order(self) -> list[FieldMeta]:
         return self.field_orders
 
+
 def _get_row_value(row_data: Any, field_name: str, default_value: Any) -> Any:
     if isinstance(row_data, dict):
         return row_data.get(field_name, default_value)
@@ -350,11 +351,11 @@ class FilterResult:
         self,
         *,
         eligible_count: int = 0,
-        bitset_words: list[int] | None = None,
+        bitset_words: list[int] | bytes | None = None,
         native_filter_token: int = 0,
     ):
         self.eligible_count = eligible_count
-        self.bitset_words = bitset_words or []
+        self.bitset_words = [] if bitset_words is None else bitset_words
         self.native_filter_token = native_filter_token
 
     @classmethod
@@ -362,6 +363,19 @@ class FilterResult:
         return cls(
             eligible_count=int(payload.get("eligible_count", 0)),
             bitset_words=[int(word) for word in payload.get("bitset_words", [])],
+            native_filter_token=int(payload.get("native_filter_token", 0)),
+        )
+
+    @classmethod
+    def from_packed_backend(cls, payload: dict[str, Any]) -> "FilterResult":
+        if "bitset_words_le" not in payload:
+            raise KeyError("Packed filter ABI response is missing bitset_words_le")
+        bitset_words = payload["bitset_words_le"]
+        if not isinstance(bitset_words, bytes):
+            raise TypeError("Packed filter ABI must return bitset_words_le as bytes")
+        return cls(
+            eligible_count=int(payload.get("eligible_count", 0)),
+            bitset_words=bitset_words,
             native_filter_token=int(payload.get("native_filter_token", 0)),
         )
 
@@ -481,6 +495,66 @@ def build_abi3_exports(backend: Any) -> dict[str, Any]:
                 payload = self._backend._index_engine_evaluate_filter(self._handle, dsl)
             return FilterResult.from_backend(payload)
 
+        def evaluate_filter_packed(self, dsl: str, max_cached_candidates: int = 0) -> FilterResult:
+            symbol_name = (
+                "_index_engine_evaluate_filter_cached_packed"
+                if max_cached_candidates > 0
+                else "_index_engine_evaluate_filter_packed"
+            )
+            evaluate_packed = getattr(self._backend, symbol_name, None)
+            if evaluate_packed is None:
+                return self.evaluate_filter(
+                    dsl,
+                    max_cached_candidates=max_cached_candidates,
+                )
+            if max_cached_candidates > 0:
+                payload = evaluate_packed(
+                    self._handle,
+                    dsl,
+                    max_cached_candidates,
+                )
+            else:
+                payload = evaluate_packed(self._handle, dsl)
+            return FilterResult.from_packed_backend(payload)
+
+        def evaluate_filter_for_routing(self, dsl: str, native_threshold: int) -> FilterResult:
+            evaluate_for_routing = getattr(
+                self._backend,
+                "_index_engine_evaluate_filter_for_routing",
+                None,
+            )
+            if evaluate_for_routing is None:
+                return self.evaluate_filter(
+                    dsl,
+                    max_cached_candidates=native_threshold,
+                )
+            payload = evaluate_for_routing(
+                self._handle,
+                dsl,
+                native_threshold,
+            )
+            return FilterResult.from_backend(payload)
+
+        def evaluate_filter_for_routing_packed(
+            self, dsl: str, native_threshold: int
+        ) -> FilterResult:
+            evaluate_packed = getattr(
+                self._backend,
+                "_index_engine_evaluate_filter_for_routing_packed",
+                None,
+            )
+            if evaluate_packed is None:
+                return self.evaluate_filter_for_routing(
+                    dsl,
+                    native_threshold=native_threshold,
+                )
+            payload = evaluate_packed(
+                self._handle,
+                dsl,
+                native_threshold,
+            )
+            return FilterResult.from_packed_backend(payload)
+
         def dump(self, path: str) -> int:
             return int(self._backend._index_engine_dump(self._handle, path))
 
@@ -509,6 +583,28 @@ def build_abi3_exports(backend: Any) -> dict[str, Any]:
 
         def seek_range(self, start_key: str, end_key: str) -> list[tuple[str, bytes]]:
             return list(self._backend._store_seek_range(self._handle, start_key, end_key))
+
+        def seek_range_page(
+            self,
+            start_key: str,
+            end_key: str,
+            limit: int,
+            max_bytes: int,
+            start_exclusive: bool = False,
+        ) -> list[tuple[str, bytes]]:
+            seek_page = getattr(self._backend, "_store_seek_range_page", None)
+            if seek_page is None:
+                raise NotImplementedError("This native engine does not support paged store scans")
+            return list(
+                seek_page(
+                    self._handle,
+                    start_key,
+                    end_key,
+                    limit,
+                    max_bytes,
+                    start_exclusive,
+                )
+            )
 
     class PersistStore(_StoreBase):
         def __init__(self, path: str):

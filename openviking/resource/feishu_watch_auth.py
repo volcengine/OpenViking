@@ -40,6 +40,10 @@ class FeishuTokenRefreshError(Exception):
         self.permanent = permanent
 
 
+class FeishuTenantTokenError(Exception):
+    """Raised when an app credential cannot produce a tenant token."""
+
+
 def load_feishu_app_credentials() -> FeishuAppCredentials:
     """Load Feishu app credentials from OpenViking config or environment."""
     from openviking_cli.utils.config import get_openviking_config
@@ -113,7 +117,7 @@ def apply_feishu_refreshed_token(
 
 
 class FeishuOAuthClient:
-    """Small wrapper around lark-oapi user token refresh."""
+    """Small wrapper around lark-oapi user and tenant token operations."""
 
     def __init__(self, credentials: FeishuAppCredentials):
         self._credentials = credentials
@@ -122,6 +126,32 @@ class FeishuOAuthClient:
     @classmethod
     def from_config(cls) -> "FeishuOAuthClient":
         return cls(load_feishu_app_credentials())
+
+    async def get_tenant_access_token(self) -> str:
+        return await asyncio.to_thread(self._get_tenant_access_token_sync)
+
+    def _get_tenant_access_token_sync(self) -> str:
+        try:
+            from lark_oapi.core.model import Config
+            from lark_oapi.core.token import TokenManager
+        except ImportError as exc:
+            raise FeishuTenantTokenError(
+                "lark-oapi is required to obtain a Feishu tenant token. "
+                "Install it with: pip install lark-oapi>=1.0.0"
+            ) from exc
+
+        config = Config()
+        config.app_id = self._credentials.app_id
+        config.app_secret = self._credentials.app_secret
+        config.domain = self._credentials.domain
+        config.timeout = self._credentials.request_timeout
+        try:
+            token = TokenManager.get_self_tenant_token(config)
+        except Exception as exc:
+            raise FeishuTenantTokenError("Failed to obtain Feishu tenant token.") from exc
+        if not isinstance(token, str) or not token.strip():
+            raise FeishuTenantTokenError("Feishu tenant token response is empty.")
+        return token.strip()
 
     async def refresh_user_access_token(self, refresh_token: str) -> FeishuRefreshedToken:
         if not isinstance(refresh_token, str) or not refresh_token.strip():
