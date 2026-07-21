@@ -1,0 +1,34 @@
+crates/ov_cli/src/main.rs
+  s_f4cf109eba0b9c::t_8ba6bb3413ddb9 16,285-316,376-379,2736-2738,2757-2792
+crates/ov_cli/src/openviking_assets.rs
+  s_f4cf109eba0b9c::t_a44be4ceeb2948 1-1609
+examples/openviking-assets/assets.yaml
+  s_f4cf109eba0b9c::t_c903816cf7f566 1-31
+examples/openviking-assets/manifests/base.yaml
+  s_f4cf109eba0b9c::t_0cbbb45c0de8cf 1-4
+examples/openviking-assets/manifests/code-qa.yaml
+  s_f4cf109eba0b9c::t_3e0e697b64ba6c 1-10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "383c6b4049f789f08181a90963ab08f5551b8499",
+  "prompts": {},
+  "humans": {
+    "h_35f000fc27e979": {
+      "author": "李子恒 <ziheng.li@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_f4cf109eba0b9c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f82d9-454f-7ea3-9d82-2d81641a10c1",
+        "model": "unknown"
+      },
+      "human_author": "ziheng.li <ziheng.li@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
