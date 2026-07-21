@@ -43,6 +43,7 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
         understanding_api_enabled=lambda: True,
         prepare_resource=AsyncMock(return_value=prepared),
         should_use_understanding_api=lambda resource: resource is prepared,
+        submit_understanding_file=AsyncMock(return_value="response-1"),
         tree_builder=SimpleNamespace(
             resolve_target_uri=AsyncMock(
                 return_value=(
@@ -99,7 +100,9 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
     queued = AddResourceMsg.from_dict(message)
     assert queued.args["parser_backend"] == "understanding"
     assert queued.args["resolved_extension"] == ".pdf"
+    assert queued.understanding_response_id == "response-1"
     assert queued.source_name == "manual.pdf"
     assert not downloaded.exists()
+    processor.submit_understanding_file.assert_awaited_once_with(str(downloaded))
     processor.process_resource.assert_not_awaited()
     lock.handoff.assert_awaited_once()

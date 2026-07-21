@@ -37,6 +37,8 @@ class AddResourceMsg:
     source_name: Optional[str] = None
     watch_interval: float = 0
     skip_watch_management: bool = True
+    defer_target_resolution: bool = False
+    understanding_response_id: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
@@ -108,4 +110,10 @@ class AddResourceMsg:
             prepared=prepared,
             watch_interval=float(data.get("watch_interval", 0) or 0),
             skip_watch_management=bool(data.get("skip_watch_management", True)),
+            defer_target_resolution=bool(data.get("defer_target_resolution", False)),
+            understanding_response_id=(
+                data.get("understanding_response_id")
+                if isinstance(data.get("understanding_response_id"), str)
+                else None
+            ),
         )

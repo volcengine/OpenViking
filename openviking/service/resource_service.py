@@ -101,6 +101,9 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "create_parent",
         "telemetry",
         "request_validator",
+        "understanding_response_id",
+        "parser_backend",
+        "resolved_extension",
         "defer_post_processing",
     }
 )
@@ -348,7 +351,7 @@ class ResourceService:
         tracker = get_task_tracker()
         task = await tracker.create(
             "add_resource",
-            resource_id=msg.root_uri,
+            resource_id=None if msg.defer_target_resolution else msg.root_uri,
             account_id=msg.account_id,
             user_id=msg.user_id,
             task_id=msg.task_id,
@@ -372,10 +375,27 @@ class ResourceService:
         """Execute one durable add-resource job inside its QueueFS consumer."""
         resource_lock = resource_lock or NO_LOCK
         if msg.prepared is None:
+            target_uri = msg.root_uri
+            parent_uri = None
+            internal_kwargs: Dict[str, Any] = {}
+            queued_args = dict(msg.args)
+            for key in ("parser_backend", "resolved_extension"):
+                if key in queued_args:
+                    internal_kwargs[key] = queued_args.pop(key)
+            if msg.defer_target_resolution:
+                from openviking_cli.utils.uri import VikingURI
+
+                target_uri = None
+                parent_uri = VikingURI(msg.root_uri).parent.uri
+            if msg.understanding_response_id is not None:
+                from openviking.parse.understanding_api import PREPARED_RESPONSE_ID_ARG
+
+                internal_kwargs[PREPARED_RESPONSE_ID_ARG] = msg.understanding_response_id
             return await self.add_resource(
                 path=msg.path,
                 ctx=ctx,
-                to=msg.root_uri,
+                to=target_uri,
+                parent=parent_uri,
                 reason=msg.reason,
                 instruction=msg.instruction,
                 wait=True,
@@ -396,7 +416,8 @@ class ResourceService:
                 directly_upload_media=msg.directly_upload_media,
                 preserve_structure=msg.preserve_structure,
                 create_parent=msg.create_parent,
-                args=msg.args,
+                args=queued_args,
+                **internal_kwargs,
             )
 
         telemetry_id = get_current_telemetry().telemetry_id
@@ -589,6 +610,31 @@ class ResourceService:
             timeout=0.0,
         )
         return root_uri, resource_lock
+
+    @staticmethod
+    def _is_feishu_url(path: str) -> bool:
+        try:
+            from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+
+            return FeishuAccessor._is_feishu_url(path)
+        except Exception:
+            return False
+
+    def _should_use_understanding_api(self, path: str) -> bool:
+        if self._resource_processor is None:
+            return False
+        return self._resource_processor.should_use_understanding_api(path)
+
+    @staticmethod
+    def _has_feishu_understanding_auth(processor_kwargs: Dict[str, Any]) -> bool:
+        token = processor_kwargs.get(FEISHU_ACCESS_TOKEN_ARG)
+        if isinstance(token, str) and token.strip():
+            return True
+        try:
+            load_feishu_app_credentials()
+            return True
+        except ValueError:
+            return False
 
     @staticmethod
     def _target_doc_name(
@@ -840,11 +886,22 @@ class ResourceService:
             if resource_lock is not None:
                 kwargs["resource_lock"] = resource_lock
 
-            if (
+            async_understanding_candidate = (
                 not wait
                 and not is_git_repo_url(path)
                 and not allow_local_path_resolution
                 and self._resource_processor is not None
+            )
+            direct_feishu_understanding = bool(
+                async_understanding_candidate
+                and self._is_feishu_url(path)
+                and self._should_use_understanding_api(path)
+                and self._has_feishu_understanding_auth(kwargs)
+            )
+
+            if (
+                async_understanding_candidate
+                and not direct_feishu_understanding
                 and self._resource_processor.understanding_api_enabled()
             ):
                 prepared_resource = await self._resource_processor.prepare_resource(
@@ -854,28 +911,29 @@ class ResourceService:
                     **kwargs,
                 )
 
-            if (
+            prepared_routes_to_understanding = bool(
                 prepared_resource is not None
                 and self._resource_processor is not None
                 and self._resource_processor.should_use_understanding_api(prepared_resource)
-            ):
+            )
+            if direct_feishu_understanding or prepared_routes_to_understanding:
                 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 
-                resolved_extension = str(prepared_resource.meta.get("resolved_extension") or "")
-                source_name = (
-                    kwargs.get("source_name")
-                    or prepared_resource.meta.get("original_filename")
-                    or prepared_resource.meta.get("resolved_name")
-                )
+                if prepared_resource is not None:
+                    resolved_extension = str(prepared_resource.meta.get("resolved_extension") or "")
+                    source_name = (
+                        kwargs.get("source_name")
+                        or prepared_resource.meta.get("original_filename")
+                        or prepared_resource.meta.get("resolved_name")
+                    )
+                else:
+                    resolved_extension = ""
+                    source_name = kwargs.get("source_name")
                 source_info = _ResourceSourceInfo(
                     source_name=source_name,
                     source_path=path,
                     source_format=resolved_extension.lstrip(".") or "file",
                 )
-                # ponytail: queued remote inputs are fetched again by the worker;
-                # persist the prepared file only if duplicate transfer becomes material.
-                prepared_resource.cleanup()
-                prepared_resource = None
                 doc_name = self._target_doc_name(path, source_name, source_info)
                 source_path = source_info.source_path or source_name or path
                 (
@@ -890,6 +948,12 @@ class ResourceService:
                     source_path=source_path,
                     source_format=source_info.source_format,
                     create_parent=target.create_parent,
+                )
+                defer_target_resolution = bool(
+                    candidate_uri
+                    and not source_name
+                    and not watch_enabled
+                    and self._is_feishu_url(path)
                 )
                 if self._viking_fs is None:
                     raise NotInitializedError("VikingFS")
@@ -913,51 +977,83 @@ class ResourceService:
                             retryable=True,
                         ) from exc
 
-                if candidate_uri:
+                if candidate_uri and not defer_target_resolution:
                     root_uri, lock_lease = await self._resource_processor.reserve_unique_candidate(
                         candidate_uri=candidate_uri,
                         ctx=ctx,
                     )
-                else:
+                elif not defer_target_resolution:
                     lock_lease = await _reserve_tree(root_uri)
 
-                lock_handoff = lock_lease.to_handoff()
-                processor_args = self._sanitize_watch_processor_kwargs(
-                    normalized_args.processor_kwargs
-                )
-                processor_args.update(
-                    parser_backend="understanding",
-                    resolved_extension=resolved_extension,
-                )
-                msg = AddResourceMsg(
-                    task_id=str(uuid4()),
-                    telemetry_id=telemetry_id or None,
-                    path=path,
-                    root_uri=root_uri,
-                    account_id=ctx.account_id,
-                    user_id=ctx.user.user_id,
-                    role=str(ctx.role),
-                    actor_peer_id=ctx.actor_peer_id,
-                    reason=reason,
-                    instruction=instruction,
-                    timeout=timeout,
-                    build_index=build_index,
-                    summarize=summarize,
-                    strict=bool(kwargs.get("strict", False)),
-                    ignore_dirs=kwargs.get("ignore_dirs"),
-                    include=kwargs.get("include"),
-                    exclude=kwargs.get("exclude"),
-                    directly_upload_media=bool(kwargs.get("directly_upload_media", True)),
-                    preserve_structure=kwargs.get("preserve_structure"),
-                    create_parent=bool(kwargs.get("create_parent", False)),
-                    allow_local_path_resolution=allow_local_path_resolution,
-                    enforce_public_remote_targets=enforce_public_remote_targets,
-                    args=processor_args,
-                    source_name=source_name,
-                    lock_handoff=lock_handoff.to_dict() if lock_handoff else None,
-                    skip_watch_management=True,
-                )
-                task = await self._enqueue_add_resource_job(msg, resource_lock=lock_lease)
+                enqueue_started = False
+                try:
+                    queued_args = dict(normalized_args.processor_kwargs)
+                    feishu_access_token = queued_args.pop(FEISHU_ACCESS_TOKEN_ARG, None)
+                    understanding_response_id = None
+                    if direct_feishu_understanding and feishu_access_token:
+                        understanding_response_id = (
+                            await self._resource_processor.submit_understanding_url(
+                                path,
+                                feishu_access_token=feishu_access_token,
+                            )
+                        )
+                    elif prepared_routes_to_understanding:
+                        if prepared_resource is None:
+                            raise InternalError("Prepared Understanding resource is missing")
+                        understanding_response_id = (
+                            await self._resource_processor.submit_understanding_file(
+                                str(prepared_resource.path)
+                            )
+                        )
+                        prepared_resource.cleanup()
+                        prepared_resource = None
+
+                    processor_args = self._sanitize_watch_processor_kwargs(queued_args)
+                    if direct_feishu_understanding:
+                        processor_args["parser_backend"] = "understanding"
+                    elif prepared_routes_to_understanding:
+                        processor_args.update(
+                            parser_backend="understanding",
+                            resolved_extension=resolved_extension,
+                        )
+
+                    lock_handoff = lock_lease.to_handoff()
+                    msg = AddResourceMsg(
+                        task_id=str(uuid4()),
+                        telemetry_id=telemetry_id or None,
+                        path=path,
+                        root_uri=root_uri,
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                        role=str(ctx.role),
+                        actor_peer_id=ctx.actor_peer_id,
+                        reason=reason,
+                        instruction=instruction,
+                        timeout=timeout,
+                        build_index=build_index,
+                        summarize=summarize,
+                        strict=bool(kwargs.get("strict", False)),
+                        ignore_dirs=kwargs.get("ignore_dirs"),
+                        include=kwargs.get("include"),
+                        exclude=kwargs.get("exclude"),
+                        directly_upload_media=bool(kwargs.get("directly_upload_media", True)),
+                        preserve_structure=kwargs.get("preserve_structure"),
+                        create_parent=bool(kwargs.get("create_parent", False)),
+                        allow_local_path_resolution=allow_local_path_resolution,
+                        enforce_public_remote_targets=enforce_public_remote_targets,
+                        args=processor_args,
+                        source_name=source_name,
+                        lock_handoff=lock_handoff.to_dict() if lock_handoff else None,
+                        skip_watch_management=True,
+                        defer_target_resolution=defer_target_resolution,
+                        understanding_response_id=understanding_response_id,
+                    )
+                    enqueue_started = True
+                    task = await self._enqueue_add_resource_job(msg, resource_lock=lock_lease)
+                except BaseException:
+                    if not enqueue_started:
+                        await lock_lease.close()
+                    raise
                 lock_lease = NO_LOCK
                 job_enqueued = True
                 logger.info(
@@ -980,11 +1076,13 @@ class ResourceService:
                     watch_auth_state=normalized_args.watch_auth_state,
                     ctx=ctx,
                 )
-                return {
+                response = {
                     "status": "success",
-                    "root_uri": root_uri,
                     "task_id": task.task_id,
                 }
+                if not defer_target_resolution:
+                    response["root_uri"] = root_uri
+                return response
 
             result = await self._resource_processor.process_resource(
                 path=path,

@@ -318,7 +318,8 @@ async def test_add_resource_job_reenters_public_route_synchronously(ctx, service
     assert call["to"] == msg.root_uri
     assert call["wait"] is True
     assert call["resource_lock"] is resource_lock
-    assert call["args"] == {"parser_backend": "understanding"}
+    assert call["args"] == {}
+    assert call["parser_backend"] == "understanding"
 
 
 @pytest.mark.asyncio

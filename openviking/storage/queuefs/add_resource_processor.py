@@ -78,7 +78,7 @@ class AddResourceProcessor(DequeueHandlerBase):
         tracker = get_task_tracker()
         task = await tracker.create(
             "add_resource",
-            resource_id=msg.root_uri,
+            resource_id=None if msg.defer_target_resolution else msg.root_uri,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
             task_id=msg.task_id,
@@ -158,6 +158,7 @@ class AddResourceProcessor(DequeueHandlerBase):
                     result,
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
+                    resource_id=result.get("root_uri"),
                 )
                 self.report_success()
                 return None

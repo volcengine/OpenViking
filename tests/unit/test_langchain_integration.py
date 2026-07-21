@@ -98,6 +98,21 @@ def test_retriever_keeps_peer_id_out_of_retrieval():
     assert "peer_id" not in client.find_calls[-1]
 
 
+def test_retriever_passes_tags_to_retrieval():
+    client = InMemoryOpenVikingClient(
+        {"viking://resources/runbooks/release.md": "Release notes mention LangChain."}
+    )
+    retriever = OpenVikingRetriever(
+        client=client,
+        target_uri="viking://resources",
+        tags=["env=prod", "team=search"],
+    )
+
+    retriever.invoke("LangChain")
+
+    assert client.find_calls[-1]["tags"] == ["env=prod", "team=search"]
+
+
 def test_create_openviking_tools_exposes_common_viking_primitives():
     client = InMemoryOpenVikingClient(
         {"viking://user/memories/profile.md": "The user likes LangGraph agents."}

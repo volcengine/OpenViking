@@ -10,7 +10,7 @@ as described in the OpenViking design document.
 import inspect
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from openviking.parse.image_rewrite import rewrite_image_uris
 from openviking.parse.tree_builder import TreeBuilder
@@ -112,8 +112,14 @@ class ResourceProcessor:
     def understanding_api_enabled(self) -> bool:
         return self._get_media_processor().understanding_api_enabled()
 
-    def should_use_understanding_api(self, resource: "LocalResource") -> bool:
-        return self._get_media_processor().should_use_understanding_api(resource)
+    def should_use_understanding_api(self, source: Union[str, "LocalResource"]) -> bool:
+        return self._get_media_processor().should_use_understanding_api(source)
+
+    async def submit_understanding_url(self, source: str, **kwargs) -> str:
+        return await self._get_media_processor().submit_understanding_url(source, **kwargs)
+
+    async def submit_understanding_file(self, source: str) -> str:
+        return await self._get_media_processor().submit_understanding_file(source)
 
     async def build_index(
         self, resource_uris: List[str], ctx: RequestContext, **kwargs

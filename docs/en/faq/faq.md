@@ -20,7 +20,7 @@ OpenViking unifies all context management through a filesystem paradigm, enablin
 | **Storage Model** | Flat vector storage | Hierarchical filesystem (AGFS) |
 | **Retrieval Method** | Single vector similarity search | Directory recursive retrieval + Intent analysis + Rerank |
 | **Output Format** | Raw chunks | Structured context (L0 Abstract/L1 Overview/L2 Details) |
-| **Memory Capability** | Not supported | Built-in 6 memory categories with auto-extraction and iteration |
+| **Memory Capability** | Not supported | Multiple extensible memory types with automatic extraction and continuous iteration |
 | **Observability** | Black box | Fully traceable retrieval trajectory |
 | **Context Types** | Documents only | Resource + Memory + Skill three types |
 
@@ -44,11 +44,16 @@ Viking URI is OpenViking's unified resource identifier, formatted as `viking://{
 viking://
 ├── resources/              # Knowledge base: documents, code, web pages, etc.
 │   └── my_project/
-├── user/                   # User context
-│   └── memories/           # User memories (preferences, entities, events)
-└── agent/                  # Agent context
-    ├── skills/             # Callable skills
-    └── memories/           # Agent memories (cases, patterns)
+├── user/
+│   └── {user_id}/          # Private context for a user
+│       ├── memories/       # User memories
+│       ├── resources/      # Private user resources
+│       ├── skills/         # Private user skills (default)
+│       └── peers/{peer_id}/
+│           ├── memories/   # Memories scoped to a peer
+│           └── resources/  # Resources scoped to a peer
+└── agent/                  # Optional account-wide Agent capabilities
+    └── skills/             # Shared skills
 ```
 
 ## Installation & Configuration
@@ -232,16 +237,9 @@ await session.commit()
 
 ### What memory types does OpenViking support?
 
-OpenViking has 6 built-in memory categories, automatically extracted during session commit:
+OpenViking includes memory types such as `profile`, `preferences`, `entities`, `events`, `identity`, `soul`, `cases`, `trajectories`, `experiences`, `tools`, and `skills`. After a session is committed, the active memory policy determines which useful information to extract. Applications can also extend or adjust the memory types for their own needs.
 
-| Category | Belongs To | Description |
-|----------|------------|-------------|
-| **profile** | user | User basic info (name, role, etc.) |
-| **preferences** | user | User preferences (code style, tool choices, etc.) |
-| **entities** | user | Entity memories (people, projects, organizations, etc.) |
-| **events** | user | Event records (decisions, milestones, etc.) |
-| **cases** | agent | Cases learned by Agent |
-| **patterns** | agent | Patterns learned by Agent |
+Memories are stored in the current User or Peer namespace; there is no current writable `viking://agent/memories` directory. See [Context Types](../concepts/02-context-types.md) for the complete type and path mapping.
 
 ### How do I use Unix-like filesystem APIs?
 

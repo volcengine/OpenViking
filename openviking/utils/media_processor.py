@@ -106,13 +106,21 @@ class UnifiedResourceProcessor:
     def understanding_api_enabled(self) -> bool:
         return self._get_parser_router().understanding_api_enabled()
 
-    def should_use_understanding_api(self, resource: LocalResource) -> bool:
-        if resource.path.is_dir():
-            return False
-        return self._get_parser_router().should_use_understanding_api(
-            resource,
-            resolved_extension=str(resource.meta.get("resolved_extension") or ""),
-        )
+    def should_use_understanding_api(self, source: str | Path | LocalResource) -> bool:
+        if isinstance(source, LocalResource):
+            if source.path.is_dir():
+                return False
+            return self._get_parser_router().should_use_understanding_api(
+                source,
+                resolved_extension=str(source.meta.get("resolved_extension") or ""),
+            )
+        return self._get_parser_router().should_use_understanding_api(source)
+
+    async def submit_understanding_url(self, source: str, **kwargs) -> str:
+        return await self._get_parser_router().submit_url(source, **kwargs)
+
+    async def submit_understanding_file(self, source: str | Path) -> str:
+        return await self._get_parser_router().submit_file(source)
 
     @staticmethod
     def _set_resolved_identity(resource: LocalResource, source_name: Optional[str]) -> None:
@@ -174,6 +182,44 @@ class UnifiedResourceProcessor:
         if not is_potential_path and not self._is_url(source):
             # Treat as raw content
             return await parse(source, instruction=instruction)
+
+        if prepared_resource is None and self._has_prepared_understanding_response(kwargs):
+            parse_kwargs = dict(kwargs)
+            parse_kwargs["instruction"] = instruction
+            parse_kwargs["vlm_processor"] = self._get_vlm_processor()
+            parse_kwargs["storage"] = self.storage
+            parse_kwargs["_source_meta"] = {
+                "source_type": (
+                    SourceType.FEISHU if self._is_feishu_url(source) else SourceType.HTTP
+                ),
+                "original_url": source,
+            }
+            parse_kwargs["original_source"] = source
+            parse_kwargs["parser_backend"] = "understanding"
+            parse_kwargs.pop("feishu_access_token", None)
+
+            explicit_name = kwargs.get("resource_name") or kwargs.get("source_name")
+            if explicit_name:
+                parse_kwargs["resource_name"] = _smart_stem(explicit_name)
+            return await self._get_parser_router().parse(source, **parse_kwargs)
+
+        if prepared_resource is None and self._should_bypass_feishu_accessor(source, kwargs):
+            parse_kwargs = dict(kwargs)
+            parse_kwargs["instruction"] = instruction
+            parse_kwargs["vlm_processor"] = self._get_vlm_processor()
+            parse_kwargs["storage"] = self.storage
+            parse_kwargs["_source_meta"] = {
+                "source_type": SourceType.FEISHU,
+                "original_url": source,
+            }
+            parse_kwargs["original_source"] = source
+            parse_kwargs.pop("feishu_access_token", None)
+            parse_kwargs["lark_file"] = await self._resolve_feishu_parser_auth(kwargs)
+
+            explicit_name = kwargs.get("resource_name") or kwargs.get("source_name")
+            if explicit_name:
+                parse_kwargs["resource_name"] = _smart_stem(explicit_name)
+            return await self._get_parser_router().parse(source, **parse_kwargs)
 
         # Phase 1: Accessor - get local resource. A caller may prepare a remote
         # resource first so async routing uses the same detected file type.
@@ -244,3 +290,49 @@ class UnifiedResourceProcessor:
     def _is_url(self, source: str) -> bool:
         """Check if source is a URL."""
         return is_remote_resource_source(source)
+
+    @staticmethod
+    def _is_feishu_url(source: str) -> bool:
+        """Backward-compatible Feishu URL detector used by legacy tests/callers."""
+        try:
+            from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+
+            return FeishuAccessor._is_feishu_url(source)
+        except Exception:
+            return False
+
+    def _should_bypass_feishu_accessor(self, source: str, kwargs: dict) -> bool:
+        token = kwargs.get("feishu_access_token")
+        if not self._is_feishu_url(source):
+            return False
+        if kwargs.get("parser_backend") == "understanding":
+            return True
+        if not self._get_parser_router().should_use_understanding_api(source):
+            return False
+        if isinstance(token, str) and token.strip():
+            return True
+        try:
+            from openviking.resource.feishu_watch_auth import load_feishu_app_credentials
+
+            load_feishu_app_credentials()
+            return True
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _has_prepared_understanding_response(kwargs: dict) -> bool:
+        from openviking.parse.understanding_api import PREPARED_RESPONSE_ID_ARG
+
+        value = kwargs.get(PREPARED_RESPONSE_ID_ARG)
+        return isinstance(value, str) and bool(value.strip())
+
+    @staticmethod
+    async def _resolve_feishu_parser_auth(kwargs: dict) -> dict[str, str]:
+        token = kwargs.get("feishu_access_token")
+        if isinstance(token, str) and token.strip():
+            return {"user_access_token": token.strip()}
+
+        from openviking.resource.feishu_watch_auth import FeishuOAuthClient
+
+        tenant_access_token = await FeishuOAuthClient.from_config().get_tenant_access_token()
+        return {"tenant_access_token": tenant_access_token}

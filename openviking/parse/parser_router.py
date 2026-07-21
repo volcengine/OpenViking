@@ -66,6 +66,14 @@ class ParserRouter:
             return False
 
         source_path = self._extract_source_path(source)
+        try:
+            from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+
+            if FeishuAccessor._is_feishu_url(str(source_path)):
+                return bool(getattr(parser_api, "enable_feishu_url", False))
+        except Exception:
+            pass
+
         ext = self._normalize_extension(resolved_extension) or self._extract_extension(source_path)
         extensions = getattr(parser_api, "extensions", None) or []
         return ext in extensions
@@ -91,11 +99,17 @@ class ParserRouter:
         if parser_backend not in {None, "internal", "understanding"}:
             raise ValueError(f"Unknown parser backend: {parser_backend}")
 
-        use_understanding = parser_backend == "understanding" or (
-            parser_backend is None
-            and self.should_use_understanding_api(
-                source,
-                resolved_extension=str(kwargs.get("resolved_extension") or ""),
+        normalized_feishu = (
+            isinstance(source, LocalResource) and source.source_type == SourceType.FEISHU
+        )
+        use_understanding = not normalized_feishu and (
+            parser_backend == "understanding"
+            or (
+                parser_backend is None
+                and self.should_use_understanding_api(
+                    source,
+                    resolved_extension=str(kwargs.get("resolved_extension") or ""),
+                )
             )
         )
 
@@ -117,6 +131,14 @@ class ParserRouter:
                 display = "<path>"
             logger.info(f"[ParserRouter] Using internal ParserRegistry for {display}")
             return await self._parser_registry.parse(source_path, **kwargs)
+
+    async def submit_url(self, source: str, **kwargs) -> str:
+        if not self.should_use_understanding_api(source):
+            raise ValueError("source is not routed to UnderstandingAPI")
+        return await self._get_understanding_api().submit_url(source, **kwargs)
+
+    async def submit_file(self, source: Union[str, Path]) -> str:
+        return await self._get_understanding_api().submit_file(source)
 
     def _extract_source_path(self, source: Union[str, Path, LocalResource]) -> Union[str, Path]:
         """Extract a filesystem path from the source."""
