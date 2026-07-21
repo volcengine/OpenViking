@@ -7,7 +7,7 @@ OV_CLI_DIR := crates/ov_cli
 
 # Dependency Versions
 MIN_PYTHON_VERSION := 3.10
-MIN_CMAKE_VERSION := 3.12
+MIN_CMAKE_VERSION := 3.15
 MIN_RUST_VERSION := 1.91.1
 MIN_GCC_VERSION := 9
 MIN_CLANG_VERSION := 11
@@ -63,7 +63,9 @@ check-deps:
 	@# CMake check
 	@command -v cmake > /dev/null 2>&1 || (echo "Error: CMake is not installed."; exit 1)
 	@CMAKE_VER=$$(cmake --version | head -n1 | awk '{print $$3}'); \
-	$(PYTHON) -c "v='$$CMAKE_VER'.split('.'); exit(0 if int(v[0]) > 3 or (int(v[0]) == 3 and int(v[1]) >= 12) else 1)" || (echo "Error: CMake >= $(MIN_CMAKE_VERSION) is required. Found $$CMAKE_VER"; exit 1); \
+	if ! $(PYTHON) -c "import sys; parse=lambda v: tuple(int(x) for x in v.split('.')); raise SystemExit(0 if parse(sys.argv[1]) >= parse(sys.argv[2]) else 1)" "$$CMAKE_VER" "$(MIN_CMAKE_VERSION)"; then \
+		echo "Error: CMake >= $(MIN_CMAKE_VERSION) is required. Found $$CMAKE_VER"; exit 1; \
+	fi; \
 	echo "  [OK] CMake $$CMAKE_VER"
 	@# Rust check
 	@command -v rustc > /dev/null 2>&1 || (echo "Error: Rust is not installed."; exit 1)
@@ -96,35 +98,38 @@ build: check-deps check-pip build-studio
 		$(PYTHON) -m pip install -e .; \
 	fi
 	@echo "Building ragfs-python (Rust RAGFS binding) into openviking/lib/..."
-	@MATURIN_CMD=""; \
+	@set -e; \
+	MATURIN_CMD=""; \
 	if command -v maturin > /dev/null 2>&1; then \
 		MATURIN_CMD=maturin; \
 	elif command -v uv > /dev/null 2>&1 && uv pip --help > /dev/null 2>&1; then \
 		uv pip install maturin && MATURIN_CMD=maturin; \
 	fi; \
 	if [ -n "$$MATURIN_CMD" ]; then \
-		TMPDIR=$$(mktemp -d); \
-		cd crates/ragfs-python && $$MATURIN_CMD build --release --out "$$TMPDIR" 2>&1; \
-		cd ../..; \
+		RAGFS_TMPDIR=$$(mktemp -d); \
+		EXTRACT_SCRIPT=$$(mktemp); \
+		trap 'rm -f "$$EXTRACT_SCRIPT"; rm -rf "$$RAGFS_TMPDIR"' 0; \
+		(cd crates/ragfs-python && $$MATURIN_CMD build --release --out "$$RAGFS_TMPDIR" 2>&1); \
 		mkdir -p openviking/lib; \
 		rm -f openviking/lib/ragfs_python*.so openviking/lib/ragfs_python*.pyd openviking/lib/ragfs_python*.dylib; \
-		echo "import zipfile, glob, shutil, os, sys" > /tmp/extract_ragfs.py; \
-		echo "whls = glob.glob(os.path.join('$$TMPDIR', 'ragfs_python-*.whl'))" >> /tmp/extract_ragfs.py; \
-		echo "assert whls, 'maturin produced no wheel'" >> /tmp/extract_ragfs.py; \
-		echo "with zipfile.ZipFile(whls[0]) as zf:" >> /tmp/extract_ragfs.py; \
-		echo "    for name in zf.namelist():" >> /tmp/extract_ragfs.py; \
-		echo "        bn = os.path.basename(name)" >> /tmp/extract_ragfs.py; \
-		echo "        if bn.startswith('ragfs_python.abi3.') and (bn.endswith('.so') or bn.endswith('.pyd')):" >> /tmp/extract_ragfs.py; \
-		echo "            dst = os.path.join('openviking', 'lib', bn)" >> /tmp/extract_ragfs.py; \
-		echo "            with zf.open(name) as src, open(dst, 'wb') as f: f.write(src.read())" >> /tmp/extract_ragfs.py; \
-		echo "            os.chmod(dst, 0o755)" >> /tmp/extract_ragfs.py; \
-		echo "            print(f'  [OK] ragfs-python: extracted {bn} -> {dst}')" >> /tmp/extract_ragfs.py; \
-		echo "            sys.exit(0)" >> /tmp/extract_ragfs.py; \
-		echo "print('[Warning] No ragfs_python abi3 .so/.pyd found in wheel')" >> /tmp/extract_ragfs.py; \
-		echo "sys.exit(1)" >> /tmp/extract_ragfs.py; \
-		$(PYTHON) /tmp/extract_ragfs.py; \
-		rm -f /tmp/extract_ragfs.py; \
-		rm -rf "$$TMPDIR"; \
+		echo "import zipfile, glob, shutil, os, sys" > "$$EXTRACT_SCRIPT"; \
+		echo "whls = glob.glob(os.path.join('$$RAGFS_TMPDIR', 'ragfs_python-*.whl'))" >> "$$EXTRACT_SCRIPT"; \
+		echo "assert whls, 'maturin produced no wheel'" >> "$$EXTRACT_SCRIPT"; \
+		echo "with zipfile.ZipFile(whls[0]) as zf:" >> "$$EXTRACT_SCRIPT"; \
+		echo "    for name in zf.namelist():" >> "$$EXTRACT_SCRIPT"; \
+		echo "        bn = os.path.basename(name)" >> "$$EXTRACT_SCRIPT"; \
+		echo "        if bn.startswith('ragfs_python.abi3.') and (bn.endswith('.so') or bn.endswith('.pyd')):" >> "$$EXTRACT_SCRIPT"; \
+		echo "            dst = os.path.join('openviking', 'lib', bn)" >> "$$EXTRACT_SCRIPT"; \
+		echo "            with zf.open(name) as src, open(dst, 'wb') as f: f.write(src.read())" >> "$$EXTRACT_SCRIPT"; \
+		echo "            os.chmod(dst, 0o755)" >> "$$EXTRACT_SCRIPT"; \
+		echo "            print(f'  [OK] ragfs-python: extracted {bn} -> {dst}')" >> "$$EXTRACT_SCRIPT"; \
+		echo "            sys.exit(0)" >> "$$EXTRACT_SCRIPT"; \
+		echo "print('[Warning] No ragfs_python abi3 .so/.pyd found in wheel')" >> "$$EXTRACT_SCRIPT"; \
+		echo "sys.exit(1)" >> "$$EXTRACT_SCRIPT"; \
+		$(PYTHON) "$$EXTRACT_SCRIPT"; \
+		rm -f "$$EXTRACT_SCRIPT"; \
+		rm -rf "$$RAGFS_TMPDIR"; \
+		trap - 0; \
 	else \
 		echo "  [SKIP] maturin not found, ragfs-python (Rust binding) will not be built."; \
 		echo "         Install maturin to enable: uv pip install maturin"; \
@@ -145,7 +150,8 @@ clean:
 
 # Web Studio target
 build-studio:
-	@if [ "$$OV_SKIP_STUDIO_BUILD" = "1" ]; then \
+	@set -e; \
+	if [ "$$OV_SKIP_STUDIO_BUILD" = "1" ]; then \
 		echo "  [SKIP] web-studio build disabled by OV_SKIP_STUDIO_BUILD=1"; \
 	elif [ -f openviking/web_studio/dist/index.html ]; then \
 		echo "  [OK] web-studio bundle already present"; \
@@ -155,7 +161,7 @@ build-studio:
 		echo "  [SKIP] web-studio source not found"; \
 	else \
 		echo "Building web-studio (Vite SPA)..."; \
-		cd web-studio && npm ci && npm run build -- --base="/studio/" && cd ..; \
+		(cd web-studio && npm ci && npm run build -- --base="/studio/"); \
 		mkdir -p openviking/web_studio; \
 		rm -rf openviking/web_studio/dist; \
 		cp -r web-studio/dist openviking/web_studio/dist; \
