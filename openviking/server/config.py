@@ -222,7 +222,7 @@ class ObservabilityConfig(BaseModel):
 class TempUploadConfig(BaseModel):
     """Temporary upload configuration."""
 
-    default_mode: str = "local"
+    default_mode: Literal["local", "shared"] = "local"
     shared_max_size_bytes: int = 512 * 1024 * 1024
     shared_prefix: str = "viking://upload"
 

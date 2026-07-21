@@ -5,9 +5,11 @@
 
 import asyncio
 import zipfile
+from types import SimpleNamespace
 
 import httpx
 
+from openviking.server.routers import resources as resources_router
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 
@@ -594,6 +596,37 @@ async def test_temp_upload_success(client: httpx.AsyncClient, upload_temp_dir):
     assert "telemetry" not in body
     assert body["result"]["temp_file_id"].endswith(".md")
     assert "/" not in body["result"]["temp_file_id"]
+
+
+async def test_temp_upload_uses_configured_shared_default(monkeypatch):
+    saved_modes = []
+
+    class Store:
+        async def save_upload(self, file, upload_mode, ctx):
+            saved_modes.append(upload_mode)
+            return "shared_123"
+
+    async def run_immediately(*, fn, **kwargs):
+        return SimpleNamespace(result=await fn(), telemetry=None)
+
+    config = SimpleNamespace(temp_upload=SimpleNamespace(default_mode="shared"))
+    request = SimpleNamespace(
+        state=SimpleNamespace(signed_upload=None),
+        app=SimpleNamespace(state=SimpleNamespace(config=config)),
+    )
+    monkeypatch.setattr(resources_router.TempUploadStore, "build", lambda _: Store())
+    monkeypatch.setattr(resources_router, "run_operation", run_immediately)
+
+    response = await resources_router.temp_upload(
+        request=request,
+        file=object(),
+        telemetry=False,
+        upload_mode=None,
+        _ctx=object(),
+    )
+
+    assert saved_modes == ["shared"]
+    assert response["result"]["temp_file_id"] == "shared_123"
 
 
 async def test_temp_upload_with_telemetry_returns_summary(

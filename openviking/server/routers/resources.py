@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Resource endpoints for OpenViking HTTP Server."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -126,7 +126,7 @@ async def temp_upload(
     request: Request,
     file: UploadFile = File(...),
     telemetry: bool = Form(False),
-    upload_mode: str = Form("local"),
+    upload_mode: Optional[Literal["local", "shared"]] = Form(None),
     _ctx: RequestContext = Depends(get_upload_request_context),
 ):
     """Upload a temporary file for add_resource or import_ovpack.
@@ -140,10 +140,11 @@ async def temp_upload(
     dependency.
     """
     signed = getattr(request.state, "signed_upload", None)
+    effective_upload_mode = upload_mode or request.app.state.config.temp_upload.default_mode
 
     async def _upload() -> dict[str, Any]:
         store = TempUploadStore.build(request.app.state.config)
-        temp_file_id = await store.save_upload(file, upload_mode, _ctx)
+        temp_file_id = await store.save_upload(file, effective_upload_mode, _ctx)
         if signed is None:
             return {"temp_file_id": temp_file_id}
         return await ingest_temp_upload(
