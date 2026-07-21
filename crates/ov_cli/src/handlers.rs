@@ -1809,6 +1809,18 @@ mod reindex_client_tests {
         );
         assert_eq!(
             headers
+                .get("X-OpenViking-Account")
+                .and_then(|value| value.to_str().ok()),
+            Some("acme")
+        );
+        assert_eq!(
+            headers
+                .get("X-OpenViking-User")
+                .and_then(|value| value.to_str().ok()),
+            Some("alice")
+        );
+        assert_eq!(
+            headers
                 .get("X-Custom-Header")
                 .and_then(|value| value.to_str().ok()),
             Some("custom")

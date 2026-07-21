@@ -225,7 +225,7 @@ ov --sudo system status
 ```
 
 `--sudo` 标志：
-- 仅适用于管理员命令：`admin`、`system`、`reindex`
+- 仅适用于管理员命令：`admin`、`system`、`reindex`，以及 `task status/list`
 - 用于非管理员命令时会报错
 - `ovcli.conf` 中未配置 `root_api_key` 时会报错
 - 请求时使用 `root_api_key` 替代 `api_key`
