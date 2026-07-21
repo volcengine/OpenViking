@@ -382,6 +382,14 @@ class VikingFS:
             get_lock_manager(),
             self._encrypted_write_lock_paths(path),
             lock_mode="exact",
+            # Encrypted writes lock both the final path and the deterministic
+            # staging path under `.encrypt_stage`. Keeping the global default
+            # timeout at 0 is still desirable for ordinary path locks, but
+            # this specific dual-path write is much more exposed to short-lived
+            # contention between concurrent writers. A small 1-second wait here
+            # lets us ride out transient conflicts without broadening lock
+            # behavior for unrelated call sites.
+            timeout=1.0,
             handle=lock_handle,
         ):
             return await operation()
@@ -4054,9 +4062,7 @@ class VikingFS:
         real_ctx = self._ctx_or_default(ctx)
         account = real_ctx.account_id
         tree_paths = (
-            None
-            if not paths
-            else [self._uri_to_tree_path(path, ctx=real_ctx) for path in paths]
+            None if not paths else [self._uri_to_tree_path(path, ctx=real_ctx) for path in paths]
         )
         return await self._async_agfs.run(
             "git_log",
