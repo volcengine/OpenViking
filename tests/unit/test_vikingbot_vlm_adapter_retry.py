@@ -6,9 +6,8 @@ import vikingbot.providers.vlm_adapter as vlm_adapter
 from vikingbot.providers.vlm_adapter import VLMProviderAdapter
 from volcenginesdkarkruntime._exceptions import ArkRateLimitError
 
-from openviking.utils.model_retry import (
-    is_retryable_rate_limit_error,
-)
+from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
+from openviking.utils.model_retry import is_retryable_rate_limit_error
 
 
 class _DisabledLangfuse:
@@ -110,6 +109,37 @@ async def test_chat_does_not_retry_errors_without_rate_limit_markers(monkeypatch
     assert response.finish_reason == "error"
     assert "AuthenticationError" in response.content
     assert fake_vlm.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_chat_accepts_string_response_from_openai_backend_with_tools(monkeypatch):
+    async def create(**_kwargs):
+        return "plain string response"
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create)),
+    )
+    vlm = OpenAIVLM({"provider": "openai", "model": "gpt-5.6-terra"})
+    monkeypatch.setattr(vlm, "get_async_client", lambda: client)
+    adapter = VLMProviderAdapter(vlm, "gpt-5.6-terra", langfuse_client=_DisabledLangfuse())
+
+    response = await adapter.chat(
+        messages=[{"role": "user", "content": "hello"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "test_tool",
+                    "description": "A test tool",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+    )
+
+    assert response.content == "plain string response"
+    assert response.tool_calls == []
+    assert response.finish_reason == "stop"
 
 
 @pytest.mark.asyncio

@@ -143,18 +143,11 @@ Unfinished tasks
 
 ## Memory Extraction
 
-### 8 Categories
+### Memory Types
 
-| Category | Belongs to | Description | Mergeable |
-|----------|------------|-------------|-----------|
-| **profile** | user | User identity/attributes | ✅ |
-| **preferences** | user | User preferences | ✅ |
-| **entities** | user | Entities (people/projects) | ✅ |
-| **events** | user | Events/decisions | ❌ |
-| **cases** | agent | Problem + solution | ❌ |
-| **patterns** | agent | Reusable patterns | ✅ |
-| **tools** | agent | Tool usage knowledge and best practices | ✅ |
-| **skills** | agent | Skill execution knowledge and workflow strategies | ✅ |
+After a session is committed, OpenViking uses the conversation and active memory policy to extract information that can improve future interactions. It stores the result in the current user's memory space. When a conversation involves a stable Peer, relevant memories can also be stored in that Peer's space.
+
+OpenViking includes memory types such as `profile`, `preferences`, `entities`, `events`, `identity`, `soul`, `cases`, `trajectories`, `experiences`, `tools`, and `skills`, and supports custom types for application-specific needs. See [Context Types](./02-context-types.md) for the complete purpose and path mapping.
 
 ### Extraction Flow
 
@@ -248,14 +241,15 @@ viking://user/{user_id}/sessions/{session_id}/
     └── {tool_id}/tool.json
 
 viking://user/memories/
-├── profile.md                # Append-only user profile
+├── profile.md
+├── identity.md
+├── soul.md
 ├── preferences/
 ├── entities/
-└── events/
-
-viking://user/memories/
+├── events/
 ├── cases/
-├── patterns/
+├── trajectories/
+├── experiences/
 ├── tools/
 └── skills/
 ```

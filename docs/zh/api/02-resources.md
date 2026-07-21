@@ -104,7 +104,8 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 资源增量更新通过**监控任务 (Watch Task)** 机制实现：
 
 #### 监控任务创建
-- 调用 `add_resource` 时设置 `watch_interval > 0` （单位：分钟）创建监控任务
+- 调用 `add_resource` 时，为 URL、sitemap、RSS 等可重新读取的来源设置 `watch_interval > 0`（单位：分钟），即可创建监控任务
+- `temp_file_id` 引用的上传内容只会作为一次性快照处理，不能创建监控任务；本地来源变化后请重新添加
 - 可指定 `to` 参数确定目标 URI；未指定时，系统会使用本次导入返回的 `root_uri` 作为监控目标
 - 把监控对象设为 sitemap/RSS/Atom URL，即可让**整站**保持同步：每次刷新重新读取 feed 并重建资源树，新发布的页面自动入库、已删除的页面自动移除
 - `WatchManager` 负责任务持久化存储
@@ -126,7 +127,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 
 ### add_resource
 
-向知识库添加资源，支持本地文件/目录、URL 等多种来源。
+向知识库添加资源，支持本地文件/目录、URL 等多种来源。通过 `temp_file_id` 引用的上传内容是一次性快照，因此不能与 `watch_interval > 0` 组合使用。
 
 #### 1. API 实现介绍
 
@@ -170,7 +171,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 | directly_upload_media | bool | 否 | True | 是否直接上传媒体文件 |
 | preserve_structure | bool | 否 | None | 是否保留目录结构 |
 | args | object | 否 | `{}` | 传给特定 parser/accessor 的导入参数。例如 `args.site=true/false` 强制/禁用整站（sitemap/RSS）导入，`args.max_pages` 等可覆盖 `webfeed` 配置；递归网页爬虫支持 `args.depth`、`args.max_pages`、`args.include_paths`、`args.exclude_paths`、`args.allow_external_links`、`args.skip_download_links`；飞书用户 token 导入传 `args.feishu_access_token`。`path`、`to`、`watch_interval`、`include`、`exclude` 等 `add_resource` 核心字段不能放入 `args` |
-| watch_interval | float | 否 | 0 | 定时更新间隔（分钟）。>0 创建任务；≤0 取消任务；显式 `to` 优先，否则绑定本次导入的 `root_uri` |
+| watch_interval | float | 否 | 0 | 定时更新间隔（分钟）。>0 为 URL/sitemap/RSS 等可重新读取的来源创建任务；通过 `temp_file_id` 上传的内容是一次性快照，变化后需重新添加。≤0 取消任务；显式 `to` 优先，否则绑定本次导入的 `root_uri` |
 | telemetry | TelemetryRequest | 否 | False | 是否返回遥测数据 |
 
 **补充说明**：

@@ -94,8 +94,9 @@ viking://user/resources/docs/                 # Current user's resource director
 viking://user/skills/                         # Current user's skills
 viking://user/skills/search-web               # Specific skill
 viking://user/memories/                       # Current user's memories
-viking://user/memories/cases/                 # Learned cases
-viking://user/memories/patterns/              # Learned patterns
+viking://user/memories/cases/                 # Task cases used for training and evaluation
+viking://user/memories/trajectories/          # Reusable task-execution trajectories
+viking://user/memories/experiences/           # Experience distilled from execution outcomes
 viking://user/{user_id}/peers/{peer_id}/memories/
 viking://user/{user_id}/peers/{peer_id}/resources/
 ```

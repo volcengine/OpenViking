@@ -141,3 +141,49 @@ test("loadConfig can disable workspace peer", async () => {
     }
   })
 })
+
+test("loadConfig preserves an explicit zero commit keep recent count", async () => {
+  const snapshot = { ...process.env }
+  await withTempDir("ov-oc-keep-recent-zero-", async (dir) => {
+    try {
+      for (const key of Object.keys(process.env)) {
+        if (key.startsWith("OPENVIKING_")) delete process.env[key]
+      }
+      const project = join(dir, "project")
+      process.env.OPENVIKING_CREDENTIAL_SOURCE = "env"
+      process.env.OPENVIKING_URL = "https://env.example.com"
+      await mkdir(join(project, ".opencode"), { recursive: true })
+      await writeFile(join(project, ".opencode", "openviking-config.json"), JSON.stringify({
+        commitKeepRecentCount: 0,
+      }))
+
+      const cfg = loadConfig(dir, project)
+      assert.equal(cfg.commitKeepRecentCount, 0)
+    } finally {
+      restoreOpenVikingEnv(snapshot)
+    }
+  })
+})
+
+test("loadConfig defaults an invalid commit keep recent count", async () => {
+  const snapshot = { ...process.env }
+  await withTempDir("ov-oc-keep-recent-invalid-", async (dir) => {
+    try {
+      for (const key of Object.keys(process.env)) {
+        if (key.startsWith("OPENVIKING_")) delete process.env[key]
+      }
+      const project = join(dir, "project")
+      process.env.OPENVIKING_CREDENTIAL_SOURCE = "env"
+      process.env.OPENVIKING_URL = "https://env.example.com"
+      await mkdir(join(project, ".opencode"), { recursive: true })
+      await writeFile(join(project, ".opencode", "openviking-config.json"), JSON.stringify({
+        commitKeepRecentCount: null,
+      }))
+
+      const cfg = loadConfig(dir, project)
+      assert.equal(cfg.commitKeepRecentCount, 10)
+    } finally {
+      restoreOpenVikingEnv(snapshot)
+    }
+  })
+})

@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import { useData, withBase } from 'vitepress'
 import { computed, ref } from 'vue'
-import { hasPageLlmsTxt } from './llms-txt'
+import { absoluteLlmsTxtUrl, hasPageLlmsTxt, pageLlmsTxtPath } from './llms-txt'
 
 const { page } = useData()
 
 const llmsUrl = computed(() => {
-  const pagePath = page.value.relativePath.replace(/\.md$/, '')
-  return withBase(`/${pagePath}/llms.txt`)
+  return withBase(pageLlmsTxtPath(page.value.relativePath))
 })
 
 const isDoc = computed(() => hasPageLlmsTxt(page.value.relativePath))
@@ -17,9 +16,9 @@ let resetTimer: ReturnType<typeof window.setTimeout> | undefined
 
 const isZh = computed(() => page.value.relativePath.startsWith('zh/'))
 const copyLabel = computed(() => {
-  if (copyFailed.value) return isZh.value ? '复制失败' : 'Copy failed'
-  if (copied.value) return isZh.value ? '已复制' : 'Copied'
-  return isZh.value ? '复制' : 'Copy'
+  if (copyFailed.value) return isZh.value ? '链接复制失败' : 'Copy failed'
+  if (copied.value) return isZh.value ? '链接已复制' : 'Link copied'
+  return isZh.value ? '复制链接' : 'Copy link'
 })
 
 async function writeClipboard(text: string) {
@@ -40,15 +39,13 @@ async function writeClipboard(text: string) {
   }
 }
 
-async function copyLlmsTxt() {
+async function copyLlmsLink() {
   window.clearTimeout(resetTimer)
   copied.value = false
   copyFailed.value = false
 
   try {
-    const response = await fetch(llmsUrl.value)
-    if (!response.ok) throw new Error(`Failed to load llms.txt: ${response.status}`)
-    await writeClipboard(await response.text())
+    await writeClipboard(absoluteLlmsTxtUrl(llmsUrl.value, window.location.origin))
     copied.value = true
   } catch {
     copyFailed.value = true
@@ -80,7 +77,12 @@ async function copyLlmsTxt() {
       </svg>
       llms.txt
     </a>
-    <button type="button" class="llms-copy" :class="{ 'is-copied': copied }" @click="copyLlmsTxt">
+    <button
+      type="button"
+      class="llms-copy"
+      :class="{ 'is-copied': copied, 'is-failed': copyFailed }"
+      @click="copyLlmsLink"
+    >
       <svg
         xmlns="http://www.w3.org/2000/svg"
         width="14"
@@ -129,12 +131,32 @@ async function copyLlmsTxt() {
   background: transparent;
   cursor: pointer;
   font-family: inherit;
-  transition: color 0.2s;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-4px);
+  transition: color 0.2s, opacity 0.2s, transform 0.2s;
+}
+
+.llms-link-wrap:hover .llms-copy,
+.llms-link-wrap:focus-within .llms-copy,
+.llms-copy.is-copied,
+.llms-copy.is-failed {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(0);
 }
 
 .llms-link:hover,
 .llms-copy:hover,
 .llms-copy.is-copied {
   color: var(--vp-c-brand-1);
+}
+
+@media (hover: none) {
+  .llms-copy {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateX(0);
+  }
 }
 </style>
