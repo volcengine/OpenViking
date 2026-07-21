@@ -18,6 +18,28 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const ENCODED_SEGMENT_PREFIX: char = '!';
 const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
 
+fn partial_delete_error(bucket: &str, errors: &[aws_sdk_s3::types::Error]) -> Option<Error> {
+    if errors.is_empty() {
+        return None;
+    }
+
+    let details = errors
+        .iter()
+        .map(|error| {
+            format!(
+                "key={} code={} message={}",
+                error.key().unwrap_or("<unknown>"),
+                error.code().unwrap_or("<unknown>"),
+                error.message().unwrap_or("<unknown>")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    Some(Error::internal(format!(
+        "S3 DeleteObjects partial failure: bucket={bucket} errors=[{details}]"
+    )))
+}
+
 fn build_s3_error_message(
     op: &str,
     scope: &str,
@@ -615,7 +637,8 @@ impl S3Client {
                     .build()
                     .map_err(|e| format_bucket_s3_error("BuildDelete", &self.bucket, e))?;
 
-                self.client
+                let response = self
+                    .client
                     .delete_objects()
                     .bucket(&self.bucket)
                     .delete(delete)
@@ -624,6 +647,9 @@ impl S3Client {
                     .map_err(|e| {
                         format_sdk_s3_error("DeleteObjects", &format!("bucket={}", self.bucket), &e)
                     })?;
+                if let Some(error) = partial_delete_error(&self.bucket, response.errors()) {
+                    return Err(error);
+                }
             }
         }
 
@@ -1111,6 +1137,19 @@ mod tests {
     #[test]
     fn test_build_key_preserves_segments_when_normalization_disabled() {
         assert_eq!(test_client("", "").build_key("/a b"), "a b");
+    }
+
+    #[test]
+    fn test_partial_delete_error_reports_each_failed_key() {
+        let errors = [aws_sdk_s3::types::Error::builder()
+            .key("denied.txt")
+            .code("AccessDenied")
+            .message("denied")
+            .build()];
+
+        let error = partial_delete_error("bucket", &errors).unwrap();
+        assert!(error.to_string().contains("key=denied.txt"));
+        assert!(error.to_string().contains("code=AccessDenied"));
     }
 
     #[test]

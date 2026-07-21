@@ -540,7 +540,7 @@ impl FileSystem for S3FileSystem {
 
         // Delete the file itself (if it exists as a file)
         let key = self.client.build_key(&normalized);
-        let _ = self.client.delete_object(&key).await;
+        self.client.delete_object(&key).await?;
 
         // Delete directory and all children
         self.client.delete_directory(&normalized).await?;
