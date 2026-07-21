@@ -93,7 +93,13 @@ def test_real_transport_stream_keeps_video_parser(tmp_path: Path):
 def test_understanding_api_skips_typescript_but_accepts_transport_stream(
     tmp_path: Path, monkeypatch
 ):
-    config = SimpleNamespace(parser_api=SimpleNamespace(enable=True, extensions=["ts"]))
+    config = SimpleNamespace(
+        parser_api=SimpleNamespace(
+            enable=True,
+            enable_feishu_url=False,
+            extensions=["ts"],
+        )
+    )
     monkeypatch.setattr(
         "openviking_cli.utils.config.open_viking_config.get_openviking_config",
         lambda: config,

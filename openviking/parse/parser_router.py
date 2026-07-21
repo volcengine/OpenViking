@@ -45,12 +45,20 @@ class ParserRouter:
         except Exception:
             return False
 
-        parser_api = getattr(ov_config, "parser_api", None)
-        if not parser_api or not getattr(parser_api, "enable", False):
+        parser_api = ov_config.parser_api
+        if not parser_api.enable:
             return False
 
+        if parser_api.enable_feishu_url:
+            try:
+                from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+
+                if FeishuAccessor._is_feishu_url(str(source_path)):
+                    return True
+            except Exception:
+                pass
+
         ext = self._extract_extension(source_path)
-        extensions = getattr(parser_api, "extensions", None) or []
         from openviking.parse.parsers.media.detection import (
             matches_ambiguous_media_file,
         )
@@ -59,7 +67,7 @@ class ParserRouter:
         ambiguous_media_match = matches_ambiguous_media_file(local_path)
         if local_path.is_file() and ambiguous_media_match is False:
             return False
-        return ext in extensions
+        return ext in parser_api.extensions
 
     def _extract_extension(self, source_path: Union[str, Path]) -> str:
         source = str(source_path)
@@ -92,6 +100,11 @@ class ParserRouter:
                 display = "<path>"
             logger.info(f"[ParserRouter] Using internal ParserRegistry for {display}")
             return await self._parser_registry.parse(source_path, **kwargs)
+
+    async def submit_url(self, source: str, **kwargs) -> str:
+        if not self.should_use_understanding_api(source):
+            raise ValueError("source is not routed to UnderstandingAPI")
+        return await self._get_understanding_api().submit_url(source, **kwargs)
 
     def _extract_source_path(self, source: Union[str, Path, "LocalResource"]) -> Union[str, Path]:
         """Extract a filesystem path from the source."""

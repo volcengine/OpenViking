@@ -92,8 +92,9 @@ viking://user/resources/docs/                 # 当前用户资源目录
 viking://user/skills/                         # 当前用户的技能
 viking://user/skills/search-web               # 某个技能
 viking://user/memories/                       # 当前用户的记忆
-viking://user/memories/cases/                 # 学习的案例
-viking://user/memories/patterns/              # 学习的模式
+viking://user/memories/cases/                 # 用于训练和评估的任务案例
+viking://user/memories/trajectories/          # 可复用的任务执行轨迹
+viking://user/memories/experiences/           # 从执行结果中提炼的经验
 viking://user/{user_id}/peers/{peer_id}/memories/
 viking://user/{user_id}/peers/{peer_id}/resources/
 ```

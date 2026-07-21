@@ -34,6 +34,7 @@ def _convert_svg_to_png(svg_data: bytes) -> Optional[bytes]:
     """
     try:
         import cairosvg
+
         return cairosvg.svg2png(bytestring=svg_data)
     except ImportError:
         pass
@@ -42,8 +43,9 @@ def _convert_svg_to_png(svg_data: bytes) -> Optional[bytes]:
 
     try:
         from wand.image import Image as WandImage
-        with WandImage(blob=svg_data, format='svg') as img:
-            img.format = 'png'
+
+        with WandImage(blob=svg_data, format="svg") as img:
+            img.format = "png"
             return img.make_blob()
     except ImportError:
         pass
