@@ -51,6 +51,8 @@ class PowerPointParser(BaseParser):
     async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
         """Parse PowerPoint presentation from file path."""
         path = Path(source)
+        parse_kwargs = dict(kwargs)
+        parse_kwargs.pop("instruction", None)
 
         if path.exists():
             import pptx
@@ -58,28 +60,35 @@ class PowerPointParser(BaseParser):
             from openviking_cli.utils.storage import get_storage
 
             storage = get_storage()
-            resource_name = kwargs.get("resource_name") or kwargs.get("source_name") or path.stem
+            resource_name = (
+                parse_kwargs.get("resource_name") or parse_kwargs.get("source_name") or path.stem
+            )
 
             markdown_content = await asyncio.to_thread(
                 self._convert_to_markdown, path, pptx, resource_name, storage
             )
+
+            caller_media_dirs = parse_kwargs.pop("allowed_media_dirs", None) or []
+            allowed_media_dirs = []
+            for media_dir in [*caller_media_dirs, storage.media_dir]:
+                media_path = Path(media_dir)
+                if media_path not in allowed_media_dirs:
+                    allowed_media_dirs.append(media_path)
+
+            # The parser owns the converted content's source and base directory,
+            # while caller-provided link-rewrite and identity options remain intact.
+            parse_kwargs.pop("source_path", None)
+            parse_kwargs["base_dir"] = path.parent
+            parse_kwargs["allowed_media_dirs"] = allowed_media_dirs
             result = await self._md_parser.parse_content(
                 markdown_content,
                 source_path=str(path),
-                resource_name=kwargs.get("resource_name"),
-                source_name=kwargs.get("source_name"),
                 instruction=instruction,
-                base_dir=path.parent,
-                # Embedded presentation images are extracted through the shared
-                # storage helper, so constrain MarkdownParser to that media root.
-                allowed_media_dirs=[storage.media_dir],
+                **parse_kwargs,
             )
         else:
             result = await self._md_parser.parse_content(
-                str(source),
-                instruction=instruction,
-                resource_name=kwargs.get("resource_name"),
-                source_name=kwargs.get("source_name"),
+                str(source), instruction=instruction, **parse_kwargs
             )
         result.source_format = "pptx"
         result.parser_name = "PowerPointParser"
