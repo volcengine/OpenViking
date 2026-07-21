@@ -190,7 +190,8 @@ ground truth 计算 recall。
 - batch > 1 的 L1 结果代表 cuVS 的能力上限，不等同于当前 OpenViking API 的吞吐；
 - L2/L3 必须以 batch=1 为主，并明确记录并发请求是否被 lock 串行化；
 - 如果 L1 与 L2 差距明显，下一阶段优先实现 persistent device buffers、CUDA streams 或
-  dynamic batching，再评估最大吞吐。
+  OpenViking request micro-batching，再评估最大吞吐；该 scheduler 与 cuVS 官方的
+  Dynamic Batching 组件不是同一实现。
 
 ## 主要图表
 

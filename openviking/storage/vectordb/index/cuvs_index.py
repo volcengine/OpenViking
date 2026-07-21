@@ -26,6 +26,7 @@ import time
 import traceback
 from array import array
 from collections import OrderedDict
+from concurrent.futures import Future
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import (
@@ -99,6 +100,8 @@ class CuVSSearchTelemetry:
     auto_mode: bool
     dtype: str = "float32"
     max_concurrent_gpu_searches: int = 1
+    micro_batching_enabled: bool = False
+    batch_size: int = 1
     route_reason: str = "pending"
     filter_kind: str = "none"
     filter_cache_hit: bool = False
@@ -119,6 +122,7 @@ class CuVSSearchTelemetry:
     build_ms: float = 0.0
     filter_prepare_ms: float = 0.0
     gpu_search_ms: float = 0.0
+    batch_wait_ms: float = 0.0
     native_search_ms: float = 0.0
 
     def as_dict(self) -> Dict[str, Any]:
@@ -127,6 +131,8 @@ class CuVSSearchTelemetry:
             "auto_mode": self.auto_mode,
             "dtype": self.dtype,
             "max_concurrent_gpu_searches": self.max_concurrent_gpu_searches,
+            "micro_batching_enabled": self.micro_batching_enabled,
+            "batch_size": self.batch_size,
             "route_reason": self.route_reason,
             "filter_kind": self.filter_kind,
             "filter_cache_hit": self.filter_cache_hit,
@@ -147,6 +153,7 @@ class CuVSSearchTelemetry:
             "build_ms": round(self.build_ms, 3),
             "filter_prepare_ms": round(self.filter_prepare_ms, 3),
             "gpu_search_ms": round(self.gpu_search_ms, 3),
+            "batch_wait_ms": round(self.batch_wait_ms, 3),
             "native_search_ms": round(self.native_search_ms, 3),
         }
 
@@ -652,11 +659,32 @@ class _CuVSRuntime:
         limit: int,
         mask: Optional[Any],
     ) -> Tuple[List[int], List[float]]:
+        batch_neighbors, batch_distances = self.search_batch(
+            runtime_index,
+            [query],
+            limit,
+            mask,
+        )
+        return batch_neighbors[0], batch_distances[0]
+
+    def search_batch(
+        self,
+        runtime_index: "_CuVSRuntimeIndex",
+        queries: Sequence[Sequence[float]],
+        limit: int,
+        mask: Optional[Any],
+    ) -> Tuple[List[List[int]], List[List[float]]]:
+        """Run compatible query rows in one cuVS call and preserve row order."""
+
+        if not queries:
+            return [], []
         with self.device_scope():
-            queries = None
+            device_queries = None
             prefilter = None
             distances = None
             neighbors = None
+            host_distances = None
+            host_neighbors = None
             resources = None
             resource_kwargs = None
             resource_reusable = False
@@ -670,7 +698,8 @@ class _CuVSRuntime:
                 # boundary inside this admitted search.
                 resources = self._acquire_resources()
                 resource_kwargs = {"resources": resources}
-                queries = self.cp.asarray([query], dtype=self.device_dtype)
+                query_count = len(queries)
+                device_queries = self.cp.asarray(queries, dtype=self.device_dtype)
                 if mask is None:
                     prefilter = None
                 elif isinstance(mask, self.cp.ndarray) and mask.dtype == self.cp.uint32:
@@ -680,7 +709,7 @@ class _CuVSRuntime:
                 if self.algorithm == "brute_force":
                     distances, neighbors = self.brute_force.search(
                         index,
-                        queries,
+                        device_queries,
                         limit,
                         prefilter=prefilter,
                         **resource_kwargs,
@@ -694,17 +723,23 @@ class _CuVSRuntime:
                     distances, neighbors = self.cagra.search(
                         params,
                         index,
-                        queries,
+                        device_queries,
                         limit,
                         filter=prefilter,
                         **resource_kwargs,
                     )
                 resources.sync()
-                host_neighbors = self.cp.asnumpy(neighbors)[0].tolist()
-                host_distances = self.cp.asnumpy(distances)[0].tolist()
+                host_neighbors = self.cp.asnumpy(neighbors)
+                host_distances = self.cp.asnumpy(distances)
                 result = (
-                    [int(item) for item in host_neighbors],
-                    [float(item) for item in host_distances],
+                    [
+                        [int(item) for item in host_neighbors[row].tolist()]
+                        for row in range(query_count)
+                    ],
+                    [
+                        [float(item) for item in host_distances[row].tolist()]
+                        for row in range(query_count)
+                    ],
                 )
                 # Reuse only after the complete call, including host result
                 # materialization, succeeds.  Any exception discards a
@@ -717,10 +752,12 @@ class _CuVSRuntime:
             finally:
                 # Search temporaries otherwise outlive Device.__exit__ as frame
                 # locals and may free allocations on the worker's prior device.
-                queries = None
+                device_queries = None
                 prefilter = None
                 distances = None
                 neighbors = None
+                host_distances = None
+                host_neighbors = None
                 try:
                     if resources is not None:
                         self._return_resources(resources, reusable=resource_reusable)
@@ -757,6 +794,30 @@ class _CuVSIndexSnapshot:
     runtime_index: Any
     labels: Tuple[int, ...]
     generation: int
+
+
+@dataclass
+class _CuVSMicroBatchRequest:
+    """One admitted search waiting for a compatible matrix-query dispatch."""
+
+    snapshot: Optional[_CuVSIndexSnapshot]
+    query: Tuple[float, ...]
+    result_limit: int
+    mask: Optional[Any]
+    filter_identity: Union[str, int]
+    telemetry: Optional[CuVSSearchTelemetry]
+    enqueued_at: float
+    future: Future[Tuple[List[int], List[float]]]
+    released: bool = False
+
+    @property
+    def key(self) -> Tuple[int, Union[str, int], int]:
+        snapshot = self.snapshot
+        return (
+            id(snapshot),
+            self.filter_identity,
+            self.result_limit,
+        )
 
 
 @dataclass
@@ -869,6 +930,21 @@ class CuVSDenseIndex:
         self.max_concurrent_gpu_searches = int(config.get("max_concurrent_gpu_searches", 1))
         if self.max_concurrent_gpu_searches < 1:
             raise ValueError("cuVS max_concurrent_gpu_searches must be at least 1")
+        self.micro_batching_enabled = bool(config.get("micro_batching_enabled", False))
+        self.micro_batching_max_batch_size = int(config.get("micro_batching_max_batch_size", 8))
+        if not 1 <= self.micro_batching_max_batch_size <= 8:
+            raise ValueError("cuVS micro_batching_max_batch_size must be between 1 and 8")
+        self.micro_batching_max_wait_ms = float(config.get("micro_batching_max_wait_ms", 1.0))
+        if (
+            not math.isfinite(self.micro_batching_max_wait_ms)
+            or self.micro_batching_max_wait_ms < 0.0
+            or self.micro_batching_max_wait_ms > 100.0
+        ):
+            raise ValueError("cuVS micro_batching_max_wait_ms must be between 0 and 100")
+        if self.micro_batching_enabled and self.algorithm != "brute_force":
+            raise ValueError("cuVS micro-batching currently supports algorithm='brute_force' only")
+        if self.micro_batching_enabled and self.max_concurrent_gpu_searches != 1:
+            raise ValueError("cuVS micro-batching currently requires max_concurrent_gpu_searches=1")
         self.auto_memory_reserve_bytes = (
             int(config.get("auto_memory_reserve_mb", 1024)) * 1024 * 1024
         )
@@ -906,6 +982,10 @@ class CuVSDenseIndex:
         set_max_concurrent_searches = getattr(self._runtime, "set_max_concurrent_searches", None)
         if set_max_concurrent_searches is not None:
             set_max_concurrent_searches(self.max_concurrent_gpu_searches)
+        if self.micro_batching_enabled and not callable(
+            getattr(self._runtime, "search_batch", None)
+        ):
+            raise ValueError("The configured cuVS runtime does not support batched search")
         self._records: Dict[int, _Record] = {}
         self._snapshot: Optional[_CuVSIndexSnapshot] = None
         self._dirty = True
@@ -919,13 +999,30 @@ class CuVSDenseIndex:
         self._filter_layout_lock = threading.Lock()
         self._records_generation = 0
         self._filter_layout_generation = -1
+        self._closing = False
         self._closed = False
         self._close_complete = False
+        self._micro_batch_condition = threading.Condition(threading.Lock())
+        self._micro_batch_pending: OrderedDict[
+            Tuple[int, Union[str, int], int], List[_CuVSMicroBatchRequest]
+        ] = OrderedDict()
+        self._micro_batch_draining = False
+        self._micro_batch_stop = False
+        self._micro_batch_worker_failure: Optional[BaseException] = None
+        self._micro_batch_worker: Optional[threading.Thread] = None
+        if self.micro_batching_enabled:
+            self._micro_batch_worker = threading.Thread(
+                target=self._micro_batch_worker_main,
+                name="openviking-cuvs-microbatch",
+                daemon=True,
+            )
+            self._micro_batch_worker.start()
         logger.info(
-            "Initialized cuVS dense index: algorithm=%s metric=%s dimension=%d",
+            "Initialized cuVS dense index: algorithm=%s metric=%s dimension=%d micro_batching=%s",
             self.algorithm,
             self._metric,
             self.dimension,
+            self.micro_batching_enabled,
         )
 
     def _runtime_device_scope(self):
@@ -1678,6 +1775,229 @@ class CuVSDenseIndex:
             if self.commit_rebuild(candidate, native_filter_layout_registrar):
                 return
 
+    def _enqueue_micro_batch(
+        self,
+        *,
+        snapshot: _CuVSIndexSnapshot,
+        query: Tuple[float, ...],
+        result_limit: int,
+        mask: Optional[Any],
+        filter_identity: Union[str, int],
+        telemetry: Optional[CuVSSearchTelemetry],
+    ) -> _CuVSMicroBatchRequest:
+        request = _CuVSMicroBatchRequest(
+            snapshot=snapshot,
+            query=query,
+            result_limit=result_limit,
+            mask=mask,
+            filter_identity=filter_identity,
+            telemetry=telemetry,
+            enqueued_at=time.perf_counter(),
+            future=Future(),
+        )
+        with self._micro_batch_condition:
+            if self._micro_batch_worker_failure is not None:
+                raise RuntimeError("The cuVS micro-batch worker is unavailable") from (
+                    self._micro_batch_worker_failure
+                )
+            if self._micro_batch_stop:
+                raise RuntimeError("The cuVS micro-batch worker is closed")
+            self._micro_batch_pending.setdefault(request.key, []).append(request)
+            self._micro_batch_condition.notify()
+        return request
+
+    def _next_micro_batch(self) -> Optional[List[_CuVSMicroBatchRequest]]:
+        wait_seconds = self.micro_batching_max_wait_ms / 1000.0
+        with self._micro_batch_condition:
+            while True:
+                if self._micro_batch_stop and not self._micro_batch_pending:
+                    return None
+                if not self._micro_batch_pending:
+                    self._micro_batch_condition.wait()
+                    continue
+
+                now = time.perf_counter()
+                selected_key: Optional[Tuple[int, Union[str, int], int]] = None
+                earliest_deadline: Optional[float] = None
+                for key, requests in self._micro_batch_pending.items():
+                    deadline = requests[0].enqueued_at + wait_seconds
+                    if (
+                        len(requests) >= self.micro_batching_max_batch_size
+                        or now >= deadline
+                        or self._micro_batch_draining
+                        or self._micro_batch_stop
+                    ):
+                        selected_key = key
+                        break
+                    if earliest_deadline is None or deadline < earliest_deadline:
+                        earliest_deadline = deadline
+
+                if selected_key is None:
+                    timeout = max((earliest_deadline or now) - now, 0.0)
+                    self._micro_batch_condition.wait(timeout)
+                    continue
+
+                requests = self._micro_batch_pending[selected_key]
+                batch = requests[: self.micro_batching_max_batch_size]
+                del requests[: len(batch)]
+                if not requests:
+                    del self._micro_batch_pending[selected_key]
+                return batch
+
+    @staticmethod
+    def _copy_micro_batch_exception(exc: BaseException) -> BaseException:
+        try:
+            return type(exc)(*exc.args)
+        except Exception:
+            return RuntimeError(f"cuVS micro-batch search failed: {exc}")
+
+    def _complete_micro_batch(
+        self,
+        requests: Sequence[_CuVSMicroBatchRequest],
+        *,
+        results: Optional[Sequence[Tuple[List[int], List[float]]]] = None,
+        error: Optional[BaseException] = None,
+    ) -> None:
+        live_requests = [request for request in requests if not request.released]
+        if not live_requests:
+            return
+        # Drop the last references to snapshot-owned CUDA allocations on the
+        # captured device before close/rebuild can observe an idle index.
+        release_error: Optional[BaseException] = None
+        try:
+            with self._runtime_device_scope():
+                for request in live_requests:
+                    request.mask = None
+                    request.snapshot = None
+                    request.released = True
+        except BaseException as exc:
+            release_error = exc
+            for request in live_requests:
+                request.mask = None
+                request.snapshot = None
+                request.released = True
+        with self._lock:
+            self._active_searches -= len(live_requests)
+            if self._active_searches == 0:
+                self._idle_condition.notify_all()
+
+        for index, request in enumerate(live_requests):
+            if request.future.cancelled():
+                continue
+            completion_error = error or release_error
+            if completion_error is not None:
+                request.future.set_exception(self._copy_micro_batch_exception(completion_error))
+            else:
+                assert results is not None
+                request.future.set_result(results[index])
+
+    def _dispatch_micro_batch(self, requests: List[_CuVSMicroBatchRequest]) -> None:
+        runnable = [
+            request for request in requests if request.future.set_running_or_notify_cancel()
+        ]
+        runnable_ids = {id(request) for request in runnable}
+        cancelled = [request for request in requests if id(request) not in runnable_ids]
+        if cancelled:
+            self._complete_micro_batch(cancelled, results=[([], [])] * len(cancelled))
+        if not runnable:
+            return
+
+        first = runnable[0]
+        snapshot = first.snapshot
+        request_snapshot: Optional[_CuVSIndexSnapshot] = None
+        if snapshot is None:
+            self._complete_micro_batch(
+                runnable,
+                error=RuntimeError("cuVS micro-batch snapshot was released before dispatch"),
+            )
+            return
+
+        self._gpu_search_gate.acquire()
+        gpu_started = time.perf_counter()
+        results: Optional[List[Tuple[List[int], List[float]]]] = None
+        error: Optional[BaseException] = None
+        try:
+            for request in runnable:
+                request_wait_ms = (gpu_started - request.enqueued_at) * 1000.0
+                if request.telemetry is not None:
+                    request.telemetry.micro_batching_enabled = True
+                    request.telemetry.batch_size = len(runnable)
+                    request.telemetry.batch_wait_ms += request_wait_ms
+                    request.telemetry.queue_ms += request_wait_ms
+            offsets_by_query, distances_by_query = self._runtime.search_batch(
+                snapshot.runtime_index,
+                [request.query for request in runnable],
+                first.result_limit,
+                first.mask,
+            )
+            if len(offsets_by_query) != len(runnable) or len(distances_by_query) != len(runnable):
+                raise RuntimeError("cuVS returned a different number of rows than requested")
+
+            results = []
+            for request, offsets, distances in zip(
+                runnable,
+                offsets_by_query,
+                distances_by_query,
+                strict=True,
+            ):
+                request_snapshot = request.snapshot
+                if request_snapshot is None:
+                    raise RuntimeError("cuVS micro-batch snapshot was released during dispatch")
+                labels: List[int] = []
+                scores: List[float] = []
+                for offset, distance in zip(offsets, distances, strict=True):
+                    if offset < 0 or offset >= len(request_snapshot.labels):
+                        continue
+                    labels.append(request_snapshot.labels[offset])
+                    scores.append(1.0 - distance if self.distance == "l2" else distance)
+                results.append((labels, scores))
+        except BaseException as exc:
+            error = exc
+        finally:
+            gpu_search_ms = (time.perf_counter() - gpu_started) * 1000.0
+            for request in runnable:
+                if request.telemetry is not None:
+                    request.telemetry.gpu_search_ms += gpu_search_ms
+            self._gpu_search_gate.release()
+            # Requests still own these objects until _complete_micro_batch(),
+            # so clearing worker locals here cannot release them prematurely.
+            # It does ensure active=0 is never published while this frame keeps
+            # an extra CUDA-owned snapshot reference alive.
+            try:
+                with self._runtime_device_scope():
+                    request_snapshot = None
+                    snapshot = None
+            except BaseException as cleanup_exc:
+                if error is None:
+                    error = cleanup_exc
+                request_snapshot = None
+                snapshot = None
+        self._complete_micro_batch(runnable, results=results, error=error)
+        if error is not None and not isinstance(error, Exception):
+            raise error
+
+    def _micro_batch_worker_main(self) -> None:
+        try:
+            while True:
+                requests = self._next_micro_batch()
+                if requests is None:
+                    return
+                self._dispatch_micro_batch(requests)
+        except BaseException as exc:
+            logger.exception("The cuVS micro-batch worker stopped unexpectedly")
+            with self._micro_batch_condition:
+                self._micro_batch_worker_failure = exc
+                pending = [
+                    request
+                    for requests in self._micro_batch_pending.values()
+                    for request in requests
+                ]
+                self._micro_batch_pending.clear()
+                self._micro_batch_stop = True
+                self._micro_batch_condition.notify_all()
+            if pending:
+                self._complete_micro_batch(pending, error=exc)
+
     def search(
         self,
         query_vector: Sequence[float],
@@ -1712,7 +2032,7 @@ class CuVSDenseIndex:
                         ) * 1000.0
                 if prepared_filter is None:
                     with self._lock:
-                        if self._closed:
+                        if self._closing or self._closed:
                             raise RuntimeError("cuVS dense index is closed")
                     # A mutation invalidated the registered native layout while
                     # the resolver ran. Retry before consuming GPU admission.
@@ -1735,6 +2055,20 @@ class CuVSDenseIndex:
                         "cuVS auto mode routed a selective filter to native search "
                         f"({eligible_count} candidates <= {native_threshold})"
                     )
+
+            if self.micro_batching_enabled:
+                try:
+                    return self._search_admitted(
+                        query,
+                        limit,
+                        filters,
+                        native_filter_resolver,
+                        native_filter_layout_registrar,
+                        prepared_filter,
+                        telemetry,
+                    )
+                except _StalePreparedFilter:
+                    continue
 
             queue_started = time.perf_counter()
             self._gpu_search_gate.acquire()
@@ -1770,8 +2104,9 @@ class CuVSDenseIndex:
         prepared_filter: Optional[_PreparedHostFilter] = None,
         telemetry: Optional[CuVSSearchTelemetry] = None,
     ) -> Tuple[List[int], List[float]]:
+        batch_request: Optional[_CuVSMicroBatchRequest] = None
         with self._lock:
-            if self._closed:
+            if self._closing or self._closed:
                 raise RuntimeError("cuVS dense index is closed")
             if (
                 prepared_filter is not None
@@ -1907,7 +2242,31 @@ class CuVSDenseIndex:
                 result_limit = min(limit, eligible_count)
             else:
                 result_limit = min(limit, len(snapshot.labels))
+            if self.micro_batching_enabled:
+                cache_key = self._filter_cache_key(filters) if filters else "no-filter"
+                filter_identity: Union[str, int] = (
+                    cache_key
+                    if cache_key is not None
+                    else id(mask)
+                    if mask is not None
+                    else id(filters)
+                )
+                batch_request = self._enqueue_micro_batch(
+                    snapshot=snapshot,
+                    query=query,
+                    result_limit=result_limit,
+                    mask=mask,
+                    filter_identity=filter_identity,
+                    telemetry=telemetry,
+                )
             self._active_searches += 1
+
+        if batch_request is not None:
+            try:
+                return batch_request.future.result()
+            except BaseException:
+                batch_request.future.cancel()
+                raise
 
         labels: List[int] = []
         scores: List[float] = []
@@ -1950,21 +2309,57 @@ class CuVSDenseIndex:
         with self._lock:
             if self._close_complete:
                 return
+            while self._closing and not self._close_complete:
+                self._idle_condition.wait()
+            if self._close_complete:
+                return
+
+            # Reject new admission and invalidate any host-filter work that is
+            # still outside the index lock. Already accepted micro-batch
+            # requests remain active and are drained below.
+            self._closing = True
             if not self._closed:
                 self._closed = True
                 self._records_generation += 1
                 self._filter_layout_generation = -1
                 self._cancel_preflight_flights_()
+            if self.micro_batching_enabled:
+                with self._micro_batch_condition:
+                    self._micro_batch_draining = True
+                    self._micro_batch_condition.notify_all()
             while self._active_searches:
                 self._idle_condition.wait()
-            with self._runtime_device_scope():
-                self._snapshot = None
-                self._filter_cache.clear()
-                self._preflight_filter_cache.clear()
-                try:
-                    self._runtime.close()
-                finally:
-                    # A failed recovery can otherwise keep this partially packed
-                    # host shadow alive through the constructor traceback.
-                    self._records.clear()
-            self._close_complete = True
+
+        if self.micro_batching_enabled:
+            with self._micro_batch_condition:
+                self._micro_batch_stop = True
+                self._micro_batch_condition.notify_all()
+            worker = self._micro_batch_worker
+            if worker is not None and worker is not threading.current_thread():
+                worker.join()
+
+        try:
+            with self._lock:
+                with self._runtime_device_scope():
+                    self._snapshot = None
+                    self._filter_cache.clear()
+                    self._preflight_filter_cache.clear()
+                    try:
+                        self._runtime.close()
+                    finally:
+                        # A failed recovery can otherwise keep this partially
+                        # packed host shadow alive through the constructor
+                        # traceback.
+                        self._records.clear()
+        except BaseException:
+            with self._lock:
+                # Keep admission closed, but allow a later close() call to
+                # retry runtime cleanup after a transient failure.
+                self._closing = False
+                self._idle_condition.notify_all()
+            raise
+        else:
+            with self._lock:
+                self._close_complete = True
+                self._closing = False
+                self._idle_condition.notify_all()

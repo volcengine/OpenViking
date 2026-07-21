@@ -27,6 +27,7 @@ Start with exact brute-force search:
         "algorithm": "brute_force",
         "dtype": "float32",
         "max_concurrent_gpu_searches": 1,
+        "micro_batching_enabled": false,
         "fallback_to_native": true,
         "filter_cache_size": 16
       }
@@ -186,6 +187,45 @@ Different unseen filters can use the native engine's shared-read path in
 parallel, while cached native routing decisions go directly to the native
 index. A record-generation check prevents a result computed across a mutation
 from entering the route cache.
+
+### Opt-in request micro-batching
+
+Exact brute-force search can coalesce compatible concurrent requests into one
+cuVS matrix-query call:
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "backend": "cuvs",
+      "cuvs": {
+        "algorithm": "brute_force",
+        "max_concurrent_gpu_searches": 1,
+        "micro_batching_enabled": true,
+        "micro_batching_max_batch_size": 8,
+        "micro_batching_max_wait_ms": 1.0
+      }
+    }
+  }
+}
+```
+
+The scheduler batches only requests using the same immutable GPU snapshot,
+prepared filter, and effective top-k. Each result row is mapped back to its
+original request, so scalar/path filtering and result limits retain their
+existing semantics. The collection window is a latency-throughput tradeoff:
+under low concurrency a singleton query can wait up to the configured window;
+under sufficient concurrency up to eight queries share one GPU call.
+
+This OpenViking micro-batcher is disabled by default and is distinct from the
+cuVS feature named Dynamic Batching. Its first version supports
+`algorithm: "brute_force"` with `max_concurrent_gpu_searches: 1`; CAGRA and
+multiple concurrent batch dispatches are rejected until separately validated.
+Auto mode can use the same options, but requests routed to the native CPU path
+never enter the GPU batch queue. Near-tie neighbor ordering may differ between
+single-row and matrix-query calls; validate set overlap and scores when tuning
+for a workload.
+
 Sparse/hybrid queries fall back to OpenViking's native local index when
 `fallback_to_native` is enabled. The canonical vectors remain in the local
 store and repopulate cuVS after restart.

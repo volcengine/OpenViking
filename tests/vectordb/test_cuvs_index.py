@@ -39,6 +39,7 @@ class FakeCuVSRuntime:
         self.release_count = 0
         self.close_count = 0
         self.close_error = None
+        self.search_batch_sizes = []
 
     def build(self, dataset):
         self.dataset = [list(vector) for vector in dataset]
@@ -62,6 +63,11 @@ class FakeCuVSRuntime:
         rows.sort()
         selected = rows[:limit]
         return [row[1] for row in selected], [row[2] for row in selected]
+
+    def search_batch(self, index, queries, limit, mask):
+        self.search_batch_sizes.append(len(queries))
+        results = [self.search(index, query, limit, mask) for query in queries]
+        return [result[0] for result in results], [result[1] for result in results]
 
     def prepare_filter(self, mask):
         self.prepare_filter_count += 1
@@ -233,8 +239,9 @@ def test_cuvs_runtime_uses_captured_device_from_worker_thread():
             assert resources.device_id == spy.expected_device
             if spy.fail_search:
                 raise RuntimeError("injected search failure")
-            return FakeArray([[0.25]], "float32", "distances"), FakeArray(
-                [[0]], "int64", "neighbors"
+            query_count = len(_queries.values)
+            return FakeArray([[0.25]] * query_count, "float32", "distances"), FakeArray(
+                [[0]] * query_count, "int64", "neighbors"
             )
 
     class FakeFilters:
@@ -308,6 +315,12 @@ def test_cuvs_runtime_uses_captured_device_from_worker_thread():
         assert ("array-5", 3) in spy.temporary_releases
         assert spy.current() == 9
         assert spy.releases == [("resources-1", 3)]
+        assert runtime.search_batch(
+            runtime_index,
+            [[1.0, 0.0], [0.0, 1.0]],
+            1,
+            [True],
+        ) == ([[0], [0]], [[0.25], [0.25]])
         assert runtime.search(runtime_index, [1.0, 0.0], 1, [True]) == ([0], [0.25])
         spy.fail_host_copy = True
         with pytest.raises(RuntimeError, match="injected host copy failure"):
@@ -1383,6 +1396,316 @@ def test_device_cache_eviction_before_admission_uses_one_in_gate_fallback():
     assert eviction_telemetry.filter_cache_hit is False
     assert eviction_telemetry.filter_cache_eviction_fallback is True
     assert eviction_telemetry.as_dict()["filter_cache_eviction_fallback"] is True
+
+
+def make_micro_batch_index(runtime, **config):
+    dense_config = {
+        "micro_batching_enabled": True,
+        "micro_batching_max_batch_size": 4,
+        "micro_batching_max_wait_ms": 50.0,
+        **config,
+    }
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config=dense_config,
+        runtime=runtime,
+    )
+    index.add_candidates(
+        [
+            candidate(1, [1.0, 0.0], account_id="a"),
+            candidate(2, [0.0, 1.0], account_id="b"),
+            candidate(3, [0.8, 0.2], account_id="a"),
+        ]
+    )
+    # Exclude the first lazy build and its unavoidable singleton from assertions.
+    assert index.search([1.0, 0.0], 1, None)[0] == [1]
+    runtime.search_batch_sizes.clear()
+    return index
+
+
+def run_simultaneous_searches(index, requests):
+    barrier = threading.Barrier(len(requests) + 1)
+
+    def run(request):
+        barrier.wait(timeout=5)
+        return index.search(*request)
+
+    with ThreadPoolExecutor(max_workers=len(requests)) as executor:
+        futures = [executor.submit(run, request) for request in requests]
+        barrier.wait(timeout=5)
+        return [future.result(timeout=5) for future in futures]
+
+
+def test_cuvs_micro_batch_coalesces_compatible_queries_and_demuxes_rows():
+    runtime = FakeCuVSRuntime()
+    index = make_micro_batch_index(runtime)
+    telemetry = [CuVSSearchTelemetry(algorithm="brute_force", auto_mode=False) for _ in range(4)]
+    requests = [
+        ([1.0, 0.0], 1, None, None, None, telemetry[0]),
+        ([0.0, 1.0], 1, None, None, None, telemetry[1]),
+        ([0.9, 0.1], 1, None, None, None, telemetry[2]),
+        ([0.1, 0.9], 1, None, None, None, telemetry[3]),
+    ]
+
+    results = run_simultaneous_searches(index, requests)
+
+    assert [result[0] for result in results] == [[1], [2], [1], [2]]
+    assert runtime.search_batch_sizes == [4]
+    assert all(item.micro_batching_enabled for item in telemetry)
+    assert [item.batch_size for item in telemetry] == [4] * 4
+    assert all(item.batch_wait_ms >= 0.0 for item in telemetry)
+    index.close()
+
+
+def test_cuvs_micro_batch_groups_same_filter_but_splits_incompatible_keys():
+    runtime = FakeCuVSRuntime()
+    index = make_micro_batch_index(runtime)
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    filter_b = {"op": "must", "field": "account_id", "conds": ["b"]}
+
+    same_filter = run_simultaneous_searches(
+        index,
+        [
+            ([1.0, 0.0], 1, filter_a),
+            ([0.0, 1.0], 1, filter_a),
+        ],
+    )
+    assert [result[0] for result in same_filter] == [[1], [3]]
+    assert runtime.search_batch_sizes == [2]
+
+    runtime.search_batch_sizes.clear()
+    split_filters = run_simultaneous_searches(
+        index,
+        [
+            ([1.0, 0.0], 1, filter_a),
+            ([0.0, 1.0], 1, filter_b),
+        ],
+    )
+    assert [result[0] for result in split_filters] == [[1], [2]]
+    assert sorted(runtime.search_batch_sizes) == [1, 1]
+
+    runtime.search_batch_sizes.clear()
+    split_limits = run_simultaneous_searches(
+        index,
+        [
+            ([1.0, 0.0], 1, None),
+            ([1.0, 0.0], 2, None),
+        ],
+    )
+    assert [len(result[0]) for result in split_limits] == [1, 2]
+    assert sorted(runtime.search_batch_sizes) == [1, 1]
+    index.close()
+
+
+def test_cuvs_micro_batch_singleton_deadline_and_exception_recovery():
+    class FailingBatchRuntime(FakeCuVSRuntime):
+        def __init__(self):
+            super().__init__()
+            self.fail_next_batch = False
+
+        def search_batch(self, index, queries, limit, mask):
+            if self.fail_next_batch:
+                self.fail_next_batch = False
+                self.search_batch_sizes.append(len(queries))
+                raise RuntimeError("injected batch failure")
+            return super().search_batch(index, queries, limit, mask)
+
+    runtime = FailingBatchRuntime()
+    index = make_micro_batch_index(
+        runtime,
+        micro_batching_max_wait_ms=10.0,
+    )
+    telemetry = CuVSSearchTelemetry(algorithm="brute_force", auto_mode=False)
+    started = time.perf_counter()
+    assert index.search([1.0, 0.0], 1, None, telemetry=telemetry)[0] == [1]
+    assert time.perf_counter() - started < 1.0
+    assert telemetry.batch_size == 1
+    assert telemetry.batch_wait_ms >= 0.0
+
+    runtime.search_batch_sizes.clear()
+    runtime.fail_next_batch = True
+    barrier = threading.Barrier(3)
+
+    def failing_search(query):
+        barrier.wait(timeout=5)
+        return index.search(query, 1, None)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(failing_search, [1.0, 0.0]),
+            executor.submit(failing_search, [0.0, 1.0]),
+        ]
+        barrier.wait(timeout=5)
+        for future in futures:
+            with pytest.raises(RuntimeError, match="injected batch failure"):
+                future.result(timeout=5)
+
+    assert runtime.search_batch_sizes == [2]
+    assert index.search([1.0, 0.0], 1, None)[0] == [1]
+    index.close()
+
+
+def test_cuvs_micro_batch_worker_fatal_error_reaps_current_batch():
+    class FatalBatchRuntime(FakeCuVSRuntime):
+        def __init__(self):
+            super().__init__()
+            self.fail_fatally = False
+
+        def search_batch(self, index, queries, limit, mask):
+            if self.fail_fatally:
+                self.fail_fatally = False
+                self.search_batch_sizes.append(len(queries))
+                raise KeyboardInterrupt("injected worker failure")
+            return super().search_batch(index, queries, limit, mask)
+
+    runtime = FatalBatchRuntime()
+    index = make_micro_batch_index(runtime)
+    runtime.fail_fatally = True
+    barrier = threading.Barrier(3)
+
+    def fatal_search(query):
+        barrier.wait(timeout=5)
+        return index.search(query, 1, None)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(fatal_search, [1.0, 0.0]),
+            executor.submit(fatal_search, [0.0, 1.0]),
+        ]
+        barrier.wait(timeout=5)
+        for future in futures:
+            with pytest.raises(KeyboardInterrupt, match="injected worker failure"):
+                future.result(timeout=5)
+
+    assert runtime.search_batch_sizes == [2]
+    assert index._active_searches == 0
+    deadline = time.monotonic() + 5
+    while index._micro_batch_worker_failure is None and time.monotonic() < deadline:
+        time.sleep(0.001)
+    assert index._micro_batch_worker_failure is not None
+    index.close()
+
+
+def test_cuvs_micro_batch_keeps_snapshot_generations_separate():
+    runtime = FakeCuVSRuntime()
+    index = make_micro_batch_index(
+        runtime,
+        micro_batching_max_wait_ms=100.0,
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        old_search = executor.submit(index.search, [1.0, 0.0], 1, None)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            with index._micro_batch_condition:
+                if index._micro_batch_pending:
+                    break
+            time.sleep(0.001)
+        else:
+            pytest.fail("old-snapshot search did not enter the micro-batch queue")
+
+        index.upsert([delta(4, [2.0, 0.0], account_id="a")])
+        new_search = executor.submit(index.search, [1.0, 0.0], 1, None)
+        assert old_search.result(timeout=5)[0] == [1]
+        assert new_search.result(timeout=5)[0] == [4]
+
+    assert runtime.search_batch_sizes == [1, 1]
+    index.close()
+
+
+def test_auto_native_route_does_not_report_micro_batching():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={
+            "micro_batching_enabled": True,
+            "micro_batching_max_wait_ms": 1.0,
+            "auto_filter_native_threshold": 10,
+            "auto_memory_reserve_mb": 0,
+            "auto_memory_safety_factor": 1.0,
+        },
+        runtime=runtime,
+        auto_memory=True,
+    )
+    index.add_candidates([candidate(1, [1.0, 0.0], account_id="a")])
+    telemetry = CuVSSearchTelemetry(algorithm="brute_force", auto_mode=True)
+
+    with pytest.raises(CuVSNativeRouteError):
+        index.search(
+            [1.0, 0.0],
+            1,
+            {"op": "must", "field": "account_id", "conds": ["a"]},
+            native_filter_resolver=lambda _filters: ([1], 1),
+            native_filter_layout_registrar=lambda _labels: None,
+            telemetry=telemetry,
+        )
+
+    assert telemetry.micro_batching_enabled is False
+    assert telemetry.batch_size == 1
+    assert runtime.search_batch_sizes == []
+    index.close()
+
+
+def test_cuvs_micro_batch_close_drains_queued_search_and_rejects_new_work():
+    runtime = FakeCuVSRuntime()
+    index = make_micro_batch_index(
+        runtime,
+        micro_batching_max_wait_ms=100.0,
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        search_future = executor.submit(index.search, [1.0, 0.0], 1, None)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            with index._micro_batch_condition:
+                if index._micro_batch_pending:
+                    break
+            time.sleep(0.001)
+        else:
+            pytest.fail("search did not enter the micro-batch queue")
+        close_future = executor.submit(index.close)
+        assert search_future.result(timeout=5)[0] == [1]
+        close_future.result(timeout=5)
+
+    assert runtime.closed is True
+    with pytest.raises(RuntimeError, match="closed"):
+        index.search([1.0, 0.0], 1, None)
+
+
+@pytest.mark.parametrize(
+    "config, message",
+    [
+        ({"micro_batching_max_batch_size": 0}, "between 1 and 8"),
+        ({"micro_batching_max_batch_size": 9}, "between 1 and 8"),
+        ({"micro_batching_max_wait_ms": -1}, "between 0 and 100"),
+        ({"micro_batching_max_wait_ms": 100.1}, "between 0 and 100"),
+        ({"micro_batching_max_wait_ms": float("inf")}, "between 0 and 100"),
+        (
+            {"micro_batching_enabled": True, "algorithm": "cagra"},
+            "brute_force",
+        ),
+        (
+            {"micro_batching_enabled": True, "max_concurrent_gpu_searches": 2},
+            "max_concurrent_gpu_searches=1",
+        ),
+    ],
+)
+def test_cuvs_micro_batch_raw_config_validation(config, message):
+    with pytest.raises(ValueError, match=message):
+        CuVSDenseIndex(
+            dimension=2,
+            distance="ip",
+            normalize_vectors=False,
+            field_types={},
+            config=config,
+            runtime=FakeCuVSRuntime(),
+        )
 
 
 def test_inflight_search_keeps_immutable_snapshot_during_rebuild():
