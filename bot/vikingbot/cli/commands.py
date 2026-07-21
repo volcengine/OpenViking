@@ -1147,13 +1147,17 @@ def cron_add(
 
     session_key = SessionKey(type="cli", channel_id="default", chat_id="default")
 
-    job = service.add_job(
-        name=name,
-        schedule=schedule,
-        message=message,
-        deliver=deliver,
-        session_key=session_key,
-    )
+    try:
+        job = service.add_job(
+            name=name,
+            schedule=schedule,
+            message=message,
+            deliver=deliver,
+            session_key=session_key,
+        )
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
 
     console.print(f"[green]✓[/green] Added job '{job.name}' ({job.id})")
 
@@ -1187,7 +1191,11 @@ def cron_enable(
     store_path = get_data_dir() / "cron" / "jobs.json"
     service = CronService(store_path)
 
-    job = service.enable_job(job_id, enabled=not disable)
+    try:
+        job = service.enable_job(job_id, enabled=not disable)
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
     if job:
         status = "disabled" if disable else "enabled"
         console.print(f"[green]✓[/green] Job '{job.name}' {status}")
@@ -1210,10 +1218,16 @@ def cron_run(
     async def run():
         return await service.run_job(job_id, force=force)
 
-    if asyncio.run(run()):
-        console.print("[green]✓[/green] Job executed")
-    else:
+    try:
+        executed = asyncio.run(run())
+    except RuntimeError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+
+    if not executed:
         console.print(f"[red]Failed to run job {job_id}[/red]")
+        raise typer.Exit(1)
+    console.print("[green]✓[/green] Job executed")
 
 
 # ============================================================================
