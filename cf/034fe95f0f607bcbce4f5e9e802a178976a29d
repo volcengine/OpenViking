@@ -1,0 +1,28 @@
+openviking/storage/queuefs/semantic_processor.py
+  s_47153bfb47974b::t_8eb39a6f748dad 751-754,761-763
+tests/storage/test_semantic_processor_target_preexisting.py
+  s_47153bfb47974b::t_c9c64491ebd32a 152-171
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "cf034fe95f0f607bcbce4f5e9e802a178976a29d",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_47153bfb47974b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6e0e-7027-7a53-975d-623ba2dd4619",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

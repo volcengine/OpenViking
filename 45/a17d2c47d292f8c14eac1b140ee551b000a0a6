@@ -1,0 +1,71 @@
+README.md
+  s_9181b2153ddbd6::t_d8d7b071c0d220 798
+README_CN.md
+  s_9181b2153ddbd6::t_1a4b9ced357f55 839
+README_JA.md
+  s_9181b2153ddbd6::t_fb7a8d37a939e9 473-489,538
+docs/.vitepress/config.ts
+  s_9181b2153ddbd6::t_6b712c6caac004 103-556,559,562,567,572,578,828,830-832,848,850-852
+docs/.vitepress/theme/LlmsTxtLink.vue
+  s_9181b2153ddbd6::t_44c76490a237ac 4,9,19-21,42,48,80-85,134-146,154-161
+docs/.vitepress/theme/api-example-tabs.test.ts
+  s_9181b2153ddbd6::t_a343618600bb05 12,21-29
+docs/.vitepress/theme/custom.css
+  s_9181b2153ddbd6::t_795a476908af60 231,237
+docs/.vitepress/theme/llms-txt.ts
+  s_9181b2153ddbd6::t_22cbe93a28b851 4-11
+docs/en/api/05-sessions.md
+  s_9181b2153ddbd6::t_b525449af6aca6 325-326,328-329,332,1534,1542-1544,1550-1551
+docs/en/concepts/01-architecture.md
+  s_9181b2153ddbd6::t_d3a1451aa5961e 61,120
+docs/en/concepts/02-context-types.md
+  s_9181b2153ddbd6::t_b7014fcdd76893 47,55-71
+docs/en/concepts/04-viking-uri.md
+  s_9181b2153ddbd6::t_54695b45156cc8 97-99
+docs/en/concepts/08-session.md
+  s_9181b2153ddbd6::t_239108c13257c5 146-150,244-246,249,251-252
+docs/en/faq/faq.md
+  s_9181b2153ddbd6::t_8d29f98ff50e14 23,47-56,240,242
+docs/en/getting-started/01-introduction.md
+  s_9181b2153ddbd6::t_70b96d6d6c2f5a 29-40,102,104,106-112
+docs/en/guides/10-prompt-guide.md
+  s_9181b2153ddbd6::t_fd1a3a8762afef 199-201,215-220,225
+docs/zh/api/05-sessions.md
+  s_9181b2153ddbd6::t_fb0a830d091f6d 325-326,328-329,332,1506,1514-1516,1522-1523
+docs/zh/concepts/01-architecture.md
+  s_9181b2153ddbd6::t_466d6a3398c75b 60,119
+docs/zh/concepts/02-context-types.md
+  s_9181b2153ddbd6::t_8ab74502ae238a 47,55-71
+docs/zh/concepts/04-viking-uri.md
+  s_9181b2153ddbd6::t_368c7198b2933c 95-97
+docs/zh/concepts/08-session.md
+  s_9181b2153ddbd6::t_b86dc5e56eee26 146-150,244-246,249,251-252
+docs/zh/faq/faq.md
+  s_9181b2153ddbd6::t_a2cd2795282cf0 23,47-57,233,235
+docs/zh/getting-started/01-introduction.md
+  s_9181b2153ddbd6::t_9e5b3c64407e12 29-40,102,104,106-112
+docs/zh/guides/10-prompt-guide.md
+  s_9181b2153ddbd6::t_e30282d14ff874 195,199-201,215-220,225
+examples/pi-coding-agent-extension/DESIGN.md
+  s_9181b2153ddbd6::t_402ebe75bfc96e 159,161,192,231,233,235,314
+openviking/eval/datasets/local_doc_example_glm5.jsonl
+  s_9181b2153ddbd6::t_8a3648d25a0ba7 3,17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "45a17d2c47d292f8c14eac1b140ee551b000a0a6",
+  "prompts": {},
+  "sessions": {
+    "s_9181b2153ddbd6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f8257-30dd-7ae0-ab5c-889365710765",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

@@ -1,0 +1,43 @@
+openviking/server/openviking_assets.py
+  s_f4cf109eba0b9c::t_7be8c897e749e3 1-315
+openviking/server/routers/openviking_assets.py
+  s_f4cf109eba0b9c::t_bfaf808afa0610 1-40
+examples/openviking-assets/assets.yaml
+  s_f4cf109eba0b9c::t_c903816cf7f566 1-31
+crates/ov_cli/src/openviking_assets.rs
+  s_f4cf109eba0b9c::t_a44be4ceeb2948 1-1040
+openviking/server/routers/__init__.py
+  s_f4cf109eba0b9c::t_1b9a8c339e221b 14,50
+examples/openviking-assets/manifests/code-qa.yaml
+  s_f4cf109eba0b9c::t_3e0e697b64ba6c 1-9
+openviking/server/app.py
+  s_f4cf109eba0b9c::t_1e73e12453db57 40,539
+tests/server/test_openviking_assets.py
+  s_f4cf109eba0b9c::t_cdf98ea7cadb8a 1-132
+crates/ov_cli/src/main.rs
+  s_f4cf109eba0b9c::t_e586557a968879 4562-4589
+  s_f4cf109eba0b9c::t_8ba6bb3413ddb9 16,285-325,385-388,2745-2748,2767-2805
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "5c78c62de9a91aae60a71522284e85376c2753c9",
+  "prompts": {},
+  "humans": {
+    "h_35f000fc27e979": {
+      "author": "李子恒 <ziheng.li@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_f4cf109eba0b9c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f82d9-454f-7ea3-9d82-2d81641a10c1",
+        "model": "unknown"
+      },
+      "human_author": "ziheng.li <ziheng.li@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

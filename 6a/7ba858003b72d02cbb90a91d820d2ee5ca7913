@@ -1,0 +1,38 @@
+openviking/service/core.py
+  s_47153bfb47974b::t_4e7cdd857dcfd5 31,419-421,424
+openviking/service/task_tracker.py
+  s_1cfb36e6160bae::t_c4a4058763de28 42-44,339,358,373,376,384-386,396,399,407-409
+openviking/utils/resource_processor.py
+  s_1cfb36e6160bae::t_6c23e49ce4e32b 138,364-384,392-465
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "6a7ba858003b72d02cbb90a91d820d2ee5ca7913",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_1cfb36e6160bae": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6b15-d3ec-75b0-9466-fcfdf6eac1c3",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    },
+    "s_47153bfb47974b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6e0e-7027-7a53-975d-623ba2dd4619",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

@@ -1,0 +1,183 @@
+crates/ov_cli/src/base_client.rs
+  s_1cfb36e6160bae::t_49bde8b2a5ab2e 72,77-78,87-101,359,364
+crates/ov_cli/src/client.rs
+  s_1cfb36e6160bae::t_0bd8d63c18fa95 1718,1722,2031-2040
+crates/ov_cli/src/config_agent.rs
+  s_1cfb36e6160bae::t_f37b52fdca1519 922-927
+crates/ov_cli/src/config_command_ui.rs
+  s_1cfb36e6160bae::t_fd9901a480193f 417-419
+crates/ov_cli/src/config_wizard/store.rs
+  s_1cfb36e6160bae::t_22466a81cf887c 617-627,678,702,1119-1122,1125-1126
+crates/ov_cli/src/config_wizard/wizard.rs
+  s_1cfb36e6160bae::t_a2438f271b1234 6311-6316,6321
+crates/ov_cli/src/error.rs
+  s_1cfb36e6160bae::t_f2d31db914d5da 1,20,22,54,56,63,65-79
+crates/ov_cli/src/error_ui.rs
+  s_1cfb36e6160bae::t_13e40aa89a6bcd 1,5,11,87-127,277,279,286-287,289,291-295,536-541,727,743-745,941,944,1064-1069,1075,1080-1083,1085-1089,1092-1093,1096,1098-1101,1103,1107-1112,1115-1126
+crates/ov_cli/src/main.rs
+  s_1cfb36e6160bae::t_6495575efaa0d6 2642-2648,2665-2671,3221-3227
+crates/ov_cli/src/status_ui.rs
+  s_1cfb36e6160bae::t_8968234db18169 213-215,888-892
+docs/en/api/01-overview.md
+  s_1cfb36e6160bae::t_7364c5b8727850 306,373
+docs/en/api/03-filesystem.md
+  s_1cfb36e6160bae::t_396858a2c30ef3 177,840,1571,1690
+docs/en/api/04-skills.md
+  s_1cfb36e6160bae::t_e8e11571e51b8c 425
+docs/en/api/11-snapshot.md
+  s_1cfb36e6160bae::t_382ef7d305f7cb 618
+docs/en/api/12-error-codes.md
+  s_1cfb36e6160bae::t_2ce11fc6320acc 1-58
+docs/en/guides/09-ovpack.md
+  s_1cfb36e6160bae::t_681f8232fc2012 305
+docs/zh/api/01-overview.md
+  s_1cfb36e6160bae::t_f9efb378998d75 301,368
+docs/zh/api/03-filesystem.md
+  s_1cfb36e6160bae::t_b52f65ddd9e388 177,841,1572,1691
+docs/zh/api/04-skills.md
+  s_1cfb36e6160bae::t_db8c242b74f876 425
+docs/zh/api/11-snapshot.md
+  s_1cfb36e6160bae::t_684cdb758c0f11 618
+docs/zh/api/12-error-codes.md
+  s_1cfb36e6160bae::t_ebea33bc8de75d 1-58
+docs/zh/guides/09-ovpack.md
+  s_1cfb36e6160bae::t_77dca0b3b51596 286
+openviking/core/uri_validation.py
+  s_1cfb36e6160bae::t_80473612dfb8f7 65
+openviking/errors/__init__.py
+  s_1cfb36e6160bae::t_b5e9c906675fcc 1-298
+openviking/parse/accessors/feishu_accessor.py
+  s_1cfb36e6160bae::t_e04ecc306e7683 22,32,82-95,97-102
+openviking/parse/parsers/feishu.py
+  s_1cfb36e6160bae::t_b493755fc89f49 23,336,414-415,741-742,799,826-827
+openviking/parse/parsers/upload_utils.py
+  s_1cfb36e6160bae::t_5c3858990a2217 213
+openviking/pyagfs/__init__.py
+  s_1cfb36e6160bae::t_c94d471d997c0f 39-40,189-190
+openviking/pyagfs/exceptions.py
+  s_1cfb36e6160bae::t_15869fe080ce4f 198-211
+openviking/resource/watch_manager.py
+  s_1cfb36e6160bae::t_1e93a1bd4589ab 23,404,413-416,486,500-503,592-595,598-601,666
+openviking/server/app.py
+  s_1cfb36e6160bae::t_3802c4ada2fbdd 9,20,30,162-169,409,412-413,419-423,425,428,434-442,444,448,463-464,467-468,471-477,479-480,483-484
+openviking/server/error_mapping.py
+  s_1cfb36e6160bae::t_f889ebda70a5e0 3-5,9-15,37,39-40,43-46,50-51,53-55,57,60-66,69-74,76-78,82-93,96-103,106-108,117,121-129,131-138,140-145,148,150-152,154-158,160-168,170,172-174,176-178,180-183,185-187,190,192-205,207,209-211
+openviking/server/models.py
+  s_1cfb36e6160bae::t_8f80678d8a7256 9-10,19-26,39
+openviking/server/responses.py
+  s_1cfb36e6160bae::t_4f526164861132 9-10,45,47-48,52,56,68,75,78,82
+openviking/server/routers/debug.py
+  s_1cfb36e6160bae::t_f1e155c2e737f7 16,20-21,47,73,82
+openviking/server/routers/resources.py
+  s_1cfb36e6160bae::t_ee84ce77c78a97 62
+openviking/server/routers/sessions.py
+  s_1cfb36e6160bae::t_c02a950edbdb1a 12,17,240,274,319,344
+openviking/server/routers/snapshot.py
+  s_1cfb36e6160bae::t_e1d45c07050f4c 15,138,152
+openviking/server/routers/stats.py
+  s_1cfb36e6160bae::t_569e72839cf3c5 9,13-14,42-44,64,67
+openviking/server/routers/tasks.py
+  s_1cfb36e6160bae::t_c0323b5eeda36b 19,46
+openviking/server/routers/watches.py
+  s_1cfb36e6160bae::t_a9cf863b76b7ff 195
+openviking/service/legacy_migration.py
+  s_1cfb36e6160bae::t_7d25b5c918e2b8 11,225,773
+openviking/service/reindex_executor.py
+  s_1cfb36e6160bae::t_48ad5f1e8c3717 26,172,192,218,228,244,251,263,270,411,434,500,1544,1667,1681
+openviking/service/resource_service.py
+  s_1cfb36e6160bae::t_6f5dd5c6272e3a 58,248,693,707,1527,1541-1547
+openviking/service/task_store.py
+  s_1cfb36e6160bae::t_04723c960e992a 12,118
+openviking/session/memory/agent_experience_context_provider.py
+  s_1cfb36e6160bae::t_963f6780eaa9b6 198
+openviking/storage/errors.py
+  s_1cfb36e6160bae::t_6a6fcd387cbe8d 18-19
+openviking/storage/ovpack/operations.py
+  s_1cfb36e6160bae::t_83120a01de4c94 65,318-323,660-665
+openviking/storage/queuefs/named_queue.py
+  s_1cfb36e6160bae::t_3e78004af0e416 11,200
+openviking/storage/transaction/lock_context.py
+  s_1cfb36e6160bae::t_1bc5e2f291b865 61,70
+openviking/storage/transaction/path_lock.py
+  s_1cfb36e6160bae::t_65fcd44ab88c7f 10,374
+openviking/storage/vectordb/collection/local_collection.py
+  s_1cfb36e6160bae::t_b0b88a4de4029c 16,778
+openviking/storage/viking_fs.py
+  s_1cfb36e6160bae::t_3336eab60afd4c 44,529,531,734,2964,3531,4033
+openviking/storage/viking_vector_index_backend.py
+  s_1cfb36e6160bae::t_28520bb533dbfc 13,15,408,413-420,426-427,435
+openviking/utils/exceptions.py
+  s_1cfb36e6160bae::t_11c569e2ed292e 5,7
+openviking/utils/resource_processor.py
+  s_1cfb36e6160bae::t_3683b13cd23ad4 204,253
+openviking_cli/client/_http_compat.py
+  s_1cfb36e6160bae::t_f4d8c6288fc623 80-81,84-91
+openviking_cli/exceptions.py
+  s_1cfb36e6160bae::t_7c7db19ecb88d7 3,5-6
+sdk/python/openviking_sdk/client.py
+  s_1cfb36e6160bae::t_c79798ded459a3 42-44,473-474,477-484
+sdk/python/openviking_sdk/errors.py
+  s_1cfb36e6160bae::t_3bf221827ed78e 24
+sdk/python/tests/test_error_mapping.py
+  s_1cfb36e6160bae::t_156bba87605fd2 5,45-58
+test_scripts/error-handling.md
+  s_1cfb36e6160bae::t_ff884ad0d8502a 1-370
+tests/client/test_http_error_mapping.py
+  s_1cfb36e6160bae::t_08d9547646e266 11,66-79
+tests/integration/test_watch_e2e.py
+  s_1cfb36e6160bae::t_e569df276312b9 14,204,261
+tests/misc/test_mkdir.py
+  s_1cfb36e6160bae::t_55e51feb1805fa 18,24,50,53,57-66,96-98
+tests/parse/test_feishu_errors.py
+  s_1cfb36e6160bae::t_712f6d0b2f45a6 55,70-89
+tests/resource/test_watch_manager.py
+  s_1cfb36e6160bae::t_2b973b21322f85 16,306,308,314,356,358,368
+tests/server/test_admin_rebuild_api.py
+  s_1cfb36e6160bae::t_978d40b0a360d8 1547
+tests/server/test_api_content.py
+  s_1cfb36e6160bae::t_30e1d8a2c39924 53,59
+tests/server/test_api_fs_content_endpoint_suite.py
+  s_1cfb36e6160bae::t_a3a82f342f7d2f 221,230
+tests/server/test_api_local_input_security.py
+  s_1cfb36e6160bae::t_7178ad5cfb361d 232
+tests/server/test_api_resources.py
+  s_1cfb36e6160bae::t_f249b1dff5dfdb 209,235,727
+tests/server/test_api_snapshot.py
+  s_1cfb36e6160bae::t_8ae4400575b4f8 13,16,157,164,212-214,244-246,249-252,263-265,319-321,331-333,363-365,369,399,408-410,419,455,466-468,470,490,497,536
+tests/server/test_error_mapping.py
+  s_1cfb36e6160bae::t_c85d377ef74a53 6-9,16-17,20-24,48,50,55,86-88,90-104,107,116-117,121,135-136,147-148,150,153,165,174,181,185,190,194,196-217
+tests/server/test_http_client_sdk.py
+  s_1cfb36e6160bae::t_3fc0850d938cde 13,64,78
+tests/server/test_resources_temp_upload_token.py
+  s_1cfb36e6160bae::t_5cce61cfbfc625 134
+tests/service/test_resource_service_watch.py
+  s_1cfb36e6160bae::t_da81d9072747b8 16,334,344,354,374,404,437
+tests/session/memory/test_agent_experience_context_provider.py
+  s_1cfb36e6160bae::t_d1d34f8a60279f 9-11,176-178,183-190
+tests/storage/test_collection_schemas.py
+  s_1cfb36e6160bae::t_7a83f9a0f33d58 21,25-26,1596,1621
+tests/storage/test_local_collection_update.py
+  s_1cfb36e6160bae::t_d74bfaaf56f52a 10,209,227
+tests/transaction/test_path_lock.py
+  s_1cfb36e6160bae::t_31f63bbe621eee 170-183
+tests/unit/stats/test_stats_api.py
+  s_1cfb36e6160bae::t_7b8b160b38c280 65,68,105,111,114,117
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "0d7e1f6871965765a90aa11894c466784b19c4d9",
+  "prompts": {},
+  "sessions": {
+    "s_1cfb36e6160bae": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6b15-d3ec-75b0-9466-fcfdf6eac1c3",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

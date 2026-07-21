@@ -1,0 +1,21 @@
+openviking/server/error_mapping.py
+  s_1cfb36e6160bae::t_cd58586cd1e6c9 7,10-11,42,157-158,161-167,219-220
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "1f7ae74724a59bf9dcaf6bfe3181f0784fe3382c",
+  "prompts": {},
+  "sessions": {
+    "s_1cfb36e6160bae": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6b15-d3ec-75b0-9466-fcfdf6eac1c3",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
