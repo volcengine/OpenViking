@@ -363,6 +363,15 @@ OpenViking 使用分数传播机制：
 3. **使用本地存储**：开发阶段使用 `local` 后端减少网络延迟
 4. **异步操作**：充分利用 `AsyncOpenViking` / `AsyncHTTPClient` 的异步特性
 
+### Docker 容器升不上去，怎么办？
+
+升级失败的报告主要集中在两个错误：
+
+- `ModuleNotFoundError: No module named 'openviking.console.bootstrap'` —— 自 v0.3.19 起 Web Studio 已打包进 `openviking-server`，仍然启动独立 bootstrap 模块的 `command:` 会立即退出。删除该行即可。
+- `EmbeddingRebuildRequiredError` —— `ov.conf` 中的 embedding 模型、provider 或维度与已有的 `vectordb/context` 集合不再匹配。你可以选择把 embedding 配置回滚，或者备份并仅重建 `vectordb/context/`，然后逐个 namespace 运行 `ov reindex`。
+
+完整的分步恢复流程，包括 `docker-compose.yml` 改动前后对照以及具体的 `ov reindex` 命令，请参阅[升级与迁移](../guides/14-upgrades-and-migrations.md)。
+
 ## 部署相关
 
 ### 嵌入式模式和服务模式有什么区别？
@@ -391,3 +400,4 @@ client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 - [架构概述](../concepts/01-architecture.md) - 深入理解系统设计
 - [检索机制](../concepts/07-retrieval.md) - 检索流程详解
 - [配置指南](../guides/01-configuration.md) - 完整配置参考
+- [升级与迁移](../guides/14-upgrades-and-migrations.md) - 处理升级时的启动失败
