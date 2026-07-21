@@ -16,6 +16,8 @@ from argon2.exceptions import VerifyMismatchError
 from openviking.pyagfs import AGFSAlreadyExistsError, AGFSNotFoundError, AsyncAGFSClient
 from openviking.server.api_keys.models import AccountInfo, UserKeyEntry
 from openviking.server.identity import ResolvedIdentity, Role
+from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+from openviking.storage.transaction import LockContext, get_lock_manager
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import (
     AlreadyExistsError,
@@ -651,18 +653,38 @@ class LegacyAPIKeyManager:
 
     async def _save_accounts_json(self) -> None:
         """Persist the global accounts list."""
-        data = {
-            "accounts": {
-                aid: {"created_at": info.created_at} for aid, info in self._accounts.items()
-            }
-        }
-        await self._write_json(ACCOUNTS_PATH, data)
+        try:
+            async with LockContext(
+                get_lock_manager(), [ACCOUNTS_PATH], lock_mode="exact", timeout=10.0
+            ):
+                data = {
+                    "accounts": {
+                        aid: {"created_at": info.created_at}
+                        for aid, info in self._accounts.items()
+                    }
+                }
+                await self._write_json(ACCOUNTS_PATH, data)
+        except LockAcquisitionError as exc:
+            raise ResourceBusyError(
+                "Another account operation is in progress. Please retry.",
+                uri=ACCOUNTS_PATH,
+                conflict_type="account_registry_busy",
+            ) from exc
 
     async def _save_users_json(self, account_id: str) -> None:
         """Persist a single account's user registry."""
-        account = self._accounts.get(account_id)
-        if account is None:
-            return
-        data = {"users": account.users}
         path = USERS_PATH_TEMPLATE.format(account_id=account_id)
-        await self._write_json(path, data)
+        try:
+            async with LockContext(
+                get_lock_manager(), [path], lock_mode="exact", timeout=10.0
+            ):
+                account = self._accounts.get(account_id)
+                if account is None:
+                    return
+                await self._write_json(path, {"users": account.users})
+        except LockAcquisitionError as exc:
+            raise ResourceBusyError(
+                "Another user operation is in progress for this account. Please retry.",
+                uri=path,
+                conflict_type="user_registry_busy",
+            ) from exc

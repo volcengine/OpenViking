@@ -11,7 +11,12 @@ from openviking_cli.utils.config.consts import (
     OPENVIKING_CONFIG_ENV,
 )
 
-_USE_COLOR = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+_USE_COLOR = (
+    hasattr(sys.stdout, "isatty")
+    and sys.stdout.isatty()
+    and os.environ.get("TERM", "dumb") != "dumb"
+    and "NO_COLOR" not in os.environ
+)
 
 
 def _color(text: str, code: str) -> str:
@@ -20,24 +25,20 @@ def _color(text: str, code: str) -> str:
     return f"\033[{code}m{text}\033[0m"
 
 
-def _prefix() -> str:
-    return _color("[preflight]", "36")
-
-
 def _log_info(message: str) -> None:
-    print(f"{_prefix()} {_color('[INFO]', '34')} {message}")
+    print(_color(f"  │ {message}", "2"))
 
 
 def _log_warn(message: str) -> None:
-    print(f"{_prefix()} {_color('[WARN]', '33')} {message}")
+    print(f"  {_color('!', '33')} {message}")
 
 
 def _log_ok(message: str) -> None:
-    print(f"{_prefix()} {_color('[OK]', '32')} {message}")
+    print(f"  {_color('✓', '32')} {message}")
 
 
 def _log_error(message: str) -> None:
-    print(f"{_prefix()} {_color('[ERROR]', '31')} {message}", file=sys.stderr)
+    print(f"  {_color('✗', '31')} {message}", file=sys.stderr)
 
 
 def _is_interactive() -> bool:
@@ -45,8 +46,10 @@ def _is_interactive() -> bool:
 
 
 def _prompt_text(prompt: str, default: str | None = None) -> str:
-    suffix = f" [{default}]" if default else ""
-    raw = input(f"{_prefix()} {prompt}{suffix}: ").strip()
+    print(f"\n  {_color('?', '33')} {prompt}")
+    if default:
+        print(f"    {_color('默认:', '2')} {default}")
+    raw = input(f"    {_color('>', '32')} ").strip()
     if not raw and default is not None:
         return default
     return raw

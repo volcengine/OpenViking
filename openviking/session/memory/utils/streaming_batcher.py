@@ -73,10 +73,6 @@ class StreamingBatcher(Generic[T, R]):
     def closed(self) -> bool:
         return self._closed
 
-    @property
-    def last_result(self) -> R | None:
-        return self._last_result
-
     async def get_buffered_size(self) -> int:
         async with self._buffer_lock:
             return sum(self._item_size(item.payload) for item in self._buffer)

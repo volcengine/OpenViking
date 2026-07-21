@@ -153,20 +153,6 @@ class AccessorRegistry:
                 return accessor
         return None
 
-    def list_accessors(self, source: Optional[Union[str, Path]] = None) -> List[DataAccessor]:
-        """
-        List registered accessors.
-
-        Args:
-            source: Optional source to filter by (only returns accessors that can handle it)
-
-        Returns:
-            List of DataAccessor instances
-        """
-        if source is None:
-            return list(self._accessors)
-        return [a for a in self._accessors if a.can_handle(source)]
-
     async def access(self, source: Union[str, Path], **kwargs) -> LocalResource:
         """
         Access a source by routing to the appropriate accessor.

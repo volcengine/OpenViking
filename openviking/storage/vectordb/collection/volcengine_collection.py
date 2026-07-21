@@ -121,18 +121,6 @@ class VolcengineCollection(ICollection):
             f"Request to {action} failed: {response.status_code} {code} {message}"
         )
 
-    @staticmethod
-    def _is_collection_not_found(response: Any, action: str) -> bool:
-        if action != "GetVikingdbCollection" or response.status_code != 404:
-            return False
-        try:
-            result = response.json()
-        except json.JSONDecodeError:
-            return False
-        metadata = result.get("ResponseMetadata", {}) if isinstance(result, dict) else {}
-        error = metadata.get("Error", {}) if isinstance(metadata, dict) else {}
-        return error.get("Code") == "NotFound.VikingdbCollection"
-
     def _console_post(self, data: Dict[str, Any], action: str):
         params = {"Action": action, "Version": VIKING_DB_VERSION}
         response = self.console_client.do_req("POST", req_params=params, req_body=data)
