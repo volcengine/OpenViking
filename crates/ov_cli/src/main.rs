@@ -7,7 +7,6 @@ mod config_agent;
 mod config_command_ui;
 mod config_wizard;
 mod error;
-mod error_classifier;
 mod error_ui;
 mod handlers;
 mod health_ui;
@@ -2402,6 +2401,30 @@ fn preprocess_cli_args(args: Vec<OsString>) -> Vec<OsString> {
     preprocess_privacy_args(args)
 }
 
+fn pre_parse_output_options(args: &[OsString]) -> (OutputFormat, bool) {
+    let mut format = OutputFormat::Table;
+    let mut compact = true;
+    let mut index = 1;
+    while index < args.len() {
+        let token = args[index].to_string_lossy();
+        if token == "--output" || token == "-o" {
+            if let Some(value) = args.get(index + 1) {
+                format = OutputFormat::from(value.to_string_lossy().as_ref());
+                index += 1;
+            }
+        } else if let Some(value) = token.strip_prefix("--output=") {
+            format = OutputFormat::from(value);
+        } else if let Some(value) = token
+            .strip_prefix("--compact=")
+            .or_else(|| token.strip_prefix("-c="))
+        {
+            compact = value != "false";
+        }
+        index += 1;
+    }
+    (format, compact)
+}
+
 fn preprocess_privacy_args(args: Vec<OsString>) -> Vec<OsString> {
     let args = preprocess_privacy_get_shortcut(args);
     preprocess_privacy_upsert_key_flags(args)
@@ -2530,12 +2553,18 @@ fn language_command_can_run_picker(has_language_value: bool, is_interactive: boo
 async fn main() {
     let args = preprocess_cli_args(std::env::args_os().collect());
     let command_display = error_ui::display_command(&args);
+    let (pre_parse_output_format, pre_parse_compact) = pre_parse_output_options(&args);
     match ensure_language_selected_before_command(&args).await {
         Ok(true) => {}
         Ok(false) => return,
         Err(e) => {
-            let report = error_ui::report_for_runtime_error(&command_display, &e);
-            error_ui::print_report(&report, false);
+            error_ui::print_runtime_error(
+                &command_display,
+                &e,
+                pre_parse_output_format,
+                pre_parse_compact,
+                false,
+            );
             std::process::exit(2);
         }
     }
@@ -2558,8 +2587,13 @@ async fn main() {
         match Config::load_required() {
             Ok(config) => Some(config),
             Err(e) => {
-                let report = error_ui::report_for_runtime_error(&command_display, &e);
-                error_ui::print_report(&report, false);
+                error_ui::print_runtime_error(
+                    &command_display,
+                    &e,
+                    pre_parse_output_format,
+                    pre_parse_compact,
+                    false,
+                );
                 std::process::exit(2);
             }
         }
@@ -2640,8 +2674,13 @@ async fn main() {
             std::process::exit(2);
         }
         if let Err(e) = handlers::handle_language(language.clone()).await {
-            let report = error_ui::report_for_runtime_error(&command_display, &e);
-            error_ui::print_report(&report, cli.verbose);
+            error_ui::print_runtime_error(
+                &command_display,
+                &e,
+                output_format,
+                compact,
+                cli.verbose,
+            );
             std::process::exit(2);
         }
         return;
@@ -2658,8 +2697,13 @@ async fn main() {
     let config = match config_result {
         Ok(config) => config,
         Err(e) => {
-            let report = error_ui::report_for_runtime_error(&command_display, &e);
-            error_ui::print_report(&report, cli.verbose);
+            error_ui::print_runtime_error(
+                &command_display,
+                &e,
+                output_format,
+                compact,
+                cli.verbose,
+            );
             std::process::exit(2);
         }
     };
@@ -3209,8 +3253,13 @@ async fn main() {
 
     if let Err(e) = result {
         if !matches!(e, Error::AlreadyReported) {
-            let report = error_ui::report_for_runtime_error(&command_display, &e);
-            error_ui::print_report(&report, verbose_errors);
+            error_ui::print_runtime_error(
+                &command_display,
+                &e,
+                output_format,
+                compact,
+                verbose_errors,
+            );
         }
         std::process::exit(1);
     }
@@ -3223,7 +3272,8 @@ mod tests {
         PrivacyCommands, SkillCommands, UploadCliOptions, find_command_index, first_command_token,
         is_language_command_request, language_command_can_run_picker, language_gate_action,
         language_required_message, legacy_upload_option_error, plain_help_misuse,
-        pre_parse_requires_cli_config_file, preprocess_cli_args, preprocess_privacy_args,
+        pre_parse_output_options, pre_parse_requires_cli_config_file, preprocess_cli_args,
+        preprocess_privacy_args,
     };
     use crate::config::{Config, DEFAULT_CUSTOM_URL};
     use crate::output::OutputFormat;
@@ -3252,6 +3302,13 @@ mod tests {
         assert_eq!(cli.account.as_deref(), Some("acme"));
         assert_eq!(cli.user.as_deref(), Some("alice"));
         assert_eq!(cli.actor_peer_id.as_deref(), Some("peer-a"));
+    }
+
+    #[test]
+    fn pre_parse_output_options_preserve_json_config_errors() {
+        let args = os_args(&["ov", "ls", "--output", "json", "--compact=false"]);
+
+        assert_eq!(pre_parse_output_options(&args), (OutputFormat::Json, false));
     }
 
     #[test]
