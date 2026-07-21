@@ -196,9 +196,9 @@ These YAML files define the structure of different memory types. They are not si
 
 - `cases`
   - Effective stage: case-memory persistence and update stage
-  - Affects: reusable problem-to-solution case accumulation
-  - Purpose: defines case memory for "what problem happened and how it was solved"
-  - Key fields: `case_name`, `problem`, `solution`, `content`
+  - Affects: trainable and evaluable task-case accumulation
+  - Purpose: defines concrete task inputs, evaluation rubrics, and supporting evidence
+  - Key fields: `case_name`, `task_signature`, `input`, `rubric`, `evidence`
 
 - `entities`
   - Effective stage: entity-memory persistence and update stage
@@ -212,17 +212,17 @@ These YAML files define the structure of different memory types. They are not si
   - Purpose: defines structured event memory such as summaries, goals, and time ranges
   - Key fields: `event_name`, `goal`, `summary`, `ranges`
 
+- `experiences`
+  - Effective stage: experience-memory persistence and update stage
+  - Affects: reusable guidance distilled from task outcomes
+  - Purpose: records durable execution experience and the memories it supersedes
+  - Key fields: `experience_name`, `content`, `supersedes`
+
 - `identity`
   - Effective stage: agent identity memory persistence stage
   - Affects: long-term consistency of the agent's identity settings
   - Purpose: defines the agent's name, persona, vibe, avatar, and self-introduction fields
-  - Key fields: `name`, `creature`, `vibe`, `emoji`, `avatar`
-
-- `patterns`
-  - Effective stage: pattern-memory persistence and update stage
-  - Affects: long-term accumulation of reusable workflows and methods
-  - Purpose: defines pattern memory for "under what circumstances to follow what process"
-  - Key fields: `pattern_name`, `pattern_type`, `content`
+  - Key fields: `name`, `creature`, `vibe`, `emoji`, `avatar`, `introduction`
 
 - `preferences`
   - Effective stage: preference-memory persistence and update stage
