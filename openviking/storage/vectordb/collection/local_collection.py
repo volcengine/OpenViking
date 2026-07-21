@@ -1295,9 +1295,6 @@ class PersistCollection(LocalCollection):
                 pass
         if index_count > 0:
             logger.info("Recovering %d index(es) from %s", index_count, self.index_dir)
-        recovery_candidates = (
-            self.store_mgr.get_all_cands_data() if self.store_mgr is not None else []
-        )
         for folder in os.listdir(self.index_dir):
             try:
                 index_dir = safe_join(self.index_dir, folder)
@@ -1329,6 +1326,12 @@ class PersistCollection(LocalCollection):
             # all data from the delta log (CandidateData) regardless of when that data was created.
             # If we used the default (current time), the index would ignore older data in the log.
             # Keep the dense worker stopped until the native snapshot has replayed those deltas.
+            # Create a fresh lazy stream for each index.  In particular, cuVS can pack
+            # one candidate at a time instead of retaining every deserialized FP32
+            # vector alongside its compact host shadow during collection recovery.
+            recovery_candidates = (
+                self.store_mgr.iter_all_cands_data() if self.store_mgr is not None else iter(())
+            )
             index = PersistentIndex(
                 name=index_name,
                 path=self.index_dir,

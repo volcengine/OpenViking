@@ -329,9 +329,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
             if self._format_retry_count == 0:
                 self._format_retry_count += 1
                 max_iterations += 1
-                retry_reason = (
-                    "refusal_text" if failure_kind == "refusal_text" else "format_retry"
-                )
+                retry_reason = "refusal_text" if failure_kind == "refusal_text" else "format_retry"
                 tracer.info(f"Extended max_iterations to {max_iterations} for {retry_reason}")
                 self._add_format_error_message(messages)
 
@@ -490,7 +488,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     break
 
         return resolved, raw_links
-
 
     def _normalize_delete_ids(self, raw_delete_ids: List[Any]) -> List[DeleteId]:
         delete_ids: List[DeleteId] = []
