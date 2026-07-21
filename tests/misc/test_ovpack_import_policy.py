@@ -588,6 +588,29 @@ async def test_export_ovpack_skips_missing_semantic_sidecars(
 
 
 @pytest.mark.asyncio
+async def test_export_failure_preserves_existing_archive(
+    temp_ovpack_path: Path, request_ctx: RequestContext
+):
+    temp_ovpack_path.write_bytes(b"previous archive")
+    fake_fs = FakeExportVikingFS()
+    original_read = fake_fs.read_file_bytes
+
+    async def fail_on_content(uri: str, ctx=None):
+        if uri.endswith("notes.txt"):
+            raise OSError("storage read failed")
+        return await original_read(uri, ctx=ctx)
+
+    fake_fs.read_file_bytes = fail_on_content
+    with pytest.raises(OSError, match="storage read failed"):
+        await export_ovpack(
+            fake_fs, "viking://resources/demo", str(temp_ovpack_path), ctx=request_ctx
+        )
+
+    assert temp_ovpack_path.read_bytes() == b"previous archive"
+    assert not list(temp_ovpack_path.parent.glob(f".{temp_ovpack_path.name}.*.tmp"))
+
+
+@pytest.mark.asyncio
 async def test_backup_restore_contract(temp_ovpack_path: Path, request_ctx: RequestContext):
     await backup_ovpack(
         FakeBackupVikingFS(),

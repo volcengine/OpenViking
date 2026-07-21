@@ -5,7 +5,10 @@
 import asyncio
 import json
 import os
+import tempfile
 import zipfile
+from contextlib import ExitStack
+from pathlib import Path
 from typing import Any, Optional
 
 from openviking.core.namespace import context_type_for_uri, is_session_uri, relative_uri_path
@@ -422,7 +425,17 @@ async def _write_ovpack_archive(
         if entry.get("kind") == "file"
     }
 
-    with zipfile.ZipFile(to, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
+    with ExitStack() as cleanup:
+        fd, temp_to = tempfile.mkstemp(
+            prefix=f".{os.path.basename(to)}.",
+            suffix=".tmp",
+            dir=os.path.dirname(os.path.abspath(to)),
+        )
+        os.close(fd)
+        cleanup.callback(Path(temp_to).unlink, missing_ok=True)
+        zf = cleanup.enter_context(
+            zipfile.ZipFile(temp_to, "w", zipfile.ZIP_DEFLATED, allowZip64=True)
+        )
         zf.writestr(base_name + "/", "")
         zf.writestr(f"{base_name}/{OVPACK_FILES_DIR}/", "")
 
@@ -470,6 +483,8 @@ async def _write_ovpack_archive(
             f"{base_name}/{OVPACK_MANIFEST_ZIP_LEAF}",
             json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8"),
         )
+        zf.close()
+        os.replace(temp_to, to)
     return to
 
 

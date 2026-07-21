@@ -591,40 +591,44 @@ class UnderstandingAPI(BaseParser):
     async def _unpack_zip_to_temp_dir(self, zip_path: Path, resource_name: str) -> str:
         viking_fs = get_viking_fs()
         temp_uri = viking_fs.create_temp_uri()
-        await viking_fs.mkdir(temp_uri)
+        try:
+            await viking_fs.mkdir(temp_uri)
 
-        temp_doc_uri = f"{temp_uri}/{resource_name}"
-        await viking_fs.mkdir(temp_doc_uri)
+            temp_doc_uri = f"{temp_uri}/{resource_name}"
+            await viking_fs.mkdir(temp_doc_uri)
 
-        with tempfile.TemporaryDirectory() as extract_dir:
-            with zipfile.ZipFile(zip_path, "r") as zf:
-                safe_extract_zip(zf, extract_dir)
-            extract_path = Path(extract_dir)
-            items = [p for p in extract_path.iterdir() if p.name not in {".", ".."}]
-            if len(items) == 1 and items[0].is_dir():
-                root_dir = items[0]
-            else:
-                root_dir = extract_path
-
-            image_mappings = await asyncio.to_thread(build_artifact_image_mappings, root_dir)
-
-            for child in root_dir.iterdir():
-                if child.name in {".", "..", IMAGE_MAPPINGS_FILENAME}:
-                    continue
-                if child.is_dir():
-                    sub_uri = f"{temp_doc_uri}/{child.name}"
-                    await viking_fs.mkdir(sub_uri)
-                    await self._copy_dir_to_fs(child, sub_uri)
+            with tempfile.TemporaryDirectory() as extract_dir:
+                with zipfile.ZipFile(zip_path, "r") as zf:
+                    safe_extract_zip(zf, extract_dir)
+                extract_path = Path(extract_dir)
+                items = [p for p in extract_path.iterdir() if p.name not in {".", ".."}]
+                if len(items) == 1 and items[0].is_dir():
+                    root_dir = items[0]
                 else:
-                    await viking_fs.write_file_bytes(
-                        f"{temp_doc_uri}/{child.name}", child.read_bytes()
-                    )
+                    root_dir = extract_path
 
-            if image_mappings:
-                await viking_fs.write_file(
-                    f"{temp_doc_uri}/{IMAGE_MAPPINGS_FILENAME}",
-                    json.dumps(image_mappings, ensure_ascii=False),
-                )
+                image_mappings = await asyncio.to_thread(build_artifact_image_mappings, root_dir)
+
+                for child in root_dir.iterdir():
+                    if child.name in {".", "..", IMAGE_MAPPINGS_FILENAME}:
+                        continue
+                    if child.is_dir():
+                        sub_uri = f"{temp_doc_uri}/{child.name}"
+                        await viking_fs.mkdir(sub_uri)
+                        await self._copy_dir_to_fs(child, sub_uri)
+                    else:
+                        await viking_fs.write_file_bytes(
+                            f"{temp_doc_uri}/{child.name}", child.read_bytes()
+                        )
+
+                if image_mappings:
+                    await viking_fs.write_file(
+                        f"{temp_doc_uri}/{IMAGE_MAPPINGS_FILENAME}",
+                        json.dumps(image_mappings, ensure_ascii=False),
+                    )
+        except Exception:
+            await viking_fs.delete_temp(temp_uri)
+            raise
 
         return temp_uri
 
