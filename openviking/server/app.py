@@ -39,6 +39,7 @@ from openviking.server.routers import (
     filesystem_router,
     metrics_router,
     observer_router,
+    openviking_assets_router,
     pack_router,
     privacy_configs_router,
     relations_router,
@@ -88,7 +89,6 @@ def create_worker_app() -> FastAPI:
     if bot_api_url is not None:
         config.bot_api_url = bot_api_url
     return create_app(config, config_path=config_path)
-
 
 async def _initialize_auth_plugin(
     app: FastAPI,
@@ -588,6 +588,7 @@ def create_app(
     app.include_router(pack_router)
     app.include_router(debug_router)
     app.include_router(observer_router)
+    app.include_router(openviking_assets_router)
     app.include_router(metrics_router)
     app.include_router(tasks_router)
     app.include_router(user_settings_router)
