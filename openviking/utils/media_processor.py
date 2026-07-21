@@ -121,6 +121,20 @@ class UnifiedResourceProcessor:
         - Directories needed for TreeBuilder are preserved via ParseResult.temp_dir_path
         """
 
+        # Block local paths in HTTP server mode before raw-content fallback.
+        if (
+            not allow_local_path_resolution
+            and not is_remote_resource_source(source)
+            and (
+                looks_like_local_path(source)
+                or (len(source) <= 1024 and "\n" not in source and Path(source).exists())
+            )
+        ):
+            raise PermissionDeniedError(
+                "HTTP server only accepts remote resource URLs or temp-uploaded files; "
+                "direct host filesystem paths are not allowed."
+            )
+
         # First check if source is raw content (not URL/path)
         is_potential_path = (
             allow_local_path_resolution and len(source) <= 1024 and "\n" not in source
@@ -128,17 +142,6 @@ class UnifiedResourceProcessor:
         if not is_potential_path and not self._is_url(source):
             # Treat as raw content
             return await parse(source, instruction=instruction)
-
-        # Block local paths in HTTP server mode, but allow remote URLs
-        if (
-            not allow_local_path_resolution
-            and not is_remote_resource_source(source)
-            and looks_like_local_path(source)
-        ):
-            raise PermissionDeniedError(
-                "HTTP server only accepts remote resource URLs or temp-uploaded files; "
-                "direct host filesystem paths are not allowed."
-            )
 
         if self._should_bypass_feishu_accessor(source, kwargs):
             parse_kwargs = dict(kwargs)
