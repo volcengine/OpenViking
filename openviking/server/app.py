@@ -37,6 +37,7 @@ from openviking.server.routers import (
     filesystem_router,
     metrics_router,
     observer_router,
+    openviking_assets_router,
     pack_router,
     privacy_configs_router,
     relations_router,
@@ -60,7 +61,6 @@ from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import init_otel_log_handler_from_server_config
 
 logger = get_logger(__name__)
-
 
 
 async def _initialize_auth_plugin(
@@ -536,6 +536,7 @@ def create_app(
     app.include_router(pack_router)
     app.include_router(debug_router)
     app.include_router(observer_router)
+    app.include_router(openviking_assets_router)
     app.include_router(metrics_router)
     app.include_router(tasks_router)
     app.include_router(user_settings_router)
