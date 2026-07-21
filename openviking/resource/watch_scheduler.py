@@ -339,7 +339,10 @@ class WatchScheduler:
                         skip_watch_management=True,
                         **processor_kwargs,
                     )
-                    if not isinstance(result, dict) or result.get("status") == "error":
+                    if not self._resource_sync_completed(
+                        result,
+                        require_queue_status=feishu_source_version is not None,
+                    ):
                         raise RuntimeError("Resource synchronization did not complete successfully")
                     resource_sync_succeeded = True
 
@@ -481,7 +484,10 @@ class WatchScheduler:
         ctx: RequestContext,
     ) -> Optional[Dict[str, Any]]:
         if not uri:
-            return {"uri": None}
+            # add_resource may choose a dynamic root URI when no target is supplied.
+            # Without a concrete destination to stat on later runs, a fingerprint
+            # cannot prove that the previously synchronized resource still exists.
+            return None
         if self._viking_fs is None:
             return None
         try:
@@ -503,6 +509,31 @@ class WatchScheduler:
                 exc,
             )
             return None
+
+    @staticmethod
+    def _resource_sync_completed(
+        result: Any,
+        *,
+        require_queue_status: bool,
+    ) -> bool:
+        if not isinstance(result, dict) or result.get("status") == "error":
+            return False
+        if not require_queue_status:
+            return True
+
+        queue_status = result.get("queue_status")
+        if not isinstance(queue_status, dict) or not queue_status:
+            return False
+        for status in queue_status.values():
+            if not isinstance(status, dict):
+                return False
+            try:
+                error_count = int(status["error_count"])
+            except (KeyError, TypeError, ValueError):
+                return False
+            if error_count != 0 or status.get("errors"):
+                return False
+        return True
 
     def _build_feishu_sync_fingerprint(
         self,
