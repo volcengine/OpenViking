@@ -368,6 +368,8 @@ class TaskTracker:
         result: Optional[Dict[str, Any]] = None,
         account_id: Optional[str] = None,
         user_id: Optional[str] = None,
+        *,
+        resource_id: Optional[str] = None,
     ) -> None:
         """Transition task to COMPLETED with optional result."""
         transitioned = False
@@ -377,6 +379,8 @@ class TaskTracker:
                 task.status = TaskStatus.COMPLETED
                 task.stage = "completed"
                 task.result = result
+                if resource_id is not None:
+                    task.resource_id = resource_id
                 task.updated_at = time.time()
                 await self._store.update(task)
                 with self._lock:

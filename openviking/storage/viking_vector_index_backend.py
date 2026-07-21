@@ -9,7 +9,7 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from openviking.core.namespace import canonicalize_uri, visible_roots
+from openviking.core.namespace import canonicalize_uri, uri_parts, visible_roots
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
 from openviking.storage.vectordb.collection.collection import Collection
@@ -1469,16 +1469,22 @@ class VikingVectorIndexBackend:
         if context_type:
             filters.append(Eq("context_type", context_type))
 
+        canonical_targets = [
+            canonicalize_uri(target_dir, ctx)
+            for target_dir in target_directories or []
+            if target_dir
+        ]
         tenant_filter = self._tenant_filter(ctx, context_type=context_type)
+        if tenant_filter and self._targets_within_visible_roots(ctx, canonical_targets):
+            # The target scopes are already narrower than the tenant-visible
+            # roots. Keep account isolation, but avoid recursively evaluating
+            # the broader path scopes as an additional filter.
+            tenant_filter = Eq("account_id", ctx.account_id)
         if tenant_filter:
             filters.append(tenant_filter)
 
-        if target_directories:
-            uri_conds = [
-                PathScope("uri", canonicalize_uri(target_dir, ctx), depth=-1)
-                for target_dir in target_directories
-                if target_dir
-            ]
+        if canonical_targets:
+            uri_conds = [PathScope("uri", target_dir, depth=-1) for target_dir in canonical_targets]
             if uri_conds:
                 filters.append(Or(uri_conds))
 
@@ -1492,6 +1498,20 @@ class VikingVectorIndexBackend:
             filters.append(In("level", level))
 
         return self._merge_filters(*filters)
+
+    @staticmethod
+    def _targets_within_visible_roots(ctx: RequestContext, canonical_targets: List[str]) -> bool:
+        if not canonical_targets:
+            return False
+
+        root_parts = [tuple(uri_parts(root)) for root in visible_roots(ctx)]
+        return all(
+            any(
+                len(target_parts) >= len(root) and target_parts[: len(root)] == root
+                for root in root_parts
+            )
+            for target_parts in (tuple(uri_parts(target)) for target in canonical_targets)
+        )
 
     @staticmethod
     def _tenant_filter(
