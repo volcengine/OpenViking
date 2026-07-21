@@ -1266,7 +1266,6 @@ async def _prepare_experience_loader_skill(
     agent: Any,
     session_key: Any,
     system_prompt_profile: VikingBotSystemPromptProfile = DEFAULT_SYSTEM_PROMPT_PROFILE,
-    task_signature: str | None = None,
 ) -> Any:
     """Install the generic experience_loader skill into the rollout sandbox.
 
@@ -1282,19 +1281,6 @@ async def _prepare_experience_loader_skill(
         else agent.context.workspace
     )
     skill_content = _read_experience_loader_template_file("SKILL.md")
-    task_signature = str(task_signature or "").strip()
-    if task_signature:
-        skill_content = "\n".join(
-            [
-                skill_content.rstrip(),
-                "",
-                "## Runtime Case context",
-                "",
-                f"- `task_signature`: `{task_signature}`",
-                "- Pass this exact value to `search_experience`; do not infer or modify it.",
-                "",
-            ]
-        )
     if sandbox_manager:
         try:
             sandbox = await sandbox_manager.get_sandbox(session_key)
@@ -1319,6 +1305,25 @@ async def _prepare_experience_loader_skill(
     )
     context_builder.latest_experience_loader_skill_content = skill_content
     return context_builder
+
+
+def _append_runtime_case_context(
+    system_prompt: str,
+    case_lookup: dict[str, Any] | None,
+) -> str:
+    task_signature = str((case_lookup or {}).get("task_signature") or "").strip()
+    if not task_signature:
+        return system_prompt
+    return "\n".join(
+        [
+            system_prompt.rstrip(),
+            "",
+            "## Runtime Case context",
+            "",
+            f"- `task_signature`: `{task_signature}`",
+            "- Pass this exact value to `search_experience`; do not infer or modify it.",
+        ]
+    )
 
 
 def _read_experience_loader_template_file(relative_path: str) -> str:
@@ -1417,11 +1422,11 @@ async def _run_agent(
     message_context = agent.context
     experience_loader_skill = None
     if loader_mode == "skill":
+        system_prompt = _append_runtime_case_context(system_prompt, case_lookup)
         message_context = await _prepare_experience_loader_skill(
             agent=agent,
             session_key=session_key,
             system_prompt_profile=system_prompt_profile,
-            task_signature=str((case_lookup or {}).get("task_signature") or "") or None,
         )
         experience_loader_skill = getattr(
             message_context,

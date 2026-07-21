@@ -1191,7 +1191,7 @@ async def test_tau2_vikingbot_rollout_runs_on_current_event_loop():
 
 
 @pytest.mark.asyncio
-async def test_tau2_prepare_experience_loader_skill_writes_required_skill(tmp_path):
+async def test_tau2_prepare_experience_loader_skill_writes_static_required_skill(tmp_path):
     import benchmark.tau2.train.rollout_executor_vikingbot as module
 
     class FakeSandbox:
@@ -1223,7 +1223,6 @@ async def test_tau2_prepare_experience_loader_skill_writes_required_skill(tmp_pa
     context_builder = await module._prepare_experience_loader_skill(
         agent=FakeAgent(),
         session_key=SimpleNamespace(),
-        task_signature="tau2:airline:train:39",
     )
 
     skill_path = tmp_path / "skills" / "experience_loader" / "SKILL.md"
@@ -1234,9 +1233,8 @@ async def test_tau2_prepare_experience_loader_skill_writes_required_skill(tmp_pa
     assert "read_experience" in content
     assert "search_experience(situation, task_signature=None, limit=2)" in content
     assert "search_experience(query" not in content
-    assert "## Runtime Case context" in content
-    assert "`task_signature`: `tau2:airline:train:39`" in content
-    assert "do not infer or modify it" in content
+    assert "## Runtime Case context" not in content
+    assert "tau2:airline:train:39" not in content
     assert "keyword list" in content
     assert "current conversation" in content
     assert "Situation snippets" in content or "`situation` as a filter only" in content
@@ -1252,26 +1250,6 @@ async def test_tau2_prepare_experience_loader_skill_writes_required_skill(tmp_pa
     assert fake_sandbox.writes
     assert fake_sandbox.writes[0][0] == "skills/experience_loader/SKILL.md"
     assert context_builder.latest_experience_loader_skill_content == content
-
-
-@pytest.mark.asyncio
-async def test_tau2_prepare_experience_loader_skill_omits_runtime_case_without_signature(
-    tmp_path,
-):
-    import benchmark.tau2.train.rollout_executor_vikingbot as module
-
-    class FakeAgent:
-        sandbox_manager = None
-        context = SimpleNamespace(workspace=tmp_path)
-
-    context_builder = await module._prepare_experience_loader_skill(
-        agent=FakeAgent(),
-        session_key=SimpleNamespace(),
-        task_signature=None,
-    )
-
-    content = context_builder.latest_experience_loader_skill_content
-    assert "## Runtime Case context" not in content
 
 
 @pytest.mark.asyncio
@@ -1538,7 +1516,12 @@ async def test_tau2_run_agent_force_loads_experience_loader_skill_before_task_ac
         sender_id="tau2_user",
         keep_default_tools=True,
         loader_mode="skill",
-        case_lookup={"benchmark": "tau2", "strict": True, "case_name": "case"},
+        case_lookup={
+            "benchmark": "tau2",
+            "strict": True,
+            "case_name": "case",
+            "task_signature": "tau2:airline:train:39",
+        },
     )
 
     tools_used = result[2]
@@ -1559,6 +1542,15 @@ async def test_tau2_run_agent_force_loads_experience_loader_skill_before_task_ac
     assert read_call_index < tool_result_index
     assert "search_experience" in messages[tool_result_index]["content"]
     assert "read_experience" in messages[tool_result_index]["content"]
+    runtime_prompt = next(
+        message["content"]
+        for message in messages
+        if message.get("role") == "system" and "tau2 policy" in message.get("content", "")
+    )
+    assert "## Runtime Case context" in runtime_prompt
+    assert "`task_signature`: `tau2:airline:train:39`" in runtime_prompt
+    assert "tau2:airline:train:39" not in messages[tool_result_index]["content"]
+    assert "tau2:airline:train:39" not in result[7]
     assert tools_used[0]["tool_name"] == "read_file"
     assert tools_used[0]["required_skill"] == "experience_loader"
 
