@@ -438,7 +438,7 @@ curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&recursiv
 **CLI**
 
 ```bash
-openviking ls viking://resources/ [--simple] [--recursive]
+openviking ls viking://resources/
 ```
 
 
@@ -893,7 +893,7 @@ curl -X DELETE "http://localhost:1933/api/v1/fs?uri=viking://resources/old-proje
 **CLI**
 
 ```bash
-openviking rm viking://resources/old.md [--recursive]
+openviking rm viking://resources/old.md
 ```
 
 
@@ -1077,7 +1077,7 @@ curl -X POST http://localhost:1933/api/v1/search/grep \
 **CLI**
 
 ```bash
-openviking grep "authentication" --uri viking://resources/ [--ignore-case]
+openviking grep "authentication" --uri viking://resources/
 ```
 
 
@@ -1167,7 +1167,7 @@ curl -X POST http://localhost:1933/api/v1/search/glob \
 **CLI**
 
 ```bash
-openviking glob "**/*.md" [--uri viking://resources/]
+openviking glob "**/*.md"
 ```
 
 
