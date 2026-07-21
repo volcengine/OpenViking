@@ -336,6 +336,10 @@ class TelemetrySummaryBuilder:
                             "micro_batched_searches": cls._i(
                                 counters.get("vector.cuvs.micro_batched_searches"), 0
                             ),
+                            "micro_batching_warm_fast_path_searches": cls._i(
+                                counters.get("vector.cuvs.micro_batching_warm_fast_path_searches"),
+                                0,
+                            ),
                             "batch_size_max": cls._i(gauges.get("vector.cuvs.batch_size.max"), 1),
                             "searches_by_batch_size": cls._counter_breakdown(
                                 "vector.cuvs.searches_by_batch_size", counters
@@ -534,6 +538,8 @@ class OperationTelemetry:
                     TelemetrySummaryBuilder._i(self._gauges.get("vector.cuvs.batch_size.max"), 1),
                     batch_size,
                 )
+            if TelemetrySummaryBuilder._bool(metrics.get("micro_batching_warm_fast_path"), False):
+                self._counters["vector.cuvs.micro_batching_warm_fast_path_searches"] += 1
             if TelemetrySummaryBuilder._bool(metrics.get("filter_cache_hit"), False):
                 self._counters["vector.cuvs.filter_cache_hits"] += 1
             if TelemetrySummaryBuilder._bool(metrics.get("filter_cache_eviction_fallback"), False):

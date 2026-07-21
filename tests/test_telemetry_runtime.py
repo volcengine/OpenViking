@@ -301,6 +301,7 @@ def test_telemetry_summary_includes_cuvs_micro_batching_fields():
                 "route_reason": "cuvs",
                 "filter_kind": "none",
                 "micro_batching_enabled": True,
+                "micro_batching_warm_fast_path": batch_size == 4,
                 "batch_size": batch_size,
                 "batch_wait_ms": batch_wait_ms,
             }
@@ -310,6 +311,7 @@ def test_telemetry_summary_includes_cuvs_micro_batching_fields():
 
     assert cuvs["micro_batching_searches"] == 3
     assert cuvs["micro_batched_searches"] == 2
+    assert cuvs["micro_batching_warm_fast_path_searches"] == 2
     assert cuvs["batch_size_max"] == 4
     assert cuvs["searches_by_batch_size"] == {"1": 1, "4": 2}
     assert cuvs["timings_ms"]["batch_wait"] == {"sum": 2.5, "max": 1.0}

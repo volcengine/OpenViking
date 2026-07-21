@@ -1426,6 +1426,29 @@ def make_micro_batch_index(runtime, **config):
     return index
 
 
+class BlockingMicroBatchRuntime(FakeCuVSRuntime):
+    def __init__(self):
+        super().__init__()
+        self.block_next_batch = False
+        self.search_started = threading.Event()
+        self.release_search = threading.Event()
+
+    def search_batch(self, index, queries, limit, mask):
+        if self.block_next_batch:
+            self.block_next_batch = False
+            self.search_started.set()
+            assert self.release_search.wait(timeout=5)
+        return super().search_batch(index, queries, limit, mask)
+
+
+def wait_for_warm_lookahead(index, expected):
+    with index._micro_batch_condition:
+        assert index._micro_batch_condition.wait_for(
+            lambda: index._micro_batch_warm_lookahead == expected,
+            timeout=5,
+        )
+
+
 def run_simultaneous_searches(index, requests):
     barrier = threading.Barrier(len(requests) + 1)
 
@@ -1457,6 +1480,144 @@ def test_cuvs_micro_batch_coalesces_compatible_queries_and_demuxes_rows():
     assert all(item.micro_batching_enabled for item in telemetry)
     assert [item.batch_size for item in telemetry] == [4] * 4
     assert all(item.batch_wait_ms >= 0.0 for item in telemetry)
+    index.close()
+
+
+def test_cuvs_micro_batch_warm_fast_path_fills_behind_active_batch():
+    runtime = BlockingMicroBatchRuntime()
+    index = make_micro_batch_index(
+        runtime,
+        micro_batching_max_batch_size=2,
+        micro_batching_max_wait_ms=100.0,
+    )
+    runtime.block_next_batch = True
+    telemetry = [CuVSSearchTelemetry(algorithm="brute_force", auto_mode=False) for _ in range(3)]
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        active = executor.submit(index.search, [1.0, 0.0], 1, None, None, None, telemetry[0])
+        assert runtime.search_started.wait(timeout=5)
+        lookahead = [
+            executor.submit(index.search, query, 1, None, None, None, item)
+            for query, item in zip(
+                ([1.0, 0.0], [0.0, 1.0]),
+                telemetry[1:],
+                strict=True,
+            )
+        ]
+        wait_for_warm_lookahead(index, 2)
+
+        assert all(not future.done() for future in lookahead)
+        assert index._active_searches == 3
+        assert all(item.micro_batching_warm_fast_path for item in telemetry)
+        assert all(item.gpu_gate_queue_ms == 0.0 for item in telemetry)
+
+        runtime.release_search.set()
+        assert active.result(timeout=5)[0] == [1]
+        assert [future.result(timeout=5)[0] for future in lookahead] == [[1], [2]]
+
+    assert runtime.search_batch_sizes == [1, 2]
+    assert [item.batch_size for item in telemetry] == [1, 2, 2]
+    assert index._active_searches == 0
+    assert index._micro_batch_warm_lookahead == 0
+    index.close()
+
+
+def test_cuvs_micro_batch_warm_fast_path_caps_one_batch_and_preserves_progress():
+    runtime = BlockingMicroBatchRuntime()
+    index = make_micro_batch_index(
+        runtime,
+        micro_batching_max_batch_size=2,
+        micro_batching_max_wait_ms=100.0,
+    )
+    runtime.block_next_batch = True
+    warm_telemetry = [
+        CuVSSearchTelemetry(algorithm="brute_force", auto_mode=False) for _ in range(2)
+    ]
+    overflow_telemetry = CuVSSearchTelemetry(algorithm="brute_force", auto_mode=False)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        active = executor.submit(index.search, [1.0, 0.0], 1, None)
+        assert runtime.search_started.wait(timeout=5)
+        warm = [
+            executor.submit(index.search, query, 1, None, None, None, item)
+            for query, item in zip(
+                ([1.0, 0.0], [0.0, 1.0]),
+                warm_telemetry,
+                strict=True,
+            )
+        ]
+        wait_for_warm_lookahead(index, 2)
+        overflow = executor.submit(
+            index.search,
+            [0.9, 0.1],
+            1,
+            None,
+            None,
+            None,
+            overflow_telemetry,
+        )
+
+        assert not overflow.done()
+        assert index._micro_batch_warm_lookahead == 2
+        assert all(item.micro_batching_warm_fast_path for item in warm_telemetry)
+        assert overflow_telemetry.micro_batching_warm_fast_path is False
+
+        runtime.release_search.set()
+        assert active.result(timeout=5)[0] == [1]
+        assert [future.result(timeout=5)[0] for future in warm] == [[1], [2]]
+        assert overflow.result(timeout=5)[0] == [1]
+
+    assert runtime.search_batch_sizes == [1, 2, 1]
+    assert index._active_searches == 0
+    assert index._micro_batch_warm_lookahead == 0
+    index.close()
+
+
+def test_cuvs_micro_batch_empty_filter_uses_gated_fallback():
+    runtime = BlockingMicroBatchRuntime()
+    index = make_micro_batch_index(
+        runtime,
+        micro_batching_max_batch_size=2,
+        micro_batching_max_wait_ms=100.0,
+    )
+    runtime.block_next_batch = True
+    no_filter_telemetry = CuVSSearchTelemetry(algorithm="brute_force", auto_mode=False)
+    empty_filter_telemetry = CuVSSearchTelemetry(algorithm="brute_force", auto_mode=False)
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        active = executor.submit(index.search, [1.0, 0.0], 1, None)
+        assert runtime.search_started.wait(timeout=5)
+        no_filter = executor.submit(
+            index.search,
+            [0.0, 1.0],
+            1,
+            None,
+            None,
+            None,
+            no_filter_telemetry,
+        )
+        wait_for_warm_lookahead(index, 1)
+        empty_filter = executor.submit(
+            index.search,
+            [1.0, 0.0],
+            1,
+            {},
+            None,
+            None,
+            empty_filter_telemetry,
+        )
+
+        assert no_filter_telemetry.micro_batching_warm_fast_path is True
+        assert empty_filter_telemetry.micro_batching_warm_fast_path is False
+        assert not empty_filter.done()
+
+        runtime.release_search.set()
+        assert active.result(timeout=5)[0] == [1]
+        assert no_filter.result(timeout=5)[0] == [2]
+        assert empty_filter.result(timeout=5)[0] == [1]
+
+    assert index._active_searches == 0
+    assert index._micro_batch_warm_lookahead == 0
     index.close()
 
 
@@ -1500,6 +1661,62 @@ def test_cuvs_micro_batch_groups_same_filter_but_splits_incompatible_keys():
     index.close()
 
 
+def test_cuvs_micro_batch_warm_fast_path_preserves_filter_and_limit_keys():
+    runtime = BlockingMicroBatchRuntime()
+    index = make_micro_batch_index(
+        runtime,
+        micro_batching_max_batch_size=4,
+        micro_batching_max_wait_ms=20.0,
+    )
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    filter_b = {"op": "must", "field": "account_id", "conds": ["b"]}
+
+    def resolve(filters):
+        return ([0b101], 2) if filters == filter_a else ([0b010], 1)
+
+    def registrar(_labels):
+        return None
+
+    assert index.search([1.0, 0.0], 1, filter_a, resolve, registrar)[0] == [1]
+    assert index.search([0.0, 1.0], 1, filter_b, resolve, registrar)[0] == [2]
+    runtime.search_batch_sizes.clear()
+    runtime.block_next_batch = True
+    telemetry = [CuVSSearchTelemetry(algorithm="brute_force", auto_mode=False) for _ in range(4)]
+
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        active = executor.submit(index.search, [1.0, 0.0], 1, None)
+        assert runtime.search_started.wait(timeout=5)
+        requests = [
+            executor.submit(
+                index.search, [1.0, 0.0], 1, filter_a, resolve, registrar, telemetry[0]
+            ),
+            executor.submit(
+                index.search, [0.0, 1.0], 1, filter_a, resolve, registrar, telemetry[1]
+            ),
+            executor.submit(
+                index.search, [1.0, 0.0], 2, filter_a, resolve, registrar, telemetry[2]
+            ),
+            executor.submit(
+                index.search, [0.0, 1.0], 1, filter_b, resolve, registrar, telemetry[3]
+            ),
+        ]
+        wait_for_warm_lookahead(index, 4)
+
+        assert all(item.micro_batching_warm_fast_path for item in telemetry)
+        assert all(item.filter_cache_hit for item in telemetry)
+        runtime.release_search.set()
+
+        assert active.result(timeout=5)[0] == [1]
+        results = [future.result(timeout=5)[0] for future in requests]
+
+    assert results == [[1], [3], [1, 3], [2]]
+    assert runtime.search_batch_sizes == [1, 2, 1, 1]
+    assert [item.batch_size for item in telemetry] == [2, 2, 1, 1]
+    assert index._active_searches == 0
+    assert index._micro_batch_warm_lookahead == 0
+    index.close()
+
+
 def test_cuvs_micro_batch_serializes_device_filter_preparation_with_search():
     class BlockingRuntime(FakeCuVSRuntime):
         def __init__(self):
@@ -1525,6 +1742,7 @@ def test_cuvs_micro_batch_serializes_device_filter_preparation_with_search():
     runtime.block_next_batch = True
     filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
     resolver_ran = threading.Event()
+    telemetry = CuVSSearchTelemetry(algorithm="brute_force", auto_mode=False)
 
     def resolve(_filters):
         resolver_ran.set()
@@ -1540,6 +1758,7 @@ def test_cuvs_micro_batch_serializes_device_filter_preparation_with_search():
             filter_a,
             resolve,
             lambda _labels: None,
+            telemetry,
         )
         try:
             # Native filter resolution remains host work outside admission.
@@ -1552,6 +1771,7 @@ def test_cuvs_micro_batch_serializes_device_filter_preparation_with_search():
         assert filtered_search.result(timeout=5)[0] == [1]
 
     assert runtime.filter_prepared.is_set()
+    assert telemetry.micro_batching_warm_fast_path is False
     index.close()
 
 
@@ -1581,12 +1801,21 @@ def test_cuvs_micro_batch_serializes_rebuild_with_search():
     index = make_micro_batch_index(runtime)
     runtime.block_next_batch = True
     runtime.observe_build = True
+    telemetry = CuVSSearchTelemetry(algorithm="brute_force", auto_mode=False)
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         active_search = executor.submit(index.search, [1.0, 0.0], 1, None)
         assert runtime.search_started.wait(timeout=5)
         index.upsert([delta(4, [2.0, 0.0], account_id="a")])
-        rebuilding_search = executor.submit(index.search, [1.0, 0.0], 1, None)
+        rebuilding_search = executor.submit(
+            index.search,
+            [1.0, 0.0],
+            1,
+            None,
+            None,
+            None,
+            telemetry,
+        )
         try:
             assert not runtime.build_started.wait(timeout=0.1)
         finally:
@@ -1595,6 +1824,137 @@ def test_cuvs_micro_batch_serializes_rebuild_with_search():
         assert rebuilding_search.result(timeout=5)[0] == [4]
 
     assert runtime.build_started.is_set()
+    assert telemetry.micro_batching_warm_fast_path is False
+    index.close()
+
+
+def test_cuvs_micro_batch_device_lru_eviction_falls_back_once():
+    class WordPreparingRuntime(FakeCuVSRuntime):
+        def __init__(self):
+            super().__init__()
+            self.prepare_filter_words_count = 0
+
+        def prepare_filter_words(self, words):
+            self.prepare_filter_words_count += 1
+            return tuple(bool(words[0] & (1 << row)) for row in range(3))
+
+    runtime = WordPreparingRuntime()
+    index = make_micro_batch_index(runtime, filter_cache_size=1)
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    filter_b = {"op": "must", "field": "account_id", "conds": ["b"]}
+    resolver_calls = {"a": 0, "b": 0}
+
+    def resolve(filters):
+        account_id = filters["conds"][0]
+        resolver_calls[account_id] += 1
+        return ([0b101], 2) if account_id == "a" else ([0b010], 1)
+
+    def registrar(_labels):
+        return None
+
+    assert index.search([1.0, 0.0], 1, filter_a, resolve, registrar)[0] == [1]
+    assert resolver_calls == {"a": 1, "b": 0}
+
+    a_host_prepared = threading.Event()
+    release_a = threading.Event()
+    original_prepare = index._prepare_host_filter
+
+    def pause_a_after_host_prepare(filters, *args, **kwargs):
+        prepared = original_prepare(filters, *args, **kwargs)
+        if filters == filter_a:
+            a_host_prepared.set()
+            assert release_a.wait(timeout=5)
+        return prepared
+
+    index._prepare_host_filter = pause_a_after_host_prepare
+    telemetry = CuVSSearchTelemetry(algorithm="brute_force", auto_mode=False)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        delayed_a = executor.submit(
+            index.search,
+            [1.0, 0.0],
+            1,
+            filter_a,
+            resolve,
+            registrar,
+            telemetry,
+        )
+        assert a_host_prepared.wait(timeout=5)
+        assert index.search([0.0, 1.0], 1, filter_b, resolve, registrar)[0] == [2]
+        release_a.set()
+        assert delayed_a.result(timeout=5)[0] == [1]
+
+    assert resolver_calls == {"a": 2, "b": 1}
+    assert runtime.prepare_filter_words_count == 3
+    assert telemetry.micro_batching_warm_fast_path is False
+    assert telemetry.filter_cache_hit is False
+    assert telemetry.filter_cache_eviction_fallback is True
+    assert index._active_searches == 0
+    assert index._micro_batch_warm_lookahead == 0
+    index.close()
+
+
+def test_cuvs_micro_batch_stale_host_filter_uses_admitted_retry():
+    class CountingGate:
+        def __init__(self, gate):
+            self.gate = gate
+            self.acquire_count = 0
+            self.lock = threading.Lock()
+
+        def acquire(self, *args, **kwargs):
+            with self.lock:
+                self.acquire_count += 1
+            return self.gate.acquire(*args, **kwargs)
+
+        def release(self):
+            return self.gate.release()
+
+    runtime = FakeCuVSRuntime()
+    index = make_micro_batch_index(runtime)
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+
+    def resolve(_filters):
+        return ([0b101], 2) if index.size == 3 else ([0b1101], 3)
+
+    def registrar(_labels):
+        return None
+
+    assert index.search([1.0, 0.0], 1, filter_a, resolve, registrar)[0] == [1]
+    stale = index._prepare_host_filter(filter_a, resolve, registrar)
+    assert stale is not None
+    index.upsert([delta(4, [2.0, 0.0], account_id="a")])
+
+    original_prepare = index._prepare_host_filter
+    prepare_calls = 0
+
+    def return_stale_once(*args, **kwargs):
+        nonlocal prepare_calls
+        prepare_calls += 1
+        if prepare_calls == 1:
+            return stale
+        return original_prepare(*args, **kwargs)
+
+    index._prepare_host_filter = return_stale_once
+    counting_gate = CountingGate(index._gpu_search_gate)
+    index._gpu_search_gate = counting_gate
+    telemetry = CuVSSearchTelemetry(algorithm="brute_force", auto_mode=False)
+
+    assert index.search(
+        [1.0, 0.0],
+        1,
+        filter_a,
+        resolve,
+        registrar,
+        telemetry,
+    )[0] == [4]
+
+    # One caller admission rejects the stale host result, the retry performs
+    # the cold rebuild/materialization, and the worker owns the final search.
+    assert counting_gate.acquire_count == 3
+    assert prepare_calls == 2
+    assert telemetry.micro_batching_warm_fast_path is False
+    assert telemetry.records_generation == index._records_generation
+    assert index._active_searches == 0
+    assert index._micro_batch_warm_lookahead == 0
     index.close()
 
 
@@ -1680,9 +2040,106 @@ def test_cuvs_micro_batch_worker_fatal_error_reaps_current_batch():
 
     assert runtime.search_batch_sizes == [2]
     assert index._active_searches == 0
+    assert index._micro_batch_warm_lookahead == 0
     deadline = time.monotonic() + 5
     while index._micro_batch_worker_failure is None and time.monotonic() < deadline:
         time.sleep(0.001)
+    assert index._micro_batch_worker_failure is not None
+    index.close()
+
+
+def test_cuvs_micro_batch_cancelled_warm_request_releases_pins_and_capacity():
+    runtime = BlockingMicroBatchRuntime()
+    index = make_micro_batch_index(
+        runtime,
+        micro_batching_max_batch_size=2,
+        micro_batching_max_wait_ms=100.0,
+    )
+    runtime.block_next_batch = True
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        active = executor.submit(index.search, [1.0, 0.0], 1, None)
+        assert runtime.search_started.wait(timeout=5)
+        telemetry = CuVSSearchTelemetry(algorithm="brute_force", auto_mode=False)
+        request = index._try_enqueue_warm_micro_batch(
+            query=(0.0, 1.0),
+            limit=1,
+            filters=None,
+            prepared_filter=None,
+            telemetry=telemetry,
+        )
+        assert request is not None
+        assert request.future.cancel()
+        assert telemetry.micro_batching_warm_fast_path is True
+        wait_for_warm_lookahead(index, 1)
+
+        runtime.release_search.set()
+        assert active.result(timeout=5)[0] == [1]
+
+    deadline = time.monotonic() + 5
+    while not request.released and time.monotonic() < deadline:
+        time.sleep(0.001)
+    assert request.released is True
+    assert request.snapshot is None
+    assert request.mask is None
+    assert index._active_searches == 0
+    assert index._micro_batch_warm_lookahead == 0
+    index.close()
+
+
+def test_cuvs_micro_batch_fatal_worker_releases_warm_lookahead_pins():
+    class BlockingFatalRuntime(FakeCuVSRuntime):
+        def __init__(self):
+            super().__init__()
+            self.block_and_fail = False
+            self.search_started = threading.Event()
+            self.fail_search = threading.Event()
+
+        def search_batch(self, index, queries, limit, mask):
+            if self.block_and_fail:
+                self.block_and_fail = False
+                self.search_started.set()
+                assert self.fail_search.wait(timeout=5)
+                raise KeyboardInterrupt("injected worker failure")
+            return super().search_batch(index, queries, limit, mask)
+
+    runtime = BlockingFatalRuntime()
+    index = make_micro_batch_index(
+        runtime,
+        micro_batching_max_batch_size=2,
+        micro_batching_max_wait_ms=100.0,
+    )
+    runtime.block_and_fail = True
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        active = executor.submit(index.search, [1.0, 0.0], 1, None)
+        assert runtime.search_started.wait(timeout=5)
+        pending = [
+            index._try_enqueue_warm_micro_batch(
+                query=query,
+                limit=1,
+                filters=None,
+                prepared_filter=None,
+                telemetry=None,
+            )
+            for query in ((1.0, 0.0), (0.0, 1.0))
+        ]
+        assert all(request is not None for request in pending)
+        wait_for_warm_lookahead(index, 2)
+        runtime.fail_search.set()
+
+        with pytest.raises(KeyboardInterrupt, match="injected worker failure"):
+            active.result(timeout=5)
+        for request in pending:
+            assert request is not None
+            with pytest.raises(KeyboardInterrupt, match="injected worker failure"):
+                request.future.result(timeout=5)
+
+    assert all(request.released for request in pending if request is not None)
+    assert all(request.snapshot is None for request in pending if request is not None)
+    assert all(request.mask is None for request in pending if request is not None)
+    assert index._active_searches == 0
+    assert index._micro_batch_warm_lookahead == 0
     assert index._micro_batch_worker_failure is not None
     index.close()
 
@@ -1694,8 +2151,19 @@ def test_cuvs_micro_batch_keeps_snapshot_generations_separate():
         micro_batching_max_wait_ms=100.0,
     )
 
+    old_telemetry = CuVSSearchTelemetry(algorithm="brute_force", auto_mode=False)
+    new_telemetry = CuVSSearchTelemetry(algorithm="brute_force", auto_mode=False)
+
     with ThreadPoolExecutor(max_workers=2) as executor:
-        old_search = executor.submit(index.search, [1.0, 0.0], 1, None)
+        old_search = executor.submit(
+            index.search,
+            [1.0, 0.0],
+            1,
+            None,
+            None,
+            None,
+            old_telemetry,
+        )
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             with index._micro_batch_condition:
@@ -1706,11 +2174,24 @@ def test_cuvs_micro_batch_keeps_snapshot_generations_separate():
             pytest.fail("old-snapshot search did not enter the micro-batch queue")
 
         index.upsert([delta(4, [2.0, 0.0], account_id="a")])
-        new_search = executor.submit(index.search, [1.0, 0.0], 1, None)
+        new_search = executor.submit(
+            index.search,
+            [1.0, 0.0],
+            1,
+            None,
+            None,
+            None,
+            new_telemetry,
+        )
         assert old_search.result(timeout=5)[0] == [1]
         assert new_search.result(timeout=5)[0] == [4]
 
     assert runtime.search_batch_sizes == [1, 1]
+    assert old_telemetry.micro_batching_warm_fast_path is True
+    assert new_telemetry.micro_batching_warm_fast_path is False
+    assert old_telemetry.records_generation < new_telemetry.records_generation
+    assert index._active_searches == 0
+    assert index._micro_batch_warm_lookahead == 0
     index.close()
 
 
@@ -1745,6 +2226,7 @@ def test_auto_native_route_does_not_report_micro_batching():
         )
 
     assert telemetry.micro_batching_enabled is False
+    assert telemetry.micro_batching_warm_fast_path is False
     assert telemetry.batch_size == 1
     assert runtime.search_batch_sizes == []
     index.close()
@@ -1756,9 +2238,18 @@ def test_cuvs_micro_batch_close_drains_queued_search_and_rejects_new_work():
         runtime,
         micro_batching_max_wait_ms=100.0,
     )
+    telemetry = CuVSSearchTelemetry(algorithm="brute_force", auto_mode=False)
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        search_future = executor.submit(index.search, [1.0, 0.0], 1, None)
+        search_future = executor.submit(
+            index.search,
+            [1.0, 0.0],
+            1,
+            None,
+            None,
+            None,
+            telemetry,
+        )
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             with index._micro_batch_condition:
@@ -1772,6 +2263,9 @@ def test_cuvs_micro_batch_close_drains_queued_search_and_rejects_new_work():
         close_future.result(timeout=5)
 
     assert runtime.closed is True
+    assert telemetry.micro_batching_warm_fast_path is True
+    assert index._active_searches == 0
+    assert index._micro_batch_warm_lookahead == 0
     with pytest.raises(RuntimeError, match="closed"):
         index.search([1.0, 0.0], 1, None)
 

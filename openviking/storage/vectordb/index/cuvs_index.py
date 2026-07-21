@@ -101,6 +101,7 @@ class CuVSSearchTelemetry:
     dtype: str = "float32"
     max_concurrent_gpu_searches: int = 1
     micro_batching_enabled: bool = False
+    micro_batching_warm_fast_path: bool = False
     batch_size: int = 1
     route_reason: str = "pending"
     filter_kind: str = "none"
@@ -132,6 +133,7 @@ class CuVSSearchTelemetry:
             "dtype": self.dtype,
             "max_concurrent_gpu_searches": self.max_concurrent_gpu_searches,
             "micro_batching_enabled": self.micro_batching_enabled,
+            "micro_batching_warm_fast_path": self.micro_batching_warm_fast_path,
             "batch_size": self.batch_size,
             "route_reason": self.route_reason,
             "filter_kind": self.filter_kind,
@@ -808,6 +810,7 @@ class _CuVSMicroBatchRequest:
     telemetry: Optional[CuVSSearchTelemetry]
     enqueued_at: float
     future: Future[Tuple[List[int], List[float]]]
+    warm_fast_path: bool = False
     released: bool = False
 
     @property
@@ -1006,6 +1009,7 @@ class CuVSDenseIndex:
         self._micro_batch_pending: OrderedDict[
             Tuple[int, Union[str, int], int], List[_CuVSMicroBatchRequest]
         ] = OrderedDict()
+        self._micro_batch_warm_lookahead = 0
         self._micro_batch_draining = False
         self._micro_batch_stop = False
         self._micro_batch_worker_failure: Optional[BaseException] = None
@@ -1784,7 +1788,8 @@ class CuVSDenseIndex:
         mask: Optional[Any],
         filter_identity: Union[str, int],
         telemetry: Optional[CuVSSearchTelemetry],
-    ) -> _CuVSMicroBatchRequest:
+        warm_fast_path: bool = False,
+    ) -> Optional[_CuVSMicroBatchRequest]:
         request = _CuVSMicroBatchRequest(
             snapshot=snapshot,
             query=query,
@@ -1794,6 +1799,7 @@ class CuVSDenseIndex:
             telemetry=telemetry,
             enqueued_at=time.perf_counter(),
             future=Future(),
+            warm_fast_path=warm_fast_path,
         )
         with self._micro_batch_condition:
             if self._micro_batch_worker_failure is not None:
@@ -1802,9 +1808,138 @@ class CuVSDenseIndex:
                 )
             if self._micro_batch_stop:
                 raise RuntimeError("The cuVS micro-batch worker is closed")
+            if (
+                warm_fast_path
+                and self._micro_batch_warm_lookahead >= self.micro_batching_max_batch_size
+            ):
+                return None
             self._micro_batch_pending.setdefault(request.key, []).append(request)
+            if warm_fast_path:
+                self._micro_batch_warm_lookahead += 1
             self._micro_batch_condition.notify()
         return request
+
+    def _try_enqueue_warm_micro_batch(
+        self,
+        *,
+        query: Tuple[float, ...],
+        limit: int,
+        filters: Optional[Mapping[str, Any]],
+        prepared_filter: Optional[_PreparedHostFilter],
+        telemetry: Optional[CuVSSearchTelemetry],
+    ) -> Optional[_CuVSMicroBatchRequest]:
+        """Queue one warm request without taking the caller-side GPU gate.
+
+        The worker remains the only owner of the device-search permit.  This
+        path merely pins an immutable, current-generation snapshot and an
+        already materialized device filter while the index lock prevents
+        mutation/close from racing the borrow.  A single batch worth of warm
+        requests may look ahead; overflow and every cold/stale case use the
+        established gated admission path.
+        """
+
+        if filters is None:
+            cache_key: Optional[str] = None
+        else:
+            # Empty mappings follow the established no-filter semantics, but
+            # are not the canonical no-filter representation for this fast path.
+            if not filters:
+                return None
+            cache_key = (
+                prepared_filter.cache_key
+                if prepared_filter is not None
+                else self._filter_cache_key(filters)
+            )
+            if cache_key is None:
+                return None
+
+        with self._lock:
+            if self._closing or self._closed:
+                raise RuntimeError("cuVS dense index is closed")
+            generation = self._records_generation
+            if prepared_filter is not None and prepared_filter.generation != generation:
+                # Preserve the established admitted retry path for stale host
+                # work instead of creating a second, fast-path-only retry
+                # protocol.
+                return None
+            snapshot = self._snapshot
+            if self._dirty or snapshot is None or snapshot.generation != generation:
+                return None
+
+            mask: Optional[Any] = None
+            filter_identity: Union[str, int] = "no-filter"
+            if filters is None:
+                result_limit = min(limit, len(snapshot.labels))
+            else:
+                cached_filter = self._get_cached_filter(cache_key)
+                if cached_filter is None:
+                    # Host metadata can outlive a size-bounded device LRU
+                    # entry.  Preserve the existing one-shot in-gate recovery.
+                    if (
+                        telemetry is not None
+                        and prepared_filter is not None
+                        and prepared_filter.cached_metadata is not None
+                    ):
+                        telemetry.filter_cache_hit = False
+                        telemetry.filter_cache_eviction_fallback = True
+                    return None
+                if (
+                    cached_filter.eligible_count == 0
+                    or cached_filter.route_native
+                    or cached_filter.prepared is None
+                ):
+                    return None
+                mask = cached_filter.prepared
+                filter_identity = cache_key
+                result_limit = min(limit, cached_filter.eligible_count)
+                if telemetry is not None:
+                    telemetry.filter_cache_hit = True
+                    telemetry.eligible_count = cached_filter.eligible_count
+                    telemetry.filter_words_packed = cached_filter.filter_words_packed
+
+            if telemetry is not None:
+                telemetry.filter_kind = (
+                    "path"
+                    if filters and _filter_uses_field_type(filters, self.field_types, "path")
+                    else "scalar"
+                    if filters
+                    else "none"
+                )
+                telemetry.records_generation = generation
+                telemetry.index_size = len(self._records)
+
+            request = self._enqueue_micro_batch(
+                snapshot=snapshot,
+                query=query,
+                result_limit=result_limit,
+                mask=mask,
+                filter_identity=filter_identity,
+                telemetry=telemetry,
+                warm_fast_path=True,
+            )
+            if request is None:
+                return None
+            self._active_searches += 1
+            if telemetry is not None:
+                telemetry.micro_batching_warm_fast_path = True
+            return request
+
+    def _release_micro_batch_warm_lookahead(
+        self,
+        requests: Sequence[_CuVSMicroBatchRequest],
+    ) -> None:
+        with self._micro_batch_condition:
+            released = 0
+            for request in requests:
+                if request.warm_fast_path:
+                    request.warm_fast_path = False
+                    released += 1
+            if not released:
+                return
+            if released > self._micro_batch_warm_lookahead:
+                raise RuntimeError("cuVS micro-batch warm look-ahead accounting underflow")
+            self._micro_batch_warm_lookahead -= released
+            self._micro_batch_condition.notify_all()
 
     @staticmethod
     def _await_micro_batch_request(
@@ -1908,6 +2043,7 @@ class CuVSDenseIndex:
         runnable_ids = {id(request) for request in runnable}
         cancelled = [request for request in requests if id(request) not in runnable_ids]
         if cancelled:
+            self._release_micro_batch_warm_lookahead(cancelled)
             self._complete_micro_batch(cancelled, results=[([], [])] * len(cancelled))
         if not runnable:
             return
@@ -1916,13 +2052,27 @@ class CuVSDenseIndex:
         snapshot = first.snapshot
         request_snapshot: Optional[_CuVSIndexSnapshot] = None
         if snapshot is None:
+            self._release_micro_batch_warm_lookahead(runnable)
             self._complete_micro_batch(
                 runnable,
                 error=RuntimeError("cuVS micro-batch snapshot was released before dispatch"),
             )
             return
 
-        self._gpu_search_gate.acquire()
+        try:
+            self._gpu_search_gate.acquire()
+        except BaseException as exc:
+            self._release_micro_batch_warm_lookahead(runnable)
+            self._complete_micro_batch(runnable, error=exc)
+            raise
+        try:
+            # Once this batch owns the gate it is the current device work, so
+            # one subsequent warm batch may begin filling behind it.
+            self._release_micro_batch_warm_lookahead(runnable)
+        except BaseException as exc:
+            self._gpu_search_gate.release()
+            self._complete_micro_batch(runnable, error=exc)
+            raise
         gpu_started = time.perf_counter()
         results: Optional[List[Tuple[List[int], List[float]]]] = None
         error: Optional[BaseException] = None
@@ -2002,6 +2152,9 @@ class CuVSDenseIndex:
                     for requests in self._micro_batch_pending.values()
                     for request in requests
                 ]
+                for request in pending:
+                    request.warm_fast_path = False
+                self._micro_batch_warm_lookahead = 0
                 self._micro_batch_pending.clear()
                 self._micro_batch_stop = True
                 self._micro_batch_condition.notify_all()
@@ -2067,6 +2220,16 @@ class CuVSDenseIndex:
                     )
 
             if self.micro_batching_enabled:
+                warm_request = self._try_enqueue_warm_micro_batch(
+                    query=query,
+                    limit=limit,
+                    filters=filters,
+                    prepared_filter=prepared_filter,
+                    telemetry=telemetry,
+                )
+                if warm_request is not None:
+                    return self._await_micro_batch_request(warm_request)
+
                 queue_started = time.perf_counter()
                 self._gpu_search_gate.acquire()
                 waited_ms = (time.perf_counter() - queue_started) * 1000.0
@@ -2286,6 +2449,8 @@ class CuVSDenseIndex:
                     filter_identity=filter_identity,
                     telemetry=telemetry,
                 )
+                if batch_request is None:
+                    raise RuntimeError("cuVS gated micro-batch enqueue unexpectedly failed")
             self._active_searches += 1
 
         if batch_request is not None:
