@@ -21,7 +21,7 @@ English / [中文](README_CN.md) / [日本語](README_JA.md)
 
 👋 Join our Community
 
-📱 <a href="./docs/en/about/01-about-us.md#lark-group">Lark Group</a> · <a href="./docs/en/about/01-about-us.md#wechat-group">WeChat</a> · <a href="https://discord.com/invite/eHvx8E9XF3">Discord</a> · <a href="https://x.com/openvikingai">X</a>
+📱 <a href="https://docs.openviking.ai/en/about/01-about-us#lark-group">Lark Group</a> · <a href="https://docs.openviking.ai/en/about/01-about-us#wechat-group">WeChat</a> · <a href="https://discord.com/invite/eHvx8E9XF3">Discord</a> · <a href="https://x.com/openvikingai">X</a>
 
 <a href="https://trendshift.io/repositories/19668" target="_blank"><img src="https://trendshift.io/api/badge/repositories/19668" alt="volcengine%2FOpenViking | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 
@@ -29,15 +29,13 @@ English / [中文](README_CN.md) / [日本語](README_JA.md)
 
 ***
 
-✨ **May 2026 Update**: Updated OpenViking benchmark results across User Memory, Agent Memory, and Knowledge Base QA scenarios. → See [Proof it works](#proof-it-works).
-
 ## What is OpenViking
 
 OpenViking is an open-source context database for AI agents. It stores memories, resources, and skills as one virtual filesystem under the `viking://` protocol, so an agent browses its own context with `ls`, `tree`, and `find` instead of querying a black-box vector store. Content is processed into three tiers — L0 abstract, L1 overview, L2 details — and loaded on demand. Every retrieval leaves a trajectory you can watch and debug. Full introduction: [Getting started](https://docs.openviking.ai/en/getting-started/01-introduction).
 
 [![OpenViking Studio playground](docs/images/studio-playground.png)](https://openviking.ai/studio)
 
-*The [OpenViking Studio](https://openviking.ai/studio) playground — a hosted instance you can try in the browser.*
+*The [OpenViking Studio](https://openviking.ai/studio) playground — a live demo you can open in the browser, no installation required.*
 
 ## Why OpenViking
 
@@ -47,7 +45,7 @@ OpenViking is an open-source context database for AI agents. It stores memories,
 - **Observable retrieval.** Each query preserves its directory-browsing trajectory. When a result looks wrong, you can see exactly which path produced it. → [Retrieval](https://docs.openviking.ai/en/concepts/07-retrieval)
 - **Sessions become memory.** After a session commits, OpenViking asynchronously extracts user preferences and agent experience into long-term memory. → [Session](https://docs.openviking.ai/en/concepts/08-session)
 
-How the pieces fit together: [Architecture](https://docs.openviking.ai/en/concepts/01-architecture).
+How the pieces fit together: [Architecture](https://docs.openviking.ai/en/concepts/01-architecture). The thinking behind the design: [The Database Paradigm for Context Engineering](https://blog.openviking.ai/post/openviking-context-database/).
 
 ```
 viking://
@@ -234,11 +232,10 @@ OpenViking open-sources a subset of the core capabilities described in the Vikin
 OpenViking is still in its early stages, and there is plenty left to build.
 
 - **Docs**: [docs.openviking.ai](https://docs.openviking.ai/) · [FAQ](https://docs.openviking.ai/en/faq/faq)
-- **Team**: [About us](./docs/en/about/01-about-us.md)
-- **Chat**: 📱 [Lark Group](./docs/en/about/01-about-us.md#lark-group) · 💬 [WeChat](./docs/en/about/01-about-us.md#wechat-group) · 🎮 [Discord](https://discord.com/invite/eHvx8E9XF3) · 🐦 [X](https://x.com/openvikingai)
+- **Blog**: [blog.openviking.ai](https://blog.openviking.ai/)
+- **Team**: [About us](https://docs.openviking.ai/en/about/01-about-us)
+- **Chat**: 📱 [Lark Group](https://docs.openviking.ai/en/about/01-about-us#lark-group) · 💬 [WeChat](https://docs.openviking.ai/en/about/01-about-us#wechat-group) · 🎮 [Discord](https://discord.com/invite/eHvx8E9XF3) · 🐦 [X](https://x.com/openvikingai)
 - **Contribute**: bug fixes and new features are both welcome — see [CONTRIBUTING.md](CONTRIBUTING.md)
-
-[![Star History Chart](https://api.star-history.com/svg?repos=volcengine/OpenViking\&type=timeline\&legend=top-left)](https://www.star-history.com/#volcengine/OpenViking\&type=timeline\&legend=top-left)
 
 ## Security and privacy
 
