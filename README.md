@@ -107,7 +107,7 @@ OpenViking 0.3.22 has been evaluated across three scenarios: long-conversation u
 | Claude Code auto-memory | 57.21% | 49.1s | 353,306,422 |
 | Claude Code + OpenViking | **80.32%** | **20.4s** | 129,968,899 |
 
-Versus each agent's native memory, input tokens drop by 34.3–91.0% and query latency by 58.45–66.10%; the per-agent breakdown is in [./benchmark](./benchmark).
+Versus each agent's native memory, input tokens drop by 34.3–91.0% and query latency by 58.45–66.10%.
 
 **Agent experience memory — tau2-bench.** Multi-turn task success in retail and airline domains:
 
@@ -128,7 +128,7 @@ Versus each agent's native memory, input tokens drop by 34.3–91.0% and query l
 | OpenViking (top-20) | Vector retrieval | **91.00%** | 12,533 | 0.23s |
 | Nanobot + OpenViking (Agent) | Vector retrieval + Agent | 87.00% | 71,300 | 61.6s |
 
-Across five open-source RAG datasets (FinanceBench, NaturalQuestions, ClapNQ, Qasper, and SyllabusQA), OpenViking averages 66.87% accuracy at 0.19s retrieval latency; indexing cost is 13.8% of LightRAG's. Reproduce it from [./benchmark](./benchmark).
+Across five open-source RAG datasets (FinanceBench, NaturalQuestions, ClapNQ, Qasper, and SyllabusQA), OpenViking averages 66.87% accuracy at 0.19s retrieval latency; indexing cost is 13.8% of LightRAG's.
 
 ## Quick start
 
@@ -162,12 +162,14 @@ ov ls viking://resources/
 ov tree viking://resources/volcengine -L 2
 # wait some time for semantic processing if not --wait
 ov find "what is openviking"
-ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
+ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/en
 ```
+
+To rebuild existing indexes: `ov reindex <uri> --mode vectors_only` refreshes vectors only, `--mode semantic_and_vectors` regenerates semantic artifacts (`.abstract.md`, `.overview.md`) before vectors, and `--mode prune_orphans` removes vector records whose source files no longer exist (add `--dry-run` to preview). There is no `semantic` or `full` mode alias.
 
 Client configuration can be initialized interactively with `ov config`; if you run multiple servers, switch between them with `ov config switch`.
 
-The Rust CLI installs with `npm i -g @openviking/cli` — see [CLI setup](https://docs.openviking.ai/en/getting-started/05-cli-setup). An official Docker image is also available; see the [Deployment guide](https://docs.openviking.ai/en/guides/03-deployment).
+The Rust CLI installs with `npm i -g @openviking/cli`, or from source with `cargo install --git https://github.com/volcengine/OpenViking ov_cli` — see [CLI setup](https://docs.openviking.ai/en/getting-started/05-cli-setup). An official Docker image is also available; see the [Deployment guide](https://docs.openviking.ai/en/guides/03-deployment).
 
 ## Use it with your agent
 
