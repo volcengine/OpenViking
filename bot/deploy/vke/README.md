@@ -121,9 +121,9 @@
 
 ---
 
-### 5. 获取访问密钥
+### 5. 获取访问凭证
 
-#### 5.1 创建 AccessKey
+#### 5.1 创建 AccessKey（仅 TOS 存储需要）
 
 1. 鼠标悬停在右上角头像，点击 **API 访问密钥**
 2. 点击 **新建密钥**
@@ -181,11 +181,7 @@ vim ~/.config/vikingbot/vke_deploy.yaml
 填入以下信息：
 
 ```yaml
-volcengine_access_key: AKLTxxxxxxxxxx      # 你的 AccessKey ID
-volcengine_secret_key: xxxxxxxxxx          # 你的 Secret Access Key
 volcengine_region: cn-beijing               # 地域
-
-vke_cluster_id: ccxxxxxxxxxx                # 集群 ID（从控制台获取）
 
 image_registry: vikingbot-cn-beijing.cr.volces.com  # 镜像仓库地址
 image_namespace: vikingbot
@@ -200,6 +196,8 @@ registry_password: "你的火山引擎密码"
 storage_type: tos
 
 # TOS 配置（仅 storage_type=tos 时需要）
+volcengine_access_key: AKLTxxxxxxxxxx
+volcengine_secret_key: xxxxxxxxxx
 tos_bucket: vikingbot_data
 tos_path: /.vikingbot/
 tos_region: cn-beijing
@@ -227,10 +225,9 @@ deploy/vke/deploy.sh
 
 | 配置项 | 说明 | 必填 | 示例 |
 |--------|------|------|------|
-| `volcengine_access_key` | 火山引擎 AccessKey ID | 是 | `AKLTxxxx` |
-| `volcengine_secret_key` | 火山引擎 Secret Access Key | 是 | `xxxx` |
+| `volcengine_access_key` | 火山引擎 AccessKey ID | 执行 TOS 部署时 | `AKLTxxxx` |
+| `volcengine_secret_key` | 火山引擎 Secret Access Key | 执行 TOS 部署时 | `xxxx` |
 | `volcengine_region` | 地域 | 是 | `cn-beijing` |
-| `vke_cluster_id` | VKE 集群 ID | 是 | `ccxxxx` |
 | `image_registry` | 镜像仓库地址 | 是 | `vikingbot-cn-beijing.cr.volces.com` |
 | `image_namespace` | 命名空间 | 是 | `vikingbot` |
 | `image_repository` | 仓库名称 | 是 | `vikingbot` |
