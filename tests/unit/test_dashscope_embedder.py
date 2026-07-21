@@ -13,6 +13,7 @@ from openviking.models.embedder.dashscope_embedders import (
     DashScopeDenseEmbedder,
     get_dashscope_model_default_dimension,
 )
+from openviking.models.embedder.base import embed_compat
 
 # ---------------------------------------------------------------------------
 # Dimension helper
@@ -236,6 +237,29 @@ class TestDashScopeMultimodalEmbed:
 
     @patch("openviking.models.embedder.dashscope_embedders.openai.OpenAI")
     @patch("openviking.models.embedder.dashscope_embedders.httpx.Client")
+    def test_embed_routes_standard_multimodal_parts(self, mock_httpx_class, mock_openai):
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "output": {"embeddings": [{"embedding": [0.1] * 2560}]}
+        }
+        mock_httpx_class.return_value.post.return_value = mock_response
+        embedder = DashScopeDenseEmbedder("qwen3-vl-embedding", api_key="sk-test")
+
+        embedder.embed(
+            [
+                {"type": "text", "text": "cat"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+            ]
+        )
+
+        body = mock_httpx_class.return_value.post.call_args.kwargs["json"]
+        assert body["input"]["contents"] == [
+            {"text": "cat"},
+            {"image": "https://example.com/cat.png"},
+        ]
+
+    @patch("openviking.models.embedder.dashscope_embedders.openai.OpenAI")
+    @patch("openviking.models.embedder.dashscope_embedders.httpx.Client")
     def test_embed_sends_multimodal_params(self, mock_httpx_class, mock_openai):
         mock_client = MagicMock()
         mock_httpx_class.return_value = mock_client
@@ -388,6 +412,25 @@ class TestDashScopeAsync:
         )
         result = await embedder.embed_async("hello multimodal async")
         assert result.dense_vector == [0.4] * 768
+
+    @patch("openviking.models.embedder.dashscope_embedders.openai.OpenAI")
+    @patch("openviking.models.embedder.dashscope_embedders.httpx.Client")
+    @pytest.mark.anyio
+    async def test_embed_compat_preserves_image(self, mock_httpx, mock_openai):
+        response = MagicMock()
+        response.json.return_value = {
+            "output": {"embeddings": [{"embedding": [0.2] * 2560}]}
+        }
+        client = MagicMock()
+        client.post = AsyncMock(return_value=response)
+        embedder = DashScopeDenseEmbedder("qwen3-vl-embedding", api_key="sk-test")
+        embedder._get_async_httpx_client = MagicMock(return_value=client)
+        parts = [{"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}]
+
+        await embed_compat(embedder, parts, is_query=True)
+
+        body = client.post.call_args.kwargs["json"]
+        assert body["input"]["contents"] == [{"image": "https://example.com/cat.png"}]
 
     @patch("openviking.models.embedder.dashscope_embedders.openai.OpenAI")
     @patch("openviking.models.embedder.dashscope_embedders.httpx.Client")

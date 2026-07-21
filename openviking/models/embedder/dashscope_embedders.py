@@ -14,6 +14,7 @@ import openai
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
     EmbedResult,
+    EmbeddingInput,
     truncate_and_normalize,
 )
 from openviking.telemetry import get_current_telemetry
@@ -147,6 +148,23 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
     # Multimodal helpers
     # ------------------------------------------------------------------
 
+    @property
+    def supports_multimodal(self) -> bool:
+        return True
+
+    @staticmethod
+    def _to_dashscope_contents(content: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+        contents = []
+        for part in content:
+            if part.get("type") == "text":
+                contents.append({"text": str(part.get("text", ""))})
+            elif part.get("type") == "image_url":
+                image_url = part.get("image_url")
+                url = image_url.get("url") if isinstance(image_url, dict) else image_url
+                if url:
+                    contents.append({"image": str(url)})
+        return contents
+
     def _multimodal_params(self) -> Dict[str, Any]:
         """Build parameters dict for multimodal requests, excluding None values."""
         return {
@@ -194,7 +212,10 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
     # embed
     # ------------------------------------------------------------------
 
-    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
+    def embed(self, text: EmbeddingInput, is_query: bool = False) -> EmbedResult:
+        if isinstance(text, list):
+            return self.embed_content(self._to_dashscope_contents(text))
+
         def _call() -> EmbedResult:
             if self._input_type == "text":
                 response = self._openai_client.embeddings.create(
@@ -221,7 +242,10 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
     # embed_async
     # ------------------------------------------------------------------
 
-    async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+    async def embed_async(self, text: EmbeddingInput, is_query: bool = False) -> EmbedResult:
+        if isinstance(text, list):
+            return await self.embed_content_async(self._to_dashscope_contents(text))
+
         async def _call() -> EmbedResult:
             if self._input_type == "text":
                 client = self._get_async_openai_client()
