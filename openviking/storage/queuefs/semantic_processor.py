@@ -259,19 +259,19 @@ class SemanticProcessor(DequeueHandlerBase):
         data: Optional[Dict[str, Any]],
         error: Exception,
     ) -> None:
-        uri = msg.uri
-        current_count = self._retry_counts.get(uri, 0) + 1
-        self._retry_counts[uri] = current_count
+        retry_key = msg.coalesce_key or msg.uri
+        current_count = self._retry_counts.get(retry_key, 0) + 1
+        self._retry_counts[retry_key] = current_count
 
         if current_count >= self.max_retries_per_uri:
             logger.warning(
                 "Max retries (%d) reached for %s, dropping to prevent token burn. "
                 "Last error: %s",
                 self.max_retries_per_uri,
-                uri,
+                retry_key,
                 error,
             )
-            self._retry_counts.pop(uri, None)
+            self._retry_counts.pop(retry_key, None)
             self._merge_request_stats(msg.telemetry_id, error_count=1)
             get_request_wait_tracker().mark_semantic_failed(
                 msg.telemetry_id, msg.id, f"Max retries ({self.max_retries_per_uri}) exceeded: {error}"
@@ -361,7 +361,8 @@ class SemanticProcessor(DequeueHandlerBase):
                     msg.uri,
                     msg.coalesce_version,
                 )
-                self._retry_counts.pop(msg.uri, None)
+                retry_key = msg.coalesce_key or msg.uri
+                self._retry_counts.pop(retry_key, None)
                 if msg.telemetry_id and msg.id:
                     get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
                 self.report_success()
@@ -380,10 +381,11 @@ class SemanticProcessor(DequeueHandlerBase):
                 self.report_success()
                 return None
             # File existence check: skip processing if the source file is gone.
-            # Prevents infinite retry loops on deleted files (see #1595).
+            # Prevents infinite retry loops on deleted files.
             try:
                 viking_fs = get_viking_fs()
-                file_exists = await viking_fs.exists(msg.uri, ctx=None)
+                check_ctx = self._ctx_from_semantic_msg(msg)
+                file_exists = await viking_fs.exists(msg.uri, ctx=check_ctx)
                 if not file_exists:
                     logger.warning(
                         "Source URI does not exist, dropping from queue: %s",
@@ -516,7 +518,8 @@ class SemanticProcessor(DequeueHandlerBase):
                     logger.info(f"Completed semantic generation for: {msg.uri}")
                     self.report_success()
                     self._circuit_breaker.record_success()
-                    self._retry_counts.pop(msg.uri, None)
+                    retry_key = msg.coalesce_key or msg.uri
+                    self._retry_counts.pop(retry_key, None)
                     return None
                 finally:
                     reset_root_observability_context(root_context_token)
