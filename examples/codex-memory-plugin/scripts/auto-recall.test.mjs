@@ -6,8 +6,36 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { resolveCodexLaunch, trySpawnCodex } from "./codex-launch.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+
+test("Windows Codex launch bypasses the npm POSIX shim", () => {
+  const npmBin = String.raw`C:\Users\test\AppData\Roaming\npm`;
+  const npmEntryPoint = String.raw`C:\Users\test\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js`;
+  const launch = resolveCodexLaunch({
+    platform: "win32",
+    pathValue: `${npmBin};C:\\Windows\\System32`,
+    execPath: String.raw`C:\Program Files\nodejs\node.exe`,
+    pathExists: (candidate) => candidate === npmEntryPoint,
+  });
+
+  assert.deepEqual(launch, {
+    command: String.raw`C:\Program Files\nodejs\node.exe`,
+    argsPrefix: [npmEntryPoint],
+  });
+});
+
+test("Codex launch converts a synchronous spawn failure into a fallback signal", () => {
+  const failure = Object.assign(new Error("spawn EPERM"), { code: "EPERM" });
+  const result = trySpawnCodex(["exec"], { stdio: "pipe" }, {
+    resolveLaunch: () => ({ command: "codex", argsPrefix: [] }),
+    spawnImpl: () => { throw failure; },
+  });
+
+  assert.equal(result.child, null);
+  assert.equal(result.error, failure);
+});
 
 function readRequestBody(req) {
   return new Promise((resolve, reject) => {
@@ -113,7 +141,14 @@ printf '%s' "$FAKE_CODEX_OUTPUT" > "$output_path"
   }
 }
 
-async function runEndpointCompressionCase({ prompt, entry, rendered, compressorOutput, exitCode = 0 }) {
+async function runEndpointCompressionCase({
+  prompt,
+  entry,
+  rendered,
+  compressorOutput,
+  exitCode = 0,
+  extraEnv = {},
+}) {
   const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-endpoint-compress-"));
   let requestBody = null;
   try {
@@ -149,11 +184,13 @@ async function runEndpointCompressionCase({ prompt, entry, rendered, compressorO
           OPENVIKING_SCORE_THRESHOLD: "0",
           OPENVIKING_TIMEOUT_MS: "5000",
           OPENVIKING_URL: baseUrl,
+          ...extraEnv,
         },
       ));
+      const compressorCallLog = await readFile(callLog, "utf-8").catch(() => "");
       return {
         output: JSON.parse(result.stdout.trim()),
-        compressorCalls: (await readFile(callLog, "utf-8")).trim().split("\n").length,
+        compressorCalls: compressorCallLog.trim().split("\n").filter(Boolean).length,
         requestBody,
       };
     }, { exitCode });
@@ -347,6 +384,45 @@ test("auto-recall falls back to a bounded deterministic digest when endpoint com
   assert.match(result.output.hookSpecificOutput.additionalContext, /Use Vim/);
   assert.doesNotMatch(result.output.hookSpecificOutput.additionalContext, /<memory_group>/);
   assert.equal(result.compressorCalls, 1);
+});
+
+test("auto-recall preserves recalled memory when compressor spawn throws synchronously", async () => {
+  const preloadDir = await mkdtemp(join(tmpdir(), "ov-sync-spawn-failure-"));
+  const preloadPath = join(preloadDir, "throw-codex-spawn.cjs");
+  await writeFile(preloadPath, `
+const childProcess = require("node:child_process");
+const { syncBuiltinESMExports } = require("node:module");
+const originalSpawn = childProcess.spawn;
+childProcess.spawn = function patchedSpawn(command, ...args) {
+  if (command === "codex") {
+    throw Object.assign(new Error("spawn EPERM"), { code: "EPERM" });
+  }
+  return originalSpawn.call(this, command, ...args);
+};
+syncBuiltinESMExports();
+`);
+
+  try {
+    const result = await runEndpointCompressionCase({
+      prompt: "Which editor do I prefer?",
+      entry: {
+        uri: "viking://user/zeus/memories/preferences/editor.md",
+        score: 0.91,
+        type: "preferences",
+        mode: "summary",
+        summary: "Use Vim",
+      },
+      rendered: "<memory_group>Use Vim</memory_group>",
+      compressorOutput: "unused",
+      extraEnv: { NODE_OPTIONS: `--require=${preloadPath}` },
+    });
+
+    assert.match(result.output.hookSpecificOutput.additionalContext, /Use Vim/);
+    assert.doesNotMatch(result.output.hookSpecificOutput.additionalContext, /<memory_group>/);
+    assert.equal(result.compressorCalls, 0);
+  } finally {
+    await rm(preloadDir, { recursive: true, force: true });
+  }
 });
 
 test("auto-recall expands configured user in memory search target", async () => {
