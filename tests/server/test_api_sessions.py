@@ -16,7 +16,6 @@ from openviking.message import ImagePart, Message, TextPart
 from openviking.server.app import create_app
 from openviking.server.config import (
     ServerConfig,
-    SessionAutoCommitConfig,
     ToolOutputExternalizationConfig,
 )
 from openviking.server.dependencies import set_service
@@ -25,6 +24,7 @@ from openviking.server.routers import sessions as sessions_router
 from openviking.session.session import Session
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
+from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 from tests.utils.mock_agfs import MockLocalAGFS
 
@@ -524,11 +524,11 @@ async def test_create_session_uses_default_policy_when_server_default_enabled(
     assert resp.status_code == 200
     config = resp.json()["result"]["config"]
     assert config["auto_commit_policy"] == {
-        "pending_token_threshold": 1000,
+        "pending_token_threshold": 10000,
         "message_count_threshold": 50,
         "idle_timeout_seconds": 86400,
         "keep_recent_count": 2,
-        "min_commit_interval_seconds": 60,
+        "min_commit_interval_seconds": 0,
     }
 
 
@@ -551,7 +551,7 @@ async def test_create_session_applies_config_and_fills_defaults(client: httpx.As
         "message_count_threshold": 50,
         "idle_timeout_seconds": 86400,
         "keep_recent_count": 10,
-        "min_commit_interval_seconds": 60,
+        "min_commit_interval_seconds": 0,
     }
 
     # Overrides survive a reload; the policy keep_recent_count is stored in the

@@ -22,6 +22,7 @@ from openviking_cli.utils.config.consts import (
     OPENVIKING_CONFIG_ENV,
     SYSTEM_CONFIG_DIR,
 )
+from openviking_cli.utils.config.memory_config import MemoryConfig
 
 logger = get_logger(__name__)
 
@@ -244,18 +245,6 @@ class ToolOutputExternalizationConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-class SessionAutoCommitConfig(BaseModel):
-    """Server-wide controls for automatic session commits."""
-
-    default_enabled: bool = False
-    idle_enabled: bool = False
-    check_interval_seconds: float = Field(default=60.0, gt=0)
-    scan_batch_size: int = Field(default=16, gt=0)
-    scan_batch_pause_seconds: float = Field(default=0.0, ge=0)
-
-    model_config = {"extra": "forbid"}
-
-
 class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
@@ -279,7 +268,7 @@ class ServerConfig(BaseModel):
     upload_signed_ttl_seconds: int = 600
     temp_upload: TempUploadConfig = Field(default_factory=TempUploadConfig)
     user_config_defaults: UserConfig = Field(default_factory=UserConfig)
-    session_auto_commit: SessionAutoCommitConfig = Field(default_factory=SessionAutoCommitConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
     tool_output_externalization: ToolOutputExternalizationConfig = Field(
         default_factory=ToolOutputExternalizationConfig
     )
@@ -406,8 +395,22 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
             "See documentation for more details."
         )
 
+    memory_data = data.get("memory", {})
+    if memory_data is None:
+        memory_data = {}
+    if not isinstance(memory_data, dict):
+        raise ValueError("Invalid memory config: 'memory' section must be an object")
+
     try:
-        config = ServerConfig.model_validate(server_data)
+        memory_config = MemoryConfig.from_dict(memory_data)
+    except ValidationError as e:
+        raise ValueError(
+            f"Invalid memory config in {path}:\n"
+            f"{format_validation_error(root_model=MemoryConfig, error=e, path_prefix='memory')}"
+        ) from e
+
+    try:
+        config = ServerConfig.model_validate({**server_data, "memory": memory_config})
     except ValidationError as e:
         raise ValueError(
             f"Invalid server config in {path}:\n"

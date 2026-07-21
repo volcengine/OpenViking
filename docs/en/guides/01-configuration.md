@@ -1110,11 +1110,11 @@ Legacy compatibility example:
 
 ##### Session Auto Commit Configuration
 
-`server.session_auto_commit` controls server-wide automatic session commit behavior.
+`memory.session_auto_commit` controls server-wide automatic session commit behavior.
 
 ```json
 {
-  "server": {
+  "memory": {
     "session_auto_commit": {
       "default_enabled": false,
       "idle_enabled": false,
@@ -1136,7 +1136,7 @@ Legacy compatibility example:
 
 Notes:
 
-- `server.session_auto_commit` is a server-wide control surface, not a per-session business policy.
+- `memory.session_auto_commit` is a server-wide control surface, not a per-session business policy.
 - Per-session auto-commit behavior is configured through the session-level `auto_commit_policy` (see the table below). It is set when creating a session (`POST /api/v1/sessions` with a `config` object), edited later via `PATCH /api/v1/sessions/{session_id}`, and viewed via `GET /api/v1/sessions/{session_id}`.
 - When `default_enabled=false`, sessions created without `config.auto_commit_policy` keep auto commit disabled and return `auto_commit_policy: null`. Providing `{}` or any policy field explicitly enables auto commit for that session and fills missing fields from the defaults below.
 - When `default_enabled=true`, sessions created without `config.auto_commit_policy` get the default policy below.
@@ -1153,11 +1153,11 @@ When a session carries an `auto_commit_policy`, any field you omit falls back to
 
 | Field | Type | Default | Max | Description |
 |-------|------|---------|-----|-------------|
-| `pending_token_threshold` | int | 1000 | 50000 | When uncommitted pending tokens exceed this value (strictly greater-than), an auto commit is triggered after a message write. |
+| `pending_token_threshold` | int | 10000 | 50000 | When uncommitted pending tokens exceed this value (strictly greater-than), an auto commit is triggered after a message write. |
 | `message_count_threshold` | int | 50 | 500 | When the uncommitted live message count exceeds this value (strictly greater-than), an auto commit is triggered after a message write. |
 | `idle_timeout_seconds` | int | 86400 | 604800 | After this many idle seconds, a session with uncommitted content becomes eligible for the server-side idle scheduler. Idle-timeout commits archive the full backlog and ignore `keep_recent_count`. |
 | `keep_recent_count` | int | 2 | 500 | Number of recent live messages to keep (not archived) on a threshold-triggered auto commit. Idle-timeout commits ignore this and commit everything. |
-| `min_commit_interval_seconds` | int | 60 | 604800 | Minimum seconds between two automatic commits (throttle). |
+| `min_commit_interval_seconds` | int | 0 | 604800 | Minimum seconds between two automatic commits (throttle). |
 
 Code entry: `openviking/session/auto_commit_policy.py:AutoCommitPolicy`.
 

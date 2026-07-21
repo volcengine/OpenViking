@@ -14,7 +14,6 @@ from openviking.core.directories import DirectoryInitializer
 from openviking.core.namespace import canonicalize_uri
 from openviking.privacy import UserPrivacyConfigService
 from openviking.resource.watch_scheduler import WatchScheduler
-from openviking.server.config import SessionAutoCommitConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.service.debug_service import DebugService
 from openviking.service.fs_service import FSService
@@ -46,6 +45,7 @@ from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import OPENVIKING_ENABLE_RECORDER_ENV, get_openviking_config
 from openviking_cli.utils.config.git_config import GitConfig
+from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
 from openviking_cli.utils.config.open_viking_config import initialize_openviking_config
 from openviking_cli.utils.config.storage_config import StorageConfig
 
@@ -416,7 +416,7 @@ class OpenVikingService:
 
         server_config = get_server_config()
         session_auto_commit_config = (
-            server_config.session_auto_commit
+            server_config.memory.session_auto_commit
             if server_config is not None
             else SessionAutoCommitConfig()
         )

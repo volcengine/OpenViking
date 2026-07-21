@@ -44,17 +44,17 @@ Session API 按认证用户作用域访问会话，并返回 canonical user sess
 |------|------|------|--------|------|
 | session_id | str | 否 | None | 会话 ID。如果为 None，则创建一个自动生成 ID 的新会话 |
 | memory_policy | object | 否 | None | 会话默认的记忆抽取策略。可选的 `self` 和 `peer` 开关控制写入目标；可选的 `working_memory.enabled=false` 跳过 archive summary；可选的顶层 `memory_types` 将抽取限制为指定的 enabled memory schema。未传或为 `null` 时允许所有 enabled memory schema。非法结构或未知 memory type 会以 `InvalidArgumentError` 拒绝。 |
-| config | object | 否 | None | 可选的 session 配置。目前支持 `auto_commit_policy` 对象（见下表）。传入的字段会被校验并 clamp 到取值范围，然后合并到默认值之上；最终生效的策略会在响应的 `result.config` 中返回，并持久化到 session meta。未传 policy 时 auto commit 关闭，除非 `server.session_auto_commit.default_enabled=true`。 |
+| config | object | 否 | None | 可选的 session 配置。目前支持 `auto_commit_policy` 对象（见下表）。传入的字段会被校验并 clamp 到取值范围，然后合并到默认值之上；最终生效的策略会在响应的 `result.config` 中返回，并持久化到 session meta。未传 policy 时 auto commit 关闭，除非 `memory.session_auto_commit.default_enabled=true`。 |
 
 `config.auto_commit_policy` 字段（均为可选；存在 policy 时，未传字段回退到默认值）：
 
 | 字段 | 类型 | 默认值 | 上限 | 说明 |
 |------|------|--------|------|------|
-| `pending_token_threshold` | int | 1000 | 50000 | 当未提交的 pending token 超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
+| `pending_token_threshold` | int | 10000 | 50000 | 当未提交的 pending token 超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
 | `message_count_threshold` | int | 50 | 500 | 当未提交的 live message 数量超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
 | `idle_timeout_seconds` | int | 86400 | 604800 | 有未提交内容的 session 在空闲这么多秒后，进入服务端 idle scheduler 的处理范围。idle 触发的 commit 会归档全部积压消息，并忽略 `keep_recent_count`。 |
 | `keep_recent_count` | int | 2 | 500 | 阈值触发的自动 commit 后保留（不归档）的最近 live message 数量。idle 超时触发的 commit 会忽略该值并归档所有消息。 |
-| `min_commit_interval_seconds` | int | 60 | 604800 | 两次自动 commit 之间的最小间隔秒数（节流）。 |
+| `min_commit_interval_seconds` | int | 0 | 604800 | 两次自动 commit 之间的最小间隔秒数（节流）。 |
 
 所有字段最小值为 `0`，会被 clamp 到 `[0, 上限]`。未知字段会以 `InvalidArgumentError` 拒绝。
 
@@ -89,7 +89,7 @@ curl -X POST http://localhost:1933/api/v1/sessions \
         "message_count_threshold": 40,
         "idle_timeout_seconds": 600,
         "keep_recent_count": 10,
-        "min_commit_interval_seconds": 60
+        "min_commit_interval_seconds": 0
       }
     }
   }'
@@ -119,7 +119,7 @@ result = await client.create_session(
             "message_count_threshold": 40,
             "idle_timeout_seconds": 600,
             "keep_recent_count": 10,
-            "min_commit_interval_seconds": 60,
+            "min_commit_interval_seconds": 0,
         }
     }
 )
@@ -165,11 +165,11 @@ ov session new
     },
     "config": {
       "auto_commit_policy": {
-        "pending_token_threshold": 1000,
+        "pending_token_threshold": 10000,
         "message_count_threshold": 50,
         "idle_timeout_seconds": 86400,
         "keep_recent_count": 2,
-        "min_commit_interval_seconds": 60
+        "min_commit_interval_seconds": 0
       }
     }
   },
@@ -400,11 +400,11 @@ ov session get a1b2c3d4
     "pending_tokens": 450,
     "config": {
       "auto_commit_policy": {
-        "pending_token_threshold": 1000,
+        "pending_token_threshold": 10000,
         "message_count_threshold": 50,
         "idle_timeout_seconds": 86400,
         "keep_recent_count": 2,
-        "min_commit_interval_seconds": 60
+        "min_commit_interval_seconds": 0
       }
     }
   }
@@ -504,7 +504,7 @@ ov session auto-commit-policy set a1b2c3d4 \
         "message_count_threshold": 40,
         "idle_timeout_seconds": 86400,
         "keep_recent_count": 2,
-        "min_commit_interval_seconds": 60
+        "min_commit_interval_seconds": 0
       }
     }
   }

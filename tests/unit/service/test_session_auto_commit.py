@@ -14,7 +14,6 @@ import pytest
 
 import openviking.service.session_auto_commit as auto_commit_module
 import openviking.service.session_service as session_service_module
-from openviking.server.config import SessionAutoCommitConfig
 from openviking.server.identity import RequestContext
 from openviking.service.session_auto_commit import (
     SessionAutoCommitScheduler,
@@ -22,6 +21,7 @@ from openviking.service.session_auto_commit import (
 )
 from openviking.service.session_service import SessionService
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
 
 
 _REAL_DATETIME = datetime

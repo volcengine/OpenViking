@@ -44,17 +44,17 @@ Create a new session. Sessions are containers for conversations, storing message
 |-----------|------|----------|---------|-------------|
 | session_id | str | No | None | Session ID. Creates new session with auto-generated ID if None |
 | memory_policy | object | No | None | Default memory extraction policy for the session. Optional `self` and `peer` switches control write targets, optional `working_memory.enabled=false` skips archive summaries, and optional top-level `memory_types` limits extraction to specific enabled memory schemas. When `memory_types` is omitted or `null`, all enabled memory schemas are allowed. Invalid shapes or unknown memory types are rejected with `InvalidArgumentError`. |
-| config | object | No | None | Optional session config. Currently supports an `auto_commit_policy` object (see table below). Any provided fields are validated, clamped to their bounds, and merged over the defaults; the effective policy is returned in the response `result.config` and persisted into session metadata. If no policy is provided, auto commit is disabled unless `server.session_auto_commit.default_enabled=true`. |
+| config | object | No | None | Optional session config. Currently supports an `auto_commit_policy` object (see table below). Any provided fields are validated, clamped to their bounds, and merged over the defaults; the effective policy is returned in the response `result.config` and persisted into session metadata. If no policy is provided, auto commit is disabled unless `memory.session_auto_commit.default_enabled=true`. |
 
 `config.auto_commit_policy` fields (all optional; omitted fields fall back to the defaults when a policy is present):
 
 | Field | Type | Default | Max | Description |
 |-------|------|---------|-----|-------------|
-| `pending_token_threshold` | int | 1000 | 50000 | When uncommitted pending tokens exceed this value (strictly greater-than), an auto commit is triggered after a message write. |
+| `pending_token_threshold` | int | 10000 | 50000 | When uncommitted pending tokens exceed this value (strictly greater-than), an auto commit is triggered after a message write. |
 | `message_count_threshold` | int | 50 | 500 | When the uncommitted live message count exceeds this value (strictly greater-than), an auto commit is triggered after a message write. |
 | `idle_timeout_seconds` | int | 86400 | 604800 | After this many idle seconds, a session with uncommitted content becomes eligible for the server-side idle scheduler. An idle-timeout commit archives the full backlog and ignores `keep_recent_count`. |
 | `keep_recent_count` | int | 2 | 500 | Number of recent live messages to keep (not archived) on a threshold-triggered auto commit. Idle-timeout commits ignore this and commit everything. |
-| `min_commit_interval_seconds` | int | 60 | 604800 | Minimum seconds between two automatic commits (throttle). |
+| `min_commit_interval_seconds` | int | 0 | 604800 | Minimum seconds between two automatic commits (throttle). |
 
 All fields have a minimum of `0` and are clamped into `[0, max]`. Unknown keys are rejected with `InvalidArgumentError`.
 
@@ -89,7 +89,7 @@ curl -X POST http://localhost:1933/api/v1/sessions \
         "message_count_threshold": 40,
         "idle_timeout_seconds": 600,
         "keep_recent_count": 10,
-        "min_commit_interval_seconds": 60
+        "min_commit_interval_seconds": 0
       }
     }
   }'
@@ -119,7 +119,7 @@ result = await client.create_session(
             "message_count_threshold": 40,
             "idle_timeout_seconds": 600,
             "keep_recent_count": 10,
-            "min_commit_interval_seconds": 60,
+            "min_commit_interval_seconds": 0,
         }
     }
 )
@@ -165,11 +165,11 @@ ov session new
     },
     "config": {
       "auto_commit_policy": {
-        "pending_token_threshold": 1000,
+        "pending_token_threshold": 10000,
         "message_count_threshold": 50,
         "idle_timeout_seconds": 86400,
         "keep_recent_count": 2,
-        "min_commit_interval_seconds": 60
+        "min_commit_interval_seconds": 0
       }
     }
   },
@@ -400,11 +400,11 @@ ov session get a1b2c3d4
     "pending_tokens": 450,
     "config": {
       "auto_commit_policy": {
-        "pending_token_threshold": 1000,
+        "pending_token_threshold": 10000,
         "message_count_threshold": 50,
         "idle_timeout_seconds": 86400,
         "keep_recent_count": 2,
-        "min_commit_interval_seconds": 60
+        "min_commit_interval_seconds": 0
       }
     }
   }
@@ -504,7 +504,7 @@ ov session auto-commit-policy set a1b2c3d4 \
         "message_count_threshold": 40,
         "idle_timeout_seconds": 86400,
         "keep_recent_count": 2,
-        "min_commit_interval_seconds": 60
+        "min_commit_interval_seconds": 0
       }
     }
   }

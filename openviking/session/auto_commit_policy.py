@@ -15,11 +15,11 @@ from typing import Any
 from openviking_cli.exceptions import InvalidArgumentError
 
 # Recommended defaults, aligned with the memory-bank streaming_write behavior.
-DEFAULT_PENDING_TOKEN_THRESHOLD = 1000
+DEFAULT_PENDING_TOKEN_THRESHOLD = 10000
 DEFAULT_MESSAGE_COUNT_THRESHOLD = 50
 DEFAULT_IDLE_TIMEOUT_SECONDS = 86400  # 1 day
 DEFAULT_KEEP_RECENT_COUNT = 2
-DEFAULT_MIN_COMMIT_INTERVAL_SECONDS = 60
+DEFAULT_MIN_COMMIT_INTERVAL_SECONDS = 0
 
 # PRD upper bounds.
 MAX_PENDING_TOKEN_THRESHOLD = 50000
