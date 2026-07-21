@@ -585,6 +585,18 @@ def test_classify_restore_path(vfs):
     # .relations.json has no vector side-effect
     assert vfs._classify_restore_path("resources/proj/.relations.json", deleted=False) is None
     assert vfs._classify_restore_path("resources/proj/.relations.json", deleted=True) is None
+    assert (
+        vfs._classify_restore_path(
+            "user/default/memories/preferences/.summary_cache.json", deleted=False
+        )
+        is None
+    )
+    assert (
+        vfs._classify_restore_path(
+            "user/default/memories/preferences/.summary_cache.json", deleted=True
+        )
+        is None
+    )
 
     # Per-file sidecars do NOT exist in production -> treated as ordinary source files
     assert vfs._classify_restore_path("resources/proj/x.md.abstract.md", deleted=False) == (
