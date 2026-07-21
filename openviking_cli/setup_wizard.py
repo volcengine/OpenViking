@@ -930,6 +930,22 @@ def _next_backup_path(config_path: Path) -> Path:
         i += 1
 
 
+def _write_secure_backup(config_path: Path, backup: Path) -> None:
+    fd, raw_temp_path = tempfile.mkstemp(prefix=f".{backup.name}.", dir=backup.parent)
+    temp_path = Path(raw_temp_path)
+    try:
+        with os.fdopen(fd, "wb") as target, config_path.open("rb") as source:
+            shutil.copyfileobj(source, target)
+            target.flush()
+            os.fsync(target.fileno())
+        os.chmod(temp_path, 0o600)
+        os.replace(temp_path, backup)
+        temp_path = None
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+
+
 def _write_config(config_dict: dict[str, Any], config_path: Path) -> bool:
     """Write config dict as JSON. Backs up existing file as .bak (rotates on conflict)."""
     temp_path: Path | None = None
@@ -945,8 +961,7 @@ def _write_config(config_dict: dict[str, Any], config_path: Path) -> bool:
         if config_path.exists():
             backup = _next_backup_path(config_path)
             os.chmod(config_path, 0o600)
-            shutil.copy2(config_path, backup)
-            os.chmod(backup, 0o600)
+            _write_secure_backup(config_path, backup)
             print(f"  {_dim('Existing config backed up to ' + str(backup))}")
         os.replace(temp_path, config_path)
         temp_path = None
@@ -1813,6 +1828,7 @@ def _update_existing_config(config_path: Path, section: str) -> int:
             _summarize_server(server_dict),
         )
         updated_server = {**current_server, **server_dict}
+        updated_server.pop("auth_mode", None)
         if server_dict.get("host") == "127.0.0.1":
             updated_server.pop("root_api_key", None)
         data["server"] = updated_server

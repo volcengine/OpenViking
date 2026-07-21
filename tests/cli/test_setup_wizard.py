@@ -364,6 +364,21 @@ class TestConfigWriting:
         assert json.loads(config_path.read_text()) == {"old": True}
         assert not list(tmp_path.glob(".ov.conf.*"))
 
+    def test_backup_copy_failure_leaves_no_public_backup(self, tmp_path):
+        config_path = tmp_path / "ov.conf"
+        config_path.write_text('{"secret": true}', encoding="utf-8")
+
+        def fail_after_partial_copy(source, target):
+            target.write(source.read(1))
+            raise OSError("copy")
+
+        with patch("openviking_cli.setup_wizard.shutil.copyfileobj", fail_after_partial_copy):
+            assert _write_config({"new": True}, config_path) is False
+
+        assert json.loads(config_path.read_text()) == {"secret": True}
+        assert not (tmp_path / "ov.conf.bak").exists()
+        assert not list(tmp_path.glob(".ov.conf*.*"))
+
     def test_run_init_redacts_summary_output(self, tmp_path):
         config_path = tmp_path / "ov.conf"
         config = {
@@ -960,7 +975,9 @@ class TestPartialUpdate:
     def test_update_server_only(self, tmp_path):
         config_path = tmp_path / "ov.conf"
         original = _existing_config()
-        original["server"].update({"workers": 4, "temp_upload": {"default_mode": "shared"}})
+        original["server"].update(
+            {"auth_mode": "dev", "workers": 4, "temp_upload": {"default_mode": "shared"}}
+        )
         config_path.write_text(json.dumps(original), encoding="utf-8")
 
         with (
@@ -986,7 +1003,7 @@ class TestPartialUpdate:
     def test_update_server_local_removes_root_key_only(self, tmp_path):
         config_path = tmp_path / "ov.conf"
         original = _existing_config()
-        original["server"].update({"root_api_key": "rk", "workers": 4})
+        original["server"].update({"auth_mode": "api_key", "root_api_key": "rk", "workers": 4})
         config_path.write_text(json.dumps(original), encoding="utf-8")
 
         with (
