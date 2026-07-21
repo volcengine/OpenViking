@@ -1,0 +1,55 @@
+openviking/parse/accessors/feishu_accessor.py
+  s_1cfb36e6160bae::t_c0cecf7ad7b491 33,83-90,92,94-97
+openviking/server/error_mapping.py
+  s_1cfb36e6160bae::t_04a74a9517ccd2 24,42,507-508
+tests/parse/test_feishu_errors.py
+  s_1cfb36e6160bae::t_22fb75557614a3 52-67
+crates/ov_cli/src/config_command_ui.rs
+  s_1cfb36e6160bae::t_c7454c829066b3 407,418-419,427,436,445-447,456-458,465
+crates/ov_cli/src/error.rs
+  s_1cfb36e6160bae::t_3d7e135f5151ee 1,18-20,23,25,57,59,66-80,82,86-130
+crates/ov_cli/src/status_ui.rs
+  s_1cfb36e6160bae::t_5ffdf1ca9e4bbb 207,214,218,227,240-244,279-292,910-914,923
+crates/ov_cli/src/main.rs
+  s_862ac2678ba7ac::t_442a2c26c7862d 2404-2427,2556,2561-2567,2590-2596,2677-2683,2700-2706,3256-3262,3275-3276,3307-3313
+tests/server/test_error_mapping.py
+  s_1cfb36e6160bae::t_4f5d58869e2910 10,92-98
+crates/ov_cli/src/base_client.rs
+  s_1cfb36e6160bae::t_68894c31aed7b8 72,77-78,87-102,104-114,306,321,336,359,365,373,378,400,412,571-572,603-629,775,815,923,945,991,1013
+crates/ov_cli/src/client.rs
+  s_1cfb36e6160bae::t_0c6295d9cc64b5 399,401,408,1149,1151,1157,1661,1669,1674,1682,1686,1995-2004
+crates/ov_cli/src/commands/chat.rs
+  s_1cfb36e6160bae::t_d067d712ad7430 21,168,429,433-437,443,477,481-485,497,698,702-706,712,758,762-766,787
+crates/ov_cli/src/config_agent.rs
+  s_1cfb36e6160bae::t_e9ecee0c2b11ec 921-926,928-929
+crates/ov_cli/src/config_wizard/store.rs
+  s_1cfb36e6160bae::t_7851bb858ab450 617-627,678-679,681-682,684,708-710,712,772
+crates/ov_cli/src/error_ui.rs
+  s_1cfb36e6160bae::t_532eade12bef61 4,10,86-121,256-269,285,287,294-295,297,299-303,544-548,734,750,946,949,1069-1074,1077-1081,1083-1086,1090-1093,1095
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "34a32fd7ae2238d157ae680e2f3642b4be8d0a9b",
+  "prompts": {},
+  "sessions": {
+    "s_1cfb36e6160bae": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6b15-d3ec-75b0-9466-fcfdf6eac1c3",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    },
+    "s_862ac2678ba7ac": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f834d-1e17-71d0-96fc-29450f81a902",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
