@@ -460,6 +460,10 @@ class SyncOpenViking:
         """Read file"""
         return run_async(self._async_client.read(uri, offset=offset, limit=limit))
 
+    def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+        """Read raw file content, including hidden MEMORY_FIELDS metadata."""
+        return run_async(self._async_client.read_raw(uri, offset=offset, limit=limit))
+
     def write(
         self,
         uri: str,
@@ -530,15 +534,22 @@ class SyncOpenViking:
     def import_ovpack(
         self,
         file_path: str,
-        target: str,
+        parent: Optional[str] = None,
         on_conflict: Optional[str] = None,
         vector_mode: Optional[str] = None,
+        *,
+        target: Optional[str] = None,
     ) -> str:
         """Import .ovpack file (triggers vectorization by default)"""
+        if parent is not None and target is not None:
+            raise ValueError("parent cannot be used with legacy target")
+        parent = parent if parent is not None else target
+        if parent is None:
+            raise TypeError("parent or legacy target is required")
         return run_async(
             self._async_client.import_ovpack(
                 file_path,
-                target,
+                parent,
                 on_conflict=on_conflict,
                 vector_mode=vector_mode,
             )
@@ -584,6 +595,14 @@ class SyncOpenViking:
     def wait_processed(self, timeout: float = None) -> Dict[str, Any]:
         """Wait for all async operations to complete"""
         return run_async(self._async_client.wait_processed(timeout))
+
+    def build_index(self, resource_uris: Union[str, List[str]], **kwargs) -> Dict[str, Any]:
+        """Manually trigger index building for resources."""
+        return run_async(self._async_client.build_index(resource_uris, **kwargs))
+
+    def summarize(self, resource_uris: Union[str, List[str]], **kwargs) -> Dict[str, Any]:
+        """Manually trigger summarization for resources."""
+        return run_async(self._async_client.summarize(resource_uris, **kwargs))
 
     def grep(
         self,

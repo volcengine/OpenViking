@@ -683,7 +683,7 @@ class AsyncOpenViking:
         simple = kwargs.get("simple", False)
         output = kwargs.get("output", "original")
         abs_limit = kwargs.get("abs_limit", 256)
-        show_all_hidden = kwargs.get("show_all_hidden", True)
+        show_all_hidden = kwargs.get("show_all_hidden", False)
         node_limit = kwargs.get("node_limit", 1000)
         sort_by = kwargs.get("sort_by")
         sort_order = kwargs.get("sort_order", "asc")
@@ -745,7 +745,7 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         output = kwargs.get("output", "original")
         abs_limit = kwargs.get("abs_limit", 128)
-        show_all_hidden = kwargs.get("show_all_hidden", True)
+        show_all_hidden = kwargs.get("show_all_hidden", False)
         node_limit = kwargs.get("node_limit", 1000)
         return await self._client.tree(
             uri,

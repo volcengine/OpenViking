@@ -617,7 +617,10 @@ class LocalClient(BaseClient):
             offset: Starting line number (0-indexed). Default 0.
             limit: Number of lines to read. -1 means read to end. Default -1.
         """
-        return await self._service.fs.read(uri, ctx=self._ctx, offset=offset, limit=limit)
+        content = await self._service.fs.read(uri, ctx=self._ctx, offset=offset, limit=limit)
+        from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+
+        return MemoryFileUtils.read(content, uri=uri).content
 
     async def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
         """Read raw file content, including hidden MEMORY_FIELDS metadata."""
