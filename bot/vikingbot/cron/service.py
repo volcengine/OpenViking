@@ -103,8 +103,9 @@ class CronService:
                     )
                 self._store = CronStore(jobs=jobs)
             except Exception as e:
-                logger.warning(f"Failed to load cron store: {e}")
-                self._store = CronStore()
+                raise RuntimeError(
+                    f"Failed to load cron store from {self.store_path}: {e}"
+                ) from e
         else:
             self._store = CronStore()
 
@@ -156,10 +157,10 @@ class CronService:
 
     async def start(self) -> None:
         """Start the cron service."""
-        self._running = True
         self._load_store()
         self._recompute_next_runs()
         self._save_store()
+        self._running = True
         self._arm_timer()
         logger.info(
             f"Cron service started with {len(self._store.jobs if self._store else [])} jobs"
