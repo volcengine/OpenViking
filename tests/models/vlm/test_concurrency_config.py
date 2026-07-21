@@ -129,3 +129,45 @@ async def test_cancelled_waiter_does_not_leak_budget_state():
     async with budget.slot():
         assert budget.snapshot() == {"limit": 1, "waiting": 0, "in_flight": 1}
     assert budget.snapshot() == {"limit": 1, "waiting": 0, "in_flight": 0}
+
+
+@pytest.mark.asyncio
+async def test_cancelled_in_flight_request_releases_shared_budget(monkeypatch):
+    vlm = _config().get_vlm_instance()
+    first, second = vlm._vlm_instances
+    completions = _RecordingCompletions(release_after=1)
+    client = _client(completions)
+    monkeypatch.setattr(first, "get_async_client", lambda: client)
+    monkeypatch.setattr(second, "get_async_client", lambda: client)
+
+    cancelled = asyncio.create_task(first.get_completion_async(prompt="cancelled"))
+    await completions.entered.wait()
+    queued = asyncio.create_task(second.get_completion_async(prompt="queued"))
+    await asyncio.sleep(0)
+    assert first.async_concurrency_budget.snapshot() == {
+        "limit": 1,
+        "waiting": 1,
+        "in_flight": 1,
+    }
+
+    cancelled.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled
+
+    for _ in range(10):
+        if completions.active == 1 and not first.async_concurrency_budget.snapshot()["waiting"]:
+            break
+        await asyncio.sleep(0)
+    assert first.async_concurrency_budget.snapshot() == {
+        "limit": 1,
+        "waiting": 0,
+        "in_flight": 1,
+    }
+
+    completions.release.set()
+    assert await queued == "ok"
+    assert first.async_concurrency_budget.snapshot() == {
+        "limit": 1,
+        "waiting": 0,
+        "in_flight": 0,
+    }
