@@ -69,6 +69,10 @@ _SESSION_PHASE1_LOCK_TIMEOUT_SECONDS = 30.0
 _MEMORY_STEP_NAMES = ("long_term", "execution")
 
 
+class _ArchiveMessagesCorruptError(ValueError):
+    """Raised when an archive messages file cannot be deserialized."""
+
+
 def _is_storage_not_found(exc: BaseException) -> bool:
     if isinstance(exc, AGFSClientError):
         return isinstance(exc, AGFSNotFoundError) or (
@@ -1977,9 +1981,9 @@ class Session:
         archive_error = ""
         try:
             archive_messages = await self._read_archive_messages(msg.archive_uri)
-        except json.JSONDecodeError as exc:
+        except _ArchiveMessagesCorruptError as exc:
             archive_messages = []
-            archive_error = f"session commit archive has invalid JSON: {exc}"
+            archive_error = f"session commit archive has invalid messages: {exc}"
         except Exception as exc:
             if not _is_storage_not_found(exc):
                 raise
@@ -3002,7 +3006,10 @@ class Session:
         for line in content.strip().split("\n"):
             if not line.strip():
                 continue
-            messages.append(Message.from_dict(json.loads(line)))
+            try:
+                messages.append(Message.from_dict(json.loads(line)))
+            except (json.JSONDecodeError, AttributeError, KeyError, TypeError, ValueError) as exc:
+                raise _ArchiveMessagesCorruptError("invalid message record") from exc
 
         return messages
 

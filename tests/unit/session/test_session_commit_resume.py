@@ -87,7 +87,7 @@ async def test_resume_queued_commit_continues_phase2(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("archive_content", [None, "{invalid json"])
+@pytest.mark.parametrize("archive_content", [None, "{invalid json", "{}"])
 async def test_resume_queued_commit_fails_terminally_for_unreadable_archive(
     monkeypatch, archive_content
 ):
