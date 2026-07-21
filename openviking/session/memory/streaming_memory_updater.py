@@ -1826,6 +1826,12 @@ async def get_streaming_memory_updater(
     with _streaming_memory_updater_registry_lock:
         existing = _streaming_memory_updater_registry.get(key)
         if existing is not None:
+            # Redo recovery can create the process-global updater before the
+            # service compressor is available, using ``vikingdb=None``.  Do
+            # not let that degraded first caller permanently disable
+            # vectorization for later normal commits with the same user key.
+            if vikingdb is not None and existing.vikingdb is not vikingdb:
+                existing.vikingdb = vikingdb
             return existing
         updater = StreamingMemoryUpdater(
             registry=registry,

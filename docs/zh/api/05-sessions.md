@@ -322,11 +322,14 @@ ov session get a1b2c3d4
       "preferences": 2,
       "entities": 3,
       "events": 1,
+      "identity": 1,
+      "soul": 1,
       "cases": 2,
-      "patterns": 1,
+      "trajectories": 1,
+      "experiences": 2,
       "tools": 0,
       "skills": 0,
-      "total": 10
+      "total": 14
     },
     "last_commit_at": "2026-03-23T11:00:00+08:00",
     "llm_token_usage": {
@@ -1500,7 +1503,7 @@ viking://user/{user_id}/sessions/{session_id}/
 
 ---
 
-## 记忆分类
+## 内置记忆类型
 
 | 分类 | 位置 | 说明 |
 |------|------|------|
@@ -1508,10 +1511,15 @@ viking://user/{user_id}/sessions/{session_id}/
 | preferences | `user/memories/preferences/` | 按主题分类的用户偏好 |
 | entities | `user/memories/entities/` | 重要实体（人物、项目等） |
 | events | `user/memories/events/` | 重要事件 |
+| identity | `user/memories/identity.md` | 助手身份与自我介绍 |
+| soul | `user/memories/soul.md` | 助手原则、边界、风格和连续性 |
+| cases | `user/memories/cases/` | 可训练、可评估的任务案例 |
 | trajectories | `user/memories/trajectories/` | 可复用的操作契约 |
 | experiences | `user/memories/experiences/` | 可复用的执行经验 |
 | tools | `user/memories/tools/` | 工具使用经验与最佳实践 |
 | skills | `user/memories/skills/` | 技能执行经验与工作流策略 |
+
+以上是当前启用的内置类型；部署可以通过自定义记忆模板扩展或覆盖。
 
 ---
 
