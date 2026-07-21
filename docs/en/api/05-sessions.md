@@ -322,11 +322,14 @@ ov session get a1b2c3d4
       "preferences": 2,
       "entities": 3,
       "events": 1,
+      "identity": 1,
+      "soul": 1,
       "cases": 2,
-      "patterns": 1,
+      "trajectories": 1,
+      "experiences": 2,
       "tools": 0,
       "skills": 0,
-      "total": 10
+      "total": 14
     },
     "last_commit_at": "2026-03-23T11:00:00+08:00",
     "llm_token_usage": {
@@ -1528,7 +1531,7 @@ An empty `memory_diff.json` (all counts zero) is written when long-term memory e
 
 ---
 
-## Memory Categories
+## Built-in Memory Types
 
 | Category | Location | Description |
 |----------|----------|-------------|
@@ -1536,10 +1539,15 @@ An empty `memory_diff.json` (all counts zero) is written when long-term memory e
 | preferences | `user/memories/preferences/` | User preferences by topic |
 | entities | `user/memories/entities/` | Important entities (people, projects) |
 | events | `user/memories/events/` | Significant events |
+| identity | `user/memories/identity.md` | Assistant identity and self-introduction |
+| soul | `user/memories/soul.md` | Assistant principles, boundaries, style, and continuity |
+| cases | `user/memories/cases/` | Trainable and evaluable task cases |
 | trajectories | `user/memories/trajectories/` | Reusable operation contracts |
 | experiences | `user/memories/experiences/` | Reusable execution insights |
 | tools | `user/memories/tools/` | Tool usage knowledge and best practices |
 | skills | `user/memories/skills/` | Skill execution knowledge and workflow strategies |
+
+These are the enabled built-in types. Deployments can extend or override them with custom memory templates.
 
 ---
 

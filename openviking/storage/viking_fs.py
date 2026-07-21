@@ -4169,9 +4169,7 @@ class VikingFS:
         real_ctx = self._ctx_or_default(ctx)
         account = real_ctx.account_id
         tree_paths = (
-            None
-            if not paths
-            else [self._uri_to_tree_path(path, ctx=real_ctx) for path in paths]
+            None if not paths else [self._uri_to_tree_path(path, ctx=real_ctx) for path in paths]
         )
         return await self._async_agfs.run(
             "git_log",
