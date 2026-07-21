@@ -1500,6 +1500,104 @@ def test_cuvs_micro_batch_groups_same_filter_but_splits_incompatible_keys():
     index.close()
 
 
+def test_cuvs_micro_batch_serializes_device_filter_preparation_with_search():
+    class BlockingRuntime(FakeCuVSRuntime):
+        def __init__(self):
+            super().__init__()
+            self.block_next_batch = False
+            self.search_started = threading.Event()
+            self.release_search = threading.Event()
+            self.filter_prepared = threading.Event()
+
+        def search_batch(self, index, queries, limit, mask):
+            if self.block_next_batch:
+                self.block_next_batch = False
+                self.search_started.set()
+                assert self.release_search.wait(timeout=5)
+            return super().search_batch(index, queries, limit, mask)
+
+        def prepare_filter_words(self, _words):
+            self.filter_prepared.set()
+            return (True, False, True)
+
+    runtime = BlockingRuntime()
+    index = make_micro_batch_index(runtime)
+    runtime.block_next_batch = True
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    resolver_ran = threading.Event()
+
+    def resolve(_filters):
+        resolver_ran.set()
+        return [0b101], 2
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        active_search = executor.submit(index.search, [1.0, 0.0], 1, None)
+        assert runtime.search_started.wait(timeout=5)
+        filtered_search = executor.submit(
+            index.search,
+            [1.0, 0.0],
+            1,
+            filter_a,
+            resolve,
+            lambda _labels: None,
+        )
+        try:
+            # Native filter resolution remains host work outside admission.
+            assert resolver_ran.wait(timeout=5)
+            # Device materialization waits for the occupied GPU gate.
+            assert not runtime.filter_prepared.wait(timeout=0.1)
+        finally:
+            runtime.release_search.set()
+        assert active_search.result(timeout=5)[0] == [1]
+        assert filtered_search.result(timeout=5)[0] == [1]
+
+    assert runtime.filter_prepared.is_set()
+    index.close()
+
+
+def test_cuvs_micro_batch_serializes_rebuild_with_search():
+    class BlockingRuntime(FakeCuVSRuntime):
+        def __init__(self):
+            super().__init__()
+            self.block_next_batch = False
+            self.observe_build = False
+            self.search_started = threading.Event()
+            self.release_search = threading.Event()
+            self.build_started = threading.Event()
+
+        def search_batch(self, index, queries, limit, mask):
+            if self.block_next_batch:
+                self.block_next_batch = False
+                self.search_started.set()
+                assert self.release_search.wait(timeout=5)
+            return super().search_batch(index, queries, limit, mask)
+
+        def build(self, dataset):
+            if self.observe_build:
+                self.build_started.set()
+            return super().build(dataset)
+
+    runtime = BlockingRuntime()
+    index = make_micro_batch_index(runtime)
+    runtime.block_next_batch = True
+    runtime.observe_build = True
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        active_search = executor.submit(index.search, [1.0, 0.0], 1, None)
+        assert runtime.search_started.wait(timeout=5)
+        index.upsert([delta(4, [2.0, 0.0], account_id="a")])
+        rebuilding_search = executor.submit(index.search, [1.0, 0.0], 1, None)
+        try:
+            assert not runtime.build_started.wait(timeout=0.1)
+        finally:
+            runtime.release_search.set()
+        assert active_search.result(timeout=5)[0] == [1]
+        assert rebuilding_search.result(timeout=5)[0] == [4]
+
+    assert runtime.build_started.is_set()
+    index.close()
+
+
 def test_cuvs_micro_batch_singleton_deadline_and_exception_recovery():
     class FailingBatchRuntime(FakeCuVSRuntime):
         def __init__(self):

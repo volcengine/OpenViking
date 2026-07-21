@@ -1806,6 +1806,16 @@ class CuVSDenseIndex:
             self._micro_batch_condition.notify()
         return request
 
+    @staticmethod
+    def _await_micro_batch_request(
+        request: _CuVSMicroBatchRequest,
+    ) -> Tuple[List[int], List[float]]:
+        try:
+            return request.future.result()
+        except BaseException:
+            request.future.cancel()
+            raise
+
     def _next_micro_batch(self) -> Optional[List[_CuVSMicroBatchRequest]]:
         wait_seconds = self.micro_batching_max_wait_ms / 1000.0
         with self._micro_batch_condition:
@@ -2057,18 +2067,33 @@ class CuVSDenseIndex:
                     )
 
             if self.micro_batching_enabled:
+                queue_started = time.perf_counter()
+                self._gpu_search_gate.acquire()
+                waited_ms = (time.perf_counter() - queue_started) * 1000.0
+                if telemetry is not None:
+                    telemetry.queue_ms += waited_ms
+                    telemetry.gpu_gate_queue_ms += waited_ms
                 try:
-                    return self._search_admitted(
-                        query,
-                        limit,
-                        filters,
-                        native_filter_resolver,
-                        native_filter_layout_registrar,
-                        prepared_filter,
-                        telemetry,
-                    )
-                except _StalePreparedFilter:
-                    continue
+                    try:
+                        admitted = self._search_admitted(
+                            query,
+                            limit,
+                            filters,
+                            native_filter_resolver,
+                            native_filter_layout_registrar,
+                            prepared_filter,
+                            telemetry,
+                            defer_micro_batch_wait=True,
+                        )
+                    except _StalePreparedFilter:
+                        continue
+                finally:
+                    # GPU rebuild/filter preparation and enqueue are admitted,
+                    # but waiting for the worker must never retain the gate.
+                    self._gpu_search_gate.release()
+                if isinstance(admitted, _CuVSMicroBatchRequest):
+                    return self._await_micro_batch_request(admitted)
+                return admitted
 
             queue_started = time.perf_counter()
             self._gpu_search_gate.acquire()
@@ -2103,7 +2128,9 @@ class CuVSDenseIndex:
         native_filter_layout_registrar: Optional[Callable[[Sequence[int]], None]] = None,
         prepared_filter: Optional[_PreparedHostFilter] = None,
         telemetry: Optional[CuVSSearchTelemetry] = None,
-    ) -> Tuple[List[int], List[float]]:
+        *,
+        defer_micro_batch_wait: bool = False,
+    ) -> Union[Tuple[List[int], List[float]], _CuVSMicroBatchRequest]:
         batch_request: Optional[_CuVSMicroBatchRequest] = None
         with self._lock:
             if self._closing or self._closed:
@@ -2262,11 +2289,9 @@ class CuVSDenseIndex:
             self._active_searches += 1
 
         if batch_request is not None:
-            try:
-                return batch_request.future.result()
-            except BaseException:
-                batch_request.future.cancel()
-                raise
+            if defer_micro_batch_wait:
+                return batch_request
+            return self._await_micro_batch_request(batch_request)
 
         labels: List[int] = []
         scores: List[float] = []

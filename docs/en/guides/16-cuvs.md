@@ -216,6 +216,9 @@ original request, so scalar/path filtering and result limits retain their
 existing semantics. The collection window is a latency-throughput tradeoff:
 under low concurrency a singleton query can wait up to the configured window;
 under sufficient concurrency up to eight queries share one GPU call.
+GPU-resident rebuild and device-filter preparation remain serialized by the
+same search-admission gate before enqueue. The caller releases that gate before
+waiting for its batch result, so batching cannot deadlock the worker.
 
 This OpenViking micro-batcher is disabled by default and is distinct from the
 cuVS feature named Dynamic Batching. Its first version supports

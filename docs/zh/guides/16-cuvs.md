@@ -217,6 +217,9 @@ scheduler 只会合并使用同一个 immutable GPU snapshot、同一个 prepare
 同一个实际 top-k 的请求；GPU 返回的每一行会映射回原请求，因此标量/路径过滤和
 结果条数语义不变。collection window 是延迟与吞吐的权衡：低并发下 singleton
 query 最多额外等待配置的窗口；并发充足时，最多 8 条 query 共用一次 GPU call。
+GPU resident rebuild 和 device filter preparation 在入队前仍受同一个 search
+admission gate 串行保护；caller 会先释放该 gate，再等待 batch 结果，因此不会因
+持有 gate 等待 worker 而死锁。
 
 该能力默认关闭，是 OpenViking 自己的 micro-batcher，不等同于 cuVS 官方名为
 Dynamic Batching 的组件。首版只支持 `algorithm: "brute_force"`，并要求
