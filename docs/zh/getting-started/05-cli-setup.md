@@ -97,7 +97,7 @@ npm 包是最轻量的独立 CLI 安装方式。如果你同时需要 Python SDK
 ```bash
 uv tool install openviking --upgrade
 # 或
-pip install openviking --upgrade --force-reinstall
+pip install -U openviking
 ```
 
 验证：

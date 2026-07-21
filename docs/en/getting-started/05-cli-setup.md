@@ -97,7 +97,7 @@ The npm package is the simplest standalone CLI install. If you also want the Pyt
 ```bash
 uv tool install openviking --upgrade
 # or
-pip install openviking --upgrade --force-reinstall
+pip install -U openviking
 ```
 
 Verify:

@@ -4,7 +4,7 @@ Run OpenViking as a standalone HTTP server and connect from any client.
 
 ## Prerequisites
 
-- OpenViking installed (`pip install openviking --upgrade --force-reinstall`)
+- OpenViking installed (`pip install -U openviking`)
 - Model configuration ready (see [Quick Start](02-quickstart.md) for setup)
 
 > Python 3.14 note for Volcengine Ark users:

@@ -135,20 +135,23 @@ After installation, run `ov --help` to see all available commands. CLI connectio
 openviking/
 ├── pyproject.toml        # Project configuration
 ├── Cargo.toml            # Rust workspace configuration
-├── third_party/          # Third-party dependencies
-│   ├── krl/              # Native retrieval dependency
-│   ├── leveldb-1.23/     # Embedded key-value storage dependency
-│   └── spdlog-1.14.1/    # Native logging dependency
 │
-├── openviking/           # Python SDK
+├── openviking/           # Python SDK & server
 │   ├── async_client.py   # AsyncOpenViking client
 │   ├── sync_client.py    # SyncOpenViking client
 │   ├── client/           # Local and HTTP client implementations
-│   ├── console/          # Standalone console UI and proxy service
+│   ├── connector/        # Data connectors
 │   ├── core/             # Core data models and directory abstractions
+│   ├── crypto/           # Encryption helpers
+│   ├── ingest/           # Ingestion pipeline
+│   ├── integrations/     # Agent integrations
 │   ├── message/          # Session message and part models
+│   ├── metrics/          # Metrics collection
 │   ├── models/           # Embedding and VLM backends
+│   ├── observability/    # Tracing and runtime observability
 │   ├── parse/            # Resource parsers and detectors
+│   ├── privacy/          # Privacy controls
+│   ├── prompts/          # Prompt templates
 │   ├── resource/         # Resource processing and watch management
 │   ├── retrieve/         # Retrieval system
 │   ├── server/           # HTTP server
@@ -156,34 +159,35 @@ openviking/
 │   ├── session/          # Session management and compression
 │   ├── storage/          # Storage layer
 │   ├── telemetry/        # Operation telemetry
-│   ├── trace/            # Trace and runtime tracing helpers
 │   ├── utils/            # Utilities and configuration helpers
-│   └── prompts/          # Prompt templates
+│   └── web_studio/       # Studio console backend
+│
+├── openviking_cli/       # Server bootstrap and CLI entry points
+├── openviking-understanding/  # Understanding service
+├── bot/                  # VikingBot agent framework
+├── web-studio/           # Studio console frontend
+├── sdk/                  # Client SDKs: go/, python/, typescript/
 │
 ├── crates/               # Rust components
 │   ├── ragfs/            # Rust implementation of AGFS
 │   ├── ragfs-python/     # Python binding for RAGFS
+│   ├── ragfs-python-native/       # Native Python binding
+│   ├── ragfs-cache-redis/         # RAGFS cache backend: Redis
+│   ├── ragfs-cache-mooncake/      # RAGFS cache backend: Mooncake
+│   ├── ragfs-cache-yuanrong/      # RAGFS cache backend: YuanRong
+│   ├── ragfs-cache-yuanrong-sys/  # YuanRong FFI bindings
 │   └── ov_cli/           # Rust CLI client
-│       ├── src/          # CLI source code
-│       └── install.sh    # Deprecated stub (use npm package; see Install)
 │
 ├── src/                  # C++ extension sources (Python abi3)
+├── third_party/          # agfs, croaring, krl, leveldb, rapidjson, spdlog
 │
-├── tests/                # Test suite
-│   ├── client/           # Client tests
-│   ├── console/          # Console tests
-│   ├── core/             # Core logic tests
-│   ├── parse/            # Parser tests
-│   ├── resource/         # Resource processing tests
-│   ├── retrieve/         # Retrieval tests
-│   ├── server/           # Server tests
-│   ├── service/          # Service layer tests
-│   ├── session/          # Session tests
-│   ├── storage/          # Storage tests
-│   ├── telemetry/        # Telemetry tests
-│   ├── vectordb/         # Vector database tests
-│   └── integration/      # End-to-end tests
-│
+├── examples/             # Usage examples
+├── benchmark/            # Benchmark suites (LoCoMo, tau2, RAG, ...)
+├── tests/                # Test suite (mirrors the module layout above)
+├── deploy/               # Helm charts and deployment assets
+├── docker/               # Docker build files
+├── npm/                  # npm CLI package
+├── scripts/              # Development scripts
 └── docs/                 # Documentation
     ├── en/               # English docs
     └── zh/               # Chinese docs
@@ -493,27 +497,24 @@ Other repository workflows also exist for PR review automation, Docker image bui
 
 Maintainers can manually trigger the following workflows from the "Actions" tab to perform specific tasks or debug issues.
 
-#### A. Lint Checks (`11. _Lint Checks`)
-Runs code style checks (Ruff) and type checks (Mypy). No arguments required.
-
-#### B. Test Suite (Lite) (`12. _Test Suite (Lite)`)
+#### A. Test Suite (Lite) (`12. _Test Suite (Lite)`)
 Runs fast integration tests, supports custom matrix configuration.
 
 *   **Inputs**:
     *   `os_json`: JSON string array of OS to run on (e.g., `["ubuntu-24.04"]`).
     *   `python_json`: JSON string array of Python versions (e.g., `["3.10"]`).
 
-#### C. Test Suite (Full) (`13. _Test Suite (Full)`)
+#### B. Test Suite (Full) (`13. _Test Suite (Full)`)
 Runs the full test suite on all supported platforms (Linux/Mac/Win) and Python versions (3.10-3.14). Supports custom matrix configuration when triggered manually.
 
 *   **Inputs**:
     *   `os_json`: List of OS to run on (Default: `["ubuntu-24.04", "macos-14", "windows-latest"]`).
     *   `python_json`: List of Python versions (Default: `["3.10", "3.11", "3.12", "3.13", "3.14"]`).
 
-#### D. Security Scan (`14. _CodeQL Scan`)
+#### C. Security Scan (`14. _CodeQL Scan`)
 Runs CodeQL security analysis. No arguments required.
 
-#### E. Build Distribution (`15. _Build Distribution`)
+#### D. Build Distribution (`15. _Build Distribution`)
 Builds Python wheel packages only, does not publish.
 
 *   **Inputs**:
@@ -522,14 +523,14 @@ Builds Python wheel packages only, does not publish.
     *   `build_sdist`: Whether to build source distribution (Default: `true`).
     *   `build_wheels`: Whether to build wheel distribution (Default: `true`).
 
-#### F. Publish Distribution (`16. _Publish Distribution`)
+#### E. Publish Distribution (`16. _Publish Distribution`)
 Publishes built packages (requires build Run ID) to PyPI.
 
 *   **Inputs**:
     *   `target`: Select publish target (`testpypi`, `pypi`, `both`).
     *   `build_run_id`: Build Workflow Run ID (Required, get it from the Build run URL).
 
-#### G. Manual Release (`03. Release`)
+#### F. Manual Release (`03. Release`)
 One-stop build and publish (includes build and publish steps).
 
 > **Version Numbering & Tag Convention**:
