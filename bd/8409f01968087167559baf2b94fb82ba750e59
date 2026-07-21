@@ -1,0 +1,40 @@
+crates/ov_cli/src/base_client.rs
+  s_1cfb36e6160bae::t_92ab5435e19c8f 292,307,322,345,351,386,398,557-558,690-719,764,804,912,934,980,1002
+crates/ov_cli/src/client.rs
+  s_1cfb36e6160bae::t_60f60f907fd0ae 399,426,1167,1193,1697,1705,1710
+crates/ov_cli/src/commands/chat.rs
+  s_1cfb36e6160bae::t_57e79839c78d21 167,428,432-435,442,476,480-483,496,697,701-704,711,757,761-764,786
+crates/ov_cli/src/config_agent.rs
+  s_1cfb36e6160bae::t_4afa89a927dcfc 928
+crates/ov_cli/src/config_command_ui.rs
+  s_1cfb36e6160bae::t_bfe79657ce68c6 407,418,429,438,447-449,458-460,467
+crates/ov_cli/src/error.rs
+  s_1cfb36e6160bae::t_73e7b61d7a5064 18-20,55-66
+crates/ov_cli/src/status_ui.rs
+  s_1cfb36e6160bae::t_07efbbb65b3e81 207,218,227,240-244,279-292
+test_scripts/error-handling.md
+  s_1cfb36e6160bae::t_6e136465f0d799 371-392
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "bd8409f01968087167559baf2b94fb82ba750e59",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_1cfb36e6160bae": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6b15-d3ec-75b0-9466-fcfdf6eac1c3",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
