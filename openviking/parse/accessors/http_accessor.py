@@ -378,7 +378,9 @@ class URLTypeDetector:
                 )
                 charset_name = charset.decode("ascii").strip()
                 if charset_name:
-                    return encoded_filename.decode(charset_name)
+                    filename = encoded_filename.decode(charset_name)
+                    if filename:
+                        return filename
             except (LookupError, UnicodeDecodeError, ValueError):
                 # Invalid extended values may still provide a valid plain
                 # filename fallback below.
