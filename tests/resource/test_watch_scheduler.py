@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
@@ -384,7 +385,56 @@ class TestWatchSchedulerFeishuPrecheck:
 
         updated = await manager.get_task(task.task_id)
         assert len(resource_service.calls) == 2
+        assert all(call["wait"] is False for call in resource_service.calls)
         assert updated.sync_state == {}
+
+    @pytest.mark.asyncio
+    async def test_concurrent_task_update_cannot_rewrite_completed_sync_fingerprint(
+        self, monkeypatch
+    ):
+        resource_service, scheduler, manager, task, _ = await self._setup_task(monkeypatch)
+        scheduler._fetch_feishu_latest_modify_time = AsyncMock(return_value=100)
+        add_started = asyncio.Event()
+        allow_add_to_finish = asyncio.Event()
+        original_add_resource = resource_service.add_resource
+
+        async def blocking_add_resource(**kwargs):
+            add_started.set()
+            await allow_add_to_finish.wait()
+            return await original_add_resource(**kwargs)
+
+        resource_service.add_resource = blocking_add_resource
+        execution = asyncio.create_task(scheduler._execute_task(task))
+        await add_started.wait()
+
+        await manager.update_task(
+            task_id=task.task_id,
+            account_id=task.account_id,
+            user_id=task.user_id,
+            role=task.original_role,
+            path="https://example.feishu.cn/docx/changed_token",
+            to_uri="viking://resources/changed-target",
+            instruction="changed while synchronization was waiting",
+            build_index=False,
+        )
+        allow_add_to_finish.set()
+        await execution
+
+        first_call = resource_service.calls[0]
+        assert first_call["path"] == "https://example.feishu.cn/docx/doc_token"
+        assert first_call["to"] == "viking://resources/feishu-doc"
+        assert first_call["instruction"] == ""
+        assert first_call["build_index"] is True
+
+        updated = await manager.get_task(task.task_id)
+        resource_service.calls.clear()
+        await scheduler._execute_task(updated)
+
+        assert len(resource_service.calls) == 1
+        assert resource_service.calls[0]["path"] == updated.path
+        assert resource_service.calls[0]["to"] == updated.to_uri
+        assert resource_service.calls[0]["instruction"] == updated.instruction
+        assert resource_service.calls[0]["build_index"] is False
 
     def test_sync_state_is_private_but_persisted(self):
         task = WatchTask(

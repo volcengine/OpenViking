@@ -227,6 +227,11 @@ class WatchScheduler:
         Args:
             task: WatchTask to execute
         """
+        # WatchManager.update_task() mutates its stored model in place. Freeze
+        # every input used by this execution before the first await so a
+        # concurrent update cannot make the post-sync fingerprint describe
+        # values that add_resource() did not process.
+        task = task.model_copy(deep=True)
         logger.info(f"[WatchScheduler] Executing task {task.task_id} for path {task.path}")
 
         cancelled = False
@@ -234,6 +239,7 @@ class WatchScheduler:
         deactivation_reason = ""
         feishu_source_version: Optional[int] = None
         feishu_sync_fingerprint: Optional[str] = None
+        require_queue_status = False
         skip_resource_sync = False
         resource_sync_succeeded = False
 
@@ -280,6 +286,7 @@ class WatchScheduler:
                     if is_feishu_auth_state(auth_state):
                         try:
                             auth_state = await self._prepare_feishu_auth_state(task, auth_state)
+                            task.auth_state = auth_state
                             processor_kwargs["feishu_access_token"] = auth_state["access_token"]
                         except FeishuTokenRefreshError as e:
                             if e.permanent:
@@ -308,6 +315,7 @@ class WatchScheduler:
                                 source_version=feishu_source_version,
                                 destination_state=destination_state,
                             )
+                            require_queue_status = feishu_sync_fingerprint is not None
                         previous_fingerprint = (getattr(task, "sync_state", {}) or {}).get(
                             _FEISHU_SYNC_FINGERPRINT_KEY
                         )
@@ -335,13 +343,13 @@ class WatchScheduler:
                         build_index=getattr(task, "build_index", True),
                         summarize=getattr(task, "summarize", False),
                         watch_interval=task.watch_interval,
-                        wait=feishu_source_version is not None,
+                        wait=require_queue_status,
                         skip_watch_management=True,
                         **processor_kwargs,
                     )
                     if not self._resource_sync_completed(
                         result,
-                        require_queue_status=feishu_source_version is not None,
+                        require_queue_status=require_queue_status,
                     ):
                         raise RuntimeError("Resource synchronization did not complete successfully")
                     resource_sync_succeeded = True
