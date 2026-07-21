@@ -2,7 +2,7 @@
 # Vikingbot 本地一键部署脚本
 # ~/.vikingbot 会挂载到容器的 /root/.vikingbot（bridge 首次启动时自动初始化）
 # 用法: ./deploy/docker/deploy.sh
-# 变量: CONTAINER_NAME, IMAGE_NAME, IMAGE_TAG, HOST_PORT, COMMAND, AUTO_BUILD, PLATFORM
+# 变量: CONTAINER_NAME, IMAGE_NAME, IMAGE_TAG, HOST_PORT, CONTAINER_PORT, COMMAND, AUTO_BUILD, PLATFORM
 
 set -e
 
@@ -19,11 +19,12 @@ CONTAINER_NAME=${CONTAINER_NAME:-vikingbot}
 IMAGE_NAME=${IMAGE_NAME:-vikingbot}
 IMAGE_TAG=${IMAGE_TAG:-latest}
 HOST_PORT=${HOST_PORT:-18791}
+CONTAINER_PORT=${CONTAINER_PORT:-18791}
 COMMAND=${COMMAND:-gateway}
 AUTO_BUILD=${AUTO_BUILD:-true}
 # openviking 只有 linux/amd64 wheel，固定使用 amd64（Apple Silicon 由 Docker Desktop Rosetta 模拟）
 PLATFORM=${PLATFORM:-linux/amd64}
-VIKINGBOT_DIR="$HOME/.vikingbot"
+VIKINGBOT_DIR=${VIKINGBOT_DIR:-"$HOME/.vikingbot"}
 
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}  Vikingbot 本地部署${NC}"
@@ -57,30 +58,31 @@ fi
 # 3. 初始化 ~/.vikingbot 目录
 echo -e "${GREEN}[3/6]${NC} 初始化 ${VIKINGBOT_DIR}..."
 mkdir -p "$VIKINGBOT_DIR/workspace" "$VIKINGBOT_DIR/sessions" "$VIKINGBOT_DIR/sandboxes" "$VIKINGBOT_DIR/bridge"
-# 创建 OpenViking 配置文件占位符
-touch "$VIKINGBOT_DIR/ov.conf"
 echo -e "  ${GREEN}✓${NC} 目录已就绪"
 
 # 4. 检查配置文件
 echo -e "${GREEN}[4/6]${NC} 检查配置文件..."
-CONFIG_FILE="$VIKINGBOT_DIR/config.json"
-if [ ! -f "$CONFIG_FILE" ]; then
+CONFIG_FILE="$VIKINGBOT_DIR/ov.conf"
+if [ ! -s "$CONFIG_FILE" ]; then
     echo -e "  ${YELLOW}配置文件不存在，创建默认配置...${NC}"
-    cat > "$CONFIG_FILE" << 'EOF'
+    if command -v openssl &> /dev/null; then
+        GATEWAY_TOKEN=$(openssl rand -hex 32)
+    else
+        GATEWAY_TOKEN=$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
+    fi
+    cat > "$CONFIG_FILE" << EOF
 {
-  "providers": {
-    "openrouter": {
-      "apiKey": ""
+  "bot": {
+    "agents": {
+      "provider": "openrouter",
+      "model": "openrouter/anthropic/claude-3.5-sonnet",
+      "api_key": ""
+    },
+    "gateway": {
+      "host": "0.0.0.0",
+      "port": ${CONTAINER_PORT},
+      "token": "${GATEWAY_TOKEN}"
     }
-  },
-  "agents": {
-    "defaults": {
-      "model": "openrouter/anthropic/claude-3.5-sonnet"
-    }
-  },
-  "gateway": {
-    "host": "0.0.0.0",
-    "port": 18791
   }
 }
 EOF
@@ -90,7 +92,51 @@ EOF
     echo ""
     exit 1
 else
-    echo -e "  ${GREEN}✓${NC} 配置文件已存在"
+    if ! command -v python3 &> /dev/null; then
+        echo -e "${RED}错误: 验证现有配置需要 python3${NC}"
+        exit 1
+    fi
+
+    if ! CONFIG_ERROR=$(python3 - "$CONFIG_FILE" "$CONTAINER_PORT" <<'PYEOF'
+import json
+import sys
+
+config_path, expected_port = sys.argv[1], int(sys.argv[2])
+
+try:
+    with open(config_path, encoding="utf-8") as config_file:
+        config = json.load(config_file)
+except (OSError, json.JSONDecodeError) as exc:
+    print(f"无法读取有效 JSON: {exc}")
+    raise SystemExit(1)
+
+bot = config.get("bot")
+if not isinstance(bot, dict):
+    print("缺少 bot 配置对象")
+    raise SystemExit(1)
+
+gateway = bot.get("gateway")
+if not isinstance(gateway, dict):
+    print("缺少 bot.gateway 配置对象")
+    raise SystemExit(1)
+
+port = gateway.get("port")
+if isinstance(port, bool) or not isinstance(port, int):
+    print("bot.gateway.port 必须是整数")
+    raise SystemExit(1)
+if port != expected_port:
+    print(
+        f"bot.gateway.port ({port}) 与 CONTAINER_PORT ({expected_port}) 不一致"
+    )
+    raise SystemExit(1)
+PYEOF
+    ); then
+        echo -e "${RED}错误: 配置文件无效: ${CONFIG_ERROR}${NC}"
+        echo -e "请修复 ${YELLOW}$CONFIG_FILE${NC} 后重新运行"
+        exit 1
+    fi
+
+    echo -e "  ${GREEN}✓${NC} 配置文件已存在且端口配置有效"
 fi
 
 # 5. 清理旧容器
@@ -107,7 +153,7 @@ echo -e "${GREEN}[6/6]${NC} 启动容器..."
 echo "  容器名: ${CONTAINER_NAME}"
 echo "  镜像:   ${IMAGE_NAME}:${IMAGE_TAG}"
 echo "  命令:   vikingbot ${COMMAND}"
-echo "  端口:   ${HOST_PORT} → 18791"
+echo "  端口:   ${HOST_PORT} → ${CONTAINER_PORT}"
 echo "  挂载:   ${VIKINGBOT_DIR} → /root/.vikingbot"
 echo ""
 
@@ -116,7 +162,7 @@ docker run -d \
     --restart unless-stopped \
     --platform "${PLATFORM}" \
     -v "${VIKINGBOT_DIR}:/root/.vikingbot" \
-    -p "${HOST_PORT}:18791" \
+    -p "${HOST_PORT}:${CONTAINER_PORT}" \
     -e OPENVIKING_CONFIG_FILE=/root/.vikingbot/ov.conf \
     "${IMAGE_NAME}:${IMAGE_TAG}" \
     "${COMMAND}"
