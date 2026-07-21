@@ -433,10 +433,13 @@ class TestStreamingResponseProcessing:
             MockChunk(content="Hello", usage=MockUsage(prompt_tokens=10, completion_tokens=5)),
         ]
 
-        with patch.object(vlm, "_update_token_usage_from_response") as mock_update:
-            vlm._process_streaming_response(iter(chunks))
+        with (
+            patch.object(vlm, "_update_token_usage_from_response") as mock_update,
+            patch("openviking.models.vlm.backends.openai_vlm.time.perf_counter", return_value=2.0),
+        ):
+            vlm._process_streaming_response(iter(chunks), started_at=1.5)
 
-            mock_update.assert_called_once_with(chunks[0], 0.0)
+            mock_update.assert_called_once_with(chunks[0], 0.5)
 
     def test_process_streaming_response_empty_chunks(self):
         """_process_streaming_response should handle empty chunks."""
@@ -467,8 +470,11 @@ class TestStreamingResponseProcessing:
             yield MockChunk(content="Test")
             yield MockChunk(content="", usage=MockUsage(prompt_tokens=15, completion_tokens=8))
 
-        with patch.object(vlm, "_update_token_usage_from_response") as mock_update:
-            await vlm._process_streaming_response_async(async_chunks())
+        with (
+            patch.object(vlm, "_update_token_usage_from_response") as mock_update,
+            patch("openviking.models.vlm.backends.openai_vlm.time.perf_counter", return_value=3.0),
+        ):
+            await vlm._process_streaming_response_async(async_chunks(), started_at=1.0)
 
-            assert mock_update.call_args.args[1] == 0.0
+            assert mock_update.call_args.args[1] == 2.0
             assert mock_update.call_args.args[0].usage.prompt_tokens == 15
