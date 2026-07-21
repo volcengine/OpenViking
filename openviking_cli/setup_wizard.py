@@ -1828,8 +1828,8 @@ def _update_existing_config(config_path: Path, section: str) -> int:
             _summarize_server(server_dict),
         )
         updated_server = {**current_server, **server_dict}
-        updated_server.pop("auth_mode", None)
         if server_dict.get("host") == "127.0.0.1":
+            updated_server.pop("auth_mode", None)
             updated_server.pop("root_api_key", None)
         data["server"] = updated_server
 

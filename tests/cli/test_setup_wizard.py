@@ -976,7 +976,7 @@ class TestPartialUpdate:
         config_path = tmp_path / "ov.conf"
         original = _existing_config()
         original["server"].update(
-            {"auth_mode": "dev", "workers": 4, "temp_upload": {"default_mode": "shared"}}
+            {"auth_mode": "trusted", "workers": 4, "temp_upload": {"default_mode": "shared"}}
         )
         config_path.write_text(json.dumps(original), encoding="utf-8")
 
@@ -995,6 +995,7 @@ class TestPartialUpdate:
         assert data["server"] == {
             "host": "0.0.0.0",
             "root_api_key": "rk",
+            "auth_mode": "trusted",
             "workers": 4,
             "temp_upload": {"default_mode": "shared"},
         }
