@@ -612,8 +612,8 @@ class TestCompressorV2:
         assert kwargs["tree_paths"] == ["/local/default/user/default/memories/events"]
 
     @pytest.mark.asyncio
-    async def test_extract_long_term_memories_refreshes_lock_during_llm_extraction(self):
-        """A live v2 extractor must refresh its schema locks until it exits."""
+    async def test_extract_long_term_memories_releases_refreshed_lock_after_failure(self):
+        """A failed v2 extraction must stop refreshing and release its schema locks."""
         compressor = SessionCompressorV2(vikingdb=None)
         user = UserIdentifier.the_default_user()
         ctx = RequestContext(user=user, role=Role.ROOT)
@@ -654,7 +654,7 @@ class TestCompressorV2:
 
             async def run(self):
                 await asyncio.wait_for(refresh_seen.wait(), timeout=1.0)
-                return None, []
+                raise RuntimeError("extraction failed")
 
         handle = SimpleNamespace(id="handle-lease", locks=["/memories"])
         active_handles = {handle.id: handle}
@@ -705,13 +705,13 @@ class TestCompressorV2:
             ),
             patch.object(compressor, "_get_or_create_react", return_value=DummyOrchestrator()),
         ):
-            result = await compressor.extract_long_term_memories(
-                messages=messages,
-                ctx=ctx,
-                strict_extract_errors=True,
-            )
+            with pytest.raises(RuntimeError, match="extraction failed"):
+                await compressor.extract_long_term_memories(
+                    messages=messages,
+                    ctx=ctx,
+                    strict_extract_errors=True,
+                )
 
-        assert result == []
         assert events[0] == "acquire"
         assert "refresh" in events
         assert events[-1] == "release"
