@@ -9,8 +9,9 @@ Inspired by microsoft/markitdown approach.
 
 import asyncio
 import hashlib
+import uuid
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 from openviking.parse.base import ParseResult
 from openviking.parse.parsers.base_parser import BaseParser
@@ -60,33 +61,75 @@ class PowerPointParser(BaseParser):
             from openviking_cli.utils.storage import get_storage
 
             storage = get_storage()
-            resource_name = (
-                parse_kwargs.get("resource_name") or parse_kwargs.get("source_name") or path.stem
-            )
-
-            markdown_content = await asyncio.to_thread(
-                self._convert_to_markdown, path, pptx, resource_name, storage
-            )
-
             caller_media_dirs = parse_kwargs.pop("allowed_media_dirs", None) or []
-            resource_media_root = storage.get_resource_media_dir(resource_name, "images").parent
+            caller_preferred_media = parse_kwargs.pop("preferred_media_paths", None) or {}
             allowed_media_dirs = []
-            for media_dir in [resource_media_root, *caller_media_dirs]:
+            for media_dir in caller_media_dirs:
                 media_path = Path(media_dir)
                 if media_path not in allowed_media_dirs:
                     allowed_media_dirs.append(media_path)
 
-            # The parser owns the converted content's source and base directory,
-            # while caller-provided link-rewrite and identity options remain intact.
-            parse_kwargs.pop("source_path", None)
-            parse_kwargs["base_dir"] = path.parent
-            parse_kwargs["allowed_media_dirs"] = allowed_media_dirs
-            result = await self._md_parser.parse_content(
-                markdown_content,
-                source_path=str(path),
-                instruction=instruction,
-                **parse_kwargs,
-            )
+            # A unique namespace prevents caller-controlled resource names, same
+            # stems, and StoragePath sanitization collisions from sharing files.
+            # MarkdownParser gets an exact reference-to-file capability map; the
+            # namespace itself is never authorized as a readable directory.
+            media_resource_name = self._media_resource_name(path)
+            generated_media_paths: Dict[str, Path] = {}
+            try:
+                conversion_task = asyncio.create_task(
+                    asyncio.to_thread(
+                        self._convert_to_markdown,
+                        path,
+                        pptx,
+                        media_resource_name,
+                        storage,
+                        generated_media_paths,
+                    )
+                )
+                try:
+                    markdown_content = await asyncio.shield(conversion_task)
+                except asyncio.CancelledError:
+                    # ``to_thread`` keeps running after its awaiter is cancelled.
+                    # Drain it before cleanup so it cannot recreate the staging
+                    # namespace after this parse has returned.
+                    try:
+                        await conversion_task
+                    except Exception:
+                        pass
+                    raise
+
+                preferred_media_paths = {
+                    str(reference): Path(media_path)
+                    for reference, media_path in caller_preferred_media.items()
+                }
+                # Generated references take precedence over caller-provided
+                # mappings with the same spelling.
+                preferred_media_paths.update(generated_media_paths)
+
+                # The parser owns the converted content's source and base directory,
+                # while caller-provided link-rewrite and identity options remain intact.
+                parse_kwargs.pop("source_path", None)
+                parse_kwargs["base_dir"] = path.parent
+                parse_kwargs["allowed_media_dirs"] = allowed_media_dirs
+                parse_kwargs["preferred_media_paths"] = preferred_media_paths
+                result = await self._md_parser.parse_content(
+                    markdown_content,
+                    source_path=str(path),
+                    instruction=instruction,
+                    **parse_kwargs,
+                )
+            finally:
+                # MarkdownParser has copied every accepted image into VikingFS by
+                # this point. Remove the per-parse staging namespace on success,
+                # failure, or cancellation so it cannot leak into a later parse.
+                try:
+                    storage.cleanup_resource_media(media_resource_name)
+                except Exception as e:
+                    logger.warning(
+                        "[PowerPointParser] Failed to clean generated media namespace %s: %s",
+                        media_resource_name,
+                        e,
+                    )
         else:
             result = await self._md_parser.parse_content(
                 str(source), instruction=instruction, **parse_kwargs
@@ -105,7 +148,12 @@ class PowerPointParser(BaseParser):
         return result
 
     def _convert_to_markdown(
-        self, path: Path, pptx, resource_name: Optional[str] = None, storage=None
+        self,
+        path: Path,
+        pptx,
+        resource_name: Optional[str] = None,
+        storage=None,
+        generated_media_paths: Optional[Dict[str, Path]] = None,
     ) -> str:
         """Convert PowerPoint presentation to Markdown string.
 
@@ -127,7 +175,11 @@ class PowerPointParser(BaseParser):
                 slide_parts.append(f"### {title}")
 
             content = self._extract_slide_content(
-                slide, resource_name=resource_name, storage=storage, image_counter=image_counter
+                slide,
+                resource_name=resource_name,
+                storage=storage,
+                image_counter=image_counter,
+                generated_media_paths=generated_media_paths,
             )
             if content:
                 slide_parts.append(content)
@@ -152,8 +204,19 @@ class PowerPointParser(BaseParser):
                     return shape.text.strip()
         return ""
 
+    @staticmethod
+    def _media_resource_name(path: Path) -> str:
+        """Return a collision-resistant staging namespace for one source parse."""
+        source_digest = hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()[:16]
+        return f"pptx-{source_digest}-{uuid.uuid4().hex}"
+
     def _extract_slide_content(
-        self, slide, resource_name=None, storage=None, image_counter=None
+        self,
+        slide,
+        resource_name=None,
+        storage=None,
+        image_counter=None,
+        generated_media_paths=None,
     ) -> str:
         """Extract content from slide shapes."""
         return self._extract_shapes_content(
@@ -161,10 +224,16 @@ class PowerPointParser(BaseParser):
             resource_name=resource_name,
             storage=storage,
             image_counter=image_counter,
+            generated_media_paths=generated_media_paths,
         )
 
     def _extract_shapes_content(
-        self, shapes, resource_name=None, storage=None, image_counter=None
+        self,
+        shapes,
+        resource_name=None,
+        storage=None,
+        image_counter=None,
+        generated_media_paths=None,
     ) -> str:
         """Extract text, tables, and pictures from a shape collection.
 
@@ -190,6 +259,7 @@ class PowerPointParser(BaseParser):
                     resource_name=resource_name,
                     storage=storage,
                     image_counter=image_counter,
+                    generated_media_paths=generated_media_paths,
                 )
                 if grouped_content:
                     content_parts.append(grouped_content)
@@ -199,7 +269,11 @@ class PowerPointParser(BaseParser):
                 shape_type == MSO_SHAPE_TYPE.PLACEHOLDER and hasattr(shape, "image")
             ):
                 image_md = self._convert_picture(
-                    shape, resource_name=resource_name, storage=storage, image_counter=image_counter
+                    shape,
+                    resource_name=resource_name,
+                    storage=storage,
+                    image_counter=image_counter,
+                    generated_media_paths=generated_media_paths,
                 )
                 if image_md:
                     content_parts.append(image_md)
@@ -215,7 +289,9 @@ class PowerPointParser(BaseParser):
 
         return "\n\n".join(content_parts)
 
-    def _convert_picture(self, shape, resource_name, storage, image_counter) -> str:
+    def _convert_picture(
+        self, shape, resource_name, storage, image_counter, generated_media_paths=None
+    ) -> str:
         """Persist one embedded picture and return its confined Markdown reference."""
         if storage is None:
             return ""
@@ -236,7 +312,10 @@ class PowerPointParser(BaseParser):
             # instead of the global media directory shared by sibling inputs.
             resource_media_root = storage.get_resource_media_dir(resource_name, "images").parent
             rel_path = image_path.relative_to(resource_media_root)
-            return f"![{filename}]({rel_path})"
+            reference = rel_path.as_posix()
+            if generated_media_paths is not None:
+                generated_media_paths[reference] = image_path.resolve()
+            return f"![{filename}]({reference})"
         except Exception as e:
             logger.warning(f"[PowerPointParser] Failed to save embedded picture: {e}")
             return ""

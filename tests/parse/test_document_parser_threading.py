@@ -159,7 +159,13 @@ async def test_powerpoint_parser_offloads_pptx_conversion(monkeypatch, tmp_path:
     storage = StoragePath(base_path=tmp_path / "storage")
     monkeypatch.setattr(storage_module, "get_storage", lambda: storage)
 
-    def convert(path: Path, pptx_module, resource_name=None, storage=None) -> str:
+    def convert(
+        path: Path,
+        pptx_module,
+        resource_name=None,
+        storage=None,
+        generated_media_paths=None,
+    ) -> str:
         assert pptx_module is fake_pptx
         return "# converted pptx"
 
@@ -181,16 +187,15 @@ async def test_powerpoint_parser_offloads_pptx_conversion(monkeypatch, tmp_path:
     assert func is convert
     assert args[0] == source
     assert args[1] is fake_pptx
+    assert args[2].startswith("pptx-")
+    assert args[3] is storage
+    assert args[4] == {}
     assert seen["content"] == "# converted pptx"
     assert seen["kwargs"]["base_dir"] == tmp_path
     assert seen["kwargs"]["enable_link_rewrite"] is True
     assert seen["kwargs"]["link_rewrite_root"] == rewrite_root
-    assert (
-        seen["kwargs"]["allowed_media_dirs"][0]
-        == storage.get_resource_media_dir("sample", "images").parent
-    )
-    assert seen["kwargs"]["allowed_media_dirs"][1] == caller_media_dir
-    assert len(seen["kwargs"]["allowed_media_dirs"]) == 2
+    assert seen["kwargs"]["allowed_media_dirs"] == [caller_media_dir]
+    assert seen["kwargs"]["preferred_media_paths"] == {}
     assert result.source_format == "pptx"
     assert result.parser_name == "PowerPointParser"
 

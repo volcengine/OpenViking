@@ -194,19 +194,21 @@ async def test_parse_does_not_authorize_sibling_resource_media(monkeypatch, tmp_
     parse_kwargs = parser._md_parser.parse_content.await_args.kwargs
     allowed_media_dirs = parse_kwargs["allowed_media_dirs"]
     assert storage.media_dir not in allowed_media_dirs
-    assert allowed_media_dirs == [storage.get_resource_media_dir("deck", "images").parent]
+    assert allowed_media_dirs == []
+    assert parse_kwargs["preferred_media_paths"] == {}
     assert (
         parser._md_parser._resolve_image_path(
             "sibling/images/private.png",
             parse_kwargs["base_dir"],
             allowed_media_dirs,
+            parse_kwargs["preferred_media_paths"],
         )
         is None
     )
 
 
 @pytest.mark.asyncio
-async def test_generated_media_root_handles_parentheses_and_wins_caller_shadow(
+async def test_generated_media_mapping_wins_source_and_caller_shadows_and_is_cleaned(
     monkeypatch, tmp_path: Path
 ):
     from openviking_cli.utils import storage as storage_module
@@ -229,11 +231,43 @@ async def test_generated_media_root_handles_parentheses_and_wins_caller_shadow(
     caller_shadow = caller_root / relative_image
     caller_shadow.parent.mkdir(parents=True)
     caller_shadow.write_bytes(b"caller shadow")
+    source_shadow = source_dir / relative_image
+    source_shadow.parent.mkdir(parents=True)
+    source_shadow.write_bytes(b"source shadow")
 
     monkeypatch.setattr(storage_module, "get_storage", lambda: storage)
-    parser._md_parser.parse_content = AsyncMock(
-        return_value=SimpleNamespace(source_format="markdown", parser_name="MarkdownParser")
-    )
+    observed = {}
+
+    async def capture_parse(content, *args, **kwargs):
+        preferred_media_paths = kwargs["preferred_media_paths"]
+        generated_image = preferred_media_paths[relative_image.as_posix()]
+        resource_root = generated_image.parent.parent
+        table_image = resource_root / "tables" / "private.png"
+        table_image.parent.mkdir()
+        table_image.write_bytes(b"private table bytes")
+        observed.update(
+            content=content,
+            allowed_media_dirs=kwargs["allowed_media_dirs"],
+            preferred_media_paths=dict(preferred_media_paths),
+            generated_image=generated_image,
+            resource_root=resource_root,
+            generated_bytes=generated_image.read_bytes(),
+            resolved=parser._md_parser._resolve_image_path(
+                relative_image.as_posix(),
+                kwargs["base_dir"],
+                kwargs["allowed_media_dirs"],
+                preferred_media_paths,
+            ),
+            cross_media=parser._md_parser._resolve_image_path(
+                "tables/private.png",
+                kwargs["base_dir"],
+                kwargs["allowed_media_dirs"],
+                preferred_media_paths,
+            ),
+        )
+        return SimpleNamespace(source_format="markdown", parser_name="MarkdownParser")
+
+    parser._md_parser.parse_content = AsyncMock(side_effect=capture_parse)
 
     await parser.parse(
         source,
@@ -241,20 +275,87 @@ async def test_generated_media_root_handles_parentheses_and_wins_caller_shadow(
         allowed_media_dirs=[caller_root],
     )
 
-    parse_call = parser._md_parser.parse_content.await_args
-    markdown = parse_call.args[0]
-    parse_kwargs = parse_call.kwargs
-    resource_root = storage.get_resource_media_dir("Deck (Final)", "images").parent
-    generated_image = resource_root / relative_image
-    assert f"![image1_{digest}]({relative_image.as_posix()})" in markdown
-    assert "Deck (Final)" not in markdown
-    assert parse_kwargs["allowed_media_dirs"] == [resource_root, caller_root]
-    assert generated_image.read_bytes() == image_bytes
-    assert (
-        parser._md_parser._resolve_image_path(
-            relative_image.as_posix(),
-            parse_kwargs["base_dir"],
-            parse_kwargs["allowed_media_dirs"],
-        )
-        == generated_image.resolve()
-    )
+    assert f"![image1_{digest}]({relative_image.as_posix()})" in observed["content"]
+    assert "Deck (Final)" not in observed["content"]
+    assert observed["allowed_media_dirs"] == [caller_root]
+    assert list(observed["preferred_media_paths"]) == [relative_image.as_posix()]
+    assert observed["generated_bytes"] == image_bytes
+    assert observed["resolved"] == observed["generated_image"].resolve()
+    assert observed["resolved"] != source_shadow.resolve()
+    assert observed["resolved"] != caller_shadow.resolve()
+    assert observed["cross_media"] is None
+    assert not observed["resource_root"].exists()
+
+
+async def _capture_generated_path(
+    parser: PowerPointParser,
+    source: Path,
+    *,
+    resource_name: str,
+) -> Path:
+    captured = {}
+
+    async def capture_parse(_content, *args, **kwargs):
+        generated_paths = kwargs["preferred_media_paths"]
+        assert len(generated_paths) == 1
+        captured["path"] = next(iter(generated_paths.values()))
+        assert captured["path"].exists()
+        return SimpleNamespace(source_format="markdown", parser_name="MarkdownParser")
+
+    parser._md_parser.parse_content = AsyncMock(side_effect=capture_parse)
+    await parser.parse(source, resource_name=resource_name)
+    assert not captured["path"].parent.parent.exists()
+    return captured["path"]
+
+
+@pytest.mark.asyncio
+async def test_same_stem_presentations_use_distinct_parse_namespaces(monkeypatch, tmp_path: Path):
+    from openviking_cli.utils import storage as storage_module
+
+    parser = PowerPointParser()
+    storage = StoragePath(base_path=tmp_path / "storage")
+    monkeypatch.setattr(storage_module, "get_storage", lambda: storage)
+    sources = []
+    for directory in ("first", "second"):
+        source_dir = tmp_path / directory
+        source_dir.mkdir()
+        image = source_dir / "picture.png"
+        _write_png(image, (20, 40, 220))
+        source = source_dir / "deck.pptx"
+        prs = pptx.Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        slide.shapes.add_picture(str(image), 0, 0)
+        prs.save(source)
+        sources.append(source)
+
+    paths = [
+        await _capture_generated_path(parser, source, resource_name="deck") for source in sources
+    ]
+
+    assert paths[0].parent.parent != paths[1].parent.parent
+
+
+@pytest.mark.asyncio
+async def test_sanitized_resource_name_collisions_use_distinct_parse_namespaces(
+    monkeypatch, tmp_path: Path
+):
+    from openviking_cli.utils import storage as storage_module
+
+    parser = PowerPointParser()
+    storage = StoragePath(base_path=tmp_path / "storage")
+    monkeypatch.setattr(storage_module, "get_storage", lambda: storage)
+    image = tmp_path / "picture.png"
+    _write_png(image, (40, 180, 60))
+    source = tmp_path / "deck.pptx"
+    prs = pptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    slide.shapes.add_picture(str(image), 0, 0)
+    prs.save(source)
+
+    paths = [
+        await _capture_generated_path(parser, source, resource_name=name)
+        for name in ("deck/a", "deck:a")
+    ]
+
+    assert StoragePath._sanitize_name("deck/a") == StoragePath._sanitize_name("deck:a")
+    assert paths[0].parent.parent != paths[1].parent.parent

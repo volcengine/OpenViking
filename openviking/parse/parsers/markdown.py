@@ -226,6 +226,7 @@ class MarkdownParser(BaseParser):
         instruction: str = "",
         base_dir: Optional[Path] = None,
         allowed_media_dirs: Optional[List[Path]] = None,
+        preferred_media_paths: Optional[Dict[str, Path]] = None,
         **kwargs,
     ) -> ParseResult:
         """
@@ -245,6 +246,9 @@ class MarkdownParser(BaseParser):
                 (e.g. images extracted by the PDF/DOC parser) may be read. The
                 caller is responsible for ensuring these belong to the current
                 input resource's lifecycle.
+            preferred_media_paths: Exact reference-to-file mappings for generated
+                media. These are resolved before ``base_dir`` and directory roots,
+                so a source-side file cannot shadow a generated artifact.
             **kwargs: Additional runtime options, incl. resource_name/source_name and
                 enable_link_rewrite/link_rewrite_root (the latter set by DirectoryParser)
 
@@ -277,12 +281,16 @@ class MarkdownParser(BaseParser):
                 "import_root": kwargs.get("link_rewrite_root"),
                 "base_dir": base_dir,
                 "allowed_media_dirs": allowed_media_dirs,
+                "preferred_media_paths": preferred_media_paths,
             }
 
             # Phase 2 — write only: replay the plan against the real VikingFS,
             # rewriting links and ingesting local images.
             await self._apply_layout(
-                layout, base_dir=base_dir, allowed_media_dirs=allowed_media_dirs
+                layout,
+                base_dir=base_dir,
+                allowed_media_dirs=allowed_media_dirs,
+                preferred_media_paths=preferred_media_paths,
             )
 
             parse_time = time.time() - start_time
@@ -391,6 +399,7 @@ class MarkdownParser(BaseParser):
         *,
         base_dir: Optional[Path] = None,
         allowed_media_dirs: Optional[List[Path]] = None,
+        preferred_media_paths: Optional[Dict[str, Path]] = None,
     ) -> None:
         """Phase 2 (write only): replay ``layout.ops`` against the real VikingFS —
         create dirs, write each section (rewriting relative links when enabled), then
@@ -404,7 +413,9 @@ class MarkdownParser(BaseParser):
 
         # Ingest local image files, placing each image next to the markdown file
         # that references it.
-        await self._ingest_local_images(layout.root_dir, base_dir, allowed_media_dirs)
+        await self._ingest_local_images(
+            layout.root_dir, base_dir, allowed_media_dirs, preferred_media_paths
+        )
 
     # ========== Helper Methods ==========
 
@@ -547,6 +558,7 @@ class MarkdownParser(BaseParser):
         root_dir: str,
         base_dir: Optional[Path] = None,
         allowed_media_dirs: Optional[List[Path]] = None,
+        preferred_media_paths: Optional[Dict[str, Path]] = None,
     ) -> None:
         """
         Scan every processed markdown file under ``root_dir`` and copy the local
@@ -563,6 +575,8 @@ class MarkdownParser(BaseParser):
             base_dir: Base directory for resolving relative paths
             allowed_media_dirs: Additional directories from which derived media
                 may be read (passed through to ``_resolve_image_path``)
+            preferred_media_paths: Exact generated-media mappings resolved before
+                directory-based candidates.
         """
         viking_fs = self._get_viking_fs()
 
@@ -603,7 +617,9 @@ class MarkdownParser(BaseParser):
                 if self._is_remote_uri(path_str):
                     continue
 
-                resolved_path = self._resolve_image_path(path_str, base_dir, allowed_media_dirs)
+                resolved_path = self._resolve_image_path(
+                    path_str, base_dir, allowed_media_dirs, preferred_media_paths
+                )
                 if resolved_path is None:
                     logger.warning(f"[MarkdownParser] Image file not found: {path_str}")
                     continue
@@ -677,6 +693,7 @@ class MarkdownParser(BaseParser):
         path_str: str,
         base_dir: Optional[Path],
         allowed_media_dirs: Optional[List[Path]] = None,
+        preferred_media_paths: Optional[Dict[str, Path]] = None,
     ) -> Optional[Path]:
         """
         Resolve a local image reference to an existing filesystem path.
@@ -687,6 +704,9 @@ class MarkdownParser(BaseParser):
             allowed_media_dirs: Additional directories that belong to the current
                 input resource's lifecycle (e.g. media extracted by the PDF/DOC
                 parser).
+            preferred_media_paths: Exact generated-media mappings. A mapped
+                reference is fail-closed if its target is gone and never falls
+                through to a same-named file under ``base_dir``.
 
         Returns:
             Resolved absolute Path if the file exists and stays within an
@@ -698,6 +718,16 @@ class MarkdownParser(BaseParser):
             # Reject absolute paths: they can point anywhere on the host
             if path.is_absolute():
                 logger.warning(f"[MarkdownParser] Rejected absolute image path: {path_str}")
+                return None
+
+            # Generated-media semantics take precedence over Markdown's base-dir
+            # lookup. The mapping is also the capability boundary: only files the
+            # producing parser explicitly registered can be read.
+            if preferred_media_paths and path_str in preferred_media_paths:
+                candidate = Path(preferred_media_paths[path_str]).resolve()
+                if candidate.exists() and candidate.is_file():
+                    return candidate
+                logger.warning(f"[MarkdownParser] Generated image file not found: {path_str}")
                 return None
 
             # Build the list of allowed roots to confine resolution to.
@@ -966,7 +996,10 @@ class MarkdownParser(BaseParser):
         if link not in cache:
             handled = False
             resolved = self._resolve_image_path(
-                link, ctx.get("base_dir"), ctx.get("allowed_media_dirs")
+                link,
+                ctx.get("base_dir"),
+                ctx.get("allowed_media_dirs"),
+                ctx.get("preferred_media_paths"),
             )
             if resolved is not None:
                 try:
