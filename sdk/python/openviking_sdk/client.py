@@ -264,7 +264,7 @@ class AsyncHTTPClient:
         user: Optional[str] = None,
         actor_peer_id: Optional[str] = None,
         agent_id: Optional[str] = None,
-        timeout: float = 60.0,
+        timeout: Optional[float] = None,
         extra_headers: Optional[Dict[str, str]] = None,
         profile_enabled: Optional[bool] = None,
         upload_mode: Optional[str] = None,
@@ -1484,7 +1484,8 @@ class AsyncHTTPClient:
         return self._handle_response(response)
 
     async def admin_migrate(self, cleanup: bool = False) -> Dict[str, Any]:
-        response = await self._request("POST", "/api/v1/admin/migrate", json={"cleanup": cleanup})
+        action = "cleanup" if cleanup else "migrate"
+        response = await self._request("POST", "/api/v1/admin/migrate", json={"action": action})
         return self._handle_response(response)
 
     def get_status(self) -> Dict[str, Any]:

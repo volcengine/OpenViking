@@ -87,6 +87,19 @@ async def test_async_http_client_reindex_posts_content_reindex():
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("cleanup", "action"), [(False, "migrate"), (True, "cleanup")])
+async def test_async_http_client_admin_migrate_posts_action_payload(cleanup, action):
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=object())
+    client._handle_response = lambda _response: {"status": "accepted"}
+
+    assert await client.admin_migrate(cleanup=cleanup) == {"status": "accepted"}
+    client._request.assert_awaited_once_with(
+        "POST", "/api/v1/admin/migrate", json={"action": action}
+    )
+
+
 def test_sync_http_client_reindex_forwards_to_async_client():
     client = SyncHTTPClient(url="http://localhost:1933")
     with patch.object(
