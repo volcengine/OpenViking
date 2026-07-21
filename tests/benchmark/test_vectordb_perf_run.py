@@ -16,6 +16,7 @@ from benchmark.vectordb_perf.run import (
     recall_scope,
     record_id,
     upsert_records,
+    wait_for_auto_derived_index,
 )
 
 
@@ -96,6 +97,124 @@ def _write_arxiv_public_shape_fixture(tmp_path):
     vectors = [[0.0, 1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]]
     _write_fvecs(tmp_path / "arxiv_corpus_vectors.fvecs", vectors)
     _write_fvecs(tmp_path / "arxiv_query_vectors.fvecs", vectors)
+
+
+@pytest.fixture
+def run_to_thread_inline(monkeypatch):
+    async def run_inline(fn):
+        return fn()
+
+    monkeypatch.setattr("benchmark.vectordb_perf.run.asyncio.to_thread", run_inline)
+
+
+@pytest.mark.asyncio
+async def test_wait_for_auto_derived_index_uses_configured_index_and_timeout(
+    run_to_thread_inline,
+):
+    del run_to_thread_inline
+    calls = []
+
+    class _Index:
+        def wait_for_background_rebuild(self, *, timeout):
+            calls.append(("wait_for_background_rebuild", timeout))
+            return True
+
+    index = _Index()
+
+    class _Collection:
+        def get_index(self, index_name):
+            calls.append(("get_index", index_name))
+            return index
+
+    class _Adapter:
+        index_name = "configured-index"
+
+        def get_collection(self):
+            calls.append(("get_collection",))
+            return _Collection()
+
+    class _Backend:
+        _shared_adapter = _Adapter()
+
+    assert await wait_for_auto_derived_index(_Backend(), timeout=12.5) is True
+    assert calls == [
+        ("get_collection",),
+        ("get_index", "configured-index"),
+        ("wait_for_background_rebuild", 12.5),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_wait_for_auto_derived_index_converts_false_to_timeout_error(
+    run_to_thread_inline,
+):
+    del run_to_thread_inline
+
+    class _Index:
+        def wait_for_background_rebuild(self, *, timeout):
+            assert timeout == 7
+            return False
+
+    class _Collection:
+        def get_index(self, index_name):
+            assert index_name == "default"
+            return _Index()
+
+    class _Adapter:
+        index_name = "default"
+
+        def get_collection(self):
+            return _Collection()
+
+    class _Backend:
+        _shared_adapter = _Adapter()
+
+    with pytest.raises(TimeoutError, match="not ready within 7s"):
+        await wait_for_auto_derived_index(_Backend(), timeout=7)
+
+
+@pytest.mark.asyncio
+async def test_wait_for_auto_derived_index_rejects_missing_index(run_to_thread_inline):
+    del run_to_thread_inline
+
+    class _Collection:
+        def get_index(self, index_name):
+            assert index_name == "missing-index"
+            return None
+
+    class _Adapter:
+        index_name = "missing-index"
+
+        def get_collection(self):
+            return _Collection()
+
+    class _Backend:
+        _shared_adapter = _Adapter()
+
+    with pytest.raises(RuntimeError, match="benchmark index not found: missing-index"):
+        await wait_for_auto_derived_index(_Backend())
+
+
+@pytest.mark.asyncio
+async def test_wait_for_auto_derived_index_rejects_unsupported_index(run_to_thread_inline):
+    del run_to_thread_inline
+
+    class _Collection:
+        def get_index(self, index_name):
+            assert index_name == "native-only"
+            return object()
+
+    class _Adapter:
+        index_name = "native-only"
+
+        def get_collection(self):
+            return _Collection()
+
+    class _Backend:
+        _shared_adapter = _Adapter()
+
+    with pytest.raises(RuntimeError, match="does not expose background rebuild readiness"):
+        await wait_for_auto_derived_index(_Backend())
 
 
 @pytest.mark.asyncio

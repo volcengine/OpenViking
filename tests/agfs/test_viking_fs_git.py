@@ -218,6 +218,60 @@ class TestCommitShowLog:
         limited = await vfs.log(limit=2, ctx=ctx)
         assert [h["oid"] for h in limited] == [c3["commit_oid"], c2["commit_oid"]]
 
+    async def test_log_filters_files_directories_and_deletions(self, vfs):
+        ctx = _make_ctx(account="acct_log_paths")
+        target = "viking://resources/proj/a.md"
+        project = "viking://resources/proj"
+
+        await vfs.write_file(target, b"v1", ctx=ctx)
+        added = await vfs.commit(message="add target", paths=[target], ctx=ctx)
+
+        unrelated_path = "viking://resources/other.md"
+        await vfs.write_file(unrelated_path, b"other", ctx=ctx)
+        await vfs.commit(
+            message="unrelated",
+            paths=[unrelated_path],
+            ctx=ctx,
+        )
+
+        sibling = "viking://resources/proj/nested/b.md"
+        await vfs.write_file(sibling, b"sibling", ctx=ctx)
+        directory_changed = await vfs.commit(
+            message="change project directory",
+            paths=[sibling],
+            ctx=ctx,
+        )
+
+        await vfs.rm(target, ctx=ctx)
+        deleted = await vfs.commit(message="delete target", paths=[target], ctx=ctx)
+
+        file_history = await vfs.log(paths=[target], limit=2, ctx=ctx)
+        assert [entry["oid"] for entry in file_history] == [
+            deleted["commit_oid"],
+            added["commit_oid"],
+        ]
+
+        directory_history = await vfs.log(paths=[project], limit=10, ctx=ctx)
+        assert [entry["oid"] for entry in directory_history] == [
+            deleted["commit_oid"],
+            directory_changed["commit_oid"],
+            added["commit_oid"],
+        ]
+
+    async def test_log_rejects_too_many_unique_paths(self, vfs):
+        ctx = _make_ctx(account="acct_log_path_budget")
+        paths = [f"viking://resources/path-{index}.md" for index in range(33)]
+
+        with pytest.raises(AGFSInvalidOperationError, match="too many log filter paths"):
+            await vfs.log(paths=paths, limit=1, ctx=ctx)
+
+    async def test_log_rejects_path_deeper_than_64_components(self, vfs):
+        ctx = _make_ctx(account="acct_log_depth_budget")
+        path = "viking://" + "/".join(["resources", *(["nested"] * 64)])
+
+        with pytest.raises(AGFSInvalidOperationError, match="has depth 65"):
+            await vfs.log(paths=[path], limit=1, ctx=ctx)
+
     async def test_show_missing_branch_raises(self, vfs):
         ctx = _make_ctx(account="acct_missing")
         with pytest.raises(AGFSNotFoundError):

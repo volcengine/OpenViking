@@ -4042,6 +4042,7 @@ class VikingFS:
         *,
         branch: str = "main",
         limit: int = 20,
+        paths: Optional[List[str]] = None,
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """Walk back from ``branch``'s HEAD along ``parents[0]`` up to ``limit`` commits.
@@ -4052,25 +4053,18 @@ class VikingFS:
             return []
         real_ctx = self._ctx_or_default(ctx)
         account = real_ctx.account_id
-        head = await self._async_agfs.run(
-            "git_show",
-            account=account,
-            target_ref=branch,
-            path=None,
+        tree_paths = (
+            None
+            if not paths
+            else [self._uri_to_tree_path(path, ctx=real_ctx) for path in paths]
         )
-        results: List[Dict[str, Any]] = [head]
-        parents = head.get("parents") or []
-        while parents and len(results) < limit:
-            parent_oid = parents[0]
-            commit = await self._async_agfs.run(
-                "git_show",
-                account=account,
-                target_ref=parent_oid,
-                path=None,
-            )
-            results.append(commit)
-            parents = commit.get("parents") or []
-        return results
+        return await self._async_agfs.run(
+            "git_log",
+            account=account,
+            branch=branch,
+            limit=limit,
+            paths=tree_paths,
+        )
 
     def _collect_restore_vector_tasks(
         self,

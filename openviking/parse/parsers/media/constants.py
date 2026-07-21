@@ -3,7 +3,7 @@
 """Constants for media parsers."""
 
 # Image extensions supported by ImageParser
-IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg"]
+IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg", ".tiff", ".tif", ".ico", ".dib", ".icns", ".sgi", ".jp2"]
 
 # Audio extensions supported by AudioParser
 AUDIO_EXTENSIONS = [".mp3", ".wav", ".ogg", ".flac", ".aac", ".m4a", ".opus", ".ac3"]

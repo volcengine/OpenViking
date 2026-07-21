@@ -119,15 +119,37 @@ async def test_show_with_path_validated(svc, viking_fs_mock):
 async def test_log_defaults(svc, viking_fs_mock):
     ctx = _ctx()
     out = await svc.log(ctx=ctx)
-    viking_fs_mock.log.assert_awaited_once_with(branch="main", limit=20, ctx=ctx)
+    viking_fs_mock.log.assert_awaited_once_with(branch="main", limit=20, paths=None, ctx=ctx)
     assert len(out) == 1
 
 
 @pytest.mark.asyncio
 async def test_log_with_overrides(svc, viking_fs_mock):
     ctx = _ctx()
-    await svc.log(ctx=ctx, branch="dev", limit=5)
-    viking_fs_mock.log.assert_awaited_once_with(branch="dev", limit=5, ctx=ctx)
+    await svc.log(
+        ctx=ctx,
+        branch="dev",
+        limit=5,
+        paths=["viking://resources/a.md", "viking://resources/docs"],
+    )
+    viking_fs_mock.log.assert_awaited_once_with(
+        branch="dev",
+        limit=5,
+        paths=["viking://resources/a.md", "viking://resources/docs"],
+        ctx=ctx,
+    )
+
+
+@pytest.mark.asyncio
+async def test_log_empty_paths_is_unfiltered(svc, viking_fs_mock):
+    ctx = _ctx()
+    await svc.log(ctx=ctx, branch="dev", limit=5, paths=[])
+    viking_fs_mock.log.assert_awaited_once_with(
+        branch="dev",
+        limit=5,
+        paths=None,
+        ctx=ctx,
+    )
 
 
 @pytest.mark.asyncio

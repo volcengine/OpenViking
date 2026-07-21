@@ -123,12 +123,20 @@ Starting from a branch's HEAD, walk history along the first parent (`parents[0]`
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | branch | str | No | `main` | Branch to walk |
-| limit | int | No | 20 | Max commits to return. The HTTP endpoint clamps this to 1–500 |
+| limit | int | No | 20 | Max commits to return. The HTTP endpoint accepts values from 1 to 500 |
+| paths | List[str] | No | null | Return only commits that changed any specified `viking://` URI; files and directories are supported. At most 32 paths are accepted, and each account-relative path may contain at most 64 components. Pass multiple URIs to HTTP as repeated `paths` query parameters |
+
+Filtering happens before the result limit is applied, so `limit=10` with `paths=[X]` returns up to 10 commits related to X rather than filtering only the 10 newest commits.
+
+To bound storage work, a filtered request inspects at most 1,000 commits. If the requested number of matches has not been collected and older uninspected history remains, the request returns an `INVALID_ARGUMENT` error instead of a partial history list. Unfiltered history is not subject to this scan budget because every inspected commit advances the result limit.
 
 **Python SDK (Embedded / HTTP)**
 
 ```python
-history = client.snapshot.log(limit=10)
+history = client.snapshot.log(
+    limit=10,
+    paths=["viking://resources/a.md", "viking://resources/docs"],
+)
 for commit in history:
     print(commit["oid"], commit["message"])
 ```
@@ -136,24 +144,35 @@ for commit in history:
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.gitLog("main", 20));
+console.log(
+  await client.gitLog("main", 20, [
+    "viking://resources/a.md",
+    "viking://resources/docs",
+  ]),
+);
 ```
 
 **HTTP API**
 
 ```
-GET /api/v1/snapshot/log?branch={branch}&limit={limit}
+GET /api/v1/snapshot/log?branch={branch}&limit={limit}&paths={uri1}&paths={uri2}
 ```
 
 ```bash
-curl -X GET "http://localhost:1933/api/v1/snapshot/log?branch=main&limit=10" \
+curl --get "http://localhost:1933/api/v1/snapshot/log" \
+  --data-urlencode "branch=main" \
+  --data-urlencode "limit=10" \
+  --data-urlencode "paths=viking://resources/a.md" \
+  --data-urlencode "paths=viking://resources/docs" \
   -H "X-API-Key: your-key"
 ```
 
 **CLI**
 
 ```bash
-ov snapshot log --limit 10 -o json
+ov snapshot log --limit 10 \
+  --paths viking://resources/a.md,viking://resources/docs \
+  -o json
 ```
 
 **Response**
