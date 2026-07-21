@@ -439,17 +439,26 @@ def _evaluation_summary(analysis: RolloutAnalysis | None) -> str:
     feedback = list(getattr(evaluation, "feedback", []) or [])
     if feedback:
         lines.append("feedback=" + "; ".join(str(item) for item in feedback[:5]))
+    for result in list(getattr(evaluation, "criterion_results", []) or [])[:10]:
+        lines.append(
+            f"criterion={result.criterion_name} passed={result.passed} score={result.score}"
+        )
+        if result.feedback:
+            lines.append(
+                "criterion_feedback="
+                + "; ".join(_preview_text(str(item), limit=500) for item in result.feedback[:5])
+            )
+        if result.evidence:
+            lines.append(
+                "criterion_evidence="
+                + "; ".join(_preview_text(str(item), limit=500) for item in result.evidence[:5])
+            )
     metadata = dict(getattr(evaluation, "metadata", {}) or {})
     if metadata:
-        # Keep the most useful compact bits; full metadata can be huge in tau2.
+        # Keep only compact, source-agnostic metadata. Criterion results carry details.
         for key in ("reward", "source"):
             if key in metadata:
                 lines.append(f"{key}={metadata[key]}")
-        eval_result = metadata.get("evaluation_result")
-        if isinstance(eval_result, dict):
-            for key in ("reward", "reward_breakdown", "db_check", "communicate_checks"):
-                if key in eval_result:
-                    lines.append(f"{key}={_preview_text(str(eval_result[key]), limit=1000)}")
     return "\n".join(lines)
 
 

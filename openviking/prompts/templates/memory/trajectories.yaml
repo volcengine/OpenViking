@@ -116,8 +116,9 @@ fields:
       actual_decision = "<literal value selected by the agent>"
       # Actual decision basis: <observable basis or unknown>
 
-      communicate_with_user(content="<actual agent message>")
-      # => "<material user reply when one followed>"
+      assistant_message_1 = "<actual agent message>"
+
+      user_message_2 = "<material user reply when one followed>"
 
       real_write_tool(real_argument="actual value")
       # => <observed side effect>
@@ -140,6 +141,8 @@ fields:
         greetings and repeated thanks.
       - Represent each retained tool call as a call to its real tool method name with its actual
         material arguments. Do not rename calls to generic pseudo-functions.
+      - Represent direct assistant text as `assistant_message_<n>`. If communication happened
+        through a tool, represent the observed call with that tool's real name instead.
       - Keep all state-changing tool calls, material communication calls, handoffs, termination
         calls, and reads whose results influence a later decision. Omit infrastructure-only reads
         and unrelated returned fields.

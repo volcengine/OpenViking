@@ -32,6 +32,7 @@ from openviking.session.train.gates import (
     default_experience_gate_contract,
     default_policy_gate_runner,
 )
+from openviking.session.train.gates.root_cause_prevention import _evaluation_summary
 from openviking.session.train.gradients import PatchSemanticGradient
 
 
@@ -103,7 +104,7 @@ def _analysis() -> RolloutAnalysis:
             score=0.0,
             criterion_results=[
                 CriterionResult(
-                    criterion_name="tau2_reward",
+                    criterion_name="required_communication",
                     passed=False,
                     score=0.0,
                     feedback=["required total was not communicated"],
@@ -156,6 +157,44 @@ def _plan_item() -> PolicyPlanItem:
             }
         },
     )
+
+
+def test_evaluation_summary_uses_generic_criterion_feedback_and_evidence():
+    analysis = RolloutAnalysis(
+        evaluation=RubricEvaluation(
+            passed=False,
+            score=0.5,
+            criterion_results=[
+                CriterionResult(
+                    criterion_name="required_action",
+                    passed=True,
+                    score=1.0,
+                    feedback=[],
+                    evidence=["Required write matched; preserve this behavior."],
+                ),
+                CriterionResult(
+                    criterion_name="required_response",
+                    passed=False,
+                    score=0.0,
+                    feedback=["Required total was omitted."],
+                    evidence=["The final response did not contain the total."],
+                ),
+            ],
+            metadata={
+                "source": "benchmark_adapter",
+                "evaluation_result": {"private_benchmark_field": "must not be parsed"},
+            },
+        ),
+        trajectories=[],
+    )
+
+    summary = _evaluation_summary(analysis)
+
+    assert "criterion=required_action passed=True score=1.0" in summary
+    assert "Required write matched; preserve this behavior." in summary
+    assert "criterion=required_response passed=False score=0.0" in summary
+    assert "Required total was omitted." in summary
+    assert "private_benchmark_field" not in summary
 
 
 def _gradient_target(

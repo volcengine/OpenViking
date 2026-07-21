@@ -16,6 +16,7 @@ from openviking.message import Message, TextPart
 from openviking.session.memory.dataclass import MemoryFile, StoredLink
 from openviking.session.train import (
     Case,
+    CriterionResult,
     Experience,
     ExperienceSet,
     ListCaseLoader,
@@ -1622,8 +1623,8 @@ async def test_session_commit_policy_trainer_uses_context_epoch_for_unique_sessi
 
     epoch_zero_id = epoch_zero.apply_result.metadata["commit_results"][0]["session_id"]
     epoch_one_id = epoch_one.apply_result.metadata["commit_results"][0]["session_id"]
-    assert epoch_zero_id == f"tau2_train_run1_test_e0_t0_{_case().name}"
-    assert epoch_one_id == f"tau2_train_run1_test_e1_t0_{_case().name}"
+    assert epoch_zero_id == f"batch_train_run1_test_e0_t0_{_case().name}"
+    assert epoch_one_id == f"batch_train_run1_test_e1_t0_{_case().name}"
     assert epoch_zero_id != epoch_one_id
 
 
@@ -2494,8 +2495,7 @@ async def test_session_commit_policy_trainer_filters_legacy_embedded_evaluation_
 
 
 @pytest.mark.asyncio
-async def test_session_commit_policy_trainer_adds_tau2_evaluation_semantics():
-    from openviking.message import ToolPart
+async def test_session_commit_policy_trainer_uses_only_generic_evaluation_semantics():
     from openviking.session.train import SessionCommitPolicyTrainer
 
     client = FakeSessionCommitClient()
@@ -2508,53 +2508,28 @@ async def test_session_commit_policy_trainer_adds_tau2_evaluation_semantics():
         case=_case(),
         messages=[
             Message(id="m1", role="user", parts=[TextPart(text="cancel reservation")]),
-            Message(
-                id="tool-1",
-                role="user",
-                parts=[
-                    ToolPart(
-                        tool_name="update_reservation_flights",
-                        tool_input={"reservation_id": "XEHM4B", "cabin": "business"},
-                        tool_output="{}",
-                        tool_status="completed",
-                    )
-                ],
-            ),
         ],
         policy_snapshot_id="snapshot-1",
         evaluation=RubricEvaluation(
             passed=False,
             score=0.0,
-            criterion_results=[],
-            feedback=[],
-            metadata={
-                "evaluation_result": {
-                    "reward": 0.0,
-                    "reward_basis": ["DB", "COMMUNICATE"],
-                    "reward_breakdown": {"DB": 1.0, "COMMUNICATE": 0.0},
-                    "db_check": {"db_match": True, "db_reward": 1.0},
-                    "action_checks": [
-                        {
-                            "action": {
-                                "name": "update_reservation_flights",
-                                "arguments": {
-                                    "reservation_id": "XEHM4B",
-                                    "cabin": "business",
-                                },
-                            },
-                            "action_match": True,
-                            "tool_type": "write",
-                        }
-                    ],
-                    "communicate_checks": [
-                        {
-                            "info": "1628",
-                            "met": False,
-                            "justification": "Information '1628' not communicated.",
-                        }
-                    ],
-                }
-            },
+            criterion_results=[
+                CriterionResult(
+                    criterion_name="environment_state",
+                    passed=True,
+                    score=1.0,
+                    feedback=[],
+                    evidence=["Expected environment state was reached; preserve this behavior."],
+                ),
+                CriterionResult(
+                    criterion_name="required_communication",
+                    passed=False,
+                    score=0.0,
+                    feedback=["Required total 1628 was not communicated."],
+                    evidence=[],
+                ),
+            ],
+            metadata={"source": "benchmark_adapter", "reward": 0.0},
         ),
         metadata={"data_split": "unit", "task_no": 7},
     )
@@ -2565,12 +2540,11 @@ async def test_session_commit_policy_trainer_adds_tau2_evaluation_semantics():
     committed_messages = client.messages[commit_result["session_id"]]
     last_text = committed_messages[-1]["parts"][0]["text"]
     assert "# OpenViking OutcomeEvaluation" in last_text
-    assert "## Tau2 Evaluation Semantics" in last_text
-    assert "action_checks[].action_match=true" in last_text
-    assert "Treat it as correct and required" in last_text
-    assert "## Derived Evaluation Verdict" in last_text
-    assert "Required actions matched (preservation set; do not block these):" in last_text
-    assert "update_reservation_flights" in last_text
-    assert "action_match=true | tool_type=write" in last_text
-    assert "first repair boundary should be communicate_with_user / final response" in last_text
-    assert "Do not learn any experience that blocks or discourages" in last_text
+    assert "## Evaluation Interpretation" in last_text
+    assert "Treat passed criteria and their evidence as behavior to preserve." in last_text
+    assert '"criterion_name": "required_communication"' in last_text
+    assert "Required total 1628 was not communicated." in last_text
+    assert "Tau2" not in last_text
+    assert "evaluation_result" not in last_text
+    assert "action_checks" not in last_text
+    assert "communicate_with_user" not in last_text

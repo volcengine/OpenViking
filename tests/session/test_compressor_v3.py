@@ -15,6 +15,7 @@ from openviking.session.compressor_v3 import (
     SessionCompressorV3,
     _experience_root_uri,
     _finalize_experience_dispositions,
+    _memory_diff_has_changes,
     _merge_memory_diffs,
     _training_evaluation_from_messages,
 )
@@ -352,6 +353,22 @@ def test_merge_memory_diffs_concatenates_gate_attempts_without_legacy_views():
     assert "gate_rejections" not in merged
     assert "gate_summary" not in merged
     assert "post_validation_retries" not in merged
+
+
+def test_memory_diff_with_only_gate_attempts_is_not_dropped():
+    assert _memory_diff_has_changes(
+        {
+            "summary": {"total_adds": 0, "total_updates": 0, "total_deletes": 0},
+            "gates": [
+                {
+                    "stage": "post_plan",
+                    "index": 0,
+                    "result": "discarded",
+                    "targets": [],
+                }
+            ],
+        }
+    )
 
 
 def test_case_experience_links_require_policy_root_uri():

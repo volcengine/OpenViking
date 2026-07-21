@@ -2045,6 +2045,8 @@ def _finalize_experience_dispositions(
 def _memory_diff_has_changes(diff: Any) -> bool:
     if not isinstance(diff, dict):
         return False
+    if any(isinstance(item, dict) for item in diff.get("gates", [])):
+        return True
     summary = diff.get("summary")
     if not isinstance(summary, dict):
         return False

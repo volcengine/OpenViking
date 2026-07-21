@@ -292,18 +292,44 @@ def test_tau2_rollout_messages_omit_empty_final_after_done():
     assert "tau2-reward" not in ids
 
 
-def test_tau2_reward_info_is_json_safe_in_rollout_messages_and_evaluation():
+def test_tau2_reward_info_is_normalized_into_generic_evaluation_criteria():
     import json
-
-    from tau2.data_model.simulation import RewardInfo, RewardType
 
     from benchmark.tau2.train.rollout_executor import _build_rollout_messages, _tau2_evaluation
 
-    reward_info = RewardInfo(
-        reward=1.0,
-        reward_basis=[RewardType.DB],
-        reward_breakdown={RewardType.DB: 1.0},
-    )
+    reward_info = {
+        "reward": 0.0,
+        "reward_basis": ["DB", "COMMUNICATE"],
+        "reward_breakdown": {"DB": 1.0, "COMMUNICATE": 0.0},
+        "db_check": {"db_match": True, "db_reward": 1.0},
+        "action_checks": [
+            {
+                "action": {
+                    "name": "update_reservation_flights",
+                    "arguments": {"reservation_id": "XEHM4B", "cabin": "business"},
+                },
+                "action_match": True,
+                "action_reward": 1.0,
+                "tool_type": "write",
+            },
+            {
+                "action": {
+                    "name": "send_certificate",
+                    "arguments": {"reservation_id": "XEHM4B"},
+                },
+                "action_match": False,
+                "action_reward": 0.0,
+                "tool_type": "write",
+            },
+        ],
+        "communicate_checks": [
+            {
+                "info": "1628",
+                "met": False,
+                "justification": "Required total was not communicated.",
+            }
+        ],
+    }
 
     rollout_messages = _build_rollout_messages(
         system_prompt="policy",
@@ -311,19 +337,57 @@ def test_tau2_reward_info_is_json_safe_in_rollout_messages_and_evaluation():
         tools_used=[],
         final_content="done",
         evaluation_result=reward_info,
-        reward=1.0,
+        reward=0.0,
         runtime_messages=[
             {"role": "system", "content": "policy"},
             {"role": "user", "content": "user request"},
             {"role": "assistant", "content": "done"},
         ],
     )
-    evaluation = _tau2_evaluation(reward=1.0, evaluation_result=reward_info)
+    evaluation = _tau2_evaluation(reward=0.0, evaluation_result=reward_info)
 
     assert not any(message.id == "tau2-reward" for message in rollout_messages)
     assert not any("evaluation report:" in message.content for message in rollout_messages)
-    assert evaluation.feedback == []
-    assert '"reward_basis": ["DB"]' in json.dumps(evaluation.metadata, sort_keys=True)
+    assert [result.criterion_name for result in evaluation.criterion_results] == [
+        "task_outcome",
+        "environment_state",
+        "required_actions",
+        "required_communication",
+    ]
+    assert evaluation.passed is False
+    assert evaluation.score == 0.0
+    assert evaluation.metadata == {"source": "tau2", "reward": 0.0}
+    assert "evaluation_result" not in json.dumps(evaluation.metadata, sort_keys=True)
+
+    by_name = {result.criterion_name: result for result in evaluation.criterion_results}
+    assert by_name["environment_state"].passed is True
+    assert by_name["environment_state"].score == 1.0
+    assert by_name["required_actions"].passed is False
+    assert by_name["required_actions"].score == 0.5
+    assert any(
+        "update_reservation_flights" in evidence and "preserve" in evidence
+        for evidence in by_name["required_actions"].evidence
+    )
+    assert any("send_certificate" in feedback for feedback in by_name["required_actions"].feedback)
+    assert by_name["required_communication"].passed is False
+    assert by_name["required_communication"].score == 0.0
+    assert by_name["required_communication"].feedback == ["Required total was not communicated."]
+
+
+def test_tau2_evaluation_ignores_malformed_optional_components():
+    from benchmark.tau2.train.rollout_executor import _tau2_evaluation
+
+    evaluation = _tau2_evaluation(
+        reward="invalid",
+        evaluation_result={
+            "db_check": "invalid",
+            "action_checks": [None, {"action": "invalid"}],
+            "communicate_checks": [{"info": "missing met"}],
+        },
+    )
+
+    assert evaluation.score == 0.0
+    assert [result.criterion_name for result in evaluation.criterion_results] == ["task_outcome"]
 
 
 def test_tau2_litellm_generate_rate_limit_retry_patch(monkeypatch):
@@ -1349,6 +1413,8 @@ async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(monkeypatc
     )
 
     assert rollout.metadata["reward"] == 1.0
+    assert rollout.metadata["evaluation_result"] == {"ok": True}
+    assert "evaluation_result" not in rollout.evaluation.metadata
     call_values = dict(calls)
     assert call_values["case_lookup"] == {
         "benchmark": "tau2",

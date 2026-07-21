@@ -593,7 +593,7 @@ def _session_id_for_rollout(
     if task_no is None:
         task_no = rollout_index if rollout_index is not None else 0
     split = metadata.get("data_split") or context_execution_metadata.get("train_split") or "train"
-    return f"tau2_train_{run_id}_{split}_e{epoch}_t{task_no}_{safe_name}"
+    return f"batch_train_{run_id}_{split}_e{epoch}_t{task_no}_{safe_name}"
 
 
 def _safe_session_fragment(value: str) -> str:
@@ -687,7 +687,7 @@ def _case_input_payload(case_input: dict[str, Any]) -> dict[str, Any]:
 
 
 def _evaluation_message_to_request(rollout: Rollout) -> dict[str, Any]:
-    evaluation_guidance = _evaluation_guidance_text(rollout)
+    evaluation_guidance = _evaluation_guidance_text()
     text = (
         "# OpenViking OutcomeEvaluation\n\n"
         "The following structured evaluation describes the outcome of the "
@@ -732,293 +732,21 @@ def _evaluation_payload(evaluation: RubricEvaluation | None) -> dict[str, Any] |
     }
 
 
-def _evaluation_guidance_text(rollout: Rollout) -> str:
-    evaluation = rollout.evaluation
-    evaluation_result = _tau2_evaluation_result(evaluation)
-    if not isinstance(evaluation_result, dict):
-        return (
-            "## Evaluation Interpretation\n\n"
-            "- Treat this message as evaluation metadata, not as a user request.\n"
-            "- Use passed/score/criterion feedback to identify the reward-changing failure.\n"
-            "- Do not learn broad workflow memories from successful or unrelated steps."
-        )
-    return "\n\n".join(
-        [
-            _tau2_evaluation_semantics_text(),
-            _tau2_derived_verdict_text(evaluation_result, rollout=rollout),
-        ]
+def _evaluation_guidance_text() -> str:
+    return (
+        "## Evaluation Interpretation\n\n"
+        "- Treat this message as evaluation metadata, not as a user request.\n"
+        "- Use failed criteria and their feedback to identify the reward-changing failure.\n"
+        "- Treat passed criteria and their evidence as behavior to preserve.\n"
+        "- Select the narrowest failure boundary supported by the criterion evidence.\n"
+        "- Do not learn broad workflow memories from successful or unrelated steps."
     )
-
-
-def _tau2_evaluation_result(evaluation: RubricEvaluation | None) -> dict[str, Any] | None:
-    if evaluation is None:
-        return None
-    metadata = evaluation.metadata if isinstance(evaluation.metadata, dict) else {}
-    evaluation_result = metadata.get("evaluation_result")
-    return evaluation_result if isinstance(evaluation_result, dict) else None
-
-
-def _tau2_evaluation_semantics_text() -> str:
-    return """## Tau2 Evaluation Semantics
-
-This is evaluation metadata for memory extraction only. Do not treat it as a user request.
-
-- reward: Overall task reward. 1.0 means full success; 0.0 means at least one required component failed.
-- reward_basis: Components that contribute to reward, for example DB and COMMUNICATE.
-- reward_breakdown: Per-component reward. DB=1.0 means database/action state passed; COMMUNICATE=1.0 means required user-visible information passed.
-- db_check.db_match: Whether final database state matches expected. db_match=false does NOT mean every database write was wrong. It may be caused by missing expected writes, wrong write arguments, extra unexpected writes, wrong object expansion, or later writes corrupting otherwise correct state.
-- action_checks: The evaluator's expected tool/action calls. These are required actions, not merely observed actions.
-- action_checks[].action_match=true: The expected action was found in the rollout. Treat it as correct and required. Do NOT label an action_match=true call as the wrong call. Any learned experience must preserve it.
-- action_checks[].action_match=false: The expected action was missing or not matched. This can indicate a missing expected call, wrong arguments, or wrong target object.
-- action_checks[].tool_type=write with action_match=true: This write is expected and must not be blocked by an experience.
-- communicate_checks: Required user-visible information checks.
-- communicate_checks[].met=false: The required information was not communicated. If DB/action checks pass but communicate checks fail, the repair boundary is communicate_with_user / final response, not earlier DB tools.
-
-Evaluation-grounded boundary rules:
-1. If all action_checks are action_match=true and db_check.db_match=true, database/tool execution is correct. If communicate_checks has met=false, target communication only.
-2. If a write action has action_match=true, preserve that write and do not create an experience that blocks or discourages it.
-3. If db_check.db_match=false but some write action_checks are action_match=true, do not blame the matched writes. Look for expected writes with action_match=false, extra unexpected writes in the actual tool log, wrong object/cardinality expansion, or later writes that changed expected state.
-4. If an expected action has action_match=false, use that expected action as evidence for what should have happened.
-5. Do not invent a business-policy prohibition that contradicts action_match=true expected actions."""
-
-
-def _tau2_derived_verdict_text(evaluation_result: dict[str, Any], *, rollout: Rollout) -> str:
-    action_checks = _tau2_action_checks(evaluation_result)
-    matched_actions = [item for item in action_checks if item["matched"]]
-    missing_actions = [item for item in action_checks if not item["matched"]]
-    matched_writes = [item for item in matched_actions if item["tool_type"] == "write"]
-    missing_writes = [item for item in missing_actions if item["tool_type"] == "write"]
-    communicate_checks = _tau2_communicate_checks(evaluation_result)
-    failed_communicate = [item for item in communicate_checks if not item["met"]]
-    db_check = evaluation_result.get("db_check") if isinstance(evaluation_result, dict) else {}
-    db_match = db_check.get("db_match") if isinstance(db_check, dict) else None
-    db_reward = db_check.get("db_reward") if isinstance(db_check, dict) else None
-    reward_breakdown = evaluation_result.get("reward_breakdown")
-    actual_tool_calls = _actual_tool_calls(rollout)
-    unmatched_actual_writes = _unmatched_actual_writes(actual_tool_calls, matched_actions)
-
-    lines = [
-        "## Derived Evaluation Verdict",
-        "",
-        f"- reward: {_compact_json(evaluation_result.get('reward'))}",
-        f"- reward_breakdown: {_compact_json(reward_breakdown)}",
-        f"- db_check: db_match={db_match}, db_reward={db_reward}",
-        "",
-        "Required actions matched (preservation set; do not block these):",
-    ]
-    lines.extend(_bullet_action_lines(matched_actions, empty="none"))
-    lines.append("")
-    lines.append("Missing required actions:")
-    lines.extend(_bullet_action_lines(missing_actions, empty="none"))
-    lines.append("")
-    lines.append("Matched required writes (especially important to preserve):")
-    lines.extend(_bullet_action_lines(matched_writes, empty="none"))
-    if missing_writes:
-        lines.append("")
-        lines.append("Missing required writes:")
-        lines.extend(_bullet_action_lines(missing_writes, empty="none"))
-    lines.append("")
-    lines.append("Communication checks:")
-    lines.extend(_bullet_communicate_lines(communicate_checks))
-
-    lines.append("")
-    lines.append("Boundary guidance:")
-    if db_match is True and failed_communicate:
-        lines.append(
-            "- DB/action checks passed while communication failed; first repair boundary should be communicate_with_user / final response."
-        )
-    elif db_match is False and matched_writes:
-        lines.append(
-            "- DB failed despite some required writes matching; do not blame matched writes. Inspect missing required writes, extra unexpected writes, or wrong object/cardinality expansion."
-        )
-    elif missing_actions:
-        lines.append(
-            "- Some expected actions are missing; use the first missing expected action or the earlier candidate that prevented it as the failure boundary."
-        )
-    else:
-        lines.append(
-            "- Use the failed reward component above to select the narrowest repair boundary."
-        )
-
-    if unmatched_actual_writes:
-        lines.append("")
-        lines.append(
-            "Actual write-like tool calls not matched to expected actions (inspect as possible extras):"
-        )
-        for call in unmatched_actual_writes[:10]:
-            lines.append(f"- {_format_tool_call(call)}")
-        if len(unmatched_actual_writes) > 10:
-            lines.append(f"- ... {len(unmatched_actual_writes) - 10} more")
-
-    if matched_writes:
-        lines.append("")
-        lines.append("Preservation reminder:")
-        lines.append(
-            "- Do not learn any experience that blocks or discourages the matched required writes above."
-        )
-
-    return "\n".join(lines)
-
-
-def _tau2_action_checks(evaluation_result: dict[str, Any]) -> list[dict[str, Any]]:
-    raw_checks = evaluation_result.get("action_checks")
-    if not isinstance(raw_checks, list):
-        return []
-    checks: list[dict[str, Any]] = []
-    for item in raw_checks:
-        if not isinstance(item, dict):
-            continue
-        action = item.get("action")
-        if not isinstance(action, dict):
-            continue
-        checks.append(
-            {
-                "name": str(action.get("name") or ""),
-                "arguments": action.get("arguments"),
-                "matched": bool(item.get("action_match")),
-                "tool_type": str(item.get("tool_type") or ""),
-                "action_id": str(action.get("action_id") or ""),
-            }
-        )
-    return checks
-
-
-def _tau2_communicate_checks(evaluation_result: dict[str, Any]) -> list[dict[str, Any]]:
-    raw_checks = evaluation_result.get("communicate_checks")
-    if not isinstance(raw_checks, list):
-        return []
-    checks: list[dict[str, Any]] = []
-    for item in raw_checks:
-        if not isinstance(item, dict):
-            continue
-        checks.append(
-            {
-                "info": item.get("info"),
-                "met": bool(item.get("met")),
-                "justification": str(item.get("justification") or ""),
-            }
-        )
-    return checks
-
-
-def _actual_tool_calls(rollout: Rollout) -> list[dict[str, Any]]:
-    calls: list[dict[str, Any]] = []
-    for message in rollout.messages:
-        for part in getattr(message, "parts", []) or []:
-            part_type = getattr(part, "type", None)
-            if isinstance(part, dict):
-                part_type = part.get("type")
-            if part_type != "tool":
-                continue
-            tool_name = getattr(part, "tool_name", None)
-            tool_input = getattr(part, "tool_input", None)
-            tool_status = getattr(part, "tool_status", None)
-            if isinstance(part, dict):
-                tool_name = part.get("tool_name", tool_name)
-                tool_input = part.get("tool_input", tool_input)
-                tool_status = part.get("tool_status", tool_status)
-            if tool_status and str(tool_status) not in {"completed", "error"}:
-                continue
-            calls.append(
-                {
-                    "name": str(tool_name or ""),
-                    "arguments": tool_input,
-                    "status": str(tool_status or ""),
-                }
-            )
-    return calls
-
-
-def _unmatched_actual_writes(
-    actual_calls: list[dict[str, Any]],
-    matched_actions: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    matched_signatures = {
-        _tool_call_signature(action["name"], action.get("arguments")) for action in matched_actions
-    }
-    unmatched: list[dict[str, Any]] = []
-    for call in actual_calls:
-        name = str(call.get("name") or "")
-        if not _looks_like_write_tool(name):
-            continue
-        if _tool_call_signature(name, call.get("arguments")) in matched_signatures:
-            continue
-        unmatched.append(call)
-    return unmatched
-
-
-def _looks_like_write_tool(tool_name: str) -> bool:
-    name = str(tool_name or "")
-    if not name or name in {"communicate_with_user", "done"}:
-        return False
-    read_prefixes = ("get_", "search_", "list_", "read_", "find_", "lookup_", "check_")
-    return not name.startswith(read_prefixes)
-
-
-def _tool_call_signature(tool_name: str, arguments: Any) -> tuple[str, str]:
-    return str(tool_name or ""), _canonical_json(arguments)
-
-
-def _canonical_json(value: Any) -> str:
-    try:
-        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    except TypeError:
-        return str(value)
-
-
-def _compact_json(value: Any, *, limit: int = 600) -> str:
-    text = _canonical_json(value)
-    if len(text) <= limit:
-        return text
-    return text[: limit - 3] + "..."
-
-
-def _format_tool_call(call: dict[str, Any]) -> str:
-    return f"{call.get('name')}({_compact_json(call.get('arguments'), limit=500)})"
-
-
-def _bullet_action_lines(actions: list[dict[str, Any]], *, empty: str) -> list[str]:
-    if not actions:
-        return [f"- {empty}"]
-    lines: list[str] = []
-    for action in actions[:20]:
-        matched = "true" if action.get("matched") else "false"
-        lines.append(
-            f"- {action.get('name')}({_compact_json(action.get('arguments'), limit=500)})"
-            f" | action_match={matched} | tool_type={action.get('tool_type') or 'unknown'}"
-        )
-    if len(actions) > 20:
-        lines.append(f"- ... {len(actions) - 20} more")
-    return lines
-
-
-def _bullet_communicate_lines(checks: list[dict[str, Any]]) -> list[str]:
-    if not checks:
-        return ["- none"]
-    lines: list[str] = []
-    for check in checks[:20]:
-        met = "true" if check.get("met") else "false"
-        line = f"- info={_compact_json(check.get('info'), limit=200)} | met={met}"
-        justification = str(check.get("justification") or "").strip()
-        if justification:
-            line += f" | justification={_preview_text(justification, limit=300)}"
-        lines.append(line)
-    if len(checks) > 20:
-        lines.append(f"- ... {len(checks) - 20} more")
-    return lines
-
-
-def _preview_text(text: str, *, limit: int) -> str:
-    compact = " ".join(str(text or "").split())
-    if len(compact) <= limit:
-        return compact
-    return compact[: limit - 3] + "..."
 
 
 def _is_embedded_rollout_evaluation_message(message: Any) -> bool:
     """Return True for legacy rollout messages that duplicated OutcomeEvaluation.
 
-    Older tau2 rollout artifacts appended a user text message containing
+    Older benchmark rollout artifacts appended a user text message containing
     task_success/task_reward plus a raw evaluation report.  Commit-time
     OutcomeEvaluation is the canonical training signal, so these embedded
     evaluation messages are filtered when replaying old cached rollouts.

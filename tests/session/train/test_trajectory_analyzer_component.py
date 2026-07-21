@@ -110,6 +110,9 @@ def test_trajectory_prompt_requires_linear_python_execution_log():
     ):
         assert removed_format not in prompt
 
+    assert 'communicate_with_user(content="<actual agent message>")' not in prompt
+    assert 'assistant_message_1 = "<actual agent message>"' in prompt
+
 
 def test_trajectory_validation_keeps_only_foundational_memory_checks():
     assert _trajectory_operation_validation_issues("task", _valid_trajectory_fields()) == []

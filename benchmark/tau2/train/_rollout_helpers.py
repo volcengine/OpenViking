@@ -56,28 +56,151 @@ def _case_trial(case: Case) -> Any:
     return case.input.get("eval_trial", case.input.get("train_trial"))
 
 
-def _tau2_evaluation(*, reward: Any, evaluation_result: Any, source: str = "tau2") -> RubricEvaluation:
+def _tau2_evaluation(
+    *, reward: Any, evaluation_result: Any, source: str = "tau2"
+) -> RubricEvaluation:
     score = _safe_float(reward, default=0.0)
     passed = score >= 1.0
-    feedback = [] if passed else ["tau2 environment reward is below 1.0."]
     evaluation_jsonable = _to_jsonable(evaluation_result)
+    evaluation_data = evaluation_jsonable if isinstance(evaluation_jsonable, dict) else {}
+    criterion_results = [
+        CriterionResult(
+            criterion_name="task_outcome",
+            passed=passed,
+            score=score,
+            feedback=[] if passed else ["Overall task outcome did not receive full reward."],
+            evidence=[f"Overall environment reward: {score:g}."],
+            metadata={"component": "overall"},
+        )
+    ]
+    environment_state = _environment_state_criterion(evaluation_data)
+    if environment_state is not None:
+        criterion_results.append(environment_state)
+    required_actions = _required_actions_criterion(evaluation_data)
+    if required_actions is not None:
+        criterion_results.append(required_actions)
+    required_communication = _required_communication_criterion(evaluation_data)
+    if required_communication is not None:
+        criterion_results.append(required_communication)
     return RubricEvaluation(
         passed=passed,
         score=score,
-        criterion_results=[
-            CriterionResult(
-                criterion_name="tau2_reward",
-                passed=passed,
-                score=score,
-                feedback=feedback,
-                evidence=[],
-                metadata={"reward": score},
+        criterion_results=criterion_results,
+        metadata={"source": source, "reward": score},
+    )
+
+
+def _environment_state_criterion(evaluation: dict[str, Any]) -> CriterionResult | None:
+    db_check = evaluation.get("db_check")
+    if not isinstance(db_check, dict) or not isinstance(db_check.get("db_match"), bool):
+        return None
+    passed = db_check["db_match"]
+    score = _safe_float(db_check.get("db_reward"), default=1.0 if passed else 0.0)
+    if passed:
+        feedback: list[str] = []
+        evidence = [
+            "Expected environment state was reached; preserve the actions that produced it."
+        ]
+    else:
+        feedback = ["Final environment state did not match the expected state."]
+        evidence = ["Expected environment state was not reached."]
+    return CriterionResult(
+        criterion_name="environment_state",
+        passed=passed,
+        score=score,
+        feedback=feedback,
+        evidence=evidence,
+        metadata={"component": "environment_state"},
+    )
+
+
+def _required_actions_criterion(evaluation: dict[str, Any]) -> CriterionResult | None:
+    raw_checks = evaluation.get("action_checks")
+    if not isinstance(raw_checks, list):
+        return None
+    checks: list[tuple[str, Any, str, bool]] = []
+    for item in raw_checks:
+        if not isinstance(item, dict) or not isinstance(item.get("action_match"), bool):
+            continue
+        action = item.get("action")
+        if not isinstance(action, dict):
+            continue
+        name = action.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        checks.append(
+            (
+                name,
+                action.get("arguments"),
+                str(item.get("tool_type") or "action"),
+                item["action_match"],
             )
-        ],
+        )
+    if not checks:
+        return None
+
+    matched_count = sum(1 for *_, matched in checks if matched)
+    feedback: list[str] = []
+    evidence: list[str] = []
+    for name, arguments, tool_type, matched in checks:
+        action_text = f"{name}({_stringify(arguments)})"
+        if matched:
+            evidence.append(
+                f"Required {tool_type} action matched; preserve this behavior: {action_text}."
+            )
+        else:
+            feedback.append(f"Missing or mismatched required {tool_type} action: {action_text}.")
+            evidence.append(f"Required {tool_type} action was not matched: {action_text}.")
+    return CriterionResult(
+        criterion_name="required_actions",
+        passed=matched_count == len(checks),
+        score=matched_count / len(checks),
+        feedback=feedback,
+        evidence=evidence,
         metadata={
-            "source": source,
-            "reward": score,
-            "evaluation_result": evaluation_jsonable,
+            "component": "required_actions",
+            "matched_count": matched_count,
+            "total_count": len(checks),
+        },
+    )
+
+
+def _required_communication_criterion(evaluation: dict[str, Any]) -> CriterionResult | None:
+    raw_checks = evaluation.get("communicate_checks")
+    if not isinstance(raw_checks, list):
+        return None
+    checks: list[tuple[Any, bool, str]] = []
+    for item in raw_checks:
+        if not isinstance(item, dict) or not isinstance(item.get("met"), bool):
+            continue
+        checks.append((item.get("info"), item["met"], str(item.get("justification") or "")))
+    if not checks:
+        return None
+
+    met_count = sum(1 for _, met, _ in checks if met)
+    feedback: list[str] = []
+    evidence: list[str] = []
+    for info, met, justification in checks:
+        info_text = _stringify(info)
+        if met:
+            evidence.append(
+                f"Required information was communicated; preserve this behavior: {info_text}."
+            )
+            continue
+        feedback.append(
+            justification.strip() or f"Required information was not communicated: {info_text}."
+        )
+        evidence.append(f"Required information was not communicated: {info_text}.")
+    return CriterionResult(
+        criterion_name="required_communication",
+        passed=met_count == len(checks),
+        score=met_count / len(checks),
+        feedback=feedback,
+        evidence=evidence,
+        metadata={
+            "component": "required_communication",
+            "met_count": met_count,
+            "total_count": len(checks),
         },
     )
 
