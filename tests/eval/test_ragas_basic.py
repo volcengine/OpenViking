@@ -2,12 +2,16 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import json
+import queue
 import tempfile
+import threading
 from pathlib import Path
 
+from openviking.eval.recorder.async_writer import AsyncRecordWriter
 from openviking.eval.ragas.generator import DatasetGenerator
 from openviking.eval.ragas.pipeline import RAGQueryPipeline
 from openviking.eval.ragas.types import EvalDataset, EvalSample
+from openviking_cli.retrieve.types import ContextType, FindResult, MatchedContext
 
 
 def test_eval_types():
@@ -34,6 +38,63 @@ def test_pipeline_initialization():
     assert pipeline.config_path == "./test.conf"
     assert pipeline.data_path == "./test_data/test_ragas"
     assert pipeline._client is None
+
+
+def test_async_record_writer_drains_records_before_stop_sentinel():
+    writer = AsyncRecordWriter.__new__(AsyncRecordWriter)
+    writer._queue = queue.Queue()
+    writer._stop_event = threading.Event()
+    writer._stop_event.set()
+    writer.batch_size = 100
+    writer.flush_interval = 60
+    writer._queue.put({"id": 1})
+    writer._queue.put({"id": 2})
+    writer._queue.put(None)
+    flushed = []
+    writer._flush_batch = lambda batch: flushed.extend(batch)
+
+    writer._writer_loop()
+
+    assert flushed == [{"id": 1}, {"id": 2}]
+
+
+def test_pipeline_query_consumes_find_result_and_generates_answer():
+    class Client:
+        def search(self, **kwargs):
+            return FindResult(
+                memories=[
+                    MatchedContext(
+                        uri="viking://user/memories/profile.md",
+                        context_type=ContextType.MEMORY,
+                        overview="Profile overview",
+                    )
+                ],
+                resources=[
+                    MatchedContext(
+                        uri="viking://resources/guide.md",
+                        context_type=ContextType.RESOURCE,
+                        abstract="Guide abstract",
+                    )
+                ],
+                skills=[],
+            )
+
+    class LLM:
+        def get_completion(self, prompt):
+            return "Generated answer"
+
+    pipeline = RAGQueryPipeline()
+    pipeline._client = Client()
+    pipeline._llm = LLM()
+
+    result = pipeline.query("How does it work?")
+
+    assert result["contexts"] == ["Profile overview", "Guide abstract"]
+    assert result["retrieved_uris"] == [
+        "viking://user/memories/profile.md",
+        "viking://resources/guide.md",
+    ]
+    assert result["answer"] == "Generated answer"
 
 
 def test_question_loader():
