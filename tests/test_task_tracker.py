@@ -151,6 +151,21 @@ async def test_complete_task(tracker: TaskTracker):
     assert retrieved.result == {"memories_extracted": 3}
 
 
+async def test_complete_task_updates_resource_id(tracker: TaskTracker):
+    task = await tracker.create("add_resource", resource_id=None, **_owner_kwargs())
+
+    await tracker.complete(
+        task.task_id,
+        {"root_uri": "viking://resources/real-title"},
+        resource_id="viking://resources/real-title",
+    )
+
+    retrieved = await tracker.get(task.task_id)
+    assert retrieved is not None
+    assert retrieved.resource_id == "viking://resources/real-title"
+    assert await tracker.list_tasks(resource_id="viking://resources/real-title") == [retrieved]
+
+
 async def test_task_result_redacts_user_key(tracker: TaskTracker):
     task = await tracker.create("legacy_migration", **_owner_kwargs())
     await tracker.complete(

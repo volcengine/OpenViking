@@ -223,17 +223,18 @@ html.vikingbot-assistant-resizing * {
 .vikingbot-identity > span:last-child {
   display: flex;
   flex-direction: column;
-  gap: 2px;
 }
 
 .vikingbot-identity strong {
   color: var(--vp-c-text-1);
   font-size: 15px;
+  line-height: 20px;
 }
 
 .vikingbot-identity small {
   color: var(--vp-c-text-3);
   font-size: 11px;
+  line-height: 16px;
 }
 
 .vikingbot-avatar,
