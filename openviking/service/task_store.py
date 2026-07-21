@@ -9,7 +9,7 @@ from copy import deepcopy
 from typing import Any, Dict, List, Optional, Protocol
 
 from openviking.pyagfs import AsyncAGFSClient
-from openviking.pyagfs.exceptions import AGFSAlreadyExistsError
+from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
 
 SYSTEM_TASK_ACCOUNT_ID = "_system"
 SYSTEM_TASK_USER_ID = "root"
@@ -65,7 +65,7 @@ class PersistentTaskStore:
         path = self._task_path(account_id, user_id, task_id)
         try:
             raw = await self._agfs.read(path)
-        except Exception:
+        except (AGFSNotFoundError, FileNotFoundError):
             return None
         return json.loads(_decode_bytes(raw))
 
@@ -75,7 +75,7 @@ class PersistentTaskStore:
         directory = self._task_dir(account_id, user_id)
         try:
             items = await self._agfs.ls(directory)
-        except Exception:
+        except (AGFSNotFoundError, FileNotFoundError):
             return []
         tasks: List[Dict[str, Any]] = []
         for item in items:
@@ -84,9 +84,9 @@ class PersistentTaskStore:
                 continue
             try:
                 raw = await self._agfs.read(path)
-                tasks.append(json.loads(_decode_bytes(raw)))
-            except Exception:
+            except (AGFSNotFoundError, FileNotFoundError):
                 continue
+            tasks.append(json.loads(_decode_bytes(raw)))
         return tasks
 
     async def delete(self, task_id: str, *, account_id: str, user_id: Optional[str] = None) -> None:

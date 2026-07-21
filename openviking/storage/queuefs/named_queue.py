@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Union
 
 from openviking.pyagfs import AGFSSyncClientProtocol, AsyncAGFSClient
+from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -195,9 +196,8 @@ class NamedQueue:
         if not self._initialized:
             try:
                 await self._async_agfs.mkdir(self.path)
-            except Exception as e:
-                if "exist" not in str(e).lower():
-                    logger.warning(f"[NamedQueue] Failed to ensure queue {self.name}: {e}")
+            except (AGFSAlreadyExistsError, FileExistsError):
+                pass
             self._initialized = True
 
     async def enqueue(self, data: Union[str, Dict[str, Any]]) -> str:
@@ -323,16 +323,17 @@ class NamedQueue:
 
         try:
             content = await self._async_agfs.read(size_file)
-            if not content:
+            if content is None:
                 return 0
             if isinstance(content, bytes):
-                return int(content.decode("utf-8").strip())
+                text = content.decode("utf-8")
             elif isinstance(content, str):
-                return int(content.strip())
+                text = content
             else:
-                return 0
-        except Exception as e:
-            logger.debug(f"[NamedQueue] Get size failed for {self.name}: {e}")
+                raise TypeError(f"Unexpected queue size response: {type(content).__name__}")
+            text = text.strip()
+            return int(text) if text else 0
+        except (AGFSNotFoundError, FileNotFoundError):
             return 0
 
     async def clear(self) -> bool:

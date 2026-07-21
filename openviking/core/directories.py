@@ -24,6 +24,8 @@ if TYPE_CHECKING:
     from openviking.storage import VikingDBManager
     from openviking.storage.viking_fs import VikingFS
 
+from openviking_cli.exceptions import NotFoundError
+
 
 @dataclass
 class DirectoryDefinition:
@@ -308,7 +310,7 @@ class DirectoryInitializer:
             viking_fs = self._get_viking_fs()
             await viking_fs.abstract(uri, ctx=ctx)
             return True
-        except Exception:
+        except (FileNotFoundError, NotFoundError):
             return False
 
     async def _initialize_children(
