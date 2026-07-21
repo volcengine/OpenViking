@@ -27,6 +27,15 @@ def test_external_peer_non_ascii_falls_back_to_ext():
     assert pid is not None and pid.startswith("ext-")
 
 
+def test_external_peer_mixed_unicode_encodes_full_value_without_collisions():
+    first = safe_external_peer("张三 Alice")
+    second = safe_external_peer("李四 Alice")
+
+    assert first != second
+    assert first is not None and first.startswith("ext-")
+    assert second is not None and second.startswith("ext-")
+
+
 def test_git_human_peer_falls_back_without_repo(tmp_path):
     # tmp_path is not a git repo -> configured fallback is used
     assert resolve_git_human_peer(str(tmp_path), "me") == "me"
