@@ -20,7 +20,7 @@ OpenViking 通过文件系统范式统一管理所有上下文，实现分层供
 | **存储模型** | 扁平化向量存储 | 层级化文件系统（AGFS） |
 | **检索方式** | 单一向量相似度搜索 | 目录递归检索 + 意图分析 + Rerank |
 | **输出形式** | 原始分块 | 结构化上下文（L0 摘要/L1 概览/L2 详情） |
-| **记忆能力** | 不支持 | 内置 6 种记忆分类，支持自动提取和迭代 |
+| **记忆能力** | 不支持 | 内置多种可扩展的记忆类型，支持自动提取和持续迭代 |
 | **可观测性** | 黑箱 | 检索轨迹完整可追溯 |
 | **上下文类型** | 仅文档 | Resource + Memory + Skill 三种类型 |
 
@@ -44,11 +44,17 @@ Viking URI 是 OpenViking 的统一资源标识符，格式为 `viking://{scope}
 viking://
 ├── resources/              # 知识库：文档、代码、网页等
 │   └── my_project/
-├── user/                   # 用户上下文
-│   ├── skills/             # 可调用技能
-│   ├── memories/           # 用户记忆（偏好、实体、事件）
-│   └── peers/              # 针对稳定 peer 的一对多记忆
-└── session/                # 会话与历史归档
+├── user/
+│   └── {user_id}/          # 用户私有上下文
+│       ├── memories/       # 用户记忆
+│       ├── resources/      # 用户私有资源
+│       ├── skills/         # 用户私有技能（默认）
+│       ├── peers/{peer_id}/
+│       │   ├── memories/   # Peer 记忆
+│       │   └── resources/  # Peer 资源
+│       └── sessions/       # 会话与历史归档
+└── agent/                  # 可选的 account 全局能力
+    └── skills/             # 共享技能
 ```
 
 ## 安装与配置
@@ -224,16 +230,9 @@ await session.commit()
 
 ### OpenViking 支持哪些记忆类型？
 
-OpenViking 内置 6 种记忆分类，在会话提交时自动提取：
+OpenViking 内置 `profile`、`preferences`、`entities`、`events`、`identity`、`soul`、`cases`、`trajectories`、`experiences`、`tools` 和 `skills` 等记忆类型。提交会话后，系统会按当前记忆策略提取适用内容；也可以根据业务需要扩展或调整记忆类型。
 
-| 分类 | 归属 | 说明 |
-|------|------|------|
-| **profile** | user | 用户基本信息（姓名、角色等） |
-| **preferences** | user | 用户偏好（代码风格、工具选择等） |
-| **entities** | user | 实体记忆（人物、项目、组织等） |
-| **events** | user | 事件记录（决策、里程碑等） |
-| **cases** | agent | Agent 学习的案例 |
-| **patterns** | agent | Agent 学习的模式 |
+记忆存储在当前用户或 Peer 命名空间，不存在当前可写的 `viking://agent/memories` 目录。完整类型与路径见 [上下文类型](../concepts/02-context-types.md)。
 
 ### 如何使用类 Unix 的文件系统 API？
 

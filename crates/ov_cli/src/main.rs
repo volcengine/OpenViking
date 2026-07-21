@@ -643,7 +643,7 @@ enum Commands {
             help_heading = "Common options"
         )]
         context_type: Option<Vec<String>>,
-        /// Only include results matching any of these explicit tags
+        /// Only include results matching all of these explicit tags
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Option<Vec<String>>,
     },
@@ -711,7 +711,7 @@ enum Commands {
             help_heading = "Advanced options"
         )]
         context_type: Option<Vec<String>>,
-        /// Only include results matching any of these explicit tags
+        /// Only include results matching all of these explicit tags
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Option<Vec<String>>,
     },
@@ -1136,6 +1136,9 @@ pub(crate) enum SnapshotCmd {
         branch: String,
         #[arg(long, default_value_t = 20)]
         limit: u32,
+        /// Show only commits touching any of these viking:// URIs (comma-separated); accepts files and directories.
+        #[arg(long, value_delimiter = ',')]
+        paths: Option<Vec<String>>,
     },
     /// Get the account .ovgitignore content
     IgnoreGet,

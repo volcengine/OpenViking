@@ -795,7 +795,7 @@ The retrieval process adopts a directory recursive strategy. The trajectory of d
 
 ### 5. Automatic Session Management → Context Self-Iteration
 
-OpenViking has a built-in memory self-iteration loop. At the end of each session, developers can actively trigger the memory extraction mechanism. The system will asynchronously analyze task execution results and user feedback, and automatically update them to the User and Agent memory directories.
+OpenViking has a built-in memory self-iteration loop. After a session is committed, the system asynchronously analyzes task outcomes and user feedback, then updates memory in the current User or Peer namespace according to the active memory policy.
 
 - **User Memory Update**: Update memories related to user preferences, making Agent responses better fit user needs.
 - **Agent Experience Accumulation**: Extract core content such as operational tips and tool usage experience from task execution experience, aiding efficient decision-making in subsequent tasks.

@@ -208,6 +208,16 @@ class CollectionAdapter(ABC):
             self._collection.close()
             self._collection = None
 
+    def begin_bulk_ingest(self) -> None:
+        """Begin a derived-index maintenance suppression scope.
+
+        Remote adapters and backends without derived indexes intentionally use
+        this default no-op implementation.
+        """
+
+    def end_bulk_ingest(self) -> None:
+        """End a matching bulk-ingest maintenance scope."""
+
     def get_collection_info(self) -> Optional[Dict[str, Any]]:
         if not self.collection_exists():
             return None

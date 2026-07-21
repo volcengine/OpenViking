@@ -53,6 +53,7 @@ function baseConfig(endpoint) {
     user: "",
     peerId: "",
     timeoutMs: 5000,
+    autoCapture: true,
     captureAssistantTurns: true,
     captureToolMaxChars: 2000,
     captureMode: "semantic",
@@ -61,6 +62,73 @@ function baseConfig(endpoint) {
     commitKeepRecentCount: 10,
   }
 }
+
+test("autoCapture=false prevents OpenCode messages from being captured", async () => {
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-session-", async (dir) => {
+      const manager = createMemorySessionManager({
+        config: { ...baseConfig(endpoint), autoCapture: false },
+        pluginRoot: dir,
+      })
+
+      await manager.init()
+      await manager.handleEvent({ type: "session.created", properties: { info: { id: "oc-session-disabled" } } })
+      await manager.handleEvent({
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "msg-user-disabled",
+            sessionID: "oc-session-disabled",
+            role: "user",
+          },
+        },
+      })
+      await manager.handleEvent({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "part-user-disabled",
+            messageID: "msg-user-disabled",
+            sessionID: "oc-session-disabled",
+            type: "text",
+            text: "This message must not be captured.",
+          },
+        },
+      })
+
+      await manager.handleEvent({ type: "session.idle", sessionID: "oc-session-disabled" })
+      await manager.flushAll({ commit: false })
+
+      assert.equal(
+        requests.some((request) => request.url?.endsWith("/messages/batch")),
+        false,
+        "disabled automatic capture must never POST session messages",
+      )
+    })
+  })
+})
+
+test("autoCapture=false skips lifecycle commits but preserves explicit commits", async () => {
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-session-", async (dir) => {
+      const manager = createMemorySessionManager({
+        config: { ...baseConfig(endpoint), autoCapture: false },
+        pluginRoot: dir,
+      })
+
+      await manager.init()
+      await manager.handleEvent({ type: "session.created", properties: { info: { id: "oc-session-disabled" } } })
+      await manager.handleEvent({ type: "session.compacted", sessionID: "oc-session-disabled" })
+      await manager.flushAll({ commit: true })
+      await manager.commitSession("oc-explicit-manual")
+
+      const commitUrls = requests
+        .filter((request) => request.method === "POST" && request.url?.endsWith("/commit"))
+        .map((request) => request.url)
+      assert.deepEqual(commitUrls, ["/api/v1/sessions/oc-explicit-manual/commit"])
+    })
+  })
+})
 
 test("session.idle event flushes pending OpenCode capture", async () => {
   await withCaptureServer(async ({ endpoint, requests }) => {

@@ -89,6 +89,7 @@ class OpenVikingRetriever(BaseRetriever):
             limit=self.limit,
             score_threshold=self.score_threshold,
             filter=self.filter,
+            tags=self.tags,
         )
         documents: list[Document] = []
         for context_type, item in iter_result_items(result, self.context_types):
