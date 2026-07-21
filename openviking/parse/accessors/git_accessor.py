@@ -355,6 +355,12 @@ class GitAccessor(DataAccessor):
             redacted,
         )
 
+    @staticmethod
+    def _validate_http_credential(value: str, label: str) -> None:
+        """Reject control characters before a credential reaches an HTTP header."""
+        if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+            raise ValueError(f"Invalid control character in {label}")
+
     def _get_repo_name(self, url: str) -> str:
         """Get repository name with organization for GitHub/GitLab URLs.
 
@@ -449,11 +455,19 @@ class GitAccessor(DataAccessor):
         auth_config_path = None
         try:
             parsed = urlparse(url)
+            if (
+                parsed.scheme in ("http", "https")
+                and parsed.username is not None
+                and parsed.password is None
+            ):
+                raise ValueError(
+                    "HTTP(S) repository URLs with a username must also include a password"
+                )
             if parsed.username is not None and parsed.password is not None:
                 username = unquote(parsed.username)
                 password = unquote(parsed.password)
-                if "\n" in username + password or "\x00" in username + password:
-                    raise ValueError("Invalid newline or NUL in repository credentials")
+                self._validate_http_credential(username, "repository username")
+                self._validate_http_credential(password, "repository password")
 
                 credentials = base64.b64encode(f"{username}:{password}".encode()).decode()
                 public_parsed = urlparse(public_url)
@@ -533,7 +547,7 @@ class GitAccessor(DataAccessor):
                         ok = await self._has_commit(target_dir, commit)
                         if not ok:
                             raise RuntimeError(f"Failed to fetch commit {commit} from {public_url}")
-                await self._run_git(["git", "-C", target_dir, "checkout", commit])
+                await self._run_git(["git", "-C", target_dir, "checkout", commit], env=git_env)
         finally:
             if auth_config_path is not None:
                 Path(auth_config_path).unlink(missing_ok=True)
@@ -654,6 +668,8 @@ class GitAccessor(DataAccessor):
         # GitLab archive URL format:
         # https://gitlab.com/{namespace}/{repo}/-/archive/{ref}/{repo}-{ref}.zip
         parsed = urlparse(repo_url)
+        if parsed.username is not None and parsed.password is None:
+            raise ValueError("HTTP(S) repository URLs with a username must also include a password")
         path_parts = [p for p in parsed.path.split("/") if p]
         repo_parts = _extract_gitlab_repo_parts(path_parts)
         if repo_parts is None:
@@ -675,8 +691,7 @@ class GitAccessor(DataAccessor):
             if unquote(parsed.username).lower() != "oauth2":
                 raise ValueError("GitLab archive API requires oauth2 URL credentials")
             oauth_token = unquote(parsed.password)
-            if "\n" in oauth_token or "\x00" in oauth_token:
-                raise ValueError("Invalid newline or NUL in GitLab OAuth token")
+            self._validate_http_credential(oauth_token, "GitLab OAuth token")
             public_parsed = urlparse(public_zip_url)
             project_id = quote(project_path, safe="")
             public_zip_url = (
@@ -709,7 +724,9 @@ class GitAccessor(DataAccessor):
             await asyncio.to_thread(_download)
         except Exception as exc:
             public_error = self._redact_credentials_in_text(str(exc))
-            raise RuntimeError(f"Failed to download GitLab ZIP {public_zip_url}: {public_error}")
+            raise RuntimeError(
+                f"Failed to download GitLab ZIP {public_zip_url}: {public_error}"
+            ) from None
 
         # Safe extraction with Zip Slip validation (non-blocking)
         def _extract_zip():

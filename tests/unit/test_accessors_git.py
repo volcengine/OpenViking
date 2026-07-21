@@ -3,6 +3,7 @@
 """Unit tests for GitAccessor."""
 
 import subprocess
+import traceback
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -275,6 +276,37 @@ class TestGitAccessor:
         assert source in observed["args"]
         assert (tmp_path / ".git_source_repo").read_text(encoding="utf-8") == source
 
+    async def test_git_clone_rejects_http_username_without_password(
+        self, accessor: GitAccessor, tmp_path: Path
+    ) -> None:
+        source = "https://alice@gitlab.com/group/subgroup/repo.git"
+
+        with patch.object(accessor, "_run_git", new_callable=AsyncMock) as run_git:
+            with pytest.raises(ValueError, match="must also include a password"):
+                await accessor._git_clone(source, str(tmp_path))
+
+        run_git.assert_not_awaited()
+
+    async def test_authenticated_commit_checkout_uses_scoped_git_environment(
+        self, accessor: GitAccessor, tmp_path: Path
+    ) -> None:
+        source = "https://oauth2:secret@gitlab.com/group/subgroup/repo.git"
+        observed = []
+
+        async def _capture_git(args, cwd=None, env=None):
+            del cwd
+            observed.append((args, env))
+            return ""
+
+        with patch.object(accessor, "_run_git", side_effect=_capture_git):
+            await accessor._git_clone(source, str(tmp_path), commit="deadbeef")
+
+        checkout_args, checkout_env = observed[-1]
+        assert checkout_args == ["git", "-C", str(tmp_path), "checkout", "deadbeef"]
+        assert checkout_env["GIT_TERMINAL_PROMPT"] == "0"
+        auth_config_index = int(checkout_env["GIT_CONFIG_COUNT"]) - 1
+        assert checkout_env[f"GIT_CONFIG_KEY_{auth_config_index}"] == "include.path"
+
     async def test_access_does_not_propagate_oauth_credentials(
         self, accessor: GitAccessor, tmp_path: Path
     ) -> None:
@@ -310,7 +342,25 @@ class TestGitAccessor:
         )
         assert "oauth2:secret@" not in request.full_url
         assert request.get_header("Authorization") == "Bearer secret"
-        assert "oauth2:secret@" not in str(exc_info.value)
+        assert "secret" not in str(exc_info.value)
+        formatted = "".join(traceback.format_exception(exc_info.value))
+        assert "secret" not in formatted
+
+    async def test_gitlab_archive_rejects_control_characters_before_header_creation(
+        self, accessor: GitAccessor, tmp_path: Path
+    ) -> None:
+        source = "https://oauth2:secret%0Dleak@gitlab.com/group/subgroup/repo.git"
+
+        with patch(
+            "openviking.parse.accessors.git_accessor.urllib.request.build_opener"
+        ) as build_opener:
+            with pytest.raises(ValueError, match="Invalid control character") as exc_info:
+                await accessor._gitlab_zip_download(source, "main", str(tmp_path))
+
+        build_opener.assert_not_called()
+        formatted = "".join(traceback.format_exception(exc_info.value))
+        assert "secret" not in str(exc_info.value)
+        assert "secret" not in formatted
 
     async def test_authenticated_gitlab_archive_rejects_cross_origin_redirect(
         self, accessor: GitAccessor, tmp_path: Path
