@@ -485,6 +485,9 @@ class VikingDBManagerProxy:
     async def delete_account_data(self, account_id: str) -> int:
         return await self._manager.delete_account_data(account_id, ctx=self._ctx)
 
+    async def delete_user_data(self, account_id: str, user_id: str) -> int:
+        return await self._manager.delete_user_data(account_id, user_id, ctx=self._ctx)
+
     async def delete_uris(self, uris: List[str]) -> None:
         return await self._manager.delete_uris(self._ctx, uris)
 

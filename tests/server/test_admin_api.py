@@ -628,6 +628,48 @@ async def test_remove_user(admin_client: httpx.AsyncClient):
     assert resp.status_code == 401
 
 
+async def test_remove_user_cascades_storage(
+    admin_client: httpx.AsyncClient, admin_service: OpenVikingService
+):
+    """remove_user should cascade-clean the user's AGFS namespace, not other users'."""
+    acct = _uid()
+    await admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    resp = await admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={"user_id": "bob", "role": "user"},
+        headers=root_headers(),
+    )
+    bob_key = resp.json()["result"]["user_key"]
+
+    bob_skill = f"/local/{acct}/user/bob/skills/code-review/SKILL.md"
+    bob_memory = f"/local/{acct}/user/bob/memories/profile.md"
+    alice_skill = f"/local/{acct}/user/alice/skills/code-review/SKILL.md"
+    await _agfs_write(admin_service, bob_skill, "# bob skill\n")
+    await _agfs_write(admin_service, bob_memory, "# bob memory\n")
+    await _agfs_write(admin_service, alice_skill, "# alice skill\n")
+
+    resp = await admin_client.delete(
+        f"/api/v1/admin/accounts/{acct}/users/bob", headers=root_headers()
+    )
+    assert resp.status_code == 200
+    assert resp.json()["result"]["deleted"] is True
+
+    assert not await _agfs_exists(admin_service, bob_skill)
+    assert not await _agfs_exists(admin_service, bob_memory)
+    assert not await _agfs_exists(admin_service, f"/local/{acct}/user/bob")
+    assert await _agfs_read_text(admin_service, alice_skill) == "# alice skill\n"
+
+    resp = await admin_client.get(
+        "/api/v1/fs/ls?uri=viking://",
+        headers={"X-API-Key": bob_key},
+    )
+    assert resp.status_code == 401
+
+
 # ---- Role management ----
 
 
