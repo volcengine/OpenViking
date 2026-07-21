@@ -92,41 +92,15 @@ viking://resources/my_project/
 
 ## 実証データ
 
-OpenViking 0.3.22 は、長い会話でのユーザーメモリ、エージェント経験メモリ、ナレッジベースQAの3つのシナリオで評価されています。再現用スクリプトは [./benchmark](./benchmark) にあります。
+OpenViking 0.3.22 は、長い会話でのユーザーメモリ（LoCoMo）と複数ターンのエージェントタスク（tau2-bench）で評価されています。ナレッジベースQAを含む完全な結果と実験設定は[ベンチマークレポート](https://blog.openviking.ai/post/openviking-benchmark-results/)を、再現用スクリプトは [./benchmark](./benchmark) を参照してください。
 
-**ユーザーメモリ — LoCoMo。** 3つのエージェント統合における、長い会話でのQA精度・レイテンシ・token 使用量:
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/benchmark-dark.svg">
+  <img alt="Benchmark results. LoCoMo accuracy: OpenClaw 24.20% native vs 82.08% with OpenViking; Hermes 33.38% vs 82.86%; Claude Code 57.21% vs 80.32%. tau2-bench task success: Retail 70.94% vs 77.81%; Airline 54.38% vs 66.25%." src="docs/images/benchmark-light.svg">
+</picture>
 
-| 統合 | 精度 | 平均クエリ時間 | 入力 token 総数 |
-|:-----------:|---------:|----------------:|-------------------:|
-| OpenClaw + ネイティブメモリ | 24.20% | 95.14s | 392,559,404 |
-| OpenClaw + OpenViking | **82.08%** | 38.8s | 37,423,456 |
-| Hermes ネイティブメモリ | 33.38% | 82.4s | 79,228,398 |
-| Hermes + OpenViking | **82.86%** | **27.9s** | 52,026,755 |
-| Claude Code auto-memory | 57.21% | 49.1s | 353,306,422 |
-| Claude Code + OpenViking | **80.32%** | **20.4s** | 129,968,899 |
-
-各エージェントのネイティブメモリと比較して、入力 token は 34.3–91.0%、クエリレイテンシは 58.45–66.10% 削減されます。
-
-**エージェント経験メモリ — tau2-bench。** 小売・航空ドメインにおけるマルチターンタスクの成功率:
-
-| 設定 | Retail 精度 | Airline 精度 |
-|:-------:|----------------:|-----------------:|
-| LLM（メモリなし） | 70.94% | 54.38% |
-| LLM + OpenViking 経験メモリ | **77.81%** (+6.87pp) | **66.25%** (+11.87pp) |
-
-**ナレッジベースQA — HotpotQA。** 他の検索システムと比較したマルチホップ RAG の精度:
-
-| 手法 | 検索パターン | 精度 | Tokens / QA | レイテンシ / QA |
-|:------:|:-----------------:|---------:|------------:|-------------:|
-| Naive RAG | ベクトル検索 | 62.50% | 1,290 | **0.11s** |
-| HippoRAG 2 | ベクトル + ナレッジグラフ | 61.00% | 726 | 20s |
-| LightRAG | ベクトル + ナレッジグラフ | 89.00% | 28,443 | 75s |
-| LangChain SQL (Agent) | SQL エージェント | 78.00% | 4,776 | 132s |
-| OpenViking (top-5) | ベクトル検索 | 72.75% | 3,154 | 0.22s |
-| OpenViking (top-20) | ベクトル検索 | **91.00%** | 12,533 | 0.23s |
-| Nanobot + OpenViking (Agent) | ベクトル検索 + Agent | 87.00% | 71,300 | 61.6s |
-
-5つのオープンソース RAG データセット（FinanceBench、NaturalQuestions、ClapNQ、Qasper、SyllabusQA）全体で、OpenViking は平均 66.87% の精度を 0.19s の検索レイテンシで達成し、インデックス構築コストは LightRAG の 13.8% です。
+- **ユーザーメモリ（LoCoMo）**: OpenViking を接続すると、3つのエージェント統合すべてで精度が 80–83% に達します（ネイティブメモリでは 24–57%）。同時に入力 token は 34.3–91.0%、クエリレイテンシは 58.45–66.10% 削減されます。
+- **エージェント経験（tau2-bench)**: 経験メモリにより、タスク成功率は同一 LLM（メモリなし）比で Retail +6.87pp、Airline +11.87pp 向上します。
 
 ## クイックスタート
 

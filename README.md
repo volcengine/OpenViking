@@ -92,41 +92,15 @@ viking://resources/my_project/
 
 ## Proof it works
 
-OpenViking 0.3.22 has been evaluated across three scenarios: long-conversation user memory, agent experience memory, and knowledge-base QA. Reproduction scripts live in [./benchmark](./benchmark).
+OpenViking 0.3.22 has been evaluated on long-conversation user memory (LoCoMo) and multi-turn agent tasks (tau2-bench). Full results and setup details, including knowledge-base QA, are in the [benchmark report](https://blog.openviking.ai/post/openviking-benchmark-results/); reproduction scripts live in [./benchmark](./benchmark).
 
-**User memory — LoCoMo.** Long-conversation QA accuracy, latency, and token usage across three agent integrations:
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/benchmark-dark.svg">
+  <img alt="Benchmark results. LoCoMo accuracy: OpenClaw 24.20% native vs 82.08% with OpenViking; Hermes 33.38% vs 82.86%; Claude Code 57.21% vs 80.32%. tau2-bench task success: Retail 70.94% vs 77.81%; Airline 54.38% vs 66.25%." src="docs/images/benchmark-light.svg">
+</picture>
 
-| Integration | Accuracy | Avg. Query Time | Total Input Tokens |
-|:-----------:|---------:|----------------:|-------------------:|
-| OpenClaw + native memory | 24.20% | 95.14s | 392,559,404 |
-| OpenClaw + OpenViking | **82.08%** | 38.8s | 37,423,456 |
-| Hermes native memory | 33.38% | 82.4s | 79,228,398 |
-| Hermes + OpenViking | **82.86%** | **27.9s** | 52,026,755 |
-| Claude Code auto-memory | 57.21% | 49.1s | 353,306,422 |
-| Claude Code + OpenViking | **80.32%** | **20.4s** | 129,968,899 |
-
-Versus each agent's native memory, input tokens drop by 34.3–91.0% and query latency by 58.45–66.10%.
-
-**Agent experience memory — tau2-bench.** Multi-turn task success in retail and airline domains:
-
-| Setting | Retail Accuracy | Airline Accuracy |
-|:-------:|----------------:|-----------------:|
-| LLM without memory | 70.94% | 54.38% |
-| LLM + OpenViking experience memory | **77.81%** (+6.87pp) | **66.25%** (+11.87pp) |
-
-**Knowledge-base QA — HotpotQA.** Multi-hop RAG accuracy against other retrieval systems:
-
-| Method | Retrieval Pattern | Accuracy | Tokens / QA | Latency / QA |
-|:------:|:-----------------:|---------:|------------:|-------------:|
-| Naive RAG | Vector retrieval | 62.50% | 1,290 | **0.11s** |
-| HippoRAG 2 | Vector + knowledge graph | 61.00% | 726 | 20s |
-| LightRAG | Vector + knowledge graph | 89.00% | 28,443 | 75s |
-| LangChain SQL (Agent) | SQL agent | 78.00% | 4,776 | 132s |
-| OpenViking (top-5) | Vector retrieval | 72.75% | 3,154 | 0.22s |
-| OpenViking (top-20) | Vector retrieval | **91.00%** | 12,533 | 0.23s |
-| Nanobot + OpenViking (Agent) | Vector retrieval + Agent | 87.00% | 71,300 | 61.6s |
-
-Across five open-source RAG datasets (FinanceBench, NaturalQuestions, ClapNQ, Qasper, and SyllabusQA), OpenViking averages 66.87% accuracy at 0.19s retrieval latency; indexing cost is 13.8% of LightRAG's.
+- **User memory (LoCoMo)**: with OpenViking, all three agent integrations land at 80–83% accuracy — up from 24–57% on their native memory — while input tokens drop by 34.3–91.0% and query latency by 58.45–66.10%.
+- **Agent experience (tau2-bench)**: experience memory lifts task success by +6.87pp (retail) and +11.87pp (airline) over the same LLM without memory.
 
 ## Quick start
 
@@ -138,20 +112,12 @@ Requires Python 3.10 or higher.
 pip install openviking --upgrade
 openviking-server init      # interactive wizard: providers, models, ov.conf
 openviking-server doctor    # validate setup
-openviking-server           # start
+openviking-server           # start (background: nohup openviking-server > openviking.log 2>&1 &)
 ```
 
-Or run the server in the background:
+`init` walks you through provider setup and writes `~/.openviking/ov.conf`. It supports Volcengine, OpenAI, Codex OAuth, Kimi, GLM, and local Ollama — for Ollama it can detect and install the runtime and pull models suited to your hardware. `doctor` checks the config file, Python version, provider connectivity, and disk space without a running server. Manual `ov.conf` templates, per-provider examples, environment variables, and Windows setup: [Configuration guide](https://docs.openviking.ai/en/guides/01-configuration) · [Quick start docs](https://docs.openviking.ai/en/getting-started/02-quickstart).
 
-```bash
-nohup openviking-server > /data/log/openviking.log 2>&1 &
-```
-
-`init` walks you through provider setup and writes `~/.openviking/ov.conf`. It supports Volcengine, OpenAI, Codex OAuth, Kimi, GLM, and local Ollama — for Ollama it can detect and install the runtime and pull models suited to your hardware. `doctor` checks the config file, Python version, provider connectivity, and disk space without a running server.
-
-Manual `ov.conf` templates, per-provider examples, environment variables, Windows setup, and CLI/client config are in the [Configuration guide](https://docs.openviking.ai/en/guides/01-configuration) and the [Quick start docs](https://docs.openviking.ai/en/getting-started/02-quickstart).
-
-With the server running:
+The install already includes the `ov` client CLI. With the server running:
 
 ```bash
 ov status
@@ -163,11 +129,10 @@ ov find "what is openviking"
 ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/en
 ```
 
-To rebuild existing indexes: `ov reindex <uri> --mode vectors_only` refreshes vectors only, `--mode semantic_and_vectors` regenerates semantic artifacts (`.abstract.md`, `.overview.md`) before vectors, and `--mode prune_orphans` removes vector records whose source files no longer exist (add `--dry-run` to preview). There is no `semantic` or `full` mode alias.
+Next steps:
 
-Client configuration can be initialized interactively with `ov config`; if you run multiple servers, switch between them with `ov config switch`.
-
-The Rust CLI installs with `npm i -g @openviking/cli`, or from source with `cargo install --git https://github.com/volcengine/OpenViking ov_cli` — see [CLI setup](https://docs.openviking.ai/en/getting-started/05-cli-setup). An official Docker image is also available; see the [Deployment guide](https://docs.openviking.ai/en/guides/03-deployment).
+- Client configuration (`ov config`), standalone CLI installs (npm / cargo), and advanced usage such as index rebuilding: [CLI setup](https://docs.openviking.ai/en/getting-started/05-cli-setup)
+- Docker and production deployment: [Deployment guide](https://docs.openviking.ai/en/guides/03-deployment)
 
 ## Use it with your agent
 

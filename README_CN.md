@@ -92,41 +92,15 @@ viking://resources/my_project/
 
 ## 评测结果
 
-OpenViking 0.3.22 的评测覆盖三个场景：长对话用户记忆、智能体经验记忆、知识库问答。复现脚本在 [./benchmark](./benchmark)。
+OpenViking 0.3.22 的评测覆盖长对话用户记忆（LoCoMo）和多轮智能体任务（tau2-bench）。完整结果和实验设置（含知识库问答）见[评测报告](https://blog.openviking.ai/post/openviking-benchmark-results/)，复现脚本在 [./benchmark](./benchmark)。
 
-**用户记忆——LoCoMo。** 三种 Agent 接入下的长对话问答准确率、时延和 token 消耗：
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/benchmark-dark.svg">
+  <img alt="Benchmark results. LoCoMo accuracy: OpenClaw 24.20% native vs 82.08% with OpenViking; Hermes 33.38% vs 82.86%; Claude Code 57.21% vs 80.32%. tau2-bench task success: Retail 70.94% vs 77.81%; Airline 54.38% vs 66.25%." src="docs/images/benchmark-light.svg">
+</picture>
 
-| 接入方式 | 准确率 | Query 平均耗时 | 输入 token 总量 |
-|:-----------:|---------:|----------------:|-------------------:|
-| OpenClaw + 原生记忆 | 24.20% | 95.14s | 392,559,404 |
-| OpenClaw + OpenViking | **82.08%** | 38.8s | 37,423,456 |
-| Hermes 原生记忆 | 33.38% | 82.4s | 79,228,398 |
-| Hermes + OpenViking | **82.86%** | **27.9s** | 52,026,755 |
-| Claude Code 自动记忆 | 57.21% | 49.1s | 353,306,422 |
-| Claude Code + OpenViking | **80.32%** | **20.4s** | 129,968,899 |
-
-对比各 Agent 的原生记忆，输入 token 减少 34.3%–91.0%，查询时延降低 58.45%–66.10%。
-
-**智能体经验记忆——tau2-bench。** Retail 和 Airline 两个领域的多轮任务成功率：
-
-| 配置 | Retail 准确率 | Airline 准确率 |
-|:-------:|----------------:|-----------------:|
-| LLM 无记忆 | 70.94% | 54.38% |
-| LLM + OpenViking 经验记忆 | **77.81%** (+6.87pp) | **66.25%** (+11.87pp) |
-
-**知识库问答——HotpotQA。** 多跳 RAG 准确率，对比其他检索系统：
-
-| 方案 | 检索范式 | 准确率 | 每 QA token | 每 QA 时延 |
-|:------:|:-----------------:|---------:|------------:|-------------:|
-| Naive RAG | 向量检索 | 62.50% | 1,290 | **0.11s** |
-| HippoRAG 2 | 向量 + 知识图谱 | 61.00% | 726 | 20s |
-| LightRAG | 向量 + 知识图谱 | 89.00% | 28,443 | 75s |
-| LangChain SQL (Agent) | SQL Agent | 78.00% | 4,776 | 132s |
-| OpenViking (top-5) | 向量检索 | 72.75% | 3,154 | 0.22s |
-| OpenViking (top-20) | 向量检索 | **91.00%** | 12,533 | 0.23s |
-| Nanobot + OpenViking (Agent) | 向量检索 + Agent | 87.00% | 71,300 | 61.6s |
-
-在五个开源 RAG 数据集（FinanceBench、NaturalQuestions、ClapNQ、Qasper、SyllabusQA）上，OpenViking 平均准确率 66.87%，检索耗时 0.19s；建库成本是 LightRAG 的 13.8%。
+- **用户记忆（LoCoMo）**：接入 OpenViking 后，三种 Agent 集成的准确率都到 80–83%，原生记忆只有 24–57%；同时输入 token 减少 34.3%–91.0%，查询时延降低 58.45%–66.10%。
+- **智能体经验（tau2-bench）**：经验记忆让任务成功率在 Retail 提升 6.87pp、Airline 提升 11.87pp（对比同一 LLM 无记忆）。
 
 ## 快速开始
 
