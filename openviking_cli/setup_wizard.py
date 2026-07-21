@@ -15,6 +15,7 @@ import select
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -397,7 +398,6 @@ def _prompt_confirm(prompt: str, default: bool = True) -> bool:
     if not raw:
         return default
     return raw in ("y", "yes")
-
 
 
 def _rule(title: str) -> None:
@@ -879,8 +879,6 @@ def _ollama_vlm_config(vlm: VLMPreset) -> dict[str, Any]:
     }
 
 
-
-
 def _build_query_planner_config(preset: QueryPlannerPreset) -> dict[str, Any]:
     """Build the ``query_planner`` config block for an Ollama-served model.
 
@@ -934,19 +932,32 @@ def _next_backup_path(config_path: Path) -> Path:
 
 def _write_config(config_dict: dict[str, Any], config_path: Path) -> bool:
     """Write config dict as JSON. Backs up existing file as .bak (rotates on conflict)."""
+    temp_path: Path | None = None
     try:
         config_path.parent.mkdir(parents=True, exist_ok=True)
+        fd, raw_temp_path = tempfile.mkstemp(prefix=f".{config_path.name}.", dir=config_path.parent)
+        temp_path = Path(raw_temp_path)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(config_dict, indent=2, ensure_ascii=False) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temp_path, 0o600)
         if config_path.exists():
             backup = _next_backup_path(config_path)
-            config_path.rename(backup)
+            os.chmod(config_path, 0o600)
+            shutil.copy2(config_path, backup)
+            os.chmod(backup, 0o600)
             print(f"  {_dim('Existing config backed up to ' + str(backup))}")
-        config_path.write_text(
-            json.dumps(config_dict, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-        )
+        os.replace(temp_path, config_path)
+        temp_path = None
+        os.chmod(config_path, 0o600)
         return True
     except OSError as exc:
         print(f"  {_red(f'Failed to write config: {exc}')}")
         return False
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1528,7 +1539,6 @@ def _wizard_two_step() -> tuple[dict[str, Any] | None | object, bool | None]:
         return config, ollama_running
 
 
-
 def _wizard_server(current: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Prompt for server binding, port, and auth (root API key when remote).
 
@@ -1802,7 +1812,10 @@ def _update_existing_config(config_path: Path, section: str) -> int:
             _summarize_server(current_server),
             _summarize_server(server_dict),
         )
-        data["server"] = server_dict
+        updated_server = {**current_server, **server_dict}
+        if server_dict.get("host") == "127.0.0.1":
+            updated_server.pop("root_api_key", None)
+        data["server"] = updated_server
 
     print(f"\n  {_bold('Change:')} {old_summary}")
     print(f"      {_cyan('→')}    {new_summary}")
