@@ -26,7 +26,9 @@ def _make_msg(
     account_id: str = "default",
     user_id: str = "default",
 ) -> SemanticMsg:
-    msg = SemanticMsg(uri=uri, context_type="resource", account_id=account_id, user_id=user_id)
+    msg = SemanticMsg(
+        uri=uri, context_type="resource", account_id=account_id, user_id=user_id
+    )
     return msg
 
 
@@ -157,8 +159,11 @@ class TestFileExistenceCheck:
         assert call_args[0][0] == "viking://user/deleted_file.txt"
         ctx = call_args[1].get("ctx") or call_args[0][1]
         assert ctx is not None, "exists() must receive a RequestContext"
-        # ctx should carry the non-default tenant IDs
-        assert hasattr(ctx, "account_id") or hasattr(ctx, "user")
+        # ctx must carry the non-default tenant IDs (not just have the attributes)
+        assert ctx.account_id == "acct-custom-42"
+        assert ctx.user.user_id == "user-7-zeta"
+
+
 # ---------------------------------------------------------------------------
 # 3. Config support for circuit breaker and semantic processor settings
 # ---------------------------------------------------------------------------
