@@ -239,9 +239,10 @@ def _make_search_experience_tool(case_lookup: dict[str, Any] | None = None):
         def description(self) -> str:
             return (
                 "Search OpenViking case memories under the current user, read each matched "
-                "case's Linked Experiences section, and return candidate case names plus "
-                "linked experience URIs and Situation snippets. Use read_experience to open "
-                "selected experience URIs."
+                "case's Linked Experiences section, and return candidate case names. An exact "
+                "task_signature match auto-loads the full content of every linked experience; "
+                "semantic matches return linked experience URIs and Situation snippets for "
+                "follow-up read_experience calls."
             )
 
         @property
@@ -296,7 +297,7 @@ def _make_search_experience_tool(case_lookup: dict[str, Any] | None = None):
                     cases_root_uri=target_uri,
                 )
                 if exact_item is not None:
-                    candidate = await _experience_search_summary(client, exact_item, rank=1)
+                    candidate = await _exact_case_experience_summary(client, exact_item, rank=1)
                     candidates = _deduplicate_candidate_experiences([candidate])
                     _trace_experience_recall(
                         match_type="exact_case",
@@ -571,6 +572,39 @@ async def _experience_search_summary(client: Any, item: Any, rank: int) -> dict[
         # ponytail: cap at ~600 chars per exp to bound search-result tokens; exclusions ("不适用于"/"not apply") are preserved.
         exp_entry["situation"] = _shorten(situation, 600)
         experiences.append(exp_entry)
+    summary["experiences"] = experiences
+    return summary
+
+
+async def _exact_case_experience_summary(
+    client: Any,
+    item: Any,
+    rank: int,
+) -> dict[str, Any]:
+    """Return full linked experiences for an exact case in deterministic URI order."""
+
+    case_uri = _case_uri(item)
+    summary: dict[str, Any] = {
+        "rank": rank,
+        "case_name": _filename_name(case_uri),
+        "experiences": [],
+    }
+    if not case_uri:
+        return summary
+    try:
+        case_content = await client.read_content(case_uri, level="read")
+    except Exception:
+        return summary
+
+    experiences: list[dict[str, str]] = []
+    for exp_uri in sorted(_linked_experience_uris(case_content, source_uri=case_uri)):
+        try:
+            exp_content = str(await client.read_content(exp_uri, level="read") or "").strip()
+        except Exception:
+            exp_content = ""
+        if not exp_content:
+            continue
+        experiences.append({"uri": exp_uri, "content": exp_content})
     summary["experiences"] = experiences
     return summary
 
@@ -1296,9 +1330,9 @@ def _build_system_prompt(
         instructions.append(
             "Before taking task actions, you MUST use the required `experience_loader` skill. "
             "It explains how to search OpenViking case memories with the `search_experience` "
-            "tool, use Situation snippets only as filters, and read every non-excluded "
-            "experience that may apply to the current task or a later task boundary using "
-            "the `read_experience` tool."
+            "tool, use exact-case experiences that are auto-loaded inline, and use Situation "
+            "snippets only as filters before reading semantic-search candidates with the "
+            "`read_experience` tool."
         )
         instructions.append(
             "Loaded experiences are guidance from prior training runs. "
@@ -1830,7 +1864,12 @@ def _extract_experience_content(content: str) -> str | None:
 def _case_memory_context_from_tools(tools_used: list[dict] | None) -> str:
     blocks: list[str] = []
     for tool in tools_used or []:
-        if not isinstance(tool, dict) or tool.get("tool_name") != "read_experience":
+        if not isinstance(tool, dict):
+            continue
+        if tool.get("tool_name") == "search_experience":
+            blocks.extend(_exact_case_experience_blocks(tool.get("result")))
+            continue
+        if tool.get("tool_name") != "read_experience":
             continue
         result = str(tool.get("result") or "").strip()
         if not result:
@@ -1855,6 +1894,43 @@ def _case_memory_context_from_tools(tools_used: list[dict] | None) -> str:
     if not blocks:
         return ""
     return "# Experience Loader Context\n\n" + "\n\n---\n\n".join(blocks)
+
+
+def _exact_case_experience_blocks(result: Any) -> list[str]:
+    try:
+        payload = json.loads(result) if isinstance(result, str) else result
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, dict) or payload.get("match_type") != "exact_case":
+        return []
+
+    blocks: list[str] = []
+    seen_uris: set[str] = set()
+    for candidate in payload.get("candidates") or []:
+        if not isinstance(candidate, dict):
+            continue
+        for experience in candidate.get("experiences") or []:
+            if not isinstance(experience, dict):
+                continue
+            uri = str(experience.get("uri") or "").strip()
+            content = str(experience.get("content") or "").strip()
+            if not uri or not content or uri in seen_uris:
+                continue
+            seen_uris.add(uri)
+            blocks.append(
+                "\n".join(
+                    [
+                        "## Loaded Experience",
+                        "",
+                        "Tool: `search_experience` (exact case auto-load)",
+                        "",
+                        f"Experience URI: `{uri}`",
+                        "",
+                        content,
+                    ]
+                )
+            )
+    return blocks
 
 
 def _merge_memories(user_memory: str | None, exp_memory: str | None) -> str | None:

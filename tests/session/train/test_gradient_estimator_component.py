@@ -501,6 +501,46 @@ def test_loaded_experience_uris_include_completed_read_experience_calls():
     assert gradient_estimator_module._loaded_experience_uris(analysis) == [loaded_uri]
 
 
+def test_loaded_experience_uris_include_exact_case_search_auto_loaded_content():
+    import json
+
+    analysis = _analysis(passed=False, outcome="failure")
+    first_uri = "viking://user/u/memories/experiences/first.md"
+    second_uri = "viking://user/u/memories/experiences/second.md"
+    analysis.metadata["rollout_messages"] = [
+        {
+            "role": "user",
+            "parts": [
+                {
+                    "type": "tool",
+                    "tool_name": "search_experience",
+                    "tool_status": "completed",
+                    "tool_input": {"task_signature": "tau2:airline:train:39"},
+                    "tool_output": json.dumps(
+                        {
+                            "match_type": "exact_case",
+                            "candidates": [
+                                {
+                                    "experiences": [
+                                        {"uri": first_uri, "content": "# First"},
+                                        {"uri": second_uri, "content": "# Second"},
+                                        {"uri": first_uri, "content": "# First"},
+                                    ]
+                                }
+                            ],
+                        }
+                    ),
+                }
+            ],
+        }
+    ]
+
+    assert gradient_estimator_module._loaded_experience_uris(analysis) == [
+        first_uri,
+        second_uri,
+    ]
+
+
 @pytest.mark.asyncio
 async def test_post_validation_gate_sees_prefetched_comparison_trajectories(monkeypatch):
     analysis = _analysis(passed=False, outcome="failure")

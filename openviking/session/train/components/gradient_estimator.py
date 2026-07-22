@@ -562,9 +562,17 @@ def _loaded_experience_uris(analysis: RolloutAnalysis) -> list[str]:
                 if isinstance(part, dict)
                 else getattr(part, "tool_input", {})
             )
-            if tool_name != "read_experience":
-                continue
             if tool_status != "completed":
+                continue
+            if tool_name == "search_experience":
+                tool_output = (
+                    part.get("tool_output", "")
+                    if isinstance(part, dict)
+                    else getattr(part, "tool_output", "")
+                )
+                loaded_uris.extend(_exact_case_search_loaded_experience_uris(tool_output))
+                continue
+            if tool_name != "read_experience":
                 continue
             tool_input = tool_input or {}
             if not isinstance(tool_input, dict):
@@ -573,6 +581,27 @@ def _loaded_experience_uris(analysis: RolloutAnalysis) -> list[str]:
             if uri:
                 loaded_uris.append(uri)
     return list(dict.fromkeys(loaded_uris))
+
+
+def _exact_case_search_loaded_experience_uris(tool_output: Any) -> list[str]:
+    try:
+        payload = json.loads(tool_output) if isinstance(tool_output, str) else tool_output
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, dict) or payload.get("match_type") != "exact_case":
+        return []
+
+    uris: list[str] = []
+    for candidate in payload.get("candidates") or []:
+        if not isinstance(candidate, dict):
+            continue
+        for experience in candidate.get("experiences") or []:
+            if not isinstance(experience, dict) or not experience.get("content"):
+                continue
+            uri = str(experience.get("uri") or "").strip()
+            if uri:
+                uris.append(uri)
+    return list(dict.fromkeys(uris))
 
 
 def _experience_extract_gate_runner(vlm: Any) -> GateRunner:

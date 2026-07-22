@@ -846,6 +846,41 @@ def test_tau2_search_experience_response_hides_internal_search_metadata():
     assert "query" not in payload
 
 
+def test_tau2_case_memory_context_includes_exact_case_auto_loaded_experiences():
+    import json
+
+    from benchmark.tau2.train.rollout_executor_vikingbot import (
+        _case_memory_context_from_tools,
+    )
+
+    exp_uri = "viking://user/u/memories/experiences/keep_scope.md"
+    result = json.dumps(
+        {
+            "match_type": "exact_case",
+            "candidates": [
+                {
+                    "experiences": [
+                        {"uri": exp_uri, "content": "# Keep scope\n\nUse the original scope."}
+                    ]
+                }
+            ],
+        }
+    )
+
+    context = _case_memory_context_from_tools(
+        [
+            {
+                "tool_name": "search_experience",
+                "args": json.dumps({"task_signature": "tau2:airline:train:39"}),
+                "result": result,
+            }
+        ]
+    )
+
+    assert exp_uri in context
+    assert "# Keep scope" in context
+
+
 @pytest.mark.asyncio
 async def test_tau2_search_experience_uses_declarative_situation(monkeypatch):
     import json
@@ -943,6 +978,23 @@ def _tau2_exact_case_content(*, linked_experience_uri: str | None = None) -> str
     )
 
 
+def _tau2_exact_case_content_with_links(linked_experience_uris: list[str]) -> str:
+    linked = "\n".join(
+        f"- [experience_{index}]({uri})"
+        for index, uri in enumerate(linked_experience_uris, start=1)
+    )
+    return (
+        "# tau2_airline_train_22\n\n"
+        "## Task Signature\n"
+        "tau2:airline:train:39\n\n"
+        "## Input\n"
+        '{"domain":"airline","split":"train","data_split":"airline_train",'
+        '"task_no":22,"task_id":"39"}\n\n'
+        "## Linked Experiences\n"
+        f"{linked}\n"
+    )
+
+
 @pytest.mark.asyncio
 async def test_tau2_search_experience_returns_exact_case_without_semantic_search(monkeypatch):
     import json
@@ -1010,7 +1062,7 @@ async def test_tau2_search_experience_returns_exact_case_without_semantic_search
                 "experiences": [
                     {
                         "uri": exp_uri,
-                        "situation": "- Applies when: the user accepts no refund",
+                        "content": "## Situation\n- Applies when: the user accepts no refund",
                     }
                 ],
             }
@@ -1027,6 +1079,64 @@ async def test_tau2_search_experience_returns_exact_case_without_semantic_search
             "experience_count": 1,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_tau2_search_experience_exact_case_loads_unique_experiences_in_uri_order(
+    monkeypatch,
+):
+    import json
+
+    import vikingbot.openviking_mount.ov_server as ov_server
+
+    from benchmark.tau2.train.rollout_executor_vikingbot import _make_search_experience_tool
+
+    case_uri = "viking://user/u/memories/cases/tau2_airline_train_22.md"
+    first_uri = "viking://user/u/memories/experiences/a_first.md"
+    second_uri = "viking://user/u/memories/experiences/z_second.md"
+    reads = []
+
+    class FakeClient:
+        @classmethod
+        async def create(cls):
+            return cls()
+
+        def _memory_target_uri(self, uri):
+            assert uri is None
+            return "viking://user/u/memories"
+
+        async def read_content(self, uri, level="read"):
+            assert level == "read"
+            reads.append(uri)
+            if uri == case_uri:
+                return _tau2_exact_case_content_with_links([second_uri, first_uri, second_uri])
+            return {
+                first_uri: "# First experience\n\nUse the first rule.",
+                second_uri: "# Second experience\n\nUse the second rule.",
+            }.get(uri, "")
+
+        async def search(self, situation, *, target_uri, limit):
+            raise AssertionError("exact case lookup must not use semantic search")
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(ov_server, "VikingClient", FakeClient)
+
+    payload = json.loads(
+        await _make_search_experience_tool(case_lookup=_tau2_exact_case_lookup()).execute(
+            None,
+            situation="Cancel upcoming reservations.",
+            task_signature="tau2:airline:train:39",
+        )
+    )
+
+    assert payload["candidates"][0]["experiences"] == [
+        {"uri": first_uri, "content": "# First experience\n\nUse the first rule."},
+        {"uri": second_uri, "content": "# Second experience\n\nUse the second rule."},
+    ]
+    assert reads.count(first_uri) == 1
+    assert reads.count(second_uri) == 1
 
 
 @pytest.mark.asyncio
@@ -1496,6 +1606,8 @@ async def test_tau2_prepare_experience_loader_skill_writes_static_required_skill
     assert "Situation snippets" in content or "`situation` as a filter only" in content
     assert "Read by default" in content
     assert "call `read_experience` unless" in content
+    assert "already loaded inline" in content
+    assert "do not call `read_experience` again" in content
     assert "later boundary in the same task" in content
     assert "Re-search on new subtasks" in content
     assert "case_name" in content
