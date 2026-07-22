@@ -17,13 +17,24 @@ from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
-# DashScope hosts that use a nested request/response envelope
-_DASHSCOPE_HOST_MARKERS = ("dashscope.aliyuncs.com",)
+# DashScope native API paths that use a nested request/response envelope.
+# The OpenAI-compatible endpoint (/compatible-api/) uses the flat protocol.
+_DASHSCOPE_NATIVE_PATH_MARKERS = ("/api/v1/services/rerank",)
 
 
-def _is_dashscope(api_base: str) -> bool:
-    """Return True if the API endpoint belongs to DashScope."""
-    return any(marker in api_base for marker in _DASHSCOPE_HOST_MARKERS)
+def _uses_nested_envelope(api_base: str) -> bool:
+    """Return True if the endpoint uses DashScope's native nested envelope.
+
+    DashScope exposes two API styles:
+    - ``/compatible-api/v1/reranks`` — OpenAI-compatible, flat body and
+      top-level ``results`` (used by qwen3-rerank).
+    - ``/api/v1/services/rerank`` — native DashScope, nested
+      ``input``/``output`` envelope (used by gte-rerank-v2, qwen3-vl-rerank).
+
+    Detection is path-based, not hostname-based, so both styles work
+    regardless of which DashScope host or gateway the user configures.
+    """
+    return any(marker in api_base for marker in _DASHSCOPE_NATIVE_PATH_MARKERS)
 
 
 class OpenAIRerankClient(RerankBase):
@@ -59,18 +70,18 @@ class OpenAIRerankClient(RerankBase):
         self.extra_headers = extra_headers or {}
         self.timeout = timeout
         self.provider = "openai"
-        self._is_dashscope = _is_dashscope(api_base)
+        self._uses_nested_envelope = _uses_nested_envelope(api_base)
 
     def _build_request_body(self, query: str, documents: List[str]) -> dict:
         """Build the request body for the rerank API.
 
-        DashScope uses a nested envelope:
+        DashScope native API uses a nested envelope:
             {"model": ..., "input": {"query": ..., "documents": [...]}, "parameters": {...}}
 
-        Standard OpenAI/Cohere uses a flat body:
+        Standard OpenAI/Cohere and DashScope compatible-api use a flat body:
             {"model": ..., "query": ..., "documents": [...]}
         """
-        if self._is_dashscope:
+        if self._uses_nested_envelope:
             return {
                 "model": self.model_name,
                 "input": {
@@ -90,10 +101,11 @@ class OpenAIRerankClient(RerankBase):
     def _extract_results(self, response_json: dict) -> Optional[List[dict]]:
         """Extract the results list from an API response.
 
-        DashScope nests results under ``output.results``; standard services
-        return ``results`` at the top level.
+        DashScope native API nests results under ``output.results``;
+        standard services and DashScope compatible-api return ``results``
+        at the top level.
         """
-        if self._is_dashscope:
+        if self._uses_nested_envelope:
             output = response_json.get("output")
             if isinstance(output, dict):
                 return output.get("results")
