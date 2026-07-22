@@ -26,7 +26,7 @@ OpenViking Helper is currently in beta and supports macOS and Windows x64. The a
 
 Helper detects installed local agents and displays their OpenViking integration status. From the UI, you can maintain multiple OpenViking service profiles, switch the active profile, test connectivity, and install or repair supported agent integrations.
 
-![Agent setup in OpenViking Helper](../../images/openviking-helper/agent-access.png)
+![Agent setup in OpenViking Helper](../../images/openviking-helper/agent-access.webp)
 
 The exact capabilities still depend on each agent integration. Refer to the corresponding integration guide for lifecycle Hooks, MCP tools, and automatic recall behavior in Claude Code, Codex, Cursor, TRAE, and OpenCode.
 
@@ -40,7 +40,7 @@ Helper parses local Claude Code, Codex, and TRAE sessions and groups their timel
 - the session was committed before context compaction;
 - lifecycle actions ran at session start or end.
 
-![Session timeline in OpenViking Helper](../../images/openviking-helper/session-timeline.png)
+![Session timeline in OpenViking Helper](../../images/openviking-helper/session-timeline.webp)
 
 This makes it easier to verify that an integration is working and to diagnose configuration, Hook, or MCP connection problems.
 
@@ -48,7 +48,7 @@ This makes it easier to verify that an integration is working and to diagnose co
 
 Helper groups local memory and rule files and `SKILL.md` skills by agent and project. You can inspect their content, path, modification time, and sync status, then sync selected local content to the active OpenViking service.
 
-![Local memory management in OpenViking Helper](../../images/openviking-helper/memory-overview.png)
+![Local memory management in OpenViking Helper](../../images/openviking-helper/memory-overview.webp)
 
 After syncing, you can browse the server-side memory categories and content from Helper. Long-term information that was previously scattered across agents can then be searched and reused through OpenViking.
 
