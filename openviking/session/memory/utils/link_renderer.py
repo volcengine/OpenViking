@@ -201,7 +201,13 @@ class LinkRenderer:
         down_parts = tgt[common:]
 
         if up_count == 0:
-            return "/".join(down_parts) or "./"
+            relative = "/".join(down_parts)
+            if not relative:
+                return ""
+            # Make a sibling-file target visibly relative.  Descendant paths remain
+            # unchanged (for example, ``events/today.md``), while a file in the
+            # source file's own directory is rendered as ``./target.md``.
+            return f"./{relative}" if len(down_parts) == 1 else relative
 
         up_parts = [".."] * up_count
         return "/".join(up_parts + list(down_parts))

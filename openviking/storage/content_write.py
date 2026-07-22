@@ -255,7 +255,7 @@ class ContentWriteCoordinator:
                         timeout=timeout,
                         telemetry_id=telemetry_id,
                     )
-                except Exception:
+                except Exception as exc:
                     if conflict is not None or write_error is not None:
                         logger.error(
                             "Batch refresh failed while preserving an earlier write error",
@@ -263,7 +263,23 @@ class ContentWriteCoordinator:
                         )
                         queue_status = None
                     else:
-                        raise
+                        if isinstance(exc, DeadlineExceededError):
+                            raise
+                        cause = str(exc).strip() or type(exc).__name__
+                        raise OpenVikingError(
+                            "Content is already at the requested state, but semantic/index "
+                            f"refresh failed: {cause}. Re-run the same batch-write or ov compile "
+                            "command; matching files will remain unchanged and refresh will be "
+                            "retried.",
+                            code="REFRESH_FAILED",
+                            details={
+                                "root_uri": normalized_root,
+                                "created": created,
+                                "updated": updated,
+                                "unchanged": unchanged,
+                                "cause": cause,
+                            },
+                        ) from exc
             else:
                 queue_status = None
         finally:

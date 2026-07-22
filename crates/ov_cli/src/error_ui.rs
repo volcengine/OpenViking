@@ -388,6 +388,39 @@ pub(crate) fn report_for_runtime_error(command: impl Into<String>, error: &Error
                 ErrorAction::new("ov status", copy(language, "Check OpenViking status", "查看 OpenViking 状态")),
             ])
         }
+        Error::Api { message, .. }
+            if bracketed_error(message)
+                .is_some_and(|(code, _)| code.eq_ignore_ascii_case("REFRESH_FAILED")) =>
+        {
+            let retry_command = command.clone();
+            ErrorReport::new(
+                copy(
+                    language,
+                    "Compile Refresh Failed",
+                    "Compile 刷新失败",
+                ),
+                api_error_message(language, message),
+            )
+            .with_command(command)
+            .with_actions(vec![
+                ErrorAction::new(
+                    retry_command,
+                    copy(
+                        language,
+                        "Retry safely; matching files stay unchanged and refresh runs again",
+                        "安全重试；相同内容不会重复写入，并会重新执行刷新",
+                    ),
+                ),
+                ErrorAction::new(
+                    "ov status",
+                    copy(
+                        language,
+                        "Check OpenViking service status",
+                        "检查 OpenViking 服务状态",
+                    ),
+                ),
+            ])
+        }
         Error::Api { message, .. } => ErrorReport::new(
             copy(language, "OpenViking API Error", "OpenViking API 错误"),
             api_error_message(language, message),
@@ -1309,6 +1342,25 @@ Usage: ov config [OPTIONS] [COMMAND]
 
         assert!(verbose.contains("Detail:"));
         assert!(verbose.contains("Request ID"));
+    }
+
+    #[test]
+    fn compile_refresh_failure_explains_safe_retry() {
+        let command = "ov compile --from viking://resources/source --to viking://resources/wiki --skill viking://agent/skills/wiki --wait";
+        let error = Error::api(
+            "[REFRESH_FAILED] Content is already at the requested state, but semantic/index refresh failed: injected overview failure. Re-run the same batch-write or ov compile command; matching files will remain unchanged and refresh will be retried."
+                .to_string(),
+        );
+        let report = report_for_runtime_error(command, &error);
+        let normal = strip_ansi(&render_report(&report, false));
+
+        assert!(normal.contains("Compile Refresh Failed"));
+        assert!(normal.contains("injected"));
+        assert!(normal.contains("overview"));
+        assert!(normal.contains("matching files"));
+        assert!(normal.contains("remain unchanged"));
+        assert!(normal.contains(command));
+        assert!(!normal.contains("ov config validate"));
     }
 
     #[test]

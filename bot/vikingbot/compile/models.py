@@ -32,7 +32,7 @@ class CompileLimits(BaseModel):
     tool_total_result_bytes: int = 8 * 1024 * 1024
     output_pages: int = 64
     output_total_bytes: int = 4 * 1024 * 1024
-    concurrent_tasks: int = 2
+    concurrent_tasks: int = 4
     task_runtime_seconds: float = 30 * 60
 
 

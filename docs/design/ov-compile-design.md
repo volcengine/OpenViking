@@ -318,14 +318,15 @@ catalog 只保存目录项和 L0/L1 可得的轻量信息，不为了计算 hash
 
 ```text
 available_tools = 已注册工具 ∩ Bot 运行策略 ∩ Compile 允许能力
-effective_tools = available_tools ∩ normalize(skill.allowed-tools)  # 声明时
-effective_tools = available_tools                                  # 未声明时
-request_tools = effective_tools - Compile 禁用工具 + submit_wiki_bundle
+core_read_tools = available_tools ∩ {read_file, openviking_list, openviking_multi_read}
+skill_tools = available_tools ∩ normalize(skill.allowed-tools)  # 声明时
+skill_tools = available_tools                                  # 未声明时
+request_tools = (core_read_tools ∪ skill_tools) - Compile 禁用工具 + submit_wiki_bundle
 ```
 
-`allowed-tools` 必须是字符串数组；显式 `allowed-tools: []` 表示除 `submit_wiki_bundle` 外不提供其他工具。名称先精确匹配 VikingBot registry name，再支持固定别名 `Read -> read_file`、`Write -> write_file`、`Edit -> edit_file`、`List/ListDir -> list_dir`、`Bash/Shell -> exec`、`WebFetch -> web_fetch`、`WebSearch -> web_search`；未知名称在 Agent 启动前返回 `SKILL_CAPABILITY_UNAVAILABLE`，不做模糊映射。OpenViking 工具使用真实的 `openviking_*` 名称，MCP 使用完整注册名。
+`read_file`、`openviking_list` 和 `openviking_multi_read` 是 Compile 核心读取工具，不受 Skill `allowed-tools` 筛选，但仍受 Bot policy、task workspace、OpenViking 用户权限和 Compile URI scope 限制。`allowed-tools` 必须是字符串数组；显式 `allowed-tools: []` 表示除这三个核心读取工具和 `submit_wiki_bundle` 外不提供其他工具。名称先精确匹配 VikingBot registry name，再支持固定别名 `Read -> read_file`、`Write -> write_file`、`Edit -> edit_file`、`List/ListDir -> list_dir`、`Bash/Shell -> exec`、`WebFetch -> web_fetch`、`WebSearch -> web_search`；未知名称在 Agent 启动前返回 `SKILL_CAPABILITY_UNAVAILABLE`，不做模糊映射。OpenViking 工具使用真实的 `openviking_*` 名称，MCP 使用完整注册名。
 
-Compile 无条件排除 `message`、`cron`、`spawn`、OpenViking 写入/提交工具以及其他会改变 Bot 会话或任务调度状态的工具。文件、shell、Web、image 和 MCP 等能力只有同时符合本节的 `allowed-tools` 规则与 Bot policy 才可用。Skill 声明 MCP 工具，或未声明 `allowed-tools` 且 Bot policy 允许 MCP 时，request-local AgentLoop 先复用 `_connect_mcp()` 完成注册，再筛选 registry；任务结束统一调用 `close_mcp()`。
+Compile 无条件排除 `message`、`cron`、`spawn`、OpenViking 写入/提交工具以及其他会改变 Bot 会话或任务调度状态的工具。除核心 `read_file` 外的本地文件工具、shell、Web、image 和 MCP 等能力只有同时符合本节的 `allowed-tools` 规则与 Bot policy 才可用。Skill 声明 MCP 工具，或未声明 `allowed-tools` 且 Bot policy 允许 MCP 时，request-local AgentLoop 先复用 `_connect_mcp()` 完成注册，再筛选 registry；任务结束统一调用 `close_mcp()`。
 
 本地文件工具受 task workspace 路径检查约束。shell、Web 和 MCP 仍可能产生外部副作用，只能在 Skill 声明和 Bot policy 都允许时注册；现有 `direct` sandbox 只提供 task cwd，不是 OS 级隔离。远程多用户部署若允许 shell，必须使用隔离 backend 或由管理员明确接受 direct backend 的主机权限风险。
 
@@ -638,7 +639,7 @@ bot/vikingbot/compile/
 - CLI 参数展开、默认 reason、`--wait` 和 timeout；
 - Bot proxy 的创建/GET 查询身份转交、未启用 Bot 的 503 和上游错误；
 - Skill 复用现有 parser/loader、`allowed-tools` 缺省与显式空数组、相对引用、requirements 和路径逃逸；
-- request registry 只包含 Skill/policy/Compile 共同允许的现有工具和 `submit_wiki_bundle`，禁用 message/cron/spawn/OV write，MCP 在筛选前按需连接且任务后关闭，用户 connection 只进入 OV read adapter；
+- request registry 始终包含 policy/Compile 允许的三个核心读取工具，并只为其余能力加入 Skill/policy/Compile 共同允许的现有工具和 `submit_wiki_bundle`；禁用 message/cron/spawn/OV write，MCP 在筛选前按需连接且任务后关闭，用户 connection 只进入 OV read adapter；
 - Agent structured wrapper 复用原 loop；失败 submit 不停止、plain text 会修复、iteration limit 不额外生成普通回答，普通 chat 行为不回归；
 - OpenViking 工具的 URI scope、缺省全库参数和数量/单次/累计输出上限，并确认没有注册第二组 source tools；
 - 非法 bundle 的 loop 内修复、空 bundle no-op 和最终失败；

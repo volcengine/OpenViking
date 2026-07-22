@@ -800,6 +800,7 @@ class AgentLoop:
             messages: Initial message list
             session_key: Session key for tool execution context
             publish_events: Whether to publish ITERATION/REASONING/TOOL_CALL events to the bus
+            sender_id: Sender identity forwarded to the tool execution context
             actor_peer_id: Authenticated OpenViking peer identity for tools
             ov_tools_enable: Whether to enable OpenViking tools for this session
             memory_peer_ids: List of peer IDs for memory retrieval
@@ -818,6 +819,15 @@ class AgentLoop:
             captured_turns: Optional mutable list populated with each intermediate assistant
                 turn and the tool calls/results produced by that same model response. Reasoning
                 content is intentionally excluded.
+            tool_registry: Optional request-scoped registry used for tool definitions and
+                execution. Defaults to the agent's shared tool registry.
+            openviking_tool_names: Optional collection of tool names allowed to receive the
+                request-scoped OpenViking connection. None preserves the legacy behavior of
+                forwarding the connection to all tools; an empty collection forwards it to none.
+            allow_final_fallback: Whether to make a final tool-free LLM call after the
+                tool-use iteration limit is reached.
+            inject_write_experience: Whether to retrieve and inject relevant agent experience
+                before executing configured write tools.
 
         Returns:
             tuple of (final_content, final_reasoning_content, tools_used, token_usage, iteration)

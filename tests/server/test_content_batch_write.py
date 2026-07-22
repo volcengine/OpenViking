@@ -5,7 +5,7 @@ import pytest
 import openviking.storage.content_write as content_write_module
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.content_write import ContentWriteCoordinator
-from openviking_cli.exceptions import ConflictError, NotFoundError
+from openviking_cli.exceptions import ConflictError, NotFoundError, OpenVikingError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -205,10 +205,14 @@ async def test_batch_refresh_failure_retry_skips_landed_write_and_refreshes(monk
         }
     ]
 
-    with pytest.raises(RuntimeError, match="refresh"):
+    with pytest.raises(OpenVikingError) as error:
         await coordinator.batch_write(
             root_uri=root, operations=operations, ctx=ctx, wait=False
         )
+    assert error.value.code == "REFRESH_FAILED"
+    assert "injected refresh failure" in str(error.value)
+    assert "Re-run the same batch-write or ov compile command" in str(error.value)
+    assert error.value.details["created"] == [page]
     assert vfs.files[page] == "landed"
     assert vfs.writes == [page]
 

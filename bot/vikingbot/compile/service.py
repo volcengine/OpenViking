@@ -49,6 +49,9 @@ _OV_READ_TOOLS = frozenset(
         "openviking_multi_read",
     }
 )
+_COMPILE_CORE_READ_TOOLS = frozenset(
+    {"read_file", "openviking_list", "openviking_multi_read"}
+)
 _COMPILE_BLOCKED_TOOLS = frozenset(
     {"message", "cron", "spawn", "openviking_add_resource", "openviking_memory_commit"}
 )
@@ -431,11 +434,17 @@ class BotCompileService:
                 except OpenVikingError as exc:
                     if exc.code == "CONFLICT":
                         code = "WRITE_CONFLICT"
+                        stage = "writing"
+                    elif exc.code == "REFRESH_FAILED":
+                        code = "REFRESH_FAILED"
+                        stage = "refreshing"
                     elif exc.code == "DEADLINE_EXCEEDED":
                         code = "DEADLINE_EXCEEDED"
+                        stage = "refreshing"
                     else:
                         code = "WRITE_FAILED"
-                    raise CompileFailure(code, str(exc), stage="writing") from exc
+                        stage = "writing"
+                    raise CompileFailure(code, str(exc), stage=stage) from exc
                 await self._set_state(task_id, status="committing", stage="refreshing")
 
             created = list(dict.fromkeys(batch_result.get("created", rendered.created)))
@@ -658,7 +667,7 @@ class BotCompileService:
         available = set(request_loop.tools.tool_names)
         declared = bool(parsed_skill.get("allowed_tools_declared"))
         if declared:
-            selected: set[str] = set()
+            selected: set[str] = set(_COMPILE_CORE_READ_TOOLS & available)
             unknown: list[str] = []
             for raw_name in parsed_skill.get("allowed_tools") or []:
                 name = str(raw_name)

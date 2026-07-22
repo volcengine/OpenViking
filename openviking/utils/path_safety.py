@@ -17,7 +17,9 @@ def _reject_encoded_path_escape(path: str) -> None:
     # raw separator forms so encoded separators cannot create a new segment.
     for segment in path.replace("\\", "/").split("/"):
         decoded = unquote(segment)
-        if decoded in {".", ".."} or "/" in decoded or "\\" in decoded:
+        if decoded != segment and (
+            decoded in {".", ".."} or "/" in decoded or "\\" in decoded
+        ):
             raise ValueError(f"Unsafe relative path rejected: {path}")
 
 

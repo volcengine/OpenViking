@@ -81,7 +81,7 @@ def test_renderer_creates_okf_pages_links_and_citations():
     first = rendered.operations[0]
     assert first["precondition"] == {"kind": "create_if_absent"}
     assert "type: concept" in first["content"]
-    assert "Read [Beta](beta.md) next." in first["content"]
+    assert "Read [Beta](./beta.md) next." in first["content"]
     assert "[1] [source](viking://resources/source)" in first["content"]
 
 
@@ -403,6 +403,7 @@ def test_request_registry_honors_allowed_tools_and_compile_blocklist():
         "web_search",
         "message",
         "openviking_list",
+        "openviking_multi_read",
         "openviking_add_resource",
     ):
         available.register(_NamedTool(name))
@@ -417,11 +418,17 @@ def test_request_registry_honors_allowed_tools_and_compile_blocklist():
         "catalog_uris": set(),
     }
 
-    empty, _ = service._build_request_registry(
+    empty, empty_ov_names = service._build_request_registry(
         parsed_skill={"allowed_tools_declared": True, "allowed_tools": []},
         **common,
     )
-    assert empty.tool_names == ["submit_wiki_bundle"]
+    assert empty.tool_names == [
+        "read_file",
+        "openviking_list",
+        "openviking_multi_read",
+        "submit_wiki_bundle",
+    ]
+    assert empty_ov_names == {"openviking_list", "openviking_multi_read"}
 
     selected, ov_names = service._build_request_registry(
         parsed_skill={
@@ -434,9 +441,10 @@ def test_request_registry_honors_allowed_tools_and_compile_blocklist():
         "read_file",
         "web_search",
         "openviking_list",
+        "openviking_multi_read",
         "submit_wiki_bundle",
     ]
-    assert ov_names == {"openviking_list"}
+    assert ov_names == {"openviking_list", "openviking_multi_read"}
 
     with pytest.raises(CompileFailure) as error:
         service._build_request_registry(
