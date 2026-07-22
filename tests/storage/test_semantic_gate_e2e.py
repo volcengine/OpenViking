@@ -82,6 +82,7 @@ def wired(monkeypatch):
     """Wire the real SemanticProcessor to the disk FS + spy VLM + fake config."""
     vlm = _make_spy_vlm()
     monkeypatch.setattr(sp, "get_openviking_config", lambda: _fake_config(vlm))
+    monkeypatch.setattr(sp, "render_prompt", lambda *a, **k: "prompt")
     monkeypatch.setattr(sp, "get_viking_fs", lambda: _DiskFS())
     # Downstream of the gate; needs real config/language models otherwise.
     monkeypatch.setattr(
@@ -98,9 +99,9 @@ def wired(monkeypatch):
 @pytest.mark.parametrize(
     "name, content, substantive",
     [
-        ("heading_only.md", HEADING_ONLY, False),      # point 1: title-only
+        ("heading_only.md", HEADING_ONLY, False),  # point 1: title-only
         ("frontmatter_only.md", FRONTMATTER_ONLY, False),  # point 2: frontmatter/whitespace
-        ("install.md", SUBSTANTIVE, True),             # point 3: genuine content
+        ("install.md", SUBSTANTIVE, True),  # point 3: genuine content
     ],
 )
 async def test_gate_on_real_file(wired, tmp_path, name, content, substantive):

@@ -66,7 +66,9 @@ logger = get_logger(__name__)
 # CJK ranges: Unified Ideographs, Hiragana, Katakana, Hangul, CJK punctuation.
 _CJK_RE = re.compile("[　-〿぀-ゟ゠-ヿ一-鿿가-힯]")
 _CJK_WEIGHT = 2.5  # CJK chars count heavier: 1 char ≈ 1 word (dense CJK has no spaces)
-_FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---[ \t]*(?:\n|\Z)", re.DOTALL)  # leading block only; closes at EOF too
+_FRONTMATTER_RE = re.compile(
+    r"\A---\n.*?\n---[ \t]*(?:\n|\Z)", re.DOTALL
+)  # leading block only; closes at EOF too
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _FENCE_RE = re.compile(r"^\s*(```|~~~)")
 _ATX_RE = re.compile(r"^\s*#{1,6}\s+\S")
