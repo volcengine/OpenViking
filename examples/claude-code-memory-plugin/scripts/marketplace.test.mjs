@@ -11,6 +11,7 @@ const repoRoot = resolve(scriptsDir, "..", "..", "..");
 const rootCatalogPath = join(repoRoot, ".claude-plugin", "marketplace.json");
 const localCatalogPath = join(repoRoot, "examples", ".claude-plugin", "marketplace.json");
 const manifestPath = join(pluginDir, ".claude-plugin", "plugin.json");
+const sharedInstallerPath = join(repoRoot, "examples", "memory-plugin-shared", "install.sh");
 
 const PLUGIN_NAME = "openviking-memory";
 
@@ -53,6 +54,14 @@ test("Claude .mcp.json starts the stdio MCP proxy", () => {
   assert.ok(!("type" in server), ".mcp.json should not keep HTTP MCP type");
   assert.ok(!("url" in server), ".mcp.json should not keep direct HTTP url");
   execFileSync("node", ["--check", join(pluginDir, "servers", "mcp-proxy.mjs")], { stdio: "pipe" });
+});
+
+test("shared installer supports Claude hook-only mode without mcpServers", () => {
+  const installer = readFileSync(sharedInstallerPath, "utf-8");
+  assert.match(installer, /--claude-hook-only/);
+  assert.match(installer, /CLAUDE_HOOK_ONLY/);
+  assert.match(installer, /delete manifest\.mcpServers/);
+  assert.match(installer, /without registering the bundled MCP server/);
 });
 
 test("Claude hooks include optional skill experience PostToolUse Read hook", () => {
