@@ -4,9 +4,11 @@
 
 import asyncio
 import threading
+from unittest.mock import MagicMock
 
 import pytest
 
+from openviking.storage.transaction import path_lock as path_lock_module
 from openviking.storage.transaction.lock_handle import LockHandle
 from openviking.storage.transaction.lock_manager import LockManager
 from openviking.storage.transaction.path_lock import EXACT_LOCK_FILE_PREFIX, PathLockEngine
@@ -196,6 +198,74 @@ async def test_exact_path_lock_blocks_same_path_without_creating_target():
 
     await lock.release(first)
     assert not lock.is_locked(target)
+
+
+@pytest.mark.asyncio
+async def test_exact_path_lock_backs_off_to_configured_cap(monkeypatch):
+    agfs = _agfs_with_docs_dir()
+    lock = PathLockEngine(agfs, poll_interval=0.1, poll_max_interval=0.25)
+    first = LockHandle(id="exact-first")
+    second = LockHandle(id="exact-second")
+    target = "/local/default/resources/docs/backoff.md"
+
+    assert await lock.acquire_exact_path(target, first)
+    lock_path = first.locks[0]
+    sleep_intervals: list[float] = []
+
+    async def fake_sleep(interval: float):
+        sleep_intervals.append(interval)
+        if len(sleep_intervals) == 4:
+            agfs.rm(lock_path)
+
+    monkeypatch.setattr(path_lock_module.asyncio, "sleep", fake_sleep)
+
+    assert await lock.acquire_exact_path(target, second, timeout=10.0)
+    assert sleep_intervals == [0.1, 0.2, 0.25, 0.25]
+
+    await lock.release(second)
+
+
+@pytest.mark.asyncio
+async def test_exact_path_lock_backoff_does_not_sleep_past_deadline(monkeypatch):
+    agfs = _agfs_with_docs_dir()
+    lock = PathLockEngine(agfs, poll_interval=0.2, poll_max_interval=1.0)
+    first = LockHandle(id="deadline-first")
+    second = LockHandle(id="deadline-second")
+    target = "/local/default/resources/docs/deadline.md"
+
+    assert await lock.acquire_exact_path(target, first)
+
+    class _FakeLoop:
+        now = 100.0
+
+        def time(self):
+            return self.now
+
+    fake_loop = _FakeLoop()
+    sleep_intervals: list[float] = []
+
+    async def fake_sleep(interval: float):
+        sleep_intervals.append(interval)
+        fake_loop.now += interval
+
+    monkeypatch.setattr(path_lock_module.asyncio, "get_running_loop", lambda: fake_loop)
+    monkeypatch.setattr(path_lock_module.asyncio, "sleep", fake_sleep)
+
+    assert not await lock.acquire_exact_path(target, second, timeout=0.15)
+    assert sleep_intervals == [pytest.approx(0.15)]
+
+
+@pytest.mark.asyncio
+async def test_wait_progress_log_is_rate_limited_per_path(monkeypatch):
+    path_lock_module._last_wait_progress_at.clear()
+    info = MagicMock()
+    monkeypatch.setattr(path_lock_module.logger, "info", info)
+
+    path_lock_module._log_wait_progress("exact:/same", "first waiter")
+    path_lock_module._log_wait_progress("exact:/same", "second waiter")
+    path_lock_module._log_wait_progress("exact:/other", "other path")
+
+    assert info.call_count == 2
 
 
 @pytest.mark.asyncio

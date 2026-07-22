@@ -41,10 +41,17 @@ class LockManager:
         lock_timeout: float = 0.0,
         lock_expire: float = 300.0,
         redo_recovery_enabled: bool = True,
+        lock_poll_interval: float = 0.2,
+        lock_poll_max_interval: float = 1.0,
     ):
         self._agfs = agfs
         self._async_agfs = AsyncAGFSClient(agfs)
-        self._path_lock = PathLockEngine(agfs, lock_expire=lock_expire)
+        self._path_lock = PathLockEngine(
+            agfs,
+            lock_expire=lock_expire,
+            poll_interval=lock_poll_interval,
+            poll_max_interval=lock_poll_max_interval,
+        )
         self._lock_timeout = lock_timeout
         self._redo_recovery_enabled = redo_recovery_enabled
         self._redo_log = RedoLog(agfs)
@@ -564,12 +571,16 @@ def init_lock_manager(
     lock_timeout: float = 0.0,
     lock_expire: float = 300.0,
     redo_recovery_enabled: bool = True,
+    lock_poll_interval: float = 0.2,
+    lock_poll_max_interval: float = 1.0,
 ) -> LockManager:
     global _lock_manager
     _lock_manager = LockManager(
         agfs=agfs,
         lock_timeout=lock_timeout,
         lock_expire=lock_expire,
+        lock_poll_interval=lock_poll_interval,
+        lock_poll_max_interval=lock_poll_max_interval,
         redo_recovery_enabled=redo_recovery_enabled,
     )
     return _lock_manager

@@ -1368,6 +1368,8 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 | `extraction_enabled` | Whether session commit runs long-term memory extraction. | `true` |
 | `session_skill_extraction_enabled` | Whether session commit also extracts reusable skills into the current user's skill directory. | `false` |
 | `link_enabled` | Whether memory extraction writes and resolves memory links. | `false` |
+| `v2_lock_retry_interval_seconds` | Delay between bounded memory-lock acquisition attempts. | `3.0` |
+| `v2_lock_max_retries` | Maximum bounded memory-lock acquisition attempts. `0` opts into unlimited retries. | `100` |
 
 ### ovcli.conf
 
@@ -1489,7 +1491,9 @@ Path locks are enabled by default and usually require no configuration. **The de
   "storage": {
     "transaction": {
       "lock_timeout": 5.0,
-      "lock_expire": 300.0
+      "lock_expire": 300.0,
+      "lock_poll_interval": 0.2,
+      "lock_poll_max_interval": 1.0
     }
   }
 }
@@ -1499,6 +1503,8 @@ Path locks are enabled by default and usually require no configuration. **The de
 |-----------|------|-------------|---------|
 | `lock_timeout` | float | Path lock acquisition timeout (seconds). `0` = fail immediately if locked (default). `> 0` = wait/retry up to this many seconds, then raise `LockAcquisitionError`. | `0.0` |
 | `lock_expire` | float | Lock inactivity threshold (seconds). Locks not refreshed within this window are treated as stale and reclaimed. | `300.0` |
+| `lock_poll_interval` | float | Initial delay between path-lock probes. Contended waits back off exponentially from this value. | `0.2` |
+| `lock_poll_max_interval` | float | Maximum delay between path-lock probes. Must be greater than or equal to `lock_poll_interval`. | `1.0` |
 
 For details on the lock mechanism, see [Path Locks and Crash Recovery](../concepts/09-transaction.md).
 

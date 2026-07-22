@@ -26,6 +26,16 @@ def lm(agfs_client):
 
 
 class TestLockManagerBasic:
+    def test_configures_path_lock_backoff(self, agfs_client):
+        manager = LockManager(
+            agfs=agfs_client,
+            lock_poll_interval=0.5,
+            lock_poll_max_interval=2.0,
+        )
+
+        assert manager._path_lock._poll_interval == 0.5
+        assert manager._path_lock._poll_max_interval == 2.0
+
     async def test_create_handle_and_acquire_exact_path(self, agfs_client, lm, test_dir):
         handle = lm.create_handle()
         ok = await lm.acquire_exact_path(handle, test_dir)
