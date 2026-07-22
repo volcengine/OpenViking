@@ -119,7 +119,9 @@ async def test_atomic_crash_leaves_old_manifest_intact():
     monkeypatch_target = fs
     monkeypatch_target.write_file = _boom  # simulate crash in the write primitive
 
-    new = sm.Manifest(source={"kind": "feishu"}, synced_at="2026-07-07T00:00:00Z", files=[], dirs=[])
+    new = sm.Manifest(
+        source={"kind": "feishu"}, synced_at="2026-07-07T00:00:00Z", files=[], dirs=[]
+    )
     with pytest.raises(OSError):
         await sm.write_manifest_atomic(ROOT, new, fs, ctx=None, lock_handle=None)
 

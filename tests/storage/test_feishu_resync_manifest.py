@@ -113,9 +113,9 @@ class FakeFS:
         if src in self.dirs:
             self.dirs.add(dst)
             for f in [f for f in self.files if f.startswith(src + "/")]:
-                self.files[dst + f[len(src):]] = self.files.pop(f)
+                self.files[dst + f[len(src) :]] = self.files.pop(f)
             for d in [d for d in self.dirs if d.startswith(src + "/")]:
-                self.dirs.add(dst + d[len(src):])
+                self.dirs.add(dst + d[len(src) :])
                 self.dirs.discard(d)
             self.dirs.discard(src)
             self._ensure_parents(dst)

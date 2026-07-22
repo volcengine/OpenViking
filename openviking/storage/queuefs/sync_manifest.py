@@ -158,7 +158,9 @@ async def read_manifest(target_root, viking_fs, ctx=None, lock_handle=None) -> O
         return None  # malformed entries => fail safe
 
 
-async def write_manifest_atomic(target_root, manifest, viking_fs, ctx=None, lock_handle=None) -> None:
+async def write_manifest_atomic(
+    target_root, manifest, viking_fs, ctx=None, lock_handle=None
+) -> None:
     """Write the manifest atomically under the caller's resource lock.
 
     See the module docstring for why a single `write_file` under `lock_handle`

@@ -854,9 +854,7 @@ class SemanticProcessor(DequeueHandlerBase):
             if old_manifest is None:
                 return False
             key = os.path.normcase(rel.replace("\\", "/"))
-            return any(
-                os.path.normcase(d.replace("\\", "/")) == key for d in old_manifest.dirs
-            )
+            return any(os.path.normcase(d.replace("\\", "/")) == key for d in old_manifest.dirs)
 
         async def write_conflict_sidecar(target_dir: str, name: str, remote: bytes) -> None:
             """Materialize the fresh remote version alongside a user-edited file
@@ -865,9 +863,7 @@ class SemanticProcessor(DequeueHandlerBase):
             stem = name.rsplit(".", 1)[0] if "." in name else name
             sidecar_uri = VikingURI(target_dir).join(f"{stem}.remote-{short}.md").uri
             try:
-                await viking_fs.write_file(
-                    sidecar_uri, remote, ctx=ctx, lock_handle=lock_handle
-                )
+                await viking_fs.write_file(sidecar_uri, remote, ctx=ctx, lock_handle=lock_handle)
             except Exception as e:
                 logger.error(f"[SyncDiff] Failed to write conflict sidecar {sidecar_uri}: {e}")
 
