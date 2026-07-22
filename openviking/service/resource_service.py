@@ -38,7 +38,7 @@ from openviking.server.user_config import (
     effective_skill_add_target,
 )
 from openviking.storage import VikingDBManager
-from openviking.storage.queuefs import get_queue_manager
+from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking.storage.transaction import NO_LOCK, LockLease
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
@@ -340,14 +340,15 @@ class ResourceService:
         self,
         msg: Any,
         *,
+        queue_name: str,
         resource_lock: LockLease = NO_LOCK,
     ) -> Any:
         """Persist a job before its TaskRecord so a crash cannot orphan the task."""
         from openviking.service.task_tracker import get_task_tracker
-        from openviking.storage.queuefs import QueueManager, get_queue_manager
+        from openviking.storage.queuefs import get_queue_manager
 
         try:
-            await get_queue_manager().enqueue(QueueManager.ADD_RESOURCE, msg.to_dict())
+            await get_queue_manager().enqueue(queue_name, msg.to_dict())
             await resource_lock.handoff()
         except BaseException:
             await resource_lock.close()
@@ -560,7 +561,11 @@ class ResourceService:
                 source_name=source_name,
                 args=self._sanitize_watch_processor_kwargs(processor_args),
             )
-            task = await self._enqueue_add_resource_job(msg, resource_lock=resource_lock)
+            task = await self._enqueue_add_resource_job(
+                msg,
+                queue_name=QueueManager.ADD_RESOURCE,
+                resource_lock=resource_lock,
+            )
             resource_lock = NO_LOCK
             return {
                 "status": "success",
@@ -936,7 +941,11 @@ class ResourceService:
                         understanding_response_id=understanding_response_id,
                     )
                     enqueue_started = True
-                    task = await self._enqueue_add_resource_job(msg, resource_lock=lock_lease)
+                    task = await self._enqueue_add_resource_job(
+                        msg,
+                        queue_name=QueueManager.EXTERNAL_PARSE,
+                        resource_lock=lock_lease,
+                    )
                 except BaseException:
                     if not enqueue_started:
                         await lock_lease.close()
@@ -1074,6 +1083,7 @@ class ResourceService:
                 )
                 task = await self._enqueue_add_resource_job(
                     msg,
+                    queue_name=QueueManager.ADD_RESOURCE,
                     resource_lock=deferred_lock,
                 )
                 deferred_lock = NO_LOCK

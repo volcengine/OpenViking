@@ -174,6 +174,7 @@ class TestMemoryUpdater:
 
     @pytest.mark.asyncio
     async def test_generate_overview_deletes_empty_overview_via_rm(self):
+        lock_handle = object()
         schema = MemoryTypeSchema(
             memory_type="entities",
             description="entity memory",
@@ -193,10 +194,10 @@ class TestMemoryUpdater:
                 return [{"name": ".overview.md", "isDir": False}]
 
             async def rm(self, uri, recursive=False, ctx=None, lock_handle=None):
-                self.rm_calls.append((uri, recursive))
+                self.rm_calls.append((uri, recursive, lock_handle))
 
         viking_fs = FakeVikingFS()
-        updater = MemoryUpdater(registry=registry)
+        updater = MemoryUpdater(registry=registry, transaction_handle=lock_handle)
         updater._get_viking_fs = MagicMock(return_value=viking_fs)
         ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
@@ -207,8 +208,12 @@ class TestMemoryUpdater:
         )
 
         assert viking_fs.rm_calls == [
-            ("viking://user/alice/memories/entities/动漫角色/.overview.md", False),
-            ("viking://user/alice/memories/entities/动漫角色", True),
+            (
+                "viking://user/alice/memories/entities/动漫角色/.overview.md",
+                False,
+                lock_handle,
+            ),
+            ("viking://user/alice/memories/entities/动漫角色", True, lock_handle),
         ]
 
     @pytest.mark.asyncio
@@ -303,7 +308,7 @@ class TestMemoryUpdater:
             async def read_file(self, uri, ctx=None):
                 return self.store[uri]
 
-            async def write_file(self, uri, content, ctx=None):
+            async def write_file(self, uri, content, ctx=None, lock_handle=None):
                 self.store[uri] = content
 
         viking_fs = FakeVikingFS()
@@ -348,7 +353,7 @@ class TestMemoryUpdater:
             async def read_file(self, uri, ctx=None):
                 return self.store[uri]
 
-            async def write_file(self, uri, content, ctx=None):
+            async def write_file(self, uri, content, ctx=None, lock_handle=None):
                 self.store[uri] = content
 
         viking_fs = FakeVikingFS()
@@ -1079,14 +1084,18 @@ class TestApplyEditWithSearchReplacePatch:
 
     @pytest.mark.asyncio
     async def test_apply_upsert_persists_last_update_trace_id(self):
+        lock_handle = object()
         updater = self._make_updater_with_registry()
+        updater._transaction_handle = lock_handle
         mock_viking_fs = MagicMock()
         mock_viking_fs.read_file = AsyncMock(side_effect=FileNotFoundError("missing"))
         written_content = None
+        write_kwargs = None
 
         async def mock_write_file(uri, content, **kwargs):
-            nonlocal written_content
+            nonlocal write_kwargs, written_content
             written_content = content
+            write_kwargs = kwargs
 
         mock_viking_fs.write_file = mock_write_file
         updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
@@ -1100,6 +1109,7 @@ class TestApplyEditWithSearchReplacePatch:
         await updater._apply_upsert(op, MagicMock())
 
         assert written_content is not None
+        assert write_kwargs["lock_handle"] is lock_handle
         result = MemoryFileUtils.read(written_content)
         assert result.extra_fields["source_extraction_id"] == "extract_1"
         assert result.extra_fields["last_update_trace_id"] == "trace_1"
