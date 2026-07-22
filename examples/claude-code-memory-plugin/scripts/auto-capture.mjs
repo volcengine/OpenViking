@@ -35,6 +35,11 @@ import {
   makeFetchJSON,
 } from "./lib/ov-session.mjs";
 import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
+import {
+  compactToolInputForPart,
+  compactToolInputForProse,
+  TOOL_INPUT_POLICIES,
+} from "./lib/compact-tool-input.mjs";
 import { readJsonState, writeJsonState } from "./lib/state.mjs";
 
 if (!isPluginEnabled()) {
@@ -199,87 +204,9 @@ function formatToolInput(value) {
 
 // ─── Tool input compaction ──────────────────────────────────────────────────
 //
-// Write/Edit tool inputs contain full file contents (often 7KB+ of source code)
-// that inflate session storage, dilute vector embeddings, and waste VLM tokens
-// during memory extraction.  The memory extractor only needs to know *what* was
-// changed and *where*, not the full content.  compactToolInput() reduces these
-// to a structural summary (file path + line count + short preview) while
-// preserving enough context for the VLM to extract meaningful memories.
-//
-// Policy: tools in TOOL_INPUT_POLICIES.summary get compacted; everything else
-// passes through formatToolInput() unchanged.  A global TOOL_INPUT_MAX_CHARS
-// cap (configurable, default 2000) truncates any remaining outliers.
-
-const TOOL_INPUT_POLICIES = {
-  // Full preservation — short inputs with high signal (paths, queries, search params)
-  full: new Set([
-    "Read", "Glob", "Grep", "LSP", "WebFetch", "WebSearch", "Skill",
-  ]),
-  // Summary only — inputs that carry full file contents or verbose metadata
-  summary: new Set([
-    "Write", "Edit", "Bash", "TaskCreate", "TaskUpdate",
-  ]),
-};
-
-const PREVIEW_CHARS = 200;    // chars kept from Write content
-const DIFF_PREVIEW_CHARS = 150; // chars kept from Edit old_string / new_string
-
-function compactToolInput(toolName, value, maxChars = 0) {
-  if (typeof value === "string") return value;
-
-  // Not in summary set → full preservation (backward compatible)
-  if (!TOOL_INPUT_POLICIES.summary.has(toolName)) {
-    const raw = formatToolInput(value);
-    return maxChars > 0 && raw.length > maxChars
-      ? raw.slice(0, maxChars) + `\n... [truncated, ${raw.length - maxChars} more chars]`
-      : raw;
-  }
-
-  // Summary mode: extract key fields per tool type
-  try {
-    const obj = typeof value === "object" ? value : JSON.parse(value);
-    let result;
-
-    if (toolName === "Write") {
-      const content = obj.content || "";
-      const lines = content.split("\n").length;
-      result = JSON.stringify({
-        file_path: obj.file_path,
-        content_summary: `${lines} lines, ${content.length} chars`,
-        content_preview: content.slice(0, PREVIEW_CHARS),
-      });
-    } else if (toolName === "Edit") {
-      const oldStr = obj.old_string || "";
-      const newStr = obj.new_string || "";
-      result = JSON.stringify({
-        file_path: obj.file_path,
-        replace_all: obj.replace_all || false,
-        old_summary: `${oldStr.length} chars`,
-        old_preview: oldStr.slice(0, DIFF_PREVIEW_CHARS),
-        new_summary: `${newStr.length} chars`,
-        new_preview: newStr.slice(0, DIFF_PREVIEW_CHARS),
-      });
-    } else if (toolName === "Bash") {
-      result = JSON.stringify({ command: obj.command });
-    } else if (toolName === "TaskCreate" || toolName === "TaskUpdate") {
-      const summary = {};
-      if (obj.subject) summary.subject = obj.subject;
-      if (obj.status) summary.status = obj.status;
-      if (obj.taskId) summary.taskId = obj.taskId;
-      result = JSON.stringify(summary);
-    } else {
-      result = formatToolInput(value);
-    }
-
-    // Global truncation cap
-    if (maxChars > 0 && result.length > maxChars) {
-      result = result.slice(0, maxChars) + `\n... [truncated]`;
-    }
-    return result;
-  } catch {
-    return formatToolInput(value);
-  }
-}
+// PULLED from ./lib/compact-tool-input.mjs (shared with subagent-stop.mjs).
+// compactToolInputForProse → string (for inline text `[tool: X]\n...`)
+// compactToolInputForPart  → object (for structured parts; server expects Dict)
 
 function truncateToolResult(s) {
   if (TOOL_RESULT_MAX_CHARS <= 0) return null; // drop
@@ -358,17 +285,16 @@ function buildParts(content, toolNameById) {
     if (block.type === "text" && typeof block.text === "string") {
       if (block.text.trim()) out.push({ type: "text", text: block.text });
     } else if (block.type === "tool_use" && typeof block.name === "string") {
-      // Mirror extractAllTurns' prose path: compact tool_input for summary-mode
-      // tools (Write/Edit/Bash/Task*) so structured parts get the same ~10x
-      // storage reduction as the inlined text path. Non-summary tools keep
-      // full input via formatToolInput. Respects cfg.toolInputCompaction.
-      const maxChars = cfg?.toolInputMaxChars || 0;
-      const useCompaction = cfg ? cfg.toolInputCompaction !== false : true;
+      // Structured parts: tool_input MUST be an object (server expects
+      // Optional[Dict[str, Any]]). compactToolInputForPart returns an object
+      // (key fields only for summary-mode tools; full input for others).
+      // Compaction respects cfg.toolInputCompaction.
       const rawInput = block.input && typeof block.input === "object" ? block.input : undefined;
+      const useCompaction = cfg ? cfg.toolInputCompaction !== false : true;
       const tool_input = rawInput
         ? (useCompaction
-            ? compactToolInput(block.name, block.input, maxChars)
-            : formatToolInput(block.input))
+            ? compactToolInputForPart(block.name, block.input)
+            : block.input)
         : undefined;
       out.push({
         type: "tool",
@@ -422,7 +348,7 @@ function extractAllTurns(messages) {
             const maxChars = cfg?.toolInputMaxChars || 0;
             const useCompaction = cfg ? cfg.toolInputCompaction !== false : true;
             const inputText = useCompaction
-              ? compactToolInput(block.name, block.input, maxChars)
+              ? compactToolInputForProse(block.name, block.input, maxChars)
               : formatToolInput(block.input);
             parts.push(`[tool: ${block.name}]\n${inputText}`);
           } else if (block.type === "tool_result") {
