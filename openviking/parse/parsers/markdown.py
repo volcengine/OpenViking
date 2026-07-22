@@ -173,7 +173,7 @@ class MarkdownParser(BaseParser):
         self._code_block_pattern = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
         self._inline_code_pattern = re.compile(r"`([^`]+)`")
         self._link_pattern = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
-        self._image_pattern = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+        self._image_pattern = re.compile(r"!\[([^\]]*)\]\(((?:[^()]|\([^()]*\))+)\)")
         self._list_pattern = re.compile(r"^(\s*)[-*+]\s+(.+)$", re.MULTILINE)
         self._numbered_list_pattern = re.compile(r"^(\s*)\d+\.\s+(.+)$", re.MULTILINE)
         self._frontmatter_pattern = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
