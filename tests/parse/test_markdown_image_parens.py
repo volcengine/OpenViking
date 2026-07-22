@@ -2,14 +2,17 @@
 
 Verifies that image paths containing balanced parentheses are correctly
 captured instead of being truncated at the first ``)`` character.
+
+Tests exercise the production ``MarkdownParser._image_pattern`` regex
+directly, so they fail if the regex regresses to the old ``[^)]+`` form.
 """
 
-import re
+from openviking.parse.parsers.markdown import MarkdownParser
 
-import pytest
 
-# The regex pattern used in MarkdownParser._image_pattern
-IMAGE_PATTERN = re.compile(r"!\[([^\]]*)\]\(((?:[^()]|\([^()]*\))+)\)")
+# Instantiate once to access the production regex
+_parser = MarkdownParser()
+IMAGE_PATTERN = _parser._image_pattern
 
 
 class TestImagePatternParentheses:
