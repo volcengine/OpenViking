@@ -8,6 +8,7 @@ const AGENT_HUB_URL = 'https://openviking.ai/studio/agent-hub';
 const OPENVIKING_GITHUB = 'https://github.com/volcengine/OpenViking';
 const OPENVIKING_DOCS = 'https://docs.openviking.ai';
 const AGENT_PLAN_POST = 'https://mp.weixin.qq.com/s/LaQB9nyyX2GhDJKMNYcdaA';
+const PEER_MODEL_POST = '/post/openviking-user-peer-model';
 const PLUGIN_DOCS_ZH = 'https://docs.openviking.ai/zh/agent-integrations/01-overview';
 const PLUGIN_DOCS_EN = 'https://docs.openviking.ai/en/agent-integrations/01-overview';
 const MCP_DOCS_ZH = 'https://docs.openviking.ai/zh/agent-integrations/06-mcp-clients';
@@ -491,8 +492,8 @@ const AgentSocietyMemoryPost = ({ t }) => {
       })}</P>
 
       <P>{T({
-        en: <>For the scenario this post explores, the most critical design is <Strong>peer_id</Strong>. When a message is committed, the system can tag “who said this,” and OpenViking will file the memories generated from that interaction into a subtree dedicated to that person (<InlineCode>{'viking://…/peers/<peer_id>/…'}</InlineCode>), growing separately from the agent’s own main memory and from its history with everyone else. The scope-isolation question from thesis one becomes, quite literally, a directory structure: the interaction histories of two different members grow on two different subtrees. Agent Hub’s server attaches the sender’s identity to every message it delivers, so per-peer impressions accumulate automatically in the background—the agent never has to spare a thought for it.</>,
-        zh: <>对于本文探讨的场景而言，最为关键的一项设计是 <Strong>peer_id</Strong>。在提交消息时系统可以标注“这句话出自谁”，OpenViking 便会将基于这段互动生成的记忆，单独归档至该对象专属的子树中（<InlineCode>{'viking://…/peers/<peer_id>/…'}</InlineCode>），与 Agent 自身的主记忆、以及与其他人的互动历史分开生长。命题一中提到的“作用域如何隔离”问题，在这里被具象化为了目录结构：张三和李四的互动历史，会分别生长在两棵不同的子树上。Agent Hub 的服务端在投递每条消息时都会自动携带发送者的身份标识，Per-peer（针对特定个体）的专属印象就这样在后台自动积累——Agent 自身完全无需为此分心。</>,
+        en: <>For the scenario this post explores, the most critical design is <Strong>peer_id</Strong>. When a message is committed, the system can tag “who said this,” and OpenViking will file the memories generated from that interaction into a subtree dedicated to that person (<InlineCode>{'viking://…/peers/<peer_id>/…'}</InlineCode>), growing separately from the agent’s own main memory and from its history with everyone else. The scope-isolation question from thesis one becomes, quite literally, a directory structure: the interaction histories of two different members grow on two different subtrees. Agent Hub’s server attaches the sender’s identity to every message it delivers, so per-peer impressions accumulate automatically in the background—the agent never has to spare a thought for it. The full design behind this—separating data owners from interaction objects—is laid out in our earlier post <A href={PEER_MODEL_POST}>OpenViking User / Peer: Separating Data Owners From Interaction Objects</A>.</>,
+        zh: <>对于本文探讨的场景而言，最为关键的一项设计是 <Strong>peer_id</Strong>。在提交消息时系统可以标注“这句话出自谁”，OpenViking 便会将基于这段互动生成的记忆，单独归档至该对象专属的子树中（<InlineCode>{'viking://…/peers/<peer_id>/…'}</InlineCode>），与 Agent 自身的主记忆、以及与其他人的互动历史分开生长。命题一中提到的“作用域如何隔离”问题，在这里被具象化为了目录结构：张三和李四的互动历史，会分别生长在两棵不同的子树上。Agent Hub 的服务端在投递每条消息时都会自动携带发送者的身份标识，Per-peer（针对特定个体）的专属印象就这样在后台自动积累——Agent 自身完全无需为此分心。这套设计背后“把数据主体和交互对象分开”的完整思路，可参阅我们此前的文章<A href={PEER_MODEL_POST}>《OpenViking User / Peer：把数据主体和交互对象分开》</A>。</>,
       })}</P>
 
       <Pre lang="text" filename="viking://" lineNumbers={false}>{T({

@@ -58,6 +58,7 @@ Public references:
 
 - Agent integrations: https://docs.openviking.ai/en/agent-integrations/01-overview
 - MCP clients: https://docs.openviking.ai/en/agent-integrations/06-mcp-clients
+- User / Peer model design: https://blog.openviking.ai/post/openviking-user-peer-model/
 
 ## Timeline Evidence
 
