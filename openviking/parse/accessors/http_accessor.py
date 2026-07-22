@@ -339,13 +339,17 @@ class URLTypeDetector:
     @staticmethod
     def _extract_filename_from_disposition(content_disposition: str) -> Optional[str]:
         """
-        Extract filename from Content-Disposition header per RFC 6266.
+        Extract filename from Content-Disposition header per RFC 6266 / RFC 5987.
 
         Handles formats:
             - inline; filename="2601.00014v1.pdf"
             - attachment; filename=document.pdf
             - attachment; filename*=UTF-8''encoded.pdf
+            - attachment; filename*=iso-8859-1''r%E9sum%E9.pdf
             - attachment; filename="foo.pdf"; size=12345
+
+        Per RFC 6266 §4.3, ``filename*`` (RFC 5987 extended notation) takes
+        precedence over the legacy ``filename`` parameter when both are present.
 
         Args:
             content_disposition: Content-Disposition header value
@@ -357,23 +361,36 @@ class URLTypeDetector:
             return None
 
         import re
+        from urllib.parse import unquote
 
         content_disposition = content_disposition.strip()
 
-        # Try filename*=UTF-8''... format first (RFC 5987)
-        utf8_match = re.search(r"filename\*=UTF-8''([^;]+)", content_disposition, re.I)
-        if utf8_match:
-            from urllib.parse import unquote
-
-            return unquote(utf8_match.group(1))
+        # Try filename*=charset''... format first (RFC 5987 extended notation)
+        # Supports any charset token, not just UTF-8.
+        ext_match = re.search(
+            r"filename\*=([^']+)'([^']*)'([^;]+)",
+            content_disposition,
+            re.I,
+        )
+        if ext_match:
+            charset = ext_match.group(1) or "utf-8"
+            _language = ext_match.group(2)  # language tag, rarely used
+            encoded_value = ext_match.group(3)
+            try:
+                return unquote(encoded_value, encoding=charset.lower())
+            except (LookupError, UnicodeDecodeError):
+                # Fall back to UTF-8 if the declared charset is unknown
+                return unquote(encoded_value)
 
         # Try filename="..." format (quoted-string)
-        quoted_match = re.search(r'filename="([^"]+)"', content_disposition, re.I)
+        # Negative lookahead prevents matching filename*=
+        quoted_match = re.search(r'filename=(?!\*)"([^"]+)"', content_disposition, re.I)
         if quoted_match:
             return quoted_match.group(1)
 
-        # Try filename=... format (token)
-        simple_match = re.search(r"filename=([^;]+)", content_disposition, re.I)
+        # Try filename=... format (bare token)
+        # Negative lookahead prevents matching filename*=
+        simple_match = re.search(r"filename=(?!\*)([^;]+)", content_disposition, re.I)
         if simple_match:
             return simple_match.group(1).strip()
 
