@@ -454,10 +454,17 @@ async def test_embedding_handler_propagates_account_id_on_success(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_embedding_handler_restores_legacy_usage_event_identity(monkeypatch):
+    upserted: dict[str, object] = {}
+
     class _DummyVikingDB:
         is_closing = False
 
-        async def upsert(self, _data, *, ctx):
+        async def upsert(self, data, *, ctx, partial_update):
+            upserted.update(
+                data_account_id=data["account_id"],
+                ctx_account_id=ctx.account_id,
+                partial_update=partial_update,
+            )
             return None
 
     class _UsageReportingEmbedder(DenseEmbedderBase):
@@ -507,6 +514,9 @@ async def test_embedding_handler_restores_legacy_usage_event_identity(monkeypatc
     assert usage_event.request_id == "telemetry-embedding"
     assert usage_event.account_id == "acct-embedding"
     assert usage_event.user_id == "user-embedding"
+    assert upserted["data_account_id"] == "acct-embedding"
+    assert upserted["ctx_account_id"] == "acct-embedding"
+    assert upserted["partial_update"] is True
 
 
 @pytest.mark.asyncio

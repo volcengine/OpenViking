@@ -556,6 +556,8 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             account_id = inserted_data.get("account_id")
             if not account_id and isinstance(user_data, dict):
                 account_id = user_data.get("account_id")
+                if account_id:
+                    inserted_data["account_id"] = account_id
             collector = resolve_telemetry(embedding_msg.telemetry_id)
             telemetry_ctx = bind_telemetry(collector) if collector is not None else nullcontext()
 
