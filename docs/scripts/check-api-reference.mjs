@@ -82,7 +82,8 @@ for (const file of fs.readdirSync(routerDir).filter((name) => name.endsWith('.py
     for (const parameter of splitTopLevel(signature)) {
       const queryMatch = parameter.match(/^([A-Za-z_]\w*)\s*:[\s\S]*?=\s*Query\(([\s\S]*)\)$/)
       if (queryMatch) {
-        query.set(queryMatch[1], /^\s*\.\.\.(?:\s*,|\s*$)/.test(queryMatch[2]))
+        const alias = queryMatch[2].match(/\balias\s*=\s*["']([^"']+)["']/)?.[1]
+        query.set(alias ?? queryMatch[1], /^\s*\.\.\.(?:\s*,|\s*$)/.test(queryMatch[2]))
         continue
       }
 

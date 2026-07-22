@@ -4062,6 +4062,9 @@ class VikingFS:
         except AGFSNotFoundError as exc:
             raise NotFoundError(to_ref, "git_ref") from exc
 
+        from_oid = str(from_meta.get("oid", from_ref)) if isinstance(from_meta, dict) else ""
+        to_oid = str(to_meta.get("oid", to_ref)) if isinstance(to_meta, dict) else to_ref
+
         async def read_optional(ref: str) -> Optional[bytes]:
             try:
                 value = await self.show(ref, path=path, ctx=real_ctx)
@@ -4071,8 +4074,8 @@ class VikingFS:
                 raise TypeError(f"git_show returned unexpected blob type: {type(value).__name__}")
             return value
 
-        before_bytes = await read_optional(from_ref) if from_ref else None
-        after_bytes = await read_optional(to_ref)
+        before_bytes = await read_optional(from_oid) if from_ref else None
+        after_bytes = await read_optional(to_oid)
         if before_bytes is None and after_bytes is None:
             raise NotFoundError(path, "git_blob")
 
@@ -4091,8 +4094,6 @@ class VikingFS:
         else:
             change_type = "modified"
 
-        from_oid = str(from_meta.get("oid", from_ref)) if isinstance(from_meta, dict) else ""
-        to_oid = str(to_meta.get("oid", to_ref)) if isinstance(to_meta, dict) else to_ref
         diff_lines = difflib.unified_diff(
             before.splitlines(keepends=True),
             after.splitlines(keepends=True),

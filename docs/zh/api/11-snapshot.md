@@ -332,10 +332,7 @@ GET /api/v1/snapshot/diff?path={uri}&from={old_ref}&to={new_ref}
 ```
 
 ```bash
-curl --get "http://localhost:1933/api/v1/snapshot/diff" \
-  --data-urlencode "path=viking://resources/my_project/guide.md" \
-  --data-urlencode "from=3f2a1b9c" \
-  --data-urlencode "to=9a0b1c2d" \
+curl "http://localhost:1933/api/v1/snapshot/diff?path=viking://resources/my_project/guide.md&from=3f2a1b9c&to=9a0b1c2d" \
   -H "X-API-Key: your-key"
 ```
 
