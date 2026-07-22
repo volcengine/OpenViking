@@ -76,12 +76,14 @@ async def write_stored_links(
     ctx: RequestContext,
     viking_fs: Any,
     skip_uris: Optional[set] = None,
+    lock_handle: Any = None,
 ) -> List[str]:
     """Write StoredLinks to their endpoint files' links/backlinks fields.
 
     For each link: from_uri's ``links`` receives the forward link;
     to_uri's ``backlinks`` receives the reverse reference.
     Files listed in skip_uris are skipped (caller handles them in the same write).
+    When lock_handle is provided, all endpoint rewrites reuse that transaction.
     Returns the endpoint URIs that were successfully rewritten.  Callers can
     use this to avoid reporting link-only edits for files that failed the
     read/modify/write step.
@@ -89,6 +91,7 @@ async def write_stored_links(
     from openviking.session.memory.merge_op.link_merge import merge_links
 
     skip = skip_uris or set()
+    lock_kwargs = {"lock_handle": lock_handle} if lock_handle is not None else {}
     file_links: Dict[str, Dict[str, List[StoredLink]]] = {}
     for link in links:
         if link.from_uri not in skip:
@@ -115,7 +118,12 @@ async def write_stored_links(
             if current_trace_id:
                 mf.extra_fields["last_update_trace_id"] = current_trace_id
             bump_memory_version(mf)
-            await viking_fs.write_file(uri, MemoryFileUtils.write(mf), ctx=ctx)
+            await viking_fs.write_file(
+                uri,
+                MemoryFileUtils.write(mf),
+                ctx=ctx,
+                **lock_kwargs,
+            )
             updated_uris.append(uri)
         except Exception as e:
             tracer.error(f"Failed to apply links to {uri}: {e}")
@@ -956,7 +964,12 @@ class MemoryUpdater:
                     source=RESOURCE_REF_SOURCE_SESSION_COMMIT,
                 )
                 if changed:
-                    await viking_fs.write_file(uri, MemoryFileUtils.write(mf), ctx=ctx)
+                    await viking_fs.write_file(
+                        uri,
+                        MemoryFileUtils.write(mf),
+                        ctx=ctx,
+                        lock_handle=self._transaction_handle,
+                    )
             except Exception as exc:
                 logger.warning("Failed to sync resource refs for %s: %s", uri, exc)
 
@@ -1073,7 +1086,12 @@ class MemoryUpdater:
                 content_template=schema.content_template,
                 extract_context=extract_context,
             )
-            await viking_fs.write_file(uri, new_full_content, ctx=ctx)
+            await viking_fs.write_file(
+                uri,
+                new_full_content,
+                ctx=ctx,
+                lock_handle=self._transaction_handle,
+            )
 
     def _distribute_links_to_operations(self, operations: ResolvedOperations) -> None:
         """Distribute resolved_links to corresponding upsert operations by URI.
@@ -1124,7 +1142,13 @@ class MemoryUpdater:
             if context_type_for_uri(uri) != "memory"
         }
         skip = upserted_uris | (deleted_uris or set()) | non_memory_endpoints
-        await write_stored_links(resolved_links, ctx, viking_fs, skip_uris=skip)
+        await write_stored_links(
+            resolved_links,
+            ctx,
+            viking_fs,
+            skip_uris=skip,
+            lock_handle=self._transaction_handle,
+        )
 
 
     async def _inherit_deleted_link_relations(
@@ -1202,7 +1226,12 @@ class MemoryUpdater:
                 if current_trace_id:
                     mf.extra_fields["last_update_trace_id"] = current_trace_id
                 bump_memory_version(mf)
-                await viking_fs.write_file(uri, MemoryFileUtils.write(mf), ctx=ctx)
+                await viking_fs.write_file(
+                    uri,
+                    MemoryFileUtils.write(mf),
+                    ctx=ctx,
+                    lock_handle=self._transaction_handle,
+                )
                 result.add_edited(uri)
             except Exception as e:
                 tracer.error(f"Failed to inherit deleted memory links for {uri}: {e}")
@@ -1414,13 +1443,23 @@ class MemoryUpdater:
                 entry.get("name", "") in {"", ".overview.md"} for entry in entries
             )
             try:
-                await viking_fs.rm(overview_path, recursive=False, ctx=ctx)
+                await viking_fs.rm(
+                    overview_path,
+                    recursive=False,
+                    ctx=ctx,
+                    lock_handle=self._transaction_handle,
+                )
             except Exception:
                 pass
             # Try to delete empty directory
             if can_delete_directory:
                 try:
-                    await viking_fs.rm(directory, recursive=True, ctx=ctx)
+                    await viking_fs.rm(
+                        directory,
+                        recursive=True,
+                        ctx=ctx,
+                        lock_handle=self._transaction_handle,
+                    )
                 except Exception:
                     pass
             return
@@ -1470,6 +1509,11 @@ class MemoryUpdater:
         # Write .overview.md to the directory
         overview_path = f"{directory.rstrip('/')}/.overview.md"
         try:
-            await viking_fs.write_file(overview_path, rendered, ctx=ctx)
+            await viking_fs.write_file(
+                overview_path,
+                rendered,
+                ctx=ctx,
+                lock_handle=self._transaction_handle,
+            )
         except Exception as e:
             tracer.error(f"Failed to write overview {overview_path}: {e}")
