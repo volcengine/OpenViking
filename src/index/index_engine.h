@@ -33,6 +33,9 @@ class IndexEngine {
   FilterResult evaluate_filter(const std::string& dsl,
                                uint64_t max_cached_candidates = 0);
 
+  FilterResult evaluate_filter_for_routing(const std::string& dsl,
+                                           uint64_t native_threshold);
+
   int64_t dump(const std::string& dir);
 
   StateResult get_state();

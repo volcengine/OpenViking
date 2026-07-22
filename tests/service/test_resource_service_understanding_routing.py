@@ -97,7 +97,7 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
         "task_id": "task-1",
     }
     _, message = queue_manager.enqueue.await_args.args
-    assert queue_manager.enqueue.await_args.args[0] == QueueManager.ADD_RESOURCE
+    assert queue_manager.enqueue.await_args.args[0] == QueueManager.EXTERNAL_PARSE
     queued = AddResourceMsg.from_dict(message)
     assert queued.args["parser_backend"] == "understanding"
     assert queued.args["resolved_extension"] == ".pdf"

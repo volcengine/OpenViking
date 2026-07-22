@@ -25,19 +25,19 @@ ResourceService._add_resource                 阶段一：选择执行方式
         |                                         +--> 轮询 Connector task/info
         |                                         +--> Connector 自己解析并写入资源
         |
-        +-- Git && wait=false ----------------> 预检 + AddResourceMsg 入队 --> 返回 task_id
-        |                                                           |
-        |                                                           +--> Worker
+        +-- Git && wait=false ----------------> 预检 + AddResource 队列 --> 返回 task_id
+        |                                                          |
+        |                                                          +--> Worker
         |
         +-- HTTP 服务远程资源 && wait=false && Understanding 已启用
         |       |
-        |       +-- 原始 URL 可直达 -----------> 提交 Understanding --> response_id 入队
+        |       +-- 原始 URL 可直达 -----------> 提交 Understanding --> ExternalParse 队列
         |       |                                                        |
         |       |                                                        +--> 返回 task_id --> Worker
         |       |
         |       +-- 需要先确定本地类型 --------> Accessor 下载并识别
         |               |
-        |               +-- 命中 Understanding --> 上传同一文件 --> response_id 入队
+        |               +-- 命中 Understanding --> 上传同一文件 --> ExternalParse 队列
         |               |                                             |
         |               |                                             +--> 返回 task_id --> Worker
         |               |
@@ -79,7 +79,7 @@ UnifiedResourceProcessor
         |
         +-- wait=true  --> 继续等待摘要 / 语义队列 / 向量索引后返回
         |
-        +-- wait=false --> 普通标准链落盘后返回；后续语义处理由后台任务完成
+        +-- wait=false --> 普通标准链落盘后进入 AddResource 队列并返回
 ```
 
 Understanding 不受 `wait=false` 限制。`wait=true` 在当前请求内完成 Understanding 提交、轮询、解析和 TreeBuilder，并继续等待后续队列；`wait=false` 的远程服务路径会先提交 Understanding、将 `response_id` 入队，再由 Worker 恢复任务。
@@ -93,7 +93,7 @@ Understanding 不受 `wait=false` 限制。`wait=true` 在当前请求内完成 
 | Understanding 能否直接接收原始 URL | `ParserRouter.should_use_understanding_directly` | 直达 Understanding 或继续 Accessor |
 | Understanding 与内置 Parser | `ParserRouter.parse` | `ParseResult` |
 
-后台资源任务统一使用可恢复的 `AddResourceMsg`。Worker 以 `wait=true` 重新进入同步添加链，因此不会再次进入 Git 或异步 Understanding 入队分支；已经落盘、只待摘要和索引的普通资源则通过消息中的 `prepared` 直接完成后处理。
+后台资源任务统一使用可恢复的 `AddResourceMsg`，但按工作类型进入两个独立队列：Understanding 使用受外部解析并发限制的 `ExternalParse`；Git 和已落盘的本地后处理使用 `AddResource`。两个队列都由 `AddResourceProcessor` 消费，锁接管失败时仍回到原队列。Worker 以 `wait=true` 重新进入同步添加链，因此不会再次进入异步入队分支。
 
 ## 顶层路由表
 
@@ -254,8 +254,8 @@ Connector 不返回本地 `ParseResult`，也不调用当前进程的 `TreeBuild
 |---|---|---|
 | Connector | 提交外部任务后返回 | 不支持；不会假装同步等待 |
 | Git | 预检并预占 URI 后启动后台标准链 | 当前请求内完成标准链并等待队列 |
-| 飞书直达 Understanding | 生产端提交后只将 response ID 入队；无显式资源名时可延迟返回 `root_uri` | 当前请求内调用 Understanding，再等待后续队列 |
-| HTTP 服务 + 异步 Understanding | 先识别类型，再预占 URI、入 AddResource 队列后返回 | 当前请求内调用 Understanding，再等待后续队列 |
+| 飞书直达 Understanding | 生产端提交后只将 response ID 放入 `ExternalParse`；无显式资源名时可延迟返回 `root_uri` | 当前请求内调用 Understanding，再等待后续队列 |
+| HTTP 服务 + 异步 Understanding | 先识别类型，再预占 URI、入 `ExternalParse` 后返回 | 当前请求内调用 Understanding，再等待后续队列 |
 | 普通标准链 | 解析和落盘完成后返回；摘要/语义处理由任务监控 | 解析和落盘完成后继续等待语义队列 |
 
 所以普通 `wait=false` 不是“所有工作后台化”，而是“资源树已落盘，但不阻塞等待后续语义任务”。Git 与异步 Understanding 是两个明确的例外分支。
@@ -280,7 +280,7 @@ Connector 不返回本地 `ParseResult`，也不调用当前进程的 `TreeBuild
 | HTTP 类型识别 | `openviking/parse/accessors/http_accessor.py`：`HTTPAccessor`、`URLTypeDetector` |
 | Understanding 同步适配 | `openviking/parse/understanding_api.py`：`UnderstandingAPI` |
 | 飞书直达开关 | `openviking_cli/utils/config/open_viking_config.py`：`ParserApiConfig.enable_feishu_url` |
-| 可恢复的后台资源消息与 Worker | `openviking/storage/queuefs/add_resource_msg.py`、`add_resource_processor.py` |
+| 可恢复的后台资源消息与双队列 Worker | `openviking/storage/queuefs/add_resource_msg.py`、`add_resource_processor.py`、`queue_manager.py` |
 | Connector 客户端 | `openviking/connector/client.py`：`ConnectorClient` |
 
 ## 快速自检
