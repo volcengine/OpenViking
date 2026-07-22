@@ -155,18 +155,22 @@ class MarkdownParser(BaseParser):
 
     def __init__(
         self,
-        extract_frontmatter: bool = True,
+        extract_frontmatter: Optional[bool] = None,
         config: Optional[ParserConfig] = None,
     ):
         """
         Initialize the enhanced markdown parser.
 
         Args:
-            extract_frontmatter: Whether to extract YAML frontmatter
+            extract_frontmatter: Whether to extract YAML frontmatter. When None, uses config.
             config: Parser configuration (uses default if None)
         """
-        self.extract_frontmatter = extract_frontmatter
         self.config = config or ParserConfig()
+        self.extract_frontmatter = (
+            extract_frontmatter
+            if extract_frontmatter is not None
+            else getattr(self.config, "extract_frontmatter", True)
+        )
 
         # Compile regex patterns for better performance
         self._heading_pattern = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
