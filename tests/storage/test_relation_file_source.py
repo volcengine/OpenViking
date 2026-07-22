@@ -44,6 +44,7 @@ async def test_relation_table_path_dir(vfs):
 async def test_relation_table_path_file(vfs, monkeypatch):
     async def file_stat(path):
         return {"isDir": False, "is_dir": False}
+
     monkeypatch.setattr(vfs._async_agfs, "stat", file_stat)
     p = "/local/test_account/resources/project/a.md"
     tbl = await vfs._relation_table_path(p)
@@ -53,6 +54,7 @@ async def test_relation_table_path_file(vfs, monkeypatch):
 async def test_relation_table_path_fallback(vfs, monkeypatch):
     async def bad_stat(path):
         raise RuntimeError("boom")
+
     monkeypatch.setattr(vfs._async_agfs, "stat", bad_stat)
     p = "/local/test_account/resources/project/a.md"
     tbl = await vfs._relation_table_path(p)
@@ -66,13 +68,22 @@ async def test_relation_table_path_fallback(vfs, monkeypatch):
     [
         ("/local/test_account/resources/project/", True, "/.relations.json"),  # row1 dir->dir
         ("/local/test_account/resources/project/d/", True, "/.relations.json"),  # row2 dir->file
-        ("/local/test_account/resources/project/a.md", False, "/.relations/a.md/.relations.json"),  # row3 file->dir FIXED
-        ("/local/test_account/resources/project/b.md", False, "/.relations/b.md/.relations.json"),  # row4 file->file FIXED
+        (
+            "/local/test_account/resources/project/a.md",
+            False,
+            "/.relations/a.md/.relations.json",
+        ),  # row3 file->dir FIXED
+        (
+            "/local/test_account/resources/project/b.md",
+            False,
+            "/.relations/b.md/.relations.json",
+        ),  # row4 file->file FIXED
     ],
 )
 async def test_relation_table_path_param(vfs, monkeypatch, source, is_dir, expected_suffix):
     async def stat_fn(path):
         return {"isDir": is_dir, "is_dir": is_dir}
+
     monkeypatch.setattr(vfs._async_agfs, "stat", stat_fn)
     tbl = await vfs._relation_table_path(source)
     assert tbl.endswith(expected_suffix)
@@ -83,8 +94,10 @@ async def test_relation_table_path_param(vfs, monkeypatch, source, is_dir, expec
 async def test_relation_table_path_name_collision(vfs, monkeypatch):
     """row11: dir x and file x.md in same parent get distinct tables (no collision)."""
     results = {}
+
     async def stat_fn(path):
         return {"isDir": not str(path).endswith(".md"), "is_dir": not str(path).endswith(".md")}
+
     monkeypatch.setattr(vfs._async_agfs, "stat", stat_fn)
     for p in [
         "/local/test_account/resources/project/x",
@@ -93,7 +106,10 @@ async def test_relation_table_path_name_collision(vfs, monkeypatch):
         results[p] = await vfs._relation_table_path(p)
     assert results["/local/test_account/resources/project/x"].endswith("x/.relations.json")
     assert results["/local/test_account/resources/project/x.md"].endswith("x.md/.relations.json")
-    assert results["/local/test_account/resources/project/x"] != results["/local/test_account/resources/project/x.md"]
+    assert (
+        results["/local/test_account/resources/project/x"]
+        != results["/local/test_account/resources/project/x.md"]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +151,9 @@ class _FakeBackendFs:
         p = self._norm(path)
         if p in self.files:
             return {"isDir": False, "is_dir": False}
-        return {"isDir": True, "is_dir": True}
+        if p in self.dirs:
+            return {"isDir": True, "is_dir": True}
+        raise FileNotFoundError(path)
 
     async def read(self, path):
         p = self._norm(path)
@@ -161,6 +179,18 @@ class _FakeBackendFs:
             cur = cur + "/" + part
             self.dirs.add(cur)
         return True
+
+    async def rm(self, path, recursive=False):
+        p = self._norm(path)
+        self.files.pop(p, None)
+        self.dirs.discard(p)
+        if recursive:
+            prefix = p.rstrip("/") + "/"
+            for k in [k for k in self.files if k.startswith(prefix)]:
+                del self.files[k]
+            for k in [k for k in self.dirs if k.startswith(prefix)]:
+                self.dirs.discard(k)
+        return {}
 
 
 @pytest.fixture
@@ -234,6 +264,112 @@ async def test_dir_source_link_unchanged_e2e(e2e_vfs):
     assert "/local/test_account/resources/project/.relations" not in backend.files
     entries = await vfs.get_relation_table(d)
     assert entries[0].uris == [target]
+
+
+@pytest.fixture
+def e2e_rm_mv_vfs(e2e_vfs, monkeypatch):
+    """Extend e2e_vfs with the infra rm/mv touch beyond link/unlink, neutralized.
+
+    rm/mv wrap work in a LockContext and consult the vector store; none of that is
+    under test here — only the file-sidecar migration/cleanup the fix adds.
+    """
+    vfs, backend = e2e_vfs
+
+    class _NoopLock:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return None
+
+        async def __aexit__(self, *a):
+            return False
+
+    monkeypatch.setattr("openviking.storage.transaction.LockContext", _NoopLock)
+    monkeypatch.setattr("openviking.storage.transaction.get_lock_manager", lambda: None)
+    monkeypatch.setattr(vfs, "_ensure_delete_access", lambda *a, **k: None)
+
+    async def _no_uris(*a, **k):
+        return []
+
+    async def _noop(*a, **k):
+        return None
+
+    monkeypatch.setattr(vfs, "_collect_uris", _no_uris)
+    monkeypatch.setattr(vfs, "_delete_from_vector_store", _noop)
+    monkeypatch.setattr(vfs, "_update_vector_store_uris", _noop)
+    monkeypatch.setattr(vfs, "_get_vector_store", lambda: None)
+    monkeypatch.setattr(
+        vfs,
+        "_path_to_uri",
+        lambda path, **k: path.replace("/local/test_account/", "viking://"),
+    )
+    return vfs, backend
+
+
+async def test_file_source_rm_clears_stale_relations_e2e(e2e_rm_mv_vfs):
+    """link -> rm -> recreate same URI: rebuilt file must not inherit stale relations."""
+    vfs, backend = e2e_rm_mv_vfs
+    a = "viking://resources/project/a.md"
+    b = "viking://resources/project/b.md"
+    a_path = "/local/test_account/resources/project/a.md"
+    sidecar = "/local/test_account/resources/project/.relations/a.md/.relations.json"
+
+    await vfs.link(a, [b], reason="test")
+    assert sidecar in backend.files
+
+    await vfs.rm(a)
+    assert sidecar not in backend.files, "rm of a file must drop its relation sidecar"
+
+    # Recreate the file at the same URI; its relation table must be empty.
+    backend.files[a_path] = b"a"
+    assert await vfs.get_relation_table(a) == []
+
+
+async def test_file_source_rm_not_found_clears_sidecar_e2e(e2e_rm_mv_vfs):
+    """rm's idempotent not-found branch must still drop the file sidecar.
+
+    Body already gone (rm takes the not-found path) -> recreate at same URI must
+    not inherit stale relations. refs #3067
+    """
+    vfs, backend = e2e_rm_mv_vfs
+    a = "viking://resources/project/a.md"
+    b = "viking://resources/project/b.md"
+    a_path = "/local/test_account/resources/project/a.md"
+    sidecar = "/local/test_account/resources/project/.relations/a.md/.relations.json"
+
+    await vfs.link(a, [b], reason="test")
+    assert sidecar in backend.files
+
+    # Simulate the body already being gone so rm hits the not-found branch.
+    backend.files.pop(a_path, None)
+    await vfs.rm(a)
+    assert sidecar not in backend.files, "not-found rm must still drop the sidecar"
+
+    backend.files[a_path] = b"a"
+    assert await vfs.get_relation_table(a) == []
+
+
+async def test_file_source_mv_migrates_relations_e2e(e2e_rm_mv_vfs):
+    """link -> mv: new URI keeps the relations, old sidecar is gone (no orphan)."""
+    vfs, backend = e2e_rm_mv_vfs
+    a = "viking://resources/project/a.md"
+    a2 = "viking://resources/project/a2.md"
+    b = "viking://resources/project/b.md"
+    old_sidecar = "/local/test_account/resources/project/.relations/a.md/.relations.json"
+    new_sidecar = "/local/test_account/resources/project/.relations/a2.md/.relations.json"
+
+    await vfs.link(a, [b], reason="test")
+    assert old_sidecar in backend.files
+
+    await vfs.mv(a, a2)
+
+    assert new_sidecar in backend.files, "moved file must carry its relations to the new sidecar"
+    assert old_sidecar not in backend.files, "old sidecar must not be orphaned"
+
+    entries = await vfs.get_relation_table(a2)
+    assert len(entries) == 1
+    assert entries[0].uris == [b]
 
 
 async def test_relations_container_registered_internal():

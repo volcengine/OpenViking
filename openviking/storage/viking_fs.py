@@ -613,6 +613,7 @@ class VikingFS:
             estimated_count = await _estimate_deleted_count(path, real_ctx)
             await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
             logger.info(f"[VikingFS] rm target not found, cleaned orphan index: {uri}")
+            await self._remove_file_relation_sidecar(path, ctx=ctx)
             return {"estimated_deleted_count": estimated_count}
 
         if is_dir:
@@ -657,6 +658,8 @@ class VikingFS:
                     result["estimated_deleted_count"] = estimated_count
                 else:
                     result = {"estimated_deleted_count": estimated_count}
+                if not is_dir:
+                    await self._remove_file_relation_sidecar(path, ctx=ctx)
                 return result
         except LockAcquisitionError:
             raise ResourceBusyError(f"Resource is being processed: {uri}", uri=uri)
@@ -788,8 +791,19 @@ class VikingFS:
                     pass
                 raise
 
+            # Migrate a file source's relation sidecar (a dir source carries its table
+            # inside the moved subtree; a file's sidecar is a sibling the body copy
+            # misses). Read while the source body still exists, write to the new sidecar,
+            # then drop the old one after the source body is removed. refs #3067
+            if not is_dir:
+                moved_relations = await self._read_relation_table(old_path, ctx=ctx)
+                if moved_relations:
+                    await self._write_relation_table(new_path, moved_relations, ctx=ctx)
+
             # Delete source
             await self._async_agfs.rm(old_path, recursive=is_dir)
+            if not is_dir:
+                await self._remove_file_relation_sidecar(old_path, ctx=ctx)
             return {}
 
     async def system_sync_status(
@@ -3057,6 +3071,28 @@ class VikingFS:
         if table_path != f"{dir_path}/.relations.json":
             await self._ensure_parent_dirs(table_path, ctx=ctx)
         await self._async_agfs.write(table_path, content)
+
+    async def _remove_file_relation_sidecar(
+        self, source_path: str, ctx: Optional[RequestContext] = None
+    ) -> None:
+        """Best-effort removal of a file source's relation sidecar dir.
+
+        Directory sources keep their table inside the body subtree, so rm/mv of the
+        directory carries it. A file source's table lives in a sibling sidecar
+        (<parent>/.relations/<name>/.relations.json) the body rm/mv never touches —
+        remove it explicitly so a rebuilt/moved file does not inherit stale
+        relations. refs #3067
+        """
+        parent, _, name = source_path.rpartition("/")
+        if not name:
+            return
+        sidecar_dir = f"{parent}/.relations/{name}"
+        try:
+            await self._async_agfs.rm(sidecar_dir, recursive=True)
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            logger.warning(f"[VikingFS] failed to remove relation sidecar {sidecar_dir}: {e}")
 
     # ========== Batch Read (backward compatible) ==========
 
