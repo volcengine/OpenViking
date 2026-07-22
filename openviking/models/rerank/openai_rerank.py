@@ -17,6 +17,25 @@ from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
+# DashScope native API paths that use a nested request/response envelope.
+# The OpenAI-compatible endpoint (/compatible-api/) uses the flat protocol.
+_DASHSCOPE_NATIVE_PATH_MARKERS = ("/api/v1/services/rerank",)
+
+
+def _uses_nested_envelope(api_base: str) -> bool:
+    """Return True if the endpoint uses DashScope's native nested envelope.
+
+    DashScope exposes two API styles:
+    - ``/compatible-api/v1/reranks`` — OpenAI-compatible, flat body and
+      top-level ``results`` (used by qwen3-rerank).
+    - ``/api/v1/services/rerank`` — native DashScope, nested
+      ``input``/``output`` envelope (used by gte-rerank-v2, qwen3-vl-rerank).
+
+    Detection is path-based, not hostname-based, so both styles work
+    regardless of which DashScope host or gateway the user configures.
+    """
+    return any(marker in api_base for marker in _DASHSCOPE_NATIVE_PATH_MARKERS)
+
 
 class OpenAIRerankClient(RerankBase):
     """
@@ -51,6 +70,47 @@ class OpenAIRerankClient(RerankBase):
         self.extra_headers = extra_headers or {}
         self.timeout = timeout
         self.provider = "openai"
+        self._uses_nested_envelope = _uses_nested_envelope(api_base)
+
+    def _build_request_body(self, query: str, documents: List[str]) -> dict:
+        """Build the request body for the rerank API.
+
+        DashScope native API uses a nested envelope:
+            {"model": ..., "input": {"query": ..., "documents": [...]}, "parameters": {...}}
+
+        Standard OpenAI/Cohere and DashScope compatible-api use a flat body:
+            {"model": ..., "query": ..., "documents": [...]}
+        """
+        if self._uses_nested_envelope:
+            return {
+                "model": self.model_name,
+                "input": {
+                    "query": query,
+                    "documents": documents,
+                },
+                "parameters": {
+                    "return_documents": False,
+                },
+            }
+        return {
+            "model": self.model_name,
+            "query": query,
+            "documents": documents,
+        }
+
+    def _extract_results(self, response_json: dict) -> Optional[List[dict]]:
+        """Extract the results list from an API response.
+
+        DashScope native API nests results under ``output.results``;
+        standard services and DashScope compatible-api return ``results``
+        at the top level.
+        """
+        if self._uses_nested_envelope:
+            output = response_json.get("output")
+            if isinstance(output, dict):
+                return output.get("results")
+            return None
+        return response_json.get("results")
 
     def rerank_batch(self, query: str, documents: List[str]) -> Optional[List[float]]:
         """
@@ -67,11 +127,7 @@ class OpenAIRerankClient(RerankBase):
         if not documents:
             return []
 
-        req_body = {
-            "model": self.model_name,
-            "query": query,
-            "documents": documents,
-        }
+        req_body = self._build_request_body(query, documents)
 
         try:
             headers = {
@@ -93,8 +149,7 @@ class OpenAIRerankClient(RerankBase):
             # Update token usage tracking (estimate, OpenAI rerank doesn't provide token info)
             self._extract_and_update_token_usage(result, query, documents)
 
-            # Standard OpenAI/Cohere rerank format: results[].{index, relevance_score}
-            results = result.get("results")
+            results = self._extract_results(result)
             if not results:
                 logger.warning(f"[OpenAIRerankClient] Unexpected response format: {result}")
                 return None
@@ -108,6 +163,8 @@ class OpenAIRerankClient(RerankBase):
 
             # Results may be sparse or out of order. Missing documents keep a
             # zero score while returned scores map back to their input indexes.
+            # Both "relevance_score" (singular) and "relevance_scores" (plural)
+            # are accepted — DashScope uses the singular form.
             scores = [0.0] * len(documents)
             for item in results:
                 idx = item.get("index")
@@ -116,7 +173,7 @@ class OpenAIRerankClient(RerankBase):
                         "[OpenAIRerankClient] Out-of-bounds or missing index in result: %s", item
                     )
                     return None
-                scores[idx] = item.get("relevance_score", 0.0)
+                scores[idx] = item.get("relevance_score", item.get("relevance_scores", 0.0))
 
             logger.debug(f"[OpenAIRerankClient] Reranked {len(documents)} documents")
             return scores

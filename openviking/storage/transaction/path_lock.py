@@ -27,7 +27,7 @@ LOCK_TYPE_TREE = "T"
 _READ_ONLY_TREE_LOCK_TYPES = {"P", "S"}
 
 # Default poll interval when waiting for a lock (seconds)
-_POLL_INTERVAL = 0.2
+_POLL_INTERVAL = 0.1
 _WAIT_LOG_INTERVAL = 10.0
 _last_timeout_warning_at: dict[str, float] = {}
 

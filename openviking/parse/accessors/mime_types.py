@@ -183,6 +183,12 @@ MEDIA_TYPE_ALIASES: Dict[str, str] = {
     "video/mp4": "video/mp4",  # Keep as is (standard)
 }
 
+
+def _normalize_media_type(media_type: str) -> str:
+    """Return the media type token without parameters."""
+    return media_type.lower().strip().split(";", 1)[0].strip()
+
+
 # Comprehensive IANA media type to file extension mapping
 # Based on IANA registry and common usage
 IANA_MEDIA_TYPE_TO_EXTENSION: Dict[str, List[str]] = {
@@ -317,15 +323,11 @@ def get_preferred_extension(media_type: str) -> Optional[str]:
         return None
 
     # Normalize and parse
-    media_type = media_type.lower().strip()
+    media_type = _normalize_media_type(media_type)
 
     # Handle aliases first
     if media_type in MEDIA_TYPE_ALIASES:
         media_type = MEDIA_TYPE_ALIASES[media_type]
-
-    # Strip parameters
-    if ";" in media_type:
-        media_type = media_type.split(";", 1)[0].strip()
 
     # Exact match
     if media_type in IANA_MEDIA_TYPE_TO_EXTENSION:
@@ -379,14 +381,10 @@ def get_all_extensions(media_type: str) -> List[str]:
     if not media_type:
         return []
 
-    media_type = media_type.lower().strip()
+    media_type = _normalize_media_type(media_type)
 
     # Handle aliases first
     if media_type in MEDIA_TYPE_ALIASES:
         media_type = MEDIA_TYPE_ALIASES[media_type]
-
-    # Strip parameters
-    if ";" in media_type:
-        media_type = media_type.split(";", 1)[0].strip()
 
     return IANA_MEDIA_TYPE_TO_EXTENSION.get(media_type, [])

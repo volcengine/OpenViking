@@ -614,7 +614,17 @@ async fn detect_api_key_role(client: &BaseClient) -> Result<ApiKeyRole> {
             status: Some(status),
             ..
         }) if admin_probe_regular_key_status(status) => Ok(ApiKeyRole::Regular),
-        Err(Error::Api { message, status }) => Err(Error::Api { message, status }),
+        Err(Error::Api {
+            code,
+            message,
+            details,
+            status,
+        }) => Err(Error::Api {
+            code,
+            message,
+            details,
+            status,
+        }),
         Err(error) => Err(error),
     }
 }
@@ -665,24 +675,13 @@ pub(crate) fn validation_error_copy(kind: ConfigKind, error: &Error) -> String {
                 "Cannot reach the server. Check the URL and your network connection.".to_string()
             }
         },
-        Error::Api {
-            status: Some(401 | 403),
-            ..
-        } => "API key was rejected. Check your API key.".to_string(),
-        Error::Api {
-            status: Some(404), ..
-        } => {
-            "Server responded but the API endpoint was not found. Check the server URL.".to_string()
+        Error::Timeout(_) => {
+            "Connection timed out. Increase the request timeout or check the server.".to_string()
         }
-        Error::Api {
-            status: Some(status),
-            ..
-        } => {
-            format!("Server returned HTTP {status}. Check the server configuration.")
+        error @ Error::Api { .. } if error.code() == "UNAUTHENTICATED" => {
+            "API key was rejected. Check your API key.".to_string()
         }
-        Error::Api { .. } => {
-            "Server returned an error during validation. Check the server logs.".to_string()
-        }
+        Error::Api { message, .. } => message.clone(),
         Error::Config(msg) => msg.clone(),
         _ => match kind {
             ConfigKind::OpenVikingService => {
@@ -706,20 +705,11 @@ pub(crate) fn validation_error_copy_zh(kind: ConfigKind, error: &Error) -> Strin
             }
             ConfigKind::Custom => "无法连接服务器。请检查 URL 和网络连接。".to_string(),
         },
-        Error::Api {
-            status: Some(401 | 403),
-            ..
-        } => "API Key 被拒绝。请检查 API Key。".to_string(),
-        Error::Api {
-            status: Some(404), ..
-        } => "服务器响应了，但 API 端点未找到。请检查服务器 URL。".to_string(),
-        Error::Api {
-            status: Some(status),
-            ..
-        } => {
-            format!("服务器返回 HTTP {status}。请检查服务器配置。")
+        Error::Timeout(_) => "连接超时。请提高请求超时时间或检查服务器状态。".to_string(),
+        error @ Error::Api { .. } if error.code() == "UNAUTHENTICATED" => {
+            "API Key 被拒绝。请检查 API Key。".to_string()
         }
-        Error::Api { .. } => "服务器验证时返回错误。请检查服务器日志。".to_string(),
+        Error::Api { message, .. } => message.clone(),
         Error::Config(msg) => msg.clone(),
         _ => match kind {
             ConfigKind::OpenVikingService => "验证失败。请检查 API Key 后重试。".to_string(),
@@ -779,7 +769,7 @@ mod tests {
         ApiKeyRole, ConfigDraft, ConfigKind, ConfigStore, OPENVIKING_SERVICE_URL,
         admin_probe_ambiguous_status, admin_probe_regular_key_status, build_config,
         should_run_authenticated_probe, validate_candidate_config,
-        validate_candidate_config_with_role, validate_config_name, validation_error_copy,
+        validate_candidate_config_with_role, validate_config_name,
     };
     use crate::config::Config;
     use std::fs;
@@ -1133,28 +1123,6 @@ mod tests {
         assert!(admin_probe_ambiguous_status(500));
         assert!(admin_probe_ambiguous_status(503));
         assert!(!admin_probe_regular_key_status(500));
-    }
-
-    #[test]
-    fn validation_error_copy_hides_raw_backend_details() {
-        let error = crate::error::Error::api(
-            "[AuthenticationError] invalid key. Request ID: 02177930089909800000000000000000ffff"
-                .to_string(),
-        );
-
-        let cloud = validation_error_copy(ConfigKind::OpenVikingService, &error);
-        let custom = validation_error_copy(ConfigKind::Custom, &error);
-
-        assert_eq!(
-            cloud,
-            "Server returned an error during validation. Check the server logs."
-        );
-        assert_eq!(
-            custom,
-            "Server returned an error during validation. Check the server logs."
-        );
-        assert!(!cloud.contains("Request ID"));
-        assert!(!custom.contains("AuthenticationError"));
     }
 
     #[test]

@@ -21,6 +21,7 @@ from openviking.pyagfs.exceptions import (
     AGFSNetworkError,
     AGFSNotADirectoryError,
     AGFSNotFoundError,
+    AGFSNotSupportedError,
     AGFSPermissionDeniedError,
     AGFSPluginError,
     AGFSSerializationError,
@@ -38,6 +39,7 @@ from openviking_cli.exceptions import (
     OpenVikingError,
     PermissionDeniedError,
     UnavailableError,
+    UnimplementedError,
 )
 
 _KNOWN_HTTP_STATUS_CODES = frozenset(HTTP_STATUS_TO_ERROR_CODE)
@@ -502,6 +504,8 @@ def map_exception(
         return PermissionDeniedError(str(exc), resource=resource)
     if isinstance(exc, AGFSAlreadyExistsError):
         return ConflictError(str(exc), resource=resource)
+    if isinstance(exc, AGFSNotSupportedError):
+        return UnimplementedError(str(exc), details=_resource_details(resource))
     if isinstance(exc, AGFSInvalidPathError):
         message = str(exc)
         return InvalidURIError(resource or message, message)

@@ -295,9 +295,12 @@ class URLTypeDetector:
         media_type_str = content_type.lower().strip()
 
         # Handle common aliases
-        if media_type_str in MEDIA_TYPE_ALIASES:
-            meta["media_type_alias"] = media_type_str
-            media_type_str = MEDIA_TYPE_ALIASES[media_type_str]
+        media_type_token = media_type_str.split(";", 1)[0].strip()
+        if media_type_token in MEDIA_TYPE_ALIASES:
+            meta["media_type_alias"] = media_type_token
+            media_type_str = (
+                MEDIA_TYPE_ALIASES[media_type_token] + media_type_str[len(media_type_token) :]
+            )
 
         # Parse into structured IANAMediaType
         try:
