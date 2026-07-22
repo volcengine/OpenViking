@@ -1,0 +1,21 @@
+docs/design/resource-ingestion-routing.md
+  s_c2efe1f8754877::t_06f8d0482c8b12 101,118,121,124-125,127-135,138-159
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "315e8892368966d7676ce3ac3b884b9815f0598c",
+  "prompts": {},
+  "sessions": {
+    "s_c2efe1f8754877": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f64f7-7452-7790-8205-20f489377bbb",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

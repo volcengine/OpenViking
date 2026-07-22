@@ -1,0 +1,25 @@
+openviking/parse/parser_router.py
+  s_c2efe1f8754877::t_f04465c0dff54a 81-87,142-146,148
+openviking/service/resource_service.py
+  s_c2efe1f8754877::t_09652ad375ef3e 870,872,877,887,891-898,932,967-972,977-979
+openviking/utils/resource_processor.py
+  s_c2efe1f8754877::t_732e97197f5d0d 118-119,121-122
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "73a30d4f66d06ae7687ad44a40b9f2084879bd60",
+  "prompts": {},
+  "sessions": {
+    "s_c2efe1f8754877": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f64f7-7452-7790-8205-20f489377bbb",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
