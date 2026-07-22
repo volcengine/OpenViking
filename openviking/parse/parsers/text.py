@@ -29,7 +29,10 @@ class TextParser(BaseParser):
 
     async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
         """Parse from file path or content string."""
-        return await self._md_parser.parse(source, **kwargs)
+        result = await self._md_parser.parse(source, instruction=instruction, **kwargs)
+        result.source_format = "text"
+        result.parser_name = "TextParser"
+        return result
 
     async def parse_content(
         self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs
