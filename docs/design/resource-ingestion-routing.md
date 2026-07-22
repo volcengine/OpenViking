@@ -18,60 +18,71 @@ SDK / HTTP API / MCP
 ResourceService.add_resource                  对外入口
         |
         v
-ResourceService._add_resource                 第一次分类：选择执行链
+ResourceService._add_resource                 阶段一：选择执行方式
         |
         +-- Connector 命中且参数受支持 ------> Connector doc/add
         |                                         |
         |                                         +--> 轮询 Connector task/info
         |                                         +--> Connector 自己解析并写入资源
         |
-        +-- Git && wait=false ----------------> 预检仓库 + 预占目标 URI
-        |                                         |
-        |                                         +--> AddResourceMsg 队列
+        +-- Git && wait=false ----------------> 预检 + AddResourceMsg 入队 --> 返回 task_id
+        |                                                           |
+        |                                                           +--> Worker
         |
-        +-- wait=false && Understanding 已启用
+        +-- HTTP 服务远程资源 && wait=false && Understanding 已启用
         |       |
-        |       +-- 原始 URL 可直达 -----------> 提交 Understanding
-        |       |                               --> response_id 入队
+        |       +-- 原始 URL 可直达 -----------> 提交 Understanding --> response_id 入队
+        |       |                                                        |
+        |       |                                                        +--> 返回 task_id --> Worker
         |       |
         |       +-- 需要先确定本地类型 --------> Accessor 下载并识别
         |               |
-        |               +-- 命中 Understanding 扩展名 --> 上传已检测文件
-        |               |                            --> response_id 入队
-        |               |                            --> Worker 恢复 Understanding
+        |               +-- 命中 Understanding --> 上传同一文件 --> response_id 入队
+        |               |                                             |
+        |               |                                             +--> 返回 task_id --> Worker
         |               |
-        |               +-- 未命中 ------------------> 复用已下载 LocalResource
+        |               +-- 未命中 ------------> 复用 LocalResource，进入当前请求标准链
         |
-        +-- 标准执行链
-                |
-                v
-        ResourceProcessor.process_resource
-                |
-                v
-        UnifiedResourceProcessor
-                |
-                +-- 原始文本 -----------------------> 内置 ParserRegistry
-                |
-                +-- 原始 URL 可直达 Understanding --> ParserRouter --> Understanding API
-                |
-                +-- 路径 / URL --> AccessorRegistry.access（选择数据访问器）
-                                          |
-                                          v
-                                      LocalResource
-                                          |
-                                          +-- 目录 --> DirectoryParser（内置）
-                                          |
-                                          +-- 文件 --> ParserRouter.parse（选择 Parser，只选一次）
-                                                          |
-                                                          +-- 内置 ParserRegistry
-                                                          +-- Understanding API
-                |
-                v
-             ParseResult
-                |
-                v
-        TreeBuilder 落盘 --> 可选摘要 --> 语义队列 / 向量索引
+        +-- 其余场景（包括所有 wait=true） -----> 当前请求标准链
+
+当前请求 / Worker
+        |
+        v
+ResourceProcessor.process_resource             阶段二：标准解析链
+        |
+        v
+UnifiedResourceProcessor
+        |
+        +-- 已有 understanding_response_id ----> ParserRouter --> Understanding 恢复任务
+        |
+        +-- 原始 URL 可直达 Understanding -----> ParserRouter --> Understanding 提交并等待
+        |
+        +-- 原始文本 --------------------------> 内置 ParserRegistry
+        |
+        +-- 路径 / URL --> AccessorRegistry.access（选择数据访问器）
+                                  |
+                                  v
+                              LocalResource
+                                  |
+                                  +-- 目录 --> DirectoryParser（内置）
+                                  |
+                                  +-- 文件 --> ParserRouter.parse（选择 Parser，只选一次）
+                                                  |
+                                                  +-- 内置 ParserRegistry
+                                                  +-- Understanding 上传并等待
+        |
+        v
+     ParseResult --> TreeBuilder 落盘
+        |
+        v
+阶段三：返回策略
+        |
+        +-- wait=true  --> 继续等待摘要 / 语义队列 / 向量索引后返回
+        |
+        +-- wait=false --> 普通标准链落盘后返回；后续语义处理由后台任务完成
 ```
+
+Understanding 不受 `wait=false` 限制。`wait=true` 在当前请求内完成 Understanding 提交、轮询、解析和 TreeBuilder，并继续等待后续队列；`wait=false` 的远程服务路径会先提交 Understanding、将 `response_id` 入队，再由 Worker 恢复任务。
 
 分类发生的位置：
 
@@ -243,7 +254,7 @@ Connector 不返回本地 `ParseResult`，也不调用当前进程的 `TreeBuild
 |---|---|---|
 | Connector | 提交外部任务后返回 | 不支持；不会假装同步等待 |
 | Git | 预检并预占 URI 后启动后台标准链 | 当前请求内完成标准链并等待队列 |
-| 飞书直达 Understanding | user token 先换成 response ID 后入队；无显式资源名时可延迟返回 `root_uri` | 当前请求内调用 Understanding，再等待后续队列 |
+| 飞书直达 Understanding | 生产端提交后只将 response ID 入队；无显式资源名时可延迟返回 `root_uri` | 当前请求内调用 Understanding，再等待后续队列 |
 | HTTP 服务 + 异步 Understanding | 先识别类型，再预占 URI、入 AddResource 队列后返回 | 当前请求内调用 Understanding，再等待后续队列 |
 | 普通标准链 | 解析和落盘完成后返回；摘要/语义处理由任务监控 | 解析和落盘完成后继续等待语义队列 |
 
