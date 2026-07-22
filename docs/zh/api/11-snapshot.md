@@ -332,7 +332,10 @@ GET /api/v1/snapshot/diff?path={uri}&from={old_ref}&to={new_ref}
 ```
 
 ```bash
-curl "http://localhost:1933/api/v1/snapshot/diff?path=viking://resources/my_project/guide.md&from=3f2a1b9c&to=9a0b1c2d" \
+curl --get "http://localhost:1933/api/v1/snapshot/diff" \
+  --data-urlencode "path=viking://resources/my_project/guide.md" \
+  --data-urlencode "from=3f2a1b9c" \
+  --data-urlencode "to=9a0b1c2d" \
   -H "X-API-Key: your-key"
 ```
 
@@ -344,7 +347,7 @@ ov snapshot diff viking://resources/my_project/guide.md \
   --to 9a0b1c2d
 ```
 
-响应包含 `path`、解析后的 `from_commit` 和 `to_commit`、`change_type`（`added`、`deleted`、`modified` 或 `unchanged`）以及 `diff_text`。
+响应包含 `path`、解析后的 `from_commit` 和 `to_commit`、`change_type`（`added`、`deleted`、`modified` 或 `unchanged`）以及 `diff_text`。参与对比的单侧文件上限为 10 MiB，生成的 diff 上限为 20 MiB；超限时返回 `RESOURCE_EXHAUSTED`，不会返回被截断的 diff。
 
 ---
 

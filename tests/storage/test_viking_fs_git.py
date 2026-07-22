@@ -2,7 +2,9 @@
 import pytest
 
 from openviking.server.identity import RequestContext, Role
+from openviking.storage import viking_fs as viking_fs_module
 from openviking.storage.viking_fs import VikingFS
+from openviking_cli.exceptions import ResourceExhaustedError
 from openviking_cli.session.user_id import UserIdentifier
 
 pytestmark = pytest.mark.asyncio
@@ -64,3 +66,77 @@ async def test_diff_reads_blobs_from_resolved_commit_oids():
     assert result["to_commit"] == to_oid
     assert "-old content" in result["diff_text"]
     assert "+new content" in result["diff_text"]
+
+
+class _DiffVikingFS:
+    def __init__(self, before: bytes, after: bytes):
+        self._before = before
+        self._after = after
+
+    def _ctx_or_default(self, ctx):
+        return ctx
+
+    async def show(self, target_ref, *, path=None, ctx=None):
+        if path is None:
+            return {"oid": target_ref}
+        return self._before if target_ref == "from" else self._after
+
+
+def _request_context() -> RequestContext:
+    return RequestContext(
+        user=UserIdentifier(account_id="account", user_id="user"),
+        role=Role.ROOT,
+    )
+
+
+async def test_diff_rejects_files_over_size_limit(monkeypatch):
+    monkeypatch.setattr(viking_fs_module, "SNAPSHOT_DIFF_MAX_FILE_BYTES", 3)
+    vfs = _DiffVikingFS(b"old\n", b"new\n")
+
+    with pytest.raises(ResourceExhaustedError, match="file size limit"):
+        await VikingFS.diff(
+            vfs,
+            path="viking://user/user/memories/experiences/example.md",
+            from_ref="from",
+            to_ref="to",
+            ctx=_request_context(),
+        )
+
+
+async def test_diff_rejects_output_over_size_limit(monkeypatch):
+    monkeypatch.setattr(viking_fs_module, "SNAPSHOT_DIFF_MAX_FILE_BYTES", 1024)
+    monkeypatch.setattr(viking_fs_module, "SNAPSHOT_DIFF_MAX_OUTPUT_BYTES", 16)
+    vfs = _DiffVikingFS(b"old\n", b"new\n")
+
+    with pytest.raises(ResourceExhaustedError, match="output size limit"):
+        await VikingFS.diff(
+            vfs,
+            path="viking://user/user/memories/experiences/example.md",
+            from_ref="from",
+            to_ref="to",
+            ctx=_request_context(),
+        )
+
+
+async def test_diff_builds_unified_diff_off_event_loop(monkeypatch):
+    calls = []
+    original_to_thread = viking_fs_module.asyncio.to_thread
+
+    async def tracking_to_thread(func, /, *args, **kwargs):
+        calls.append(func)
+        return await original_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(viking_fs_module.asyncio, "to_thread", tracking_to_thread)
+    vfs = _DiffVikingFS(b"old\n", b"new\n")
+
+    result = await VikingFS.diff(
+        vfs,
+        path="viking://user/user/memories/experiences/example.md",
+        from_ref="from",
+        to_ref="to",
+        ctx=_request_context(),
+    )
+
+    assert calls
+    assert "-old" in result["diff_text"]
+    assert "+new" in result["diff_text"]

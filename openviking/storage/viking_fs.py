@@ -60,6 +60,7 @@ from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
     PermissionDeniedError,
+    ResourceExhaustedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.grep_config import GrepEngine
@@ -81,7 +82,54 @@ logger = get_logger(__name__)
 # materializes its first 1000 subdirectories. Pass this explicitly at those
 # call sites.
 LS_ALL_NODES = 2**31 - 1
+SNAPSHOT_DIFF_MAX_FILE_BYTES = 10 * 1024 * 1024
+SNAPSHOT_DIFF_MAX_OUTPUT_BYTES = 20 * 1024 * 1024
 _T = TypeVar("_T")
+
+
+def _build_snapshot_unified_diff(
+    *,
+    path: str,
+    from_oid: str,
+    to_oid: str,
+    before_bytes: Optional[bytes],
+    after_bytes: Optional[bytes],
+    max_output_bytes: int,
+) -> tuple[str, str]:
+    try:
+        before = before_bytes.decode("utf-8") if before_bytes is not None else ""
+        after = after_bytes.decode("utf-8") if after_bytes is not None else ""
+    except UnicodeDecodeError as exc:
+        raise InvalidArgumentError("snapshot diff only supports UTF-8 text files") from exc
+
+    if before_bytes is None:
+        change_type = "added"
+    elif after_bytes is None:
+        change_type = "deleted"
+    elif before_bytes == after_bytes:
+        change_type = "unchanged"
+    else:
+        change_type = "modified"
+
+    output: list[str] = []
+    output_bytes = 0
+    diff_lines = difflib.unified_diff(
+        before.splitlines(keepends=True),
+        after.splitlines(keepends=True),
+        fromfile=f"{path}@{from_oid}",
+        tofile=f"{path}@{to_oid}",
+    )
+    for line in diff_lines:
+        normalized = line if line.endswith("\n") else line + "\n\\ No newline at end of file\n"
+        output_bytes += len(normalized.encode("utf-8"))
+        if output_bytes > max_output_bytes:
+            raise ResourceExhaustedError(
+                f"snapshot diff output size limit exceeded ({max_output_bytes} bytes)",
+                details={"limit_bytes": max_output_bytes, "path": path},
+            )
+        output.append(normalized)
+
+    return change_type, "".join(output)
 
 
 def _ensure_non_empty_search_query(query: str, image_url: Optional[str] = None) -> None:
@@ -4087,30 +4135,21 @@ class VikingFS:
         if before_bytes is None and after_bytes is None:
             raise NotFoundError(path, "git_blob")
 
-        try:
-            before = before_bytes.decode("utf-8") if before_bytes is not None else ""
-            after = after_bytes.decode("utf-8") if after_bytes is not None else ""
-        except UnicodeDecodeError as exc:
-            raise InvalidArgumentError("snapshot diff only supports UTF-8 text files") from exc
+        for value in (before_bytes, after_bytes):
+            if value is not None and len(value) > SNAPSHOT_DIFF_MAX_FILE_BYTES:
+                raise ResourceExhaustedError(
+                    f"snapshot diff file size limit exceeded ({SNAPSHOT_DIFF_MAX_FILE_BYTES} bytes)",
+                    details={"limit_bytes": SNAPSHOT_DIFF_MAX_FILE_BYTES, "path": path},
+                )
 
-        if before_bytes is None:
-            change_type = "added"
-        elif after_bytes is None:
-            change_type = "deleted"
-        elif before_bytes == after_bytes:
-            change_type = "unchanged"
-        else:
-            change_type = "modified"
-
-        diff_lines = difflib.unified_diff(
-            before.splitlines(keepends=True),
-            after.splitlines(keepends=True),
-            fromfile=f"{path}@{from_oid}",
-            tofile=f"{path}@{to_oid}",
-        )
-        diff_text = "".join(
-            line if line.endswith("\n") else line + "\n\\ No newline at end of file\n"
-            for line in diff_lines
+        change_type, diff_text = await asyncio.to_thread(
+            _build_snapshot_unified_diff,
+            path=path,
+            from_oid=from_oid,
+            to_oid=to_oid,
+            before_bytes=before_bytes,
+            after_bytes=after_bytes,
+            max_output_bytes=SNAPSHOT_DIFF_MAX_OUTPUT_BYTES,
         )
         return {
             "path": path,
