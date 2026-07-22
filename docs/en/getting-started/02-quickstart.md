@@ -17,7 +17,7 @@ OpenViking can be installed via a Python Package to be used as a local library, 
 ### Option 1: Install via pip (As a local library)
 
 ```bash
-pip install openviking --upgrade --force-reinstall
+pip install -U openviking
 ```
 
 ### Option 2: Start via Docker (As an independent service)

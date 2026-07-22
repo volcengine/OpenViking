@@ -196,7 +196,7 @@
 #### 路径 A：普通最小安装
 
 ```bash
-pip install openviking --upgrade --force-reinstall
+pip install -U openviking
 ```
 
 用户确认配置后写入 `~/.openviking/ov.conf`，然后执行：
@@ -272,7 +272,7 @@ curl http://localhost:1933/health
 优先按预编译 wheel 路径执行：
 
 ```bat
-pip install openviking --upgrade --force-reinstall
+pip install -U openviking
 ```
 
 配置文件写好后，按用户 shell 设置环境变量。
@@ -372,7 +372,7 @@ openviking-server doctor
 - 先执行一次标准重装：
 
 ```bash
-pip install openviking --upgrade --force-reinstall
+pip install -U openviking
 ```
 
 - 如果仍失败，再判断是否需要进入源码构建路径

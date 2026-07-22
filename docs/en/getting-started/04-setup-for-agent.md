@@ -196,7 +196,7 @@ Only add these when the provider requires them, when the README examples explici
 #### Path A: Standard minimal install
 
 ```bash
-pip install openviking --upgrade --force-reinstall
+pip install -U openviking
 ```
 
 After the user confirms the configuration, write `~/.openviking/ov.conf`, then run:
@@ -272,7 +272,7 @@ curl http://localhost:1933/health
 Prefer the prebuilt-wheel path first:
 
 ```bat
-pip install openviking --upgrade --force-reinstall
+pip install -U openviking
 ```
 
 After the config file is ready, set environment variables using the user’s shell.
@@ -372,7 +372,7 @@ Handling rule:
 - first try a standard reinstall:
 
 ```bash
-pip install openviking --upgrade --force-reinstall
+pip install -U openviking
 ```
 
 - if it still fails, then decide whether to move to the source-build path
