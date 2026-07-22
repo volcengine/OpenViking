@@ -7,6 +7,7 @@ import concurrent.futures
 import json
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
+from openviking.observability.context import bind_background_observability_context
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import get_task_tracker
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
@@ -27,30 +28,38 @@ class SessionCommitProcessor(DequeueHandlerBase):
         self._service_loop = service_loop
 
     async def _process(self, msg: SessionCommitMsg, ctx: RequestContext) -> None:
-        session = self._session_service.session(
-            ctx,
-            msg.session_id,
-            session_uri=msg.session_uri,
-        )
-        if not await session.exists():
-            error = f"Session '{msg.session_id}' no longer exists"
-            tracker = get_task_tracker()
-            await tracker.create(
-                "session_commit",
-                resource_id=msg.session_id,
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-                task_id=msg.task_id,
+        with bind_background_observability_context(
+            http_method="QUEUE",
+            http_route="/queuefs/session-commit",
+            request_id=msg.task_id,
+            url_path=msg.session_uri,
+            account_id=msg.user.get("account_id"),
+            user_id=msg.user.get("user_id"),
+        ):
+            session = self._session_service.session(
+                ctx,
+                msg.session_id,
+                session_uri=msg.session_uri,
             )
-            await tracker.fail(
-                msg.task_id,
-                error,
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-            )
-            return
-        await session.load()
-        await session.resume_queued_commit(msg)
+            if not await session.exists():
+                error = f"Session '{msg.session_id}' no longer exists"
+                tracker = get_task_tracker()
+                await tracker.create(
+                    "session_commit",
+                    resource_id=msg.session_id,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                    task_id=msg.task_id,
+                )
+                await tracker.fail(
+                    msg.task_id,
+                    error,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                return
+            await session.load()
+            await session.resume_queued_commit(msg)
 
     async def on_dequeue(
         self, data: Optional[Dict[str, Any]]

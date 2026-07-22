@@ -7,6 +7,7 @@ import json
 import time
 from typing import Any, Dict, List, Optional, Protocol
 
+from openviking.observability import bind_background_observability_context
 from openviking.pyagfs import AGFSSyncClientProtocol, AsyncAGFSClient
 from openviking.storage.transaction.lock_handle import LockHandle
 from openviking.storage.transaction.path_lock import PathLockEngine
@@ -445,7 +446,15 @@ class LockManager:
             try:
                 info = await self._redo_log.read_async(task_id)
                 if info:
-                    await self._redo_session_memory(info)
+                    with bind_background_observability_context(
+                        http_method="RECOVERY",
+                        http_route="/transaction/session-memory-redo",
+                        request_id=task_id,
+                        url_path=info.get("session_uri"),
+                        account_id=info.get("account_id", "default"),
+                        user_id=info.get("user_id", "default"),
+                    ):
+                        await self._redo_session_memory(info)
                 await self._redo_log.mark_done_async(task_id)
             except Exception as e:
                 logger.error(f"Redo recovery failed for {task_id}: {e}", exc_info=True)

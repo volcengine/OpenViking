@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from openviking.models.embedder.base import EmbedResult, embed_compat
+from openviking.observability.context import bind_background_observability_context
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.errors import (
     CollectionNotFoundError,
@@ -550,10 +551,19 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             # Parse EmbeddingMsg from data
             embedding_msg = EmbeddingMsg.from_dict(queue_data)
             inserted_data = embedding_msg.context_data
+            user_data = inserted_data.get("user")
+            user_id = user_data.get("user_id") if isinstance(user_data, dict) else None
             collector = resolve_telemetry(embedding_msg.telemetry_id)
             telemetry_ctx = bind_telemetry(collector) if collector is not None else nullcontext()
 
-            with telemetry_ctx:
+            with telemetry_ctx, bind_background_observability_context(
+                http_method="QUEUE",
+                http_route="/queuefs/embedding",
+                request_id=embedding_msg.telemetry_id or embedding_msg.id,
+                url_path=inserted_data.get("uri"),
+                account_id=inserted_data.get("account_id"),
+                user_id=user_id,
+            ):
                 if self._vikingdb.is_closing:
                     logger.debug("Skip embedding dequeue during shutdown")
                     self._merge_request_stats(embedding_msg.telemetry_id, processed=1)

@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.observability.context import get_root_observability_context
 from openviking.resource.watch_manager import WatchManager
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.service.resource_service import ResourceService
@@ -110,3 +111,39 @@ class TestWatchSchedulerResourceExistence:
         assert updated.is_active is True
         assert resource_service.calls and resource_service.calls[0]["to"] == task.to_uri
         manager.update_execution_time.assert_awaited_once_with(task.task_id)
+
+    @pytest.mark.asyncio
+    async def test_watch_execution_restores_observability_identity(self, tmp_path):
+        observed_identity = {}
+
+        class FakeResourceService(ResourceService):
+            async def add_resource(self, **kwargs):
+                root = get_root_observability_context()
+                observed_identity.update(
+                    request_id=root.request_id if root else None,
+                    account_id=root.account_id if root else None,
+                    user_id=root.user_id if root else None,
+                )
+                return {"root_uri": kwargs.get("to")}
+
+        source = tmp_path / "source.txt"
+        source.write_text("ok")
+        scheduler = WatchScheduler(resource_service=FakeResourceService(), check_interval=1)
+        manager = WatchManager(viking_fs=None)
+        await manager.initialize()
+        scheduler._watch_manager = manager
+        task = await manager.create_task(
+            path=str(source),
+            account_id="account-watch",
+            user_id="user-watch",
+            to_uri="viking://resources/watch",
+            watch_interval=30.0,
+        )
+
+        await scheduler._execute_task(task)
+
+        assert observed_identity == {
+            "request_id": task.task_id,
+            "account_id": "account-watch",
+            "user_id": "user-watch",
+        }

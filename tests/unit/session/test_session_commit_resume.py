@@ -1,15 +1,20 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import asyncio
 import json
 from unittest.mock import AsyncMock
 
 import pytest
 
 from openviking.message import Message, TextPart
+from openviking.observability.context import get_root_observability_context
+from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import TaskTracker, set_task_tracker
 from openviking.session.session import Session
 from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
+from openviking.storage.queuefs.session_commit_processor import SessionCommitProcessor
+from openviking_cli.session.user_id import UserIdentifier
 
 
 class _TaskStore:
@@ -84,3 +89,49 @@ async def test_resume_queued_commit_continues_phase2(monkeypatch):
     assert [
         item.id for item in session._run_memory_extraction.await_args.kwargs["messages"]
     ] == ["archived"]
+
+
+@pytest.mark.asyncio
+async def test_session_commit_processor_restores_observability_identity():
+    observed_identity = {}
+
+    class _QueuedSession:
+        async def exists(self):
+            return True
+
+        async def load(self):
+            return None
+
+        async def resume_queued_commit(self, _message):
+            root = get_root_observability_context()
+            observed_identity.update(
+                request_id=root.request_id if root else None,
+                account_id=root.account_id if root else None,
+                user_id=root.user_id if root else None,
+            )
+
+    session_service = type(
+        "_SessionService",
+        (),
+        {"session": lambda *_args, **_kwargs: _QueuedSession()},
+    )()
+    processor = SessionCommitProcessor(session_service, asyncio.get_running_loop())
+    message = SessionCommitMsg(
+        task_id="task-session-commit",
+        session_id="session-1",
+        session_uri="viking://user/sessions/session-1",
+        archive_uri="viking://user/sessions/session-1/history/archive-1",
+        user={"account_id": "account-1", "user_id": "user-1"},
+    )
+    ctx = RequestContext(
+        user=UserIdentifier("account-1", "user-1"),
+        role=Role.USER,
+    )
+
+    await processor._process(message, ctx)
+
+    assert observed_identity == {
+        "request_id": "task-session-commit",
+        "account_id": "account-1",
+        "user_id": "user-1",
+    }

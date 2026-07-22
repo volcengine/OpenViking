@@ -5,12 +5,15 @@ from __future__ import annotations
 
 from openviking.metrics.datasources.base import EventMetricDataSource
 from openviking.observability.context import (
+    bind_background_observability_context,
     bind_root_observability_context,
+    get_root_observability_context,
     reset_root_observability_context,
 )
 from openviking.observability.events import (
     _GLOBAL_EVENT_BUS,
     ObservabilityEvent,
+    build_event,
     register_event_subscriber,
     try_publish_event,
 )
@@ -59,3 +62,31 @@ def test_metric_datasource_publishes_to_shared_bus_without_metrics_init():
     assert len(seen) == 1
     assert seen[0].event_name == "demo.metric"
     assert seen[0].payload == {"value": 3}
+
+
+def test_background_context_enriches_model_event_and_restores_previous_root():
+    sentinel = RootSpanAttributes(
+        http_method="GET",
+        http_route="/sentinel",
+        request_id="sentinel-request",
+        account_id="sentinel-account",
+        user_id="sentinel-user",
+    )
+    sentinel_token = bind_root_observability_context(sentinel)
+    try:
+        with bind_background_observability_context(
+            http_method="QUEUE",
+            http_route="/queuefs/test",
+            request_id="queue-request",
+            url_path="viking://resources/test",
+            account_id="queue-account",
+            user_id="queue-user",
+        ):
+            event = build_event("vlm.call", {"prompt_tokens": 3})
+
+        assert event.request_id == "queue-request"
+        assert event.account_id == "queue-account"
+        assert event.user_id == "queue-user"
+        assert get_root_observability_context() is sentinel
+    finally:
+        reset_root_observability_context(sentinel_token)
