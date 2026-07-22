@@ -246,7 +246,7 @@ Both plugins share the same core design (informed by each other):
 | Tool delivery       | OV server's MCP endpoint (16 tools)     | pi.registerTool() (7 tools)            |
 | Write path          | Detached worker (async)                 | Async promise (pi's event loop)        |
 | Installation        | `claude plugin install` + setup script  | Copy directory → auto-discovered       |
-| Memory index        | None (flashlight search model)          | Built (map model — model sees what OV knows) |
+| Memory index        | None (flashlight search model)          | None (on-demand recall; startup index dropped for latency) |
 | Subagent isolation  | Explicit hook management                | Natural process-level isolation        |
 
 ## Extension Structure

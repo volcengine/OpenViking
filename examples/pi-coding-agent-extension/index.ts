@@ -18,6 +18,7 @@ import { RecallManager } from "./recall.js";
 import { SyncManager } from "./sync.js";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
 import { guardVikingUriToolCall } from "./lib/uri-guard-adapter.mjs";
+import { TAKEOVER_ENTRY_TYPE } from "./lib/takeover-core.mjs";
 import { registerTools } from "./tools.js";
 import { createTakeoverManager } from "./takeover.js";
 
@@ -43,6 +44,28 @@ export default async function (pi: ExtensionAPI) {
     }
   };
   const takeover = createTakeoverManager({ pi, client, sync, config, log: debugLog });
+
+  // Takeover state entries are persisted via pi.appendEntry and never reach the
+  // LLM; on pi >= 0.81 render them in the TUI so the archive boundary is visible.
+  if (config.takeoverEnabled && typeof (pi as any).registerEntryRenderer === "function") {
+    try {
+      const { Box, Text } = await import("@earendil-works/pi-tui");
+      (pi as any).registerEntryRenderer(TAKEOVER_ENTRY_TYPE, (entry: any, opts: any, theme: any) => {
+        const d = entry?.data ?? {};
+        const box = new Box(1, 0, (text: string) => text);
+        box.addChild(new Text(
+          theme.fg("dim", `◆ OV takeover · ${d.coveredUserTurns ?? 0}/${d.lastSeenUserTurns ?? 0} turns archived · ~${d.pendingTokens ?? 0} tokens pending`),
+          0, 0,
+        ));
+        if (opts?.expanded && typeof d.overview === "string" && d.overview) {
+          box.addChild(new Text(theme.fg("dim", d.overview.slice(0, 600)), 0, 0));
+        }
+        return box;
+      });
+    } catch {
+      // pi-tui unavailable (headless or older pi); entries just render as default.
+    }
+  }
 
   // Session state
   let connected = false;
@@ -132,10 +155,15 @@ export default async function (pi: ExtensionAPI) {
 
   // --- before_agent_start ---
   pi.on("before_agent_start", async (event, ctx) => {
-    // session_start doesn't fire for pi -c continuations.
+    // pi < 0.81 doesn't fire session_start for `pi -c` continuations; on 0.81+
+    // this is a cheap idempotent no-op after session_start(reason: "resume").
     await start(ctx);
 
     if (!connected || bypassed) return;
+
+    // Fallback commit point for pi < 0.81 where agent_settled never fires.
+    // Fire-and-forget: never delay the prompt; commitAndAdvance self-serializes.
+    if (config.takeoverEnabled) void takeover.commitIfDue();
 
     // Queue recall for the context hook. Pi renders the user message before
     // that hook, so recall latency does not delay the message appearing.
@@ -186,8 +214,20 @@ export default async function (pi: ExtensionAPI) {
     const branch = ctx.sessionManager.getBranch();
     const result = await sync.syncBranch(branch);
     debugLog(`turn_end: synced ${result.added} entries, ~${result.tokens} tokens`);
-    await takeover.onTurnSynced(result.tokens);
+    // Accumulate only. The threshold commit (flush + commit + overview poll,
+    // up to pollMax×pollMs) runs from agent_settled so it never stalls a run.
+    takeover.noteSynced(result.tokens);
     updateStatus(ctx, connected, result.added, sync.sessionId, config, takeover.state);
+  });
+
+  // --- agent_settled --- (pi >= 0.81: run fully settled, no retry/compaction pending)
+  pi.on("agent_settled", async (_event, ctx) => {
+    if (!connected || bypassed || !config.takeoverEnabled) return;
+    const committed = await takeover.commitIfDue();
+    if (committed) {
+      debugLog(`agent_settled: takeover boundary advanced to ${takeover.state.coveredUserTurns} turns`);
+      updateStatus(ctx, connected, 0, sync.sessionId, config, takeover.state);
+    }
   });
 
   // --- session_before_compact ---

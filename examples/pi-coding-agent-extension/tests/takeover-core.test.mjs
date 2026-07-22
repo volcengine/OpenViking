@@ -229,6 +229,40 @@ test("onTurnSynced waits for threshold and enough user turns", async () => {
   assert.equal(calls.committed, 1);
 });
 
+test("noteSynced accumulates without committing even past threshold", async () => {
+  const { core, calls } = makeCore({ config: { takeoverTokenThreshold: 50, takeoverKeepRecentTurns: 1 } });
+  core.transformContext([user("one"), user("two"), user("three")]);
+  core.noteSynced(200);
+  assert.equal(core.state.pendingTokens, 200);
+  assert.equal(calls.committed, 0);
+});
+
+test("commitIfDue commits only when threshold and turn gates pass", async () => {
+  const { core, calls } = makeCore({ config: { takeoverTokenThreshold: 50, takeoverKeepRecentTurns: 1 } });
+  core.transformContext([user("one"), user("two"), user("three")]);
+
+  core.noteSynced(10);
+  assert.equal(await core.commitIfDue(), false);
+  assert.equal(calls.committed, 0);
+
+  core.noteSynced(60);
+  assert.equal(await core.commitIfDue(), true);
+  assert.equal(calls.committed, 1);
+  assert.equal(core.state.pendingTokens, 0);
+
+  // Nothing pending afterwards: idempotent no-op.
+  assert.equal(await core.commitIfDue(), false);
+  assert.equal(calls.committed, 1);
+});
+
+test("commitIfDue respects keepRecentTurns gate", async () => {
+  const { core, calls } = makeCore({ config: { takeoverTokenThreshold: 50, takeoverKeepRecentTurns: 3 } });
+  core.transformContext([user("one"), user("two")]);
+  core.noteSynced(200);
+  assert.equal(await core.commitIfDue(), false);
+  assert.equal(calls.committed, 0);
+});
+
 test("commitAndAdvance advances boundary and persists after overview is ready", async () => {
   const { core, calls, setWatermark } = makeCore({
     watermark: 4,
