@@ -19,6 +19,7 @@ import uvicorn
 DEFAULT_NATIVE_THREAD_WORKERS = 128
 DEFAULT_MAX_ROLLOUT_CONCURRENCY = 200
 DEFAULT_ROLLOUT_THREAD_WORKERS = 200
+DEFAULT_ROLLOUT_SEED = 300
 TAU2_SERVICE_LOG_LEVEL = "WARNING"
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -55,6 +56,7 @@ def create_app(
     rollout_language: str = "default",
     rollout_backend: str | None = None,
     loader_mode: str | None = None,
+    seed: int | None = None,
     max_rollout_concurrency: int | None = None,
     rollout_thread_workers: int | None = None,
 ):
@@ -67,6 +69,9 @@ def create_app(
         loader_mode
         or os.getenv("TAU2_EXPERIENCE_LOADER_MODE")
         or DEFAULT_TAU2_EXPERIENCE_LOADER_MODE
+    )
+    default_seed = int(
+        seed if seed is not None else os.getenv("TAU2_ROLLOUT_SEED", str(DEFAULT_ROLLOUT_SEED))
     )
 
     def make_case_loader(
@@ -93,6 +98,7 @@ def create_app(
             "show_progress": options.get("show_progress", False),
             "progress_label": options.get("progress_label") or "tau2",
             "loader_mode": options.get("loader_mode") or default_loader_mode,
+            "seed": options.get("seed") if options.get("seed") is not None else default_seed,
         }
         return make_tau2_rollout_executor(
             backend=backend,
@@ -144,6 +150,12 @@ def parse_args() -> argparse.Namespace:
         choices=["skill", "constraint", "direct_experience"],
         default=os.getenv("TAU2_EXPERIENCE_LOADER_MODE", DEFAULT_TAU2_EXPERIENCE_LOADER_MODE),
         help="Experience loading mode for vikingbot rollouts (default: skill).",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=int(os.getenv("TAU2_ROLLOUT_SEED", str(DEFAULT_ROLLOUT_SEED))),
+        help=f"Base rollout seed; task/trial derive stable seeds from it (default: {DEFAULT_ROLLOUT_SEED}).",
     )
     parser.add_argument(
         "--native-thread-workers",
@@ -214,6 +226,7 @@ def main() -> None:
         rollout_language=args.rollout_language,
         rollout_backend=args.rollout_backend,
         loader_mode=args.loader_mode,
+        seed=args.seed,
         max_rollout_concurrency=args.max_rollout_concurrency,
         rollout_thread_workers=(
             None if args.rollout_thread_workers == 0 else args.rollout_thread_workers

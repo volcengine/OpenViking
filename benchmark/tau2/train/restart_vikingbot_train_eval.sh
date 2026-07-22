@@ -11,6 +11,7 @@ set -euo pipefail
 # Launcher-only options:
 #   --slot N   Run an isolated slot. Slot 0 is the default legacy setup. Slot N>0
 #              uses separate ports, OpenViking config/data, logs, and result dir.
+#   --seed N  Base rollout seed shared by train and eval stages.
 #   --auto-commit
 #              Automatically commit pending code changes before starting services
 #              and train/eval.
@@ -23,12 +24,13 @@ openviking_capture_train_launch_command "$@"
 
 SLOT="0"
 AUTO_COMMIT=false
+TAU2_ROLLOUT_SEED="${TAU2_ROLLOUT_SEED:-300}"
 declare -a TRAIN_CLI_ARGS=()
 
 usage() {
   cat <<'USAGE'
 Usage:
-  bash benchmark/tau2/train/restart_vikingbot_train_eval.sh [--slot N] [--auto-commit] [train/eval args...]
+  bash benchmark/tau2/train/restart_vikingbot_train_eval.sh [--slot N] [--seed N] [--auto-commit] [train/eval args...]
 
 Launcher options:
   --slot N  Isolated experiment slot. Slot 0 is default/legacy. Slot N>0 uses:
@@ -41,6 +43,8 @@ Launcher options:
   --auto-commit
             Commit pending code changes before launching, then append local Git
             notes with the command and each completed train/eval stage result.
+  --seed N  Base rollout seed. Each task/trial derives a stable seed from it.
+            Default: 300.
 
 All remaining args are passed to benchmark/tau2/train/run_batch_train_eval.sh.
 USAGE
@@ -63,6 +67,18 @@ parse_launcher_args() {
         ;;
       --auto-commit)
         AUTO_COMMIT=true
+        shift 1
+        ;;
+      --seed)
+        if [[ $# -lt 2 ]]; then
+          echo "[restart-vikingbot-train] ERROR: --seed requires a value" >&2
+          exit 1
+        fi
+        TAU2_ROLLOUT_SEED="$2"
+        shift 2
+        ;;
+      --seed=*)
+        TAU2_ROLLOUT_SEED="${1#--seed=}"
         shift 1
         ;;
       -h|--help)
@@ -89,8 +105,16 @@ validate_slot() {
   fi
 }
 
+validate_seed() {
+  if ! [[ "${TAU2_ROLLOUT_SEED}" =~ ^[0-9]+$ ]]; then
+    echo "[restart-vikingbot-train] ERROR: --seed must be a non-negative integer, got: ${TAU2_ROLLOUT_SEED}" >&2
+    exit 1
+  fi
+}
+
 parse_launcher_args "$@"
 validate_slot
+validate_seed
 
 if [[ "${SLOT}" == "0" ]]; then
   DEFAULT_OPENVIKING_PORT="1933"
@@ -327,7 +351,7 @@ start_openviking_server() {
 
 start_tau2_service() {
   log "restarting tau2 service on ${TAU2_SERVICE_HOST}:${TAU2_SERVICE_PORT} backend=${TAU2_ROLLOUT_BACKEND} loader_mode=${TAU2_EXPERIENCE_LOADER_MODE}"
-  log "tau2 service concurrency=${TAU2_MAX_ROLLOUT_CONCURRENCY} rollout_thread_workers=${TAU2_ROLLOUT_THREAD_WORKERS}"
+  log "tau2 service seed=${TAU2_ROLLOUT_SEED} concurrency=${TAU2_MAX_ROLLOUT_CONCURRENCY} rollout_thread_workers=${TAU2_ROLLOUT_THREAD_WORKERS}"
   log "tau2 service log: ${TAU2_SERVICE_LOG}"
   : > "${TAU2_SERVICE_LOG}"
   stop_existing_listener "tau2 rollout service" "${TAU2_SERVICE_PORT}"
@@ -341,6 +365,7 @@ start_tau2_service() {
       --config "${OPENVIKING_CONFIG_FILE}" \
       --rollout-backend "${TAU2_ROLLOUT_BACKEND}" \
       --loader-mode "${TAU2_EXPERIENCE_LOADER_MODE}" \
+      --seed "${TAU2_ROLLOUT_SEED}" \
       --max-rollout-concurrency "${TAU2_MAX_ROLLOUT_CONCURRENCY}" \
       --rollout-thread-workers "${TAU2_ROLLOUT_THREAD_WORKERS}"
   ) >"${TAU2_SERVICE_LOG}" 2>&1 &

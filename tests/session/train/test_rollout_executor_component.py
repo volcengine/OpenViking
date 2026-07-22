@@ -477,6 +477,40 @@ def test_tau2_native_env_reward_handles_required_id_and_tool_call_ids(monkeypatc
     assert evaluation.reward == 1.0
 
 
+def test_tau2_gym_env_passes_seed_to_user_llm_before_reset(monkeypatch):
+    import benchmark.tau2.common.tau2_env.tau2_environment as tau2_environment
+
+    calls = {}
+
+    class FakeAgentGymEnv:
+        def __init__(self, **kwargs):
+            calls["init"] = kwargs
+
+        def reset(self, *, seed=None):
+            calls["reset_seed"] = seed
+            task = SimpleNamespace(evaluation_criteria=[], user_scenario="scenario")
+            return "user: hello", {
+                "task": task,
+                "simulation_run": None,
+                "policy": "policy",
+                "tools": [],
+            }
+
+    monkeypatch.setattr(tau2_environment, "AgentGymEnv", FakeAgentGymEnv)
+    monkeypatch.setattr(tau2_environment, "_install_tau2_litellm_rate_limit_retry", lambda: None)
+    monkeypatch.setattr(
+        tau2_environment,
+        "_install_tau2_litellm_unknown_cost_suppression",
+        lambda: None,
+    )
+
+    env = tau2_environment._GymTau2BenchEnv("airline", "1")
+    env.reset(seed=1234)
+
+    assert calls["init"]["user_llm_args"] == {"temperature": 0.0, "seed": 1234}
+    assert calls["reset_seed"] == 1234
+
+
 def test_tau2_native_env_records_communication_as_assistant_text(monkeypatch):
     import benchmark.tau2.common.tau2_env.tau2_environment as tau2_environment
     from benchmark.tau2.common.tau2_env.tau2_environment import Tau2BenchEnv
@@ -1176,6 +1210,7 @@ def test_tau2_rollout_backend_factory_selects_vikingbot(monkeypatch):
         "concurrency": 2,
         "keep_default_tools": True,
         "max_iterations": 9,
+        "seed": 300,
         "rollout_language": "zh",
         "loader_mode": "skill",
         "system_prompt_profile": "minimal",
@@ -1193,6 +1228,57 @@ def test_tau2_rollout_backend_factory_selects_vikingbot(monkeypatch):
         concurrency=1,
     )
     assert created["system_prompt_profile"] == "minimal"
+
+
+def test_tau2_vikingbot_seed_is_stable_for_task_and_trial():
+    from benchmark.tau2.train.rollout_executor_vikingbot import _stable_case_seed
+
+    assert _stable_case_seed(300, task_no=22, trial=4) == 400_322
+    assert _stable_case_seed(300, task_no=22, trial="4") == 400_322
+
+
+def test_tau2_vikingbot_build_agent_uses_configured_temperature(monkeypatch, tmp_path):
+    import benchmark.tau2.train.rollout_executor_vikingbot as module
+
+    config = SimpleNamespace(
+        bot_data_path=tmp_path / "bot-data",
+        workspace_path=tmp_path / "workspace",
+        agents=SimpleNamespace(
+            model="test-model",
+            temperature=0.0,
+            memory_window=12,
+            gen_image_model="test-image-model",
+        ),
+        tools=SimpleNamespace(
+            web=SimpleNamespace(search=SimpleNamespace(api_key="")),
+            exec=SimpleNamespace(),
+        ),
+    )
+    captured = {}
+
+    def fake_agent_loop(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(
+        module,
+        "_vikingbot_imports",
+        lambda: {
+            "ensure_config": lambda _path: config,
+            "_init_bot_data": lambda _config: None,
+            "MessageBus": object,
+            "SessionManager": lambda _path: object(),
+            "get_source_workspace_path": lambda: tmp_path / "source",
+            "SandboxManager": lambda *_args: object(),
+            "_make_provider": lambda _config: object(),
+            "AgentLoop": fake_agent_loop,
+        },
+    )
+
+    module._build_agent(None, max_iterations=9)
+
+    assert captured["temperature"] == 0.0
+    assert captured["max_iterations"] == 9
 
 
 def test_tau2_service_rollout_backend_option_overrides_default(monkeypatch):
@@ -1363,8 +1449,9 @@ async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(monkeypatc
             self.policy = "policy"
             self.user_query = "user query"
 
-        def reset(self):
+        def reset(self, *, seed=None):
             calls.append(("reset", threading.get_ident()))
+            calls.append(("reset_seed", seed))
 
         def list_openai_tools(self):
             return []
@@ -1414,6 +1501,7 @@ async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(monkeypatc
 
     assert rollout.metadata["reward"] == 1.0
     assert rollout.metadata["evaluation_result"] == {"ok": True}
+    assert rollout.metadata["seed"] == 300
     assert "evaluation_result" not in rollout.evaluation.metadata
     call_values = dict(calls)
     assert call_values["case_lookup"] == {
@@ -1438,6 +1526,7 @@ async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(monkeypatc
     }
     call_threads = call_values
     assert call_threads["reset"] != event_loop_thread
+    assert call_threads["reset_seed"] == 300
     assert call_threads["build_agent"] != event_loop_thread
     assert call_threads["reward"] != event_loop_thread
     assert call_threads["run_agent"] == event_loop_thread

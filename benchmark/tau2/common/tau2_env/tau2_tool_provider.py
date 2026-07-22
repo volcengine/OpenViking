@@ -20,9 +20,9 @@ class Tau2BenchToolProvider:
         self.env: Tau2BenchEnv | None = None
         self._openai_tools: list[dict[str, Any]] = []
 
-    def reset(self) -> None:
+    def reset(self, *, seed: int | None = None) -> None:
         env = Tau2BenchEnv(self.domain, self.task_id)
-        env.reset()
+        env.reset(seed=seed)
         self.env = env
         # Tau2BenchEnv.tool_schemas already includes tau2's native tools plus
         # communicate_with_user.

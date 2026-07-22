@@ -688,6 +688,7 @@ class VikingBotTau2RolloutExecutor:
     concurrency: int = 20
     keep_default_tools: bool = True
     max_iterations: int = 30
+    seed: int = 300
     log_timings: bool = True
     rollout_language: str = "default"
     loader_mode: Tau2ExperienceLoaderMode = DEFAULT_TAU2_EXPERIENCE_LOADER_MODE
@@ -736,6 +737,7 @@ class VikingBotTau2RolloutExecutor:
         data_split = str(case.input["data_split"])
         data_root = case.input.get("data_root")
         trial = _case_trial(case)
+        rollout_seed = _stable_case_seed(self.seed, task_no=task_no, trial=trial)
 
         timings = _RolloutTiming(case=case.name, enabled=self.log_timings)
         total_started_at = time.perf_counter()
@@ -743,7 +745,7 @@ class VikingBotTau2RolloutExecutor:
         stage_started_at = time.perf_counter()
         Tau2BenchToolProvider = _tool_provider_cls()
         provider = Tau2BenchToolProvider(domain, task_id, data_root=data_root)
-        await asyncio.to_thread(provider.reset)
+        await asyncio.to_thread(provider.reset, seed=rollout_seed)
         timings.record("provider_reset", stage_started_at)
 
         case_lookup = _tau2_case_lookup(case)
@@ -859,6 +861,7 @@ class VikingBotTau2RolloutExecutor:
                 "eval_trial_count": case.input.get("eval_trial_count"),
                 "train_trial": case.input.get("train_trial"),
                 "train_trial_count": case.input.get("train_trial_count"),
+                "seed": rollout_seed,
                 "original_case_name": case.input.get("original_case_name"),
                 "reward": reward,
                 "evaluation_result": evaluation_result,
@@ -901,6 +904,16 @@ class VikingBotTau2RolloutExecutor:
             iterations=iteration,
         )
         return rollout
+
+
+def _stable_case_seed(base_seed: int, *, task_no: int, trial: Any) -> int:
+    """Derive the same seed for a task/trial across epochs and rollout stages."""
+
+    try:
+        trial_index = int(trial) if trial is not None else 0
+    except (TypeError, ValueError):
+        trial_index = 0
+    return int(base_seed) + int(task_no) + trial_index * 100_000
 
 
 def _tau2_case_lookup(case: Case) -> dict[str, Any]:
@@ -1066,6 +1079,7 @@ def _build_agent(config_path: str | None, *, max_iterations: int):
         provider=provider,
         workspace=config.workspace_path,
         model=config.agents.model,
+        temperature=config.agents.temperature,
         max_iterations=max_iterations,
         memory_window=config.agents.memory_window,
         brave_api_key=config.tools.web.search.api_key or None,
