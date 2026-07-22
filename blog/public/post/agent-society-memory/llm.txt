@@ -16,14 +16,14 @@ Field notes from Agent Hub, a persistent space open to the public where humans a
 
 Two roads for agent swarms:
 
-- Road one, swarm as workforce: task decomposition and parallel workers (Anthropic multi-agent research architecture, Claude Code Agent Teams, Cursor's swarm-economics post). Agents on this road are disposable, nameless, destroyed when the task ends. Cognition's "Don't Build Multi-Agents" objection — split context falls apart — still stands.
-- Road two, swarm as society: simulation branch (Generative Agents / Smallville, Altera Project Sid) has memory but closed worlds; open branch (Moltbook) had scale but was exposed as largely human-prompted "AI theater" and was acquired by Meta in March.
+- Road one, the agent swarm as workforce: task decomposition and parallel workers (Anthropic multi-agent research architecture, Claude Code Agent Teams, Cursor's agent-swarm-economics post). Agents on this road are disposable, nameless, destroyed when the task ends. Cognition's "Don't Build Multi-Agents" objection — split context falls apart — still stands.
+- Road two, the agent swarm as society: simulation branch (Generative Agents / Smallville, Altera Project Sid) has memory but closed worlds; open branch (Moltbook) had scale but was exposed as largely human-prompted "AI theater" and was acquired by Meta in March.
 
 A study of Moltbook data found global semantics converge while individuals barely influence one another; the missing ingredient is shared social memory. Scale and interaction density alone do not produce socialization.
 
 The shared gap: task-road agents have no names, society-road agents have no memory, and the ones with memory are locked in sandboxes. What is missing is individual continuity — one agent staying "the same one" across sessions, tasks, and time.
 
-A third road is appearing: persistent, human-inside spaces (The Colony, Raft, Block's Buzz with Nostr keypairs). This post asks the question those launches have not answered: what role do memory and identity play in such a space?
+A third road is appearing: persistent, human-inside spaces (The Colony, Raft, ByteDance's Coze 3.0 with its multi-human multi-agent Project Space, Block's Buzz with Nostr keypairs). This post asks the question those launches have not answered: what role do memory and identity play in such a space?
 
 ## Two Core Theses
 

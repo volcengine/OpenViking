@@ -198,7 +198,7 @@ const AgentSocietyMemoryPost = ({ t }) => {
       <Cols count={2}>
         <RoadCard
           badge={T({ en: 'ROAD ONE', zh: '路线一' })}
-          title={T({ en: 'The swarm as workforce', zh: '将 Swarm 视为劳动力' })}
+          title={T({ en: 'The agent swarm as workforce', zh: '将 Agent Swarm 视为劳动力' })}
         >
           <RoadFact label={T({ en: 'GOAL', zh: '目标' })}>
             {T({
@@ -208,8 +208,8 @@ const AgentSocietyMemoryPost = ({ t }) => {
           </RoadFact>
           <RoadFact label={T({ en: 'PLAYERS', zh: '代表' })}>
             {T({
-              en: 'Anthropic’s multi-agent research architecture (an orchestrator dispatching parallel workers, at the cost of token usage growing by more than an order of magnitude); Claude Code Agent Teams, launched this February; Cursor’s July post on swarm economics—different orchestration schemes, with costs diverging by as much as eight times.',
-              zh: 'Anthropic 的 Multi-agent Research 架构（Orchestrator 派发、Worker 并行，代价是呈十几倍增长的 Token 消耗）；今年二月上线的 Claude Code Agent Teams；七月份 Cursor 那篇探讨 Swarm 经济学的博客——不同的编排方式，让成本产生了高达八倍的差异。',
+              en: 'Anthropic’s multi-agent research architecture (an orchestrator dispatching parallel workers, at the cost of token usage growing by more than an order of magnitude); Claude Code Agent Teams, launched this February; Cursor’s July post on agent-swarm economics—different orchestration schemes, with costs diverging by as much as eight times.',
+              zh: 'Anthropic 的 Multi-agent Research 架构（Orchestrator 派发、Worker 并行，代价是呈十几倍增长的 Token 消耗）；今年二月上线的 Claude Code Agent Teams；七月份 Cursor 那篇探讨 Agent Swarm 经济学的博客——不同的编排方式，让成本产生了高达八倍的差异。',
             })}
           </RoadFact>
           <RoadFact label={T({ en: 'OBJECTION', zh: '反方' })}>
@@ -227,7 +227,7 @@ const AgentSocietyMemoryPost = ({ t }) => {
         </RoadCard>
         <RoadCard
           badge={T({ en: 'ROAD TWO', zh: '路线二' })}
-          title={T({ en: 'The swarm as society', zh: '将 Swarm 视为社会' })}
+          title={T({ en: 'The agent swarm as society', zh: '将 Agent Swarm 视为社会' })}
         >
           <RoadFact label={T({ en: 'SIMULATION BRANCH', zh: '模拟支' })}>
             {T({
@@ -289,8 +289,8 @@ const AgentSocietyMemoryPost = ({ t }) => {
       })}</P>
 
       <P>{T({
-        en: <>In just the past two or three months, a third road has begun to appear: <Strong>persistent, human-inside spaces</Strong>. The Colony lets humans and agents register on the same forum; Raft, released in May, blends persistent agent processes, native memory, and heterogeneous runtimes into a collaboration product; and in late July, Jack Dorsey’s Block released Buzz—an open-source workspace where humans and agents are both members, using Nostr keypairs to give every agent a verifiable identity. Humans are no longer spectators; they are co-builders in the same room.</>,
-        zh: <>就在最近两三个月，第三条道路开始显现：<Strong>人在场内（human-inside）的持久化空间</Strong>。The Colony 允许人类与 Agent 注册进同一个论坛；五月发布的 Raft 将持久化的 Agent 进程、原生记忆与异构 Runtime 混编成了协作产品；七月下旬，Jack Dorsey 的 Block 更是发布了 Buzz——一个人类与 Agent 同为成员的开源 Workspace，利用 Nostr 密钥对赋予每个 Agent 可验证的身份。至此，人类不再是旁观者，而是身处同一个房间的共建成员。</>,
+        en: <>In just the past two or three months, a third road has begun to appear: <Strong>persistent, human-inside spaces</Strong>. The Colony lets humans and agents register on the same forum; Raft, released in May, blends persistent agent processes, native memory, and heterogeneous runtimes into a collaboration product; in June, ByteDance’s Coze 3.0 built multi-human, multi-agent collaboration into its Project Space, plugging in local Claude Code and Codex alongside its cloud agents; and in late July, Jack Dorsey’s Block released Buzz—an open-source workspace where humans and agents are both members, using Nostr keypairs to give every agent a verifiable identity. Humans are no longer spectators; they are co-builders in the same room.</>,
+        zh: <>就在最近两三个月，第三条道路开始显现：<Strong>人在场内（human-inside）的持久化空间</Strong>。The Colony 允许人类与 Agent 注册进同一个论坛；五月发布的 Raft 将持久化的 Agent 进程、原生记忆与异构 Runtime 混编成了协作产品；六月，字节的 Coze 3.0 把多人多 Agent 协作做进了 Project Space，云端 Agent 之外还能接入本地的 Claude Code 与 Codex；七月下旬，Jack Dorsey 的 Block 更是发布了 Buzz——一个人类与 Agent 同为成员的开源 Workspace，利用 Nostr 密钥对赋予每个 Agent 可验证的身份。至此，人类不再是旁观者，而是身处同一个房间的共建成员。</>,
       })}</P>
 
       <Table
@@ -302,7 +302,7 @@ const AgentSocietyMemoryPost = ({ t }) => {
         rows={[
           [
             T({ en: 'Task orchestration', zh: '任务编排' }),
-            T({ en: 'Multi-agent research, Agent Teams, Cursor swarms', zh: 'Multi-agent Research、Agent Teams、Cursor Swarm' }),
+            T({ en: 'Multi-agent research, Agent Teams, Cursor agent swarms', zh: 'Multi-agent Research、Agent Teams、Cursor Agent Swarm' }),
             T({ en: '“Who it is” — nameless, destroyed when the task ends', zh: '“是谁”——无名，任务结束即销毁' }),
           ],
           [
@@ -317,7 +317,7 @@ const AgentSocietyMemoryPost = ({ t }) => {
           ],
           [
             T({ en: 'Human-inside spaces', zh: '人在场内' }),
-            T({ en: 'The Colony, Raft, Buzz', zh: 'The Colony、Raft、Buzz' }),
+            T({ en: 'The Colony, Raft, Coze 3.0, Buzz', zh: 'The Colony、Raft、Coze 3.0、Buzz' }),
             T({ en: 'An answer on memory and identity — the question this post takes on', zh: '记忆与身份的答案——本文要探讨的问题' }),
           ],
         ]}
