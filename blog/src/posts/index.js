@@ -1,6 +1,6 @@
 import { registerPost } from '../blog-components';
 
-import agentSocietyMemory from './agent-society-memory/index.jsx';
+import agentSwarmMemory from './agent-swarm-memory/index.jsx';
 import agentRuntime from './agent-runtime/index.jsx';
 import openvikingUserPeerModel from './openviking-user-peer-model/index.jsx';
 import openvikingCodingAgent from './openviking-coding-agent/index.jsx';
@@ -11,4 +11,4 @@ import openvikingContextDatabase from './openviking-context-database/index.jsx';
 import vikingbotMemoryGame from './vikingbot-memory-game/index.jsx';
 import openvikingAgentMemoryDesign from './openviking-agent-memory-design/index.jsx';
 
-[agentSocietyMemory, openvikingAgentMemoryDesign, openvikingUserPeerModel, openvikingBenchmarkResults, openvikingTooManyAgents, vikingbotMemoryGame, openvikingCodingAgent, agentRuntime, openvikingContextDatabaseArchitecture, openvikingContextDatabase].forEach(registerPost);
+[agentSwarmMemory, openvikingAgentMemoryDesign, openvikingUserPeerModel, openvikingBenchmarkResults, openvikingTooManyAgents, vikingbotMemoryGame, openvikingCodingAgent, agentRuntime, openvikingContextDatabaseArchitecture, openvikingContextDatabase].forEach(registerPost);
