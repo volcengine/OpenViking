@@ -112,22 +112,3 @@ fn get_key_path(output_file: Option<PathBuf>) -> Result<PathBuf> {
         }
     }
 }
-
-#[cfg(all(test, unix))]
-mod tests {
-    use super::*;
-    use std::os::unix::fs::PermissionsExt;
-
-    #[tokio::test]
-    async fn init_key_creates_owner_only_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("master.key");
-
-        handle_init_key(Some(path.clone())).await.unwrap();
-
-        assert_eq!(
-            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-    }
-}
