@@ -262,6 +262,10 @@ export function TodayRetrievalsPanel({
             label={t('todayRetrievals.search')}
             value={formatNumber(data?.search)}
           />
+          <DetailRow
+            label={t('todayRetrievals.recall')}
+            value={formatNumber(data?.recall)}
+          />
         </>
       )}
     </MetricPanel>

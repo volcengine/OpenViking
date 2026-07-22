@@ -20,6 +20,7 @@ export type ConsoleTokenCounts = {
 
 export type ConsoleRetrievalCounts = {
   find?: number
+  recall?: number
   search?: number
   total?: number
 }
@@ -58,7 +59,8 @@ export type ConsoleTokenSeriesItem = {
   vlm_output?: number
 }
 
-export type ConsoleTokenSeriesResult = ConsoleSeriesResult<ConsoleTokenSeriesItem>
+export type ConsoleTokenSeriesResult =
+  ConsoleSeriesResult<ConsoleTokenSeriesItem>
 
 export type ConsoleContextCommitItem = {
   add_resource?: number
@@ -70,7 +72,8 @@ export type ConsoleContextCommitItem = {
   total?: number
 }
 
-export type ConsoleContextCommitsResult = ConsoleSeriesResult<ConsoleContextCommitItem>
+export type ConsoleContextCommitsResult =
+  ConsoleSeriesResult<ConsoleContextCommitItem>
 
 export type ConsoleAuditLogItem = {
   account_id?: string | null
@@ -84,9 +87,10 @@ export type ConsoleAuditLogItem = {
   user_id?: string | null
 }
 
-export type ConsoleAuditResult = OvMaybeDisabled & PaginatedResult<ConsoleAuditLogItem> & {
-  success_rate?: number
-}
+export type ConsoleAuditResult = OvMaybeDisabled &
+  PaginatedResult<ConsoleAuditLogItem> & {
+    success_rate?: number
+  }
 
 export type ConsoleAuditQuery = {
   api_type?: string[] | null

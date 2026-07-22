@@ -117,6 +117,7 @@ store backend，而不是让多个实例各写各的本地 SQLite。
 | --- | --- |
 | `POST /api/v1/search/find` | `find` |
 | `POST /api/v1/search/search` | `search` |
+| `POST /api/v1/search/recall` | `recall` |
 
 `2xx` 和 `3xx` 记为 `success`，`4xx/5xx` 记为 `error`。Dashboard 今日检索只展示成功请求数。
 
@@ -230,7 +231,8 @@ GET /api/v1/console/dashboard/summary
     "today_retrievals": {
       "find": 10,
       "search": 4,
-      "total": 14
+      "recall": 6,
+      "total": 20
     }
   }
 }

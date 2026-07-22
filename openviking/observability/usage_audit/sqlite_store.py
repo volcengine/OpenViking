@@ -355,7 +355,7 @@ class SQLiteUsageAuditStore:
         assert self._conn is not None
         day = date.fromisoformat(user_date)
         utc_start, utc_end = _user_day_window_utc(day, tz)
-        result = {"find": 0, "search": 0}
+        result = {"find": 0, "search": 0, "recall": 0}
         for operation, total in self._fetch_hourly_retrieval_rows(
             account_id, utc_start, utc_end, user_id=user_id
         ):

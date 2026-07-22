@@ -284,8 +284,9 @@ const zhCN = {
     requestFailed: '请求失败',
     todayRetrievals: {
       description:
-        '展示用户或 Agent 今日使用语义检索 find() 和 search() 的成功调用次数，每天零点刷新。',
+        '展示用户或 Agent 今日使用语义检索 find()、search() 和 recall() 的成功调用次数，每天零点刷新。',
       find: 'find',
+      recall: 'recall',
       search: 'search',
       title: '今日检索次数',
     },

@@ -278,6 +278,8 @@ def retrieval_operation_for_http(method: str, route: str) -> str | None:
         return "find"
     if route == "/api/v1/search/search":
         return "search"
+    if route == "/api/v1/search/recall":
+        return "recall"
     return None
 
 
@@ -302,6 +304,8 @@ def derive_api_type(route: str) -> str:
         return "search.find"
     if route == "/api/v1/search/search":
         return "search.search"
+    if route == "/api/v1/search/recall":
+        return "search.recall"
     prefix_map = {
         "/api/v1/resources": "resources",
         "/api/v1/skills": "skills",

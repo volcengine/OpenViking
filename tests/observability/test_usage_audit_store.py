@@ -159,6 +159,16 @@ async def test_sqlite_usage_audit_store_aggregates_dashboard_data(tmp_path):
                 _event(
                     "http.request",
                     {
+                        "request_id": "req-recall",
+                        "method": "POST",
+                        "route": "/api/v1/search/recall",
+                        "status": "200",
+                        "duration_seconds": 0.1,
+                    },
+                ),
+                _event(
+                    "http.request",
+                    {
                         "request_id": "req-message",
                         "method": "POST",
                         "route": "/api/v1/sessions/{session_id}/messages",
@@ -231,14 +241,16 @@ async def test_sqlite_usage_audit_store_aggregates_dashboard_data(tmp_path):
         ) == {
             "find": 1,
             "search": 1,
-            "total": 2,
+            "recall": 1,
+            "total": 3,
         }
         assert await store.get_today_retrievals(
             account_id="acct-1", user_id="user-1", user_date="2026-05-12", tz=UTC
         ) == {
             "find": 1,
             "search": 0,
-            "total": 1,
+            "recall": 1,
+            "total": 2,
         }
         commits = await store.get_context_commit_heatmap(
             account_id="acct-1",
@@ -261,17 +273,22 @@ async def test_sqlite_usage_audit_store_aggregates_dashboard_data(tmp_path):
         )
         assert any(row["hour"] == 1 and row["session_add_message"] == 1 for row in commits)
         audit = await store.query_audit_logs(account_id="acct-1")
-        assert audit["total"] == 4
+        assert audit["total"] == 5
         assert audit["success_rate"] == 1.0
         assert {item["api_type"] for item in audit["items"]} == {
             "search.find",
             "search.search",
+            "search.recall",
             "sessions",
         }
         audit = await store.query_audit_logs(account_id="acct-1", user_id="user-1")
-        assert audit["total"] == 2
+        assert audit["total"] == 3
         assert audit["success_rate"] == 1.0
-        assert {item["request_id"] for item in audit["items"]} == {"req-find", "req-message"}
+        assert {item["request_id"] for item in audit["items"]} == {
+            "req-find",
+            "req-message",
+            "req-recall",
+        }
     finally:
         await store.close()
 

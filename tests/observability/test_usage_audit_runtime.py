@@ -38,7 +38,7 @@ async def test_usage_audit_runtime_subscribes_to_shared_event_bus(tmp_path):
                 "account_id": "acct-runtime",
                 "user_id": "user-runtime",
                 "method": "POST",
-                "route": "/api/v1/search/find",
+                "route": "/api/v1/search/recall",
                 "status": "200",
                 "duration_seconds": 0.01,
             },
@@ -57,6 +57,7 @@ async def test_usage_audit_runtime_subscribes_to_shared_event_bus(tmp_path):
         await shutdown_usage_audit(app=app)
         _GLOBAL_EVENT_BUS.clear()
 
-    assert retrievals["find"] == 1
+    assert retrievals["recall"] == 1
+    assert retrievals["total"] == 1
     assert audit["total"] == 1
     assert audit["items"][0]["request_id"] == "req-runtime"
