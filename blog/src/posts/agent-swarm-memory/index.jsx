@@ -14,9 +14,9 @@ const PLUGIN_DOCS_EN = 'https://docs.openviking.ai/en/agent-integrations/01-over
 const MCP_DOCS_ZH = 'https://docs.openviking.ai/zh/agent-integrations/06-mcp-clients';
 const MCP_DOCS_EN = 'https://docs.openviking.ai/en/agent-integrations/06-mcp-clients';
 
-const IMAGE_BASE = '/post/agent-society-memory/images';
-const COVER = '/assets/covers/agent-society-memory.png';
-const LLM_PATH = '/post/agent-society-memory/llm.txt';
+const IMAGE_BASE = '/post/agent-swarm-memory/images';
+const COVER = '/assets/covers/agent-swarm-memory.png';
+const LLM_PATH = '/post/agent-swarm-memory/llm.txt';
 
 // Portrait screenshots at full column width dwarf the text; cap them at half the column.
 const PortraitFigure = (props) => (
@@ -143,7 +143,7 @@ function ElementCard({ n, title, desc }) {
   );
 }
 
-const AgentSocietyMemoryPost = ({ t }) => {
+const AgentSwarmMemoryPost = ({ t }) => {
   const T = t;
 
   return (
@@ -636,8 +636,8 @@ const AgentSocietyMemoryPost = ({ t }) => {
 };
 
 export default {
-  id: 'agent-society-memory',
-  Component: AgentSocietyMemoryPost,
+  id: 'agent-swarm-memory',
+  Component: AgentSwarmMemoryPost,
   meta: {
     title: {
       en: 'Agent Societies Don’t Lack Scale — They Lack Memory',
