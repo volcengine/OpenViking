@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import re
 from dataclasses import dataclass, field
@@ -43,8 +44,10 @@ class RenderedBundle:
     link_count: int = 0
 
 
-def content_hash(content: str) -> str:
-    return "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+def content_hash(content: str | bytes) -> str:
+    if isinstance(content, str):
+        content = content.encode("utf-8")
+    return "sha256:" + hashlib.sha256(content).hexdigest()
 
 
 def _split_frontmatter(content: str) -> tuple[dict[str, Any], str]:
@@ -82,9 +85,16 @@ def _frontmatter(
         **data,
     }
     normalized_tags = _normalize_tags(tags)
+    dumped = yaml.safe_dump(data, allow_unicode=True, sort_keys=False, width=10**9)
     if normalized_tags:
-        data["tags"] = normalized_tags
-    return "---\n" + yaml.safe_dump(data, allow_unicode=True, sort_keys=False) + "---\n\n"
+        inline_tags = yaml.safe_dump(
+            normalized_tags,
+            allow_unicode=True,
+            width=10**9,
+            default_flow_style=True,
+        ).strip()
+        dumped += f"tags: {inline_tags}\n"
+    return "---\n" + dumped + "---\n\n"
 
 
 def _split_citations(body: str) -> tuple[str, list[tuple[str, str]]]:
@@ -160,6 +170,20 @@ def validate_relative_page_path(path: str) -> str:
     return "/".join(segments)
 
 
+def validate_relative_file_path(path: str) -> str:
+    relative = sanitize_relative_viking_path(path).strip("/")
+    segments = relative.split("/")
+    if (
+        not relative
+        or any(not segment or segment in {".", ".."} for segment in segments)
+        or any(segment.startswith(".") for segment in segments)
+    ):
+        raise ValueError(f"invalid output file path: {path}")
+    if segments[-1].lower() in _RESERVED_FILENAMES:
+        raise ValueError(f"reserved output file path: {path}")
+    return relative
+
+
 def is_reserved_wiki_page_uri(uri: str) -> bool:
     return uri.rstrip("/").rsplit("/", 1)[-1].lower() in _RESERVED_FILENAMES
 
@@ -207,11 +231,22 @@ class WikiRenderer:
         source_roots: Mapping[str, str],
         catalog_uris: set[str],
         existing_raw: Mapping[str, str],
+        file_catalog_uris: set[str] | None = None,
+        existing_bytes: Mapping[str, bytes] | None = None,
+        file_payloads: list[bytes | None] | None = None,
     ) -> RenderedBundle:
+        file_catalog_uris = file_catalog_uris or set()
+        existing_bytes = existing_bytes or {}
+        file_payloads = file_payloads or []
         if len(bundle.pages) > self.limits.output_pages:
             raise ValueError("Wiki bundle exceeds the page limit")
+        if len(bundle.files) > self.limits.output_files:
+            raise ValueError("Wiki bundle exceeds the file limit")
         if not bundle.pages and bundle.links:
             raise ValueError("an empty Wiki bundle cannot contain links")
+        memory_target = context_type_for_uri(target_uri) == "memory"
+        if memory_target and bundle.files:
+            raise ValueError("raw artifact files are only supported for Resource targets")
 
         page_ids: set[int] = set()
         page_uris: dict[int, list[str]] = {}
@@ -256,6 +291,31 @@ class WikiRenderer:
             output_uris.add(uri)
             page_uris[page.page_id] = [uri]
 
+        file_uris: list[str] = []
+        for index, file in enumerate(bundle.files):
+            if file.update_uri:
+                uri = validate_safe_viking_uri_path(file.update_uri).rstrip("/")
+                if is_reserved_wiki_page_uri(uri):
+                    raise ValueError(f"reserved output file cannot be updated: {uri}")
+                if uri not in file_catalog_uris:
+                    raise ValueError(f"file update_uri is not in the target catalog: {uri}")
+                if uri not in existing_bytes:
+                    raise ValueError(f"raw bytes were not loaded for file update_uri: {uri}")
+            else:
+                relative = validate_relative_file_path(file.path or "")
+                uri = safe_join_viking_uri(target_uri, relative).rstrip("/")
+                if uri in file_catalog_uris:
+                    raise ValueError(f"output file already exists; use update_uri: {uri}")
+            if uri in output_uris:
+                raise ValueError(f"duplicate final output path: {uri}")
+            output_uris.add(uri)
+            file_uris.append(uri)
+
+            if file.workspace_path is not None and (
+                index >= len(file_payloads) or file_payloads[index] is None
+            ):
+                raise ValueError(f"workspace payload was not loaded for file {index}")
+
         for link in bundle.links:
             if link.f is None or link.t is None or link.f == link.t:
                 raise ValueError("WikiLink endpoints must be non-null and non-self")
@@ -276,7 +336,6 @@ class WikiRenderer:
         resolved_links = resolve_wiki_links(bundle.links, page_uris, strict=True)
         result = RenderedBundle()
         total_bytes = 0
-        memory_target = context_type_for_uri(target_uri) == "memory"
         for page in bundle.pages:
             uri = page_uris[page.page_id][0]
             is_update = page.update_uri is not None
@@ -345,6 +404,39 @@ class WikiRenderer:
             result.operations.append(
                 {"uri": uri, "content": candidate, "precondition": precondition}
             )
+
+        for index, file in enumerate(bundle.files):
+            uri = file_uris[index]
+            if file.content is not None:
+                candidate = file.content.encode("utf-8")
+                operation_content = {"content": file.content}
+            else:
+                candidate = file_payloads[index]
+                assert candidate is not None
+                operation_content = {"content_base64": base64.b64encode(candidate).decode("ascii")}
+
+            total_bytes += len(candidate)
+            if total_bytes > self.limits.output_total_bytes:
+                raise ValueError("Wiki bundle exceeds the final content size limit")
+
+            is_update = file.update_uri is not None
+            old = existing_bytes.get(uri)
+            if old is not None and candidate == old:
+                result.unchanged.append(uri)
+                continue
+            if is_update:
+                assert old is not None
+                result.updated.append(uri)
+                precondition = {
+                    "kind": "replace_if_hash",
+                    "base_hash": content_hash(old),
+                }
+            else:
+                result.created.append(uri)
+                precondition = {"kind": "create_if_absent"}
+            result.operations.append(
+                {"uri": uri, **operation_content, "precondition": precondition}
+            )
         return result
 
 
@@ -353,5 +445,6 @@ __all__ = [
     "WikiRenderer",
     "content_hash",
     "is_reserved_wiki_page_uri",
+    "validate_relative_file_path",
     "validate_relative_page_path",
 ]

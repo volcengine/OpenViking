@@ -5,14 +5,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from openviking.session.memory.dataclass import WikiLink
 from vikingbot.channels.openapi_models import OpenVikingConnection
 
 DEFAULT_COMPILE_REASON = (
-    "Follow the loaded Skill's instructions to organize the provided source materials "
-    "and generate or update the target Wiki."
+    "Follow the loaded Skill's instructions to transform the provided source materials "
+    "into the outputs required by the Skill."
 )
 OKF_VERSION = "0.1"
 TERMINAL_STATUSES = frozenset({"completed", "failed"})
@@ -31,6 +31,7 @@ class CompileLimits(BaseModel):
     tool_result_bytes: int = 1024 * 1024
     tool_total_result_bytes: int = 8 * 1024 * 1024
     output_pages: int = 64
+    output_files: int = 64
     output_total_bytes: int = 4 * 1024 * 1024
     concurrent_tasks: int = 4
     task_runtime_seconds: float = 30 * 60
@@ -70,10 +71,43 @@ class WikiPageDraft(BaseModel):
     update_uri: str | None = None
 
 
+class CompileFileDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str | None = Field(
+        default=None,
+        description="Relative target path for a new file under the Compile target.",
+    )
+    update_uri: str | None = Field(
+        default=None,
+        description="Catalog URI of an existing target file to replace.",
+    )
+    content: str | None = Field(
+        default=None,
+        description="Exact UTF-8 text file content, including any required frontmatter.",
+    )
+    workspace_path: str | None = Field(
+        default=None,
+        description=(
+            "Explicit relative path of a file already generated in the task workspace; "
+            "its bytes are preserved exactly."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_shape(self) -> "CompileFileDraft":
+        if (self.path is None) == (self.update_uri is None):
+            raise ValueError("exactly one of path or update_uri is required")
+        if (self.content is None) == (self.workspace_path is None):
+            raise ValueError("exactly one of content or workspace_path is required")
+        return self
+
+
 class WikiBundleDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     pages: list[WikiPageDraft]
+    files: list[CompileFileDraft] = Field(default_factory=list)
     links: list[WikiLink] = Field(default_factory=list)
 
 
@@ -141,6 +175,7 @@ def utc_now() -> str:
 __all__ = [
     "CompileAccepted",
     "CompileErrorInfo",
+    "CompileFileDraft",
     "CompileFailure",
     "CompileLimits",
     "CompileRequest",

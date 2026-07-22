@@ -7,13 +7,21 @@ from typing import Any, Mapping
 
 from pydantic import ValidationError
 
-from openviking.core.namespace import relative_uri_path
+from openviking.core.namespace import context_type_for_uri, relative_uri_path
 from openviking.session.memory.utils.link_renderer import LinkRenderer
-from openviking.utils.path_safety import safe_join_viking_uri, validate_safe_viking_uri_path
+from openviking.utils.path_safety import (
+    safe_join_viking_uri,
+    sanitize_relative_viking_path,
+    validate_safe_viking_uri_path,
+)
 from openviking_cli.utils import VikingURI
 from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.compile.models import CompileLimits, WikiBundleDraft
-from vikingbot.compile.renderer import is_reserved_wiki_page_uri, validate_relative_page_path
+from vikingbot.compile.renderer import (
+    is_reserved_wiki_page_uri,
+    validate_relative_file_path,
+    validate_relative_page_path,
+)
 
 _LINK_FIELDS = frozenset({"f", "t", "link_type", "weight", "match_text", "description"})
 
@@ -114,14 +122,17 @@ class SubmitWikiBundleTool(Tool):
         *,
         source_ids: set[str],
         catalog_uris: set[str],
+        file_catalog_uris: set[str] | None = None,
         target_uri: str,
         limits: CompileLimits,
     ):
         self.source_ids = source_ids
         self.catalog_uris = catalog_uris
+        self.file_catalog_uris = file_catalog_uris or set()
         self.target_uri = target_uri.rstrip("/")
         self.limits = limits
         self.bundle: WikiBundleDraft | None = None
+        self.file_payloads: list[bytes | None] = []
 
     @property
     def name(self) -> str:
@@ -129,7 +140,7 @@ class SubmitWikiBundleTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Submit the final validated Wiki page bundle for deterministic rendering."
+        return "Submit the final validated Wiki pages and explicitly declared raw output files."
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -148,27 +159,45 @@ class SubmitWikiBundleTool(Tool):
         self,
         tool_context: ToolContext,
         pages: list[dict[str, Any]],
+        files: list[dict[str, Any]] | None = None,
         links: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> str:
-        del tool_context, kwargs
+        del kwargs
+        self.bundle = None
+        self.file_payloads = []
         raw_links = links or []
         for index, link in enumerate(raw_links):
             if not isinstance(link, Mapping) or set(link) - _LINK_FIELDS:
                 return f"Error: links[{index}] contains unknown fields."
         try:
-            bundle = WikiBundleDraft.model_validate({"pages": pages, "links": raw_links})
-            self._validate_bundle(bundle)
+            bundle = WikiBundleDraft.model_validate(
+                {"pages": pages, "files": files or [], "links": raw_links}
+            )
+            payloads = await self._validate_bundle(bundle, tool_context=tool_context)
         except (ValidationError, ValueError) as exc:
             return f"Error: Invalid Wiki bundle: {exc}"
         self.bundle = bundle
-        return f"Wiki bundle accepted with {len(bundle.pages)} page(s)."
+        self.file_payloads = payloads
+        return (
+            f"Wiki bundle accepted with {len(bundle.pages)} page(s) and "
+            f"{len(bundle.files)} file(s)."
+        )
 
-    def _validate_bundle(self, bundle: WikiBundleDraft) -> None:
+    async def _validate_bundle(
+        self, bundle: WikiBundleDraft, *, tool_context: ToolContext
+    ) -> list[bytes | None]:
         if len(bundle.pages) > self.limits.output_pages:
             raise ValueError("page limit exceeded")
+        if len(bundle.files) > self.limits.output_files:
+            raise ValueError("file limit exceeded")
         if not bundle.pages and bundle.links:
             raise ValueError("empty bundle must not contain links")
+        if bundle.files and context_type_for_uri(self.target_uri) != "resource":
+            raise ValueError(
+                "raw artifact files are only supported for Resource targets; "
+                "re-run ov compile with a viking://resources/... target"
+            )
         page_ids: set[int] = set()
         final_uris: set[str] = set()
         total_bytes = 0
@@ -204,6 +233,46 @@ class SubmitWikiBundleTool(Tool):
                 raise ValueError(f"duplicate final Wiki path: {final_uri}")
             final_uris.add(final_uri)
             total_bytes += len(page.body_markdown.encode("utf-8"))
+
+        file_payloads: list[bytes | None] = []
+        for index, file in enumerate(bundle.files):
+            if file.update_uri:
+                final_uri = validate_safe_viking_uri_path(file.update_uri).rstrip("/")
+                if is_reserved_wiki_page_uri(final_uri):
+                    raise ValueError(f"file {index} cannot update a reserved file")
+                if final_uri not in self.file_catalog_uris:
+                    raise ValueError(f"file {index} update_uri is not in the catalog")
+            else:
+                relative = validate_relative_file_path(file.path or "")
+                final_uri = safe_join_viking_uri(self.target_uri, relative).rstrip("/")
+                if final_uri in self.file_catalog_uris:
+                    raise ValueError(f"file {index} path exists; use its update_uri")
+            if final_uri in final_uris:
+                raise ValueError(f"duplicate final output path: {final_uri}")
+            final_uris.add(final_uri)
+
+            if file.content is not None:
+                payload = None
+                content_bytes = file.content.encode("utf-8")
+            else:
+                try:
+                    workspace_path = sanitize_relative_viking_path(file.workspace_path or "")
+                    if tool_context.sandbox_manager is None:
+                        raise ValueError("task sandbox is unavailable")
+                    sandbox = await tool_context.sandbox_manager.get_sandbox(
+                        tool_context.session_key
+                    )
+                    payload = await sandbox.read_file_bytes(workspace_path)
+                except ValueError:
+                    raise
+                except Exception as exc:
+                    raise ValueError(
+                        f"file {index} workspace_path could not be read: {file.workspace_path}"
+                    ) from exc
+                content_bytes = payload
+            total_bytes += len(content_bytes)
+            file_payloads.append(payload)
+
         if total_bytes > self.limits.output_total_bytes:
             raise ValueError("draft content size limit exceeded")
         for link in bundle.links:
@@ -223,6 +292,7 @@ class SubmitWikiBundleTool(Tool):
                 is None
             ):
                 raise ValueError(f"link anchor is not linkable: {link.match_text!r}")
+        return file_payloads
 
 
 __all__ = ["CompileScopedTool", "SubmitWikiBundleTool"]

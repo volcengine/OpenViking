@@ -59,7 +59,7 @@ ov compile \
 `--reason` 为空时，VikingBot 使用以下默认任务描述：
 
 ```text
-Follow the loaded Skill's instructions to organize the provided source materials and generate or update the target Wiki.
+Follow the loaded Skill's instructions to transform the provided source materials into the outputs required by the Skill.
 ```
 
 ### 2.2 返回结果

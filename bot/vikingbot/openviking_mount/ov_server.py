@@ -604,6 +604,9 @@ class VikingClient:
     async def attrs(self, uri: str) -> Dict[str, Any]:
         return await self.client.attrs(uri)
 
+    async def mkdir(self, uri: str) -> None:
+        await self.client.mkdir(uri)
+
     async def tree(self, uri: str, *, node_limit: int = 1000) -> List[Dict[str, Any]]:
         return await self.client.tree(uri, node_limit=node_limit)
 

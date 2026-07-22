@@ -66,8 +66,15 @@ class BatchWriteOperation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     uri: str
-    content: str
+    content: str | None = None
+    content_base64: str | None = None
     precondition: BatchWritePrecondition
+
+    @model_validator(mode="after")
+    def validate_content_shape(self) -> "BatchWriteOperation":
+        if (self.content is None) == (self.content_base64 is None):
+            raise ValueError("exactly one of content or content_base64 is required")
+        return self
 
 
 class BatchWriteRequest(BaseModel):

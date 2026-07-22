@@ -1,3 +1,4 @@
+import base64
 import hashlib
 
 import pytest
@@ -5,7 +6,12 @@ import pytest
 import openviking.storage.content_write as content_write_module
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.content_write import ContentWriteCoordinator
-from openviking_cli.exceptions import ConflictError, NotFoundError, OpenVikingError
+from openviking_cli.exceptions import (
+    ConflictError,
+    InvalidArgumentError,
+    NotFoundError,
+    OpenVikingError,
+)
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -56,6 +62,10 @@ class _VFS:
             raise NotFoundError(uri, "file")
         return self.files[uri]
 
+    async def read_file_bytes(self, uri, ctx=None):
+        value = await self.read_file(uri, ctx=ctx)
+        return value.encode() if isinstance(value, str) else value
+
     async def write_file(self, uri, content, ctx=None, lock_handle=None):
         del ctx
         assert lock_handle is not None
@@ -67,6 +77,10 @@ class _VFS:
 
 def _hash(value):
     return "sha256:" + hashlib.sha256(value.encode()).hexdigest()
+
+
+def _hash_bytes(value):
+    return "sha256:" + hashlib.sha256(value).hexdigest()
 
 
 @pytest.mark.asyncio
@@ -142,6 +156,78 @@ async def test_batch_releases_tree_lock_before_one_aggregated_refresh(monkeypatc
     assert result["created"] == [a, b]
     assert calls == [{a: "added", b: "added"}]
     assert locks.releases == 1
+
+
+@pytest.mark.asyncio
+async def test_batch_writes_and_hashes_binary_content(monkeypatch):
+    root = "viking://resources/wiki"
+    image = f"{root}/figure.png"
+    locks = _LockManager()
+    original = b"\x89PNG\r\n\x1a\nold"
+    replacement = b"\x89PNG\r\n\x1a\nnew"
+    vfs = _VFS(root, {image: original})
+    coordinator = ContentWriteCoordinator(vfs)
+    monkeypatch.setattr(content_write_module, "get_lock_manager", lambda: locks)
+
+    async def refresh(**kwargs):
+        return None
+
+    monkeypatch.setattr(coordinator, "_refresh_batch", refresh)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    operation = {
+        "uri": image,
+        "content_base64": base64.b64encode(replacement).decode(),
+        "precondition": {
+            "kind": "replace_if_hash",
+            "base_hash": _hash_bytes(original),
+        },
+    }
+    result = await coordinator.batch_write(
+        root_uri=root, operations=[operation], ctx=ctx, wait=False
+    )
+    assert result["updated"] == [image]
+    assert vfs.files[image] == replacement
+
+    retry = await coordinator.batch_write(
+        root_uri=root, operations=[operation], ctx=ctx, wait=False
+    )
+    assert retry["unchanged"] == [image]
+
+
+@pytest.mark.asyncio
+async def test_batch_rejects_invalid_binary_payload_and_memory_binary():
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    resource_root = "viking://resources/wiki"
+    coordinator = ContentWriteCoordinator(_VFS(resource_root))
+    with pytest.raises(InvalidArgumentError, match="content_base64 is invalid"):
+        await coordinator.batch_write(
+            root_uri=resource_root,
+            operations=[
+                {
+                    "uri": f"{resource_root}/figure.png",
+                    "content_base64": "not base64!",
+                    "precondition": {"kind": "create_if_absent"},
+                }
+            ],
+            ctx=ctx,
+            wait=False,
+        )
+
+    memory_root = "viking://user/default/memories/preferences/wiki"
+    coordinator = ContentWriteCoordinator(_VFS(memory_root))
+    with pytest.raises(InvalidArgumentError, match="not supported for memories"):
+        await coordinator.batch_write(
+            root_uri=memory_root,
+            operations=[
+                {
+                    "uri": f"{memory_root}/figure.png",
+                    "content_base64": base64.b64encode(b"png").decode(),
+                    "precondition": {"kind": "create_if_absent"},
+                }
+            ],
+            ctx=ctx,
+            wait=False,
+        )
 
 
 @pytest.mark.asyncio
@@ -316,6 +402,32 @@ async def test_batch_write_api_updates_and_retries_by_final_hash(client_with_res
     )
     assert retry.status_code == 200
     assert retry.json()["result"]["unchanged"] == sorted([existing, created])
+
+
+@pytest.mark.asyncio
+async def test_batch_write_api_creates_binary_file(client_with_resource):
+    client, root = client_with_resource
+    image = f"{root}/compile-figure.png"
+    content = b"\x89PNG\r\n\x1a\ncompile"
+    response = await client.post(
+        "/api/v1/content/batch-write",
+        json={
+            "root_uri": root,
+            "wait": False,
+            "operations": [
+                {
+                    "uri": image,
+                    "content_base64": base64.b64encode(content).decode(),
+                    "precondition": {"kind": "create_if_absent"},
+                }
+            ],
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["result"]["created"] == [image]
+    downloaded = await client.get("/api/v1/content/download", params={"uri": image})
+    assert downloaded.status_code == 200
+    assert downloaded.content == content
 
 
 @pytest.mark.asyncio

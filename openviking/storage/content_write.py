@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import os
 from collections import defaultdict
@@ -17,6 +19,7 @@ from openviking.core.namespace import (
     relative_uri_path,
     uri_parts,
 )
+from openviking.parse.parsers.media.constants import IMAGE_EXTENSIONS
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
 from openviking.session.memory.memory_updater import MemoryUpdater
@@ -56,6 +59,7 @@ _DERIVED_FILENAMES = frozenset({".abstract.md", ".overview.md", ".relations.json
 _CREATE_ALLOWED_EXTENSIONS = frozenset(
     {".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".py", ".js", ".ts"}
 )
+_BATCH_CREATE_ALLOWED_EXTENSIONS = _CREATE_ALLOWED_EXTENSIONS | frozenset(IMAGE_EXTENSIONS)
 _BATCH_MAX_OPERATIONS = 128
 _BATCH_MAX_FILE_BYTES = 8 * 1024 * 1024
 _BATCH_MAX_TOTAL_BYTES = 16 * 1024 * 1024
@@ -179,8 +183,8 @@ class ContentWriteCoordinator:
                 if exists and stat.get("isDir"):
                     raise InvalidArgumentError(f"batch-write target must be a file: {uri}")
 
-                current = await self._viking_fs.read_file(uri, ctx=ctx) if exists else None
-                desired_hash = self._content_hash(operation["content"])
+                current = await self._viking_fs.read_file_bytes(uri, ctx=ctx) if exists else None
+                desired_hash = self._content_hash(operation["content_bytes"])
                 if current is not None and self._content_hash(current) == desired_hash:
                     unchanged.append(uri)
                     refresh_kinds[uri] = (
@@ -208,7 +212,7 @@ class ContentWriteCoordinator:
                         )
                     pending.append((operation, exists))
                     continue
-                if self._content_hash(current or "") != precondition["base_hash"]:
+                if self._content_hash(current or b"") != precondition["base_hash"]:
                     if conflict is None:
                         conflict = ConflictError(
                             "Batch write replace precondition failed; content hash changed.",
@@ -357,13 +361,38 @@ class ContentWriteCoordinator:
             self._validate_target_uri(uri)
             self._viking_fs._ensure_mutable_access(uri, ctx)
 
-            content = raw.get("content")
-            if not isinstance(content, str):
-                raise InvalidArgumentError(f"batch-write content must be a string: {uri}")
-            content_bytes = len(content.encode("utf-8"))
-            if content_bytes > _BATCH_MAX_FILE_BYTES:
+            has_content = "content" in raw
+            has_content_base64 = "content_base64" in raw
+            if has_content == has_content_base64:
+                raise InvalidArgumentError(
+                    f"batch-write requires exactly one of content or content_base64: {uri}"
+                )
+            if has_content:
+                content = raw.get("content")
+                if not isinstance(content, str):
+                    raise InvalidArgumentError(f"batch-write content must be a string: {uri}")
+                encoded_content = content.encode("utf-8")
+            else:
+                if context_type == "memory":
+                    raise InvalidArgumentError(
+                        f"batch-write binary content is not supported for memories: {uri}"
+                    )
+                content_base64 = raw.get("content_base64")
+                if not isinstance(content_base64, str):
+                    raise InvalidArgumentError(
+                        f"batch-write content_base64 must be a string: {uri}"
+                    )
+                try:
+                    encoded_content = base64.b64decode(content_base64, validate=True)
+                except (binascii.Error, ValueError) as exc:
+                    raise InvalidArgumentError(
+                        f"batch-write content_base64 is invalid: {uri}"
+                    ) from exc
+                content = encoded_content
+            content_size = len(encoded_content)
+            if content_size > _BATCH_MAX_FILE_BYTES:
                 raise ResourceExhaustedError(f"batch-write file exceeds size limit: {uri}")
-            total_bytes += content_bytes
+            total_bytes += content_size
             if total_bytes > _BATCH_MAX_TOTAL_BYTES:
                 raise ResourceExhaustedError("batch-write total content exceeds size limit")
 
@@ -374,7 +403,9 @@ class ContentWriteCoordinator:
             if kind == "create_if_absent":
                 if set(precondition) != {"kind"}:
                     raise InvalidArgumentError(f"invalid create_if_absent precondition: {uri}")
-                self._validate_create_extension(uri)
+                self._validate_create_extension(
+                    uri, allowed_extensions=_BATCH_CREATE_ALLOWED_EXTENSIONS
+                )
                 normalized_precondition = {"kind": kind}
             elif kind == "replace_if_hash":
                 if set(precondition) != {"kind", "base_hash"}:
@@ -386,13 +417,20 @@ class ContentWriteCoordinator:
             else:
                 raise InvalidArgumentError(f"unsupported batch-write precondition: {kind}")
             normalized.append(
-                {"uri": uri, "content": content, "precondition": normalized_precondition}
+                {
+                    "uri": uri,
+                    "content": content,
+                    "content_bytes": encoded_content,
+                    "precondition": normalized_precondition,
+                }
             )
         return sorted(normalized, key=lambda operation: operation["uri"])
 
     @staticmethod
-    def _content_hash(content: str) -> str:
-        return _SHA256_PREFIX + hashlib.sha256(content.encode("utf-8")).hexdigest()
+    def _content_hash(content: str | bytes) -> str:
+        if isinstance(content, str):
+            content = content.encode("utf-8")
+        return _SHA256_PREFIX + hashlib.sha256(content).hexdigest()
 
     @staticmethod
     def _is_content_hash(value: Any) -> bool:
@@ -790,9 +828,14 @@ class ContentWriteCoordinator:
                 raise NotFoundError(uri, "file") from exc
             raise NotFoundError(uri, "file") from exc
 
-    def _validate_create_extension(self, uri: str) -> None:
+    def _validate_create_extension(
+        self,
+        uri: str,
+        *,
+        allowed_extensions: frozenset[str] = _CREATE_ALLOWED_EXTENSIONS,
+    ) -> None:
         _, ext = os.path.splitext(uri)
-        if ext.lower() not in _CREATE_ALLOWED_EXTENSIONS:
+        if ext.lower() not in allowed_extensions:
             raise InvalidArgumentError(f"create mode does not allow extension '{ext}': {uri}")
 
     async def _create_and_write(

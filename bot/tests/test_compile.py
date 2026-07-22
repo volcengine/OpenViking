@@ -1,3 +1,4 @@
+import base64
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,6 +9,7 @@ from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.agent.tools.compile import CompileScopedTool, SubmitWikiBundleTool
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.compile.models import (
+    DEFAULT_COMPILE_REASON,
     CompileLimits,
     CompileRequest,
     CompileTask,
@@ -22,6 +24,7 @@ from vikingbot.config.schema import SessionKey
 
 from openviking.core.skill_loader import SkillLoader
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking_cli.exceptions import OpenVikingError
 
 
 def _page(page_id: int, title: str, **overrides):
@@ -78,10 +81,11 @@ def test_skill_loader_rejects_invalid_allowed_tools():
 
 
 def test_renderer_creates_okf_pages_links_and_citations():
+    summary = "Residual building block designs, network variants, shortcut connection types, and design principles aligned with VGG architecture."
     bundle = WikiBundleDraft.model_validate(
         {
             "pages": [
-                _page(1, "Alpha", body_markdown="Read Beta next."),
+                _page(1, "Alpha", body_markdown="Read Beta next.", summary=summary),
                 _page(2, "Beta"),
             ],
             "links": [{"f": 1, "t": 2, "match_text": "Beta"}],
@@ -102,8 +106,90 @@ def test_renderer_creates_okf_pages_links_and_citations():
     first = rendered.operations[0]
     assert first["precondition"] == {"kind": "create_if_absent"}
     assert "type: concept" in first["content"]
+    assert f"description: {summary}\n" in first["content"]
     assert "Read [Beta](./beta.md) next." in first["content"]
     assert "[1] [source](viking://resources/source)" in first["content"]
+
+
+def test_renderer_adds_raw_text_and_workspace_binary_to_same_bundle():
+    paper = "---\ntitle: ARA Demo\nauthors: [Ada]\n---\n\n# Layer Index\n"
+    image_bytes = b"\x89PNG\r\n\x1a\nfigure"
+    bundle = WikiBundleDraft.model_validate(
+        {
+            "pages": [_page(1, "Overview")],
+            "files": [
+                {"path": "PAPER.md", "content": paper},
+                {
+                    "path": "trace/exploration_tree.yaml",
+                    "content": "nodes: []\n",
+                },
+                {
+                    "path": "evidence/figures/figure1.png",
+                    "workspace_path": "ara-output/figure1.png",
+                },
+            ],
+        }
+    )
+    rendered = WikiRenderer().render(
+        bundle=bundle,
+        target_uri="viking://resources/wiki",
+        source_roots={"src_1": "viking://resources/source"},
+        catalog_uris=set(),
+        existing_raw={},
+        file_payloads=[None, None, image_bytes],
+    )
+    operations = {operation["uri"]: operation for operation in rendered.operations}
+    assert operations["viking://resources/wiki/PAPER.md"]["content"] == paper
+    assert (
+        operations["viking://resources/wiki/trace/exploration_tree.yaml"]["content"]
+        == "nodes: []\n"
+    )
+    encoded = operations["viking://resources/wiki/evidence/figures/figure1.png"]["content_base64"]
+    assert base64.b64decode(encoded) == image_bytes
+    assert rendered.created == [
+        "viking://resources/wiki/overview.md",
+        "viking://resources/wiki/PAPER.md",
+        "viking://resources/wiki/trace/exploration_tree.yaml",
+        "viking://resources/wiki/evidence/figures/figure1.png",
+    ]
+
+
+def test_renderer_raw_file_update_uses_byte_hash_and_detects_unchanged():
+    uri = "viking://resources/wiki/trace/exploration_tree.yaml"
+    old = b"nodes: []\n"
+    unchanged_bundle = WikiBundleDraft.model_validate(
+        {"pages": [], "files": [{"update_uri": uri, "content": old.decode()}]}
+    )
+    renderer = WikiRenderer()
+    unchanged = renderer.render(
+        bundle=unchanged_bundle,
+        target_uri="viking://resources/wiki",
+        source_roots={},
+        catalog_uris=set(),
+        existing_raw={},
+        file_catalog_uris={uri},
+        existing_bytes={uri: old},
+    )
+    assert unchanged.unchanged == [uri]
+    assert unchanged.operations == []
+
+    changed_bundle = WikiBundleDraft.model_validate(
+        {"pages": [], "files": [{"update_uri": uri, "content": "nodes: [root]\n"}]}
+    )
+    changed = renderer.render(
+        bundle=changed_bundle,
+        target_uri="viking://resources/wiki",
+        source_roots={},
+        catalog_uris=set(),
+        existing_raw={},
+        file_catalog_uris={uri},
+        existing_bytes={uri: old},
+    )
+    assert changed.updated == [uri]
+    assert changed.operations[0]["precondition"] == {
+        "kind": "replace_if_hash",
+        "base_hash": content_hash(old),
+    }
 
 
 def test_renderer_empty_existing_update_uses_hash_precondition_and_preserves_uri():
@@ -172,7 +258,7 @@ Old body
     )
     content = rendered.operations[0]["content"]
     assert "custom: keep-me" in content
-    assert "tags:\n- stable\n- new" in content
+    assert "tags: [stable, new]" in content
     assert content.count("viking://resources/source/detail.md") == 1
     assert "viking://resources/other/no.md" not in content
     assert "[2] [source](viking://resources/source)" in content
@@ -260,6 +346,56 @@ async def test_submit_tool_rejects_protected_anchor_and_path_collision():
     accepted = await tool.execute(context, pages=[], links=[])
     assert not accepted.startswith("Error:")
     assert tool.bundle is not None and tool.bundle.pages == []
+
+
+@pytest.mark.asyncio
+async def test_submit_tool_reads_explicit_workspace_file_and_rejects_memory_files():
+    class Sandbox:
+        async def read_file_bytes(self, path):
+            assert path == "ara-output/figure.png"
+            return b"PNG"
+
+    class Manager:
+        async def get_sandbox(self, session_key):
+            assert session_key is not None
+            return Sandbox()
+
+    context = ToolContext(
+        session_key=SessionKey(type="compile", channel_id="cmp", chat_id="cmp"),
+        sandbox_manager=Manager(),
+    )
+    resource_tool = SubmitWikiBundleTool(
+        source_ids={"src_1"},
+        catalog_uris=set(),
+        target_uri="viking://resources/wiki",
+        limits=CompileLimits(),
+    )
+    accepted = await resource_tool.execute(
+        context,
+        pages=[],
+        files=[
+            {
+                "path": "evidence/figure.png",
+                "workspace_path": "ara-output/figure.png",
+            }
+        ],
+    )
+    assert not accepted.startswith("Error:")
+    assert resource_tool.file_payloads == [b"PNG"]
+
+    memory_tool = SubmitWikiBundleTool(
+        source_ids={"src_1"},
+        catalog_uris=set(),
+        target_uri="viking://user/memories/preferences/wiki",
+        limits=CompileLimits(),
+    )
+    rejected = await memory_tool.execute(
+        context,
+        pages=[],
+        files=[{"path": "trace/tree.yaml", "content": "nodes: []"}],
+    )
+    assert rejected.startswith("Error:")
+    assert "Resource targets" in rejected
 
 
 class _EchoTool(Tool):
@@ -367,11 +503,18 @@ async def test_structured_wrapper_delegates_to_only_existing_loop_without_fallba
 @pytest.mark.asyncio
 async def test_request_normalization_uses_default_reason_and_canonical_skill(monkeypatch):
     class Client:
+        created = set()
+
         async def attrs(self, uri):
+            if uri == "viking://resources/wiki" and uri not in self.created:
+                raise OpenVikingError("missing", code="NOT_FOUND")
             return {"uri": uri.rstrip("/")}
 
         async def stat(self, uri):
             return {"uri": uri, "isDir": True}
+
+        async def mkdir(self, uri):
+            self.created.add(uri)
 
         async def get_skill(self, name, *, target_uri):
             assert name == "wiki"
@@ -404,8 +547,52 @@ async def test_request_normalization_uses_default_reason_and_canonical_skill(mon
         connection={"api_key": "secret"},
     )
     assert normalized.from_ == ["viking://resources/source"]
+    assert normalized.to == "viking://resources/wiki"
     assert normalized.skill == "viking://agent/skills/wiki"
-    assert normalized.reason.startswith("Follow the loaded Skill's instructions")
+    assert normalized.reason == DEFAULT_COMPILE_REASON
+
+
+@pytest.mark.asyncio
+async def test_target_catalog_includes_raw_files_and_marks_wiki_pages():
+    class Client:
+        async def tree(self, uri, *, node_limit):
+            assert uri == "viking://resources/ara"
+            assert node_limit == CompileLimits().target_catalog_pages + 1
+            return [
+                {"uri": f"{uri}/Overview.md", "isDir": False, "abstract": "Overview"},
+                {"uri": f"{uri}/trace/tree.yaml", "isDir": False},
+                {"uri": f"{uri}/figures/chart.png", "isDir": False},
+                {"uri": f"{uri}/.overview.md", "isDir": False},
+            ]
+
+    service = object.__new__(BotCompileService)
+    service.limits = CompileLimits()
+    catalog = await service._build_catalog(Client(), "viking://resources/ara")
+
+    assert catalog == [
+        {
+            "uri": "viking://resources/ara/Overview.md",
+            "kind": "wiki_page",
+            "title": "Overview",
+            "type": "",
+            "summary": "Overview",
+            "page_id": 1,
+        },
+        {
+            "uri": "viking://resources/ara/trace/tree.yaml",
+            "kind": "file",
+            "title": "tree.yaml",
+            "type": "",
+            "summary": "",
+        },
+        {
+            "uri": "viking://resources/ara/figures/chart.png",
+            "kind": "file",
+            "title": "chart.png",
+            "type": "",
+            "summary": "",
+        },
+    ]
 
 
 class _NamedTool(_EchoTool):
@@ -501,16 +688,33 @@ def test_request_registry_honors_allowed_tools_and_compile_blocklist():
         "write_file",
         "edit_file",
         "openviking_list",
+        "openviking_grep",
+        "openviking_glob",
         "openviking_multi_read",
         "submit_wiki_bundle",
     ]
-    assert ara_ov_names == {"openviking_list", "openviking_multi_read"}
+    assert ara_ov_names == {
+        "openviking_list",
+        "openviking_grep",
+        "openviking_glob",
+        "openviking_multi_read",
+    }
     assert ara_unavailable == [
         "Bash(python *|git clone *|ls *|mkdir *)",
-        "Glob",
-        "Grep",
         "Task",
     ]
+
+    lowercase, lowercase_ov_names, lowercase_unavailable = service._build_request_registry(
+        parsed_skill={
+            "allowed_tools_declared": True,
+            "allowed_tools": ["glob", "grep"],
+        },
+        **common,
+    )
+    assert "openviking_glob" in lowercase.tool_names
+    assert "openviking_grep" in lowercase.tool_names
+    assert {"openviking_glob", "openviking_grep"} <= lowercase_ov_names
+    assert lowercase_unavailable == []
 
 
 def test_compile_prompt_explains_unavailable_tools_to_agent_only():
@@ -534,7 +738,14 @@ def test_compile_prompt_explains_unavailable_tools_to_agent_only():
 
     assert "Compile host capability notice" in system
     assert '"Bash(...)"' in system
-    assert "Do not claim that unavailable validation steps" in system
+    assert "Do not claim that unavailable validation or generation steps" in system
+    assert "use files for every Skill-prescribed artifact path, including Markdown" in system
+    assert "For a file-only artifact, submit pages=[]" in system
+    assert "link related generated pages through the submission tool" in system
+    assert "bundle.links" not in system
+    assert "match_text" not in system
+    assert "source entries by concrete URI" in system
+    assert "submit a compact files manifest with workspace_path" in system
     assert "unavailable" not in user
 
 
