@@ -126,6 +126,7 @@ const agentIntegrationSidebar = {
       {
         text: 'General Integration',
         items: [
+          ['14-openviking-helper.md', 'OpenViking Helper'],
           ['06-mcp-clients.md', 'MCP Clients'],
           ['09-log-ingestion.md', 'Local Log Import'],
           ['08-community-plugins.md', 'Community Integrations']
@@ -158,6 +159,7 @@ const agentIntegrationSidebar = {
       {
         text: '通用接入',
         items: [
+          ['14-openviking-helper.md', 'OpenViking Helper'],
           ['06-mcp-clients.md', 'MCP 客户端'],
           ['09-log-ingestion.md', '本地日志导入'],
           ['08-community-plugins.md', '社区集成']
