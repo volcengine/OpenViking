@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from openviking.server.identity import RequestContext
 
 from .constants import AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
+from openviking.parse.parsers.constants import CODE_EXTENSIONS
 
 logger = get_logger(__name__)
 
@@ -68,6 +69,11 @@ def get_media_type(source_path: Optional[str], source_format: Optional[str]) -> 
 
     if source_path:
         ext = Path(source_path).suffix.lower()
+        # Code extensions take priority over media extensions to prevent
+        # collisions (e.g. .ts is both TypeScript and MPEG-2 Transport Stream).
+        # Users can override with source_format="video" for genuine video files.
+        if ext in CODE_EXTENSIONS:
+            return None
         if ext in IMAGE_EXTENSIONS:
             return "image"
         elif ext in AUDIO_EXTENSIONS:
