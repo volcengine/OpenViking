@@ -2235,16 +2235,14 @@ class VikingFS:
         for uri in uris:
             self._ensure_access(uri, ctx)
 
-        from_path = self._uri_to_path(from_uri, ctx=ctx)
-
-        entries = await self._read_relation_table(from_path, ctx=ctx)
+        entries = await self._read_relation_table(from_uri, ctx=ctx)
         existing_ids = {e.id for e in entries}
 
         link_id = next(f"link_{i}" for i in range(1, 10000) if f"link_{i}" not in existing_ids)
 
         entries.append(RelationEntry(id=link_id, uris=uris, reason=reason))
 
-        await self._write_relation_table(from_path, entries, ctx=ctx)
+        await self._write_relation_table(from_uri, entries, ctx=ctx)
         logger.debug(f"[VikingFS] Created link: {from_uri} -> {uris}")
 
     async def unlink(
@@ -2256,10 +2254,9 @@ class VikingFS:
         """Delete relation."""
         self._ensure_mutable_access(from_uri, ctx)
         self._ensure_access(uri, ctx)
-        from_path = self._uri_to_path(from_uri, ctx=ctx)
 
         try:
-            entries = await self._read_relation_table(from_path, ctx=ctx)
+            entries = await self._read_relation_table(from_uri, ctx=ctx)
 
             entry_to_modify = None
             for entry in entries:
@@ -2277,7 +2274,7 @@ class VikingFS:
                 entries.remove(entry_to_modify)
                 logger.debug(f"[VikingFS] Removed empty entry: {entry_to_modify.id}")
 
-            await self._write_relation_table(from_path, entries, ctx=ctx)
+            await self._write_relation_table(from_uri, entries, ctx=ctx)
             logger.debug(f"[VikingFS] Removed link: {from_uri} -> {uri}")
 
         except Exception as e:
@@ -2289,8 +2286,7 @@ class VikingFS:
     ) -> List[RelationEntry]:
         """Get relation table."""
         self._ensure_access(uri, ctx)
-        path = self._uri_to_path(uri, ctx=ctx)
-        return await self._read_relation_table(path, ctx=ctx)
+        return await self._read_relation_table(uri, ctx=ctx)
 
     # ========== Tree Traversal (Refactored) ==========
 
@@ -3000,10 +2996,10 @@ class VikingFS:
     # ========== Relation Table Internal Methods ==========
 
     async def _read_relation_table(
-        self, dir_path: str, ctx: Optional[RequestContext] = None
+        self, uri: str, ctx: Optional[RequestContext] = None
     ) -> List[RelationEntry]:
-        """Read .relations.json."""
-        table_path = f"{dir_path}/.relations.json"
+        """Read relation table for a file or directory source."""
+        table_path = await self._relation_table_path(uri, ctx=ctx)
         try:
             content = self._handle_agfs_read(await self._async_agfs.read(table_path))
             data = json.loads(content.decode("utf-8"))
@@ -3028,18 +3024,30 @@ class VikingFS:
         return entries
 
     async def _write_relation_table(
-        self, dir_path: str, entries: List[RelationEntry], ctx: Optional[RequestContext] = None
+        self, uri: str, entries: List[RelationEntry], ctx: Optional[RequestContext] = None
     ) -> None:
-        """Write .relations.json."""
+        """Write relation table for a file or directory source."""
         # Use flat list format
         data = [entry.to_dict() for entry in entries]
 
         content = json.dumps(data, ensure_ascii=False, indent=2)
-        table_path = f"{dir_path}/.relations.json"
+        table_path = await self._relation_table_path(uri, ctx=ctx)
         if isinstance(content, str):
             content = content.encode("utf-8")
 
         await self._async_agfs.write(table_path, content)
+
+    async def _relation_table_path(
+        self, uri: str, ctx: Optional[RequestContext] = None
+    ) -> str:
+        """Return the canonical relation table path for a source URI."""
+        path = self._uri_to_path(uri, ctx=ctx)
+        try:
+            stat = await self._async_agfs.stat(path)
+        except Exception:
+            stat = {}
+        is_dir = isinstance(stat, dict) and stat.get("isDir", False)
+        return f"{path}/.relations.json" if is_dir else f"{path}.relations.json"
 
     # ========== Batch Read (backward compatible) ==========
 
@@ -3669,7 +3677,7 @@ class VikingFS:
         (no parent directory to scope an L0/L1 vector to).
         """
         parent, _, name = tree_path.rpartition("/")
-        if name in self._NO_VECTOR_DERIVED:
+        if name in self._NO_VECTOR_DERIVED or name.endswith(".relations.json"):
             return None
         level = self._DIR_MARKER_LEVELS.get(name)
         if level is not None:

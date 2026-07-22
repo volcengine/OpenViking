@@ -3,6 +3,8 @@
 
 """Relation tests"""
 
+from openviking import AsyncOpenViking
+
 
 class TestLink:
     """Test link creating relations"""
@@ -40,6 +42,21 @@ class TestLink:
         link = next((r for r in relations if r.get("uri") == target_uri), None)
         assert link is not None
         assert link.get("reason") == reason
+
+    async def test_link_from_file_resource(self, client: AsyncOpenViking):
+        """Test creating relation when the source is a file resource."""
+        source_uri = "viking://resources/file-source.md"
+        target_uri = "viking://resources/file-target.md"
+
+        await client.write(source_uri, "source", mode="create")
+        await client.write(target_uri, "target", mode="create")
+
+        await client.link(from_uri=source_uri, uris=target_uri, reason="File source test")
+
+        relations = await client.relations(source_uri)
+        link = next((r for r in relations if r.get("uri") == target_uri), None)
+        assert link is not None
+        assert link.get("reason") == "File source test"
 
 
 class TestUnlink:
