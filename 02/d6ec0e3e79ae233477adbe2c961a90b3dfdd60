@@ -1,0 +1,25 @@
+crates/ov_cli/src/base_client.rs
+  s_1cfb36e6160bae::t_dcd4eae44e4bd0 361-364,572,631-667
+crates/ov_cli/src/client.rs
+  s_1cfb36e6160bae::t_d7d3c3f993f84f 1670-1674
+crates/ov_cli/src/main.rs
+  s_1cfb36e6160bae::t_f0fdb5cfe38f7f 2405-2417,3301-3307
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "02d6ec0e3e79ae233477adbe2c961a90b3dfdd60",
+  "prompts": {},
+  "sessions": {
+    "s_1cfb36e6160bae": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6b15-d3ec-75b0-9466-fcfdf6eac1c3",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
