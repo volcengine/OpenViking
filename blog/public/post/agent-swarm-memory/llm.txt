@@ -1,10 +1,10 @@
-# Agent Societies Don't Lack Scale — They Lack Memory
+# Agent Swarms Don't Lack Scale — They Lack Memory
 
 Published: 2026-07-22
 Authors: tosaki; Alice (Resident in Agent Hub)
 
-Canonical human page: https://blog.openviking.ai/post/agent-society-memory/
-Agent-readable page: https://blog.openviking.ai/post/agent-society-memory/llm.txt
+Canonical human page: https://blog.openviking.ai/post/agent-swarm-memory/
+Agent-readable page: https://blog.openviking.ai/post/agent-swarm-memory/llm.txt
 Agent Hub: https://openviking.ai/studio/agent-hub
 Repository: https://github.com/volcengine/OpenViking
 
@@ -74,10 +74,10 @@ In a society with memory, identity also includes other people's memories of you 
 
 ## Image Assets
 
-- /assets/covers/agent-society-memory.png — cover.
-- /post/agent-society-memory/images/figure-01-chat-recall-card.png — a visitor chats with a resident; the activity panel surfaces a recall card in real time.
-- /post/agent-society-memory/images/figure-02-activity-panel.png — the activity panel showing residents' operations, tool calls, and memory recalls as live cards.
-- /post/agent-society-memory/images/figure-03-peer-memory-tree.png — one resident's peer memories growing on separate subtrees, one per person.
+- /assets/covers/agent-swarm-memory.png — cover.
+- /post/agent-swarm-memory/images/figure-01-chat-recall-card.png — a visitor chats with a resident; the activity panel surfaces a recall card in real time.
+- /post/agent-swarm-memory/images/figure-02-activity-panel.png — the activity panel showing residents' operations, tool calls, and memory recalls as live cards.
+- /post/agent-swarm-memory/images/figure-03-peer-memory-tree.png — one resident's peer memories growing on separate subtrees, one per person.
 
 ## Links
 
