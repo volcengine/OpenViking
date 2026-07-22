@@ -14,8 +14,10 @@ from openviking.session import create_session_compressor
 from openviking.session.compressor_v3 import (
     SessionCompressorV3,
     _experience_root_uri,
-    _finalize_experience_dispositions,
-    _separate_training_evaluation_messages,
+    _memory_diff_has_changes,
+    _merge_memory_diffs,
+    _training_evaluation_from_messages,
+    _trajectory_only_training_result,
 )
 from openviking.session.memory.dataclass import (
     MemoryFile,
@@ -98,98 +100,214 @@ def test_experience_root_uri_requires_request_user():
         _experience_root_uri(SimpleNamespace(user=None))
 
 
-def test_final_disposition_uses_applied_split_plan_after_gate_retry():
-    trajectory_uri = "viking://user/u/memories/trajectories/literature_review.md"
-    experience_uris = [
-        "viking://user/u/memories/experiences/repair_definition.md",
-        "viking://user/u/memories/experiences/repair_measurement.md",
+def test_case_trajectory_link_types_encode_outcome():
+    from openviking.session.compressor_v3 import _case_trajectory_links
+
+    case_uri = "viking://user/u/memories/cases/case.md"
+    trajectories = [
+        SimpleNamespace(
+            uri=f"viking://user/u/memories/trajectories/{outcome}.md",
+            outcome=outcome,
+        )
+        for outcome in ("success", "failure", "partial", "unfinished", "unknown", "invalid")
     ]
-    analysis = RolloutAnalysis(
-        evaluation=RubricEvaluation(
-            passed=False,
-            score=0.8,
-            criterion_results=[],
-            feedback=[],
-        ),
-        trajectories=[
-            Trajectory(
-                name="literature_review",
-                uri=trajectory_uri,
-                content="trajectory",
-                outcome="partial",
-                retrieval_anchor="",
-            )
-        ],
-        gradients=[],
-        metadata={
-            "experience_dispositions": [
-                {
-                    "disposition": "gradient_proposed",
-                    "experience_uris": [
-                        "viking://user/u/memories/experiences/combined_repair.md"
-                    ],
-                }
-            ]
-        },
+
+    links = _case_trajectory_links(
+        analysis=SimpleNamespace(trajectories=trajectories),
+        case_uri=case_uri,
     )
-    plan = PolicyUpdatePlan(
-        items=[
-            PolicyPlanItem(
-                kind="upsert",
-                memory_type="experiences",
-                target_name=uri.rsplit("/", 1)[-1].removesuffix(".md"),
-                target_uri=uri,
-                before_content=None,
-                after_content="experience",
-                links=[
-                    StoredLink(
-                        from_uri=uri,
-                        to_uri=trajectory_uri,
-                        link_type="derived_from",
-                        weight=1.0,
-                    )
+
+    assert [link.link_type for link in links] == [
+        "successful_trajectory",
+        "failed_trajectory",
+        "partial_trajectory",
+        "unfinished_trajectory",
+        "unknown_trajectory",
+        "unknown_trajectory",
+    ]
+
+
+def test_case_memory_fields_include_generalized_situation():
+    from openviking.session.compressor_v3 import _case_to_memory_fields
+
+    case = _training_case()
+    case.input["user_query"] = (
+        "Reason for call:\n\tCancel reservation ABC123 on July 20.\n"
+        "Task instructions:\n\tRefund $500 without changing unrelated bookings."
+    )
+
+    fields = _case_to_memory_fields(case)
+
+    assert fields["situation"]
+    assert "ABC123" not in fields["situation"]
+    assert "$500" not in fields["situation"]
+    assert "July 20" not in fields["situation"]
+    assert "<reservation_id>" in fields["situation"]
+    assert "<amount>" in fields["situation"]
+    assert "<date>" in fields["situation"]
+
+
+def test_retain_case_links_keeps_latest_five_per_outcome_class():
+    from openviking.session.compressor_v3 import _retain_case_links
+
+    case_uri = "viking://user/u/memories/cases/case.md"
+
+    def link(index: int, link_type: str, directory: str = "trajectories") -> dict:
+        return StoredLink(
+            from_uri=case_uri,
+            to_uri=f"viking://user/u/memories/{directory}/{link_type}_{index}.md",
+            link_type=link_type,
+            weight=1.0,
+            created_at=f"2026-07-{index + 1:02d}T00:00:00Z",
+        ).model_dump()
+
+    links = [
+        *[link(index, "successful_trajectory") for index in range(7)],
+        *[link(index, "failed_trajectory") for index in range(7)],
+        link(0, "related_to", directory="experiences"),
+        link(0, "related_to"),
+    ]
+
+    retained = _retain_case_links(links)
+
+    success = [item for item in retained if item["link_type"] == "successful_trajectory"]
+    failure = [item for item in retained if item["link_type"] == "failed_trajectory"]
+    assert [item["to_uri"] for item in success] == [
+        f"viking://user/u/memories/trajectories/successful_trajectory_{index}.md"
+        for index in range(6, 1, -1)
+    ]
+    assert [item["to_uri"] for item in failure] == [
+        f"viking://user/u/memories/trajectories/failed_trajectory_{index}.md"
+        for index in range(6, 1, -1)
+    ]
+    assert any("/memories/experiences/" in item["to_uri"] for item in retained)
+    assert not any(
+        item["link_type"] == "related_to" and "/memories/trajectories/" in item["to_uri"]
+        for item in retained
+    )
+
+
+@pytest.mark.asyncio
+async def test_training_memory_diff_serializes_gate_attempts_once_without_legacy_views():
+    attempt = {
+        "stage": "post_plan",
+        "index": 0,
+        "result": "retry_requested",
+        "targets": [
+            {
+                "name": "combined_repair",
+                "outcome": "rejected",
+                "decisions": [
+                    {
+                        "gate": "experience_plan_quality",
+                        "action": "reject",
+                        "reason": "retry the combined candidate",
+                        "retriable": True,
+                    }
                 ],
-            )
-            for uri in experience_uris
-        ]
-    )
+            }
+        ],
+    }
     result = RolloutTrainingResult(
-        analyses=[analysis],
+        analyses=[],
         gradients=[],
-        plan=plan,
+        plan=PolicyUpdatePlan(items=[], metadata={"gate_attempts": [attempt]}),
         apply_result=PolicyApplyResult(
             updated_policy_set=ExperienceSet(
                 root_uri="viking://user/u/memories/experiences",
                 policies=[],
-            ),
-            written_uris=experience_uris,
+            )
         ),
-        metadata={
-            "gate_reports": [
+        metadata={"gate_attempts": [attempt]},
+    )
+
+    diff = await SessionCompressorV3(
+        vikingdb=None,
+        rollout_analyzer=SimpleNamespace(),
+    )._build_training_memory_diff(
+        training_result=result,
+        viking_fs=SimpleNamespace(),
+        ctx=_ctx(),
+        archive_uri="viking://user/u/sessions/s1/history/archive_001",
+    )
+
+    assert diff["gates"] == [attempt]
+    assert "experience_dispositions" not in diff
+    assert "experience_disposition_summary" not in diff
+    assert "total_experience_dispositions" not in diff["summary"]
+    assert "gate_rejections" not in diff
+    assert "gate_summary" not in diff
+    assert "post_validation_retries" not in diff
+    assert all(not key.startswith("total_gate") for key in diff["summary"])
+    assert "total_post_validation_retries" not in diff["summary"]
+
+
+def test_merge_memory_diffs_concatenates_gate_attempts_without_legacy_views():
+    first = {
+        "operations": {"adds": [], "updates": [], "deletes": []},
+        "gates": [{"stage": "post_gradient", "index": 0, "result": "passed", "targets": []}],
+    }
+    second = {
+        "operations": {"adds": [], "updates": [], "deletes": []},
+        "gates": [{"stage": "post_gradient", "index": 0, "result": "passed", "targets": []}],
+    }
+
+    merged = _merge_memory_diffs(
+        [first, second],
+        archive_uri="viking://user/u/sessions/s1/history/archive_001",
+    )
+
+    assert merged["gates"] == [
+        first["gates"][0],
+        {**second["gates"][0], "index": 1},
+    ]
+    assert "gate_rejections" not in merged
+    assert "gate_summary" not in merged
+    assert "post_validation_retries" not in merged
+
+
+def test_memory_diff_with_only_gate_attempts_is_not_dropped():
+    assert _memory_diff_has_changes(
+        {
+            "summary": {"total_adds": 0, "total_updates": 0, "total_deletes": 0},
+            "gates": [
                 {
                     "stage": "post_plan",
-                    "decisions": [
-                        {
-                            "action": "reject",
-                            "gate_name": "experience_plan_quality",
-                            "reason": "retry the combined candidate",
-                            "evidence": {"target_name": "combined_repair"},
-                        }
-                    ],
+                    "index": 0,
+                    "result": "discarded",
+                    "targets": [],
                 }
-            ]
-        },
+            ],
+        }
     )
 
-    records = _finalize_experience_dispositions(
+
+def test_trajectory_only_training_result_preserves_analysis_gate_attempts():
+    attempt = {
+        "stage": "post_gradient",
+        "index": 0,
+        "result": "discarded",
+        "targets": [
+            {
+                "name": "candidate",
+                "outcome": "rejected",
+                "decisions": [],
+            }
+        ],
+    }
+    analysis = SimpleNamespace(trajectories=[], metadata={"gate_attempts": [attempt]})
+    rollout = SimpleNamespace(case=SimpleNamespace(name="case"))
+
+    result = _trajectory_only_training_result(
         analysis=analysis,
-        training_result=result,
-        session_id="s1",
+        rollout=rollout,
+        policy_set=ExperienceSet(
+            root_uri="viking://user/u/memories/experiences",
+            policies=[],
+        ),
     )
 
-    assert records[0]["disposition"] == "experience_created"
-    assert records[0]["experience_uris"] == experience_uris
-    assert "gate_rejections" not in records[0]
+    assert result.metadata["gate_attempts"] == [attempt]
 
 
 def test_case_experience_links_require_policy_root_uri():
@@ -234,6 +352,12 @@ def test_case_experience_links_require_policy_root_uri():
 async def test_train_from_extracted_case_memories_submits_streaming_rollout(monkeypatch):
     submitted_gradients = []
     submitted_analyses = []
+    no_op_lease = SimpleNamespace(handle=object(), close=AsyncMock())
+    acquire_lock = AsyncMock(return_value=no_op_lease)
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.OwnedLockLease.acquire_exact_paths",
+        acquire_lock,
+    )
 
     class FakeTrainer:
         policy_set = ExperienceSet(
@@ -301,7 +425,10 @@ async def test_train_from_extracted_case_memories_submits_streaming_rollout(monk
 
     monkeypatch.setattr(
         "openviking.session.compressor_v3.get_viking_fs",
-        lambda: SimpleNamespace(ls=AsyncMock(return_value=[])),
+        lambda: SimpleNamespace(
+            ls=AsyncMock(return_value=[]),
+            _uri_to_path=lambda uri, ctx=None: uri.removeprefix("viking://"),
+        ),
     )
     monkeypatch.setattr(
         "openviking.session.compressor_v3.get_streaming_policy_trainer",
@@ -349,12 +476,26 @@ async def test_train_from_extracted_case_memories_submits_streaming_rollout(monk
     assert cases[0].name == "重复预订处理"
     assert cases[0].input["summary"] == "用户要求处理重复预订"
     assert cases[0].rubric.criteria[0].name == "先验证重复"
+    acquire_lock.assert_awaited()
 
 
 @pytest.mark.asyncio
 async def test_train_from_extracted_multiple_case_memories_analyzes_bound_rollouts(monkeypatch):
     seen_rollouts = []
-    rollout_messages = _messages()
+    evaluation_message = Message(
+        id="evaluation",
+        role="user",
+        parts=[
+            TextPart(
+                """# OpenViking OutcomeEvaluation
+
+```json
+{"evaluation":{"passed":false,"score":0.25,"criterion_results":[],"metadata":{}}}
+```"""
+            )
+        ],
+    )
+    rollout_messages = [*_messages(), evaluation_message]
 
     class FakeTrainer:
         policy_set = ExperienceSet(
@@ -427,6 +568,7 @@ async def test_train_from_extracted_multiple_case_memories_analyzes_bound_rollou
         rollout_messages,
         rollout_messages,
     ]
+    assert [rollout.evaluation.score for rollout in seen_rollouts] == [0.25, 0.25]
 
 
 @pytest.mark.asyncio
@@ -732,7 +874,7 @@ def test_training_case_spec_message_uses_fast_path_protocol():
     assert "duplicate_booking_rubric" in text
 
 
-def test_training_outcome_evaluation_is_structured_and_removed_from_runtime_messages():
+def test_training_outcome_evaluation_is_parsed_without_removing_message():
     runtime_message = Message(id="runtime", role="user", parts=[TextPart("complete operation")])
     evaluation_message = Message(
         id="evaluation",
@@ -748,11 +890,10 @@ def test_training_outcome_evaluation_is_structured_and_removed_from_runtime_mess
         ],
     )
 
-    runtime, evaluation = _separate_training_evaluation_messages(
-        [runtime_message, evaluation_message]
-    )
+    messages = [runtime_message, evaluation_message]
+    evaluation = _training_evaluation_from_messages(messages)
 
-    assert runtime == [runtime_message]
+    assert messages == [runtime_message, evaluation_message]
     assert evaluation is not None
     assert evaluation.score == pytest.approx(0.25)
     assert evaluation.criterion_results[0].feedback == ["verification missing"]
@@ -855,14 +996,6 @@ async def test_v3_fast_path_writes_final_memory_diff_with_case_traj_and_exp(monk
                     "deletes": [],
                 },
                 "summary": {"total_adds": 1, "total_updates": 1, "total_deletes": 0},
-                "experience_dispositions": [
-                    {
-                        "session_id": "s1",
-                        "trajectory_uri": "viking://user/u/memories/trajectories/duplicate_booking.md",
-                        "disposition": "experience_updated",
-                        "reason": "experience plan passed gates and was applied",
-                    }
-                ],
             },
         }
 
@@ -889,13 +1022,10 @@ async def test_v3_fast_path_writes_final_memory_diff_with_case_traj_and_exp(monk
         "total_adds": 2,
         "total_updates": 1,
         "total_deletes": 0,
-        "total_experience_dispositions": 1,
     }
-    report_lines = writes[f"{archive_uri}/experience_extraction_report.jsonl"].splitlines()
-    assert len(report_lines) == 1
-    report = __import__("json").loads(report_lines[0])
-    assert report["disposition"] == "experience_updated"
-    assert report["session_id"] == "s1"
+    assert "experience_dispositions" not in diff
+    assert "experience_disposition_summary" not in diff
+    assert f"{archive_uri}/experience_extraction_report.jsonl" not in writes
 
 
 @pytest.mark.asyncio
@@ -1073,6 +1203,12 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
     case_uri = "viking://user/u/memories/cases/duplicate_booking.md"
     traj_uri = "viking://user/u/memories/trajectories/duplicate_booking.md"
     exp_uri = "viking://user/u/memories/experiences/booking_duplicate_handling.md"
+    no_op_lease = SimpleNamespace(handle=object(), close=AsyncMock())
+    acquire_lock = AsyncMock(return_value=no_op_lease)
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.OwnedLockLease.acquire_exact_paths",
+        acquire_lock,
+    )
 
     class FakeFS:
         def __init__(self):
@@ -1133,8 +1269,12 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
             del ctx
             return self.files[uri]
 
-        async def write_file(self, uri, content, ctx=None):
+        def _uri_to_path(self, uri, ctx=None):
             del ctx
+            return uri.removeprefix("viking://")
+
+        async def write_file(self, uri, content, ctx=None, lock_handle=None):
+            del ctx, lock_handle
             self.files[uri] = content
 
         async def ls(self, uri, output="original", ctx=None):
@@ -1242,10 +1382,11 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
     )
 
     assert result["submitted"] == 1
+    acquire_lock.assert_awaited()
     case_file = MemoryFileUtils.read(fs.files[case_uri], uri=case_uri)
     assert any(
         link["to_uri"] == traj_uri
-        and link["link_type"] == "related_to"
+        and link["link_type"] == "successful_trajectory"
         and link.get("match_text") is None
         and link.get("description") == ""
         for link in case_file.links
@@ -1271,7 +1412,7 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
     assert any(link["from_uri"] == case_uri for link in exp_file.backlinks)
 
 
-def test_training_messages_after_case_spec_filters_legacy_embedded_evaluation_message():
+def test_training_messages_after_case_spec_preserves_all_remaining_messages_in_order():
     from openviking.session.compressor_v3 import _training_messages_after_case_spec
 
     case_spec = _case_spec_message()
@@ -1295,5 +1436,6 @@ def test_training_messages_after_case_spec_filters_legacy_embedded_evaluation_me
         [case_spec, *rollout_messages, legacy_eval, outcome_eval]
     ) == [
         *rollout_messages,
+        legacy_eval,
         outcome_eval,
     ]

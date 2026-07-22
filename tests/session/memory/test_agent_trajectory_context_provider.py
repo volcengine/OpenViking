@@ -25,6 +25,11 @@ def test_trajectory_provider_separates_direct_evidence_from_advisory_signals():
     assert "Evidence Sources with `direct=true`" in rendered
     assert "authoritative for outcome and requirement compliance" in rendered
     assert "does not independently prove an unobserved internal cause" in rendered
+    assert "`# =>` comments" in rendered
+    assert "decisions and actions that actually occurred" in rendered
+    assert "Key Step `Evidence`" not in rendered
+    assert "Evidence References" not in rendered
+    assert "earliest causal decision" not in rendered
     assert "## Advisory Signals" in rendered
     assert "independent_probe" in rendered
     assert "possible timeout" in rendered

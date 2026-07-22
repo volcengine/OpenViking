@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.train import (
     CriterionResult,
@@ -21,6 +22,7 @@ from openviking.session.train import (
 )
 from openviking.session.train.components import gradient_estimator as gradient_estimator_module
 from openviking.session.train.gates import GateDecision, GateReport
+from openviking_cli.session.user_id import UserIdentifier
 
 
 class FakeExperienceGradientEstimator(ExperienceGradientEstimator):
@@ -31,6 +33,11 @@ class FakeExperienceGradientEstimator(ExperienceGradientEstimator):
 
     async def _run_extract_loop(self, trajectory, context):
         self.calls.append((trajectory, context))
+        context.metadata["final_gate_report"] = GateReport(
+            stage="post_gradient",
+            evaluated_count=1,
+            allowed_count=1,
+        ).to_dict()
         return self.operations_by_trajectory_uri.get(trajectory.uri)
 
 
@@ -79,18 +86,37 @@ def _experience_set() -> ExperienceSet:
 
 
 def _context() -> ExperienceGradientContext:
-    return ExperienceGradientContext(request_context=SimpleNamespace(), messages=[])
+    return ExperienceGradientContext(
+        request_context=RequestContext(UserIdentifier("account", "u"), Role.USER),
+        messages=[],
+    )
+
+
+def _experience_fields(
+    *,
+    name: str = "booking_duplicate_handling",
+    situation: str = (
+        "- Applies when: duplicate booking evidence is present.\n"
+        "- Does not apply when: no existing booking matches.\n"
+        "- Evidence binding: retrieved booking records.\n"
+        "- Decision boundary: before submitting the candidate booking."
+    ),
+    reminder: str = "- Check for a duplicate before booking.",
+    procedure: str = "- Compare the candidate with retrieved bookings.",
+    anti_pattern: str = "- Do not create a duplicate booking.",
+) -> dict[str, str]:
+    return {
+        "experience_name": name,
+        "situation": situation,
+        "reminder": reminder,
+        "procedure": procedure,
+        "anti_pattern": anti_pattern,
+    }
 
 
 def test_retain_gated_experience_operations_keeps_only_allowed_candidates():
-    accepted_fields = {
-        "experience_name": "specific_repair",
-        "constraint": "specific body",
-    }
-    rejected_fields = {
-        "experience_name": "generic_checklist",
-        "constraint": "generic body",
-    }
+    accepted_fields = _experience_fields(name="specific_repair", reminder="specific body")
+    rejected_fields = _experience_fields(name="generic_checklist", reminder="generic body")
     operations = SimpleNamespace(
         upsert_operations=[
             SimpleNamespace(memory_type="experiences", memory_fields=accepted_fields),
@@ -106,10 +132,7 @@ def test_retain_gated_experience_operations_keeps_only_allowed_candidates():
 
 
 def test_gated_experience_operations_survive_later_repair_draft():
-    accepted_fields = {
-        "experience_name": "specific_repair",
-        "constraint": "specific body",
-    }
+    accepted_fields = _experience_fields(name="specific_repair", reminder="specific body")
     accepted_operation = SimpleNamespace(
         memory_type="experiences",
         memory_fields=accepted_fields,
@@ -129,10 +152,10 @@ def test_gated_experience_operations_survive_later_repair_draft():
         upsert_operations=[
             SimpleNamespace(
                 memory_type="experiences",
-                memory_fields={
-                    "experience_name": "combined_invalid",
-                    "constraint": "invalid body",
-                },
+                memory_fields=_experience_fields(
+                    name="combined_invalid",
+                    reminder="invalid body",
+                ),
                 uris=["viking://user/u/memories/experiences/combined_invalid.md"],
             )
         ]
@@ -244,12 +267,7 @@ async def test_experience_gradient_estimator_audits_missing_trajectory():
     )
 
     assert gradients == []
-    disposition = analysis.metadata["experience_dispositions"][0]
-    assert disposition["disposition"] == "no_valid_trajectory"
-    assert disposition["case_name"] == "case_17"
-    assert disposition["evidence_source_summary"]["direct_available"] is False
-    assert "structural/evidence validation" in disposition["reason"]
-    assert disposition["retry_events"][0]["final_outcome"] == ("discarded_after_max_retries")
+    assert "experience_dispositions" not in analysis.metadata
 
 
 @pytest.mark.asyncio
@@ -271,7 +289,7 @@ async def test_experience_gradient_estimator_skips_success_trajectories():
 
     assert gradients == []
     assert estimator.calls == []
-    assert analysis.metadata["experience_dispositions"][0]["disposition"] == ("success_no_learning")
+    assert "experience_dispositions" not in analysis.metadata
 
 
 @pytest.mark.asyncio
@@ -288,8 +306,7 @@ async def test_experience_gradient_estimator_converts_experience_operations():
             SimpleNamespace(
                 memory_type="experiences",
                 memory_fields={
-                    "experience_name": "booking_duplicate_handling",
-                    "constraint": "## Situation\n- Applies when: candidate booking may duplicate an existing retrieved booking.\n- Does not apply when: no matching existing booking is retrieved.\n- Evidence binding: user request and retrieved booking records.\n- Decision boundary: before submitting the candidate booking.\n\n## Reminder\n- Avoid creating a duplicate booking for the same confirmed trip.\n\n## Procedure\n- Before booking: compare the candidate trip to retrieved bookings.\n- If it duplicates an existing booking: do not book and explain.\n- Else: proceed.\n\n## Anti-pattern\n- Do not book a duplicate reservation.\n- Preserve genuinely new bookings.",
+                    **_experience_fields(),
                     "supersedes": ["older_experience"],
                 },
                 uris=["viking://user/u/memories/experiences/booking_duplicate_handling.md"],
@@ -329,7 +346,7 @@ async def test_experience_gradient_estimator_converts_experience_operations():
     assert gradient.metadata["rubric_passed"] is False
     assert gradient.metadata["training_category"] == "booking"
     assert len(estimator.calls) == 1
-    assert analysis.metadata["experience_dispositions"][0]["disposition"] == ("gradient_proposed")
+    assert "experience_dispositions" not in analysis.metadata
 
 
 @pytest.mark.asyncio
@@ -339,9 +356,7 @@ async def test_experience_gradient_estimator_uses_policy_version_for_newer_old_f
         upsert_operations=[
             SimpleNamespace(
                 memory_type="experiences",
-                memory_fields={
-                    "constraint": "## Situation\n- Applies when: candidate booking may duplicate an existing retrieved booking.\n- Does not apply when: no matching existing booking is retrieved.\n- Evidence binding: user request and retrieved booking records.\n- Decision boundary: before submitting the candidate booking.\n\n## Reminder\n- Avoid creating a duplicate booking for the same confirmed trip.\n\n## Procedure\n- Before booking: compare the candidate trip to retrieved bookings.\n- If it duplicates an existing booking: do not book and explain.\n- Else: proceed.\n\n## Anti-pattern\n- Do not book a duplicate reservation.\n- Preserve genuinely new bookings.",
-                },
+                memory_fields=_experience_fields(),
                 uris=["viking://user/u/memories/experiences/booking_duplicate_handling.md"],
                 old_memory_file_content=None,
             )
@@ -408,12 +423,10 @@ async def test_experience_gradient_estimator_skips_empty_content_and_handles_ext
     estimator._run_extract_loop = raise_error
 
     assert await estimator.estimate(analysis, _experience_set(), _context()) == []
-    assert analysis.metadata["experience_dispositions"][0]["disposition"] == (
-        "extract_parse_failed"
-    )
+    assert "experience_dispositions" not in analysis.metadata
 
     strict_context = ExperienceGradientContext(
-        request_context=SimpleNamespace(),
+        request_context=RequestContext(UserIdentifier("account", "u"), Role.USER),
         messages=[],
         strict_extract_errors=True,
     )
@@ -457,14 +470,75 @@ async def test_experience_gradient_estimator_runs_extract_loop(monkeypatch):
 
     assert gradients == []
     assert captured["provider_kwargs"] == {
-        "messages": context.messages,
         "trajectory_summary": analysis.trajectories[0].content,
         "trajectory_uri": analysis.trajectories[0].uri,
+        "loaded_experience_uris": [],
     }
     assert captured["request_context"] is context.request_context
     assert captured["allowed_memory_types"] == {"experiences"}
     assert captured["prepare_messages_called"] is True
     assert captured["extract_loop_kwargs"]["context_provider"]._isolation_handler is not None
+
+
+def test_loaded_experience_uris_include_completed_read_experience_calls():
+    analysis = _analysis(passed=False, outcome="failure")
+    loaded_uri = "viking://user/u/memories/experiences/loaded.md"
+    analysis.metadata["rollout_messages"] = [
+        {
+            "role": "user",
+            "parts": [
+                {
+                    "type": "tool",
+                    "tool_name": "read_experience",
+                    "tool_status": "completed",
+                    "tool_input": {"experience_uri": loaded_uri},
+                    "tool_output": f"# Loaded Experience\n\nExperience URI: `{loaded_uri}`",
+                }
+            ],
+        }
+    ]
+
+    assert gradient_estimator_module._loaded_experience_uris(analysis) == [loaded_uri]
+
+
+def test_loaded_experience_uris_include_exact_case_search_auto_loaded_content():
+    import json
+
+    analysis = _analysis(passed=False, outcome="failure")
+    first_uri = "viking://user/u/memories/experiences/first.md"
+    second_uri = "viking://user/u/memories/experiences/second.md"
+    analysis.metadata["rollout_messages"] = [
+        {
+            "role": "user",
+            "parts": [
+                {
+                    "type": "tool",
+                    "tool_name": "search_experience",
+                    "tool_status": "completed",
+                    "tool_input": {"task_signature": "tau2:airline:train:39"},
+                    "tool_output": json.dumps(
+                        {
+                            "match_type": "exact_case",
+                            "candidates": [
+                                {
+                                    "experiences": [
+                                        {"uri": first_uri, "content": "# First"},
+                                        {"uri": second_uri, "content": "# Second"},
+                                        {"uri": first_uri, "content": "# First"},
+                                    ]
+                                }
+                            ],
+                        }
+                    ),
+                }
+            ],
+        }
+    ]
+
+    assert gradient_estimator_module._loaded_experience_uris(analysis) == [
+        first_uri,
+        second_uri,
+    ]
 
 
 @pytest.mark.asyncio
@@ -502,18 +576,17 @@ async def test_post_validation_gate_sees_prefetched_comparison_trajectories(monk
                 upsert_operations=[
                     SimpleNamespace(
                         memory_type="experiences",
-                        memory_fields={
-                            "experience_name": "scope_total",
-                            "constraint": (
-                                "## Situation\n"
+                        memory_fields=_experience_fields(
+                            name="scope_total",
+                            situation=(
                                 "- Applies when: a scoped total is requested.\n"
                                 "- Does not apply when: no scoped total is requested.\n"
-                                "- Source binding: request records.\n\n"
-                                "## Reminder\n- Preserve the requested total scope.\n\n"
-                                "## Procedure\n- Calculate and communicate the requested total.\n\n"
-                                "## Anti-pattern\n- Do not omit the requested total."
+                                "- Source binding: request records."
                             ),
-                        },
+                            reminder="- Preserve the requested total scope.",
+                            procedure="- Calculate and communicate the requested total.",
+                            anti_pattern="- Do not omit the requested total.",
+                        ),
                         uris=["viking://user/u/memories/experiences/scope_total.md"],
                         old_memory_file_content=None,
                     )
@@ -560,7 +633,23 @@ async def test_post_validation_gate_sees_prefetched_comparison_trajectories(monk
     gradients = await estimator.estimate(analysis, _experience_set(), _context())
 
     assert len(gradients) == 1
+    assert gradients[0].metadata["experience_gate_validation"] == "post_validation_hook"
     assert captured["post_validation_decision"] is None
-    assert captured["metadata_seen"]
-    assert all(item == comparison for item in captured["metadata_seen"])
+    assert captured["metadata_seen"] == [comparison]
     assert analysis.trajectories[0].metadata["comparison_trajectory_uris"] == [comparison[0]["uri"]]
+    assert analysis.metadata["gate_attempts"] == [
+        {
+            "stage": "post_gradient",
+            "index": 0,
+            "result": "passed",
+            "targets": [
+                {
+                    "name": "scope_total",
+                    "uri": "viking://user/u/memories/experiences/scope_total.md",
+                    "outcome": "allowed",
+                    "decisions": [],
+                }
+            ],
+        }
+    ]
+    assert "experience_dispositions" not in analysis.metadata

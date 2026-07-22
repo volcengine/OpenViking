@@ -231,10 +231,10 @@ def render_extraction_evidence_context(
             "- Conversation messages and tool results are runtime evidence.",
             "- Entries in Evidence Sources with `direct=true` are direct external evidence.",
             "- A `rollout_evaluation` direct source is authoritative for outcome and requirement compliance, including which expected results were missing or incorrect.",
-            "- Outcome feedback does not independently prove an unobserved internal cause. Use the runtime trajectory to locate the earliest causal decision or action; keep the cause unknown when the trajectory does not show it.",
+            "- Outcome feedback does not independently prove an unobserved internal cause. Record the decisions and actions that actually occurred; keep the decision basis unknown when the runtime trajectory does not show it.",
             "- Advisory Signals are suggestions for locating evidence, not proof.",
             "- Never turn an advisory signal into an observed decision or root cause. If runtime and direct external evidence do not support a claim, record unknown/unverified.",
-            "- In `Evidence References`, identify the runtime boundary or direct external source used for every material failure claim.",
+            "- In the Execution log, bind material facts to their runtime message, tool result, or direct external source with concise `# =>` comments or nearby factual comments.",
             "",
             "## Evidence Sources",
             json.dumps(

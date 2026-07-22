@@ -14,7 +14,7 @@ embedding_template: |-
   {{ retrieval_anchor }}
 
 directory: "viking://user/{{ user_space }}/memories/trajectories"
-filename_template: "{{ trajectory_name }}_{{ extract_context.get_session_timestamp() }}.md"
+filename_template: "{{ extract_context.get_session_timestamp()[:4] }}/{{ extract_context.get_session_timestamp()[4:6] }}/{{ extract_context.get_session_timestamp()[6:8] }}/{{ trajectory_name }}.md"
 enabled: true
 operation_mode: "add_only"
 agent_only: true
@@ -74,9 +74,11 @@ fields:
     description: |
       Write in {{ language }}. Keep raw tool names, schema keys, and quoted runtime values unchanged.
 
-      You are producing a compact factual trace for downstream experience extraction. Your job is
-      to preserve enough runtime evidence for a later extractor to compare multiple trajectories
-      and decide the true reusable experience. Do not decide the final experience here.
+      Produce a compact factual execution record for downstream experience extraction. Represent
+      the actual chronological path as a readable Python-style log so a later extractor can compare
+      successful and failed trajectories without reading the full transcript. The Python is a
+      representation only and will never be executed. Do not decide the root cause or final
+      experience here.
 
       ## Do NOT output
       - No `Counterfactual Ideal Experience` section.
@@ -87,19 +89,11 @@ fields:
       - No broad advice such as "check all requirements" or "include all information".
       - No `Diagnostic Hints` section.
       - No `Ambiguous references` field or verdict such as `Ambiguous references: none`.
-
-      ## What to preserve
-      Preserve concrete runtime evidence, especially:
-      - user intent, constraints, confirmations, and success conditions;
-      - observations returned by tools, environments, services, or other participants;
-      - decisions and assumptions that changed the execution path;
-      - actions, side effects, generated outputs, and user-visible communication;
-      - verification steps and observed differences between expected and actual outcomes;
-      - correct decisions/actions/outputs that should be preserved;
-      - uncertainty and competing interpretations.
+      - No `Timeline`, `Outcome Checks`, `Correct Work To Preserve`, `Observed Problem`,
+        `Evidence References`, or `Raw Evidence` section.
 
       ## Output Format
-      Output exactly ONE markdown record with the labels below. Do not add extra top-level sections.
+      Output exactly ONE markdown record with one fenced Python block under `## Execution`.
 
       # <trajectory_name>
       - Outcome: <success|failure|partial|unfinished|unknown>
@@ -110,52 +104,66 @@ fields:
         - Helpful: <which loaded reminders appeared helpful, or none>
         - Misleading: <which loaded reminders appeared misleading/over-broad, or none>
         - Insufficient: <which loaded reminders were relevant but incomplete, or none>
-      - Timeline:
-        - User request: <relevant user wording and obligations, generalized>
-        - Observations: <important tool/environment/participant results observed>
-        - Decisions: <important assumptions, branches, plans, or reasoning choices>
-        - Actions: <tools/actions performed, semantic targets, and observed side effects>
-        - Outputs: <generated deliverables, returned values, or user-visible communication>
-        - Termination: <done/handoff/unfinished and any side effects>
-      - Outcome Checks:
-        - Required outcome: <passed|failed|partial|unknown; evidence in runtime terms>
-        - Constraints: <passed|failed|partial|unknown|none; evidence in runtime terms>
-        - Required output/communication: <passed|failed|partial|unknown|none; evidence in runtime terms>
-      - Correct Work To Preserve:
-        - <correct observations/decisions/actions/outputs that later extraction should not block, or none>
-      - Observed Problem:
-        - Failure type: <wrong_input|wrong_target|wrong_strategy|missing_information|missing_validation|missing_output|premature_action|extra_action|tool_error|reasoning_error|none|unknown>
-        - First observed divergence: <earliest observable boundary where behavior diverged, or none/unknown>
-        - Candidate bad behavior: <input/decision/action/output shape that appears risky, or none>
-        - What was missing/wrong: <specific runtime-observable difference, or none/unknown>
-      - Evidence References:
-        - Runtime evidence: <message/tool boundary and short supporting fact, or none>
-        - Direct external evidence: <independent observation supplied through evidence_sources, or none>
-        - Advisory signals: <external suggestions used only to locate evidence, or none>
-      - Raw Evidence:
-        - User/request snippets: <short relevant snippets or none>
-        - Tool/result snippets: <short relevant snippets, field names, IDs/values only as evidence, or none>
-        - Final message snippets: <short relevant snippets or none>
-      - Result: <concise final outcome and side effects>
+
+      ## Execution
+
+      ```python
+      user_message_1 = "<material user request>"
+
+      value = real_tool_name(real_argument="actual value")
+      # => <only returned fields that affect a later decision or establish a side effect>
+
+      actual_decision = "<literal value selected by the agent>"
+      # Actual decision basis: <observable basis or unknown>
+
+      assistant_message_1 = "<actual agent message>"
+
+      user_message_2 = "<material user reply when one followed>"
+
+      real_write_tool(real_argument="actual value")
+      # => <observed side effect>
+      ```
+
+      ## Evaluation
+      - Required outcome: <passed|failed|partial|unknown; factual evidence>
+      - Failed requirements: <explicit failed requirements or none/unknown>
+      - External feedback: <explicit direct feedback or none>
+      - Unexplained differences: <known evidence gap or none>
+
+      ## Result
+      - <concise final state, outputs, and side effects>
 
       ## Rules
       - Be factual and compact. Prefer evidence over interpretation.
+      - Preserve material user messages in chronological order as `user_message_<n>` variables.
+        A material message establishes or changes the goal, scope, constraints, reason,
+        authorization, confirmation, refusal, or evaluator-relevant requested output. Omit
+        greetings and repeated thanks.
+      - Represent each retained tool call as a call to its real tool method name with its actual
+        material arguments. Do not rename calls to generic pseudo-functions.
+      - Represent direct assistant text as `assistant_message_<n>`. If communication happened
+        through a tool, represent the observed call with that tool's real name instead.
+      - Keep all state-changing tool calls, material communication calls, handoffs, termination
+        calls, and reads whose results influence a later decision. Omit infrastructure-only reads
+        and unrelated returned fields.
+      - Preserve chronological order and write repeated calls separately. Do not introduce loops,
+        helper functions, comprehensions, imports, classes, or other abstractions.
+      - Use `# =>` comments for concise observed returns, errors, user replies, and side effects.
+      - Use literal assignments and comments for actual intermediate selections or decisions only
+        when they explain later tool arguments.
+      - Do not emit unexecuted `if/else` branches, counterfactual calls, or an ideal corrected path.
       - Runtime messages/tool results and `evidence_sources` marked `direct=true` are factual
         evidence. Advisory signals are search hints only. Never rewrite an advisory claim as an
         observed decision or root cause.
       - A `rollout_evaluation` source marked `direct=true` is authoritative external feedback for
         outcome and requirement compliance. Use it to record which required results were missing,
         incorrect, or incomplete. It does not by itself prove an unobserved internal cause.
-      - Determine the first causal divergence from runtime observations, decisions, and actions.
-        When outcome feedback proves a failure but the runtime trace does not reveal why, preserve
-        the failed requirement and write the cause/divergence as unknown.
-      - Every material failure claim in `Outcome Checks`, `Observed Problem`, and `Result` must be
-        grounded under `Evidence References`. If neither runtime nor direct external evidence
-        supports it, write unknown/unverified.
+      - Record the decision the agent actually made, even when evaluation failed. Do not label it
+        correct or incorrect and do not replace it with what should have happened.
+      - Record only an observable decision basis. If the rollout does not reveal it, write
+        `unknown`; never infer a hidden policy, internal cause, or evaluator rationale.
       - Do not hide uncertainty. If the trace does not prove the expected behavior or outcome,
         write unknown/uncertain instead of inventing a root cause.
-      - Do not generalize IDs, dates, names, or exact amounts into rules. Exact literals may appear
-        only under `Raw Evidence` when they are needed to audit the trace.
       - If the run succeeded, record the successful path facts that distinguish it from failures
         without producing a success-path SOP or an injectable reminder.
       - If an injected experience was misleading, record how it influenced observed behavior; do

@@ -12,10 +12,14 @@ from typing import Any
 
 from openviking.message import Message
 from openviking.server.identity import RequestContext
-from openviking.session.memory.dataclass import MemoryFile, StoredLink
+from openviking.session.memory.dataclass import MemoryFile, MemoryTypeSchema, StoredLink
 from openviking.session.memory.extract_loop import ExtractLoop, PostValidationRetryDecision
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
-from openviking.session.memory.memory_updater import ExtractContext
+from openviking.session.memory.memory_type_registry import (
+    MemoryTypeRegistry,
+    create_default_registry,
+)
+from openviking.session.memory.memory_updater import ExtractContext, render_operation_after_file
 from openviking.session.memory.patch_merge_context_provider import (
     PatchMergeContextProvider,
     PatchMergePatch,
@@ -31,6 +35,7 @@ from openviking.session.train.gates import (
     GateRunner,
     build_gate_retry_instruction,
     candidate_retry_draft,
+    make_gate_audit_attempt,
 )
 from openviking.session.train.interfaces import SemanticGradient
 from openviking.session.train.utils import first_uri, safe_int
@@ -61,6 +66,18 @@ class PatchMergePolicyOptimizer:
     viking_fs: Any = None
     vlm: Any = None
     memory_type: str = "experiences"
+    registry: MemoryTypeRegistry | None = None
+
+    def _get_registry(self) -> MemoryTypeRegistry:
+        if self.registry is None:
+            self.registry = create_default_registry()
+        return self.registry
+
+    def _get_schema(self) -> MemoryTypeSchema:
+        schema = self._get_registry().get(self.memory_type)
+        if schema is None or not schema.enabled:
+            raise ValueError(f"Memory schema not found or disabled: {self.memory_type}")
+        return schema
 
     @tracer(
         "train.policy_optimizer.patch_merge.plan",
@@ -78,6 +95,8 @@ class PatchMergePolicyOptimizer:
 
         context.metadata.pop("gate_retry_reports", None)
         context.metadata.pop("post_validation_retries", None)
+        context.metadata.pop("final_gate_report", None)
+        context.metadata.pop("gate_attempts", None)
         patch_gradients = list(gradients)
         if not patch_gradients:
             return PolicyUpdatePlan(
@@ -100,6 +119,7 @@ class PatchMergePolicyOptimizer:
             gradients=patch_gradients,
             policy_set=policy_set,
             memory_type=self.memory_type,
+            schema=self._get_schema(),
         )
         _log_merge_output(
             target="all",
@@ -119,11 +139,17 @@ class PatchMergePolicyOptimizer:
         }
         gate_retry_reports = list(context.metadata.get("gate_retry_reports", []) or [])
         gate_retry_events = list(context.metadata.get("post_validation_retries", []) or [])
+        gate_attempts = list(context.metadata.get("gate_attempts", []) or [])
+        final_gate_report = context.metadata.get("final_gate_report")
         if gate_retry_reports:
             metadata["gate_reports"] = gate_retry_reports
             metadata["gate_retry_reports"] = gate_retry_reports
         if gate_retry_events:
             metadata["post_validation_retries"] = gate_retry_events
+        if gate_attempts:
+            metadata["gate_attempts"] = gate_attempts
+        if isinstance(final_gate_report, dict):
+            metadata["gate_report"] = final_gate_report
 
         return PolicyUpdatePlan(items=items, metadata=metadata)
 
@@ -149,8 +175,12 @@ class PatchMergePolicyOptimizer:
         provider = PatchMergeContextProvider(
             memory_type=self.memory_type,
             required_file_uris=_required_file_uris(gradients, policy_set),
-            patches=[_gradient_to_merge_patch(gradient) for gradient in gradients],
+            patches=[
+                _gradient_to_merge_patch(gradient, schema=self._get_schema())
+                for gradient in gradients
+            ],
         )
+        provider._registry = self._get_registry()
         provider._ctx = context.request_context
         provider._viking_fs = viking_fs
         provider._extract_context = extract_context
@@ -193,6 +223,7 @@ class PatchMergePolicyOptimizer:
                 gradients=gradients,
                 policy_set=policy_set,
                 memory_type=self.memory_type,
+                schema=self._get_schema(),
             )
             gated, report = await gate_runner.filter_plan(
                 items,
@@ -202,6 +233,7 @@ class PatchMergePolicyOptimizer:
             _remember_gated_plan_operations(
                 operations,
                 gated,
+                schema=self._get_schema(),
                 retained_upserts=retained_valid_upserts,
                 retained_deletes=retained_valid_deletes,
             )
@@ -210,6 +242,22 @@ class PatchMergePolicyOptimizer:
                 prior_reports=gate_retry_history,
             )
             if not instruction:
+                result = (
+                    "passed"
+                    if not report.rejected_count
+                    else "partial_accepted"
+                    if retained_valid_upserts or retained_valid_deletes
+                    else "discarded"
+                )
+                context.metadata.setdefault("gate_attempts", []).append(
+                    make_gate_audit_attempt(
+                        report=report,
+                        candidates=items,
+                        allowed_candidates=gated,
+                        index=retry_count,
+                        result=result,
+                    )
+                )
                 if report.rejected_count or (
                     retry_count and (retained_valid_upserts or retained_valid_deletes)
                 ):
@@ -218,6 +266,7 @@ class PatchMergePolicyOptimizer:
                         retained_upserts=retained_valid_upserts,
                         retained_deletes=retained_valid_deletes,
                     )
+                context.metadata["final_gate_report"] = report.to_dict()
                 if retry_count:
                     context.metadata.setdefault("post_validation_retries", []).append(
                         _post_validation_retry_event(
@@ -237,6 +286,23 @@ class PatchMergePolicyOptimizer:
                 "discarded_after_max_retries"
                 if retry_count >= _EXPERIENCE_PLAN_POST_VALIDATION_MAX_RETRIES
                 else "retry_requested"
+            )
+            attempt_result = (
+                "partial_accepted"
+                if retry_count >= _EXPERIENCE_PLAN_POST_VALIDATION_MAX_RETRIES
+                and (retained_valid_upserts or retained_valid_deletes)
+                else "discarded"
+                if retry_count >= _EXPERIENCE_PLAN_POST_VALIDATION_MAX_RETRIES
+                else "retry_requested"
+            )
+            context.metadata.setdefault("gate_attempts", []).append(
+                make_gate_audit_attempt(
+                    report=report,
+                    candidates=items,
+                    allowed_candidates=gated,
+                    index=retry_count,
+                    result=attempt_result,
+                )
             )
             context.metadata.setdefault("post_validation_retries", []).append(
                 _post_validation_retry_event(
@@ -260,7 +326,9 @@ class PatchMergePolicyOptimizer:
                     event["retained_count"] = len(retained_valid_upserts) + len(
                         retained_valid_deletes
                     )
+                    context.metadata["final_gate_report"] = report.to_dict()
                     return None
+                context.metadata["final_gate_report"] = report.to_dict()
                 return PostValidationRetryDecision(discard=True)
             return PostValidationRetryDecision(
                 retry=True,
@@ -290,6 +358,8 @@ class PatchMergePolicyOptimizer:
 def _retain_gated_plan_operations(
     operations: Any,
     gated: list[PolicyPlanItem],
+    *,
+    schema: MemoryTypeSchema,
 ) -> None:
     """Keep independently valid plan operations when a sibling exhausts retries."""
 
@@ -318,7 +388,7 @@ def _retain_gated_plan_operations(
             or fields.get("name")
             or _fallback_policy_name(operation, memory_type="experiences")
         )
-        after_content = _experience_constraint_text(fields)
+        after_content = render_operation_after_file(operation, schema=schema).content
         if (target_uri, target_name, after_content) in allowed_upserts:
             retained_upserts.append(operation)
 
@@ -334,13 +404,14 @@ def _remember_gated_plan_operations(
     operations: Any,
     gated: list[PolicyPlanItem],
     *,
+    schema: MemoryTypeSchema,
     retained_upserts: dict[tuple[str, str], Any],
     retained_deletes: dict[str, Any],
 ) -> None:
     """Carry independently valid plan items across model repair attempts."""
 
     selected = deepcopy(operations)
-    _retain_gated_plan_operations(selected, gated)
+    _retain_gated_plan_operations(selected, gated, schema=schema)
     for operation in getattr(selected, "upsert_operations", []) or []:
         if getattr(operation, "memory_type", None) != "experiences":
             continue
@@ -573,7 +644,11 @@ def _links_to_dicts(links: list[StoredLink] | None) -> list[dict[str, Any]]:
     return [link.model_dump() for link in links or []]
 
 
-def _gradient_to_merge_patch(gradient: SemanticGradient) -> PatchMergePatch:
+def _gradient_to_merge_patch(
+    gradient: SemanticGradient,
+    *,
+    schema: MemoryTypeSchema,
+) -> PatchMergePatch:
     return PatchMergePatch(
         before_file=gradient.before_file,
         after_file=gradient.after_file,
@@ -582,25 +657,22 @@ def _gradient_to_merge_patch(gradient: SemanticGradient) -> PatchMergePatch:
             "rationale": gradient.rationale,
             "links": _links_to_dicts(gradient.links),
             "confidence": gradient.confidence,
-            "gradient_metadata": _compact_gradient_metadata(gradient.metadata),
+            "gradient_metadata": _compact_gradient_metadata(gradient.metadata, schema=schema),
         },
     )
 
 
-def _experience_constraint_text(fields: dict[str, Any]) -> str:
-    return str(fields.get("constraint") or fields.get("content") or "")
-
-
-def _compact_gradient_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+def _compact_gradient_metadata(
+    metadata: dict[str, Any],
+    *,
+    schema: MemoryTypeSchema,
+) -> dict[str, Any]:
     compact = dict(metadata)
     memory_fields = compact.get("memory_fields")
-    if isinstance(memory_fields, dict) and (
-        "content" in memory_fields or "constraint" in memory_fields
-    ):
+    hidden_content_fields = {"content", *schema.content_field_names()}
+    if isinstance(memory_fields, dict) and hidden_content_fields.intersection(memory_fields):
         compact["memory_fields"] = {
-            key: value
-            for key, value in memory_fields.items()
-            if key not in {"content", "constraint"}
+            key: value for key, value in memory_fields.items() if key not in hidden_content_fields
         }
     return compact
 
@@ -662,6 +734,7 @@ def _operations_to_plan_items(
     gradients: list[SemanticGradient],
     policy_set: PolicySet,
     memory_type: str,
+    schema: MemoryTypeSchema,
 ) -> list[PolicyPlanItem]:
     items: list[PolicyPlanItem] = []
     source_links_by_target = _source_trajectory_links_by_target(gradients, policy_set)
@@ -670,7 +743,11 @@ def _operations_to_plan_items(
     confidence = max(confidence_values) if confidence_values else None
     name_field = _name_field_for_memory_type(memory_type)
 
-    upsert_output_count = _upsert_output_count(operations, memory_type=memory_type)
+    upsert_output_count = _upsert_output_count(
+        operations,
+        memory_type=memory_type,
+        schema=schema,
+    )
     single_source_trajectory = _source_trajectory_count(source_links_by_target) == 1
     replacement_source_uris_by_target = _replacement_source_uris_by_target(operations)
     upsert_target_uris: set[str] = set()
@@ -678,7 +755,18 @@ def _operations_to_plan_items(
         if getattr(op, "memory_type", None) != memory_type:
             continue
         fields = dict(getattr(op, "memory_fields", {}) or {})
-        after_content = _experience_constraint_text(fields)
+        old_file = getattr(op, "old_memory_file_content", None)
+        after_file = render_operation_after_file(op, schema=schema)
+        plan_fields = dict(fields)
+        for field_name in schema.content_field_names():
+            if field_name == "content":
+                continue
+            plan_fields.pop(field_name, None)
+            if field_name in after_file.extra_fields:
+                plan_fields[field_name] = after_file.extra_fields[field_name]
+        if not _memory_file_has_schema_content(after_file, schema=schema):
+            continue
+        after_content = after_file.content
         if not after_content.strip():
             continue
         target_name = str(
@@ -687,7 +775,6 @@ def _operations_to_plan_items(
             or _fallback_policy_name(op, memory_type=memory_type)
         )
         target_uri = first_uri(getattr(op, "uris", []) or [])
-        old_file = getattr(op, "old_memory_file_content", None)
         before_content = old_file.plain_content() if old_file is not None else None
         if before_content is None and target_uri:
             policy = _find_policy_by_uri(policy_set, target_uri)
@@ -723,7 +810,7 @@ def _operations_to_plan_items(
                 metadata={
                     "rationale": "PatchMergeContextProvider merged semantic gradients via ExtractLoop.",
                     "merge_gradient_count": len(gradients),
-                    "merge_memory_fields": fields,
+                    "merge_memory_fields": plan_fields,
                     "superseded_experience_uris": [policy.uri for policy in superseded_policies],
                     **_plan_quality_review_metadata(
                         memory_type=memory_type,
@@ -851,9 +938,7 @@ def _plan_quality_review_metadata(
             if str(getattr(link, "link_type", "") or "") == "derived_from"
             and str(getattr(link, "to_uri", "") or "")
         }
-        if source_trajectory_uris and not source_trajectory_uris.intersection(
-            gradient_source_uris
-        ):
+        if source_trajectory_uris and not source_trajectory_uris.intersection(gradient_source_uris):
             continue
         source_contents.add(_normalized_policy_content(after_file.plain_content()))
     if normalized_after in source_contents:
@@ -1139,15 +1224,36 @@ def _superseded_source_trajectory_links(
     return _source_trajectory_links_from_experience(superseded_policy)
 
 
-def _upsert_output_count(operations: Any, *, memory_type: str) -> int:
+def _upsert_output_count(
+    operations: Any,
+    *,
+    memory_type: str,
+    schema: MemoryTypeSchema,
+) -> int:
     count = 0
     for op in getattr(operations, "upsert_operations", []) or []:
         if getattr(op, "memory_type", None) != memory_type:
             continue
-        fields = dict(getattr(op, "memory_fields", {}) or {})
-        if _experience_constraint_text(fields).strip():
+        after_file = render_operation_after_file(op, schema=schema)
+        if _memory_file_has_schema_content(after_file, schema=schema):
             count += 1
     return count
+
+
+def _memory_file_has_schema_content(
+    memory_file: MemoryFile,
+    *,
+    schema: MemoryTypeSchema,
+) -> bool:
+    for field_name in schema.content_field_names():
+        value = (
+            memory_file.content
+            if field_name == "content"
+            else memory_file.extra_fields.get(field_name)
+        )
+        if str(value or "").strip():
+            return True
+    return False
 
 
 def _replacement_source_uris_by_target(operations: Any) -> dict[str, list[str]]:

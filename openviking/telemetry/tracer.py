@@ -18,7 +18,7 @@ try:
     from opentelemetry.propagate import extract, inject
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import Status, StatusCode, TracerProvider
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExportResult
     from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
     try:
@@ -40,6 +40,7 @@ except ImportError:
     Status = None
     StatusCode = None
     BatchSpanProcessor = None
+    SpanExportResult = None
     OTLPGrpcSpanExporter = None
     OTLPHttpSpanExporter = None
     TraceContextTextMapPropagator = None
@@ -53,6 +54,51 @@ except ImportError:
 _otel_tracer: Any = None
 _propagator: Any = None
 _trace_id_filter_added: bool = False
+
+
+class _ReplayIsolatingSpanExporter:
+    """Export replay records separately so large concurrent records cannot share one batch."""
+
+    def __init__(self, delegate: Any) -> None:
+        self._delegate = delegate
+
+    def export(self, spans: Any) -> Any:
+        regular_spans = []
+        replay_spans = []
+        for span in spans:
+            attributes = getattr(span, "attributes", None) or {}
+            if attributes.get("replay.kind") in {"entry", "mock"}:
+                replay_spans.append(span)
+            else:
+                regular_spans.append(span)
+
+        results = [self._export_batch([span]) for span in replay_spans]
+        if regular_spans:
+            results.append(self._export_batch(regular_spans))
+
+        for result in results:
+            if result is not SpanExportResult.SUCCESS:
+                return result
+        return SpanExportResult.SUCCESS
+
+    def _export_batch(self, spans: Any) -> Any:
+        try:
+            return self._delegate.export(spans)
+        except Exception:
+            _log_trace_internal_failure("[TRACER] isolated span export failed")
+            return SpanExportResult.FAILURE
+
+    def shutdown(self, timeout_millis: float = 30000) -> Any:
+        try:
+            parameters = inspect.signature(self._delegate.shutdown).parameters
+        except (TypeError, ValueError):
+            parameters = {}
+        if "timeout_millis" in parameters:
+            return self._delegate.shutdown(timeout_millis=timeout_millis)
+        return self._delegate.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return self._delegate.force_flush(timeout_millis)
 
 
 def _log_trace_internal_failure(message: str) -> None:
@@ -250,6 +296,7 @@ def init_tracer(
         else:
             raise ValueError(f"Unsupported trace protocol: {protocol}")
 
+        trace_exporter = _ReplayIsolatingSpanExporter(trace_exporter)
         trace_provider = TracerProvider(resource=resource)
         trace_provider.add_span_processor(
             BatchSpanProcessor(

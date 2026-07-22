@@ -317,6 +317,12 @@ class TestExtractLoopPostValidationHook:
         def __init__(self, schemas):
             self._schemas = schemas
             self._extract_context = ExtractContext([], split_long_text_messages=False)
+            self._registry = MemoryTypeRegistry(load_schemas=False)
+            for schema in schemas:
+                self._registry.register(schema)
+
+        def _get_registry(self):
+            return self._registry
 
         def get_memory_schemas(self, ctx):
             return self._schemas

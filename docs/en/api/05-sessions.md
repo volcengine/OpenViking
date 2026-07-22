@@ -1410,6 +1410,7 @@ When long-term memory extraction runs successfully, the commit writes a `memory_
 ```json
 {
   "archive_uri": "viking://user/{user_id}/sessions/{session_id}/history/archive_001",
+  "trace_id": "0123456789abcdef",
   "extracted_at": "2026-04-21T10:00:00Z",
   "operations": {
     "adds": [
@@ -1435,6 +1436,21 @@ When long-term memory extraction runs successfully, the commit writes a `memory_
       }
     ]
   },
+  "gates": [
+    {
+      "stage": "post_gradient",
+      "index": 0,
+      "result": "passed",
+      "targets": [
+        {
+          "name": "avoid_duplicate_booking",
+          "uri": "viking://user/alice/memories/experiences/avoid_duplicate_booking.md",
+          "outcome": "allowed",
+          "decisions": []
+        }
+      ]
+    }
+  ],
   "summary": {
     "total_adds": 1,
     "total_updates": 1,
@@ -1446,15 +1462,24 @@ When long-term memory extraction runs successfully, the commit writes a `memory_
 | Field | Type | Description |
 |-------|------|-------------|
 | `archive_uri` | str | Archive directory URI for this commit |
+| `trace_id` | str or null | Trace containing full extraction and Gate diagnostics |
 | `extracted_at` | str | ISO 8601 timestamp of extraction |
 | `operations.adds` | array | New memories created (`uri`, `memory_type`, `after`) |
 | `operations.updates` | array | Modified memories (`uri`, `memory_type`, `before`, `after`) |
 | `operations.deletes` | array | Deleted memories (`uri`, `memory_type`, `deleted_content`) |
+| `gates` | array | Gate executions, recorded once per attempt |
+| `gates[].stage` | str | Validation stage: `post_gradient` or `post_plan` |
+| `gates[].index` | int | Zero-based attempt index within the stage |
+| `gates[].result` | str | `passed`, `retry_requested`, `partial_accepted`, or `discarded` |
+| `gates[].targets` | array | Candidate outcomes and compact warning/rejection decisions |
 | `summary.total_adds` | int | Number of new memories |
 | `summary.total_updates` | int | Number of modified memories |
 | `summary.total_deletes` | int | Number of deleted memories |
 
 An empty `memory_diff.json` (all counts zero) is written when long-term memory extraction runs but produces no memory operations.
+Gate counts are derived from `gates[].targets` and are not stored separately. Candidate previews,
+repair prompts, raw evidence, and full Gate reports are available through `trace_id` rather than
+being duplicated in this audit file.
 
 ---
 

@@ -61,19 +61,8 @@ _TRAJECTORY_COMMA_ANCHOR_RE = re.compile(
     r"Outcome:\s*(?P<outcome>success|failure|partial|unfinished|unknown)[.;]?\s*$",
     re.IGNORECASE,
 )
-_TRAJECTORY_REQUIRED_CONTENT_LABELS = (
-    "Outcome",
-    "Domain",
-    "User Goal",
-    "Injected Experiences",
-    "Timeline",
-    "Outcome Checks",
-    "Correct Work To Preserve",
-    "Observed Problem",
-    "Evidence References",
-    "Raw Evidence",
-    "Result",
-)
+
+
 @dataclass(slots=True)
 class _TrajectoryValidationIssue:
     target_name: str
@@ -89,7 +78,6 @@ class TrajectoryAnalyzerContext:
     strict_extract_errors: bool = False
     latest_archive_overview: str = ""
     evaluator_context: Any = None
-    inject_evaluation_feedback: bool = True
     include_session_skills: bool = False
 
 
@@ -118,12 +106,11 @@ class TrajectoryRolloutAnalyzer:
 
         evaluation = await self._evaluate_rollout(rollout, context)
         extraction_messages = list(rollout.messages)
-        extraction_evaluation = evaluation if context.inject_evaluation_feedback else None
         advisory_signals = _advisory_signals_payload(
             rollout,
-            extraction_evaluation,
+            evaluation,
         )
-        evidence_sources = _evidence_sources_payload(rollout, extraction_evaluation)
+        evidence_sources = _evidence_sources_payload(rollout, evaluation)
         result = await self.extract_trajectory_memories(
             messages=extraction_messages,
             ctx=context.request_context,
@@ -292,10 +279,7 @@ class TrajectoryRolloutAnalyzer:
             latest_draft: Any = None,
         ):
             _ensure_trajectory_case_name(operations, case_name=case_name)
-            issues = _trajectory_validation_issues(
-                operations,
-                evidence_sources=evidence_sources,
-            )
+            issues = _trajectory_validation_issues(operations)
             if not issues:
                 if retry_count:
                     validation_events.append(
@@ -368,10 +352,7 @@ class TrajectoryRolloutAnalyzer:
             traj_ops, skill_ops = _split_operations_by_type(
                 operations, target_type=_TRAJECTORY_MEMORY_TYPE
             )
-            traj_ops = _filter_invalid_trajectory_operations(
-                traj_ops,
-                evidence_sources=evidence_sources,
-            )
+            traj_ops = _filter_invalid_trajectory_operations(traj_ops)
             skill_gradients = _skill_operations_to_gradients(
                 skill_ops,
                 viking_fs=viking_fs,
@@ -515,8 +496,6 @@ class TrajectoryRolloutAnalyzer:
 
 def _trajectory_validation_issues(
     operations: Any,
-    *,
-    evidence_sources: dict[str, Any] | None = None,
 ) -> list[_TrajectoryValidationIssue]:
     issues: list[_TrajectoryValidationIssue] = []
     trajectory_operations = [
@@ -536,16 +515,9 @@ def _trajectory_validation_issues(
         raw_fields = getattr(op, "memory_fields", {}) or {}
         if isinstance(raw_fields, dict):
             _normalize_trajectory_retrieval_anchor(raw_fields)
-            _normalize_known_empty_evidence_references(raw_fields, evidence_sources)
         fields = dict(raw_fields)
         name = str(fields.get("trajectory_name") or _fallback_trajectory_name(op))
-        issues.extend(
-            _trajectory_operation_validation_issues(
-                name,
-                fields,
-                evidence_sources=evidence_sources,
-            )
-        )
+        issues.extend(_trajectory_operation_validation_issues(name, fields))
     return issues
 
 
@@ -566,37 +538,9 @@ def _normalize_trajectory_retrieval_anchor(fields: dict[str, Any]) -> None:
     )
 
 
-def _normalize_known_empty_evidence_references(
-    fields: dict[str, Any],
-    evidence_sources: dict[str, Any] | None,
-) -> None:
-    """Fill an omitted evidence channel only when its source set is known empty."""
-
-    if int((evidence_sources or {}).get("advisory_signal_count") or 0) != 0:
-        return
-    content = str(fields.get("content") or "")
-    if not content or re.search(r"(?m)^\s+-\s+Advisory signals\s*:", content):
-        return
-    evidence_header = re.search(r"(?m)^-\s+Evidence References\s*:\s*$", content)
-    if evidence_header is None:
-        return
-    section_end = re.search(
-        r"(?m)^-\s+(?:Raw Evidence|Result)\s*:",
-        content[evidence_header.end() :],
-    )
-    insertion_at = (
-        evidence_header.end() + section_end.start() if section_end is not None else len(content)
-    )
-    prefix = content[:insertion_at].rstrip("\n")
-    suffix = content[insertion_at:].lstrip("\n")
-    fields["content"] = prefix + "\n  - Advisory signals: none\n" + suffix
-
-
 def _trajectory_operation_validation_issues(
     target_name: str,
     fields: dict[str, Any],
-    *,
-    evidence_sources: dict[str, Any] | None = None,
 ) -> list[_TrajectoryValidationIssue]:
     issues: list[_TrajectoryValidationIssue] = []
     required_fields = (
@@ -625,26 +569,6 @@ def _trajectory_operation_validation_issues(
                 details=outcome,
             )
         )
-    direct_evaluation = _direct_rollout_evaluation(evidence_sources)
-    if direct_evaluation is not None:
-        evaluation_passed = bool(direct_evaluation.get("passed"))
-        if evaluation_passed and outcome and outcome != "success":
-            issues.append(
-                _TrajectoryValidationIssue(
-                    target_name=target_name,
-                    reason="trajectory outcome disagrees with direct evaluation",
-                    details=f"evaluation_passed=true, outcome={outcome}",
-                )
-            )
-        elif not evaluation_passed and outcome == "success":
-            issues.append(
-                _TrajectoryValidationIssue(
-                    target_name=target_name,
-                    reason="trajectory outcome disagrees with direct evaluation",
-                    details="evaluation_passed=false, outcome=success",
-                )
-            )
-
     content = str(fields.get("content") or "")
     content_outcome_match = re.search(r"(?m)^-\s+Outcome\s*:\s*([^\n]+)", content)
     if outcome and content_outcome_match:
@@ -682,14 +606,6 @@ def _trajectory_operation_validation_issues(
     if effects:
         issues.extend(_experience_effects_validation_issues(target_name, effects))
 
-    issues.extend(_trajectory_content_validation_issues(target_name, content))
-    issues.extend(
-        _trajectory_evidence_validation_issues(
-            target_name,
-            content,
-            evidence_sources,
-        )
-    )
     return issues
 
 
@@ -735,178 +651,6 @@ def _experience_effects_validation_issues(
     ]
 
 
-def _trajectory_content_validation_issues(
-    target_name: str,
-    content: str,
-) -> list[_TrajectoryValidationIssue]:
-    issues: list[_TrajectoryValidationIssue] = []
-    if not content.strip():
-        return [
-            _TrajectoryValidationIssue(
-                target_name=target_name,
-                reason="trajectory content is empty",
-            )
-        ]
-    if not re.search(r"(?m)^#\s+\S", content):
-        issues.append(
-            _TrajectoryValidationIssue(
-                target_name=target_name,
-                reason="trajectory content is missing its title",
-            )
-        )
-    missing_labels = [
-        label
-        for label in _TRAJECTORY_REQUIRED_CONTENT_LABELS
-        if not re.search(rf"(?m)^-\s+{re.escape(label)}\s*:", content)
-    ]
-    if missing_labels:
-        issues.append(
-            _TrajectoryValidationIssue(
-                target_name=target_name,
-                reason="trajectory content is missing required sections",
-                details=", ".join(missing_labels),
-            )
-        )
-    duplicate_labels = [
-        label
-        for label in _TRAJECTORY_REQUIRED_CONTENT_LABELS
-        if len(re.findall(rf"(?m)^-\s+{re.escape(label)}\s*:", content)) > 1
-    ]
-    if duplicate_labels:
-        issues.append(
-            _TrajectoryValidationIssue(
-                target_name=target_name,
-                reason="trajectory content repeats required sections",
-                details=", ".join(duplicate_labels),
-            )
-        )
-    forbidden_patterns = (
-        ("Counterfactual Ideal Experience", r"(?mi)^\s*-?\s*Counterfactual Ideal Experience\s*:"),
-        ("Runtime experience content", r"(?mi)^\s*-?\s*Runtime experience content\s*:"),
-        ("Experience Repair Signal", r"(?mi)^\s*-?\s*Experience Repair Signal\s*:"),
-        ("Diagnostic Hints", r"(?mi)^\s*-?\s*Diagnostic Hints\s*:"),
-        ("Ambiguous references", r"(?mi)^\s*-\s*Ambiguous references\s*:"),
-        ("Recommended operation", r"(?mi)^\s*-\s*Recommended operation\s*:"),
-        ("Selected candidate", r"(?mi)^\s*-\s*Selected candidate\s*:"),
-        ("Candidate Cx", r"(?mi)^\s*-\s*Candidate\s+C\d+\s*:"),
-    )
-    found = [name for name, pattern in forbidden_patterns if re.search(pattern, content or "")]
-    if found:
-        issues.append(
-            _TrajectoryValidationIssue(
-                target_name=target_name,
-                reason="trajectory contains experience-generation sections",
-                details=", ".join(found),
-            )
-        )
-    return issues
-
-
-def _trajectory_evidence_validation_issues(
-    target_name: str,
-    content: str,
-    evidence_sources: dict[str, Any] | None,
-) -> list[_TrajectoryValidationIssue]:
-    evidence_labels = (
-        "Runtime evidence",
-        "Direct external evidence",
-        "Advisory signals",
-    )
-    values: dict[str, str] = {}
-    missing: list[str] = []
-    duplicate: list[str] = []
-    for label in evidence_labels:
-        matches = re.findall(rf"(?m)^\s+-\s+{re.escape(label)}\s*:\s*(.*)$", content)
-        if not matches:
-            missing.append(label)
-            continue
-        if len(matches) > 1:
-            duplicate.append(label)
-        values[label] = matches[0].strip()
-
-    issues: list[_TrajectoryValidationIssue] = []
-    if missing:
-        issues.append(
-            _TrajectoryValidationIssue(
-                target_name=target_name,
-                reason="trajectory evidence references are incomplete",
-                details=", ".join(missing),
-            )
-        )
-    if duplicate:
-        issues.append(
-            _TrajectoryValidationIssue(
-                target_name=target_name,
-                reason="trajectory evidence references are duplicated",
-                details=", ".join(duplicate),
-            )
-        )
-
-    direct_available = bool((evidence_sources or {}).get("direct_available"))
-    runtime_grounded = _has_substantive_evidence(values.get("Runtime evidence", ""))
-    external_grounded = direct_available and _has_substantive_evidence(
-        values.get("Direct external evidence", "")
-    )
-    if not direct_available and _has_substantive_evidence(
-        values.get("Direct external evidence", "")
-    ):
-        issues.append(
-            _TrajectoryValidationIssue(
-                target_name=target_name,
-                reason="trajectory claims direct external evidence when none was supplied",
-                details=values.get("Direct external evidence", "")[:300],
-            )
-        )
-    if _has_material_failure_claim(content) and not (runtime_grounded or external_grounded):
-        issues.append(
-            _TrajectoryValidationIssue(
-                target_name=target_name,
-                reason="trajectory material failure claim lacks direct evidence",
-                details="advisory signals cannot serve as proof",
-            )
-        )
-    return issues
-
-
-def _direct_rollout_evaluation(
-    evidence_sources: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    for item in (evidence_sources or {}).get("items", []) or []:
-        if (
-            isinstance(item, dict)
-            and item.get("direct") is True
-            and item.get("source") == "rollout_evaluation"
-        ):
-            return item
-    return None
-
-
-def _has_substantive_evidence(value: str) -> bool:
-    normalized = str(value or "").strip().lower().rstrip(".")
-    return normalized not in {
-        "",
-        "none",
-        "unknown",
-        "unavailable",
-        "unverified",
-        "none/unknown",
-        "无",
-        "未知",
-        "不可用",
-        "未验证",
-    }
-
-
-def _has_material_failure_claim(content: str) -> bool:
-    if re.search(
-        r"(?mi)^\s+-\s+(?:Required outcome|Constraints|Required output/communication)\s*:\s*(?:failed|partial)\b",
-        content,
-    ):
-        return True
-    match = re.search(r"(?mi)^\s+-\s+Failure type\s*:\s*([^\n]+)", content)
-    return bool(match and match.group(1).strip().lower() not in {"none", "unknown", "无", "未知"})
-
-
 def _trajectory_validation_retry_instruction(issues: list[_TrajectoryValidationIssue]) -> str:
     detail_lines = [
         f"- target={issue.target_name}: {issue.reason}"
@@ -922,10 +666,9 @@ def _trajectory_validation_retry_instruction(issues: list[_TrajectoryValidationI
             *detail_lines,
             "",
             "Required repair:",
-            "- Do not output Counterfactual Ideal Experience, Runtime experience content, Experience Repair Signal, Diagnostic Hints, Recommended operation, Selected candidate, or C1/C2/C3 sections.",
-            "- Record observed execution facts only: timeline, outcome checks, correct work to preserve, observed problem, evidence references, raw evidence, and uncertainty.",
-            "- Include every required field and section from the trajectory schema. Use the exact retrieval_anchor and experience_effects formats.",
-            "- Treat Advisory Signals as hints only. Never present them as runtime observations or causal facts; write unknown when runtime or direct external evidence does not support a cause.",
+            "- Include non-empty trajectory_name, outcome, retrieval_anchor, experience_effects, and content fields.",
+            "- Use the exact outcome, retrieval_anchor, and experience_effects formats from the trajectory schema, and keep their outcomes consistent.",
+            "- Keep the content factual and regenerate the complete trajectory record rather than returning a partial field patch.",
             "Output ONLY the complete JSON object as an instance of OUTPUT_SCHEMA; "
             "do not output the OUTPUT_SCHEMA definition itself.",
         ]
@@ -934,8 +677,6 @@ def _trajectory_validation_retry_instruction(issues: list[_TrajectoryValidationI
 
 def _filter_invalid_trajectory_operations(
     operations: ResolvedOperations,
-    *,
-    evidence_sources: dict[str, Any] | None = None,
 ) -> ResolvedOperations:
     valid_upserts = []
     rejected_names: list[str] = []
@@ -945,11 +686,7 @@ def _filter_invalid_trajectory_operations(
             continue
         fields = dict(op.memory_fields or {})
         name = str(fields.get("trajectory_name") or _fallback_trajectory_name(op))
-        issues = _trajectory_operation_validation_issues(
-            name,
-            fields,
-            evidence_sources=evidence_sources,
-        )
+        issues = _trajectory_operation_validation_issues(name, fields)
         if issues:
             rejected_names.append(name)
             continue
@@ -1024,32 +761,6 @@ def _evidence_sources_payload(
     evaluation: RubricEvaluation | None,
 ) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
-    if evaluation is not None:
-        items.append(
-            {
-                "source": "rollout_evaluation",
-                "kind": "outcome_evaluation",
-                "direct": True,
-                "scope": "outcome_and_requirement_compliance",
-                "passed": bool(evaluation.passed),
-                "score": float(evaluation.score),
-                "feedback": list(evaluation.feedback),
-                "criterion_results": [
-                    {
-                        "criterion_name": item.criterion_name,
-                        "passed": bool(item.passed),
-                        "score": float(item.score),
-                        "feedback": list(item.feedback),
-                        "evidence": list(item.evidence),
-                    }
-                    for item in evaluation.criterion_results
-                ],
-                "contract": (
-                    "Authoritative feedback for outcome and requirement compliance. "
-                    "It does not independently prove an unobserved internal cause."
-                ),
-            }
-        )
     sources = (
         ("rollout_metadata", dict(rollout.metadata or {})),
         ("evaluation_metadata", dict(evaluation.metadata or {}) if evaluation else {}),

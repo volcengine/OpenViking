@@ -10,7 +10,10 @@ to the storage system.
 from __future__ import annotations
 
 import re
+import secrets
+import string
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:
@@ -18,9 +21,11 @@ if TYPE_CHECKING:
 
 from openviking.message import Message
 from openviking.message.part import TextPart
+from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import (
     MemoryFile,
+    MemoryTypeSchema,
     ResolvedOperation,
     ResolvedOperations,
     StoredLink,
@@ -38,7 +43,7 @@ from openviking.session.memory.utils.resource_refs import (
     sync_memory_resource_refs,
 )
 from openviking.session.memory.utils.template_utils import TemplateUtils
-from openviking.session.memory.utils.uri import render_template
+from openviking.session.memory.utils.uri import numbered_uri, render_template
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -50,6 +55,7 @@ from openviking_cli.utils import VikingURI, get_logger
 logger = get_logger(__name__)
 
 _MEMORY_ABSTRACT_MAX_BYTES = 50_000
+_RANDOM_SUFFIX_ALPHABET = string.digits + string.ascii_letters
 _EXTRACTION_CHUNK_MIN_CHARS = 100
 _EXTRACTION_CHUNK_BOUNDARY_RE = re.compile(r"(\n+|[。！？；!?;]+|(?<!\d)\.(?!\d))")
 _RESOURCE_ADDITION_FIELD_RE = re.compile(
@@ -160,6 +166,113 @@ def _operation_trace_id(op: ResolvedOperation) -> str | None:
 def _schema_should_persist_content(schema: Any) -> bool:
     return bool(getattr(schema, "content_template", None)) and any(
         getattr(field, "name", None) == "content" for field in getattr(schema, "fields", [])
+    )
+
+
+def resolve_memory_fields(
+    fields: Dict[str, Any],
+    *,
+    schema: MemoryTypeSchema,
+    old_file: MemoryFile | None = None,
+    uri: str | None = None,
+) -> Dict[str, Any]:
+    """Apply schema merge operations and preserve fields not changed by a patch."""
+    incoming = dict(fields or {})
+    resolved = dict(getattr(old_file, "extra_fields", {}) or {})
+    schema_field_names = {field.name for field in schema.fields}
+    resolved.update(
+        {key: value for key, value in incoming.items() if key not in schema_field_names}
+    )
+
+    for field in schema.fields:
+        if old_file is None:
+            current_value = None
+        elif field.name == "content":
+            current_value = old_file.plain_content()
+        else:
+            current_value = old_file.extra_fields.get(field.name)
+
+        if field.name not in incoming:
+            if current_value is not None:
+                resolved[field.name] = current_value
+            continue
+
+        try:
+            resolved[field.name] = MergeOpFactory.from_field(field).apply(
+                current_value,
+                incoming[field.name],
+            )
+        except Exception as exc:
+            if uri is None:
+                tracer.info(
+                    "[memory_updater] Skipping preview field update after merge_op failure: "
+                    f"memory_type={schema.memory_type}, field={field.name}, error={exc}"
+                )
+            else:
+                tracer.info(
+                    "[memory_updater] Skipping field update after merge_op failure: "
+                    f"uri={uri}, field={field.name}, error={exc}"
+                )
+            if current_value is None:
+                resolved.pop(field.name, None)
+            else:
+                resolved[field.name] = current_value
+
+    return resolved
+
+
+def render_operation_after_file(
+    op: ResolvedOperation,
+    *,
+    schema: MemoryTypeSchema,
+    extract_context: Any = None,
+) -> MemoryFile:
+    """Render the post-operation MemoryFile using the registered schema template."""
+    rendered = render_operation_after_file_content(
+        op,
+        schema=schema,
+        extract_context=extract_context,
+    )
+    old_file = getattr(op, "old_memory_file_content", None)
+    uri = op.uris[0] if op.uris else getattr(old_file, "uri", None)
+    return MemoryFileUtils.read(rendered, uri=uri)
+
+
+def render_operation_after_file_content(
+    op: ResolvedOperation,
+    *,
+    schema: MemoryTypeSchema,
+    extract_context: Any = None,
+) -> str:
+    """Serialize the post-operation memory file using the registered schema template."""
+    old_file = getattr(op, "old_memory_file_content", None)
+    metadata = resolve_memory_fields(
+        dict(getattr(op, "memory_fields", {}) or {}),
+        schema=schema,
+        old_file=old_file,
+    )
+    source = getattr(op, "source", None)
+    source_extraction_id = getattr(source, "extraction_id", None) if source else None
+    if source_extraction_id:
+        metadata["source_extraction_id"] = str(source_extraction_id)
+    source_trace_id = _operation_trace_id(op)
+    if source_trace_id:
+        metadata["last_update_trace_id"] = source_trace_id
+    metadata["version"] = next_memory_version(old_file)
+    metadata.setdefault("memory_type", op.memory_type)
+    if old_file is not None:
+        if old_file.links and "links" not in metadata:
+            metadata["links"] = list(old_file.links)
+        if old_file.backlinks and "backlinks" not in metadata:
+            metadata["backlinks"] = list(old_file.backlinks)
+
+    uri = op.uris[0] if op.uris else getattr(old_file, "uri", None)
+    memory_file = MemoryFile.from_parsed(uri=uri, parsed=metadata)
+    return MemoryFileUtils.write(
+        memory_file,
+        content_template=schema.content_template,
+        extract_context=extract_context,
+        persist_content=_schema_should_persist_content(schema),
     )
 
 
@@ -344,21 +457,40 @@ class ExtractContext:
                         continue
         return datetime.now().strftime("%Y%m%d%H%M%S")
 
-    def get_session_timestamp(self) -> str:
-        """取对话第一条消息的时间戳（YYYYMMDDHHMMSS），用于文件名唯一化。
-
-        Fallback 到 datetime.now() 以保证总是返回非空字符串。
-        """
-        from datetime import datetime
-
+    def _get_session_datetime(self) -> datetime:
+        """取对话第一条有效消息的时间，fallback 到当前时间。"""
         for msg in self.messages:
             created_at = getattr(msg, "created_at", None)
             if created_at:
                 try:
-                    return datetime.fromisoformat(created_at).strftime("%Y%m%d%H%M%S")
+                    return datetime.fromisoformat(created_at)
                 except (ValueError, TypeError):
                     continue
-        return datetime.now().strftime("%Y%m%d%H%M%S")
+        return datetime.now()
+
+    def get_session_year(self) -> str:
+        """取对话第一条有效消息的年份（YYYY）。"""
+        return self._get_session_datetime().strftime("%Y")
+
+    def get_session_month(self) -> str:
+        """取对话第一条有效消息的月份（MM）。"""
+        return self._get_session_datetime().strftime("%m")
+
+    def get_session_day(self) -> str:
+        """取对话第一条有效消息的日期（DD）。"""
+        return self._get_session_datetime().strftime("%d")
+
+    def get_session_time(self) -> str:
+        """取对话第一条有效消息的时间（HHMMSS）。"""
+        return self._get_session_datetime().strftime("%H%M%S")
+
+    def get_session_timestamp(self) -> str:
+        """取对话第一条有效消息的紧凑时间戳（YYYYMMDDHHMMSS）。"""
+        return self._get_session_datetime().strftime("%Y%m%d%H%M%S")
+
+    def get_random_suffix(self, length: int) -> str:
+        """Return a random Base62 suffix with the requested length."""
+        return "".join(secrets.choice(_RANDOM_SUFFIX_ALPHABET) for _ in range(length))
 
     def get_event_content(
         self, ranges_str: str, summary: str | None, ratio_threshold: float = 0.2
@@ -837,12 +969,24 @@ class MemoryUpdater:
                 f"Cannot apply operations: missing resolved URIs for {', '.join(missing)}"
             )
 
+        await self._allocate_add_only_uris(
+            operations,
+            ctx,
+            viking_fs,
+        )
         # Distribute resolved_links to corresponding upsert operations
         self._distribute_links_to_operations(operations)
 
         # Apply unified operations - _apply_edit returns True if edited, False if written
         for resolved_op in operations.upsert_operations:
             try:
+                allocation_error = getattr(
+                    resolved_op,
+                    "_add_only_allocation_error",
+                    None,
+                )
+                if allocation_error is not None:
+                    raise allocation_error
                 await self._apply_upsert(
                     resolved_op,
                     ctx,
@@ -968,8 +1112,82 @@ class MemoryUpdater:
             except Exception as exc:
                 logger.warning("Failed to sync resource refs for %s: %s", uri, exc)
 
+    async def _allocate_add_only_uris(
+        self,
+        operations: ResolvedOperations,
+        ctx: RequestContext,
+        viking_fs: Any,
+    ) -> None:
+        add_only_operations = [
+            operation
+            for operation in operations.upsert_operations
+            if getattr(self._registry.get(operation.memory_type), "operation_mode", None)
+            == "add_only"
+        ]
+        if not add_only_operations:
+            return
+
+        batch_reservations: set[str] = set()
+        uri_remap: Dict[str, str] = {}
+        for operation in add_only_operations:
+            allocated_uris: List[str] = []
+            allocation_bases: Dict[str, str] = {}
+            allocation_error: Exception | None = None
+            for candidate_uri in operation.uris:
+                canonical_uri = operation.add_only_uri_bases.get(
+                    candidate_uri,
+                    candidate_uri,
+                )
+                ordinal = 1
+                while True:
+                    allocated_uri = numbered_uri(canonical_uri, ordinal)
+                    if allocated_uri in batch_reservations:
+                        ordinal += 1
+                        continue
+                    try:
+                        await viking_fs.stat(
+                            allocated_uri,
+                            ctx=ctx,
+                            skip_count=True,
+                        )
+                    except (NotFoundError, FileNotFoundError, AGFSNotFoundError):
+                        break
+                    except Exception as exc:
+                        allocation_error = exc
+                        break
+                    ordinal += 1
+                if allocation_error is not None:
+                    break
+                batch_reservations.add(allocated_uri)
+                allocated_uris.append(allocated_uri)
+                allocation_bases[allocated_uri] = canonical_uri
+
+            if allocation_error is not None:
+                operation._add_only_allocation_error = allocation_error
+                continue
+
+            previous_uris = list(operation.uris)
+            operation.uris = allocated_uris
+            operation.add_only_uri_bases = allocation_bases
+            operation.old_memory_file_content = None
+            for previous_uri, allocated_uri in zip(
+                previous_uris,
+                allocated_uris,
+                strict=True,
+            ):
+                if previous_uri != allocated_uri:
+                    uri_remap.setdefault(previous_uri, allocated_uri)
+
+        operations.resolved_links = remap_stored_links(
+            list(getattr(operations, "resolved_links", []) or []),
+            uri_remap,
+        )
+
     async def _apply_upsert(
-        self, resolved_op: ResolvedOperation, ctx: RequestContext, extract_context: Any = None
+        self,
+        resolved_op: ResolvedOperation,
+        ctx: RequestContext,
+        extract_context: Any = None,
     ):
         """Apply upsert operation from a flat model."""
         viking_fs = self._get_viking_fs()
@@ -981,18 +1199,29 @@ class MemoryUpdater:
             # Always read from disk first to get the latest content,
             # so consecutive patches to the same URI see each other's changes.
             old_content: Optional[MemoryFile] = None
-            try:
-                content = await viking_fs.read_file(uri, ctx=ctx)
-                if content:
-                    old_content = MemoryFileUtils.read(content, uri=uri)
-            except Exception:
-                # File doesn't exist yet, that's okay
-                pass
-            # Fall back to pre-fetched content if disk read failed
-            if old_content is None:
-                old_content = resolved_op.old_memory_file_content
+            if schema.operation_mode != "add_only":
+                try:
+                    content = await viking_fs.read_file(uri, ctx=ctx)
+                    if content:
+                        old_content = MemoryFileUtils.read(content, uri=uri)
+                except Exception:
+                    # File doesn't exist yet, that's okay
+                    pass
+                # Fall back to pre-fetched content if disk read failed
+                if old_content is None:
+                    old_content = resolved_op.old_memory_file_content
 
-            metadata: Dict[str, Any] = dict(resolved_op.memory_fields)
+            metadata = resolve_memory_fields(
+                dict(resolved_op.memory_fields),
+                schema=schema,
+                old_file=old_content,
+                uri=uri,
+            )
+            if (
+                schema.memory_type == "experiences"
+                and "trigger_code" not in resolved_op.memory_fields
+            ):
+                metadata.pop("trigger_code", None)
             source = getattr(resolved_op, "source", None)
             source_extraction_id = getattr(source, "extraction_id", None) if source else None
             if source_extraction_id:
@@ -1000,45 +1229,6 @@ class MemoryUpdater:
             source_trace_id = _operation_trace_id(resolved_op)
             if source_trace_id:
                 metadata["last_update_trace_id"] = source_trace_id
-            # Process fields defined in schema (apply merge_op)
-            for field in schema.fields:
-                if field.name in resolved_op.memory_fields:
-                    patch_value = resolved_op.memory_fields[field.name]
-                    # Get current value for this URI
-                    if old_content is None:
-                        current_value = None
-                    else:
-                        if field.name == "content":
-                            current_value = old_content.plain_content()
-                        else:
-                            current_value = old_content.extra_fields.get(field.name)
-                    # Use merge_op to process field value
-                    merge_op = MergeOpFactory.from_field(field)
-                    try:
-                        new_value = merge_op.apply(current_value, patch_value)
-                    except Exception as e:
-                        tracer.info(
-                            f"[memory_updater] Skipping field update after merge_op failure: uri={uri}, field={field.name}, error={e}"
-                        )
-                        if current_value is None:
-                            metadata.pop(field.name, None)
-                        else:
-                            metadata[field.name] = current_value
-                        continue
-                    metadata[field.name] = new_value
-
-            # Preserve system-managed metadata from the old file that is not
-            # covered by the schema. These fields are written by the system,
-            # never by the LLM, so they would be silently dropped on every
-            # Update without this copy.
-            if old_content and old_content.extra_fields:
-                schema_field_names = {f.name for f in schema.fields} | {"content", "memory_type"}
-                for key, val in old_content.extra_fields.items():
-                    if schema.memory_type == "experiences" and key == "trigger_code":
-                        continue
-                    if key not in schema_field_names and key not in metadata and val is not None:
-                        metadata[key] = val
-
             metadata["version"] = next_memory_version(old_content)
 
             # Handle links/backlinks fields: merge with existing

@@ -15,10 +15,26 @@ from openviking.server.identity import RequestContext
 from openviking.session.memory.agent_experience_context_provider import (
     AgentExperienceContextProvider,
 )
-from openviking.session.memory.dataclass import MemoryFile, StoredLink
+from openviking.session.memory.agent_trajectory_context_provider import (
+    extract_injected_experience_reminders,
+)
+from openviking.session.memory.dataclass import MemoryTypeSchema, StoredLink
 from openviking.session.memory.extract_loop import ExtractLoop, PostValidationRetryDecision
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
-from openviking.session.train.domain import ExperienceSet, RolloutAnalysis, Trajectory
+from openviking.session.memory.memory_type_registry import (
+    MemoryTypeRegistry,
+    create_default_registry,
+)
+from openviking.session.memory.memory_updater import render_operation_after_file
+from openviking.session.train.components import (
+    experience_replay_codecs as _experience_replay_codecs,  # noqa: F401
+)
+from openviking.session.train.domain import (
+    ExperienceSet,
+    RolloutAnalysis,
+    RubricEvaluation,
+    Trajectory,
+)
 from openviking.session.train.gates import (
     ExperienceRootCausePreventionGate,
     GateReport,
@@ -26,17 +42,21 @@ from openviking.session.train.gates import (
     build_gate_retry_instruction,
     candidate_retry_draft,
     default_policy_gate_runner,
+    make_gate_audit_attempt,
+    mark_experience_gradients_post_validated,
 )
 from openviking.session.train.gradients import PatchSemanticGradient
 from openviking.session.train.utils import first_uri, safe_int
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.telemetry import tracer
+from openviking.telemetry import replay, tracer
+from openviking.telemetry.replay.models import EncodedValue, ReplayCodecError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
 _EXPERIENCE_POST_VALIDATION_MAX_RETRIES = 3
+_REPLAY_VIKING_FS_PLACEHOLDER = object()
 
 
 @dataclass(slots=True)
@@ -50,6 +70,64 @@ class ExperienceGradientContext:
 
 
 @dataclass(slots=True)
+class ExperienceGradientEstimateRequest:
+    """Serializable input for one trajectory's experience-gradient replay entry."""
+
+    trajectory: Trajectory
+    evaluation: RubricEvaluation
+    experience_set: ExperienceSet
+    request_context: RequestContext
+    case_uri: str = ""
+    case_name: str = ""
+    task_signature: str = ""
+    loaded_experience_uris: list[str] = field(default_factory=list)
+    diagnostics: dict[str, Any] = field(default_factory=dict)
+
+
+def _encoded_request_field(payload: dict[str, Any], name: str) -> EncodedValue:
+    value = payload.get(name)
+    if not isinstance(value, dict):
+        raise ReplayCodecError(f"Experience replay request is missing encoded field {name!r}")
+    return value
+
+
+@replay.codec(
+    ExperienceGradientEstimateRequest,
+    name="openviking.train.experience_gradient_estimate_request",
+)
+class ExperienceGradientEstimateRequestReplayCodec:
+    @staticmethod
+    def encode(value: ExperienceGradientEstimateRequest, encode):
+        return {
+            "trajectory": encode(value.trajectory),
+            "evaluation": encode(value.evaluation),
+            "experience_set": encode(value.experience_set),
+            "request_context": encode(value.request_context),
+            "case_uri": encode(value.case_uri),
+            "case_name": encode(value.case_name),
+            "task_signature": encode(value.task_signature),
+            "loaded_experience_uris": encode(value.loaded_experience_uris),
+            "diagnostics": encode(value.diagnostics),
+        }
+
+    @staticmethod
+    def decode(payload, decode):
+        return ExperienceGradientEstimateRequest(
+            trajectory=decode(_encoded_request_field(payload, "trajectory")),
+            evaluation=decode(_encoded_request_field(payload, "evaluation")),
+            experience_set=decode(_encoded_request_field(payload, "experience_set")),
+            request_context=decode(_encoded_request_field(payload, "request_context")),
+            case_uri=decode(_encoded_request_field(payload, "case_uri")),
+            case_name=decode(_encoded_request_field(payload, "case_name")),
+            task_signature=decode(_encoded_request_field(payload, "task_signature")),
+            loaded_experience_uris=decode(
+                _encoded_request_field(payload, "loaded_experience_uris")
+            ),
+            diagnostics=decode(_encoded_request_field(payload, "diagnostics")),
+        )
+
+
+@dataclass(slots=True)
 class ExperienceGradientEstimator:
     """Estimate PatchSemanticGradients via experience ExtractLoop.
 
@@ -60,6 +138,18 @@ class ExperienceGradientEstimator:
 
     viking_fs: Any = None
     vlm: Any = None
+    registry: MemoryTypeRegistry | None = None
+
+    def _get_registry(self) -> MemoryTypeRegistry:
+        if self.registry is None:
+            self.registry = create_default_registry()
+        return self.registry
+
+    def _get_experience_schema(self) -> MemoryTypeSchema:
+        schema = self._get_registry().get("experiences")
+        if schema is None or not schema.enabled:
+            raise ValueError("Memory schema not found or disabled: experiences")
+        return schema
 
     @tracer(
         "train.gradient_estimator.experience.estimate",
@@ -76,109 +166,98 @@ class ExperienceGradientEstimator:
             raise ValueError("ExperienceGradientContext.request_context is required")
 
         if not analysis.trajectories:
-            analysis.metadata.setdefault("experience_dispositions", []).append(
-                {
-                    "trajectory_uri": "",
-                    "trajectory_name": "",
-                    "outcome": "unknown",
-                    "case_name": str(analysis.metadata.get("case_name") or ""),
-                    "evidence_source_summary": dict(
-                        analysis.metadata.get("evidence_source_summary") or {}
-                    ),
-                    "disposition": "no_valid_trajectory",
-                    "reason": (
-                        "trajectory extraction produced no valid persisted trajectory; "
-                        "the model returned no operation or every candidate failed "
-                        "structural/evidence validation"
-                    ),
-                    "experience_uris": [],
-                    "retry_events": list(
-                        analysis.metadata.get("trajectory_post_validation_retries") or []
-                    ),
-                }
-            )
             return []
 
-        extract_context = _context_with_analysis_messages(context, analysis)
-
-        async def estimate_one(trajectory: Trajectory) -> list[PatchSemanticGradient]:
+        requests: list[ExperienceGradientEstimateRequest] = []
+        for trajectory in analysis.trajectories:
             if not _should_update_experience_from_trajectory(trajectory):
-                _record_experience_disposition(
-                    analysis,
-                    trajectory,
-                    disposition="success_no_learning",
-                    reason="successful trajectories do not create failure-repair experiences",
+                continue
+            requests.append(
+                ExperienceGradientEstimateRequest(
+                    trajectory=trajectory,
+                    evaluation=analysis.evaluation,
+                    experience_set=experience_set,
+                    request_context=context.request_context,
+                    case_uri=_trajectory_or_analysis_metadata(trajectory, analysis, "case_uri"),
+                    case_name=_trajectory_or_analysis_metadata(trajectory, analysis, "case_name"),
+                    task_signature=_trajectory_or_analysis_metadata(
+                        trajectory, analysis, "task_signature"
+                    ),
+                    loaded_experience_uris=_loaded_experience_uris(analysis),
                 )
-                return []
-            extract_context.metadata["current_analysis"] = analysis
-            extract_context.metadata["current_experience_set"] = experience_set
+            )
+
+        async def estimate_one(
+            request: ExperienceGradientEstimateRequest,
+        ) -> list[PatchSemanticGradient]:
             try:
-                operations = await self._run_extract_loop(trajectory, extract_context)
+                return await self.estimate_trajectory_gradients(request)
             except Exception as exc:
                 logger.exception("Experience gradient estimation failed")
-                _record_experience_disposition(
-                    analysis,
-                    trajectory,
-                    disposition="extract_parse_failed",
-                    reason=f"{type(exc).__name__}: {exc}",
-                )
+                request.diagnostics["estimate_error"] = f"{type(exc).__name__}: {exc}"
                 if context.strict_extract_errors:
                     raise
                 return []
+
+        gradient_batches = await asyncio.gather(*(estimate_one(request) for request in requests))
+        for request in requests:
+            _merge_diagnostics(context.metadata, request.diagnostics)
+            _merge_diagnostics(analysis.metadata, request.diagnostics)
+        return [gradient for batch in gradient_batches for gradient in batch]
+
+    @replay.entry("memory.experience.estimate_gradients")
+    async def estimate_trajectory_gradients(
+        self,
+        request: ExperienceGradientEstimateRequest,
+    ) -> list[PatchSemanticGradient]:
+        analysis_metadata = {
+            key: value
+            for key, value in {
+                "case_uri": request.case_uri,
+                "case_name": request.case_name,
+                "task_signature": request.task_signature,
+            }.items()
+            if value
+        }
+        analysis_metadata["loaded_experience_uris"] = list(request.loaded_experience_uris)
+        analysis = RolloutAnalysis(
+            evaluation=request.evaluation,
+            trajectories=[request.trajectory],
+            metadata=analysis_metadata,
+        )
+        context = ExperienceGradientContext(
+            request_context=request.request_context,
+            messages=[],
+            metadata={
+                "current_analysis": analysis,
+                "current_experience_set": request.experience_set,
+            },
+        )
+        try:
+            operations = await self._run_extract_loop(request.trajectory, context)
             if operations is None:
-                _record_experience_disposition(
-                    analysis,
-                    trajectory,
-                    disposition="no_change_proposed",
-                    reason=_no_change_reason(trajectory),
-                )
                 return []
             gradients = _operations_to_gradients(
                 operations=operations,
-                trajectory=trajectory,
+                trajectory=request.trajectory,
                 analysis=analysis,
-                experience_set=experience_set,
+                experience_set=request.experience_set,
+                schema=self._get_experience_schema(),
             )
-            gated, report = await _evaluate_experience_gradients(
-                gradients=gradients,
-                analysis=analysis,
-                experience_set=experience_set,
+            if gradients and not isinstance(context.metadata.get("final_gate_report"), dict):
+                raise RuntimeError(
+                    "experience extraction completed without post-validation gate execution"
+                )
+            mark_experience_gradients_post_validated(gradients)
+            return gradients
+        finally:
+            request.diagnostics.update(
+                {
+                    key: value
+                    for key, value in context.metadata.items()
+                    if key not in {"current_analysis", "current_experience_set"}
+                }
             )
-            _record_gate_report(report, analysis=analysis, context=context)
-            if gated:
-                _record_experience_disposition(
-                    analysis,
-                    trajectory,
-                    disposition="gradient_proposed",
-                    reason=(
-                        "at least one experience candidate passed extraction gates and awaits "
-                        "merge/apply"
-                    ),
-                    experience_uris=[gradient.target_uri for gradient in gated],
-                    gate_report=report.to_dict(),
-                )
-            elif report.rejected_count:
-                _record_experience_disposition(
-                    analysis,
-                    trajectory,
-                    disposition="gradient_gate_rejected",
-                    reason="all experience candidates were rejected by the post-gradient gate",
-                    gate_report=report.to_dict(),
-                )
-            else:
-                _record_experience_disposition(
-                    analysis,
-                    trajectory,
-                    disposition="no_change_proposed",
-                    reason=_no_change_reason(trajectory),
-                    gate_report=report.to_dict(),
-                )
-            return gated
-
-        gradient_batches = await asyncio.gather(
-            *(estimate_one(trajectory) for trajectory in analysis.trajectories)
-        )
-        return [gradient for batch in gradient_batches for gradient in batch]
 
     @tracer(
         "train.gradient_estimator.experience.extract_loop",
@@ -198,7 +277,6 @@ class ExperienceGradientEstimator:
 
         analysis_obj = _analysis_from_context_metadata_optional(context)
         provider_kwargs = {
-            "messages": context.messages,
             "trajectory_summary": trajectory.content,
             "trajectory_uri": trajectory.uri,
         }
@@ -206,7 +284,11 @@ class ExperienceGradientEstimator:
             value = _trajectory_or_analysis_metadata(trajectory, analysis_obj, key)
             if value:
                 provider_kwargs[key] = value
+        provider_kwargs["loaded_experience_uris"] = list(
+            dict(getattr(analysis_obj, "metadata", {}) or {}).get("loaded_experience_uris", [])
+        )
         provider = AgentExperienceContextProvider(**provider_kwargs)
+        provider._registry = self._get_registry()
         if hasattr(provider, "get_extract_context"):
             extract_context = provider.get_extract_context()
         else:
@@ -240,6 +322,7 @@ class ExperienceGradientEstimator:
                 trajectory=trajectory,
                 analysis=analysis_obj,
                 experience_set=experience_set,
+                schema=self._get_experience_schema(),
             )
             gated, report = await _evaluate_experience_gradients(
                 gradients=gradients,
@@ -257,11 +340,28 @@ class ExperienceGradientEstimator:
                 prior_reports=gate_retry_history,
             )
             if not instruction:
+                result = (
+                    "passed"
+                    if not report.rejected_count
+                    else "partial_accepted"
+                    if retained_valid_upserts
+                    else "discarded"
+                )
+                context.metadata.setdefault("gate_attempts", []).append(
+                    make_gate_audit_attempt(
+                        report=report,
+                        candidates=gradients,
+                        allowed_candidates=gated,
+                        index=retry_count,
+                        result=result,
+                    )
+                )
                 if report.rejected_count or (retry_count and retained_valid_upserts):
                     _restore_gated_experience_operations(
                         operations,
                         retained_upserts=retained_valid_upserts,
                     )
+                _record_final_gate_report(report, analysis=analysis_obj, context=context)
                 return None
             report_dict = report.to_dict()
             gate_retry_history.append(report)
@@ -270,6 +370,22 @@ class ExperienceGradientEstimator:
                 "discarded_after_max_retries"
                 if retry_count >= _EXPERIENCE_POST_VALIDATION_MAX_RETRIES
                 else "retry_requested"
+            )
+            attempt_result = (
+                "partial_accepted"
+                if retry_count >= _EXPERIENCE_POST_VALIDATION_MAX_RETRIES and retained_valid_upserts
+                else "discarded"
+                if retry_count >= _EXPERIENCE_POST_VALIDATION_MAX_RETRIES
+                else "retry_requested"
+            )
+            context.metadata.setdefault("gate_attempts", []).append(
+                make_gate_audit_attempt(
+                    report=report,
+                    candidates=gradients,
+                    allowed_candidates=gated,
+                    index=retry_count,
+                    result=attempt_result,
+                )
             )
             event = _post_validation_retry_event(
                 stage="post_gradient",
@@ -290,7 +406,9 @@ class ExperienceGradientEstimator:
                     )
                     event["final_outcome"] = "accepted_valid_subset_after_max_retries"
                     event["retained_count"] = len(retained_valid_upserts)
+                    _record_final_gate_report(report, analysis=analysis_obj, context=context)
                     return None
+                _record_final_gate_report(report, analysis=analysis_obj, context=context)
                 return PostValidationRetryDecision(discard=True)
             return PostValidationRetryDecision(
                 retry=True,
@@ -315,6 +433,11 @@ class ExperienceGradientEstimator:
         operations, _ = await orchestrator.run()
         _sync_prefetched_comparison_trajectories(provider, trajectory)
         return operations
+
+
+@replay.component(ExperienceGradientEstimator)
+def _current_experience_gradient_estimator() -> ExperienceGradientEstimator:
+    return ExperienceGradientEstimator(viking_fs=_REPLAY_VIKING_FS_PLACEHOLDER)
 
 
 def _sync_prefetched_comparison_trajectories(
@@ -411,6 +534,76 @@ def _trajectory_or_analysis_metadata(
     return ""
 
 
+def _loaded_experience_uris(analysis: RolloutAnalysis) -> list[str]:
+    messages = dict(getattr(analysis, "metadata", {}) or {}).get("rollout_messages") or []
+    reminders = extract_injected_experience_reminders(messages)
+    loaded_uris = [
+        str(reminder.get("experience_uri") or "")
+        for reminder in reminders
+        if reminder.get("experience_uri")
+    ]
+    for message in messages:
+        parts = (
+            message.get("parts", []) if isinstance(message, dict) else getattr(message, "parts", [])
+        )
+        for part in parts or []:
+            tool_name = (
+                part.get("tool_name", "")
+                if isinstance(part, dict)
+                else getattr(part, "tool_name", "")
+            )
+            tool_status = (
+                part.get("tool_status", "")
+                if isinstance(part, dict)
+                else getattr(part, "tool_status", "")
+            )
+            tool_input = (
+                part.get("tool_input", {})
+                if isinstance(part, dict)
+                else getattr(part, "tool_input", {})
+            )
+            if tool_status != "completed":
+                continue
+            if tool_name == "search_experience":
+                tool_output = (
+                    part.get("tool_output", "")
+                    if isinstance(part, dict)
+                    else getattr(part, "tool_output", "")
+                )
+                loaded_uris.extend(_exact_case_search_loaded_experience_uris(tool_output))
+                continue
+            if tool_name != "read_experience":
+                continue
+            tool_input = tool_input or {}
+            if not isinstance(tool_input, dict):
+                continue
+            uri = str(tool_input.get("experience_uri") or "")
+            if uri:
+                loaded_uris.append(uri)
+    return list(dict.fromkeys(loaded_uris))
+
+
+def _exact_case_search_loaded_experience_uris(tool_output: Any) -> list[str]:
+    try:
+        payload = json.loads(tool_output) if isinstance(tool_output, str) else tool_output
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, dict) or payload.get("match_type") != "exact_case":
+        return []
+
+    uris: list[str] = []
+    for candidate in payload.get("candidates") or []:
+        if not isinstance(candidate, dict):
+            continue
+        for experience in candidate.get("experiences") or []:
+            if not isinstance(experience, dict) or not experience.get("content"):
+                continue
+            uri = str(experience.get("uri") or "").strip()
+            if uri:
+                uris.append(uri)
+    return list(dict.fromkeys(uris))
+
+
 def _experience_extract_gate_runner(vlm: Any) -> GateRunner:
     return GateRunner(
         gates=[
@@ -472,6 +665,16 @@ def _record_gate_report(
     analysis.metadata.setdefault("gate_reports", []).append(report.to_dict())
 
 
+def _record_final_gate_report(
+    report: GateReport,
+    *,
+    analysis: RolloutAnalysis,
+    context: ExperienceGradientContext,
+) -> None:
+    context.metadata["final_gate_report"] = report.to_dict()
+    _record_gate_report(report, analysis=analysis, context=context)
+
+
 def _analysis_from_context_metadata(context: ExperienceGradientContext) -> RolloutAnalysis:
     analysis = context.metadata.get("current_analysis")
     if not isinstance(analysis, RolloutAnalysis):
@@ -492,44 +695,14 @@ def _should_update_experience_from_trajectory(trajectory: Trajectory) -> bool:
     return str(getattr(trajectory, "outcome", "") or "").strip().lower() != "success"
 
 
-def _record_experience_disposition(
-    analysis: RolloutAnalysis,
-    trajectory: Trajectory,
-    *,
-    disposition: str,
-    reason: str,
-    experience_uris: list[str] | None = None,
-    gate_report: dict[str, Any] | None = None,
-) -> None:
-    records = analysis.metadata.setdefault("experience_dispositions", [])
-    trajectory_uri = str(trajectory.uri or "")
-    record = {
-        "trajectory_uri": trajectory_uri,
-        "trajectory_name": str(trajectory.name or ""),
-        "outcome": str(trajectory.outcome or "unknown"),
-        "case_name": str(
-            trajectory.metadata.get("case_name") or analysis.metadata.get("case_name") or ""
-        ),
-        "evidence_source_summary": dict(analysis.metadata.get("evidence_source_summary") or {}),
-        "disposition": disposition,
-        "reason": reason,
-        "experience_uris": list(dict.fromkeys(experience_uris or [])),
-        "retry_events": list(trajectory.metadata.get("post_validation_retries") or []),
-    }
-    if gate_report:
-        record["gate_report"] = gate_report
-    for index, existing in enumerate(records):
-        if isinstance(existing, dict) and existing.get("trajectory_uri") == trajectory_uri:
-            records[index] = record
-            return
-    records.append(record)
-
-
-def _no_change_reason(trajectory: Trajectory) -> str:
-    return (
-        "extractor proposed no experience; the failure was successful, already covered, "
-        "case-specific, unsupported, not preventable, or lacked sufficient evidence"
-    )
+def _merge_diagnostics(target: dict[str, Any], diagnostics: dict[str, Any]) -> None:
+    for key, value in diagnostics.items():
+        if isinstance(value, list):
+            target.setdefault(key, []).extend(value)
+        elif isinstance(value, dict):
+            target.setdefault(key, {}).update(value)
+        else:
+            target[key] = value
 
 
 def _context_with_analysis_messages(
@@ -547,36 +720,32 @@ def _context_with_analysis_messages(
     )
 
 
-def _experience_constraint_text(fields: dict[str, Any]) -> str:
-    return str(fields.get("constraint") or fields.get("content") or "")
-
-
 def _operations_to_gradients(
     *,
     operations: Any,
     trajectory: Trajectory,
     analysis: RolloutAnalysis,
     experience_set: ExperienceSet,
+    schema: MemoryTypeSchema,
 ) -> list[PatchSemanticGradient]:
     gradients: list[PatchSemanticGradient] = []
+    content_field_names = schema.content_field_names()
     for op in getattr(operations, "upsert_operations", []) or []:
         if getattr(op, "memory_type", None) != "experiences":
             continue
         fields = dict(getattr(op, "memory_fields", {}) or {})
-        after_content = _experience_constraint_text(fields)
-        if not after_content.strip():
+        after_file = render_operation_after_file(op, schema=schema)
+        if not any(
+            str(
+                after_file.content if name == "content" else after_file.extra_fields.get(name) or ""
+            ).strip()
+            for name in content_field_names
+        ):
             continue
 
         old_file = getattr(op, "old_memory_file_content", None)
-        target_name = str(fields.get("experience_name") or _fallback_experience_name(op))
         target_uri = first_uri(getattr(op, "uris", []) or [])
         base_version = _base_version(old_file, target_uri, experience_set)
-        after_file = _operation_after_file(
-            fields=fields,
-            target_name=target_name,
-            target_uri=target_uri,
-            old_file=old_file,
-        )
 
         gradients.append(
             PatchSemanticGradient(
@@ -697,31 +866,6 @@ def _trajectory_training_category(
     if trajectory.retrieval_anchor:
         return str(trajectory.retrieval_anchor)
     return str(trajectory.name)
-
-
-def _operation_after_file(
-    *,
-    fields: dict[str, Any],
-    target_name: str,
-    target_uri: str | None,
-    old_file: MemoryFile | None,
-) -> MemoryFile:
-    extra_fields = dict(getattr(old_file, "extra_fields", {}) or {})
-    for key, value in fields.items():
-        if key != "content":
-            extra_fields[key] = value
-    if "constraint" not in extra_fields and fields.get("content"):
-        extra_fields["constraint"] = str(fields.get("content") or "")
-    extra_fields["memory_type"] = "experiences"
-    extra_fields["experience_name"] = target_name
-    return MemoryFile(
-        uri=target_uri,
-        content=_experience_constraint_text(fields),
-        links=list(getattr(old_file, "links", []) or []),
-        backlinks=list(getattr(old_file, "backlinks", []) or []),
-        memory_type="experiences",
-        extra_fields=extra_fields,
-    )
 
 
 def _fallback_experience_name(op: Any) -> str:

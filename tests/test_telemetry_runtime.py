@@ -8,6 +8,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from opentelemetry.sdk.trace.export import SpanExportResult
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult, embed_compat
 from openviking.models.vlm.base import VLMBase
@@ -300,6 +301,125 @@ def test_init_tracer_forwards_headers_to_grpc_exporter(monkeypatch):
     assert captured["endpoint"] == "apmplus-cn-beijing.ivolces.com:4317"
     assert captured["insecure"] is True
     assert captured["headers"] == {"x-byteapm-appkey": "trace-appkey"}
+
+
+def test_init_tracer_exports_replay_spans_individually(monkeypatch):
+    captured = {}
+
+    class FakeExporter:
+        def __init__(self, **_kwargs):
+            self.batches = []
+            captured["delegate"] = self
+
+        def export(self, spans):
+            self.batches.append(list(spans))
+            return SpanExportResult.SUCCESS
+
+        def shutdown(self):
+            return None
+
+        def force_flush(self, timeout_millis=30000):
+            return True
+
+    def capture_processor(exporter, **_kwargs):
+        captured["exporter"] = exporter
+        return exporter
+
+    monkeypatch.setattr(tracer_module, "OTLPGrpcSpanExporter", FakeExporter)
+    monkeypatch.setattr(tracer_module, "BatchSpanProcessor", capture_processor)
+
+    class FakeTracerProvider:
+        def __init__(self, resource=None):
+            self.resource = resource
+
+        def add_span_processor(self, _processor):
+            return None
+
+    monkeypatch.setattr(tracer_module, "TracerProvider", FakeTracerProvider)
+    monkeypatch.setattr(tracer_module, "Resource", SimpleNamespace(create=lambda attrs: attrs))
+    monkeypatch.setattr(
+        tracer_module,
+        "otel_trace",
+        SimpleNamespace(
+            set_tracer_provider=lambda _provider: None,
+            get_tracer=lambda service_name: f"tracer:{service_name}",
+        ),
+    )
+    monkeypatch.setattr(tracer_module, "TraceContextTextMapPropagator", lambda: "propagator")
+    monkeypatch.setattr(tracer_module, "_setup_logging", lambda: None)
+    monkeypatch.setattr(tracer_module, "_init_asyncio_instrumentation", lambda: None)
+
+    tracer_module.init_tracer(
+        endpoint="apmplus-cn-beijing.ivolces.com:4317",
+        service_name="memorydb",
+        protocol="grpc",
+        insecure=True,
+        enabled=True,
+    )
+
+    regular_one = SimpleNamespace(attributes={})
+    replay_entry = SimpleNamespace(attributes={"replay.kind": "entry"})
+    replay_mock = SimpleNamespace(attributes={"replay.kind": "mock"})
+    regular_two = SimpleNamespace(attributes={"span.kind": "internal"})
+    exporter = captured["exporter"]
+
+    result = exporter.export([regular_one, replay_entry, replay_mock, regular_two])
+
+    assert result is SpanExportResult.SUCCESS
+    assert captured["delegate"].batches == [
+        [replay_entry],
+        [replay_mock],
+        [regular_one, regular_two],
+    ]
+
+
+def test_replay_exporter_continues_after_one_sub_batch_raises():
+    replay_one = SimpleNamespace(attributes={"replay.kind": "entry"})
+    replay_two = SimpleNamespace(attributes={"replay.kind": "mock"})
+    regular = SimpleNamespace(attributes={})
+
+    class FlakyExporter:
+        def __init__(self):
+            self.batches = []
+
+        def export(self, spans):
+            batch = list(spans)
+            self.batches.append(batch)
+            if batch == [replay_one]:
+                raise RuntimeError("first replay export failed")
+            return SpanExportResult.SUCCESS
+
+    delegate = FlakyExporter()
+    exporter = tracer_module._ReplayIsolatingSpanExporter(delegate)
+
+    result = exporter.export([regular, replay_one, replay_two])
+
+    assert result is SpanExportResult.FAILURE
+    assert delegate.batches == [[replay_one], [replay_two], [regular]]
+
+
+def test_replay_exporter_forwards_shutdown_timeout_when_supported():
+    class TimeoutExporter:
+        def __init__(self):
+            self.timeout_millis = None
+
+        def shutdown(self, timeout_millis=30000):
+            self.timeout_millis = timeout_millis
+
+    class NoTimeoutExporter:
+        def __init__(self):
+            self.shutdown_called = False
+
+        def shutdown(self):
+            self.shutdown_called = True
+
+    timeout_delegate = TimeoutExporter()
+    tracer_module._ReplayIsolatingSpanExporter(timeout_delegate).shutdown(timeout_millis=1234)
+    no_timeout_delegate = NoTimeoutExporter()
+    tracer_module._ReplayIsolatingSpanExporter(no_timeout_delegate).shutdown(timeout_millis=1234)
+
+    assert timeout_delegate.timeout_millis == 1234
+    assert no_timeout_delegate.shutdown_called is True
 
 
 def test_init_tracer_forwards_headers_to_http_exporter(monkeypatch):

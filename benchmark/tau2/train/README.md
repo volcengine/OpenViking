@@ -71,6 +71,17 @@ bash benchmark/tau2/train/restart_vikingbot_train_eval.sh \
 rollouts for epoch `0`, before memory training has changed the policy. Later
 training epochs and eval rollouts are always executed normally.
 
+Pass `--auto-commit` to commit pending changes before services start. The
+launcher then appends the redacted launch command and concise baseline,
+per-epoch train/eval, final, and run-result summaries to the local Git note for
+that commit. Notes stay local and do not change the commit SHA or push anything:
+
+```bash
+bash benchmark/tau2/train/restart_vikingbot_train_eval.sh --auto-commit \
+  --epochs 2 --train-index 14 --eval-index 14
+git notes show HEAD
+```
+
 ## 2. Evaluation modes from the restart launcher
 
 The restart launcher always runs the full VikingBot path. Evaluation behavior is

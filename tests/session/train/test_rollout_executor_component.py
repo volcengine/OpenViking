@@ -292,18 +292,44 @@ def test_tau2_rollout_messages_omit_empty_final_after_done():
     assert "tau2-reward" not in ids
 
 
-def test_tau2_reward_info_is_json_safe_in_rollout_messages_and_evaluation():
+def test_tau2_reward_info_is_normalized_into_generic_evaluation_criteria():
     import json
-
-    from tau2.data_model.simulation import RewardInfo, RewardType
 
     from benchmark.tau2.train.rollout_executor import _build_rollout_messages, _tau2_evaluation
 
-    reward_info = RewardInfo(
-        reward=1.0,
-        reward_basis=[RewardType.DB],
-        reward_breakdown={RewardType.DB: 1.0},
-    )
+    reward_info = {
+        "reward": 0.0,
+        "reward_basis": ["DB", "COMMUNICATE"],
+        "reward_breakdown": {"DB": 1.0, "COMMUNICATE": 0.0},
+        "db_check": {"db_match": True, "db_reward": 1.0},
+        "action_checks": [
+            {
+                "action": {
+                    "name": "update_reservation_flights",
+                    "arguments": {"reservation_id": "XEHM4B", "cabin": "business"},
+                },
+                "action_match": True,
+                "action_reward": 1.0,
+                "tool_type": "write",
+            },
+            {
+                "action": {
+                    "name": "send_certificate",
+                    "arguments": {"reservation_id": "XEHM4B"},
+                },
+                "action_match": False,
+                "action_reward": 0.0,
+                "tool_type": "write",
+            },
+        ],
+        "communicate_checks": [
+            {
+                "info": "1628",
+                "met": False,
+                "justification": "Required total was not communicated.",
+            }
+        ],
+    }
 
     rollout_messages = _build_rollout_messages(
         system_prompt="policy",
@@ -311,19 +337,57 @@ def test_tau2_reward_info_is_json_safe_in_rollout_messages_and_evaluation():
         tools_used=[],
         final_content="done",
         evaluation_result=reward_info,
-        reward=1.0,
+        reward=0.0,
         runtime_messages=[
             {"role": "system", "content": "policy"},
             {"role": "user", "content": "user request"},
             {"role": "assistant", "content": "done"},
         ],
     )
-    evaluation = _tau2_evaluation(reward=1.0, evaluation_result=reward_info)
+    evaluation = _tau2_evaluation(reward=0.0, evaluation_result=reward_info)
 
     assert not any(message.id == "tau2-reward" for message in rollout_messages)
     assert not any("evaluation report:" in message.content for message in rollout_messages)
-    assert evaluation.feedback == []
-    assert '"reward_basis": ["DB"]' in json.dumps(evaluation.metadata, sort_keys=True)
+    assert [result.criterion_name for result in evaluation.criterion_results] == [
+        "task_outcome",
+        "environment_state",
+        "required_actions",
+        "required_communication",
+    ]
+    assert evaluation.passed is False
+    assert evaluation.score == 0.0
+    assert evaluation.metadata == {"source": "tau2", "reward": 0.0}
+    assert "evaluation_result" not in json.dumps(evaluation.metadata, sort_keys=True)
+
+    by_name = {result.criterion_name: result for result in evaluation.criterion_results}
+    assert by_name["environment_state"].passed is True
+    assert by_name["environment_state"].score == 1.0
+    assert by_name["required_actions"].passed is False
+    assert by_name["required_actions"].score == 0.5
+    assert any(
+        "update_reservation_flights" in evidence and "preserve" in evidence
+        for evidence in by_name["required_actions"].evidence
+    )
+    assert any("send_certificate" in feedback for feedback in by_name["required_actions"].feedback)
+    assert by_name["required_communication"].passed is False
+    assert by_name["required_communication"].score == 0.0
+    assert by_name["required_communication"].feedback == ["Required total was not communicated."]
+
+
+def test_tau2_evaluation_ignores_malformed_optional_components():
+    from benchmark.tau2.train.rollout_executor import _tau2_evaluation
+
+    evaluation = _tau2_evaluation(
+        reward="invalid",
+        evaluation_result={
+            "db_check": "invalid",
+            "action_checks": [None, {"action": "invalid"}],
+            "communicate_checks": [{"info": "missing met"}],
+        },
+    )
+
+    assert evaluation.score == 0.0
+    assert [result.criterion_name for result in evaluation.criterion_results] == ["task_outcome"]
 
 
 def test_tau2_litellm_generate_rate_limit_retry_patch(monkeypatch):
@@ -411,6 +475,139 @@ def test_tau2_native_env_reward_handles_required_id_and_tool_call_ids(monkeypatc
 
     assert reward == 1.0
     assert evaluation.reward == 1.0
+
+
+def test_tau2_gym_env_passes_seed_to_user_llm_before_reset(monkeypatch):
+    import benchmark.tau2.common.tau2_env.tau2_environment as tau2_environment
+
+    calls = {}
+
+    class FakeAgentGymEnv:
+        def __init__(self, **kwargs):
+            calls["init"] = kwargs
+
+        def reset(self, *, seed=None):
+            calls["reset_seed"] = seed
+            task = SimpleNamespace(evaluation_criteria=[], user_scenario="scenario")
+            return "user: hello", {
+                "task": task,
+                "simulation_run": None,
+                "policy": "policy",
+                "tools": [],
+            }
+
+    monkeypatch.setattr(tau2_environment, "AgentGymEnv", FakeAgentGymEnv)
+    monkeypatch.setattr(tau2_environment, "_install_tau2_litellm_rate_limit_retry", lambda: None)
+    monkeypatch.setattr(
+        tau2_environment,
+        "_install_tau2_litellm_unknown_cost_suppression",
+        lambda: None,
+    )
+
+    env = tau2_environment._GymTau2BenchEnv("airline", "1")
+    env.reset(seed=1234)
+
+    assert calls["init"]["user_llm_args"] == {"temperature": 0.0, "seed": 1234}
+    assert calls["reset_seed"] == 1234
+
+
+def test_tau2_fixed_first_user_simulator_uses_fixture_only_for_first_turn(monkeypatch):
+    from tau2.data_model.message import AssistantMessage, UserMessage
+    from tau2.user.user_simulator import UserSimulator
+
+    from benchmark.tau2.common.fixed_first_user import FixedFirstUserSimulator
+
+    generated = []
+
+    def fake_generate(self, message, state):
+        del self, message, state
+        generated.append(True)
+        return UserMessage(role="user", content="generated later")
+
+    monkeypatch.setattr(UserSimulator, "_generate_next_message", fake_generate)
+    simulator = FixedFirstUserSimulator(
+        fixed_first_message="cached first",
+        llm="openai/test-user",
+        instructions="scenario",
+    )
+    state = simulator.get_init_state()
+
+    first = simulator.generate_next_message(
+        AssistantMessage(role="assistant", content="start"), state
+    )[0]
+    second = simulator.generate_next_message(
+        AssistantMessage(role="assistant", content="continue"), state
+    )[0]
+
+    assert first.content == "cached first"
+    assert second.content == "generated later"
+    assert generated == [True]
+
+
+def test_tau2_first_user_cache_records_then_replays(tmp_path):
+    from benchmark.tau2.train.first_user_cache import FirstUserMessageCache
+
+    cache = FirstUserMessageCache(tmp_path, enabled=True)
+    identity = {
+        "task_signature": "tau2:airline:train:7:trial:0",
+        "seed": 305,
+        "user_model": "openai/test-user",
+        "temperature": 0.0,
+        "scenario_sha256": "scenario-hash",
+    }
+    fixed_messages = []
+
+    def reset_user(fixed_first_message):
+        fixed_messages.append(fixed_first_message)
+        return fixed_first_message or "generated first"
+
+    first = cache.run(identity, reset_user)
+    second = cache.run(identity, reset_user)
+
+    assert first.hit is False
+    assert second.hit is True
+    assert first.message == second.message == "generated first"
+    assert fixed_messages == [None, "generated first"]
+    assert first.path == second.path
+    assert first.path.is_file()
+
+
+def test_tau2_first_user_cache_off_never_reads_or_writes(tmp_path):
+    from benchmark.tau2.train.first_user_cache import FirstUserMessageCache
+
+    cache = FirstUserMessageCache(tmp_path, enabled=False)
+    generated = iter(["first", "second"])
+
+    first = cache.run({"task_signature": "case"}, lambda _fixed: next(generated))
+    second = cache.run({"task_signature": "case"}, lambda _fixed: next(generated))
+
+    assert first.message == "first"
+    assert second.message == "second"
+    assert first.hit is second.hit is False
+    assert list(tmp_path.rglob("*.json")) == []
+
+
+def test_tau2_first_user_cache_serializes_same_case_miss(tmp_path):
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    from benchmark.tau2.train.first_user_cache import FirstUserMessageCache
+
+    cache = FirstUserMessageCache(tmp_path, enabled=True)
+    identity = {"task_signature": "tau2:airline:train:7:trial:0"}
+    fixed_messages = []
+
+    def reset_user(fixed_first_message):
+        fixed_messages.append(fixed_first_message)
+        if fixed_first_message is None:
+            time.sleep(0.05)
+        return fixed_first_message or "generated once"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _index: cache.run(identity, reset_user), range(2)))
+
+    assert sorted(result.hit for result in results) == [False, True]
+    assert fixed_messages == [None, "generated once"]
 
 
 def test_tau2_native_env_records_communication_as_assistant_text(monkeypatch):
@@ -512,6 +709,47 @@ def test_tau2_configure_tools_removes_only_openviking_tools():
     assert normalize_tau2_experience_loader_mode("direct_experience") == "direct_experience"
 
 
+def test_tau2_configure_tools_binds_case_lookup_to_search_experience(monkeypatch):
+    import benchmark.tau2.train.rollout_executor_vikingbot as module
+
+    observed = {}
+
+    class FakeTool:
+        name = "search_experience"
+
+    def fake_make_search_experience_tool(case_lookup=None):
+        observed["case_lookup"] = case_lookup
+        return FakeTool()
+
+    monkeypatch.setattr(module, "_make_search_experience_tool", fake_make_search_experience_tool)
+
+    class FakeTools:
+        tool_names = []
+
+        def unregister(self, name):
+            raise AssertionError(f"unexpected unregister: {name}")
+
+        def register(self, tool):
+            return None
+
+    class FakeAgent:
+        tools = FakeTools()
+
+    class FakeProvider:
+        def list_openai_tools(self):
+            return []
+
+    case_lookup = _tau2_exact_case_lookup()
+    module._configure_tools(
+        FakeAgent(),
+        FakeProvider(),
+        keep_default_tools=True,
+        case_lookup=case_lookup,
+    )
+
+    assert observed["case_lookup"] == case_lookup
+
+
 @pytest.mark.asyncio
 async def test_tau2_search_experience_summary_only_exposes_case_name_and_experience_snippets():
     from benchmark.tau2.train.rollout_executor_vikingbot import _experience_search_summary
@@ -571,7 +809,7 @@ def test_tau2_search_experience_response_hides_internal_search_metadata():
 
     payload = json.loads(
         _format_search_experience_response(
-            query="cancel flight reservations",
+            situation="The user wants to cancel all upcoming reservations.",
             candidates=[
                 {
                     "rank": 1,
@@ -588,7 +826,8 @@ def test_tau2_search_experience_response_hides_internal_search_metadata():
     )
 
     assert payload == {
-        "query": "cancel flight reservations",
+        "match_type": "semantic",
+        "situation": "The user wants to cancel all upcoming reservations.",
         "candidates": [
             {
                 "rank": 1,
@@ -604,6 +843,493 @@ def test_tau2_search_experience_response_hides_internal_search_metadata():
     }
     assert "target_uri" not in payload
     assert "count" not in payload
+    assert "query" not in payload
+
+
+def test_tau2_case_memory_context_includes_exact_case_auto_loaded_experiences():
+    import json
+
+    from benchmark.tau2.train.rollout_executor_vikingbot import (
+        _case_memory_context_from_tools,
+    )
+
+    exp_uri = "viking://user/u/memories/experiences/keep_scope.md"
+    result = json.dumps(
+        {
+            "match_type": "exact_case",
+            "candidates": [
+                {
+                    "experiences": [
+                        {"uri": exp_uri, "content": "# Keep scope\n\nUse the original scope."}
+                    ]
+                }
+            ],
+        }
+    )
+
+    context = _case_memory_context_from_tools(
+        [
+            {
+                "tool_name": "search_experience",
+                "args": json.dumps({"task_signature": "tau2:airline:train:39"}),
+                "result": result,
+            }
+        ]
+    )
+
+    assert exp_uri in context
+    assert "# Keep scope" in context
+
+
+@pytest.mark.asyncio
+async def test_tau2_search_experience_uses_declarative_situation(monkeypatch):
+    import json
+
+    import vikingbot.openviking_mount.ov_server as ov_server
+
+    from benchmark.tau2.train.rollout_executor_vikingbot import _make_search_experience_tool
+
+    observed = {}
+
+    class FakeClient:
+        @classmethod
+        async def create(cls):
+            return cls()
+
+        def _memory_target_uri(self, uri):
+            assert uri is None
+            return "viking://user/u/memories"
+
+        async def search(self, situation, *, target_uri, limit):
+            observed.update(
+                situation=situation,
+                target_uri=target_uri,
+                limit=limit,
+            )
+            return {"memories": []}
+
+        async def close(self):
+            observed["closed"] = True
+
+    monkeypatch.setattr(ov_server, "VikingClient", FakeClient)
+    tool = _make_search_experience_tool()
+
+    assert tool.parameters["required"] == ["situation"]
+    assert "situation" in tool.parameters["properties"]
+    assert "task_signature" in tool.parameters["properties"]
+    assert "query" not in tool.parameters["properties"]
+    description = tool.parameters["properties"]["situation"]["description"]
+    assert "current conversation" in description
+    assert "keyword" in description
+
+    payload = json.loads(
+        await tool.execute(
+            None,
+            situation="The user wants to cancel all upcoming reservations.",
+            limit=3,
+        )
+    )
+
+    assert observed == {
+        "situation": "The user wants to cancel all upcoming reservations.",
+        "target_uri": "viking://user/u/memories/cases",
+        "limit": 3,
+        "closed": True,
+    }
+    assert payload == {
+        "match_type": "semantic",
+        "situation": "The user wants to cancel all upcoming reservations.",
+        "candidates": [],
+    }
+
+
+def _tau2_exact_case_lookup() -> dict:
+    return {
+        "strict": True,
+        "case_names": ["tau2_airline_train_22"],
+        "domain": "airline",
+        "split": "train",
+        "data_split": "airline_train",
+        "task_no": "22",
+        "task_id": "39",
+        "case_name": "tau2_airline_train_22",
+        "task_signature": "tau2:airline:train:39",
+        "expected_fields": {
+            "input.domain": "airline",
+            "input.split": "train",
+            "input.data_split": "airline_train",
+            "input.task_no": "22",
+            "input.task_id": "39",
+        },
+    }
+
+
+def _tau2_exact_case_content(*, linked_experience_uri: str | None = None) -> str:
+    linked = f"- [cancel_without_refund]({linked_experience_uri})" if linked_experience_uri else ""
+    return (
+        "# tau2_airline_train_22\n\n"
+        "## Task Signature\n"
+        "tau2:airline:train:39\n\n"
+        "## Input\n"
+        '{"domain":"airline","split":"train","data_split":"airline_train",'
+        '"task_no":22,"task_id":"39"}\n\n'
+        "## Linked Experiences\n"
+        f"{linked}\n"
+    )
+
+
+def _tau2_exact_case_content_with_links(linked_experience_uris: list[str]) -> str:
+    linked = "\n".join(
+        f"- [experience_{index}]({uri})"
+        for index, uri in enumerate(linked_experience_uris, start=1)
+    )
+    return (
+        "# tau2_airline_train_22\n\n"
+        "## Task Signature\n"
+        "tau2:airline:train:39\n\n"
+        "## Input\n"
+        '{"domain":"airline","split":"train","data_split":"airline_train",'
+        '"task_no":22,"task_id":"39"}\n\n'
+        "## Linked Experiences\n"
+        f"{linked}\n"
+    )
+
+
+@pytest.mark.asyncio
+async def test_tau2_search_experience_returns_exact_case_without_semantic_search(monkeypatch):
+    import json
+
+    import vikingbot.openviking_mount.ov_server as ov_server
+
+    import benchmark.tau2.train.rollout_executor_vikingbot as module
+
+    trace_messages = []
+    monkeypatch.setattr(
+        module,
+        "tracer",
+        SimpleNamespace(info=lambda message: trace_messages.append(message)),
+        raising=False,
+    )
+
+    case_uri = "viking://user/u/memories/cases/tau2_airline_train_22.md"
+    exp_uri = "viking://user/u/memories/experiences/cancel_without_refund.md"
+
+    class FakeClient:
+        search_calls = []
+
+        @classmethod
+        async def create(cls):
+            return cls()
+
+        def _memory_target_uri(self, uri):
+            assert uri is None
+            return "viking://user/u/memories"
+
+        async def read_content(self, uri, level="read"):
+            assert level == "read"
+            if uri == case_uri:
+                return _tau2_exact_case_content(linked_experience_uri=exp_uri)
+            if uri == exp_uri:
+                return "## Situation\n- Applies when: the user accepts no refund\n"
+            return ""
+
+        async def search(self, situation, *, target_uri, limit):
+            self.search_calls.append((situation, target_uri, limit))
+            return {"memories": []}
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(ov_server, "VikingClient", FakeClient)
+    tool = module._make_search_experience_tool(case_lookup=_tau2_exact_case_lookup())
+
+    payload = json.loads(
+        await tool.execute(
+            None,
+            situation="The user wants to cancel all upcoming reservations.",
+            task_signature="tau2:airline:train:39",
+        )
+    )
+
+    assert payload == {
+        "match_type": "exact_case",
+        "task_signature": "tau2:airline:train:39",
+        "situation": "The user wants to cancel all upcoming reservations.",
+        "candidates": [
+            {
+                "rank": 1,
+                "case_name": "tau2_airline_train_22",
+                "experiences": [
+                    {
+                        "uri": exp_uri,
+                        "content": "## Situation\n- Applies when: the user accepts no refund",
+                    }
+                ],
+            }
+        ],
+    }
+    assert FakeClient.search_calls == []
+    assert [json.loads(message) for message in trace_messages] == [
+        {
+            "event": "experience_recall",
+            "match_type": "exact_case",
+            "task_signature": "tau2:airline:train:39",
+            "exact_case_found": True,
+            "candidate_count": 1,
+            "experience_count": 1,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tau2_search_experience_exact_case_loads_unique_experiences_in_uri_order(
+    monkeypatch,
+):
+    import json
+
+    import vikingbot.openviking_mount.ov_server as ov_server
+
+    from benchmark.tau2.train.rollout_executor_vikingbot import _make_search_experience_tool
+
+    case_uri = "viking://user/u/memories/cases/tau2_airline_train_22.md"
+    first_uri = "viking://user/u/memories/experiences/a_first.md"
+    second_uri = "viking://user/u/memories/experiences/z_second.md"
+    reads = []
+
+    class FakeClient:
+        @classmethod
+        async def create(cls):
+            return cls()
+
+        def _memory_target_uri(self, uri):
+            assert uri is None
+            return "viking://user/u/memories"
+
+        async def read_content(self, uri, level="read"):
+            assert level == "read"
+            reads.append(uri)
+            if uri == case_uri:
+                return _tau2_exact_case_content_with_links([second_uri, first_uri, second_uri])
+            return {
+                first_uri: "# First experience\n\nUse the first rule.",
+                second_uri: "# Second experience\n\nUse the second rule.",
+            }.get(uri, "")
+
+        async def search(self, situation, *, target_uri, limit):
+            raise AssertionError("exact case lookup must not use semantic search")
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(ov_server, "VikingClient", FakeClient)
+
+    payload = json.loads(
+        await _make_search_experience_tool(case_lookup=_tau2_exact_case_lookup()).execute(
+            None,
+            situation="Cancel upcoming reservations.",
+            task_signature="tau2:airline:train:39",
+        )
+    )
+
+    assert payload["candidates"][0]["experiences"] == [
+        {"uri": first_uri, "content": "# First experience\n\nUse the first rule."},
+        {"uri": second_uri, "content": "# Second experience\n\nUse the second rule."},
+    ]
+    assert reads.count(first_uri) == 1
+    assert reads.count(second_uri) == 1
+
+
+@pytest.mark.asyncio
+async def test_tau2_search_experience_returns_exact_empty_case_without_semantic_search(
+    monkeypatch,
+):
+    import json
+
+    import vikingbot.openviking_mount.ov_server as ov_server
+
+    from benchmark.tau2.train.rollout_executor_vikingbot import _make_search_experience_tool
+
+    case_uri = "viking://user/u/memories/cases/tau2_airline_train_22.md"
+
+    class FakeClient:
+        search_calls = []
+
+        @classmethod
+        async def create(cls):
+            return cls()
+
+        def _memory_target_uri(self, uri):
+            assert uri is None
+            return "viking://user/u/memories"
+
+        async def read_content(self, uri, level="read"):
+            assert level == "read"
+            return _tau2_exact_case_content() if uri == case_uri else ""
+
+        async def search(self, situation, *, target_uri, limit):
+            self.search_calls.append((situation, target_uri, limit))
+            return {"memories": []}
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(ov_server, "VikingClient", FakeClient)
+    tool = _make_search_experience_tool(case_lookup=_tau2_exact_case_lookup())
+
+    payload = json.loads(
+        await tool.execute(
+            None,
+            situation="The user wants to cancel all upcoming reservations.",
+            task_signature="tau2:airline:train:39",
+        )
+    )
+
+    assert payload["match_type"] == "exact_case"
+    assert payload["candidates"] == [
+        {
+            "rank": 1,
+            "case_name": "tau2_airline_train_22",
+            "experiences": [],
+        }
+    ]
+    assert FakeClient.search_calls == []
+
+
+@pytest.mark.asyncio
+async def test_tau2_search_experience_falls_back_when_task_signature_case_file_is_missing(
+    monkeypatch,
+):
+    import json
+
+    import vikingbot.openviking_mount.ov_server as ov_server
+
+    from benchmark.tau2.train.rollout_executor_vikingbot import _make_search_experience_tool
+
+    semantic_case_uri = "viking://user/u/memories/cases/semantic_case.md"
+
+    class FakeClient:
+        search_calls = []
+
+        @classmethod
+        async def create(cls):
+            return cls()
+
+        def _memory_target_uri(self, uri):
+            assert uri is None
+            return "viking://user/u/memories"
+
+        async def read_content(self, uri, level="read"):
+            assert level == "read"
+            if uri == semantic_case_uri:
+                return "# semantic_case\n\n## Linked Experiences\n"
+            return ""
+
+        async def search(self, situation, *, target_uri, limit):
+            self.search_calls.append((situation, target_uri, limit))
+            return {"memories": [{"uri": semantic_case_uri, "score": 0.8}]}
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(ov_server, "VikingClient", FakeClient)
+    tool = _make_search_experience_tool(case_lookup=_tau2_exact_case_lookup())
+
+    payload = json.loads(
+        await tool.execute(
+            None,
+            situation="The user wants to cancel all upcoming reservations.",
+            task_signature="tau2:airline:train:39",
+            limit=2,
+        )
+    )
+
+    assert payload["match_type"] == "semantic"
+    assert payload["fallback_reason"] == "task_signature_not_found"
+    assert payload["candidates"][0]["case_name"] == "semantic_case"
+    assert FakeClient.search_calls == [
+        (
+            "The user wants to cancel all upcoming reservations.",
+            "viking://user/u/memories/cases",
+            2,
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tau2_search_experience_deduplicates_experiences_across_semantic_cases(
+    monkeypatch,
+):
+    import json
+
+    import vikingbot.openviking_mount.ov_server as ov_server
+
+    from benchmark.tau2.train.rollout_executor_vikingbot import _make_search_experience_tool
+
+    case_uris = [
+        "viking://user/u/memories/cases/case_one.md",
+        "viking://user/u/memories/cases/case_two.md",
+    ]
+    exp_uri = "viking://user/u/memories/experiences/shared.md"
+
+    class FakeClient:
+        @classmethod
+        async def create(cls):
+            return cls()
+
+        def _memory_target_uri(self, uri):
+            assert uri is None
+            return "viking://user/u/memories"
+
+        async def read_content(self, uri, level="read"):
+            assert level == "read"
+            if uri in case_uris:
+                return f"# case\n\n## Linked Experiences\n- [shared]({exp_uri})\n"
+            if uri == exp_uri:
+                return "## Situation\n- Applies to both cases\n"
+            return ""
+
+        async def search(self, situation, *, target_uri, limit):
+            return {"memories": [{"uri": uri, "score": 0.9} for uri in case_uris]}
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(ov_server, "VikingClient", FakeClient)
+    tool = _make_search_experience_tool()
+
+    payload = json.loads(await tool.execute(None, situation="A related situation", limit=2))
+
+    returned_experiences = [
+        experience for candidate in payload["candidates"] for experience in candidate["experiences"]
+    ]
+    assert returned_experiences == [
+        {
+            "uri": exp_uri,
+            "situation": "- Applies to both cases",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tau2_search_experience_returns_error_when_client_creation_fails(monkeypatch):
+    import vikingbot.openviking_mount.ov_server as ov_server
+
+    from benchmark.tau2.train.rollout_executor_vikingbot import _make_search_experience_tool
+
+    class FakeClient:
+        @classmethod
+        async def create(cls):
+            raise RuntimeError("service unavailable")
+
+    monkeypatch.setattr(ov_server, "VikingClient", FakeClient)
+
+    result = await _make_search_experience_tool(case_lookup=_tau2_exact_case_lookup()).execute(
+        None,
+        situation="The user wants to cancel all upcoming reservations.",
+        task_signature="tau2:airline:train:39",
+    )
+
+    assert result == "Error searching experience candidates: service unavailable"
 
 
 def test_tau2_rollout_backend_factory_defaults_to_native():
@@ -693,12 +1419,15 @@ def test_tau2_rollout_backend_factory_selects_vikingbot(monkeypatch):
         "concurrency": 2,
         "keep_default_tools": True,
         "max_iterations": 9,
+        "seed": 300,
         "rollout_language": "zh",
         "loader_mode": "skill",
         "system_prompt_profile": "minimal",
         "direct_experience_content": None,
         "direct_experience_name": None,
         "direct_experience_uri": None,
+        "first_user_cache": True,
+        "first_user_cache_dir": None,
     }
 
     module.make_tau2_rollout_executor(
@@ -710,6 +1439,57 @@ def test_tau2_rollout_backend_factory_selects_vikingbot(monkeypatch):
         concurrency=1,
     )
     assert created["system_prompt_profile"] == "minimal"
+
+
+def test_tau2_vikingbot_seed_is_stable_for_task_and_trial():
+    from benchmark.tau2.train.rollout_executor_vikingbot import _stable_case_seed
+
+    assert _stable_case_seed(300, task_no=22, trial=4) == 400_322
+    assert _stable_case_seed(300, task_no=22, trial="4") == 400_322
+
+
+def test_tau2_vikingbot_build_agent_uses_configured_temperature(monkeypatch, tmp_path):
+    import benchmark.tau2.train.rollout_executor_vikingbot as module
+
+    config = SimpleNamespace(
+        bot_data_path=tmp_path / "bot-data",
+        workspace_path=tmp_path / "workspace",
+        agents=SimpleNamespace(
+            model="test-model",
+            temperature=0.0,
+            memory_window=12,
+            gen_image_model="test-image-model",
+        ),
+        tools=SimpleNamespace(
+            web=SimpleNamespace(search=SimpleNamespace(api_key="")),
+            exec=SimpleNamespace(),
+        ),
+    )
+    captured = {}
+
+    def fake_agent_loop(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(
+        module,
+        "_vikingbot_imports",
+        lambda: {
+            "ensure_config": lambda _path: config,
+            "_init_bot_data": lambda _config: None,
+            "MessageBus": object,
+            "SessionManager": lambda _path: object(),
+            "get_source_workspace_path": lambda: tmp_path / "source",
+            "SandboxManager": lambda *_args: object(),
+            "_make_provider": lambda _config: object(),
+            "AgentLoop": fake_agent_loop,
+        },
+    )
+
+    module._build_agent(None, max_iterations=9)
+
+    assert captured["temperature"] == 0.0
+    assert captured["max_iterations"] == 9
 
 
 def test_tau2_service_rollout_backend_option_overrides_default(monkeypatch):
@@ -731,16 +1511,21 @@ def test_tau2_service_rollout_backend_option_overrides_default(monkeypatch):
     monkeypatch.setattr(service_app, "create_dataset_service_app", fake_create_dataset_service_app)
     monkeypatch.setattr(service_app, "make_tau2_rollout_executor", fake_make_tau2_rollout_executor)
 
-    app = service_app.create_app(rollout_backend="native")
+    app = service_app.create_app(rollout_backend="native", first_user_cache=False)
     executor = app["make_rollout_executor"]({"rollout_backend": "vikingbot", "max_iterations": 5})
 
     assert isinstance(executor, FakeExecutor)
     assert calls[-1]["factory"]["backend"] == "vikingbot"
     assert calls[-1]["factory"]["options"]["max_iterations"] == 5
     assert calls[-1]["factory"]["options"]["show_progress"] is False
+    assert calls[-1]["factory"]["options"]["first_user_cache"] is False
 
     app["make_rollout_executor"]({"rollout_backend": "native", "show_progress": True})
     assert calls[-1]["factory"]["options"]["show_progress"] is True
+
+    default_app = service_app.create_app(rollout_backend="native")
+    default_app["make_rollout_executor"]({})
+    assert calls[-1]["factory"]["options"]["first_user_cache"] is True
 
 
 @pytest.mark.asyncio
@@ -772,7 +1557,7 @@ async def test_tau2_vikingbot_rollout_runs_on_current_event_loop():
 
 
 @pytest.mark.asyncio
-async def test_tau2_prepare_experience_loader_skill_writes_required_skill(tmp_path):
+async def test_tau2_prepare_experience_loader_skill_writes_static_required_skill(tmp_path):
     import benchmark.tau2.train.rollout_executor_vikingbot as module
 
     class FakeSandbox:
@@ -812,9 +1597,17 @@ async def test_tau2_prepare_experience_loader_skill_writes_required_skill(tmp_pa
     assert "name: experience_loader" in content
     assert "search_experience" in content
     assert "read_experience" in content
+    assert "search_experience(situation, task_signature=None, limit=2)" in content
+    assert "search_experience(query" not in content
+    assert "## Runtime Case context" not in content
+    assert "tau2:airline:train:39" not in content
+    assert "keyword list" in content
+    assert "current conversation" in content
     assert "Situation snippets" in content or "`situation` as a filter only" in content
     assert "Read by default" in content
     assert "call `read_experience` unless" in content
+    assert "already loaded inline" in content
+    assert "do not call `read_experience` again" in content
     assert "later boundary in the same task" in content
     assert "Re-search on new subtasks" in content
     assert "case_name" in content
@@ -853,7 +1646,7 @@ async def test_tau2_experience_loader_skill_is_required_with_relative_read_path(
 
 
 @pytest.mark.asyncio
-async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(monkeypatch):
+async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(monkeypatch, tmp_path):
     import benchmark.tau2.train.rollout_executor_vikingbot as module
     from benchmark.tau2.train.rollout_executor_vikingbot import VikingBotTau2RolloutExecutor
 
@@ -874,8 +1667,10 @@ async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(monkeypatc
             self.policy = "policy"
             self.user_query = "user query"
 
-        def reset(self):
+        def reset(self, *, seed=None, fixed_first_user_message=None):
             calls.append(("reset", threading.get_ident()))
+            calls.append(("reset_seed", seed))
+            calls.append(("fixed_first_user_message", fixed_first_user_message))
 
         def list_openai_tools(self):
             return []
@@ -916,7 +1711,7 @@ async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(monkeypatc
         },
         rubric=Rubric(name="rubric", description="", criteria=[]),
     )
-    executor = VikingBotTau2RolloutExecutor()
+    executor = VikingBotTau2RolloutExecutor(first_user_cache_dir=str(tmp_path))
 
     rollout = await executor._execute_one(
         case,
@@ -924,6 +1719,12 @@ async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(monkeypatc
     )
 
     assert rollout.metadata["reward"] == 1.0
+    assert rollout.metadata["evaluation_result"] == {"ok": True}
+    assert rollout.metadata["seed"] == 300
+    assert rollout.metadata["first_user_cache_enabled"] is True
+    assert rollout.metadata["first_user_cache_hit"] is False
+    assert Path(rollout.metadata["first_user_cache_path"]).is_file()
+    assert "evaluation_result" not in rollout.evaluation.metadata
     call_values = dict(calls)
     assert call_values["case_lookup"] == {
         "benchmark": "tau2",
@@ -947,6 +1748,7 @@ async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(monkeypatc
     }
     call_threads = call_values
     assert call_threads["reset"] != event_loop_thread
+    assert call_threads["reset_seed"] == 300
     assert call_threads["build_agent"] != event_loop_thread
     assert call_threads["reward"] != event_loop_thread
     assert call_threads["run_agent"] == event_loop_thread
@@ -1091,7 +1893,12 @@ async def test_tau2_run_agent_force_loads_experience_loader_skill_before_task_ac
         sender_id="tau2_user",
         keep_default_tools=True,
         loader_mode="skill",
-        case_lookup={"benchmark": "tau2", "strict": True, "case_name": "case"},
+        case_lookup={
+            "benchmark": "tau2",
+            "strict": True,
+            "case_name": "case",
+            "task_signature": "tau2:airline:train:39",
+        },
     )
 
     tools_used = result[2]
@@ -1112,6 +1919,15 @@ async def test_tau2_run_agent_force_loads_experience_loader_skill_before_task_ac
     assert read_call_index < tool_result_index
     assert "search_experience" in messages[tool_result_index]["content"]
     assert "read_experience" in messages[tool_result_index]["content"]
+    runtime_prompt = next(
+        message["content"]
+        for message in messages
+        if message.get("role") == "system" and "tau2 policy" in message.get("content", "")
+    )
+    assert "## Runtime Case context" in runtime_prompt
+    assert "`task_signature`: `tau2:airline:train:39`" in runtime_prompt
+    assert "tau2:airline:train:39" not in messages[tool_result_index]["content"]
+    assert "tau2:airline:train:39" not in result[7]
     assert tools_used[0]["tool_name"] == "read_file"
     assert tools_used[0]["required_skill"] == "experience_loader"
 

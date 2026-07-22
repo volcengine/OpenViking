@@ -215,6 +215,13 @@ class MemoryTypeSchema(BaseModel):
     def filename_has_variables(self):
         return "{{" in self.filename_template and "}}" in self.filename_template
 
+    def content_field_names(self) -> tuple[str, ...]:
+        """Return schema fields referenced by the content template, in schema order."""
+        from openviking.session.memory.utils.template_utils import TemplateUtils
+
+        template_variables = TemplateUtils.variables(self.content_template or "")
+        return tuple(field.name for field in self.fields if field.name in template_variables)
+
 
 class MemoryData(BaseModel):
     """Dynamic memory data."""
@@ -296,6 +303,7 @@ class ResolvedOperation(BaseModel):
     memory_fields: Dict
     memory_type: str  # The memory type (e.g., 'tools', 'skills', 'events')
     uris: List[str]
+    add_only_uri_bases: Dict[str, str] = Field(default_factory=dict, exclude=True, repr=False)
     page_id: Optional[int] = None  # Temporary page_id for link resolution (not persisted)
     source: Optional[MemoryOperationSource] = None
 

@@ -11,6 +11,7 @@ set -euo pipefail
 # Launcher-only options:
 #   --slot N   Run an isolated slot. Slot 0 is the default legacy setup. Slot N>0
 #              uses separate ports, OpenViking config/data, logs, and result dir.
+#   --seed N  Base rollout seed shared by train and eval stages.
 #   --auto-commit
 #              Automatically commit pending code changes before starting services
 #              and train/eval.
@@ -18,15 +19,19 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TAU2_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${TAU2_DIR}/../.." && pwd)"
+source "${REPO_ROOT}/openviking/session/train/auto_commit.sh"
+openviking_capture_train_launch_command "$@"
 
 SLOT="0"
 AUTO_COMMIT=false
+TAU2_ROLLOUT_SEED="${TAU2_ROLLOUT_SEED:-300}"
+TAU2_FIRST_USER_CACHE="${TAU2_FIRST_USER_CACHE:-on}"
 declare -a TRAIN_CLI_ARGS=()
 
 usage() {
   cat <<'USAGE'
 Usage:
-  bash benchmark/tau2/train/restart_vikingbot_train_eval.sh [--slot N] [--auto-commit] [train/eval args...]
+  bash benchmark/tau2/train/restart_vikingbot_train_eval.sh [--slot N] [--seed N] [--auto-commit] [train/eval args...]
 
 Launcher options:
   --slot N  Isolated experiment slot. Slot 0 is default/legacy. Slot N>0 uses:
@@ -37,8 +42,12 @@ Launcher options:
             OV data     = ~/.openviking_N/data
             result dir  = result/tau2/train_N
   --auto-commit
-            Commit pending code changes before launching the run, matching the
-            LoCoMo vikingbot eval helper behavior.
+            Commit pending code changes before launching, then append local Git
+            notes with the command and each completed train/eval stage result.
+  --seed N  Base rollout seed. Each task/trial derives a stable seed from it.
+            Default: 300.
+  --first-user-cache on|off
+            Cache and replay each task/trial's first user message. Default: on.
 
 All remaining args are passed to benchmark/tau2/train/run_batch_train_eval.sh.
 USAGE
@@ -61,6 +70,30 @@ parse_launcher_args() {
         ;;
       --auto-commit)
         AUTO_COMMIT=true
+        shift 1
+        ;;
+      --seed)
+        if [[ $# -lt 2 ]]; then
+          echo "[restart-vikingbot-train] ERROR: --seed requires a value" >&2
+          exit 1
+        fi
+        TAU2_ROLLOUT_SEED="$2"
+        shift 2
+        ;;
+      --seed=*)
+        TAU2_ROLLOUT_SEED="${1#--seed=}"
+        shift 1
+        ;;
+      --first-user-cache)
+        if [[ $# -lt 2 ]]; then
+          echo "[restart-vikingbot-train] ERROR: --first-user-cache requires on or off" >&2
+          exit 1
+        fi
+        TAU2_FIRST_USER_CACHE="$2"
+        shift 2
+        ;;
+      --first-user-cache=*)
+        TAU2_FIRST_USER_CACHE="${1#--first-user-cache=}"
         shift 1
         ;;
       -h|--help)
@@ -87,26 +120,24 @@ validate_slot() {
   fi
 }
 
-auto_commit_if_requested() {
-  if [[ "${AUTO_COMMIT}" != "true" ]]; then
-    return 0
+validate_seed() {
+  if ! [[ "${TAU2_ROLLOUT_SEED}" =~ ^[0-9]+$ ]]; then
+    echo "[restart-vikingbot-train] ERROR: --seed must be a non-negative integer, got: ${TAU2_ROLLOUT_SEED}" >&2
+    exit 1
   fi
+}
 
-  if [[ -n "$(git -C "${REPO_ROOT}" status --porcelain)" ]]; then
-    local commit_message
-    commit_message="auto-commit before tau2 train eval $(date +%Y%m%d_%H%M%S)"
-    log "[auto-commit] detected pending changes, committing..."
-    git -C "${REPO_ROOT}" add -A
-    git -C "${REPO_ROOT}" commit -m "${commit_message}"
-  else
-    log "[auto-commit] working tree clean, nothing to commit"
+validate_first_user_cache() {
+  if [[ "${TAU2_FIRST_USER_CACHE}" != "on" && "${TAU2_FIRST_USER_CACHE}" != "off" ]]; then
+    echo "[restart-vikingbot-train] ERROR: --first-user-cache must be on or off, got: ${TAU2_FIRST_USER_CACHE}" >&2
+    exit 1
   fi
-
-  log "[auto-commit] current commit: $(git -C "${REPO_ROOT}" rev-parse --short HEAD)"
 }
 
 parse_launcher_args "$@"
 validate_slot
+validate_seed
+validate_first_user_cache
 
 if [[ "${SLOT}" == "0" ]]; then
   DEFAULT_OPENVIKING_PORT="1933"
@@ -343,7 +374,7 @@ start_openviking_server() {
 
 start_tau2_service() {
   log "restarting tau2 service on ${TAU2_SERVICE_HOST}:${TAU2_SERVICE_PORT} backend=${TAU2_ROLLOUT_BACKEND} loader_mode=${TAU2_EXPERIENCE_LOADER_MODE}"
-  log "tau2 service concurrency=${TAU2_MAX_ROLLOUT_CONCURRENCY} rollout_thread_workers=${TAU2_ROLLOUT_THREAD_WORKERS}"
+  log "tau2 service seed=${TAU2_ROLLOUT_SEED} first_user_cache=${TAU2_FIRST_USER_CACHE} concurrency=${TAU2_MAX_ROLLOUT_CONCURRENCY} rollout_thread_workers=${TAU2_ROLLOUT_THREAD_WORKERS}"
   log "tau2 service log: ${TAU2_SERVICE_LOG}"
   : > "${TAU2_SERVICE_LOG}"
   stop_existing_listener "tau2 rollout service" "${TAU2_SERVICE_PORT}"
@@ -357,6 +388,8 @@ start_tau2_service() {
       --config "${OPENVIKING_CONFIG_FILE}" \
       --rollout-backend "${TAU2_ROLLOUT_BACKEND}" \
       --loader-mode "${TAU2_EXPERIENCE_LOADER_MODE}" \
+      --seed "${TAU2_ROLLOUT_SEED}" \
+      --first-user-cache "${TAU2_FIRST_USER_CACHE}" \
       --max-rollout-concurrency "${TAU2_MAX_ROLLOUT_CONCURRENCY}" \
       --rollout-thread-workers "${TAU2_ROLLOUT_THREAD_WORKERS}"
   ) >"${TAU2_SERVICE_LOG}" 2>&1 &
@@ -397,7 +430,7 @@ run_train_eval() {
 }
 
 main() {
-  auto_commit_if_requested
+  openviking_train_auto_commit "${REPO_ROOT}" "tau2 train eval"
   start_openviking_server
   start_tau2_service
   run_train_eval "${TRAIN_CLI_ARGS[@]}"

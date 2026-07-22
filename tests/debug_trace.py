@@ -8,12 +8,19 @@ Designed to be LLM-friendly: concise, structured output that won't blow up conte
 """
 
 import argparse
+import asyncio
 import base64
 import json
 import os
 import sys
 from pathlib import Path
 from typing import Optional
+
+from openviking.telemetry.replay import ReplayRunner, encode_value
+from openviking.telemetry.replay.trace import (
+    entries_from_jaeger_trace,
+    select_replay_invocation,
+)
 
 
 def _load_jaeger_config() -> dict:
@@ -210,7 +217,8 @@ def extract_tags(span: dict) -> dict:
             # Allow longer values for error-related fields
             max_len = (
                 2000
-                if key.startswith("error.") or key in ("exception.stacktrace", "exception.message")
+                if key.startswith(("error.", "gate."))
+                or key in ("exception.stacktrace", "exception.message")
                 else 200
             )
             if len(value) > max_len:
@@ -336,7 +344,7 @@ def print_tree(roots, children_map, span_map, trace_start_us, mode, detail_span_
                     print("  " + ", ".join(parts))
 
 
-def main():
+def main(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(description="Query Jaeger trace by trace ID")
     parser.add_argument("trace_id", help="Trace ID (16 or 32 hex chars)")
     parser.add_argument(
@@ -347,7 +355,27 @@ def main():
     )
     parser.add_argument("--raw", action="store_true", help="Output raw JSON")
     parser.add_argument("--no-color", action="store_true", help="Disable ANSI colors")
-    args = parser.parse_args()
+    replay_group = parser.add_mutually_exclusive_group()
+    replay_group.add_argument(
+        "--replay-list",
+        action="store_true",
+        help="List replay entry invocations recorded in the trace",
+    )
+    replay_group.add_argument(
+        "--replay",
+        metavar="ENTRY_NAME",
+        help="Run the selected replay entry against the current workspace",
+    )
+    parser.add_argument(
+        "--invocation",
+        metavar="SPAN_ID",
+        help="Select one replay entry invocation by span ID",
+    )
+    args = parser.parse_args(argv)
+    if args.invocation and not args.replay:
+        parser.error("--invocation requires --replay")
+    if args.raw and (args.replay_list or args.replay):
+        parser.error("--raw cannot be combined with replay commands")
 
     use_color = not args.no_color and sys.stdout.isatty()
 
@@ -357,6 +385,63 @@ def main():
 
     if args.raw:
         print(json.dumps(data, indent=2, ensure_ascii=False))
+        return
+
+    if args.replay_list:
+        entries = entries_from_jaeger_trace(data)
+        print(
+            json.dumps(
+                [
+                    {
+                        "invocation_id": entry.invocation_id,
+                        "module": entry.module,
+                        "name": entry.name,
+                        "outcome": entry.outcome,
+                    }
+                    for entry in entries
+                ],
+                indent=2,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+        return
+
+    if args.replay:
+        try:
+            invocation = select_replay_invocation(
+                data,
+                args.replay,
+                invocation_id=args.invocation,
+            )
+            result = asyncio.run(ReplayRunner().run(invocation.entry, invocation.mock_records))
+        except Exception as error:
+            print(f"Replay failed: {error}", file=sys.stderr)
+            raise SystemExit(1) from error
+        payload = {
+            "outcome": result.outcome,
+            "result": encode_value(result.result) if result.outcome == "returned" else None,
+            "exception": (
+                {
+                    "type": type(result.exception).__qualname__,
+                    "message": str(result.exception),
+                }
+                if result.exception is not None
+                else None
+            ),
+            "unconsumed_mock_records": [
+                {
+                    "invocation_id": record.invocation_id,
+                    "name": record.name,
+                    "outcome": record.outcome,
+                    "match_key": record.match_key,
+                }
+                for record in result.unconsumed_records
+            ],
+        }
+        print(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True))
+        if result.outcome == "raised":
+            raise SystemExit(1)
         return
 
     traces = data.get("data", [])

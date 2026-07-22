@@ -29,10 +29,7 @@ from openviking.session.memory.tools import (
     MEMORY_TOOLS_REGISTRY,
     add_tool_call_pair_to_messages,
 )
-from openviking.session.memory.utils import (
-    parse_json_with_stability,
-    pretty_print_messages,
-)
+from openviking.session.memory.utils import parse_json_with_stability
 from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
 from openviking.telemetry import bind_telemetry_stage, tracer
@@ -300,8 +297,6 @@ OUTPUT_SCHEMA definition itself.
                 )
 
             # Call LLM with tools - model decides: tool calls OR final operations
-            pretty_print_messages(messages)
-
             tool_calls, operations = await self._call_llm(messages)
 
             if tool_calls:
@@ -812,7 +807,6 @@ OUTPUT_SCHEMA definition itself.
                 tool_choice=tool_choice,
                 thinking=self.thinking,
             )
-        tracer.info(f"llm_response={response}")
         self._last_llm_failure_kind = None
         self._last_llm_failure_content = ""
         # print(f'response={response}')
@@ -903,7 +897,11 @@ OUTPUT_SCHEMA definition itself.
 
     async def _check_unread_existing_files(self, operations: ResolvedOperations) -> Dict:
         refetch_uris = {}
+        registry = self.context_provider._get_registry()
         for operation in operations.upsert_operations:
+            schema = registry.get(operation.memory_type)
+            if getattr(schema, "operation_mode", None) == "add_only":
+                continue
             for uri in operation.uris:
                 if uri in self.context_provider.read_file_contents:
                     continue

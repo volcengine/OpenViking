@@ -64,7 +64,7 @@ class ExperienceSetLoader:
                     uri=uri,
                     version=version,
                     status=status,
-                    content=str(fields.get("constraint") or mf.plain_content()),
+                    content=mf.plain_content(),
                     metadata=metadata,
                     links=list(mf.links or []),
                     backlinks=list(mf.backlinks or []),

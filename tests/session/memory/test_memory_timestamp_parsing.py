@@ -1,20 +1,23 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import string
 from types import SimpleNamespace
 
 import pytest
 
 from openviking.message import Message
 from openviking.message.part import TextPart
+from openviking.prompts.manager import PromptManager
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import MemoryFile, MemoryTypeSchema, ResolvedOperation
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
+from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.memory_updater import ExtractContext, MessageRange
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
-from openviking.session.memory.utils import MemoryFileUtils
+from openviking.session.memory.utils import MemoryFileUtils, generate_uri
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -72,6 +75,35 @@ def test_message_range_accepts_extended_fractional_seconds():
 
     assert msg_range._first_message_time() == "2026-04-17"
     assert msg_range._first_message_time_with_weekday() == "2026-04-17 (Friday)"
+
+
+def test_extract_context_random_suffix_uses_requested_base62_length():
+    suffix = ExtractContext([]).get_random_suffix(2)
+
+    assert len(suffix) == 2
+    assert set(suffix) <= set(string.ascii_letters + string.digits)
+
+
+def test_trajectory_uri_uses_name_inside_session_date_directory():
+    extract_context = SimpleNamespace(
+        get_session_timestamp=lambda: "20240515150000",
+    )
+    memory_dir = PromptManager._get_bundled_templates_dir() / "memory"
+    registry = MemoryTypeRegistry(load_schemas=False)
+    registry.load_from_yaml(str(memory_dir / "trajectories.yaml"))
+    schema = registry.get("trajectories")
+    assert schema is not None
+
+    uri = generate_uri(
+        schema,
+        {"trajectory_name": "航班取消资格判断与操作"},
+        user_space="default",
+        extract_context=extract_context,
+    )
+
+    assert uri == (
+        "viking://user/default/memories/trajectories/2024/05/15/航班取消资格判断与操作.md"
+    )
 
 
 def test_message_range_uses_peer_id_when_present():

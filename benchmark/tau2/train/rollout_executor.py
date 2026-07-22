@@ -55,6 +55,7 @@ def make_tau2_rollout_executor(
             concurrency=concurrency,
             keep_default_tools=_bool_option(opts.get("keep_default_tools"), default=True),
             max_iterations=int(opts.get("max_iterations") or 30),
+            seed=int(opts.get("seed") if opts.get("seed") is not None else 300),
             rollout_language=str(opts.get("rollout_language") or rollout_language),
             loader_mode=normalize_tau2_experience_loader_mode(
                 opts.get("loader_mode") or DEFAULT_TAU2_EXPERIENCE_LOADER_MODE
@@ -65,6 +66,8 @@ def make_tau2_rollout_executor(
             direct_experience_content=_optional_str(opts.get("direct_experience_content")),
             direct_experience_name=_optional_str(opts.get("direct_experience_name")),
             direct_experience_uri=_optional_str(opts.get("direct_experience_uri")),
+            first_user_cache=_bool_option(opts.get("first_user_cache"), default=True),
+            first_user_cache_dir=_optional_str(opts.get("first_user_cache_dir")),
         )
     loader_mode = normalize_tau2_experience_loader_mode(
         opts.get("loader_mode") or DEFAULT_TAU2_EXPERIENCE_LOADER_MODE

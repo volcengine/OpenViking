@@ -206,8 +206,13 @@ class Tau2BenchEnv:
         else:
             self._impl = _NativeTau2BenchEnv(domain, task_id)
 
-    def reset(self):
-        self._impl.reset()
+    def reset(
+        self,
+        *,
+        seed: int | None = None,
+        fixed_first_user_message: str | None = None,
+    ):
+        self._impl.reset(seed=seed, fixed_first_user_message=fixed_first_user_message)
         self.env = self._impl.env
         self.terminated = self._impl.terminated
         self.user_query = self._impl.user_query
@@ -236,15 +241,32 @@ class _GymTau2BenchEnv:
     def __init__(self, domain: str, task_id: str):
         _install_tau2_litellm_rate_limit_retry()
         _install_tau2_litellm_unknown_cost_suppression()
-        self.env = AgentGymEnv(
-            domain=domain,
-            task_id=task_id,
-            user_llm=os.getenv("TAU2_USER_LLM") or DEFAULT_TAU2_USER_LLM,
-        )
+        self.domain = domain
+        self.task_id = task_id
+        self.env = None
         self.terminated = False
 
-    def reset(self):
-        user_query, info_dict = self.env.reset()
+    def reset(
+        self,
+        *,
+        seed: int | None = None,
+        fixed_first_user_message: str | None = None,
+    ):
+        user_llm_args = None
+        if seed is not None:
+            # AgentGymEnv.reset(seed=...) currently does not forward the seed to
+            # its Orchestrator/UserSimulator. Put it on the user LLM before the
+            # first generated message as well as passing it to Gymnasium.
+            user_llm_args = {"temperature": 0.0, "seed": seed}
+        self.env = AgentGymEnv(
+            domain=self.domain,
+            task_id=self.task_id,
+            user_llm=os.getenv("TAU2_USER_LLM") or DEFAULT_TAU2_USER_LLM,
+            user_llm_args=user_llm_args,
+        )
+        if fixed_first_user_message is not None:
+            self._install_fixed_first_user(fixed_first_user_message)
+        user_query, info_dict = self.env.reset(seed=seed)
         self.user_query = user_query.lstrip("user: ")
         self.task = info_dict["task"]
         self.simulation_run = info_dict["simulation_run"]
@@ -253,6 +275,26 @@ class _GymTau2BenchEnv:
         self.tool_schemas.append(CommunicateWithUser.openai_schema())
         self.ground_truth = str(self.task.evaluation_criteria)
         self.user_scenario = self.task.user_scenario
+
+    def _install_fixed_first_user(self, message: str) -> None:
+        from benchmark.tau2.common.fixed_first_user import FixedFirstUserSimulator
+
+        original_get_user = getattr(self.env, "_get_user", None)
+        if not callable(original_get_user):
+            raise RuntimeError("Tau2 AgentGymEnv does not expose _get_user")
+
+        def get_fixed_first_user():
+            user = original_get_user()
+            return FixedFirstUserSimulator(
+                fixed_first_message=message,
+                llm=user.llm,
+                llm_args=user.llm_args,
+                instructions=user.instructions,
+                tools=user.tools,
+                persona_config=user.persona_config,
+            )
+
+        self.env._get_user = get_fixed_first_user
 
     def tool_call(self, tool_name: str, arguments: dict) -> str:
         if self.terminated:
@@ -307,7 +349,13 @@ class _NativeTau2BenchEnv:
         self.terminated = False
         self.simulation_run = None
 
-    def reset(self):
+    def reset(
+        self,
+        *,
+        seed: int | None = None,
+        fixed_first_user_message: str | None = None,
+    ):
+        del seed
         from tau2.evaluator.evaluator import EvaluationType, evaluate_simulation
         from tau2.registry import registry
 
@@ -338,7 +386,7 @@ class _NativeTau2BenchEnv:
         self.policy = self.env.get_policy()
         self.tool_schemas = [tool.openai_schema for tool in self.env.get_tools()]
         self.tool_schemas.append(CommunicateWithUser.openai_schema())
-        self.user_query = str(self.task.user_scenario)
+        self.user_query = fixed_first_user_message or str(self.task.user_scenario)
         self.ground_truth = str(self.task.evaluation_criteria)
         self.user_scenario = self.task.user_scenario
         self._messages = []

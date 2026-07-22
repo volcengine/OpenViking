@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -36,6 +36,7 @@ from openviking.session.memory.streaming_memory_updater import (
     split_request_by_merge_group,
 )
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.storage.transaction.lock_handle import LockHandle
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -43,6 +44,10 @@ class InMemoryVikingFS:
     def __init__(self, files: dict[str, str] | None = None):
         self.files = dict(files or {})
         self.writes = []
+
+    def _uri_to_path(self, uri: str, ctx=None) -> str:
+        uri = _canonical_user_uri(uri, ctx)
+        return f"/{uri.removeprefix('viking://')}"
 
     async def ls(self, uri: str, output: str = "original", ctx=None):
         del output, ctx
@@ -59,7 +64,15 @@ class InMemoryVikingFS:
             raise FileNotFoundError(uri)
         return self.files[uri]
 
-    async def write_file(self, uri: str, content: str, ctx=None):
+    async def stat(self, uri: str, ctx=None, skip_count: bool = False):
+        del skip_count
+        uri = _canonical_user_uri(uri, ctx)
+        if uri not in self.files:
+            raise FileNotFoundError(uri)
+        return {"isDir": False}
+
+    async def write_file(self, uri: str, content: str, ctx=None, lock_handle=None):
+        del lock_handle
         uri = _canonical_user_uri(uri, ctx)
         self.files[uri] = content
         self.writes.append((uri, content, ctx))
@@ -79,6 +92,28 @@ def _canonical_user_uri(uri: str, ctx=None) -> str:
 
 def _ctx() -> RequestContext:
     return RequestContext(user=UserIdentifier.the_default_user("u"), role=Role.ROOT)
+
+
+def _install_test_lock_manager(monkeypatch) -> None:
+    handles: dict[str, LockHandle] = {}
+    manager = MagicMock()
+
+    def create_handle() -> LockHandle:
+        handle = LockHandle()
+        handles[handle.id] = handle
+        return handle
+
+    async def release(handle: LockHandle) -> None:
+        handles.pop(handle.id, None)
+
+    manager.create_handle.side_effect = create_handle
+    manager.get_handle.side_effect = handles.get
+    manager.acquire_tree_batch = AsyncMock(return_value=True)
+    manager.release = AsyncMock(side_effect=release)
+    monkeypatch.setattr(
+        "openviking.storage.transaction.get_lock_manager",
+        lambda: manager,
+    )
 
 
 def _registry() -> MemoryTypeRegistry:
@@ -313,6 +348,7 @@ def test_operation_to_patch_preserves_hidden_feedback_stats_metadata():
 
 @pytest.mark.asyncio
 async def test_streaming_memory_updater_submit_applies_fast_path(monkeypatch):
+    _install_test_lock_manager(monkeypatch)
     fs = InMemoryVikingFS({})
     fs.search = AsyncMock(return_value=[])
     monkeypatch.setattr(
@@ -355,6 +391,7 @@ async def test_streaming_memory_updater_submit_applies_fast_path(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_streaming_memory_updater_fast_path_filters_links(monkeypatch):
+    _install_test_lock_manager(monkeypatch)
     fs = InMemoryVikingFS(
         {
             "viking://user/u/memories/events/existing.md": (

@@ -75,3 +75,26 @@ def test_tau2_service_keeps_explicit_rollout_progress_override(monkeypatch):
     app["make_rollout_executor"]({"rollout_backend": "native", "show_progress": True})
 
     assert calls[-1]["options"]["show_progress"] is True
+
+
+def test_tau2_service_passes_default_seed_and_keeps_request_override(monkeypatch):
+    import benchmark.tau2.train.service_app as service_app
+
+    calls = []
+
+    def fake_create_dataset_service_app(**kwargs):
+        return kwargs
+
+    def fake_make_tau2_rollout_executor(**kwargs):
+        calls.append(kwargs)
+        return object()
+
+    monkeypatch.setattr(service_app, "create_dataset_service_app", fake_create_dataset_service_app)
+    monkeypatch.setattr(service_app, "make_tau2_rollout_executor", fake_make_tau2_rollout_executor)
+
+    app = service_app.create_app(rollout_backend="vikingbot", seed=700)
+    app["make_rollout_executor"]({})
+    assert calls[-1]["options"]["seed"] == 700
+
+    app["make_rollout_executor"]({"seed": 900})
+    assert calls[-1]["options"]["seed"] == 900

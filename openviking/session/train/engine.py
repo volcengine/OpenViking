@@ -16,7 +16,10 @@ from openviking.session.train.domain import (
     Rollout,
     RolloutAnalysis,
 )
-from openviking.session.train.gates import default_policy_gate_runner
+from openviking.session.train.gates import (
+    default_policy_gate_runner,
+    require_experience_gradients_post_validated,
+)
 from openviking.session.train.interfaces import (
     GradientEstimator,
     PolicyOptimizer,
@@ -79,15 +82,11 @@ class PolicyTrainingEngine:
             ]
         )
         gradients = [gradient for batch in gradient_batches for gradient in batch]
-        gate_runner = _gate_runner_for_gradients(ctx, gradients)
-        if gate_runner is None:
-            return gradients
-        gradients, gate_report = await gate_runner.filter_gradients(
-            gradients,
-            analyses=analyses,
-            policy_set=policy_set,
-        )
-        _append_gate_report(ctx, gate_report)
+        require_experience_gradients_post_validated(gradients)
+        for analysis in analyses:
+            report = dict(getattr(analysis, "metadata", {}) or {}).get("final_gate_report")
+            if isinstance(report, dict):
+                ctx.execution_metadata.setdefault("gate_reports", []).append(report)
         return gradients
 
     async def plan_and_apply(
@@ -111,23 +110,6 @@ class PolicyTrainingEngine:
                 latest_policy_set,
                 ctx.optimization_context,
             )
-            if gate_runner is not None:
-                filtered_items, gate_report = await gate_runner.filter_plan(
-                    list(plan.items or []),
-                    analyses=list(analyses or []),
-                    policy_set=latest_policy_set,
-                )
-                _append_gate_report(ctx, gate_report)
-                if len(filtered_items) != len(plan.items or []):
-                    plan = PolicyUpdatePlan(
-                        items=filtered_items,
-                        metadata={
-                            **dict(plan.metadata or {}),
-                            "gate_report": gate_report.to_dict(),
-                        },
-                    )
-                elif gate_report.decisions:
-                    plan.metadata.setdefault("gate_reports", []).append(gate_report.to_dict())
             apply_result = await self.policy_updater.apply(
                 plan,
                 latest_policy_set,
@@ -135,12 +117,6 @@ class PolicyTrainingEngine:
                 transaction_handle=transaction_handle,
             )
         return plan, apply_result
-
-
-def _append_gate_report(ctx: PipelineContext, report: Any) -> None:
-    if report is None:
-        return
-    ctx.execution_metadata.setdefault("gate_reports", []).append(report.to_dict())
 
 
 def _prepare_optimization_context_for_gates(

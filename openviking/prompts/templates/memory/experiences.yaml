@@ -10,7 +10,17 @@ enabled: true
 operation_mode: "upsert"
 agent_only: true
 content_template: |
-  {{ constraint|default(content, true) }}
+  ## Situation
+  {{ situation }}
+
+  ## Reminder
+  {{ reminder }}
+
+  ## Procedure
+  {{ procedure }}
+
+  ## Anti-pattern
+  {{ anti_pattern }}
 
 fields:
   - name: experience_name
@@ -22,36 +32,20 @@ fields:
       Good: "verify_before_irreversible_action", "missing_required_output", "关键校验遗漏".
     merge_op: immutable
 
-  - name: constraint
+  - name: situation
     type: string
     description: |
       Natural-language content must be written in {{ language }}. Keep tool names, schema
       fields, Python identifiers, and quoted runtime values unchanged.
 
-      Output the experience in EXACTLY this 4-section Markdown format. The skill loader
-      shows `## Situation` in search results and may load the whole file with
-      `read_experience`, so the experience must be understandable without trigger_code.
-      Keep the Markdown headings and field labels below exactly in English even when the
-      field values are written in another language.
-
-      ## Situation
+      Write only the bullet body for `## Situation`; the storage template adds the heading.
+      The skill loader shows this section in search results and may load the whole file with
+      `read_experience`, so it must be understandable without trigger_code.
       - Applies when: <runtime-visible task/user/tool-result situation where this lesson matters>
       - Does not apply when: <closest nearby but non-applicable task pattern; do not use
         temporal stage wording such as before final_response or while still reading/writing>
       - Evidence binding: <which observation or evidence supports applying the rule>
       - Decision boundary: <the earliest reusable point where the reminder changes behavior>
-
-      ## Reminder
-      - <one sentence root-cause lesson that changes the next agent behavior>
-
-      ## Procedure
-      - Before/when <candidate decision/action/output boundary>: <check the decisive evidence>
-      - If <bad condition>: <apply the smallest corrective or recovery action>
-      - Else: <proceed without rewriting unrelated workflow steps>
-
-      ## Anti-pattern
-      - Do not <the tempting wrong behavior that caused the failure>
-      - Preserve <the nearest correct behavior/object/action that must not be blocked>
 
       Rules:
       - Failure repair only. Do not output generic positive workflows, full SOPs, success-path
@@ -143,4 +137,34 @@ fields:
         no hidden answers. Use semantic roles instead of case literals.
       - Use imperative, machine-readable bullets. No introductory or closing paragraphs.
 
+    merge_op: patch
+
+  - name: reminder
+    type: string
+    description: |
+      Natural-language content must be written in {{ language }}. Keep tool names, schema
+      fields, Python identifiers, and quoted runtime values unchanged.
+      Write only the bullet body for `## Reminder`; the storage template adds the heading.
+      - <one sentence root-cause lesson that changes the next agent behavior>
+    merge_op: patch
+
+  - name: procedure
+    type: string
+    description: |
+      Natural-language content must be written in {{ language }}. Keep tool names, schema
+      fields, Python identifiers, and quoted runtime values unchanged.
+      Write only the bullet body for `## Procedure`; the storage template adds the heading.
+      - Before/when <candidate decision/action/output boundary>: <check the decisive evidence>
+      - If <bad condition>: <apply the smallest corrective or recovery action>
+      - Else: <proceed without rewriting unrelated workflow steps>
+    merge_op: patch
+
+  - name: anti_pattern
+    type: string
+    description: |
+      Natural-language content must be written in {{ language }}. Keep tool names, schema
+      fields, Python identifiers, and quoted runtime values unchanged.
+      Write only the bullet body for `## Anti-pattern`; the storage template adds the heading.
+      - Do not <the tempting wrong behavior that caused the failure>
+      - Preserve <the nearest correct behavior/object/action that must not be blocked>
     merge_op: patch

@@ -4,7 +4,8 @@
 Tests for MemoryUpdater.
 """
 
-from unittest.mock import AsyncMock, MagicMock
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -38,6 +39,41 @@ from openviking.session.memory.utils import (
 )
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
+
+
+class _MemoryVikingFS:
+    def __init__(self, files: dict[str, str] | None = None):
+        self.files = dict(files or {})
+        self.write_calls: list[tuple[str, object | None]] = []
+        self.read_error_uris: set[str] = set()
+
+    def _uri_to_path(self, uri: str, ctx=None) -> str:
+        del ctx
+        return f"/{uri.removeprefix('viking://')}"
+
+    async def read_file(self, uri: str, ctx=None) -> str:
+        del ctx
+        await asyncio.sleep(0)
+        if uri in self.read_error_uris:
+            raise PermissionError(f"denied: {uri}")
+        if uri not in self.files:
+            raise NotFoundError(uri, "file")
+        return self.files[uri]
+
+    async def stat(self, uri: str, ctx=None, skip_count: bool = False) -> dict:
+        del ctx, skip_count
+        await asyncio.sleep(0)
+        if uri in self.read_error_uris:
+            raise PermissionError(f"denied: {uri}")
+        if uri not in self.files:
+            raise NotFoundError(uri, "file")
+        return {"isDir": False}
+
+    async def write_file(self, uri: str, content: str, ctx=None, lock_handle=None) -> None:
+        del ctx
+        await asyncio.sleep(0)
+        self.files[uri] = content
+        self.write_calls.append((uri, lock_handle))
 
 
 class TestMemoryUpdateResult:
@@ -91,7 +127,7 @@ class TestMemoryUpdateResult:
         assert "Errors: 0" in summary
 
 
-class TestMemoryUpdater:
+class TestMemoryUpdaterBasics:
     """Tests for MemoryUpdater."""
 
     def test_extract_context_initializes_page_id_map(self):
@@ -385,6 +421,234 @@ class TestMemoryUpdater:
         assert "**Topic:** workflow.md" in viking_fs.store[preference_overview_uri]
         assert "- [workflow.md](./workflow.md)" in viking_fs.store[preference_overview_uri]
 
+
+class TestAddOnlyUriAllocation:
+    @staticmethod
+    def _schema(operation_mode: str = "add_only") -> MemoryTypeSchema:
+        return MemoryTypeSchema(
+            memory_type="events",
+            description="event memory",
+            directory="viking://user/{{ user_space }}/memories/events",
+            filename_template="{{ event_name }}.md",
+            operation_mode=operation_mode,
+            fields=[
+                MemoryField(
+                    name="event_name",
+                    field_type=FieldType.STRING,
+                    merge_op=MergeOp.IMMUTABLE,
+                ),
+                MemoryField(
+                    name="content",
+                    field_type=FieldType.STRING,
+                    merge_op=MergeOp.REPLACE,
+                ),
+            ],
+        )
+
+    @classmethod
+    def _updater(cls, viking_fs: _MemoryVikingFS, operation_mode: str = "add_only"):
+        registry = MemoryTypeRegistry(load_schemas=False)
+        registry.register(cls._schema(operation_mode))
+        updater = MemoryUpdater(registry=registry)
+        updater._get_viking_fs = MagicMock(return_value=viking_fs)
+        updater._sync_resource_refs_for_result = AsyncMock()
+        updater._vectorize_memories = AsyncMock()
+        updater._apply_links_to_existing_files = AsyncMock()
+        updater.generate_overview = AsyncMock()
+        return updater
+
+    @staticmethod
+    def _ctx() -> RequestContext:
+        return RequestContext(
+            user=UserIdentifier("acme", "alice"),
+            role=Role.USER,
+        )
+
+    @pytest.mark.asyncio
+    async def test_existing_numbered_files_allocate_next_uri_and_remap_links(self):
+        canonical = "viking://user/alice/memories/events/name.md"
+        canonical_2 = "viking://user/alice/memories/events/name_2.md"
+        canonical_3 = "viking://user/alice/memories/events/name_3.md"
+        case_uri = "viking://user/alice/memories/cases/case.md"
+        existing_content = MemoryFileUtils.write(MemoryFile(content="existing"))
+        viking_fs = _MemoryVikingFS({canonical: existing_content, canonical_2: existing_content})
+        updater = self._updater(viking_fs)
+        operation = ResolvedOperation(
+            memory_fields={"event_name": "name", "content": "new"},
+            memory_type="events",
+            uris=[canonical],
+            add_only_uri_bases={canonical: canonical},
+        )
+        operations = ResolvedOperations(
+            upsert_operations=[operation],
+            delete_file_contents=[],
+            errors=[],
+            resolved_links=[
+                StoredLink(
+                    from_uri=canonical,
+                    to_uri=case_uri,
+                    link_type="belongs_to",
+                )
+            ],
+        )
+        with patch(
+            "openviking.storage.transaction.get_lock_manager",
+            side_effect=AssertionError("add_only allocation must not acquire a directory lock"),
+        ):
+            result = await updater.apply_operations(operations, self._ctx())
+
+        assert viking_fs.files[canonical] == existing_content
+        assert viking_fs.files[canonical_2] == existing_content
+        assert canonical_3 in viking_fs.files
+        assert operation.uris == [canonical_3]
+        assert result.written_uris == [canonical_3]
+        assert result.edited_uris == []
+        assert result.errors == []
+        assert operations.resolved_links[0].from_uri == canonical_3
+        written = MemoryFileUtils.read(viking_fs.files[canonical_3], uri=canonical_3)
+        assert written.links[0]["from_uri"] == canonical_3
+        assert viking_fs.write_calls[0][1] is None
+        assert updater._vectorize_memories.await_args.kwargs["uri_memory_type_map"] == {
+            canonical_3: "events"
+        }
+
+    @pytest.mark.asyncio
+    async def test_same_request_candidates_continue_from_canonical_base(self):
+        canonical = "viking://user/alice/memories/events/name.md"
+        canonical_2 = "viking://user/alice/memories/events/name_2.md"
+        canonical_3 = "viking://user/alice/memories/events/name_3.md"
+        existing_content = MemoryFileUtils.write(MemoryFile(content="existing"))
+        viking_fs = _MemoryVikingFS({canonical: existing_content})
+        updater = self._updater(viking_fs)
+        first = ResolvedOperation(
+            memory_fields={"event_name": "name", "content": "first"},
+            memory_type="events",
+            uris=[canonical],
+            add_only_uri_bases={canonical: canonical},
+        )
+        second = ResolvedOperation(
+            memory_fields={"event_name": "name", "content": "second"},
+            memory_type="events",
+            uris=[canonical_2],
+            add_only_uri_bases={canonical_2: canonical},
+        )
+        operations = ResolvedOperations(
+            upsert_operations=[first, second],
+            delete_file_contents=[],
+            errors=[],
+        )
+
+        result = await updater.apply_operations(operations, self._ctx())
+
+        assert first.uris == [canonical_2]
+        assert second.uris == [canonical_3]
+        assert result.written_uris == [canonical_2, canonical_3]
+        assert MemoryFileUtils.read(viking_fs.files[canonical_2]).content == "first"
+        assert MemoryFileUtils.read(viking_fs.files[canonical_3]).content == "second"
+
+    @pytest.mark.asyncio
+    async def test_non_not_found_read_error_fails_without_writing(self):
+        canonical = "viking://user/alice/memories/events/name.md"
+        viking_fs = _MemoryVikingFS()
+        viking_fs.read_error_uris.add(canonical)
+        updater = self._updater(viking_fs)
+        operation = ResolvedOperation(
+            memory_fields={"event_name": "name", "content": "new"},
+            memory_type="events",
+            uris=[canonical],
+        )
+        operations = ResolvedOperations(
+            upsert_operations=[operation],
+            delete_file_contents=[],
+            errors=[],
+        )
+
+        result = await updater.apply_operations(operations, self._ctx())
+
+        assert result.written_uris == []
+        assert len(result.errors) == 1
+        assert isinstance(result.errors[0][1], PermissionError)
+        assert viking_fs.write_calls == []
+
+    @pytest.mark.asyncio
+    async def test_sequential_writers_allocate_distinct_uris(self):
+        canonical = "viking://user/alice/memories/events/name.md"
+        canonical_2 = "viking://user/alice/memories/events/name_2.md"
+        viking_fs = _MemoryVikingFS()
+        first_updater = self._updater(viking_fs)
+        second_updater = self._updater(viking_fs)
+
+        def operations(content: str) -> ResolvedOperations:
+            return ResolvedOperations(
+                upsert_operations=[
+                    ResolvedOperation(
+                        memory_fields={"event_name": "name", "content": content},
+                        memory_type="events",
+                        uris=[canonical],
+                    )
+                ],
+                delete_file_contents=[],
+                errors=[],
+            )
+
+        first_result = await first_updater.apply_operations(operations("first"), self._ctx())
+        second_result = await second_updater.apply_operations(operations("second"), self._ctx())
+
+        assert set(first_result.written_uris + second_result.written_uris) == {
+            canonical,
+            canonical_2,
+        }
+        assert set(viking_fs.files) == {canonical, canonical_2}
+
+    @pytest.mark.asyncio
+    async def test_add_only_write_does_not_use_outer_transaction_handle(self):
+        canonical = "viking://user/alice/memories/events/name.md"
+        viking_fs = _MemoryVikingFS()
+        updater = self._updater(viking_fs)
+        outer_handle = object()
+        updater._transaction_handle = outer_handle
+        operations = ResolvedOperations(
+            upsert_operations=[
+                ResolvedOperation(
+                    memory_fields={"event_name": "name", "content": "new"},
+                    memory_type="events",
+                    uris=[canonical],
+                )
+            ],
+            delete_file_contents=[],
+            errors=[],
+        )
+
+        result = await updater.apply_operations(operations, self._ctx())
+
+        assert result.written_uris == [canonical]
+        assert viking_fs.write_calls == [(canonical, None)]
+
+    @pytest.mark.asyncio
+    async def test_non_add_only_schema_keeps_canonical_uri(self):
+        canonical = "viking://user/alice/memories/events/name.md"
+        existing_content = MemoryFileUtils.write(MemoryFile(content="existing"))
+        viking_fs = _MemoryVikingFS({canonical: existing_content})
+        updater = self._updater(viking_fs, operation_mode="upsert")
+        operation = ResolvedOperation(
+            memory_fields={"event_name": "name", "content": "replacement"},
+            memory_type="events",
+            uris=[canonical],
+        )
+        operations = ResolvedOperations(
+            upsert_operations=[operation],
+            delete_file_contents=[],
+            errors=[],
+        )
+
+        result = await updater.apply_operations(operations, self._ctx())
+
+        assert operation.uris == [canonical]
+        assert result.written_uris == [canonical]
+        assert MemoryFileUtils.read(viking_fs.files[canonical]).content == "replacement"
+
+
+class TestMemoryUpdater:
     @pytest.mark.asyncio
     async def test_apply_operations_preserves_pre_resolved_multi_uris_for_new_page_ids(self):
         registry = MagicMock()

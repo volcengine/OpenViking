@@ -43,6 +43,9 @@ KILL_EXISTING=1
 ROLLOUT_LANGUAGE="default"
 ROLLOUT_BACKEND="${TAU2_ROLLOUT_BACKEND:-vikingbot}"
 LOADER_MODE="${TAU2_EXPERIENCE_LOADER_MODE:-skill}"
+ROLLOUT_SEED="${TAU2_ROLLOUT_SEED:-300}"
+FIRST_USER_CACHE="${TAU2_FIRST_USER_CACHE:-on}"
+FIRST_USER_CACHE_DIR="${TAU2_FIRST_USER_CACHE_DIR:-}"
 NATIVE_THREAD_WORKERS="${TAU2_NATIVE_THREAD_WORKERS:-128}"
 MAX_ROLLOUT_CONCURRENCY="${TAU2_MAX_ROLLOUT_CONCURRENCY:-200}"
 ROLLOUT_THREAD_WORKERS="${TAU2_ROLLOUT_THREAD_WORKERS:-200}"
@@ -57,6 +60,9 @@ while [[ $# -gt 0 ]]; do
     --rollout-language) ROLLOUT_LANGUAGE="$2"; shift 2 ;;
     --rollout-backend) ROLLOUT_BACKEND="$2"; shift 2 ;;
     --loader-mode) LOADER_MODE="$2"; shift 2 ;;
+    --seed) ROLLOUT_SEED="$2"; shift 2 ;;
+    --first-user-cache) FIRST_USER_CACHE="$2"; shift 2 ;;
+    --first-user-cache-dir) FIRST_USER_CACHE_DIR="$2"; shift 2 ;;
     --native-thread-workers) NATIVE_THREAD_WORKERS="$2"; shift 2 ;;
     --max-rollout-concurrency) MAX_ROLLOUT_CONCURRENCY="$2"; shift 2 ;;
     --rollout-thread-workers) ROLLOUT_THREAD_WORKERS="$2"; shift 2 ;;
@@ -77,6 +83,12 @@ Options:
                      Rollout implementation backend. Default: vikingbot.
   --loader-mode skill|constraint|direct_experience
                      VikingBot experience loading mode. Default: skill.
+  --seed N           Base rollout seed. Default: 300.
+  --first-user-cache on|off
+                     Cache and replay each task/trial's first user message.
+                     Default: on.
+  --first-user-cache-dir PATH
+                     Cache directory. Default: result/tau2/train/cache/first_user_messages.
   --native-thread-workers N
                      Default thread pool workers for native rollout. Default: 128.
   --max-rollout-concurrency N
@@ -109,6 +121,16 @@ fi
 
 if [[ "${LOADER_MODE}" != "skill" && "${LOADER_MODE}" != "constraint" && "${LOADER_MODE}" != "direct_experience" ]]; then
   echo "[tau2-service] invalid --loader-mode: ${LOADER_MODE}. Expected skill, constraint, or direct_experience" >&2
+  exit 1
+fi
+
+if ! [[ "${ROLLOUT_SEED}" =~ ^[0-9]+$ ]]; then
+  echo "[tau2-service] invalid --seed: ${ROLLOUT_SEED}. Expected non-negative integer" >&2
+  exit 1
+fi
+
+if [[ "${FIRST_USER_CACHE}" != "on" && "${FIRST_USER_CACHE}" != "off" ]]; then
+  echo "[tau2-service] invalid --first-user-cache: ${FIRST_USER_CACHE}. Expected on or off" >&2
   exit 1
 fi
 
@@ -209,10 +231,15 @@ fi
 cd "${REPO_ROOT}"
 export TAU2_ROLLOUT_BACKEND="${ROLLOUT_BACKEND}"
 export TAU2_EXPERIENCE_LOADER_MODE="${LOADER_MODE}"
+export TAU2_ROLLOUT_SEED="${ROLLOUT_SEED}"
+export TAU2_FIRST_USER_CACHE="${FIRST_USER_CACHE}"
+if [[ -n "${FIRST_USER_CACHE_DIR}" ]]; then
+  export TAU2_FIRST_USER_CACHE_DIR="${FIRST_USER_CACHE_DIR}"
+fi
 export TAU2_NATIVE_THREAD_WORKERS="${NATIVE_THREAD_WORKERS}"
 export TAU2_MAX_ROLLOUT_CONCURRENCY="${MAX_ROLLOUT_CONCURRENCY}"
 export TAU2_ROLLOUT_THREAD_WORKERS="${ROLLOUT_THREAD_WORKERS}"
-echo "[tau2-service] host=${HOST} port=${PORT} data_root=${DATA_ROOT} config=${CONFIG} rollout_language=${ROLLOUT_LANGUAGE} rollout_backend=${ROLLOUT_BACKEND} loader_mode=${LOADER_MODE} native_thread_workers=${NATIVE_THREAD_WORKERS} max_rollout_concurrency=${MAX_ROLLOUT_CONCURRENCY} rollout_thread_workers=${ROLLOUT_THREAD_WORKERS}"
+echo "[tau2-service] host=${HOST} port=${PORT} data_root=${DATA_ROOT} config=${CONFIG} rollout_language=${ROLLOUT_LANGUAGE} rollout_backend=${ROLLOUT_BACKEND} loader_mode=${LOADER_MODE} seed=${ROLLOUT_SEED} first_user_cache=${FIRST_USER_CACHE} native_thread_workers=${NATIVE_THREAD_WORKERS} max_rollout_concurrency=${MAX_ROLLOUT_CONCURRENCY} rollout_thread_workers=${ROLLOUT_THREAD_WORKERS}"
 if [[ "${KILL_EXISTING}" == "1" ]]; then
   EXISTING_PIDS="$(lsof -tiTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null || true)"
   if [[ -n "${EXISTING_PIDS}" ]]; then
@@ -231,4 +258,21 @@ if [[ "${KILL_EXISTING}" == "1" ]]; then
     fi
   fi
 fi
-exec "${PYTHON_BIN}" "${SCRIPT_DIR}/service_app.py" --host "${HOST}" --port "${PORT}" --data-root "${DATA_ROOT}" --config "${CONFIG}" --rollout-language "${ROLLOUT_LANGUAGE}" --rollout-backend "${ROLLOUT_BACKEND}" --loader-mode "${LOADER_MODE}" --native-thread-workers "${NATIVE_THREAD_WORKERS}" --max-rollout-concurrency "${MAX_ROLLOUT_CONCURRENCY}" --rollout-thread-workers "${ROLLOUT_THREAD_WORKERS}"
+SERVICE_ARGS=(
+  --host "${HOST}"
+  --port "${PORT}"
+  --data-root "${DATA_ROOT}"
+  --config "${CONFIG}"
+  --rollout-language "${ROLLOUT_LANGUAGE}"
+  --rollout-backend "${ROLLOUT_BACKEND}"
+  --loader-mode "${LOADER_MODE}"
+  --seed "${ROLLOUT_SEED}"
+  --first-user-cache "${FIRST_USER_CACHE}"
+  --native-thread-workers "${NATIVE_THREAD_WORKERS}"
+  --max-rollout-concurrency "${MAX_ROLLOUT_CONCURRENCY}"
+  --rollout-thread-workers "${ROLLOUT_THREAD_WORKERS}"
+)
+if [[ -n "${FIRST_USER_CACHE_DIR}" ]]; then
+  SERVICE_ARGS+=(--first-user-cache-dir "${FIRST_USER_CACHE_DIR}")
+fi
+exec "${PYTHON_BIN}" "${SCRIPT_DIR}/service_app.py" "${SERVICE_ARGS[@]}"

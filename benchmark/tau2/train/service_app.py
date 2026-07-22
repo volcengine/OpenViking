@@ -19,6 +19,7 @@ import uvicorn
 DEFAULT_NATIVE_THREAD_WORKERS = 128
 DEFAULT_MAX_ROLLOUT_CONCURRENCY = 200
 DEFAULT_ROLLOUT_THREAD_WORKERS = 200
+DEFAULT_ROLLOUT_SEED = 300
 TAU2_SERVICE_LOG_LEVEL = "WARNING"
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -55,6 +56,9 @@ def create_app(
     rollout_language: str = "default",
     rollout_backend: str | None = None,
     loader_mode: str | None = None,
+    seed: int | None = None,
+    first_user_cache: bool | None = None,
+    first_user_cache_dir: str | None = None,
     max_rollout_concurrency: int | None = None,
     rollout_thread_workers: int | None = None,
 ):
@@ -68,6 +72,15 @@ def create_app(
         or os.getenv("TAU2_EXPERIENCE_LOADER_MODE")
         or DEFAULT_TAU2_EXPERIENCE_LOADER_MODE
     )
+    default_seed = int(
+        seed if seed is not None else os.getenv("TAU2_ROLLOUT_SEED", str(DEFAULT_ROLLOUT_SEED))
+    )
+    default_first_user_cache = (
+        first_user_cache
+        if first_user_cache is not None
+        else _on_off(os.getenv("TAU2_FIRST_USER_CACHE", "on"))
+    )
+    default_first_user_cache_dir = first_user_cache_dir or os.getenv("TAU2_FIRST_USER_CACHE_DIR")
 
     def make_case_loader(
         dataset: str,
@@ -93,6 +106,11 @@ def create_app(
             "show_progress": options.get("show_progress", False),
             "progress_label": options.get("progress_label") or "tau2",
             "loader_mode": options.get("loader_mode") or default_loader_mode,
+            "seed": options.get("seed") if options.get("seed") is not None else default_seed,
+            "first_user_cache": options.get("first_user_cache", default_first_user_cache),
+            "first_user_cache_dir": options.get(
+                "first_user_cache_dir", default_first_user_cache_dir
+            ),
         }
         return make_tau2_rollout_executor(
             backend=backend,
@@ -126,6 +144,15 @@ def _task_indices_from_filters(filters: dict[str, Any]) -> list[int] | None:
     return indices
 
 
+def _on_off(value: Any) -> bool:
+    normalized = str(value).strip().lower()
+    if normalized == "on":
+        return True
+    if normalized == "off":
+        return False
+    raise ValueError(f"expected 'on' or 'off', got {value!r}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Start tau2 rollout HTTP service")
     parser.add_argument("--host", default="127.0.0.1")
@@ -144,6 +171,23 @@ def parse_args() -> argparse.Namespace:
         choices=["skill", "constraint", "direct_experience"],
         default=os.getenv("TAU2_EXPERIENCE_LOADER_MODE", DEFAULT_TAU2_EXPERIENCE_LOADER_MODE),
         help="Experience loading mode for vikingbot rollouts (default: skill).",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=int(os.getenv("TAU2_ROLLOUT_SEED", str(DEFAULT_ROLLOUT_SEED))),
+        help=f"Base rollout seed; task/trial derive stable seeds from it (default: {DEFAULT_ROLLOUT_SEED}).",
+    )
+    parser.add_argument(
+        "--first-user-cache",
+        choices=["on", "off"],
+        default=os.getenv("TAU2_FIRST_USER_CACHE", "on"),
+        help="Cache and replay each task/trial's first user message (default: on).",
+    )
+    parser.add_argument(
+        "--first-user-cache-dir",
+        default=os.getenv("TAU2_FIRST_USER_CACHE_DIR"),
+        help="Persistent first-user-message cache directory.",
     )
     parser.add_argument(
         "--native-thread-workers",
@@ -214,6 +258,9 @@ def main() -> None:
         rollout_language=args.rollout_language,
         rollout_backend=args.rollout_backend,
         loader_mode=args.loader_mode,
+        seed=args.seed,
+        first_user_cache=args.first_user_cache == "on",
+        first_user_cache_dir=args.first_user_cache_dir,
         max_rollout_concurrency=args.max_rollout_concurrency,
         rollout_thread_workers=(
             None if args.rollout_thread_workers == 0 else args.rollout_thread_workers
