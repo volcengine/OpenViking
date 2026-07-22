@@ -1209,6 +1209,7 @@ enum ObserverCommands {
     /// Get retrieval quality metrics
     Retrieval,
     /// Get filesystem operation metrics
+    #[command(alias = "fs")]
     Filesystem,
     /// Get overall system status
     System,
@@ -3220,10 +3221,11 @@ async fn main() {
 mod tests {
     use super::{
         Cli, CliContext, Commands, ConfigAddTarget, ConfigCommands, LanguageGateAction,
-        PrivacyCommands, SkillCommands, UploadCliOptions, find_command_index, first_command_token,
-        is_language_command_request, language_command_can_run_picker, language_gate_action,
-        language_required_message, legacy_upload_option_error, plain_help_misuse,
-        pre_parse_requires_cli_config_file, preprocess_cli_args, preprocess_privacy_args,
+        ObserverCommands, PrivacyCommands, SkillCommands, SnapshotCmd, UploadCliOptions,
+        find_command_index, first_command_token, is_language_command_request,
+        language_command_can_run_picker, language_gate_action, language_required_message,
+        legacy_upload_option_error, plain_help_misuse, pre_parse_requires_cli_config_file,
+        preprocess_cli_args, preprocess_privacy_args,
     };
     use crate::config::{Config, DEFAULT_CUSTOM_URL};
     use crate::output::OutputFormat;
@@ -4450,6 +4452,36 @@ mod tests {
         );
         let client = ctx.get_client();
         assert_eq!(client.api_key(), Some("root-key"));
+    }
+
+    #[test]
+    fn observer_alias_and_snapshot_restore_examples_parse() {
+        let observer = Cli::try_parse_from(["ov", "observer", "fs"]).unwrap();
+        assert!(matches!(
+            observer.command,
+            Commands::Observer {
+                action: ObserverCommands::Filesystem
+            }
+        ));
+
+        let snapshot = Cli::try_parse_from([
+            "ov",
+            "snapshot",
+            "restore",
+            "abc123",
+            "viking://projects/acme",
+        ])
+        .unwrap();
+        assert!(matches!(
+            snapshot.command,
+            Commands::Snapshot {
+                cmd: SnapshotCmd::Restore {
+                    source_commit,
+                    project_dir,
+                    ..
+                }
+            } if source_commit == "abc123" && project_dir.as_deref() == Some("viking://projects/acme")
+        ));
     }
 
     #[test]

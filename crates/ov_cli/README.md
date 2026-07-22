@@ -175,7 +175,7 @@ Run `ov --help` and `ov <command> --help` for the exact command surface of your 
 - `observer vikingdb` - VikingDB status.
 - `observer models` - VLM, embedding, and rerank model status.
 - `observer retrieval` - Retrieval quality metrics.
-- `observer fs` - Filesystem operation metrics.
+- `observer filesystem` - Filesystem operation metrics.
 - `observer system` - Overall system status.
 
 ### Configuration
@@ -269,8 +269,8 @@ ov glob "**/*.md" --uri viking://resources
 
 # Session workflow
 SESSION=$(ov -o json session new | jq -r '.result.session_id')
-ov session add-message --session-id "$SESSION" --role user --content "Hello"
-ov session commit --session-id "$SESSION"
+ov session add-message "$SESSION" --role user --content "Hello"
+ov session commit "$SESSION"
 
 # Watch task management
 ov add-resource https://example.com/docs --to viking://resources/docs --watch-interval 60
