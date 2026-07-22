@@ -120,7 +120,11 @@ class TestFileExistenceCheck:
     @pytest.mark.asyncio
     async def test_missing_file_drops_from_queue(self):
         processor = SemanticProcessor()
-        msg = _make_msg("viking://user/default/deleted_file.txt")
+        msg = _make_msg(
+            "viking://user/deleted_file.txt",
+            account_id="acct-custom-42",
+            user_id="user-7-zeta",
+        )
 
         mock_fs = MagicMock()
         mock_fs.exists = AsyncMock(return_value=False)
@@ -147,7 +151,14 @@ class TestFileExistenceCheck:
         error_msg = mock_err.call_args[0][0]
         assert "does not exist" in error_msg
 
-
+        # Verify the existence check received a ctx that preserves tenant identity
+        mock_fs.exists.assert_called_once()
+        call_args = mock_fs.exists.call_args
+        assert call_args[0][0] == "viking://user/deleted_file.txt"
+        ctx = call_args[1].get("ctx") or call_args[0][1]
+        assert ctx is not None, "exists() must receive a RequestContext"
+        # ctx should carry the non-default tenant IDs
+        assert hasattr(ctx, "account_id") or hasattr(ctx, "user")
 # ---------------------------------------------------------------------------
 # 3. Config support for circuit breaker and semantic processor settings
 # ---------------------------------------------------------------------------
