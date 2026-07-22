@@ -30,6 +30,7 @@ logger = get_logger(__name__)
 
 _FEISHU_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(feishu://image/([^)]+)\)")
 _FEISHU_DOCUMENT_FORBIDDEN = 1770032
+_FEISHU_BITABLE_PERMISSION_REQUIRED = 99991672
 
 
 def _title_as_filename(title: str) -> str:
@@ -79,15 +80,21 @@ def _raise_from_lark_response(
         msg,
         http_status,
     )
-    raise OpenVikingError(
-        f"Feishu {operation} failed: code={code}, msg={msg}",
-        code=(
+    if code == _FEISHU_BITABLE_PERMISSION_REQUIRED:
+        public_code = "FAILED_PRECONDITION"
+        message = (
+            "Feishu application is missing required Bitable permissions: "
+            f"code={code}, msg={msg}"
+        )
+    else:
+        public_code = (
             "PERMISSION_DENIED"
-            if code == _FEISHU_DOCUMENT_FORBIDDEN or "forbidden" in msg.lower()
+            if code == _FEISHU_DOCUMENT_FORBIDDEN
             else error_code_from_http_status(http_status)
-        ),
-        details=details,
-    )
+        )
+        message = f"Feishu {operation} failed: code={code}, msg={msg}"
+
+    raise OpenVikingError(message, code=public_code, details=details)
 
 
 @dataclass

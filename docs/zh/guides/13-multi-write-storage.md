@@ -75,7 +75,8 @@
               "endpoint": "https://s3.example.com",
               "access_key": "your-access-key",
               "secret_key": "your-secret-key",
-              "prefix": "openviking"
+              "prefix": "openviking",
+              "directory_marker_mode": "none"
             }
           }
         ]
@@ -90,6 +91,48 @@
 - `name` 不要使用会频繁变化的机器名或临时编号。
 - backup 的底层路径或 bucket 应避免与 primary 指向同一物理位置。
 - 修改 backup `name` 会影响历史同步元数据的识别，生产环境应谨慎变更。
+
+### S3 兼容存储注意事项
+
+使用 S3 兼容服务（MinIO、RustFS、Ceph 等）时，`s3` 段需要额外配置以下字段：
+
+| 字段 | 是否必填 | 说明 |
+| --- | --- | --- |
+| `use_path_style` | 大多数 S3 兼容服务必填 | 设置为 `true` 使用路径风格 URL（`http://host/bucket/key`）。大多数 S3 兼容服务需要此配置。 |
+| `directory_marker_mode` | S3 兼容服务必填 | **必须显式设置为 `"none"`**。如果不配置，RAGFS Rust binding 启动时会报 `AGFSConfigError: invalid directory_marker_mode: null` 并静默崩溃。 |
+| `use_ssl` | 可选 | HTTP 端点（如 `http://localhost:9000`）需要设置为 `false`。 |
+
+**S3 兼容存储最小示例（RustFS/MinIO）：**
+
+```json
+{
+  "name": "s3-backup",
+  "backend": "s3",
+  "s3": {
+    "bucket": "my-bucket",
+    "endpoint": "http://localhost:9000",
+    "access_key": "your-access-key",
+    "secret_key": "your-secret-key",
+    "prefix": "openviking",
+    "use_ssl": false,
+    "use_path_style": true,
+    "directory_marker_mode": "none"
+  }
+}
+```
+
+> **为什么需要 `directory_marker_mode`？**
+>
+> S3 兼容存储服务对"目录"的处理方式与 AWS S3 不同。RAGFS Rust binding 必须知道创建目录时是否需要写入目录标记对象。合法取值为 `"none"`、`"empty"` 和 `"nonempty"`。对于不使用目录标记的 S3 兼容服务（RustFS、MinIO、Ceph 等），设置为 `"none"`。如果省略，Rust binding 默认值为 `null`（不合法），导致服务端在启动时静默崩溃，报错 `AGFSConfigError: invalid directory_marker_mode: null`。
+
+### Docker 网络配置
+
+在 Docker 中运行 OpenViking 并配置同主机的 S3 备份时，需要注意：
+
+- **Linux Docker**：使用 `--network host` 或宿主机局域网 IP。Docker bridge 网络可通过网关 IP（如 `172.17.0.1:9000`）访问宿主机局域网。
+- **macOS/Windows Docker Desktop**：`--network host` **不支持**。S3 端点使用 `host.docker.internal`（映射为宿主机的 localhost），或使用宿主机局域网 IP。
+
+如果启用 S3 备份后服务静默崩溃，请优先排查 Docker 网络。RAGFS Rust binding 在容器内无法访问 S3 端点时会报 `dispatch failure` 错误。
 
 ## 同步模式选择
 

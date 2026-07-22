@@ -14,7 +14,7 @@ When asked where to connect, select **Volcengine OpenViking Cloud** and enter yo
 2. In **Cursor Settings → Hooks**, confirm that the lifecycle Hooks ran `cursor-hook.mjs`, the URI protection Hooks ran `uri-guard.mjs`, and the prompt Hook returned `additional_context`.
 3. In **Cursor Settings → Tools & MCPs**, confirm that `openviking` is connected.
 
-See the complete [Cursor integration guide](https://github.com/volcengine/OpenViking/blob/main/docs/en/agent-integrations/12-cursor.md).
+See the complete [Cursor integration guide](../../../en/agent-integrations/12-cursor.md).
 
 ## Troubleshooting
 

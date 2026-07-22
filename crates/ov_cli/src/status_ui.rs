@@ -6,7 +6,6 @@ use crate::{
     config::{Config, display_config_home},
     config_wizard::{ConfigKind, ConfigStore},
     error::{Error, Result},
-    error_classifier::looks_like_auth_error,
     i18n::{Language, copy},
     theme,
 };
@@ -212,7 +211,7 @@ enum StatusFailureKind {
 impl StatusFailureKind {
     fn from_error(error: Option<&Error>) -> Self {
         match error {
-            Some(Error::Api { message, .. }) if looks_like_auth_error(message) => {
+            Some(error @ Error::Api { .. }) if error.code() == "UNAUTHENTICATED" => {
                 Self::Authentication
             }
             Some(Error::Api { .. }) => Self::Api,
@@ -916,8 +915,11 @@ mod tests {
 
     #[test]
     fn unreachable_status_distinguishes_auth_failures() {
-        let error = crate::error::Error::api(
-            "[AuthenticationError] API key invalid. Request ID: abc".to_string(),
+        let error = crate::error::Error::api_response(
+            Some("UNAUTHENTICATED".to_string()),
+            "API key invalid",
+            None,
+            401,
         );
         let rendered =
             super::render_unreachable_status(&sample_config(), Some("local"), 2, Some(&error));
@@ -926,7 +928,7 @@ mod tests {
         assert!(rendered.contains("Status        Authentication failed"));
         assert!(rendered.contains("Issue         API key rejected"));
         assert!(rendered.contains("ov config                 Edit the active API key"));
-        assert!(!rendered.contains("Request ID"));
+        assert!(!rendered.contains("API key invalid"));
     }
 
     #[test]

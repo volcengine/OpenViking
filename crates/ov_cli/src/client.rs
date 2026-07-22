@@ -5,7 +5,6 @@ use std::path::Path;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
-use crate::base_client::request_error;
 pub use crate::base_client::{BaseClient, FileUploader, TimeoutConfig};
 
 use crate::error::{Error, Result};
@@ -397,34 +396,16 @@ impl HttpClient {
             let bytes = response
                 .bytes()
                 .await
-                .map_err(|e| request_error("Failed to read error response", e))?;
+                .map_err(|e| Error::from_reqwest("Failed to read error response", e))?;
 
-            let error_msg = match serde_json::from_slice::<serde_json::Value>(&bytes) {
-                Ok(json) => json
-                    .get("error")
-                    .and_then(|e| e.get("message"))
-                    .and_then(|m| m.as_str())
-                    .map(|s| s.to_string())
-                    .or_else(|| {
-                        json.get("detail")
-                            .and_then(|d| d.as_str())
-                            .map(|s| s.to_string())
-                    })
-                    .unwrap_or_else(|| format!("HTTP error {}", status)),
-                Err(_) => {
-                    let body_str = String::from_utf8_lossy(&bytes);
-                    format!("HTTP error {}\n\nRaw response body:\n{}", status, body_str)
-                }
-            };
-
-            return Err(Error::api(error_msg));
+            return Err(crate::base_client::api_error_from_body(&bytes, status));
         }
 
         response
             .bytes()
             .await
             .map(|b| b.to_vec())
-            .map_err(|e| request_error("Failed to read response bytes", e))
+            .map_err(|e| Error::from_reqwest("Failed to read response bytes", e))
     }
 
     // ============ Filesystem Methods ============
@@ -1165,33 +1146,15 @@ impl HttpClient {
             let bytes = response
                 .bytes()
                 .await
-                .map_err(|e| request_error("Failed to read error response", e))?;
+                .map_err(|e| Error::from_reqwest("Failed to read error response", e))?;
 
-            let error_msg = match serde_json::from_slice::<serde_json::Value>(&bytes) {
-                Ok(json) => json
-                    .get("error")
-                    .and_then(|e| e.get("message"))
-                    .and_then(|m| m.as_str())
-                    .map(|s| s.to_string())
-                    .or_else(|| {
-                        json.get("detail")
-                            .and_then(|d| d.as_str())
-                            .map(|s| s.to_string())
-                    })
-                    .unwrap_or_else(|| format!("HTTP error {}", status)),
-                Err(_) => {
-                    let body_str = String::from_utf8_lossy(&bytes);
-                    format!("HTTP error {}\n\nRaw response body:\n{}", status, body_str)
-                }
-            };
-
-            return Err(Error::api(error_msg));
+            return Err(crate::base_client::api_error_from_body(&bytes, status));
         }
 
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| request_error("Failed to read response bytes", e))?;
+            .map_err(|e| Error::from_reqwest("Failed to read response bytes", e))?;
 
         let to_path = Path::new(to);
         let final_path = if to_path.is_dir() {
@@ -1695,7 +1658,7 @@ impl HttpClient {
             let bytes = response
                 .bytes()
                 .await
-                .map_err(|e| request_error("Failed to read blob bytes", e))?
+                .map_err(|e| Error::from_reqwest("Failed to read blob bytes", e))?
                 .to_vec();
             return Ok(SnapshotShowResult::Blob { oid, size, bytes });
         }
@@ -1703,30 +1666,26 @@ impl HttpClient {
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| request_error("Failed to read response body", e))?;
+            .map_err(|e| Error::from_reqwest("Failed to read response body", e))?;
+
+        if !status.is_success() {
+            return Err(crate::base_client::api_error_from_body(&bytes, status));
+        }
+
         let json: Value = match serde_json::from_slice(&bytes) {
             Ok(v) => v,
             Err(e) => {
                 let body_str = String::from_utf8_lossy(&bytes);
-                return Err(Error::Network(format!(
+                return Err(Error::Parse(format!(
                     "Failed to parse JSON response: {}\n\nRaw response body:\n{}",
                     e, body_str
                 )));
             }
         };
 
-        if !status.is_success() {
-            return Err(Error::api_with_status(
-                crate::base_client::api_error_from_envelope(&json, status),
-                status.as_u16(),
-            ));
-        }
         if let Some(error) = json.get("error") {
             if !error.is_null() {
-                return Err(Error::api_with_status(
-                    crate::base_client::api_error_from_envelope(&json, status),
-                    status.as_u16(),
-                ));
+                return Err(crate::base_client::api_error_from_envelope(&json, status));
             }
         }
 
@@ -2086,10 +2045,16 @@ mod tests {
             }
         });
 
-        assert_eq!(
-            api_error_from_envelope(&body, StatusCode::INTERNAL_SERVER_ERROR),
-            "[PROCESSING_ERROR] Parse error: boom"
-        );
+        let error = api_error_from_envelope(&body, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(matches!(
+            error,
+            crate::error::Error::Api {
+                code: Some(code),
+                message,
+                status: Some(500),
+                ..
+            } if code == "PROCESSING_ERROR" && message == "Parse error: boom"
+        ));
     }
 
     #[test]

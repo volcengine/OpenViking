@@ -22,7 +22,7 @@ When asked where to connect, select **Volcengine OpenViking Cloud** and enter yo
 3. Start a new session and ask about a previous project or preference.
 4. Share a temporary preference and ask for it in the next session to verify capture and commit.
 
-See the complete [TRAE integration guide](https://github.com/volcengine/OpenViking/blob/main/docs/en/agent-integrations/13-trae.md).
+See the complete [TRAE integration guide](../../../en/agent-integrations/13-trae.md).
 
 ## Troubleshooting
 

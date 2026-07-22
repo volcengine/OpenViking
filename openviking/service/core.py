@@ -416,15 +416,19 @@ class OpenVikingService:
         )
 
         if self._queue_manager:
-            external_parse_processor = AddResourceProcessor(
-                self._resource_service,
-                asyncio.get_running_loop(),
-            )
-            self._queue_manager.get_queue(
+            for queue_name in (
+                self._queue_manager.EXTERNAL_PARSE,
                 self._queue_manager.ADD_RESOURCE,
-                dequeue_handler=external_parse_processor,
-                allow_create=True,
-            )
+            ):
+                self._queue_manager.get_queue(
+                    queue_name,
+                    dequeue_handler=AddResourceProcessor(
+                        self._resource_service,
+                        asyncio.get_running_loop(),
+                        queue_name,
+                    ),
+                    allow_create=True,
+                )
             self._queue_manager.get_queue(
                 self._queue_manager.SESSION_COMMIT,
                 dequeue_handler=SessionCommitProcessor(
