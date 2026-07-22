@@ -612,31 +612,6 @@ class ResourceService:
         return root_uri, resource_lock
 
     @staticmethod
-    def _is_feishu_url(path: str) -> bool:
-        try:
-            from openviking.parse.accessors.feishu_accessor import FeishuAccessor
-
-            return FeishuAccessor._is_feishu_url(path)
-        except Exception:
-            return False
-
-    def _should_use_understanding_api(self, path: str) -> bool:
-        if self._resource_processor is None:
-            return False
-        return self._resource_processor.should_use_understanding_api(path)
-
-    @staticmethod
-    def _has_feishu_understanding_auth(processor_kwargs: Dict[str, Any]) -> bool:
-        token = processor_kwargs.get(FEISHU_ACCESS_TOKEN_ARG)
-        if isinstance(token, str) and token.strip():
-            return True
-        try:
-            load_feishu_app_credentials()
-            return True
-        except ValueError:
-            return False
-
-    @staticmethod
     def _target_doc_name(
         path: str,
         source_name: Optional[str],
@@ -892,16 +867,14 @@ class ResourceService:
                 and not allow_local_path_resolution
                 and self._resource_processor is not None
             )
-            direct_feishu_understanding = bool(
+            direct_understanding = bool(
                 async_understanding_candidate
-                and self._is_feishu_url(path)
-                and self._should_use_understanding_api(path)
-                and self._has_feishu_understanding_auth(kwargs)
+                and self._resource_processor.should_use_understanding_directly(path, **kwargs)
             )
 
             if (
                 async_understanding_candidate
-                and not direct_feishu_understanding
+                and not direct_understanding
                 and self._resource_processor.understanding_api_enabled()
             ):
                 prepared_resource = await self._resource_processor.prepare_resource(
@@ -911,12 +884,18 @@ class ResourceService:
                     **kwargs,
                 )
 
-            prepared_routes_to_understanding = bool(
+            if (
                 prepared_resource is not None
                 and self._resource_processor is not None
                 and self._resource_processor.should_use_understanding_api(prepared_resource)
-            )
-            if direct_feishu_understanding or prepared_routes_to_understanding:
+            ):
+                understanding_source = prepared_resource
+            elif direct_understanding:
+                understanding_source = path
+            else:
+                understanding_source = None
+
+            if understanding_source is not None:
                 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 
                 if prepared_resource is not None:
@@ -950,10 +929,7 @@ class ResourceService:
                     create_parent=target.create_parent,
                 )
                 defer_target_resolution = bool(
-                    candidate_uri
-                    and not source_name
-                    and not watch_enabled
-                    and self._is_feishu_url(path)
+                    candidate_uri and not source_name and not watch_enabled and direct_understanding
                 )
                 if self._viking_fs is None:
                     raise NotInitializedError("VikingFS")
@@ -988,34 +964,19 @@ class ResourceService:
                 enqueue_started = False
                 try:
                     queued_args = dict(normalized_args.processor_kwargs)
-                    feishu_access_token = queued_args.pop(FEISHU_ACCESS_TOKEN_ARG, None)
-                    understanding_response_id = None
-                    if direct_feishu_understanding and feishu_access_token:
-                        understanding_response_id = (
-                            await self._resource_processor.submit_understanding_url(
-                                path,
-                                feishu_access_token=feishu_access_token,
-                            )
-                        )
-                    elif prepared_routes_to_understanding:
-                        if prepared_resource is None:
-                            raise InternalError("Prepared Understanding resource is missing")
-                        understanding_response_id = (
-                            await self._resource_processor.submit_understanding_file(
-                                str(prepared_resource.path)
-                            )
-                        )
+                    understanding_response_id = await self._resource_processor.submit_understanding(
+                        understanding_source,
+                        **queued_args,
+                    )
+                    queued_args.pop(FEISHU_ACCESS_TOKEN_ARG, None)
+                    if prepared_resource is not None:
                         prepared_resource.cleanup()
                         prepared_resource = None
 
                     processor_args = self._sanitize_watch_processor_kwargs(queued_args)
-                    if direct_feishu_understanding:
-                        processor_args["parser_backend"] = "understanding"
-                    elif prepared_routes_to_understanding:
-                        processor_args.update(
-                            parser_backend="understanding",
-                            resolved_extension=resolved_extension,
-                        )
+                    processor_args["parser_backend"] = "understanding"
+                    if resolved_extension:
+                        processor_args["resolved_extension"] = resolved_extension
 
                     lock_handoff = lock_lease.to_handoff()
                     msg = AddResourceMsg(

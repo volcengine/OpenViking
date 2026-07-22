@@ -95,14 +95,14 @@ class UnderstandingAPI(BaseParser):
                 raise ValueError(f"{PREPARED_RESPONSE_ID_ARG} must be a non-empty string")
             prepared_response_id = prepared_response_id.strip()
 
-        lark_file = self._normalize_lark_file(kwargs)
         # Only a directly routed Feishu URL uses the Lark protocol. Accessor
         # output is an existing local Markdown file and must stay local.
         is_feishu_url = self._is_feishu_url(source_str)
-        if is_feishu_url and not lark_file and not prepared_response_id:
-            raise ValueError(
-                "exactly one Feishu user or tenant access token is required for parser API imports"
-            )
+        lark_file = (
+            await self._resolve_lark_file(kwargs)
+            if is_feishu_url and not prepared_response_id
+            else None
+        )
 
         url: Optional[str] = None
         local_path: Optional[Path] = None
@@ -257,11 +257,7 @@ class UnderstandingAPI(BaseParser):
             raise ValueError("UnderstandingAPI URL submission requires an http(s) URL")
 
         is_feishu_url = self._is_feishu_url(source)
-        lark_file = self._normalize_lark_file(kwargs)
-        if is_feishu_url and not lark_file:
-            raise ValueError(
-                "exactly one Feishu user or tenant access token is required for parser API imports"
-            )
+        lark_file = await self._resolve_lark_file(kwargs) if is_feishu_url else None
 
         parsed = urlparse(source)
         doc_type = Path(parsed.path).suffix.lower().lstrip(".") or "unknown"
@@ -283,6 +279,20 @@ class UnderstandingAPI(BaseParser):
                 f"responses api missing id: {self._safe_error_summary(response_obj)}"
             )
         return str(response_id)
+
+    def can_submit_url_directly(self, source: str, **kwargs) -> bool:
+        """Return whether this URL can bypass source materialization."""
+        if not source.startswith(("http://", "https://")) or not self._is_feishu_url(source):
+            return False
+        if self._normalize_lark_file(kwargs):
+            return True
+        try:
+            from openviking.resource.feishu_watch_auth import load_feishu_app_credentials
+
+            load_feishu_app_credentials()
+            return True
+        except (FileNotFoundError, ValueError):
+            return False
 
     async def parse_content(
         self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs
@@ -425,6 +435,20 @@ class UnderstandingAPI(BaseParser):
                 "lark_file must contain exactly one of user_access_token or tenant_access_token"
             )
         return auth or None
+
+    async def _resolve_lark_file(self, kwargs: Dict[str, Any]) -> Dict[str, str]:
+        auth = self._normalize_lark_file(kwargs)
+        if auth:
+            return auth
+        try:
+            from openviking.resource.feishu_watch_auth import FeishuOAuthClient
+
+            token = await FeishuOAuthClient.from_config().get_tenant_access_token()
+        except (FileNotFoundError, ValueError) as exc:
+            raise ValueError(
+                "exactly one Feishu user or tenant access token is required for parser API imports"
+            ) from exc
+        return {"tenant_access_token": token}
 
     @staticmethod
     def _single_zip_root_name(zip_path: Path) -> Optional[str]:

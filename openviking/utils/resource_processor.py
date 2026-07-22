@@ -115,11 +115,11 @@ class ResourceProcessor:
     def should_use_understanding_api(self, source: Union[str, "LocalResource"]) -> bool:
         return self._get_media_processor().should_use_understanding_api(source)
 
-    async def submit_understanding_url(self, source: str, **kwargs) -> str:
-        return await self._get_media_processor().submit_understanding_url(source, **kwargs)
+    def should_use_understanding_directly(self, source: str, **kwargs) -> bool:
+        return self._get_media_processor().should_use_understanding_directly(source, **kwargs)
 
-    async def submit_understanding_file(self, source: str) -> str:
-        return await self._get_media_processor().submit_understanding_file(source)
+    async def submit_understanding(self, source: Union[str, "LocalResource"], **kwargs) -> str:
+        return await self._get_media_processor().submit_understanding(source, **kwargs)
 
     async def build_index(
         self, resource_uris: List[str], ctx: RequestContext, **kwargs

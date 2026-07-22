@@ -78,6 +78,13 @@ class ParserRouter:
         extensions = getattr(parser_api, "extensions", None) or []
         return ext in extensions
 
+    def should_use_understanding_directly(self, source: str, **kwargs) -> bool:
+        forced = kwargs.get("parser_backend") == "understanding"
+        return bool(
+            (forced or self.should_use_understanding_api(source))
+            and self._get_understanding_api().can_submit_url_directly(source, **kwargs)
+        )
+
     @staticmethod
     def _normalize_extension(extension: str) -> str:
         return str(extension or "").lower().lstrip(".")
@@ -132,13 +139,13 @@ class ParserRouter:
             logger.info(f"[ParserRouter] Using internal ParserRegistry for {display}")
             return await self._parser_registry.parse(source_path, **kwargs)
 
-    async def submit_url(self, source: str, **kwargs) -> str:
-        if not self.should_use_understanding_api(source):
+    async def submit(self, source: Union[str, Path, LocalResource], **kwargs) -> str:
+        source_path = self._extract_source_path(source)
+        if Path(source_path).is_file():
+            return await self._get_understanding_api().submit_file(source_path)
+        if not self.should_use_understanding_api(str(source_path)):
             raise ValueError("source is not routed to UnderstandingAPI")
-        return await self._get_understanding_api().submit_url(source, **kwargs)
-
-    async def submit_file(self, source: Union[str, Path]) -> str:
-        return await self._get_understanding_api().submit_file(source)
+        return await self._get_understanding_api().submit_url(str(source_path), **kwargs)
 
     def _extract_source_path(self, source: Union[str, Path, LocalResource]) -> Union[str, Path]:
         """Extract a filesystem path from the source."""

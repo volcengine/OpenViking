@@ -41,9 +41,10 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
     )
     processor = SimpleNamespace(
         understanding_api_enabled=lambda: True,
+        should_use_understanding_directly=lambda _source, **_kwargs: False,
         prepare_resource=AsyncMock(return_value=prepared),
         should_use_understanding_api=lambda resource: resource is prepared,
-        submit_understanding_file=AsyncMock(return_value="response-1"),
+        submit_understanding=AsyncMock(return_value="response-1"),
         tree_builder=SimpleNamespace(
             resolve_target_uri=AsyncMock(
                 return_value=(
@@ -103,6 +104,6 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
     assert queued.understanding_response_id == "response-1"
     assert queued.source_name == "manual.pdf"
     assert not downloaded.exists()
-    processor.submit_understanding_file.assert_awaited_once_with(str(downloaded))
+    processor.submit_understanding.assert_awaited_once_with(prepared)
     processor.process_resource.assert_not_awaited()
     lock.handoff.assert_awaited_once()
