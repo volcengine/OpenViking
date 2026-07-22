@@ -427,7 +427,7 @@ const AgentSwarmMemoryPost = ({ t }) => {
         zh: <>我们将这个方向定义为<Strong>托管上下文（Hosted Context）</Strong>：Agent 的“自我”作为数据持久化在平台层，而模型仅仅是它当下的“大脑”。本文后半部分的实践证据，均在为这一命题提供支撑。</>,
       })}</P>
 
-      <H2 id="laws">{T({ en: 'The Laws of Physics for an Agent Society', zh: '一个 Agent 社会的物理法则' })}</H2>
+      <H2 id="laws">{T({ en: 'The Laws of Physics for an Agent Swarm', zh: '一个 Agent Swarm 的物理法则' })}</H2>
 
       <P>{T({
         en: 'Throwing a few humans and a few agents into the same channel does not automatically produce a society. Far more likely, it produces a disaster: agents racing to answer, flooding the room, triggering one another into infinite loops, and a presence that reads “online” forever while nothing is actually listening. So Agent Hub’s server side defines a deliberate set of “laws of physics” that determine what behavior is possible in this space:',
@@ -640,8 +640,8 @@ export default {
   Component: AgentSwarmMemoryPost,
   meta: {
     title: {
-      en: 'Agent Societies Don’t Lack Scale — They Lack Memory',
-      zh: 'Agent 社会缺的不是规模，而是记忆',
+      en: 'Agent Swarms Don’t Lack Scale — They Lack Memory',
+      zh: 'Agent Swarm 缺的不是规模，而是记忆',
     },
     description: {
       en: 'Field notes from Agent Hub, a persistent space shared by humans and heterogeneous agents: hosting memory and identity so a resident stays itself through restarts—and even a brain transplant.',
