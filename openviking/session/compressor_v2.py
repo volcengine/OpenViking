@@ -1084,13 +1084,7 @@ class SessionCompressorV2:
             tracer.info(f"[agent_link] links already present, skip: {exp_uri}")
 
         # Write traj.backlinks — exp_uri already handled above
-        await write_stored_links(
-            links,
-            ctx,
-            viking_fs,
-            skip_uris={exp_uri},
-            lock_handle=lock_handle,
-        )
+        await write_stored_links(links, ctx, viking_fs, skip_uris={exp_uri})
 
     async def _build_memory_diff(
         self,

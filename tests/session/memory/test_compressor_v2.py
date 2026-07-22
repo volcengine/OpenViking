@@ -796,45 +796,6 @@ class TestCompressorV2:
             "release",
         ]
 
-    @pytest.mark.asyncio
-    async def test_append_trajectory_metadata_reuses_lock_for_backlinks(self):
-        compressor = object.__new__(SessionCompressorV2)
-        ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
-        exp_uri = "viking://user/default/memories/experiences/debug.md"
-        traj_uri = "viking://user/default/memories/trajectories/traj-1.md"
-        lock_handle = object()
-
-        class FakeVikingFS:
-            def __init__(self):
-                self.files = {
-                    exp_uri: MemoryFileUtils.write(
-                        MemoryFile(uri=exp_uri, content="debug login issue")
-                    ),
-                    traj_uri: MemoryFileUtils.write(
-                        MemoryFile(uri=traj_uri, content="trajectory content")
-                    ),
-                }
-                self.write_lock_handles = []
-
-            async def read_file(self, uri: str, ctx=None):
-                return self.files[uri]
-
-            async def write_file(self, uri: str, content: str, ctx=None, lock_handle=None):
-                self.write_lock_handles.append(lock_handle)
-                self.files[uri] = content
-
-        viking_fs = FakeVikingFS()
-
-        await compressor._append_trajectory_metadata(
-            exp_uri,
-            [traj_uri],
-            ctx,
-            viking_fs,
-            lock_handle=lock_handle,
-        )
-
-        assert viking_fs.write_lock_handles == [lock_handle, lock_handle]
-
 
 class TestExtractLoopPatchRepair:
     """Tests for ExtractLoop patch validation and repair retry."""
