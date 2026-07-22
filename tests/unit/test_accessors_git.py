@@ -84,6 +84,7 @@ class TestGitAccessor:
             "https://github.com/volcengine/OpenViking.git",
             "https://gitlab.com/org/repo",
             "http://github.com/org/repo",
+            "HTTPS://github.com/volcengine/OpenViking",
         ],
     )
     def test_can_handle_github_http_url(self, accessor: GitAccessor, source: str) -> None:
@@ -115,6 +116,15 @@ class TestGitAccessor:
     def test_can_handle_git_protocol_url(self, accessor: GitAccessor) -> None:
         """GitAccessor should handle git:// URLs."""
         assert accessor.can_handle("git://github.com/volcengine/OpenViking.git") is True
+
+    def test_parse_repo_source_with_uppercase_http_scheme(self, accessor: GitAccessor) -> None:
+        repo_url, branch, commit = accessor._parse_repo_source(
+            "HTTPS://github.com/volcengine/OpenViking/tree/main?raw=1#readme"
+        )
+
+        assert repo_url == "https://github.com/volcengine/OpenViking"
+        assert branch == "main"
+        assert commit is None
 
     def test_normalize_repo_url_ssh_with_userinfo_and_ref(self, accessor: GitAccessor) -> None:
         """GitAccessor should normalize ssh URLs with userinfo using the shared host matcher."""

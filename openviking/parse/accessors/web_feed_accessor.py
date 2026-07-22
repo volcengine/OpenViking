@@ -100,6 +100,10 @@ def _localname(tag: str) -> str:
     return tag.rsplit("}", 1)[-1].lower()
 
 
+def _is_http_url(source: Union[str, Path]) -> bool:
+    return str(source).lower().startswith(("http://", "https://"))
+
+
 def looks_like_feed_url(source: Union[str, Path]) -> bool:
     """Heuristic: does this URL path look like a sitemap / RSS / Atom feed?
 
@@ -107,7 +111,7 @@ def looks_like_feed_url(source: Union[str, Path]) -> bool:
     HTTPAccessor for single-page ingestion.
     """
     source_str = str(source)
-    if not source_str.startswith(("http://", "https://")):
+    if not _is_http_url(source_str):
         return False
     basename = urlparse(source_str).path.lower().rstrip("/").rsplit("/", 1)[-1]
     if not basename:
@@ -273,7 +277,7 @@ class WebFeedAccessor(DataAccessor):
         ``args={"site": False}`` opts a feed-looking URL back out to HTTPAccessor.
         """
         source_str = str(source)
-        if not source_str.startswith(("http://", "https://")):
+        if not _is_http_url(source_str):
             return False
         override = _resolve_override(kwargs)
         if override is not None:
@@ -571,7 +575,7 @@ class WebFeedAccessor(DataAccessor):
         out: List[FeedEntry] = []
         for entry in entries:
             url = entry.url
-            if not url.startswith(("http://", "https://")):
+            if not _is_http_url(url):
                 continue
             if url in seen:
                 continue
@@ -771,7 +775,7 @@ async def _gather_feed_candidates(client, page_url: str, page_content: bytes) ->
 
 async def _discover_feed_hint(url: str, request_validator) -> Optional[str]:
     url = str(url)
-    if not url.startswith(("http://", "https://")):
+    if not _is_http_url(url):
         return None
     try:
         from openviking.utils.code_hosting_utils import is_git_repo_url

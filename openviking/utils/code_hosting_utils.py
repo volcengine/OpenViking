@@ -142,7 +142,7 @@ def parse_code_hosting_url(url: str) -> Optional[str]:
         repo = _sanitize_segment(repo)
         return f"{org}/{repo}"
 
-    if not url.startswith(("http://", "https://", "git://", "ssh://")):
+    if not url.lower().startswith(("http://", "https://", "git://", "ssh://")):
         return None
 
     parsed = urlparse(url)
@@ -229,7 +229,7 @@ def is_code_hosting_blob_url(url: str) -> bool:
     historically go through HTTPAccessor (with optional blob->raw rewriting),
     not the recursive web crawler.
     """
-    if not url.startswith(("http://", "https://")):
+    if not url.lower().startswith(("http://", "https://")):
         return False
 
     config = get_openviking_config()
@@ -279,11 +279,12 @@ def is_git_repo_url(url: str) -> bool:
         True if the URL points to a cloneable git repository
     """
     # git@/ssh://git:// protocols: always a repo if the domain matches
-    if url.startswith(("git@", "ssh://", "git://")):
+    lower_url = url.lower()
+    if url.startswith("git@") or lower_url.startswith(("ssh://", "git://")):
         return is_code_hosting_url(url)
 
     # http/https: check domain AND require exactly 2 path parts (owner/repo)
-    if url.startswith(("http://", "https://")):
+    if lower_url.startswith(("http://", "https://")):
         config = get_openviking_config()
         all_domains = _get_all_domains()
         parsed = urlparse(url)

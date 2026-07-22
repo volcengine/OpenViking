@@ -11,6 +11,10 @@ import httpx
 import pytest
 
 from openviking.parse.accessors.http_accessor import URLTypeDetector
+from openviking.server.local_input_guard import (
+    is_remote_resource_source,
+    require_remote_resource_source,
+)
 from openviking.utils.network_guard import ensure_public_remote_target
 from openviking_cli.exceptions import PermissionDeniedError
 from tests.server.ovpack_test_helpers import build_ovpack_bytes
@@ -19,6 +23,19 @@ from tests.server.ovpack_test_helpers import build_ovpack_bytes
 def _allow_admin_api_in_dev_mode(client: httpx.AsyncClient) -> None:
     # Admin routes require the app to have an API key manager, even in dev-mode tests.
     client._transport.app.state.api_key_manager = object()
+
+
+def test_remote_resource_scheme_is_case_insensitive(monkeypatch):
+    source = "HTTPS://example.com/resource.md"
+    validated = []
+    monkeypatch.setattr(
+        "openviking.server.local_input_guard.ensure_public_remote_target", validated.append
+    )
+
+    assert is_remote_resource_source(source) is True
+    assert require_remote_resource_source(source) == source
+    assert validated == [source]
+    assert is_remote_resource_source("GIT@github.com:org/repo.git") is False
 
 
 async def test_add_skill_accepts_temp_uploaded_file(

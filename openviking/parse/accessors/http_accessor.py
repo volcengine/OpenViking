@@ -429,7 +429,7 @@ class HTTPAccessor(DataAccessor):
         and will be checked first for their specific URL types.
         """
         source_str = str(source)
-        return source_str.startswith(("http://", "https://"))
+        return source_str.lower().startswith(("http://", "https://"))
 
     async def access(self, source: Union[str, Path], **kwargs) -> LocalResource:
         """
