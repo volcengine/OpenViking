@@ -3076,6 +3076,8 @@ class VikingFS:
 
         if isinstance(content, str):
             content = content.encode("utf-8")
+                
+        logger.debug("[write_file] target=%s lock_handle=%r", path, lock_handle)
 
         await self._run_with_encrypted_write_lock(
             path,
