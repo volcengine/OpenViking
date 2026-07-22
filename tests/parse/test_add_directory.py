@@ -688,6 +688,43 @@ class TestPDFConversion:
         # Should have a warning, not a crash
         assert any("bad.pdf" in w for w in result.warnings)
 
+    @pytest.mark.asyncio
+    async def test_pdf_without_temp_output_is_recorded_as_failed(
+        self, tmp_path: Path, parser, fake_fs
+    ) -> None:
+        pdf_file = tmp_path / "bad.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4 broken")
+
+        failed_result = create_parse_result(
+            root=ResourceNode(type=NodeType.ROOT),
+            source_path=str(pdf_file),
+            source_format="pdf",
+            parser_name="PDFParser",
+            parse_time=0.1,
+            warnings=["Failed to parse PDF: broken input"],
+        )
+
+        with patch(
+            "openviking.parse.parsers.directory.DirectoryParser._assign_parser",
+        ) as mock_assign:
+            from openviking.parse.parsers.pdf import PDFParser as _PDF
+
+            mock_pdf = AsyncMock(spec=_PDF)
+            mock_pdf.parse = AsyncMock(return_value=failed_result)
+
+            def assign_side_effect(cf, registry):
+                if cf.path.suffix == ".pdf":
+                    return mock_pdf
+                return registry.get_parser_for_file(cf.path)
+
+            mock_assign.side_effect = assign_side_effect
+            result = await parser.parse(str(tmp_path))
+
+        assert result.meta["file_count"] == 0
+        assert result.meta["processed_files"] == []
+        assert result.meta["failed_files"][0]["path"] == "bad.pdf"
+        assert result.warnings == ["bad.pdf: Failed to parse PDF: broken input"]
+
 
 # ---------------------------------------------------------------------------
 # Tests: ParseResult metadata
