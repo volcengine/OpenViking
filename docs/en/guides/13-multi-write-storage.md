@@ -75,7 +75,8 @@ You can configure more than one backup. The following example writes to both a l
               "endpoint": "https://s3.example.com",
               "access_key": "your-access-key",
               "secret_key": "your-secret-key",
-              "prefix": "openviking"
+              "prefix": "openviking",
+              "directory_marker_mode": "none"
             }
           }
         ]
@@ -90,6 +91,48 @@ Recommendations:
 - Do not use unstable hostnames or temporary IDs for `name`.
 - The backup path or bucket should not point to the same physical location as the primary backend.
 - Changing a backup `name` affects historical sync metadata recognition, so treat that as a production change.
+
+### S3-Compatible Storage Notes
+
+When using S3-compatible services (MinIO, RustFS, Ceph, etc.), the `s3` section requires additional fields:
+
+| Field | Required? | Description |
+| --- | --- | --- |
+| `use_path_style` | Yes for most S3-compatible | Set to `true` for path-style URLs (`http://host/bucket/key`). Most S3-compatible services require this. |
+| `directory_marker_mode` | Yes for S3-compatible | **Must be explicitly set to `"none"`**. Without this, the RAGFS Rust binding panics with `AGFSConfigError: invalid directory_marker_mode: null` during startup, causing a silent crash loop. |
+| `use_ssl` | Optional | Set to `false` for HTTP endpoints (e.g. `http://localhost:9000`). |
+
+**Minimal S3-compatible example (RustFS/MinIO):**
+
+```json
+{
+  "name": "s3-backup",
+  "backend": "s3",
+  "s3": {
+    "bucket": "my-bucket",
+    "endpoint": "http://localhost:9000",
+    "access_key": "your-access-key",
+    "secret_key": "your-secret-key",
+    "prefix": "openviking",
+    "use_ssl": false,
+    "use_path_style": true,
+    "directory_marker_mode": "none"
+  }
+}
+```
+
+> **Why is `directory_marker_mode` required?**
+>
+> S3-compatible storage services handle "directories" differently from AWS S3. The RAGFS Rust binding must know whether to write directory marker objects when creating directories. Valid values are `"none"`, `"empty"`, and `"nonempty"`. For S3-compatible services that don't use directory markers (RustFS, MinIO, Ceph, etc.), set this to `"none"`. If omitted, the Rust binding defaults to `null` which is rejected, causing the server to crash silently during startup with `AGFSConfigError: invalid directory_marker_mode: null`.
+
+### Docker Networking for S3 Backup
+
+When running OpenViking in Docker with an S3 backup on the same host:
+
+- **Linux Docker**: Use `--network host` or the host's LAN IP. Docker bridge network can reach the host's LAN via gateway IP (e.g. `172.17.0.1:9000`).
+- **macOS/Windows Docker Desktop**: `--network host` is **not supported** on Docker Desktop. Use `host.docker.internal` as the S3 endpoint (maps to the host's localhost). Alternatively, use the host's LAN IP.
+
+If the server crashes silently on startup with S3 backup enabled, check the Docker networking first. The RAGFS Rust binding will produce `dispatch failure` if the S3 endpoint is unreachable from inside the container.
 
 ## Choosing a Sync Mode
 

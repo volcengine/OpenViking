@@ -78,7 +78,7 @@ async def test_encrypted_writes_lock_final_and_temp_paths(
                 "/local/default/temp/.encrypt_stage/571a25aab6e6bca05a60a6e4aec646389a9ac38237daf55ceda4f72f3d1b4afe.encrypt",
             ],
             "exact",
-            {"handle": None},
+            {"timeout": 1.0, "handle": None},
         )
     ]
     assert agfs.storage["/local/default/resources/note.md"] == expected_bytes

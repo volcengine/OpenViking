@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 407" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" role="img" aria-label="OpenViking benchmark results on LoCoMo and tau2-bench">
+<rect x="150" y="4" width="14" height="14" rx="3" fill="#898781"/><text x="170" y="15" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="12" fill="#c3c2b7">Without OpenViking</text><rect x="330" y="4" width="14" height="14" rx="3" fill="#3987e5"/><text x="350" y="15" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="12" fill="#c3c2b7">With OpenViking</text>
+<text x="150" y="48" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="13" font-weight="600" fill="#ffffff">User memory — LoCoMo · long-conversation QA accuracy</text>
+<line x1="150.0" y1="62" x2="150.0" y2="215" stroke="#383835" stroke-width="1"/>
+<text x="150.0" y="231" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="10" fill="#898781" text-anchor="middle">0%</text>
+<line x1="312.5" y1="62" x2="312.5" y2="215" stroke="#2c2c2a" stroke-width="1"/>
+<text x="312.5" y="231" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="10" fill="#898781" text-anchor="middle">25%</text>
+<line x1="475.0" y1="62" x2="475.0" y2="215" stroke="#2c2c2a" stroke-width="1"/>
+<text x="475.0" y="231" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="10" fill="#898781" text-anchor="middle">50%</text>
+<line x1="637.5" y1="62" x2="637.5" y2="215" stroke="#2c2c2a" stroke-width="1"/>
+<text x="637.5" y="231" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="10" fill="#898781" text-anchor="middle">75%</text>
+<line x1="800.0" y1="62" x2="800.0" y2="215" stroke="#2c2c2a" stroke-width="1"/>
+<text x="800.0" y="231" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="10" fill="#898781" text-anchor="middle">100%</text>
+<text x="138" y="87" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="12" fill="#c3c2b7" text-anchor="end">OpenClaw</text>
+<path d="M150,80 L150,62 L303.3,62 Q307.3,62 307.3,66 L307.3,76 Q307.3,80 303.3,80 Z" fill="#898781"/>
+<text x="314.3" y="75" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="11" fill="#c3c2b7">24.20%</text>
+<path d="M150,101 L150,83 L679.52,83 Q683.52,83 683.52,87 L683.52,97 Q683.52,101 679.52,101 Z" fill="#3987e5"/>
+<text x="690.52" y="96" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="11" fill="#c3c2b7">82.08%</text>
+<text x="138" y="144" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="12" fill="#c3c2b7" text-anchor="end">Hermes</text>
+<path d="M150,137 L150,119 L362.97,119 Q366.97,119 366.97,123 L366.97,133 Q366.97,137 362.97,137 Z" fill="#898781"/>
+<text x="373.97" y="132" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="11" fill="#c3c2b7">33.38%</text>
+<path d="M150,158 L150,140 L684.59,140 Q688.59,140 688.59,144 L688.59,154 Q688.59,158 684.59,158 Z" fill="#3987e5"/>
+<text x="695.59" y="153" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="11" fill="#c3c2b7">82.86%</text>
+<text x="138" y="201" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="12" fill="#c3c2b7" text-anchor="end">Claude Code</text>
+<path d="M150,194 L150,176 L517.865,176 Q521.865,176 521.865,180 L521.865,190 Q521.865,194 517.865,194 Z" fill="#898781"/>
+<text x="528.865" y="189" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="11" fill="#c3c2b7">57.21%</text>
+<path d="M150,215 L150,197 L668.0799999999999,197 Q672.0799999999999,197 672.0799999999999,201 L672.0799999999999,211 Q672.0799999999999,215 668.0799999999999,215 Z" fill="#3987e5"/>
+<text x="679.0799999999999" y="210" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="11" fill="#c3c2b7">80.32%</text>
+<text x="150" y="267" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="13" font-weight="600" fill="#ffffff">Agent experience — tau2-bench · multi-turn task success</text>
+<line x1="150.0" y1="281" x2="150.0" y2="377" stroke="#383835" stroke-width="1"/>
+<text x="150.0" y="393" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="10" fill="#898781" text-anchor="middle">0%</text>
+<line x1="312.5" y1="281" x2="312.5" y2="377" stroke="#2c2c2a" stroke-width="1"/>
+<text x="312.5" y="393" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="10" fill="#898781" text-anchor="middle">25%</text>
+<line x1="475.0" y1="281" x2="475.0" y2="377" stroke="#2c2c2a" stroke-width="1"/>
+<text x="475.0" y="393" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="10" fill="#898781" text-anchor="middle">50%</text>
+<line x1="637.5" y1="281" x2="637.5" y2="377" stroke="#2c2c2a" stroke-width="1"/>
+<text x="637.5" y="393" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="10" fill="#898781" text-anchor="middle">75%</text>
+<line x1="800.0" y1="281" x2="800.0" y2="377" stroke="#2c2c2a" stroke-width="1"/>
+<text x="800.0" y="393" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="10" fill="#898781" text-anchor="middle">100%</text>
+<text x="138" y="306" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="12" fill="#c3c2b7" text-anchor="end">Retail</text>
+<path d="M150,299 L150,281 L607.11,281 Q611.11,281 611.11,285 L611.11,295 Q611.11,299 607.11,299 Z" fill="#898781"/>
+<text x="618.11" y="294" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="11" fill="#c3c2b7">70.94%</text>
+<path d="M150,320 L150,302 L651.765,302 Q655.765,302 655.765,306 L655.765,316 Q655.765,320 651.765,320 Z" fill="#3987e5"/>
+<text x="662.765" y="315" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="11" fill="#c3c2b7">77.81%</text>
+<text x="138" y="363" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="12" fill="#c3c2b7" text-anchor="end">Airline</text>
+<path d="M150,356 L150,338 L499.47,338 Q503.47,338 503.47,342 L503.47,352 Q503.47,356 499.47,356 Z" fill="#898781"/>
+<text x="510.47" y="351" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="11" fill="#c3c2b7">54.38%</text>
+<path d="M150,377 L150,359 L576.625,359 Q580.625,359 580.625,363 L580.625,373 Q580.625,377 576.625,377 Z" fill="#3987e5"/>
+<text x="587.625" y="372" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="11" fill="#c3c2b7">66.25%</text>
+</svg>

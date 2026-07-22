@@ -69,8 +69,9 @@ class QueueManager:
     # Standard queue names
     EMBEDDING = "Embedding"
     SEMANTIC = "Semantic"
-    # Keep the on-disk queue name stable so pre-upgrade jobs remain recoverable.
-    ADD_RESOURCE = "ExternalParse"
+    # Keep the on-disk name stable so pre-upgrade jobs remain recoverable.
+    EXTERNAL_PARSE = "ExternalParse"
+    ADD_RESOURCE = "AddResource"
     SESSION_COMMIT = "SessionCommit"
 
     def __init__(
@@ -158,7 +159,7 @@ class QueueManager:
 
         if queue.name == self.EMBEDDING:
             max_concurrent = self._max_concurrent_embedding
-        elif queue.name in {self.ADD_RESOURCE, self.SESSION_COMMIT}:
+        elif queue.name in {self.EXTERNAL_PARSE, self.SESSION_COMMIT}:
             max_concurrent = self._max_concurrent_external_parse
         else:
             max_concurrent = self._max_concurrent_semantic

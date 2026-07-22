@@ -459,7 +459,6 @@ It is recommended to first go back to Explore and manually run PromQL to confirm
 ## Related Documents
 
 - [Observability and Troubleshooting](05-observability.md)
-- [Validating Vikingbot Metrics with Real Q&A](12-vikingbot-metrics-validation.md)
 - [Metrics](../concepts/12-metrics.md)
 - [Metrics API](../api/09-metrics.md)
 - [Server Deployment](03-deployment.md)
