@@ -653,6 +653,31 @@ class TestRewriteImageUris:
         assert _decode(fake.files[f"{root}/doc.md"]) == f"![p]({root}/logo.png)"
         assert f"{root}/.image_mappings.json" not in fake.files
 
+    async def test_parenthesized_markdown_image_path_rewritten(self):
+        # Regression for #3455: rewrite_image_uris must parse the same
+        # parenthesized Markdown image path that MarkdownParser stores as the
+        # sidecar key, otherwise the copied image is never linked back.
+        from openviking.parse.image_rewrite import rewrite_image_uris
+
+        root = "viking://resources/doc"
+        original_path = "文档_17 (17号项目)/image1.png"
+        fake = FakeVikingFS()
+        fake.files = {
+            f"{root}/doc.md": f"![image1]({original_path})".encode(),
+            f"{root}/image1.png": b"img",
+            f"{root}/.image_mappings.json": (
+                f'{{"doc.md": {{"{original_path}": "image1.png"}}}}'.encode()
+            ),
+        }
+
+        with self._patched(fake):
+            stats = await rewrite_image_uris(root, lock_handle=None)
+
+        assert stats == {"files_processed": 1, "references_rewritten": 1}
+        assert _decode(fake.files[f"{root}/doc.md"]) == f"![image1]({root}/image1.png)"
+        assert original_path not in _decode(fake.files[f"{root}/doc.md"])
+        assert f"{root}/.image_mappings.json" not in fake.files
+
     async def test_merge_temp_carries_sidecar_but_not_other_hidden_files(self):
         # _merge_temp must carry the declared .image_mappings.json sidecar, but
         # keep filtering every other hidden file a parser (or anything else)

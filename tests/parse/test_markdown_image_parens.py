@@ -9,7 +9,6 @@ directly, so they fail if the regex regresses to the old ``[^)]+`` form.
 
 from openviking.parse.parsers.markdown import MarkdownParser
 
-
 # Instantiate once to access the production regex
 _parser = MarkdownParser()
 IMAGE_PATTERN = _parser._image_pattern
