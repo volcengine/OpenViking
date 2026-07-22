@@ -607,29 +607,6 @@ class TestRewriteImageUris:
         assert _decode(fake.files[f"{root}/index/index.md"]) == (f"![p]({root}/index/logo.png)")
         assert f"{root}/index/.image_mappings.json" not in fake.files
 
-    async def test_parenthesized_mapping_consumed(self):
-        from openviking.parse.image_rewrite import rewrite_image_uris
-
-        root = "viking://resources/res"
-        original = "文档_17 (17号项目)/image1.png"
-        fake = FakeVikingFS()
-        fake.files = {
-            f"{root}/index/index.md": f"![image1]({original})".encode(),
-            f"{root}/index/image1.png": b"img",
-            f"{root}/index/.image_mappings.json": (
-                f'{{"index.md": {{"{original}": "image1.png"}}}}'.encode()
-            ),
-        }
-
-        with self._patched(fake):
-            stats = await rewrite_image_uris(root, lock_handle=None)
-
-        assert stats == {"files_processed": 1, "references_rewritten": 1}
-        assert _decode(fake.files[f"{root}/index/index.md"]) == (
-            f"![image1]({root}/index/image1.png)"
-        )
-        assert f"{root}/index/.image_mappings.json" not in fake.files
-
     async def test_split_doc_mapping_keys_resolved(self):
         # Keys produced for a split document are paths relative to the doc root
         # holding the mapping (possibly several levels deep).

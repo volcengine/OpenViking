@@ -9,6 +9,7 @@ directly, so they fail if the regex regresses to the old ``[^)]+`` form.
 
 from openviking.parse.parsers.markdown import MarkdownParser
 
+
 # Instantiate once to access the production regex
 _parser = MarkdownParser()
 IMAGE_PATTERN = _parser._image_pattern
@@ -58,7 +59,9 @@ class TestImagePatternParentheses:
 
     def test_multiple_images(self):
         """Multiple images on the same line, some with parens."""
-        text = "![a](img1.png) and ![b](docs (v2)/img2.png) and ![c](img3.png)"
+        text = (
+            "![a](img1.png) and ![b](docs (v2)/img2.png) and ![c](img3.png)"
+        )
         matches = [m.group(2) for m in IMAGE_PATTERN.finditer(text)]
         assert matches == ["img1.png", "docs (v2)/img2.png", "img3.png"]
 
