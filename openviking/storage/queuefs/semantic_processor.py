@@ -401,6 +401,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                         msg.target_uri,
                                         ctx=current_ctx,
                                         lock=semantic_lock.lock,
+                                        preserve_target_only=bool(msg.target_preexisting),
                                     )
                                     logger.info(
                                         "[SyncDiff] Diff computed: "
@@ -746,7 +747,16 @@ class SemanticProcessor(DequeueHandlerBase):
         ctx: Optional[RequestContext] = None,
         file_change_status: Optional[Dict[str, bool]] = None,
         lock: LockLease = NO_LOCK,
+        preserve_target_only: bool = False,
     ) -> DiffResult:
+        """Recursively sync root_uri into target_uri (top-down).
+
+        When ``preserve_target_only`` is True, files and directories that exist
+        only in the target (not in the source) are preserved instead of being
+        deleted. This protects user-managed files during re-syncs of watched
+        resources (e.g. Feishu documents). Files that exist in both are still
+        updated, and new files from the source are still added.
+        """
         viking_fs = get_viking_fs()
         if not await viking_fs.exists(root_uri, ctx=ctx):
             raise FileNotFoundError(
@@ -813,6 +823,11 @@ class SemanticProcessor(DequeueHandlerBase):
                     continue
 
                 if target_file and not root_file:
+                    if preserve_target_only:
+                        logger.debug(
+                            f"[SyncDiff] Preserving target-only file (preserve_target_only=True): {target_file}"
+                        )
+                        continue
                     try:
                         await viking_fs.rm(target_file, ctx=ctx, lock_handle=lock_handle)
                         diff.deleted_files.append(target_file)
@@ -892,6 +907,11 @@ class SemanticProcessor(DequeueHandlerBase):
                     target_subdir = None
 
                 if target_subdir and not root_subdir:
+                    if preserve_target_only:
+                        logger.debug(
+                            f"[SyncDiff] Preserving target-only directory (preserve_target_only=True): {target_subdir}"
+                        )
+                        continue
                     try:
                         await viking_fs.rm(
                             target_subdir,
