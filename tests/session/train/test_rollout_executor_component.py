@@ -511,6 +511,105 @@ def test_tau2_gym_env_passes_seed_to_user_llm_before_reset(monkeypatch):
     assert calls["reset_seed"] == 1234
 
 
+def test_tau2_fixed_first_user_simulator_uses_fixture_only_for_first_turn(monkeypatch):
+    from tau2.data_model.message import AssistantMessage, UserMessage
+    from tau2.user.user_simulator import UserSimulator
+
+    from benchmark.tau2.common.fixed_first_user import FixedFirstUserSimulator
+
+    generated = []
+
+    def fake_generate(self, message, state):
+        del self, message, state
+        generated.append(True)
+        return UserMessage(role="user", content="generated later")
+
+    monkeypatch.setattr(UserSimulator, "_generate_next_message", fake_generate)
+    simulator = FixedFirstUserSimulator(
+        fixed_first_message="cached first",
+        llm="openai/test-user",
+        instructions="scenario",
+    )
+    state = simulator.get_init_state()
+
+    first = simulator.generate_next_message(
+        AssistantMessage(role="assistant", content="start"), state
+    )[0]
+    second = simulator.generate_next_message(
+        AssistantMessage(role="assistant", content="continue"), state
+    )[0]
+
+    assert first.content == "cached first"
+    assert second.content == "generated later"
+    assert generated == [True]
+
+
+def test_tau2_first_user_cache_records_then_replays(tmp_path):
+    from benchmark.tau2.train.first_user_cache import FirstUserMessageCache
+
+    cache = FirstUserMessageCache(tmp_path, enabled=True)
+    identity = {
+        "task_signature": "tau2:airline:train:7:trial:0",
+        "seed": 305,
+        "user_model": "openai/test-user",
+        "temperature": 0.0,
+        "scenario_sha256": "scenario-hash",
+    }
+    fixed_messages = []
+
+    def reset_user(fixed_first_message):
+        fixed_messages.append(fixed_first_message)
+        return fixed_first_message or "generated first"
+
+    first = cache.run(identity, reset_user)
+    second = cache.run(identity, reset_user)
+
+    assert first.hit is False
+    assert second.hit is True
+    assert first.message == second.message == "generated first"
+    assert fixed_messages == [None, "generated first"]
+    assert first.path == second.path
+    assert first.path.is_file()
+
+
+def test_tau2_first_user_cache_off_never_reads_or_writes(tmp_path):
+    from benchmark.tau2.train.first_user_cache import FirstUserMessageCache
+
+    cache = FirstUserMessageCache(tmp_path, enabled=False)
+    generated = iter(["first", "second"])
+
+    first = cache.run({"task_signature": "case"}, lambda _fixed: next(generated))
+    second = cache.run({"task_signature": "case"}, lambda _fixed: next(generated))
+
+    assert first.message == "first"
+    assert second.message == "second"
+    assert first.hit is second.hit is False
+    assert list(tmp_path.rglob("*.json")) == []
+
+
+def test_tau2_first_user_cache_serializes_same_case_miss(tmp_path):
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    from benchmark.tau2.train.first_user_cache import FirstUserMessageCache
+
+    cache = FirstUserMessageCache(tmp_path, enabled=True)
+    identity = {"task_signature": "tau2:airline:train:7:trial:0"}
+    fixed_messages = []
+
+    def reset_user(fixed_first_message):
+        fixed_messages.append(fixed_first_message)
+        if fixed_first_message is None:
+            time.sleep(0.05)
+        return fixed_first_message or "generated once"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _index: cache.run(identity, reset_user), range(2)))
+
+    assert sorted(result.hit for result in results) == [False, True]
+    assert fixed_messages == [None, "generated once"]
+
+
 def test_tau2_native_env_records_communication_as_assistant_text(monkeypatch):
     import benchmark.tau2.common.tau2_env.tau2_environment as tau2_environment
     from benchmark.tau2.common.tau2_env.tau2_environment import Tau2BenchEnv
@@ -1217,6 +1316,8 @@ def test_tau2_rollout_backend_factory_selects_vikingbot(monkeypatch):
         "direct_experience_content": None,
         "direct_experience_name": None,
         "direct_experience_uri": None,
+        "first_user_cache": True,
+        "first_user_cache_dir": None,
     }
 
     module.make_tau2_rollout_executor(
@@ -1300,16 +1401,21 @@ def test_tau2_service_rollout_backend_option_overrides_default(monkeypatch):
     monkeypatch.setattr(service_app, "create_dataset_service_app", fake_create_dataset_service_app)
     monkeypatch.setattr(service_app, "make_tau2_rollout_executor", fake_make_tau2_rollout_executor)
 
-    app = service_app.create_app(rollout_backend="native")
+    app = service_app.create_app(rollout_backend="native", first_user_cache=False)
     executor = app["make_rollout_executor"]({"rollout_backend": "vikingbot", "max_iterations": 5})
 
     assert isinstance(executor, FakeExecutor)
     assert calls[-1]["factory"]["backend"] == "vikingbot"
     assert calls[-1]["factory"]["options"]["max_iterations"] == 5
     assert calls[-1]["factory"]["options"]["show_progress"] is False
+    assert calls[-1]["factory"]["options"]["first_user_cache"] is False
 
     app["make_rollout_executor"]({"rollout_backend": "native", "show_progress": True})
     assert calls[-1]["factory"]["options"]["show_progress"] is True
+
+    default_app = service_app.create_app(rollout_backend="native")
+    default_app["make_rollout_executor"]({})
+    assert calls[-1]["factory"]["options"]["first_user_cache"] is True
 
 
 @pytest.mark.asyncio
@@ -1428,7 +1534,7 @@ async def test_tau2_experience_loader_skill_is_required_with_relative_read_path(
 
 
 @pytest.mark.asyncio
-async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(monkeypatch):
+async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(monkeypatch, tmp_path):
     import benchmark.tau2.train.rollout_executor_vikingbot as module
     from benchmark.tau2.train.rollout_executor_vikingbot import VikingBotTau2RolloutExecutor
 
@@ -1449,9 +1555,10 @@ async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(monkeypatc
             self.policy = "policy"
             self.user_query = "user query"
 
-        def reset(self, *, seed=None):
+        def reset(self, *, seed=None, fixed_first_user_message=None):
             calls.append(("reset", threading.get_ident()))
             calls.append(("reset_seed", seed))
+            calls.append(("fixed_first_user_message", fixed_first_user_message))
 
         def list_openai_tools(self):
             return []
@@ -1492,7 +1599,7 @@ async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(monkeypatc
         },
         rubric=Rubric(name="rubric", description="", criteria=[]),
     )
-    executor = VikingBotTau2RolloutExecutor()
+    executor = VikingBotTau2RolloutExecutor(first_user_cache_dir=str(tmp_path))
 
     rollout = await executor._execute_one(
         case,
@@ -1502,6 +1609,9 @@ async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(monkeypatc
     assert rollout.metadata["reward"] == 1.0
     assert rollout.metadata["evaluation_result"] == {"ok": True}
     assert rollout.metadata["seed"] == 300
+    assert rollout.metadata["first_user_cache_enabled"] is True
+    assert rollout.metadata["first_user_cache_hit"] is False
+    assert Path(rollout.metadata["first_user_cache_path"]).is_file()
     assert "evaluation_result" not in rollout.evaluation.metadata
     call_values = dict(calls)
     assert call_values["case_lookup"] == {

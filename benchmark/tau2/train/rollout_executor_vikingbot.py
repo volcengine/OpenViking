@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import posixpath
 import re
 import time
@@ -24,6 +25,7 @@ from benchmark.tau2.train._rollout_helpers import (
 from benchmark.tau2.train._rollout_helpers import (
     _tau2_evaluation as _tau2_evaluation_helper,
 )
+from benchmark.tau2.train.first_user_cache import FirstUserMessageCache
 from openviking.message import Message, TextPart, ToolPart
 from openviking.session.train import (
     Case,
@@ -41,6 +43,14 @@ Tau2ExperienceLoaderMode = Literal["skill", "constraint", "direct_experience"]
 VikingBotSystemPromptProfile = Literal["full", "minimal"]
 DEFAULT_TAU2_EXPERIENCE_LOADER_MODE: Tau2ExperienceLoaderMode = "skill"
 DEFAULT_SYSTEM_PROMPT_PROFILE: VikingBotSystemPromptProfile = "minimal"
+DEFAULT_FIRST_USER_CACHE_DIR = (
+    Path(__file__).resolve().parents[3]
+    / "result"
+    / "tau2"
+    / "train"
+    / "cache"
+    / "first_user_messages"
+)
 
 
 def normalize_system_prompt_profile(value: Any) -> VikingBotSystemPromptProfile:
@@ -696,6 +706,8 @@ class VikingBotTau2RolloutExecutor:
     direct_experience_content: str | None = None
     direct_experience_name: str | None = None
     direct_experience_uri: str | None = None
+    first_user_cache: bool = True
+    first_user_cache_dir: str | None = None
 
     def __post_init__(self) -> None:
         if self.rollout_language not in {"default", "zh"}:
@@ -745,7 +757,19 @@ class VikingBotTau2RolloutExecutor:
         stage_started_at = time.perf_counter()
         Tau2BenchToolProvider = _tool_provider_cls()
         provider = Tau2BenchToolProvider(domain, task_id, data_root=data_root)
-        await asyncio.to_thread(provider.reset, seed=rollout_seed)
+        first_user_cache = FirstUserMessageCache(
+            self.first_user_cache_dir or DEFAULT_FIRST_USER_CACHE_DIR,
+            enabled=self.first_user_cache,
+        )
+        first_user_cache_result = await asyncio.to_thread(
+            first_user_cache.run,
+            _first_user_cache_identity(case, seed=rollout_seed),
+            lambda fixed: _reset_provider(
+                provider,
+                seed=rollout_seed,
+                fixed_first_user_message=fixed,
+            ),
+        )
         timings.record("provider_reset", stage_started_at)
 
         case_lookup = _tau2_case_lookup(case)
@@ -862,6 +886,16 @@ class VikingBotTau2RolloutExecutor:
                 "train_trial": case.input.get("train_trial"),
                 "train_trial_count": case.input.get("train_trial_count"),
                 "seed": rollout_seed,
+                "first_user_cache_enabled": self.first_user_cache,
+                "first_user_cache_hit": first_user_cache_result.hit,
+                "first_user_cache_path": (
+                    str(first_user_cache_result.path)
+                    if first_user_cache_result.path is not None
+                    else None
+                ),
+                "first_user_message_sha256": sha256(
+                    first_user_cache_result.message.encode("utf-8")
+                ).hexdigest(),
                 "original_case_name": case.input.get("original_case_name"),
                 "reward": reward,
                 "evaluation_result": evaluation_result,
@@ -914,6 +948,41 @@ def _stable_case_seed(base_seed: int, *, task_no: int, trial: Any) -> int:
     except (TypeError, ValueError):
         trial_index = 0
     return int(base_seed) + int(task_no) + trial_index * 100_000
+
+
+def _first_user_cache_identity(case: Case, *, seed: int) -> dict[str, Any]:
+    from tau2.user.user_simulator import UserSimulator
+
+    from benchmark.tau2.common.tau2_env.tau2_environment import DEFAULT_TAU2_USER_LLM
+
+    scenario = str(case.input.get("user_query") or "")
+    user_model = os.getenv("TAU2_USER_LLM") or DEFAULT_TAU2_USER_LLM
+    user_simulator = UserSimulator(
+        llm=user_model,
+        llm_args={"temperature": 0.0, "seed": seed},
+        instructions=scenario,
+    )
+    return {
+        "task_signature": case.task_signature,
+        "seed": seed,
+        "user_model": user_model,
+        "temperature": 0.0,
+        "scenario_sha256": sha256(scenario.encode("utf-8")).hexdigest(),
+        "prompt_sha256": sha256(user_simulator.system_prompt.encode("utf-8")).hexdigest(),
+    }
+
+
+def _reset_provider(
+    provider: Any,
+    *,
+    seed: int,
+    fixed_first_user_message: str | None,
+) -> str:
+    provider.reset(
+        seed=seed,
+        fixed_first_user_message=fixed_first_user_message,
+    )
+    return str(provider.user_query)
 
 
 def _tau2_case_lookup(case: Case) -> dict[str, Any]:

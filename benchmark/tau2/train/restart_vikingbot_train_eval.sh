@@ -25,6 +25,7 @@ openviking_capture_train_launch_command "$@"
 SLOT="0"
 AUTO_COMMIT=false
 TAU2_ROLLOUT_SEED="${TAU2_ROLLOUT_SEED:-300}"
+TAU2_FIRST_USER_CACHE="${TAU2_FIRST_USER_CACHE:-on}"
 declare -a TRAIN_CLI_ARGS=()
 
 usage() {
@@ -45,6 +46,8 @@ Launcher options:
             notes with the command and each completed train/eval stage result.
   --seed N  Base rollout seed. Each task/trial derives a stable seed from it.
             Default: 300.
+  --first-user-cache on|off
+            Cache and replay each task/trial's first user message. Default: on.
 
 All remaining args are passed to benchmark/tau2/train/run_batch_train_eval.sh.
 USAGE
@@ -81,6 +84,18 @@ parse_launcher_args() {
         TAU2_ROLLOUT_SEED="${1#--seed=}"
         shift 1
         ;;
+      --first-user-cache)
+        if [[ $# -lt 2 ]]; then
+          echo "[restart-vikingbot-train] ERROR: --first-user-cache requires on or off" >&2
+          exit 1
+        fi
+        TAU2_FIRST_USER_CACHE="$2"
+        shift 2
+        ;;
+      --first-user-cache=*)
+        TAU2_FIRST_USER_CACHE="${1#--first-user-cache=}"
+        shift 1
+        ;;
       -h|--help)
         usage
         exit 0
@@ -112,9 +127,17 @@ validate_seed() {
   fi
 }
 
+validate_first_user_cache() {
+  if [[ "${TAU2_FIRST_USER_CACHE}" != "on" && "${TAU2_FIRST_USER_CACHE}" != "off" ]]; then
+    echo "[restart-vikingbot-train] ERROR: --first-user-cache must be on or off, got: ${TAU2_FIRST_USER_CACHE}" >&2
+    exit 1
+  fi
+}
+
 parse_launcher_args "$@"
 validate_slot
 validate_seed
+validate_first_user_cache
 
 if [[ "${SLOT}" == "0" ]]; then
   DEFAULT_OPENVIKING_PORT="1933"
@@ -351,7 +374,7 @@ start_openviking_server() {
 
 start_tau2_service() {
   log "restarting tau2 service on ${TAU2_SERVICE_HOST}:${TAU2_SERVICE_PORT} backend=${TAU2_ROLLOUT_BACKEND} loader_mode=${TAU2_EXPERIENCE_LOADER_MODE}"
-  log "tau2 service seed=${TAU2_ROLLOUT_SEED} concurrency=${TAU2_MAX_ROLLOUT_CONCURRENCY} rollout_thread_workers=${TAU2_ROLLOUT_THREAD_WORKERS}"
+  log "tau2 service seed=${TAU2_ROLLOUT_SEED} first_user_cache=${TAU2_FIRST_USER_CACHE} concurrency=${TAU2_MAX_ROLLOUT_CONCURRENCY} rollout_thread_workers=${TAU2_ROLLOUT_THREAD_WORKERS}"
   log "tau2 service log: ${TAU2_SERVICE_LOG}"
   : > "${TAU2_SERVICE_LOG}"
   stop_existing_listener "tau2 rollout service" "${TAU2_SERVICE_PORT}"
@@ -366,6 +389,7 @@ start_tau2_service() {
       --rollout-backend "${TAU2_ROLLOUT_BACKEND}" \
       --loader-mode "${TAU2_EXPERIENCE_LOADER_MODE}" \
       --seed "${TAU2_ROLLOUT_SEED}" \
+      --first-user-cache "${TAU2_FIRST_USER_CACHE}" \
       --max-rollout-concurrency "${TAU2_MAX_ROLLOUT_CONCURRENCY}" \
       --rollout-thread-workers "${TAU2_ROLLOUT_THREAD_WORKERS}"
   ) >"${TAU2_SERVICE_LOG}" 2>&1 &

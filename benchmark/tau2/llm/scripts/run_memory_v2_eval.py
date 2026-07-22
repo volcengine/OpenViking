@@ -318,52 +318,32 @@ def _load_fixed_first_user_fixture(path: Path) -> dict[str, str]:
     return {str(key): str(value) for key, value in mapping.items()}
 
 
-def _has_user_message(state: Any) -> bool:
-    for message in getattr(state, "messages", []) or []:
-        role = getattr(message, "role", None)
-        if str(getattr(role, "value", role)) == "user":
-            return True
-    return False
-
-
-def _append_incoming_user_context(message: Any, state: Any) -> None:
-    from tau2.data_model.message import AssistantMessage, MultiToolMessage, ToolMessage
-
-    if isinstance(message, MultiToolMessage):
-        state.messages.extend(message.tool_messages)
-    elif isinstance(message, ToolMessage):
-        state.messages.append(message)
-    elif isinstance(message, AssistantMessage) and (
-        message.has_content() or message.is_tool_call()
-    ):
-        state.messages.append(message)
-
-
 def _register_fixed_first_user(args: argparse.Namespace) -> str:
     if not args.fixed_first_user_file:
         return args.user
     _add_tau2_to_path(args.tau2_repo)
     mapping = _load_fixed_first_user_fixture(args.fixed_first_user_file)
 
-    from tau2.data_model.message import UserMessage
     from tau2.registry import registry
-    from tau2.user.user_simulator import UserSimulator
 
-    class FixedFirstUserSimulator(UserSimulator):  # type: ignore[misc]
-        def _generate_next_message(self, message: Any, state: Any) -> UserMessage:  # type: ignore[override]
-            if not _has_user_message(state):
-                key = _scenario_sha256(str(self.instructions or ""))
-                fixed = mapping.get(key)
-                if fixed is None:
-                    raise RuntimeError(
-                        f"fixed-first-user fixture does not cover this TAU-2 scenario: sha256={key}"
-                    )
-                _append_incoming_user_context(message, state)
-                return UserMessage(role="user", content=fixed)
-            return super()._generate_next_message(message, state)
+    from benchmark.tau2.common.fixed_first_user import FixedFirstUserSimulator
+
+    class FixtureFirstUserSimulator(FixedFirstUserSimulator):  # type: ignore[misc]
+        def __init__(self, *, instructions: str | None = None, **kwargs: Any):
+            key = _scenario_sha256(str(instructions or ""))
+            fixed = mapping.get(key)
+            if fixed is None:
+                raise RuntimeError(
+                    f"fixed-first-user fixture does not cover this TAU-2 scenario: sha256={key}"
+                )
+            super().__init__(
+                fixed_first_message=fixed,
+                instructions=instructions,
+                **kwargs,
+            )
 
     if FIXED_FIRST_USER_NAME not in registry.get_users():
-        registry.register_user(FixedFirstUserSimulator, FIXED_FIRST_USER_NAME)
+        registry.register_user(FixtureFirstUserSimulator, FIXED_FIRST_USER_NAME)
     return FIXED_FIRST_USER_NAME
 
 
