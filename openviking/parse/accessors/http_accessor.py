@@ -30,6 +30,7 @@ from openviking.parse.parsers.media.constants import (
     VIDEO_EXTENSIONS,
 )
 from openviking.utils import is_code_hosting_blob_url
+from openviking.utils.code_hosting_utils import _domain_matches
 from openviking.utils.network_guard import build_httpx_request_validation_hooks
 from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.utils.logger import get_logger
@@ -843,14 +844,14 @@ class HTTPAccessor(DataAccessor):
             gitlab_domains = config.code.gitlab_domains
             github_raw_domain = config.code.github_raw_domain
 
-            if parsed.netloc in github_domains:
+            if _domain_matches(parsed, github_domains):
                 path_parts = parsed.path.strip("/").split("/")
                 if len(path_parts) >= 4 and path_parts[2] == "blob":
                     # Remove 'blob'
                     new_path = "/".join(path_parts[:2] + path_parts[3:])
                     return f"https://{github_raw_domain}/{new_path}"
 
-            if parsed.netloc in gitlab_domains and "/blob/" in parsed.path:
+            if _domain_matches(parsed, gitlab_domains) and "/blob/" in parsed.path:
                 return url.replace("/blob/", "/raw/")
 
         except Exception as e:
