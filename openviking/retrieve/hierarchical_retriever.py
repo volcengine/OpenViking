@@ -12,8 +12,10 @@ import heapq
 import logging
 import math
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import unquote
 
 from openviking.core.retrieval_targets import default_target_directories
 from openviking.models.embedder.base import EmbedResult, embed_compat
@@ -41,10 +43,292 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+_INTERNAL_SESSION_LOG_FILENAMES = frozenset({"messages.jsonl"})
+_INTERNAL_SESSION_SIDECAR_FILENAMES = frozenset({".abstract.md", ".overview.md"})
+_SESSION_LOG_FILTER_MAX_SCAN_PAGES = 8
+_SESSION_URI_MAX_LENGTH = 4096
+_SESSION_URI_MAX_DECODE_PASSES = 16
+
+
+@dataclass(frozen=True)
+class _SessionLogClassification:
+    is_internal: bool = False
+    incomplete: bool = False
+
+    @property
+    def should_exclude(self) -> bool:
+        return self.is_internal or self.incomplete
+
+
+@dataclass
+class _SessionLogReplacementBudget:
+    remaining: int
+
+    def claim(self) -> bool:
+        if self.remaining <= 0:
+            return False
+        self.remaining -= 1
+        return True
+
+
+def _new_session_log_replacement_budget() -> _SessionLogReplacementBudget:
+    # The first page preserves the pre-filter search call. Only replacement
+    # pages consume the shared request budget.
+    return _SessionLogReplacementBudget(remaining=max(0, _SESSION_LOG_FILTER_MAX_SCAN_PAGES - 1))
+
 
 class RetrieverMode(str):
     THINKING = "thinking"
     QUICK = "quick"
+
+
+def _session_root_depth(parts: List[str], user_id: Optional[str]) -> Optional[int]:
+    if len(parts) >= 2 and parts[0] == "session":
+        return 2
+    if not parts or parts[0] != "user":
+        return None
+
+    is_short = len(parts) >= 3 and parts[1] == "sessions"
+    is_canonical = len(parts) >= 4 and parts[2] == "sessions"
+    if is_short and is_canonical:
+        normalized_user_id = user_id.casefold() if isinstance(user_id, str) else None
+        # A user literally named "sessions" makes the short and canonical
+        # grammars overlap. Retrieval has the request identity, so use it.
+        # Without identity, prefer the canonical shape used by stored records.
+        return 4 if normalized_user_id in (None, parts[1]) else 3
+    if is_canonical:
+        return 4
+    if is_short:
+        return 3
+    return None
+
+
+def _session_uri_tail(uri: str, user_id: Optional[str] = None) -> tuple[Optional[List[str]], bool]:
+    """Return the tail below one authoritative session root and parse status."""
+    scheme = "viking://"
+    if len(uri) < len(scheme) or uri[: len(scheme)].casefold() != scheme:
+        return None, False
+
+    # Find URI delimiters only inside the bounded path prefix. Percent-encoded
+    # '?' and '#' remain path data after decoding.
+    scan_end = min(len(uri), _SESSION_URI_MAX_LENGTH)
+    delimiter_positions = [
+        position
+        for position in (
+            uri.find("?", len(scheme), scan_end),
+            uri.find("#", len(scheme), scan_end),
+        )
+        if position >= 0
+    ]
+    path_end = min(delimiter_positions) if delimiter_positions else scan_end
+    path_complete = bool(delimiter_positions) or len(uri) <= _SESSION_URI_MAX_LENGTH
+    path = uri[len(scheme) : path_end].rstrip("/")
+
+    for _ in range(_SESSION_URI_MAX_DECODE_PASSES):
+        decoded = unquote(path)
+        if decoded == path:
+            break
+        path = decoded
+    else:
+        path_complete = False
+
+    # Split decoded path data directly. Passing it back through a URI parser
+    # would reinterpret encoded '?' or '#' bytes as query/fragment delimiters.
+    parts = [part for part in path.strip("/").casefold().split("/") if part]
+    root_depth = _session_root_depth(parts, user_id)
+    return (parts[root_depth:] if root_depth is not None else None), not path_complete
+
+
+def _classify_session_log_uri(uri: str, user_id: Optional[str] = None) -> _SessionLogClassification:
+    tail, incomplete = _session_uri_tail(uri, user_id)
+    if incomplete:
+        # A recognizable session root fails closed. Other overlong/overencoded
+        # URIs are indeterminate and are excluded by should_exclude as well.
+        return _SessionLogClassification(
+            is_internal=tail is not None,
+            incomplete=True,
+        )
+    return _SessionLogClassification(
+        is_internal=bool(tail is not None and _is_internal_session_log_tail(tail))
+    )
+
+
+def _is_internal_session_log_uri(uri: str, user_id: Optional[str] = None) -> bool:
+    """Return whether a URI names a session transcript or its generated sidecar."""
+    return _classify_session_log_uri(uri, user_id).is_internal
+
+
+def _is_internal_session_log_tail(tail: List[str]) -> bool:
+    if tail in (["messages.jsonl"], [".abstract.md"], [".overview.md"]):
+        return True
+    if (
+        len(tail) == 2
+        and tail[0] in _INTERNAL_SESSION_LOG_FILENAMES
+        and tail[1] in _INTERNAL_SESSION_SIDECAR_FILENAMES
+    ):
+        return True
+    if len(tail) >= 3 and tail[0] == "history" and tail[1].startswith("archive_"):
+        archive_tail = tail[2:]
+        return archive_tail in (
+            ["messages.jsonl"],
+            [".abstract.md"],
+            [".overview.md"],
+            ["messages.jsonl", ".abstract.md"],
+            ["messages.jsonl", ".overview.md"],
+        )
+    return False
+
+
+def _classify_session_log_result(
+    result: Dict[str, Any], user_id: Optional[str] = None
+) -> _SessionLogClassification:
+    """Also catch L0/L1 sidecars represented as a base URI plus a level."""
+    uri = str(result.get("uri", ""))
+    classification = _classify_session_log_uri(uri, user_id)
+    if classification.should_exclude:
+        return classification
+    try:
+        level = int(result.get("level", 2))
+    except (TypeError, ValueError):
+        return classification
+    if level not in (0, 1):
+        return classification
+    tail, _ = _session_uri_tail(uri, user_id)
+    return _SessionLogClassification(
+        is_internal=bool(
+            tail == []
+            or (
+                tail is not None
+                and len(tail) == 2
+                and tail[0] == "history"
+                and tail[1].startswith("archive_")
+            )
+        )
+    )
+
+
+def _is_internal_session_log_result(result: Dict[str, Any], user_id: Optional[str] = None) -> bool:
+    return _classify_session_log_result(result, user_id).is_internal
+
+
+async def _search_in_tenant_excluding_session_logs(
+    vector_proxy: VikingDBManagerProxy,
+    *,
+    desired_limit: int,
+    page_limit: int,
+    query_vector: Optional[List[float]],
+    sparse_query_vector: Optional[Dict[str, float]],
+    context_type: Optional[str],
+    target_directories: List[str],
+    extra_filter: Optional[FilterExpr | Dict[str, Any]],
+    level: Optional[List[int]],
+    session_user_id: Optional[str] = None,
+    replacement_page_budget: Optional[_SessionLogReplacementBudget] = None,
+) -> tuple[List[Dict[str, Any]], int, int, bool]:
+    results: List[Dict[str, Any]] = []
+    searches = 0
+    scanned = 0
+    offset = 0
+    truncated = False
+    budget = replacement_page_budget or _new_session_log_replacement_budget()
+    while True:
+        page = await vector_proxy.search_in_tenant(
+            query_vector=query_vector,
+            sparse_query_vector=sparse_query_vector,
+            context_type=context_type,
+            target_directories=target_directories,
+            extra_filter=extra_filter,
+            level=level,
+            limit=page_limit,
+            offset=offset,
+        )
+        searches += 1
+        scanned += len(page)
+        normalization_incomplete = False
+        for result in page:
+            classification = _classify_session_log_result(result, session_user_id)
+            normalization_incomplete = normalization_incomplete or classification.incomplete
+            if not classification.should_exclude:
+                results.append(result)
+        if normalization_incomplete:
+            truncated = True
+            logger.warning("Session-log filtering excluded an incompletely normalized global URI")
+            get_current_telemetry().count("vector.session_log_filter_truncated", 1)
+        if len(results) >= desired_limit or len(page) < page_limit:
+            break
+        if not budget.claim():
+            truncated = True
+            logger.warning(
+                "Session-log filtering exhausted the request-wide replacement-page "
+                "budget during global search before finding %d eligible results",
+                desired_limit,
+            )
+            get_current_telemetry().count("vector.session_log_filter_truncated", 1)
+            break
+        offset += page_limit
+    return results[:desired_limit], searches, scanned, truncated
+
+
+async def _search_children_excluding_session_logs(
+    vector_proxy: VikingDBManagerProxy,
+    *,
+    parent_uri: str,
+    desired_limit: int,
+    page_limit: int,
+    query_vector: Optional[List[float]],
+    sparse_query_vector: Optional[Dict[str, float]],
+    context_type: Optional[str],
+    target_directories: Optional[List[str]],
+    extra_filter: Optional[FilterExpr | Dict[str, Any]],
+    session_user_id: Optional[str] = None,
+    replacement_page_budget: Optional[_SessionLogReplacementBudget] = None,
+) -> tuple[List[Dict[str, Any]], int, int, bool]:
+    results: List[Dict[str, Any]] = []
+    searches = 0
+    scanned = 0
+    offset = 0
+    truncated = False
+    budget = replacement_page_budget or _new_session_log_replacement_budget()
+    while True:
+        page = await vector_proxy.search_children_in_tenant(
+            parent_uri=parent_uri,
+            query_vector=query_vector,
+            sparse_query_vector=sparse_query_vector,
+            context_type=context_type,
+            target_directories=target_directories,
+            extra_filter=extra_filter,
+            limit=page_limit,
+            offset=offset,
+        )
+        searches += 1
+        scanned += len(page)
+        normalization_incomplete = False
+        for result in page:
+            classification = _classify_session_log_result(result, session_user_id)
+            normalization_incomplete = normalization_incomplete or classification.incomplete
+            if not classification.should_exclude:
+                results.append(result)
+        if normalization_incomplete:
+            truncated = True
+            logger.warning(
+                "Session-log filtering excluded an incompletely normalized child URI under %s",
+                parent_uri,
+            )
+            get_current_telemetry().count("vector.session_log_filter_truncated", 1)
+        if len(results) >= desired_limit or len(page) < page_limit:
+            break
+        if not budget.claim():
+            truncated = True
+            logger.warning(
+                "Session-log filtering exhausted the request-wide replacement-page "
+                "budget under %s before finding %d eligible results",
+                parent_uri,
+                desired_limit,
+            )
+            get_current_telemetry().count("vector.session_log_filter_truncated", 1)
+            break
+        offset += page_limit
+    return results[:desired_limit], searches, scanned, truncated
 
 
 class HierarchicalRetriever:
@@ -172,21 +456,33 @@ class HierarchicalRetriever:
         if image_query and context_type is None:
             context_type = ContextType.RESOURCE.value
 
+        session_user_id = getattr(getattr(ctx, "user", None), "user_id", None)
+        replacement_page_budget = _new_session_log_replacement_budget()
+        retrieval_truncated = False
         if mode == RetrieverMode.QUICK:
             search_limit = max(limit * 5, 50) if image_query else max(limit, self.GLOBAL_SEARCH_TOPK)
             with telemetry.measure("search.vector_retrieval"):
-                quick_results = await vector_proxy.search_in_tenant(
+                (
+                    quick_results,
+                    search_count,
+                    scanned_count,
+                    retrieval_truncated,
+                ) = await _search_in_tenant_excluding_session_logs(
+                    vector_proxy,
+                    desired_limit=search_limit,
+                    page_limit=search_limit,
                     query_vector=query_vector,
                     sparse_query_vector=sparse_query_vector,
                     context_type=context_type,
                     target_directories=target_dirs,
                     extra_filter=scope_dsl,
                     level=level,
-                    limit=search_limit,
+                    session_user_id=session_user_id,
+                    replacement_page_budget=replacement_page_budget,
                 )
-            telemetry.count("vector.searches", 1)
-            telemetry.count("vector.scored", len(quick_results))
-            telemetry.count("vector.scanned", len(quick_results))
+            telemetry.count("vector.searches", search_count)
+            telemetry.count("vector.scored", scanned_count)
+            telemetry.count("vector.scanned", scanned_count)
 
             collected_by_uri: Dict[str, Dict[str, Any]] = {}
             for result in quick_results:
@@ -215,19 +511,29 @@ class HierarchicalRetriever:
             rerank_used = False
         else:
             # Step 2: Global vector search to supplement starting points
+            global_search_limit = max(limit, self.GLOBAL_SEARCH_TOPK)
             with telemetry.measure("search.vector_retrieval"):
-                global_results = await vector_proxy.search_in_tenant(
+                (
+                    global_results,
+                    search_count,
+                    scanned_count,
+                    global_truncated,
+                ) = await _search_in_tenant_excluding_session_logs(
+                    vector_proxy,
+                    desired_limit=global_search_limit,
+                    page_limit=global_search_limit,
                     query_vector=query_vector,
                     sparse_query_vector=sparse_query_vector,
                     context_type=context_type,
                     target_directories=target_dirs,
                     extra_filter=scope_dsl,
                     level=[0, 1],
-                    limit=max(limit, self.GLOBAL_SEARCH_TOPK),
+                    session_user_id=session_user_id,
+                    replacement_page_budget=replacement_page_budget,
                 )
-            telemetry.count("vector.searches", 1)
-            telemetry.count("vector.scored", len(global_results))
-            telemetry.count("vector.scanned", len(global_results))
+            telemetry.count("vector.searches", search_count)
+            telemetry.count("vector.scored", scanned_count)
+            telemetry.count("vector.scanned", scanned_count)
 
             # Debug: Print all URIs in global_results
             if logger.isEnabledFor(logging.DEBUG):
@@ -281,6 +587,7 @@ class HierarchicalRetriever:
 
             # Step 4: Recursive search
             with telemetry.measure("search.vector_retrieval"):
+                recursive_truncation: Dict[str, bool] = {}
                 candidates = await self._recursive_search(
                     vector_proxy=vector_proxy,
                     query=query.query,
@@ -296,7 +603,11 @@ class HierarchicalRetriever:
                     scope_dsl=scope_dsl,
                     initial_candidates=initial_candidates,
                     level=level,
+                    truncation_state=recursive_truncation,
+                    session_user_id=session_user_id,
+                    replacement_page_budget=replacement_page_budget,
                 )
+            retrieval_truncated = global_truncated or recursive_truncation.get("truncated", False)
             apply_hotness = True
             rerank_used = self._rerank_client is not None and mode == RetrieverMode.THINKING
 
@@ -321,6 +632,7 @@ class HierarchicalRetriever:
             query=query,
             matched_contexts=final,
             searched_directories=root_uris,
+            truncated=retrieval_truncated,
         )
 
     def _resolve_threshold(self, threshold: Optional[float]) -> float:
@@ -407,6 +719,9 @@ class HierarchicalRetriever:
         scope_dsl: Optional[FilterExpr | Dict[str, Any]] = None,
         initial_candidates: Optional[List[Dict[str, Any]]] = None,
         level: Optional[List[int]] = None,
+        truncation_state: Optional[Dict[str, bool]] = None,
+        session_user_id: Optional[str] = None,
+        replacement_page_budget: Optional[_SessionLogReplacementBudget] = None,
     ) -> List[Dict[str, Any]]:
         """
         Recursive search with directory priority return and score propagation.
@@ -428,12 +743,16 @@ class HierarchicalRetriever:
         prev_pool_size = 0
         convergence_rounds = 0
         stagnant_rounds = 0
+        replacement_page_budget = replacement_page_budget or _new_session_log_replacement_budget()
 
         # Add initial candidates that match the requested level.
         if initial_candidates:
             for r in initial_candidates:
                 uri = r.get("uri", "")
-                if not uri:
+                classification = _classify_session_log_result(r, session_user_id)
+                if classification.incomplete and truncation_state is not None:
+                    truncation_state["truncated"] = True
+                if not uri or classification.should_exclude:
                     continue
                 if level is None or r.get("level", 2) in level:
                     score = self._finite_score(r.get("_score", 0.0))
@@ -452,17 +771,30 @@ class HierarchicalRetriever:
 
         # Initialize: process starting points
         for uri, score in starting_points:
+            classification = _classify_session_log_uri(uri, session_user_id)
+            if classification.incomplete and truncation_state is not None:
+                truncation_state["truncated"] = True
+            if classification.should_exclude:
+                continue
             heapq.heappush(dir_queue, (-score, uri))
 
-        async def search_children(current_uri: str) -> List[Dict[str, Any]]:
-            return await vector_proxy.search_children_in_tenant(
+        child_search_limit = max(limit * 2, 20)
+
+        async def search_children(
+            current_uri: str,
+        ) -> tuple[List[Dict[str, Any]], int, int, bool]:
+            return await _search_children_excluding_session_logs(
+                vector_proxy,
                 parent_uri=current_uri,
+                desired_limit=child_search_limit,
+                page_limit=child_search_limit,
                 query_vector=query_vector,
-                sparse_query_vector=sparse_query_vector,  # Pass sparse vector
+                sparse_query_vector=sparse_query_vector,
                 context_type=context_type,
                 target_directories=target_dirs,
                 extra_filter=scope_dsl,
-                limit=max(limit * 2, 20),
+                session_user_id=session_user_id,
+                replacement_page_budget=replacement_page_budget,
             )
 
         parallelism = max(1, self.MAX_PARALLEL_CHILD_SEARCHES)
@@ -486,10 +818,17 @@ class HierarchicalRetriever:
             )
 
             telemetry = get_current_telemetry()
-            for (_, current_score), results in zip(batch, batch_results, strict=True):
-                telemetry.count("vector.searches", 1)
-                telemetry.count("vector.scored", len(results))
-                telemetry.count("vector.scanned", len(results))
+            for (_, current_score), (
+                results,
+                search_count,
+                scanned_count,
+                search_truncated,
+            ) in zip(batch, batch_results, strict=True):
+                if search_truncated and truncation_state is not None:
+                    truncation_state["truncated"] = True
+                telemetry.count("vector.searches", search_count)
+                telemetry.count("vector.scored", scanned_count)
+                telemetry.count("vector.scanned", scanned_count)
 
                 if not results:
                     continue
@@ -501,6 +840,11 @@ class HierarchicalRetriever:
 
                 for r, score in zip(results, query_scores, strict=True):
                     uri = r.get("uri", "")
+                    classification = _classify_session_log_result(r, session_user_id)
+                    if classification.incomplete and truncation_state is not None:
+                        truncation_state["truncated"] = True
+                    if not uri or classification.should_exclude:
+                        continue
                     final_score = (
                         alpha * score + (1 - alpha) * current_score if current_score else score
                     )

@@ -305,12 +305,14 @@ class QueryResult:
         matched_contexts: List of matched contexts
         searched_directories: Directories that were searched
         thinking_trace: Structured thinking trace for visualization
+        truncated: Whether bounded replacement paging hit its scan cap
     """
 
     query: TypedQuery
     matched_contexts: List[MatchedContext]
     searched_directories: List[str]
     thinking_trace: ThinkingTrace = field(default_factory=ThinkingTrace)
+    truncated: bool = False
 
     def get_trace_messages(self) -> List[str]:
         """Get trace as simple message list."""
@@ -400,6 +402,7 @@ class FindResult:
         return {
             "query": qr.query.query,
             "searched_directories": qr.searched_directories,
+            "truncated": qr.truncated,
             "matched_contexts": [
                 {
                     "uri": ctx.uri,

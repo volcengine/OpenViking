@@ -1268,6 +1268,7 @@ class VikingVectorIndexBackend:
         target_directories: Optional[List[str]] = None,
         extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
         limit: int = 10,
+        offset: int = 0,
     ) -> List[Dict[str, Any]]:
         # TODO：Better Alternative to Current Temporary Fix
 
@@ -1299,6 +1300,7 @@ class VikingVectorIndexBackend:
             sparse_query_vector=sparse_query_vector,
             filter=merged_filter,
             limit=limit,
+            offset=offset,
             output_fields=RETRIEVAL_OUTPUT_FIELDS,
             ctx=ctx,
         )
