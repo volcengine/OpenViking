@@ -247,6 +247,102 @@ async def test_show_path_not_found_returns_404(client_with_resource):
     assert resp.json()["status"] == "error"
 
 
+async def test_diff_returns_unified_diff_for_path(client_with_resource, service):
+    client, _ = client_with_resource
+    path = "viking://resources/snapshot_diff_fixture.md"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    await service.viking_fs.write_file(path, b"# Title\n\nold line\n", ctx=ctx)
+    from_commit = (
+        await client.post(
+            "/api/v1/snapshot/commit",
+            json={"message": "snapshot diff v1", "paths": [path]},
+        )
+    ).json()["result"]["commit_oid"]
+
+    await service.viking_fs.write_file(path, b"# Title\n\nnew line\n", ctx=ctx)
+    to_commit = (
+        await client.post(
+            "/api/v1/snapshot/commit",
+            json={"message": "snapshot diff v2", "paths": [path]},
+        )
+    ).json()["result"]["commit_oid"]
+
+    response = await client.get(
+        "/api/v1/snapshot/diff",
+        params={"path": path, "from": from_commit, "to": to_commit},
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["path"] == path
+    assert result["from_commit"] == from_commit
+    assert result["to_commit"] == to_commit
+    assert result["change_type"] == "modified"
+    assert "-old line" in result["diff_text"]
+    assert "+new line" in result["diff_text"]
+
+
+async def test_diff_supports_first_version_without_from_commit(client_with_resource, service):
+    client, _ = client_with_resource
+    path = "viking://resources/snapshot_diff_added_fixture.md"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    await service.viking_fs.write_file(path, b"first version\n", ctx=ctx)
+    to_commit = (
+        await client.post(
+            "/api/v1/snapshot/commit",
+            json={"message": "snapshot diff added", "paths": [path]},
+        )
+    ).json()["result"]["commit_oid"]
+
+    response = await client.get(
+        "/api/v1/snapshot/diff",
+        params={"path": path, "to": to_commit},
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["from_commit"] == ""
+    assert result["to_commit"] == to_commit
+    assert result["change_type"] == "added"
+    assert "+first version" in result["diff_text"]
+
+
+async def test_diff_reports_missing_final_newline(client_with_resource, service):
+    client, _ = client_with_resource
+    path = "viking://resources/snapshot_diff_newline_fixture.md"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    await service.viking_fs.write_file(path, b"same line\n", ctx=ctx)
+    from_commit = (
+        await client.post(
+            "/api/v1/snapshot/commit",
+            json={"message": "snapshot diff newline v1", "paths": [path]},
+        )
+    ).json()["result"]["commit_oid"]
+
+    await service.viking_fs.write_file(path, b"same line", ctx=ctx)
+    to_commit = (
+        await client.post(
+            "/api/v1/snapshot/commit",
+            json={"message": "snapshot diff newline v2", "paths": [path]},
+        )
+    ).json()["result"]["commit_oid"]
+
+    response = await client.get(
+        "/api/v1/snapshot/diff",
+        params={"path": path, "from": from_commit, "to": to_commit},
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["change_type"] == "modified"
+    assert "-same line" in result["diff_text"]
+    assert "+same line" in result["diff_text"]
+    assert "\\ No newline at end of file" in result["diff_text"]
+
+
 # ---------------------------------------------------------------------------
 # restore (apply) — forward-commit chain + reindex hook + concurrent-commit 409
 # ---------------------------------------------------------------------------

@@ -92,6 +92,12 @@ ov language zh-CN
 npm i -g @openviking/cli
 ```
 
+也可以从源码构建 Rust CLI：
+
+```bash
+cargo install --git https://github.com/volcengine/OpenViking ov_cli
+```
+
 npm 包是最轻量的独立 CLI 安装方式。如果你同时需要 Python SDK 或服务端包，Python 包也会提供 `ov`：
 
 ```bash
@@ -484,3 +490,13 @@ ov --help
 ov config --help
 ov add-resource --help
 ```
+
+## 重建索引
+
+`ov reindex <uri>` 用于重建已导入内容的索引，支持三种模式：
+
+- `--mode vectors_only` —— 只刷新向量。
+- `--mode semantic_and_vectors` —— 先重新生成语义产物（`.abstract.md`、`.overview.md`），再刷新向量。
+- `--mode prune_orphans` —— 清理源文件已不存在的向量记录，加 `--dry-run` 可预览而不实际执行。
+
+没有 `semantic` 或 `full` 这样的模式别名。

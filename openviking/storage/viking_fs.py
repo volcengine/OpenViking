@@ -14,6 +14,7 @@ Responsibilities:
 
 import asyncio
 import contextvars
+import difflib
 import hashlib
 import json
 import os
@@ -40,6 +41,7 @@ from openviking.pyagfs.exceptions import (
     AGFSDirectoryNotEmptyError,
     AGFSHTTPError,
     AGFSInvalidOperationError,
+    AGFSNotFoundError,
     AGFSNotSupportedError,
 )
 from openviking.resource.watch_storage import is_watch_task_control_uri
@@ -4036,6 +4038,78 @@ class VikingFS:
                 f"git_show returned unexpected shape for blob path: {type(resp).__name__}"
             )
         return resp
+
+    async def diff(
+        self,
+        *,
+        path: str,
+        from_ref: Optional[str],
+        to_ref: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> Dict[str, Any]:
+        """Return a unified text diff for one path between two snapshots."""
+        real_ctx = self._ctx_or_default(ctx)
+        path = canonicalize_uri(path, ctx=real_ctx)
+
+        from_meta: Optional[Dict[str, Any]] = None
+        if from_ref:
+            try:
+                from_meta = await self.show(from_ref, ctx=real_ctx)
+            except AGFSNotFoundError as exc:
+                raise NotFoundError(from_ref, "git_ref") from exc
+        try:
+            to_meta = await self.show(to_ref, ctx=real_ctx)
+        except AGFSNotFoundError as exc:
+            raise NotFoundError(to_ref, "git_ref") from exc
+
+        async def read_optional(ref: str) -> Optional[bytes]:
+            try:
+                value = await self.show(ref, path=path, ctx=real_ctx)
+            except AGFSNotFoundError:
+                return None
+            if not isinstance(value, bytes):
+                raise TypeError(f"git_show returned unexpected blob type: {type(value).__name__}")
+            return value
+
+        before_bytes = await read_optional(from_ref) if from_ref else None
+        after_bytes = await read_optional(to_ref)
+        if before_bytes is None and after_bytes is None:
+            raise NotFoundError(path, "git_blob")
+
+        try:
+            before = before_bytes.decode("utf-8") if before_bytes is not None else ""
+            after = after_bytes.decode("utf-8") if after_bytes is not None else ""
+        except UnicodeDecodeError as exc:
+            raise InvalidArgumentError("snapshot diff only supports UTF-8 text files") from exc
+
+        if before_bytes is None:
+            change_type = "added"
+        elif after_bytes is None:
+            change_type = "deleted"
+        elif before_bytes == after_bytes:
+            change_type = "unchanged"
+        else:
+            change_type = "modified"
+
+        from_oid = str(from_meta.get("oid", from_ref)) if isinstance(from_meta, dict) else ""
+        to_oid = str(to_meta.get("oid", to_ref)) if isinstance(to_meta, dict) else to_ref
+        diff_lines = difflib.unified_diff(
+            before.splitlines(keepends=True),
+            after.splitlines(keepends=True),
+            fromfile=f"{path}@{from_oid}",
+            tofile=f"{path}@{to_oid}",
+        )
+        diff_text = "".join(
+            line if line.endswith("\n") else line + "\n\\ No newline at end of file\n"
+            for line in diff_lines
+        )
+        return {
+            "path": path,
+            "from_commit": from_oid,
+            "to_commit": to_oid,
+            "change_type": change_type,
+            "diff_text": diff_text,
+        }
 
     async def log(
         self,

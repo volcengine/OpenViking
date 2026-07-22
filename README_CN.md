@@ -1,4 +1,5 @@
 <div align="center">
+
 <a href="https://openviking.ai/" target="_blank">
   <picture>
     <img alt="OpenViking" src="docs/images/ov-logo.png" width="200px" height="auto">
@@ -9,69 +10,163 @@
 
 [English](README.md) / 中文 / [日本語](README_JA.md)
 
-<a href="https://www.openviking.ai">官网</a> · <a href="https://openviking.net/studio">在线体验</a> · <a href="https://github.com/volcengine/OpenViking">GitHub</a> · <a href="https://github.com/volcengine/OpenViking/issues">问题反馈</a> · <a href="https://www.openviking.ai/docs">文档</a>
+<a href="https://www.openviking.ai">官网</a> · <a href="https://openviking.ai/studio">在线体验</a> · <a href="https://github.com/volcengine/OpenViking">GitHub</a> · <a href="https://github.com/volcengine/OpenViking/issues">问题反馈</a> · <a href="https://docs.openviking.ai/">文档</a>
 
-[![][release-shield]][release-link]
-[![][github-stars-shield]][github-stars-link]
-[![][github-issues-shield]][github-issues-shield-link]
-[![][github-contributors-shield]][github-contributors-link]
-[![][license-shield]][license-shield-link]
-[![][last-commit-shield]][last-commit-shield-link]
-
+[![](https://img.shields.io/github/v/release/volcengine/OpenViking?color=369eff\&labelColor=black\&logo=github\&style=flat-square)](https://github.com/volcengine/OpenViking/releases)
+[![](https://img.shields.io/github/stars/volcengine/OpenViking?labelColor\&style=flat-square\&color=ffcb47)](https://github.com/volcengine/OpenViking)
+[![](https://img.shields.io/github/issues/volcengine/OpenViking?labelColor=black\&style=flat-square\&color=ff80eb)](https://github.com/volcengine/OpenViking/issues)
+[![](https://img.shields.io/github/contributors/volcengine/OpenViking?color=c4f042\&labelColor=black\&style=flat-square)](https://github.com/volcengine/OpenViking/graphs/contributors)
+[![](https://img.shields.io/badge/license-AGPLv3-white?labelColor=black\&style=flat-square)](https://github.com/volcengine/OpenViking/blob/main/LICENSE)
+[![](https://img.shields.io/github/last-commit/volcengine/OpenViking?color=c4f042\&labelColor=black\&style=flat-square)](https://github.com/volcengine/OpenViking/commits/main)
 
 👋 加入我们的社区
 
-📱 <a href="./docs/zh/about/01-about-us.md#lark-group">飞书群</a> · <a href="./docs/zh/about/01-about-us.md#wechat-group">微信群</a> · <a href="https://discord.com/invite/eHvx8E9XF3">Discord</a> · <a href="https://x.com/openvikingai">X</a>
+📱 <a href="https://docs.openviking.ai/zh/about/01-about-us#飞书群">飞书群</a> · <a href="https://docs.openviking.ai/zh/about/01-about-us#微信群">微信群</a> · <a href="https://discord.com/invite/eHvx8E9XF3">Discord</a> · <a href="https://x.com/openvikingai">X</a>
+
+<a href="https://trendshift.io/repositories/19668" target="_blank"><img src="https://trendshift.io/api/badge/repositories/19668" alt="volcengine%2FOpenViking | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 
 </div>
 
----
+***
 
-✨ **2026年5月更新**：更新 OpenViking 在 User Memory、Agent Memory 和知识库问答三场景上的评测结果。→ 见 [评测结果](#-评测结果)。
+## OpenViking 是什么
 
-## 概述
+OpenViking 是面向 AI 智能体的开源上下文数据库。记忆、资源、技能统一存放在 `viking://` 协议下的虚拟文件系统里，智能体用 `ls`、`tree`、`find` 浏览自己的上下文，不必去查一个黑盒向量库。内容写入时会处理成三层——L0 摘要、L1 概览、L2 详情——按需加载。每次检索都留下轨迹，可以查看，也可以调试。完整介绍见[入门文档](https://docs.openviking.ai/zh/getting-started/01-introduction)。
 
-### 智能体开发面临的挑战
+[![OpenViking Studio playground](docs/images/studio-playground.png)](https://openviking.ai/studio)
 
-在 AI 时代，数据丰富，但高质量的上下文却难以获得。在构建 AI 智能体时，开发者经常面临以下挑战：
+*[OpenViking Studio](https://openviking.ai/studio) 实验场——在线 Demo，打开浏览器就能试，无需安装。*
 
-- **上下文碎片化**：记忆存储在代码中，资源在向量数据库中，技能分散在各处，难以统一管理。
-- **上下文需求激增**：智能体的长运行任务在每次执行时都会产生上下文。简单的截断或压缩会导致信息丢失。
-- **检索效果不佳**：传统 RAG 使用扁平化存储，缺乏全局视图，难以理解信息的完整上下文。
-- **上下文不可观察**：传统 RAG 的隐式检索链像黑盒，出错时难以调试。
-- **记忆迭代有限**：当前记忆只是用户交互的记录，缺乏智能体相关的任务记忆。
+## 为什么用 OpenViking
 
-### OpenViking 解决方案
+- **一个文件系统装下所有上下文。** 记忆、资源、技能各有一个 `viking://` URI。智能体像开发者操作文件一样，确定地定位和操作上下文。→ [Viking URI](https://docs.openviking.ai/zh/concepts/04-viking-uri) · [上下文类型](https://docs.openviking.ai/zh/concepts/02-context-types)
+- **分层加载省 token。** 每条内容写入时生成 L0（摘要）、L1（概览）、L2（详情）三层，任务需要多深就加载多深。→ [上下文分层](https://docs.openviking.ai/zh/concepts/03-context-layers)
+- **目录递归检索。** 向量检索先定位得分最高的目录，再逐层向下探索，结果连同周边上下文一起返回。→ [检索机制](https://docs.openviking.ai/zh/concepts/07-retrieval)
+- **检索过程可观察。** 每次查询都保留目录浏览轨迹。结果不对时，能看到它出自哪条路径。→ [检索机制](https://docs.openviking.ai/zh/concepts/07-retrieval)
+- **会话沉淀为记忆。** 会话提交后，OpenViking 异步提取用户偏好和智能体经验，写入长期记忆。→ [会话管理](https://docs.openviking.ai/zh/concepts/08-session)
 
-**OpenViking** 是专为 AI 智能体设计的开源**上下文数据库**。
+各部分如何配合：见[架构](https://docs.openviking.ai/zh/concepts/01-architecture)。设计思路：[The Database Paradigm for Context Engineering](https://blog.openviking.ai/post/openviking-context-database/)（页内可切换中文）。
 
-我们的目标是为智能体定义一个极简的上下文交互范式，让开发者完全告别上下文管理的烦恼。OpenViking 抛弃了传统 RAG 的碎片化向量存储模型，创新性地采用 **"文件系统范式"** 来统一组织智能体所需的记忆、资源和技能。
+```
+viking://
+├── resources/              # 资源：项目文档、代码库、网页等
+│   └── my_project/
+│       ├── docs/
+│       │   ├── api/
+│       │   └── tutorials/
+│       └── src/
+└── user/
+    └── {user_id}/
+        ├── memories/
+        │   └── preferences/
+        │       ├── writing_style
+        │       └── coding_habits
+        ├── resources/
+        │   └── private_project/
+        ├── skills/
+        │   ├── search_code
+        │   └── analyze_data
+        └── peers/
+            └── web-visitor-alice/
+```
 
-使用 OpenViking，开发者可以像管理本地文件一样构建智能体的大脑：
+三个加载层级：
 
-- **文件系统管理范式** → **解决碎片化**：基于文件系统范式统一管理记忆、资源和技能。
-- **分层上下文加载** → **降低 Token 消耗**：L0/L1/L2 三层结构，按需加载，显著节省成本。
-- **目录递归检索** → **提升检索效果**：支持原生文件系统检索方式，结合目录定位和语义搜索，实现递归精准的上下文获取。
-- **可视化检索轨迹** → **可观察上下文**：支持目录检索轨迹可视化，让用户清晰观察问题根源，指导检索逻辑优化。
-- **自动会话管理** → **上下文自迭代**：自动压缩对话中的内容、资源引用、工具调用等，提取长期记忆，让智能体越用越聪明。
+- **L0（摘要）**：一句话总结，用来快速判断相关性。
+- **L1（概览）**：核心信息和使用场景，供规划阶段决策。
+- **L2（详情）**：完整原始数据，只在需要时读取。
 
----
+每个目录都带自己的 L0/L1 层，读完整文件之前就能判断相关性：
+
+```
+viking://resources/my_project/
+├── .abstract               # L0：约 100 tokens——快速判断相关性
+├── .overview               # L1：约 2k tokens——结构和要点
+└── docs/
+    ├── .abstract
+    ├── .overview
+    └── api/
+        ├── auth.md         # L2：完整内容，按需加载
+        └── endpoints.md
+```
+
+## 评测结果
+
+OpenViking 0.3.22 的评测覆盖长对话用户记忆（LoCoMo）和多轮智能体任务（tau2-bench）。完整结果和实验设置（含知识库问答）见[评测报告](https://blog.openviking.ai/post/openviking-benchmark-results/)，复现脚本在 [./benchmark](./benchmark)。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/benchmark-dark.svg">
+  <img alt="Benchmark results. LoCoMo accuracy: OpenClaw 24.20% native vs 82.08% with OpenViking; Hermes 33.38% vs 82.86%; Claude Code 57.21% vs 80.32%. tau2-bench task success: Retail 70.94% vs 77.81%; Airline 54.38% vs 66.25%." src="docs/images/benchmark-light.svg">
+</picture>
+
+- **用户记忆（LoCoMo）**：接入 OpenViking 后，三种 Agent 集成的准确率都到 80–83%，原生记忆只有 24–57%；同时输入 token 减少 34.3%–91.0%，查询时延降低 58.45%–66.10%。
+- **智能体经验（tau2-bench）**：经验记忆让任务成功率在 Retail 提升 6.87pp、Airline 提升 11.87pp（对比同一 LLM 无记忆）。
 
 ## 快速开始
 
-> 💡 **想先看看实际效果？** 试试 [OpenViking Studio](https://openviking.net/studio)——在线托管实例，提供上下文实验场、语义检索和多智能体 Hub，无需安装。
+> 💡 **想先看看实际效果？** 试试 [OpenViking Studio](https://openviking.ai/studio)——官方托管的在线实例，带上下文实验场、语义检索和多智能体 Hub，无需安装。
 
-### OpenViking Helper 桌面端（Beta）
+需要 Python 3.10 或更高版本。
 
-**OpenViking Helper** 是面向 OpenViking 用户的桌面应用，把本机 Agent 接入、会话轨迹、记忆和技能放到可视化界面里，方便用户确认接入状态，并把本地上下文同步到 OpenViking。
+```bash
+pip install openviking --upgrade
+openviking-server init      # 交互式向导：提供商、模型、ov.conf
+openviking-server doctor    # 校验配置
+openviking-server           # 启动
+```
 
-核心特性：
+或者在后台运行：
 
-- **可视化接入本地 Agent**：检测 OpenViking CLI、Claude Code、Codex、Cursor、Trae、OpenCode，并配置支持的插件、MCP、Hook 和 CLI 接入。
-- **回看会话生效过程**：解析 Claude Code、Codex、Trae 会话，展示 OpenViking 的召回、Prompt 注入、MCP 调用、捕获和提交事件。
+```bash
+nohup openviking-server > /data/log/openviking.log 2>&1 &
+```
+
+`init` 引导你完成提供商配置，并写入 `~/.openviking/ov.conf`。它支持火山引擎、OpenAI、Codex OAuth、Kimi、GLM 和本地 Ollama——选 Ollama 时还能检测并安装运行时，按你的硬件拉取合适的模型。`doctor` 检查配置文件、Python 版本、提供商连通性和磁盘空间，不需要先启动服务器。
+
+手写 `ov.conf` 的模板、各提供商示例、环境变量、Windows 配置和 CLI/客户端配置，见[配置指南](https://docs.openviking.ai/zh/guides/01-configuration)和[快速入门文档](https://docs.openviking.ai/zh/getting-started/02-quickstart)。
+
+服务器跑起来之后：
+
+```bash
+ov status
+ov add-resource https://github.com/volcengine/OpenViking # --wait
+ov ls viking://resources/
+ov tree viking://resources/volcengine -L 2
+# 没加 --wait 的话，语义处理需要等一段时间
+ov find "what is openviking"
+ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
+```
+
+重建已有索引：`ov reindex <uri> --mode vectors_only` 只刷新向量；`--mode semantic_and_vectors` 先重新生成语义产物（`.abstract.md`、`.overview.md`）再刷新向量；`--mode prune_orphans` 清理源文件已不存在的向量记录（加 `--dry-run` 可预览）。没有 `semantic` 或 `full` 这样的模式别名。
+
+客户端配置可以用 `ov config` 交互式初始化；有多台服务器时，用 `ov config switch` 切换。
+
+Rust CLI 通过 `npm i -g @openviking/cli` 安装，也可以从源码构建：`cargo install --git https://github.com/volcengine/OpenViking ov_cli`，见 [CLI 安装](https://docs.openviking.ai/zh/getting-started/05-cli-setup)。官方 Docker 镜像也已提供，见[部署指南](https://docs.openviking.ai/zh/guides/03-deployment)。
+
+## 接入你的 Agent
+
+集成会把 OpenViking 的召回注入 Agent 上下文，并自动提交会话记忆：
+
+- [Claude Code](https://docs.openviking.ai/zh/agent-integrations/02-claude-code)
+- [Codex](https://docs.openviking.ai/zh/agent-integrations/04-codex)
+- [OpenClaw](https://docs.openviking.ai/zh/agent-integrations/03-openclaw)
+- [Hermes](https://docs.openviking.ai/zh/agent-integrations/05-hermes)
+- [Cursor](https://docs.openviking.ai/zh/agent-integrations/12-cursor)
+- [Trae](https://docs.openviking.ai/zh/agent-integrations/13-trae)
+- [OpenCode](https://docs.openviking.ai/zh/agent-integrations/10-opencode)
+- [pi](https://docs.openviking.ai/zh/agent-integrations/11-pi)
+- [MCP 客户端](https://docs.openviking.ai/zh/agent-integrations/06-mcp-clients)
+- [LangChain / LangGraph](https://docs.openviking.ai/zh/agent-integrations/07-langchain-langgraph)
+
+各 Agent 的接入步骤：[Agent 集成总览](https://docs.openviking.ai/zh/agent-integrations/01-overview)。
+
+## OpenViking Helper（Beta）
+
+OpenViking Helper 是一个桌面控制台，目前处于 Beta 阶段，支持 macOS 和 Windows x64：
+
+- **可视化接入本地 Agent**：检测 OpenViking CLI、Claude Code、Codex、Cursor、Trae 和 OpenCode，并配置支持的插件、MCP、Hook 和 CLI 接入。
+- **查看会话轨迹**：解析 Claude Code、Codex 和 Trae 的会话，展示 OpenViking 的召回、Prompt 注入、MCP 调用、捕获和提交事件。
 - **管理本地记忆与技能**：查看本地 memory / rule 文件和 `SKILL.md` 技能，并同步到 OpenViking。
-
-> OpenViking Helper 目前仍处于 Beta 阶段，支持 macOS 和 Windows x64。
 
 下载：
 
@@ -79,827 +174,53 @@
 - [macOS Intel 版（x64）](https://lf3-cdn-tos.bytegoofy.com/obj/tron-demo/7654844610543360265/420238785/0.0.19/darwin-x64/openviking-helper-0.0.19-x64.dmg)
 - [Windows 版（x64）](https://lf3-cdn-tos.bytegoofy.com/obj/tron-demo/7654844610543360265/420238785/0.0.19/win32-x64/openviking-helper-0.0.19-x64.exe)
 
-### 本地部署
+## VikingBot
 
-#### 前置条件
-
-在开始使用 OpenViking 之前，请确保您的环境满足以下要求：
-
-- **Python 版本**：3.10 或更高版本
-- **Rust 工具链**：Cargo（从源码构建 RAGFS 和 CLI 组件需要）
-- **C++ 编译器**：GCC 9+ 或 Clang 11+（构建核心扩展需要，必须支持 C++17）
-- **操作系统**：Linux、macOS、Windows
-- **网络连接**：需要稳定的网络连接（用于下载依赖和访问模型服务）
-
-#### 1. 安装
-
-##### Python 包
+VikingBot 是构建在 OpenViking 之上的 AI 智能体框架：
 
 ```bash
-pip install openviking --upgrade --force-reinstall
-```
-
-##### Rust CLI（可选）
-
-```bash
-npm i -g @openviking/cli
-```
-
-或从源码构建：
-
-```bash
-cargo install --git https://github.com/volcengine/OpenViking ov_cli
-```
-
-#### 2. 模型准备
-
-OpenViking 需要以下模型能力：
-- **VLM 模型**：用于图像和内容理解
-- **Embedding 模型**：用于向量化和语义检索
-
-##### 支持的 VLM 提供商
-
-OpenViking 支持多种 VLM 提供商：
-
-| 提供商 | 描述 | 设置方式 |
-|----------|-------------|-------------|
-| `volcengine` | 火山引擎豆包模型 | [Volcengine 控制台](https://console.volcengine.com/ark/region:ark+cn-beijing/overview?briefPage=0&briefType=introduce&type=new&utm_content=OpenViking&utm_medium=devrel&utm_source=OWO&utm_term=OpenViking) |
-| `openai` | OpenAI 官方 API | [OpenAI 平台](https://platform.openai.com) |
-| `azure` | Azure OpenAI 服务 | [Azure OpenAI 服务](https://portal.azure.com) |
-| `openai-codex` | 通过 ChatGPT/Codex OAuth 使用 Codex VLM | 使用 `openviking-server init` |
-
-##### 提供商特定说明
-
-<details>
-<summary><b>Volcengine (豆包)</b></summary>
-
-Volcengine 支持模型名称和端点 ID。为简单起见，建议使用模型名称：
-
-```json
-{
-  "vlm": {
-    "provider": "volcengine",
-    "model": "doubao-seed-2-0-lite-260428",
-    "api_key": "your-api-key",
-    "api_base": "https://ark.cn-beijing.volces.com/api/v3"
-  }
-}
-```
-
-您也可以使用端点 ID（可在 [Volcengine ARK 控制台](https://console.volcengine.com/ark) 中找到）：
-
-```json
-{
-  "vlm": {
-    "provider": "volcengine",
-    "model": "ep-20241220174930-xxxxx",
-    "api_key": "your-api-key",
-    "api_base": "https://ark.cn-beijing.volces.com/api/v3"
-  }
-}
-```
-
-</details>
-
-<details>
-<summary><b>OpenAI</b></summary>
-
-使用 OpenAI 的官方 API：
-
-```json
-{
-  "vlm": {
-    "provider": "openai",
-    "model": "gpt-4o",
-    "api_key": "your-api-key",
-    "api_base": "https://api.openai.com/v1"
-  }
-}
-```
-
-您也可以使用自定义的 OpenAI 兼容端点：
-
-```json
-{
-  "vlm": {
-    "provider": "openai",
-    "model": "gpt-4o",
-    "api_key": "your-api-key",
-    "api_base": "https://your-custom-endpoint.com/v1"
-  }
-}
-```
-
-</details>
-
-<details>
-<summary><b>Azure OpenAI</b></summary>
-
-使用 Azure OpenAI 服务。`model` 字段需要填写 Azure 上的**部署名称（deployment name）**，而非模型官方名字：
-
-```json
-{
-  "vlm": {
-    "provider": "azure",
-    "model": "your-deployment-name",
-    "api_key": "your-azure-api-key",
-    "api_base": "https://your-resource-name.openai.azure.com",
-    "api_version": "2025-01-01-preview"
-  }
-}
-```
-
-> 💡 **提示**：
-> - `api_base` 填写你的 Azure OpenAI 资源端点，支持 `*.openai.azure.com` 和 `*.cognitiveservices.azure.com` 两种格式
-> - `api_version` 可选，默认值为 `2025-01-01-preview`
-> - `model` 必须与 Azure Portal 中创建的部署名称一致
-
-</details>
-
-<details>
-<summary><b>OpenAI Codex（OAuth）</b></summary>
-
-如果你希望通过 ChatGPT/Codex OAuth 会话来使用 Codex VLM，而不是标准 OpenAI API Key，可以这样配置：
-
-```bash
-openviking-server init
-# 在向导中选择 OpenAI Codex
-openviking-server doctor
-```
-
-```json
-{
-  "vlm": {
-    "provider": "openai-codex",
-    "model": "gpt-5.3-codex",
-    "api_base": "https://chatgpt.com/backend-api/codex",
-    "temperature": 0.0,
-    "max_retries": 2
-  }
-}
-```
-
-> 💡 **提示**：
-> - 当 Codex OAuth 可用时，`openai-codex` 不需要 `vlm.api_key`
-> - OpenViking 会把自己的 Codex 鉴权状态保存在 `~/.openviking/codex_auth.json`
-> - 可以通过 `openviking-server doctor` 校验当前 Codex 鉴权是否可用
-
-</details>
-
-#### 3. 环境配置
-
-##### 本地模型快速配置 (Ollama)
-
-如果你想通过 [Ollama](https://ollama.ai) 使用本地模型运行 OpenViking，交互式向导会自动完成所有配置：
-
-```bash
-openviking-server init
-```
-
-向导会：
-- 检测并安装 Ollama（如需要）
-- 根据你的硬件推荐并拉取合适的 embedding 和 VLM 模型
-- 生成可直接使用的 `ov.conf` 配置文件
-
-随时验证配置是否正确：
-
-```bash
-openviking-server doctor
-```
-
-`doctor` 会检查本地环境（配置文件、Python 版本、embedding/VLM 服务连通性、磁盘空间），无需启动服务器。
-
-> 如果使用云端 API（火山引擎、OpenAI、Gemini 等），请继续下方的手动配置。
-
-##### 服务器配置模板
-
-推荐的首次配置流程是：
-
-```bash
-openviking-server init
-openviking-server doctor
-```
-
-如果你在 `openviking-server init` 中选择了 `OpenAI Codex`，初始化向导会帮你导入已有 Codex 鉴权，或直接引导你完成登录。
-
-如果你更想手动配置，再创建 `~/.openviking/ov.conf`，复制前请删除注释：
-
-```json
-{
-  "storage": {
-    "workspace": "/home/your-name/openviking_workspace"
-  },
-  "log": {
-    "level": "INFO",
-    "output": "stdout"                 // 日志输出："stdout" 或 "file"
-  },
-  "embedding": {
-    "dense": {
-      "api_base" : "<api-endpoint>",   // API 端点地址
-      "api_key"  : "<your-api-key>",   // 模型服务 API Key
-      "provider" : "<provider-type>",  // 提供商类型："volcengine"、"openai"、"azure" 等
-      "api_version": "2025-01-01-preview", // （仅 azure）API 版本，可选，默认 "2025-01-01-preview"
-      "dimension": 1024,               // 向量维度
-      "model"    : "<model-name>"      // Embedding 模型名称或 Azure 部署名
-    },
-    "max_concurrent": 10               // 最大并发 embedding 请求（默认：10）
-  },
-  "vlm": {
-    "api_base" : "<api-endpoint>",     // API 端点地址
-    "api_key"  : "<your-api-key>",     // 模型服务 API Key（openai-codex 可选）
-    "provider" : "<provider-type>",    // 提供商类型 (volcengine, openai, azure, openai-codex 等)
-    "api_version": "2025-01-01-preview", // （仅 azure）API 版本，可选，默认 "2025-01-01-preview"
-    "model"    : "<model-name>",       // VLM 模型名称或 Azure 部署名
-    "max_concurrent": 64              // 语义处理的最大并发 LLM 调用（默认：64）
-  }
-}
-```
-
-> **注意**：对于 embedding 模型，支持 `volcengine`（豆包）、`openai`、`azure`、`jina`、`ollama`、`voyage`、`dashscope`、`minimax`、`cohere`、`vikingdb`、`gemini`（需 `pip install "google-genai>=1.0.0"`）、`litellm` 和 `local`。对于 VLM 模型，常见提供商包括 `volcengine`、`openai`、`openai-codex`、`kimi`、`glm`。
-
-> **Memory 配置**：OpenViking 始终使用 v3 记忆抽取链路。旧的 `memory.version` 配置项已废弃且会被忽略；已有配置中保留该字段仍可正常加载，但不会改变行为。
-
-> **Memory schema 作用域**：Memory schema YAML 默认 `stage: "user"` 且 `peer_enabled: true`。trajectories/experiences 这类执行派生 schema 使用 `stage: "agent"`；如果某类记忆必须保留在当前用户目录而不是 peer 目录，设置 `peer_enabled: false`。
-
-##### 服务器配置示例
-
-👇 展开查看您的模型服务的配置示例：
-
-<details>
-<summary><b>示例 1：使用 Volcengine（豆包模型）</b></summary>
-
-```json
-{
-  "storage": {
-    "workspace": "/home/your-name/openviking_workspace"
-  },
-  "log": {
-    "level": "INFO",
-    "output": "stdout"
-  },
-  "embedding": {
-    "dense": {
-      "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
-      "api_key"  : "your-volcengine-api-key",
-      "provider" : "volcengine",
-      "dimension": 1024,
-      "model"    : "doubao-embedding-vision-251215"
-    },
-    "max_concurrent": 10
-  },
-  "vlm": {
-    "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
-    "api_key"  : "your-volcengine-api-key",
-    "provider" : "volcengine",
-    "model"    : "doubao-seed-2-0-lite-260428",
-    "max_concurrent": 64
-  }
-}
-```
-
-</details>
-
-<details>
-<summary><b>示例 2：使用 OpenAI 模型</b></summary>
-
-```json
-{
-  "storage": {
-    "workspace": "/home/your-name/openviking_workspace"
-  },
-  "log": {
-    "level": "INFO",
-    "output": "stdout"
-  },
-  "embedding": {
-    "dense": {
-      "api_base" : "https://api.openai.com/v1",
-      "api_key"  : "your-openai-api-key",
-      "provider" : "openai",
-      "dimension": 3072,
-      "model"    : "text-embedding-3-large"
-    },
-    "max_concurrent": 10
-  },
-  "vlm": {
-    "api_base" : "https://api.openai.com/v1",
-    "api_key"  : "your-openai-api-key",
-    "provider" : "openai",
-    "model"    : "gpt-4-vision-preview",
-    "max_concurrent": 64
-  }
-}
-```
-
-</details>
-
-<details>
-<summary><b>示例 3：使用 Azure OpenAI 模型</b></summary>
-
-```json
-{
-  "storage": {
-    "workspace": "/home/your-name/openviking_workspace"
-  },
-  "log": {
-    "level": "INFO",
-    "output": "stdout"
-  },
-  "embedding": {
-    "dense": {
-      "api_base" : "https://your-resource-name.openai.azure.com",
-      "api_key"  : "your-azure-api-key",
-      "provider" : "azure",
-      "api_version": "2025-01-01-preview",
-      "dimension": 1024,
-      "model"    : "text-embedding-3-large"
-    },
-    "max_concurrent": 10
-  },
-  "vlm": {
-    "api_base" : "https://your-resource-name.openai.azure.com",
-    "api_key"  : "your-azure-api-key",
-    "provider" : "azure",
-    "api_version": "2025-01-01-preview",
-    "model"    : "gpt-4o",
-    "max_concurrent": 64
-  }
-}
-```
-
-> 💡 **提示**：
-> - `model` 必须填写 Azure Portal 中创建的**部署名称**，而非模型官方名字
-> - `api_base` 支持 `*.openai.azure.com` 和 `*.cognitiveservices.azure.com` 两种端点格式
-> - Embedding 和 VLM 可以使用不同的 Azure 资源和 API Key
-
-</details>
-
-##### 设置服务器配置环境变量
-
-创建配置文件后，设置环境变量指向它（Linux/macOS）：
-
-```bash
-export OPENVIKING_CONFIG_FILE=~/.openviking/ov.conf # 默认值
-```
-
-在 Windows 上，使用以下任一方式：
-
-PowerShell：
-
-```powershell
-$env:OPENVIKING_CONFIG_FILE = "$HOME/.openviking/ov.conf"
-```
-
-命令提示符 (cmd.exe)：
-
-```bat
-set "OPENVIKING_CONFIG_FILE=%USERPROFILE%\.openviking\ov.conf"
-```
-
-> 💡 **提示**：您也可以将配置文件放在其他位置，只需在环境变量中指定正确路径。
-
-##### CLI/客户端配置示例
-
-你可以通过 `ov config` 命令来以交互式方式初始化 CLI/客户端的配置。如果你有多个 openviking 服务器，你还可以通过 `ov config switch` 命令来切换到其他配置。
-
-👇 展开查看您的 CLI/客户端的配置示例：
-
-<details>
-<summary><b>示例：用于访问本地服务器的 ovcli.conf</b></summary>
-
-```json
-{
-  "url": "http://localhost:1933",
-  "timeout": 60.0,
-  "output": "table"
-}
-```
-
-创建配置文件后，设置环境变量指向它（Linux/macOS）：
-
-```bash
-export OPENVIKING_CLI_CONFIG_FILE=~/.openviking/ovcli.conf # 默认值
-```
-
-在 Windows 上，使用以下任一方式：
-
-PowerShell：
-
-```powershell
-$env:OPENVIKING_CLI_CONFIG_FILE = "$HOME/.openviking/ovcli.conf"
-```
-
-命令提示符 (cmd.exe)：
-
-```bat
-set "OPENVIKING_CLI_CONFIG_FILE=%USERPROFILE%\.openviking\ovcli.conf"
-```
-
-</details>
-
-#### 4. 运行您的第一个示例
-
-> 📝 **前置条件**：确保您已完成上一步的配置（ov.conf 和 ovcli.conf）。
-
-现在让我们运行一个完整的示例，体验 OpenViking 的核心功能。
-
-##### 启动服务器
-
-```bash
-openviking-server doctor
-openviking-server
-```
-
-如果你的 `vlm.provider` 是 `openai-codex`，`openviking-server doctor` 已经会校验 Codex 鉴权。
-
-或者您可以在后台运行
-
-```bash
-nohup openviking-server > /data/log/openviking.log 2>&1 &
-```
-
-##### 运行 CLI
-
-```bash
-ov status
-ov add-resource https://github.com/volcengine/OpenViking # --wait
-ov ls viking://resources/
-ov tree viking://resources/volcengine -L 2
-# 如果没有使用 --wait，等待一段时间以进行语义处理
-ov find "what is openviking"
-ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
-```
-
-恭喜！您已成功运行 OpenViking 🎉
-
-### 商业化接入
-
-OpenViking Personal 现已正式上线。相比开源版本，Service 版本由官方托管、开箱即用，借助 VikingDB 实现远超本地硬件的扩展能力，并提供更丰富的集成和专业的技术支持。新用户可免费试用至多 50 个文件，现有开源版用户也可通过我们的迁移工具平滑迁移。
-
-### VikingBot 快速开始
-
-VikingBot 是构建在 OpenViking 之上的 AI 智能体框架。以下是快速开始指南：
-
-```bash
-# 选项 1：从 PyPI 安装 VikingBot（推荐大多数用户使用）
 pip install "openviking[bot]"
-
-# 选项 2：从源码安装 VikingBot（用于开发）
-uv pip install -e ".[bot]"
-
-# 启动 OpenViking 服务器（同时启动 Bot）
 openviking-server --with-bot
-
-# 在另一个终端启动交互式聊天
-ov chat
+ov chat   # 在另一个终端运行
 ```
 
----
+官方 Docker 镜像内置 VikingBot，默认随服务器和控制台 UI 一起启动。详情见 [VikingBot 指南](https://docs.openviking.ai/zh/guides/17-vikingbot)。
 
-## 服务器部署详情
+## 生产部署
 
-对于生产环境，我们建议将 OpenViking 作为独立的 HTTP 服务运行，为您的 AI 智能体提供持久、高性能的上下文支持。
+生产环境建议把 OpenViking 作为独立 HTTP 服务运行——见[服务器部署](https://docs.openviking.ai/zh/getting-started/03-quickstart-server)和[部署指南](https://docs.openviking.ai/zh/guides/03-deployment)。
 
-🚀 **在云端部署 OpenViking**：
-为确保最佳的存储性能和数据安全，我们建议在 **火山引擎弹性计算服务 (ECS)** 上使用 **veLinux** 操作系统进行部署。我们准备了详细的分步指南，帮助您快速上手。
+不想自己运维？OpenViking Personal 由官方托管、开箱即用，借助 VikingDB 获得远超本地硬件的扩展能力，并提供至多 50 个文件的免费试用；开源版用户可以用迁移工具平滑迁移。→ [openviking.ai](https://www.openviking.ai)
 
-👉 **[查看：服务器部署与 ECS 设置指南](./docs/zh/getting-started/03-quickstart-server.md)**
+## 研究
 
----
-
-## 📊 评测结果
-
-OpenViking 0.3.22 的核心价值主张：**在更高问答准确率的同时，消耗更低的 Token，完成任务时延更低**。以下结果覆盖三个评测维度。
-
-### 1. 用户记忆评测（User Memory）
-
-**测试目标**：验证 OpenViking 作为不同 Agent 的外接记忆组件，在长对话记忆问答（LOCOMO 数据集）上的准确率、Token 效率和时延表现。
-
-#### 1.1 各 Agent 基座上的 LOCOMO 测试结果
-
-<table style="width: 100%; table-layout: fixed;">
-  <thead>
-    <tr>
-      <th style="text-align: center; width: 12%;">实验编号</th>
-      <th style="text-align: center; width: 30%;">方案</th>
-      <th style="text-align: center; width: 20%;">Query 平均耗时</th>
-      <th style="text-align: center; width: 14%;">问答准确率</th>
-      <th style="text-align: center; width: 24%;">Agent 总输入 Token</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td colspan="5" style="text-align: center; font-weight: bold;">OpenClaw 基座</td>
-    </tr>
-    <tr>
-      <td style="text-align: center;">1</td>
-      <td style="text-align: center;">OpenClaw + 原生 memory-core</td>
-      <td style="text-align: right; white-space: nowrap;">95.14s</td>
-      <td style="text-align: right;">24.20%</td>
-      <td style="text-align: right;">392,559,404</td>
-    </tr>
-    <tr>
-      <td style="text-align: center;">2</td>
-      <td style="text-align: center;">OpenClaw + Mem0</td>
-      <td style="text-align: right; white-space: nowrap; font-weight: bold;">37.6s</td>
-      <td style="text-align: right;">56.62%</td>
-      <td style="text-align: right;">42,118,285</td>
-    </tr>
-    <tr>
-      <td style="text-align: center;">3</td>
-      <td style="text-align: center;">OpenClaw + SuperMemory</td>
-      <td style="text-align: right; white-space: nowrap;">109.3s</td>
-      <td style="text-align: right;">42.99%</td>
-      <td style="text-align: right;">88,304,113</td>
-    </tr>
-    <tr>
-      <td style="text-align: center;">4</td>
-      <td style="text-align: center;">OpenClaw + 百炼记忆库</td>
-      <td style="text-align: right; white-space: nowrap;">41.6s</td>
-      <td style="text-align: right;">39.55%</td>
-      <td style="text-align: right;">35,206,037</td>
-    </tr>
-    <tr>
-      <td style="text-align: center; font-weight: bold;">5</td>
-      <td style="text-align: center; font-weight: bold;">OpenClaw + OpenViking</td>
-      <td style="text-align: right; white-space: nowrap; font-weight: bold;">38.8s</td>
-      <td style="text-align: right; font-weight: bold;">82.08%</td>
-      <td style="text-align: right; font-weight: bold;">37,423,456</td>
-    </tr>
-    <tr>
-      <td colspan="5" style="text-align: center; font-weight: bold;">Hermes 基座</td>
-    </tr>
-    <tr>
-      <td style="text-align: center;">6</td>
-      <td style="text-align: center;">Hermes Native Memory</td>
-      <td style="text-align: right; white-space: nowrap;">82.4s (3.57轮/query)</td>
-      <td style="text-align: right;">33.38%</td>
-      <td style="text-align: right;">79,228,398</td>
-    </tr>
-    <tr>
-      <td style="text-align: center; font-weight: bold;">7</td>
-      <td style="text-align: center; font-weight: bold;">Hermes + OpenViking</td>
-      <td style="text-align: right; white-space: nowrap; font-weight: bold;">27.9s (1.55轮/query)</td>
-      <td style="text-align: right; font-weight: bold;">82.86%</td>
-      <td style="text-align: right; font-weight: bold;">52,026,755</td>
-    </tr>
-    <tr>
-      <td colspan="5" style="text-align: center; font-weight: bold;">Claude Code 基座</td>
-    </tr>
-    <tr>
-      <td style="text-align: center;">8</td>
-      <td style="text-align: center;">Claude Code Auto-Memory</td>
-      <td style="text-align: right; white-space: nowrap;">49.1s (7.2轮/query)</td>
-      <td style="text-align: right;">57.21%</td>
-      <td style="text-align: right;">353,306,422</td>
-    </tr>
-    <tr>
-      <td style="text-align: center; font-weight: bold;">9</td>
-      <td style="text-align: center; font-weight: bold;">Claude Code + OpenViking</td>
-      <td style="text-align: right; white-space: nowrap; font-weight: bold;">20.4s (2.6轮/query)</td>
-      <td style="text-align: right; font-weight: bold;">80.32%</td>
-      <td style="text-align: right; font-weight: bold;">129,968,899</td>
-    </tr>
-  </tbody>
-</table>
-
-#### 1.2 关键效率提升汇总
-
-| Agent | 准确率提升 | 时延降低 | Token 消耗降低 |
-|:-----:|----------:|---------:|--------------:|
-| OpenClaw | 24.20% → 82.08% (+3.39×) | -59.22% | **-91.0%** |
-| Hermes | 33.38% → 82.86% (+2.48×) | -66.10% | -34.3% |
-| Claude Code | 57.21% → 80.32% (+1.40×) | -58.45% | -63.2% |
-
----
-
-### 2. Agent 经验记忆评测（Agent Memory）
-
-**测试目标**：验证 OpenViking 抽取并召回经验记忆前后，任务执行表现和 Token 节省的效果。
-
-OpenViking 的 Agent Memory 分为两层：
-
-| 层级 | 概念 | 说明 |
-|:----:|:----:|:----:|
-| Layer 1 | **轨迹（Trajectory）** | 每次会话结束后自动提炼，记录"做了什么、怎么做的、结果如何" |
-| Layer 2 | **经验（Experience）** | 由多条相关轨迹归纳而来，跨会话可复用的策略性知识，"Situation / Approach / Reflect"三段式 |
-
-#### 2.1 经济仿真测试（ClawWork）
-
-港大数据科学实验室（HKUDS）构建的"实时经济生存 benchmark"，Agent 从 $10 起步，每次 LLM 调用自动扣费，收入来自完成专业任务（覆盖 44 个职业、220 个任务）。
-
-| 方案 | 完成 50 个任务后净收入 | 平均每小时 Token 消耗 |
-|:----:|-------------------:|------------------:|
-| LLM only | $2,269.77 | 1,030.3K/h |
-| **LLM + OpenViking** | **$3,843.74 (+69.34%)** | **872.4K/h (-22.8%)** |
-
-#### 2.2 Tau-2 对话 Agent 测试
-
-Sierra AI 发布的对话式 Agent 评测基准，覆盖 Retail 和 Airline 两个领域。
-
-| 方案 | Retail 正确率 | Airline 正确率 |
-|:----:|------------:|-------------:|
-| LLM 无记忆 | 70.94% | 54.38% |
-| **LLM + OpenViking 经验记忆** | **77.81% (+6.87pp)** | **66.25% (+11.87pp)** |
-
----
-
-### 3. 知识库问答评测（Knowledge Base QA）
-
-**测试目标**：对比 OpenViking 与其他 RAG 方案在开源 benchmark 上的准确率、Token 效率和时延表现。
-
-#### 3.1 多跳、多路 RAG 测试（HotpotQA 数据集）
-
-| 方案 | 检索范式 | Accuracy | 每 QA Token | 每 QA 耗时 |
-|:----:|:------:|---------:|-----------:|---------:|
-| Naive RAG | 向量检索 | 62.50% | 1,290 | **0.11s** |
-| HippoRAG 2 | 向量 + 知识图谱 | 61.00% | 726 | 20s |
-| LightRAG | 向量 + 知识图谱 | 89.00% | 28,443 | 75s |
-| LangChain SQL (Agent) | SQL + Agent | 78.00% | 4,776 | 132s |
-| OpenViking (top5) | 向量检索 | 72.75% | 3,154 | 0.22s |
-| **OpenViking (top20)** | **向量检索** | **91.00%** | **12,533** | **0.23s** |
-
-> 💡 **在本组对比中，OpenViking 在 HotpotQA top20 配置下取得最高准确率（91%）；同时检索延迟仅 0.23s，Token 消耗不到 LightRAG 的一半。**
-
-#### 3.2 单轮 RAG 测试（5 个开源数据集均值）
-
-| 方案 | 检索范式 | 平均 Accuracy | 建库 Token | 每 QA Token | 检索耗时 |
-|:----:|:------:|-------------:|---------:|-----------:|-------:|
-| Naive RAG | 向量检索 | 53.93% | 2,755,356 | 1,435 | **0.13s** |
-| PageIndex | 向量 + 树结构 | 36.75% | 5,609,206 | 710,480 | 84.60s |
-| HippoRAG 2 | 向量 + 知识图谱 | 44.50% | 124,963,618 | **637** | 18.83s |
-| LightRAG | 向量 + 知识图谱 | **76.00%** | 62,705,469 | 27,035 | 9.19s |
-| **OpenViking** | **向量检索** | **66.87%** | **8,671,538** | **3,060** | **0.19s** |
-
-> 测试数据集：FinanceBench、NaturalQuestions、ClapNQ、Qasper、SyllabusQA。OpenViking 以极低耗时（0.19s）取得 66.87% 的平均准确率，建库成本仅为 LightRAG 的 13.8%。
-
----
-
-## 学术背书
-
-OpenViking 开源了论文 `VikingMem` 中描述的部分核心能力，使 AI 智能体开发者可以直接使用其中的上下文数据库与记忆管理理念。
+OpenViking 开源了 VikingMem 论文中描述的部分核心能力：
 
 > **VikingMem: A Memory Base Management System for Stateful LLM-based Applications**
 > Jiajie Fu, Junwen Chen, Mengzhao Wang, Aoxiang He, Maojia Sheng, Xiangyu Ke, Yifan Zhu, and Yunjun Gao.
 > arXiv:2605.29640, 2026。已被 VLDB 2026 接收。
->
-> 📄 [阅读 arXiv 论文](https://arxiv.org/abs/2605.29640)
+> 📄 [在 arXiv 阅读论文](https://arxiv.org/abs/2605.29640)
 
-## VikingBot 部署详情
+## 社区与贡献
 
-OpenViking 有一个类似 nanobot 的机器人用于交互工作，现已可用。
+OpenViking 还在早期阶段，要做的事还很多。
 
-👉 **[查看：使用 VikingBot 部署服务器](bot/README_CN.md)**
-
----
-
-## 核心概念
-
-运行第一个示例后，让我们深入了解 OpenViking 的设计理念。这五个核心概念与前面提到的解决方案一一对应，共同构建了一个完整的上下文管理系统：
-
-### 1. 文件系统管理范式 → 解决碎片化
-
-我们不再将上下文视为扁平的文本切片，而是将它们统一到一个抽象的虚拟文件系统中。无论是记忆、资源还是能力，都映射到 `viking://` 协议下的虚拟目录中，每个都有唯一的 URI。
-
-这种范式赋予智能体前所未有的上下文操作能力，使它们能够像开发者一样，通过 `ls` 和 `find` 等标准命令精确、确定地定位、浏览和操作信息。这将上下文管理从模糊的语义匹配转变为直观、可追踪的"文件操作"。了解更多：[Viking URI](./docs/zh/concepts/04-viking-uri.md) | [上下文类型](./docs/zh/concepts/02-context-types.md)
-
-```
-viking://
-├── resources/              # 资源：项目文档、代码库、网页等
-│   ├── my_project/
-│   │   ├── docs/
-│   │   │   ├── api/
-│   │   │   └── tutorials/
-│   │   └── src/
-│   └── ...
-├── user/                   # 用户：个人偏好、习惯等
-│   └── {user_id}/
-│       ├── memories/
-│       │   ├── preferences/
-│       │   │   ├── writing_style
-│       │   │   └── coding_habits
-│       │   └── ...
-│       ├── resources/
-│       │   └── private_project/
-│       ├── skills/
-│       │   ├── search_code
-│       │   └── analyze_data
-│       └── peers/
-│           └── web-visitor-alice/
-│               ├── memories/
-│               └── resources/
-```
-
-### 2. 分层上下文加载 → 降低 Token 消耗
-
-一次性将大量上下文塞入提示不仅昂贵，而且容易超出模型窗口并引入噪声。OpenViking 在写入时自动将上下文处理为三个级别：
-- **L0 (摘要)**：一句话摘要，用于快速检索和识别。
-- **L1 (概览)**：包含核心信息和使用场景，用于智能体在规划阶段的决策。
-- **L2 (详情)**：完整的原始数据，供智能体在绝对必要时深度阅读。
-
-了解更多：[上下文分层](./docs/zh/concepts/03-context-layers.md)
-
-```
-viking://resources/my_project/
-├── .abstract               # L0 层：摘要（~100 tokens）- 快速相关性检查
-├── .overview               # L1 层：概览（~2k tokens）- 理解结构和关键点
-├── docs/
-│   ├── .abstract          # 每个目录都有对应的 L0/L1 层
-│   ├── .overview
-│   ├── api/
-│   │   ├── .abstract
-│   │   ├── .overview
-│   │   ├── auth.md        # L2 层：完整内容 - 按需加载
-│   │   └── endpoints.md
-│   └── ...
-└── src/
-    └── ...
-```
-
-### 3. 目录递归检索 → 提升检索效果
-
-单一向量检索难以应对复杂的查询意图。OpenViking 设计了创新的**目录递归检索策略**，深度集成多种检索方法：
-
-1. **意图分析**：通过意图分析生成多个检索条件。
-2. **初始定位**：使用向量检索快速定位初始切片所在的高分目录。
-3. **精细探索**：在该目录内进行二次检索，并将高分结果更新到候选集。
-4. **递归深入**：如果存在子目录，则逐层递归重复二次检索步骤。
-5. **结果聚合**：最终获取最相关的上下文返回。
-
-这种"先锁定高分目录，再精细化内容探索"的策略不仅找到语义最佳匹配的片段，还能理解信息所在的完整上下文，从而提高检索的全局性和准确性。了解更多：[检索机制](./docs/zh/concepts/07-retrieval.md)
-
-### 4. 可视化检索轨迹 → 可观察上下文
-
-OpenViking 的组织采用分层虚拟文件系统结构。所有上下文以统一格式集成，每个条目对应一个唯一的 URI（如 `viking://` 路径），打破了传统的扁平黑盒管理模式，具有清晰易懂的层次结构。
-
-检索过程采用目录递归策略。每次检索的目录浏览和文件定位轨迹被完整保留，让用户能够清晰观察问题的根源，指导检索逻辑的优化。了解更多：[检索机制](./docs/zh/concepts/07-retrieval.md)
-
-### 5. 自动会话管理 → 上下文自迭代
-
-OpenViking 内置了记忆自迭代循环。提交会话后，系统会异步分析任务执行结果和用户反馈，并根据记忆策略更新当前用户或 Peer 命名空间中的记忆。
-
-- **用户记忆更新**：更新与用户偏好相关的记忆，使智能体响应更好地适应用户需求。
-- **智能体经验积累**：从任务执行经验中提取操作技巧和工具使用经验等核心内容，辅助后续任务的高效决策。
-
-这使得智能体能够通过与世界的交互"越用越聪明"，实现自我进化。了解更多：[会话管理](./docs/zh/concepts/08-session.md)
-
----
-
-## 深入阅读
-
-### 文档
-
-更多详情，请访问我们的[完整文档](./docs/zh/)。
-
-### 社区与团队
-
-更多详情，请参见：**[关于我们](./docs/zh/about/01-about-us.md)**
-
-### 加入社区
-
-OpenViking 仍处于早期阶段，有许多改进和探索的空间。我们真诚邀请每一位对 AI 智能体技术充满热情的开发者：
-
-- 为我们点亮一颗珍贵的 **Star**，给我们前进的动力。
-- 访问我们的[**官网**](https://www.openviking.ai)了解我们传达的理念，并通过[**文档**](https://www.openviking.ai/docs)在您的项目中使用它。感受它带来的变化，并给我们最真实的体验反馈。
-- 加入我们的社区，分享您的见解，帮助回答他人的问题，共同创造开放互助的技术氛围：
-  - 📱 **飞书群**：扫码加入 → [查看二维码](./docs/zh/about/01-about-us.md#lark-group)
-  - 💬 **微信群**：扫码添加助手 → [查看二维码](./docs/zh/about/01-about-us.md#wechat-group)
-  - 🎮 **Discord**：[加入 Discord 服务器](https://discord.com/invite/eHvx8E9XF3)
-  - 🐦 **X (Twitter)**：[关注我们](https://x.com/openvikingai)
-- 成为**贡献者**，无论是提交错误修复还是贡献新功能，您的每一行代码都将是 OpenViking 成长的重要基石。
-
-让我们共同努力，定义和构建 AI 智能体上下文管理的未来。旅程已经开始，期待您的参与！
-
-### Star 趋势
-
-[![Star History Chart](https://api.star-history.com/svg?repos=volcengine/OpenViking&type=timeline&legend=top-left)](https://www.star-history.com/#volcengine/OpenViking&type=timeline&legend=top-left)
+- **文档**：[docs.openviking.ai](https://docs.openviking.ai/) · [FAQ](https://docs.openviking.ai/zh/faq/faq)
+- **博客**：[blog.openviking.ai](https://blog.openviking.ai/)
+- **团队**：[关于我们](https://docs.openviking.ai/zh/about/01-about-us)
+- **交流**：📱 [飞书群](https://docs.openviking.ai/zh/about/01-about-us#飞书群) · 💬 [微信群](https://docs.openviking.ai/zh/about/01-about-us#微信群) · 🎮 [Discord](https://discord.com/invite/eHvx8E9XF3) · 🐦 [X](https://x.com/openvikingai)
+- **贡献**：修 bug、加新功能都欢迎——见 [CONTRIBUTING_CN.md](CONTRIBUTING_CN.md)
 
 ## 安全与隐私
 
-本项目高度重视安全问题。
-有关漏洞报告方式和受支持版本，请参见 [SECURITY.md](SECURITY.md)
+本项目重视安全问题。
+漏洞报告方式和受支持的版本，见 [SECURITY.md](SECURITY.md)
 
 ## 许可证
 
-OpenViking 项目不同组件采用不同的开源协议：
+OpenViking 各组件采用不同的许可证：
 
-- **主项目**: AGPLv3 - 详情请参见 [LICENSE](./LICENSE) 文件
-- **crates/ov_cli**: Apache 2.0 - 详情请参见 [LICENSE](./crates/LICENSE) 文件
-- **examples**: Apache 2.0 - 详情请参见 [LICENSE](./examples/LICENSE) 文件
-- **third_party**: 保留各三方项目的原有协议
-
-
-<!-- Link Definitions -->
-
-[release-shield]: https://img.shields.io/github/v/release/volcengine/OpenViking?color=369eff&labelColor=black&logo=github&style=flat-square
-[release-link]: https://github.com/volcengine/OpenViking/releases
-[license-shield]: https://img.shields.io/badge/license-AGPLv3-white?labelColor=black&style=flat-square
-[license-shield-link]: https://github.com/volcengine/OpenViking/blob/main/LICENSE
-[last-commit-shield]: https://img.shields.io/github/last-commit/volcengine/OpenViking?color=c4f042&labelColor=black&style=flat-square
-[last-commit-shield-link]: https://github.com/volcengine/OpenViking/commits/main
-[github-stars-shield]: https://img.shields.io/github/stars/volcengine/OpenViking?labelColor&style=flat-square&color=ffcb47
-[github-stars-link]: https://github.com/volcengine/OpenViking
-[github-issues-shield]: https://img.shields.io/github/issues/volcengine/OpenViking?labelColor=black&style=flat-square&color=ff80eb
-[github-issues-shield-link]: https://github.com/volcengine/OpenViking/issues
-[github-contributors-shield]: https://img.shields.io/github/contributors/volcengine/OpenViking?color=c4f042&labelColor=black&style=flat-square
-[github-contributors-link]: https://github.com/volcengine/OpenViking/graphs/contributors
+- **主项目**：AGPLv3——详见 [LICENSE](./LICENSE)
+- **crates/ov\_cli**：Apache 2.0——详见 [LICENSE](./crates/LICENSE)
+- **examples**：Apache 2.0——详见 [LICENSE](./examples/LICENSE)
+- **third\_party**：各三方项目保留其原有协议

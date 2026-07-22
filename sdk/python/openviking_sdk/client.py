@@ -1620,6 +1620,24 @@ class AsyncHTTPClient:
         )
         return self._handle_response(response)
 
+    async def git_diff(
+        self,
+        path: str,
+        *,
+        to_ref: str,
+        from_ref: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Compare one file between two snapshot refs."""
+        params: Dict[str, Any] = {"path": path, "to": to_ref}
+        if from_ref is not None:
+            params["from"] = from_ref
+        response = await self._request(
+            "GET",
+            "/api/v1/snapshot/diff",
+            params=params,
+        )
+        return self._handle_response(response)
+
     async def git_get_ignore(self) -> str:
         """Return the account ``.ovgitignore`` content (empty string if absent)."""
         response = await self._request("GET", "/api/v1/snapshot/ignore")
@@ -2410,6 +2428,20 @@ class AsyncHTTPSnapshotNamespace:
     ) -> List[Dict[str, Any]]:
         return await self._client.git_log(branch=branch, limit=limit, paths=paths)
 
+    async def diff(
+        self,
+        path: str,
+        *,
+        to_ref: str,
+        from_ref: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Compare one file between two snapshot refs."""
+        return await self._client.git_diff(
+            path,
+            from_ref=from_ref,
+            to_ref=to_ref,
+        )
+
     async def get_gitignore(self) -> str:
         return await self._client.git_get_ignore()
 
@@ -2487,6 +2519,18 @@ class SyncHTTPSnapshotNamespace:
         paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         return run_async(self._ns().log(branch=branch, limit=limit, paths=paths))
+
+    def diff(
+        self,
+        path: str,
+        *,
+        to_ref: str,
+        from_ref: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Compare one file between two snapshot refs."""
+        return run_async(
+            self._ns().diff(path, from_ref=from_ref, to_ref=to_ref)
+        )
 
     def get_gitignore(self) -> str:
         return run_async(self._ns().get_gitignore())

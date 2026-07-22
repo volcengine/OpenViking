@@ -1267,8 +1267,7 @@ current=commit_a]
 
 - [GitoxideLabs/gitoxide](https://github.com/GitoxideLabs/gitoxide)
 - [volcengine/OpenViking](https://github.com/volcengine/OpenViking)
-- [OpenViking 存储架构文档](https://github.com/volcengine/OpenViking/blob/main/docs/zh/concepts/05-storage.md)
+- [OpenViking 存储架构文档](../zh/concepts/05-storage.md)
 - [Git Pack Format (后续 Phase 参考)](https://git-scm.com/docs/gitformat-pack)
 
 > 💡 **文档完成**。如需对某一章节细化(如某后端实现细节、某测试用例代码、迁移脚本),请告知具体目标。
-

@@ -4,13 +4,14 @@ OpenViking 在 VikingFS 之上提供了一套基于 Git 的多版本管理能力
 
 快照能力底层由内嵌在 Rust RAGFS 层的 [gitoxide](https://github.com/Byron/gitoxide) 驱动，按 `account_id` 维护一个逻辑 Git 仓库（每个账号一个仓库），对调用方完全透明——你无需关心 `.ovgit` 目录、对象库或引用细节。
 
-四个核心命令：
+五个核心命令：
 
 | 命令 | 作用 |
 |------|------|
 | `commit` | 把当前工作区状态保存成一个新快照 |
 | `log` | 从最新提交开始回溯历史 |
 | `show` | 查看某个提交的元数据，或读取该提交中某个文件的内容 |
+| `diff` | 以 unified diff 格式对比某个文件在两个快照中的内容 |
 | `restore` | 把目录（或整棵账号树）恢复到某个历史快照的状态 |
 
 此外还提供账号级 `.ovgitignore` 排除规则的管理命令（`get`/`set`/`delete`），用于在 `commit` 时按规则排除匹配的文件。详见 [ignore 管理](#ignore-管理)。
@@ -26,7 +27,7 @@ OpenViking 在 VikingFS 之上提供了一套基于 Git 的多版本管理能力
 
 - HTTP 路由：[snapshot.py](https://github.com/volcengine/OpenViking/blob/main/openviking/server/routers/snapshot.py)，前缀 `/api/v1/snapshot`。
 - 命名空间（SDK）：[snapshot_namespace.py](https://github.com/volcengine/OpenViking/blob/main/openviking/snapshot_namespace.py)，暴露为 `client.snapshot.*`。
-- 底层语义实现：[viking_fs.py](https://github.com/volcengine/OpenViking/blob/main/openviking/storage/viking_fs.py) 的 `commit` / `restore` / `show` / `log`。
+- 底层语义实现：[viking_fs.py](https://github.com/volcengine/OpenViking/blob/main/openviking/storage/viking_fs.py) 的 `commit` / `restore` / `show` / `log` / `diff`。
 - CLI 命令：[main.rs](https://github.com/volcengine/OpenViking/blob/main/crates/ov_cli/src/main.rs) 的 `SnapshotCmd`，子命令 [snapshot.rs](https://github.com/volcengine/OpenViking/blob/main/crates/ov_cli/src/commands/snapshot.rs)。
 
 ## API 参考
@@ -295,6 +296,58 @@ ov snapshot show 3f2a1b9c --path viking://resources/my_project/guide.md --out-fi
   }
 }
 ```
+
+---
+
+### diff()
+
+对比一个 UTF-8 文件在两个快照引用中的内容，并返回 unified diff。`to_ref` 必填；省略 `from_ref` 时，旧版本按空文件处理，可用于展示文件的初始版本。
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+result = client.snapshot.diff(
+    "viking://resources/my_project/guide.md",
+    from_ref="3f2a1b9c",
+    to_ref="9a0b1c2d",
+)
+print(result["diff_text"])
+```
+
+**TypeScript SDK**
+
+```typescript
+const result = await client.gitDiff(
+  "viking://resources/my_project/guide.md",
+  "9a0b1c2d",
+  "3f2a1b9c",
+);
+console.log(result.diff_text);
+```
+
+**HTTP API**
+
+```
+GET /api/v1/snapshot/diff?path={uri}&from={old_ref}&to={new_ref}
+```
+
+```bash
+curl --get "http://localhost:1933/api/v1/snapshot/diff" \
+  --data-urlencode "path=viking://resources/my_project/guide.md" \
+  --data-urlencode "from=3f2a1b9c" \
+  --data-urlencode "to=9a0b1c2d" \
+  -H "X-API-Key: your-key"
+```
+
+**CLI**
+
+```bash
+ov snapshot diff viking://resources/my_project/guide.md \
+  --from 3f2a1b9c \
+  --to 9a0b1c2d
+```
+
+响应包含 `path`、解析后的 `from_commit` 和 `to_commit`、`change_type`（`added`、`deleted`、`modified` 或 `unchanged`）以及 `diff_text`。
 
 ---
 

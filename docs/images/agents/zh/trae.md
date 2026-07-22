@@ -22,7 +22,7 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 3. 新建会话并提问一个与过往项目或个人偏好相关的问题。
 4. 告诉 Agent 一个临时偏好；下一会话再次询问，验证捕获和提交。
 
-完整说明见 [TRAE 接入文档](https://github.com/volcengine/OpenViking/blob/main/docs/zh/agent-integrations/13-trae.md)。
+完整说明见 [TRAE 接入文档](../../../zh/agent-integrations/13-trae.md)。
 
 ## 故障排查
 
