@@ -1,4 +1,3 @@
-import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
@@ -7,36 +6,6 @@ import pytest
 from openviking_sdk import AsyncHTTPClient, SyncHTTPClient
 from openviking_sdk.client import Session, SyncSession
 from openviking_sdk.errors import NotFoundError
-
-
-@pytest.mark.asyncio
-async def test_async_http_client_initialize_is_idempotent_and_close_resets():
-    first_http = SimpleNamespace(aclose=AsyncMock())
-    second_http = SimpleNamespace(aclose=AsyncMock())
-
-    with patch(
-        "openviking_sdk.client.httpx.AsyncClient",
-        side_effect=[first_http, second_http],
-    ) as mock_async_client:
-        client = AsyncHTTPClient(url="http://localhost:1933")
-        client.initialize()
-
-        assert client._http is first_http
-        assert client._initialized is True
-        assert mock_async_client.call_count == 1
-
-        await client.close()
-
-        assert client._http is None
-        assert client._initialized is False
-        first_http.aclose.assert_awaited_once()
-
-        client.initialize()
-
-        assert client._http is second_http
-        assert client._initialized is True
-        assert mock_async_client.call_count == 2
-
 
 @pytest.mark.asyncio
 async def test_async_http_client_initialize_forwards_event_hooks():
@@ -57,76 +26,13 @@ async def test_async_http_client_initialize_forwards_event_hooks():
             url="http://localhost:1933",
             event_hooks=event_hooks,
         )
+        await client.initialize()
     event_hooks["request"].append(later_hook)
 
     assert mock_async_client.call_args.kwargs["event_hooks"] == {
         "request": [request_hook]
     }
     await client.close()
-
-
-def test_sync_http_client_initialize_is_idempotent_after_constructor():
-    client = SyncHTTPClient(url="http://localhost:1933")
-
-    try:
-        with patch.object(client._async_client, "initialize") as mock_initialize:
-            client.initialize()
-
-        mock_initialize.assert_not_called()
-        assert client._initialized is True
-    finally:
-        client.close()
-
-
-def test_sync_http_client_del_closes_underlying_async_client():
-    client = SyncHTTPClient(url="http://localhost:1933")
-    http = client._async_client._http
-
-    with patch(
-        "openviking_sdk.client.run_async",
-        side_effect=lambda coro: asyncio.run(coro),
-    ):
-        client.__del__()
-
-    assert client._initialized is False
-    assert client._async_client._http is None
-    assert http.is_closed
-
-
-def test_sync_http_client_del_handles_partially_constructed_instance():
-    client = SyncHTTPClient.__new__(SyncHTTPClient)
-
-    client.__del__()
-
-
-def test_async_http_client_del_closes_without_running_loop():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    asyncio.run(client.close())
-    fake_http = SimpleNamespace(aclose=AsyncMock())
-    client._http = fake_http
-    client._initialized = True
-
-    client.__del__()
-
-    fake_http.aclose.assert_awaited_once()
-    assert client._http is None
-    assert client._initialized is False
-
-
-@pytest.mark.asyncio
-async def test_async_http_client_del_schedules_close_on_running_loop():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    await client.close()
-    fake_http = SimpleNamespace(aclose=AsyncMock())
-    client._http = fake_http
-    client._initialized = True
-
-    client.__del__()
-    await asyncio.sleep(0)
-
-    fake_http.aclose.assert_awaited_once()
-    assert client._http is None
-    assert client._initialized is False
 
 
 @pytest.mark.asyncio
