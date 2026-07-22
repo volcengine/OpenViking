@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-_IMAGE_PATTERN = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+_IMAGE_PATTERN = re.compile(r"!\[([^\]]*)\]\(((?:[^()]|\([^()]*\))+)\)")
 _REMOTE_PREFIXES = ("http://", "https://", "viking://", "data:", "ftp://")
 
 # Sidecar written by MarkdownParser._ingest_local_images at each document root,
