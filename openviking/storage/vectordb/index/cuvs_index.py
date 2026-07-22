@@ -1838,13 +1838,12 @@ class CuVSDenseIndex:
         established gated admission path.
         """
 
-        if filters is None:
+        # LocalIndex normalizes an omitted public-API filter from None to {},
+        # so both representations are the canonical no-filter case here.
+        no_filter = not filters
+        if no_filter:
             cache_key: Optional[str] = None
         else:
-            # Empty mappings follow the established no-filter semantics, but
-            # are not the canonical no-filter representation for this fast path.
-            if not filters:
-                return None
             cache_key = (
                 prepared_filter.cache_key
                 if prepared_filter is not None
@@ -1868,7 +1867,7 @@ class CuVSDenseIndex:
 
             mask: Optional[Any] = None
             filter_identity: Union[str, int] = "no-filter"
-            if filters is None:
+            if no_filter:
                 result_limit = min(limit, len(snapshot.labels))
             else:
                 cached_filter = self._get_cached_filter(cache_key)

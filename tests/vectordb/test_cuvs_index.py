@@ -1573,7 +1573,7 @@ def test_cuvs_micro_batch_warm_fast_path_caps_one_batch_and_preserves_progress()
     index.close()
 
 
-def test_cuvs_micro_batch_empty_filter_uses_gated_fallback():
+def test_cuvs_micro_batch_empty_filter_uses_warm_fast_path():
     runtime = BlockingMicroBatchRuntime()
     index = make_micro_batch_index(
         runtime,
@@ -1606,9 +1606,10 @@ def test_cuvs_micro_batch_empty_filter_uses_gated_fallback():
             None,
             empty_filter_telemetry,
         )
+        wait_for_warm_lookahead(index, 2)
 
         assert no_filter_telemetry.micro_batching_warm_fast_path is True
-        assert empty_filter_telemetry.micro_batching_warm_fast_path is False
+        assert empty_filter_telemetry.micro_batching_warm_fast_path is True
         assert not empty_filter.done()
 
         runtime.release_search.set()
@@ -1616,6 +1617,7 @@ def test_cuvs_micro_batch_empty_filter_uses_gated_fallback():
         assert no_filter.result(timeout=5)[0] == [2]
         assert empty_filter.result(timeout=5)[0] == [1]
 
+    assert runtime.search_batch_sizes == [1, 2]
     assert index._active_searches == 0
     assert index._micro_batch_warm_lookahead == 0
     index.close()
