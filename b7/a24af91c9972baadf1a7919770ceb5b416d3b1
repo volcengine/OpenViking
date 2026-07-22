@@ -1,0 +1,32 @@
+openviking/service/core.py
+  s_0a78d284296ad4::t_aaf7e70b6cbe0c 419-420,422-431
+openviking/service/resource_service.py
+  s_0a78d284296ad4::t_359d41089ff8a0 41,343,348,351,564-568,944-948,1086
+openviking/storage/queuefs/add_resource_processor.py
+  s_0a78d284296ad4::t_8f6159037b9510 3,31,35,60,64
+openviking/storage/queuefs/queue_manager.py
+  s_0a78d284296ad4::t_d603679f82a4ad 72-74,162
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "b7a24af91c9972baadf1a7919770ceb5b416d3b1",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_0a78d284296ad4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f886d-85f5-7150-8398-ebea47f281b4",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
