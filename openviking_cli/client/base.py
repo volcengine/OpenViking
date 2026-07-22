@@ -594,6 +594,16 @@ class BaseClient(ABC):
         """Walk back along parents[0] up to limit commits."""
 
     @abstractmethod
+    async def git_diff(
+        self,
+        path: str,
+        *,
+        to_ref: str,
+        from_ref: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Compare one file between two snapshot refs."""
+
+    @abstractmethod
     async def git_get_ignore(self) -> str:
         """Return the account .ovgitignore content (empty string if absent)."""
 
