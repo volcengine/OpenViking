@@ -247,6 +247,7 @@ impl Config {
         let config: Config = serde_json::from_str(&content)
             .map_err(|e| Error::Config(format!("Failed to parse config file: {}", e)))?;
         config.validate_identity_mode()?;
+        config.validate_output()?;
         Ok(config)
     }
 
@@ -304,6 +305,16 @@ impl Config {
             return Err(Error::Config(
                 "actor_peer_id cannot be used with agent_id".to_string(),
             ));
+        }
+        Ok(())
+    }
+
+    fn validate_output(&self) -> Result<()> {
+        if !matches!(self.output.as_str(), "table" | "json") {
+            return Err(Error::Config(format!(
+                "Invalid output value {:?}: expected table or json",
+                self.output
+            )));
         }
         Ok(())
     }
@@ -456,6 +467,18 @@ mod tests {
             .expect_err("mixed identity mode should fail");
 
         assert!(error.to_string().contains("actor_peer_id cannot be used"));
+    }
+
+    #[test]
+    fn config_file_rejects_invalid_output() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let path = dir.path().join("ovcli.conf");
+        std::fs::write(&path, r#"{"output": "yaml"}"#)
+            .expect("config file should be written");
+
+        let error = Config::from_file(&path.to_string_lossy())
+            .expect_err("invalid output should fail");
+        assert!(error.to_string().contains("Invalid output value \"yaml\""));
     }
 
     #[test]

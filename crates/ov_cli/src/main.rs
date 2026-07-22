@@ -119,12 +119,11 @@ struct Cli {
         short,
         long,
         value_enum,
-        default_value = "table",
         global = true,
         hide = true,
         value_name = "table|json"
     )]
-    output: OutputFormat,
+    output: Option<OutputFormat>,
 
     /// Use compact table/JSON rendering
     #[arg(
@@ -2526,6 +2525,10 @@ fn language_command_can_run_picker(has_language_value: bool, is_interactive: boo
     has_language_value || is_interactive
 }
 
+fn resolve_output_format(cli_output: Option<OutputFormat>, config: &Config) -> OutputFormat {
+    cli_output.unwrap_or_else(|| OutputFormat::from(config.output.as_str()))
+}
+
 #[tokio::main]
 async fn main() {
     let args = preprocess_cli_args(std::env::args_os().collect());
@@ -2580,7 +2583,7 @@ async fn main() {
         }
     };
 
-    let output_format = cli.output;
+    let output_override = cli.output;
     let compact = cli.compact;
     let legacy_upload_options = UploadCliOptions {
         progress: cli.progress,
@@ -2663,6 +2666,7 @@ async fn main() {
             std::process::exit(2);
         }
     };
+    let output_format = resolve_output_format(output_override, &config);
     let ctx = CliContext::from_config(
         config,
         output_format,
@@ -3224,6 +3228,7 @@ mod tests {
         is_language_command_request, language_command_can_run_picker, language_gate_action,
         language_required_message, legacy_upload_option_error, plain_help_misuse,
         pre_parse_requires_cli_config_file, preprocess_cli_args, preprocess_privacy_args,
+        resolve_output_format,
     };
     use crate::config::{Config, DEFAULT_CUSTOM_URL};
     use crate::output::OutputFormat;
@@ -3915,7 +3920,7 @@ mod tests {
         let show_global_output =
             Cli::try_parse_from(["ov", "skills", "show", "code-review", "-o", "json"])
                 .expect("skills show should accept global -o after the subcommand");
-        assert_eq!(show_global_output.output, OutputFormat::Json);
+        assert_eq!(show_global_output.output, Some(OutputFormat::Json));
 
         let remove = Cli::try_parse_from(["ov", "skills", "remove", "foo", "bar", "--yes"])
             .expect("skills remove --yes should parse");
@@ -4317,6 +4322,20 @@ mod tests {
                 "{args:?} should treat help as an option value"
             );
         }
+    }
+
+    #[test]
+    fn configured_output_is_used_unless_cli_overrides_it() {
+        let mut config = Config::default();
+        config.output = "json".to_string();
+
+        assert_eq!(resolve_output_format(None, &config), OutputFormat::Json);
+        assert_eq!(
+            resolve_output_format(Some(OutputFormat::Table), &config),
+            OutputFormat::Table
+        );
+        let cli = Cli::try_parse_from(["ov", "status"]).unwrap();
+        assert_eq!(cli.output, None);
     }
 
     #[test]
