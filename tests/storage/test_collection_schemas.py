@@ -453,7 +453,7 @@ async def test_embedding_handler_propagates_account_id_on_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_embedding_handler_restores_usage_event_identity(monkeypatch):
+async def test_embedding_handler_restores_legacy_usage_event_identity(monkeypatch):
     class _DummyVikingDB:
         is_closing = False
 
@@ -490,7 +490,6 @@ async def test_embedding_handler_restores_usage_event_identity(monkeypatch):
             context_data={
                 "id": "id-1",
                 "uri": "viking://resources/sample",
-                "account_id": "acct-embedding",
                 "abstract": "sample",
                 "user": {
                     "account_id": "acct-embedding",

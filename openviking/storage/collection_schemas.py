@@ -553,6 +553,9 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             inserted_data = embedding_msg.context_data
             user_data = inserted_data.get("user")
             user_id = user_data.get("user_id") if isinstance(user_data, dict) else None
+            account_id = inserted_data.get("account_id")
+            if not account_id and isinstance(user_data, dict):
+                account_id = user_data.get("account_id")
             collector = resolve_telemetry(embedding_msg.telemetry_id)
             telemetry_ctx = bind_telemetry(collector) if collector is not None else nullcontext()
 
@@ -561,7 +564,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 http_route="/queuefs/embedding",
                 request_id=embedding_msg.telemetry_id or embedding_msg.id,
                 url_path=inserted_data.get("uri"),
-                account_id=inserted_data.get("account_id"),
+                account_id=account_id,
                 user_id=user_id,
             ):
                 if self._vikingdb.is_closing:
