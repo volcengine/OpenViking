@@ -1667,6 +1667,11 @@ impl HttpClient {
             .bytes()
             .await
             .map_err(|e| Error::from_reqwest("Failed to read response body", e))?;
+
+        if !status.is_success() {
+            return Err(crate::base_client::api_error_from_body(&bytes, status));
+        }
+
         let json: Value = match serde_json::from_slice(&bytes) {
             Ok(v) => v,
             Err(e) => {
@@ -1678,9 +1683,6 @@ impl HttpClient {
             }
         };
 
-        if !status.is_success() {
-            return Err(crate::base_client::api_error_from_envelope(&json, status));
-        }
         if let Some(error) = json.get("error") {
             if !error.is_null() {
                 return Err(crate::base_client::api_error_from_envelope(&json, status));

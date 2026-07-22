@@ -358,6 +358,10 @@ impl BaseClient {
             .await
             .map_err(|e| Error::from_reqwest("Failed to read response body", e))?;
 
+        if !status.is_success() {
+            return Err(api_error_from_body(&bytes, status));
+        }
+
         let json: Value = match serde_json::from_slice(&bytes) {
             Ok(json) => json,
             Err(e) => {
@@ -368,10 +372,6 @@ impl BaseClient {
                 )));
             }
         };
-
-        if !status.is_success() {
-            return Err(api_error_from_envelope(&json, status));
-        }
 
         if let Some(error) = json.get("error") {
             if !error.is_null() {
@@ -569,6 +569,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::time::Duration;
+    use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
 
     #[test]
@@ -625,6 +626,43 @@ mod tests {
             .expect_err("slow response should time out");
 
         assert!(matches!(error, Error::Timeout(_)));
+    }
+
+    #[tokio::test]
+    async fn plain_text_http_error_preserves_status() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut connection, _) = listener.accept().await.unwrap();
+            connection
+                .write_all(
+                    b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 20\r\n\r\nupstream unavailable",
+                )
+                .await
+                .unwrap();
+        });
+
+        let client = BaseClient::new(
+            format!("http://{address}"),
+            None,
+            None,
+            None,
+            None,
+            1.0,
+            false,
+            None,
+        );
+        let error = client.get::<Value>("/", &[]).await.unwrap_err();
+
+        assert_eq!(error.code(), "UNAVAILABLE");
+        assert!(matches!(
+            error,
+            Error::Api {
+                status: Some(503),
+                message,
+                ..
+            } if message.contains("upstream unavailable")
+        ));
     }
 
     #[test]

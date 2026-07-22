@@ -2402,27 +2402,19 @@ fn preprocess_cli_args(args: Vec<OsString>) -> Vec<OsString> {
 }
 
 fn pre_parse_output_options(args: &[OsString]) -> (OutputFormat, bool) {
-    let mut format = OutputFormat::Table;
-    let mut compact = true;
-    let mut index = 1;
-    while index < args.len() {
-        let token = args[index].to_string_lossy();
-        if token == "--output" || token == "-o" {
-            if let Some(value) = args.get(index + 1) {
-                format = OutputFormat::from(value.to_string_lossy().as_ref());
-                index += 1;
-            }
-        } else if let Some(value) = token.strip_prefix("--output=") {
-            format = OutputFormat::from(value);
-        } else if let Some(value) = token
-            .strip_prefix("--compact=")
-            .or_else(|| token.strip_prefix("-c="))
-        {
-            compact = value != "false";
-        }
-        index += 1;
-    }
-    (format, compact)
+    let Ok(matches) = Cli::command()
+        .ignore_errors(true)
+        .try_get_matches_from(args)
+    else {
+        return (OutputFormat::Table, true);
+    };
+    (
+        matches
+            .get_one::<OutputFormat>("output")
+            .copied()
+            .unwrap_or(OutputFormat::Table),
+        matches.get_one::<bool>("compact").copied().unwrap_or(true),
+    )
 }
 
 fn preprocess_privacy_args(args: Vec<OsString>) -> Vec<OsString> {
@@ -3306,9 +3298,13 @@ mod tests {
 
     #[test]
     fn pre_parse_output_options_preserve_json_config_errors() {
-        let args = os_args(&["ov", "ls", "--output", "json", "--compact=false"]);
-
-        assert_eq!(pre_parse_output_options(&args), (OutputFormat::Json, false));
+        for args in [
+            os_args(&["ov", "ls", "--output", "json", "--compact=false"]),
+            os_args(&["ov", "ls", "-ojson"]),
+            os_args(&["ov", "ls", "-o=json"]),
+        ] {
+            assert_eq!(pre_parse_output_options(&args).0, OutputFormat::Json);
+        }
     }
 
     #[test]
