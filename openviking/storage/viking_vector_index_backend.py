@@ -1332,9 +1332,7 @@ class VikingVectorIndexBackend:
         root_backend = self._get_root_backend()
         return await root_backend.delete_by_filter(Eq("account_id", account_id))
 
-    async def delete_user_data(
-        self, account_id: str, user_id: str, *, ctx: RequestContext
-    ) -> int:
+    async def delete_user_data(self, account_id: str, user_id: str, *, ctx: RequestContext) -> int:
         """删除指定 account 下某个 user 的所有向量数据（仅限 root 角色操作）。"""
         self._check_root_role(ctx)
         root_backend = self._get_root_backend()

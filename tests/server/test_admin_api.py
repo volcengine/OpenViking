@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import json
 import uuid
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -87,6 +88,8 @@ class _FakeVikingFS:
     def __init__(self):
         self.agfs = _FakeAGFS()
         self.files = {}
+        self.rm_calls: list[tuple[str, dict]] = []
+        self.vector_store = None
 
     async def read_file(self, uri, **_kwargs):
         if uri not in self.files:
@@ -96,8 +99,12 @@ class _FakeVikingFS:
     async def write_file(self, uri, content, **_kwargs):
         self.files[uri] = content
 
-    async def rm(self, uri, **_kwargs):
+    async def rm(self, uri, **kwargs):
+        self.rm_calls.append((uri, kwargs))
         self.files.pop(uri, None)
+
+    def _get_vector_store(self):
+        return self.vector_store
 
 
 class _FakeService:
@@ -668,6 +675,55 @@ async def test_remove_user_cascades_storage(
         headers={"X-API-Key": bob_key},
     )
     assert resp.status_code == 401
+
+
+async def test_remove_user_cascades_vectordb_call(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """remove_user must call delete_user_data with target account/user ROOT ctx."""
+    fake_fs = lightweight_admin_app.state.fake_service.viking_fs
+    vector_store = AsyncMock()
+    vector_store.delete_user_data = AsyncMock(return_value=3)
+    fake_fs.vector_store = vector_store
+    monkeypatch.setattr("openviking.server.routers.admin.get_viking_fs", lambda: fake_fs)
+
+    acct = _uid()
+    await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={"user_id": "bob", "role": "user"},
+        headers=root_headers(),
+    )
+
+    resp = await lightweight_admin_client.delete(
+        f"/api/v1/admin/accounts/{acct}/users/bob", headers=root_headers()
+    )
+    assert resp.status_code == 200
+    assert resp.json()["result"]["deleted"] is True
+
+    assert fake_fs.rm_calls
+    assert fake_fs.rm_calls[0][0] == "viking://user/bob"
+    assert fake_fs.rm_calls[0][1].get("recursive") is True
+    rm_ctx = fake_fs.rm_calls[0][1].get("ctx")
+    assert isinstance(rm_ctx, RequestContext)
+    assert rm_ctx.account_id == acct
+    assert rm_ctx.user.user_id == "bob"
+    assert rm_ctx.role == Role.ROOT
+
+    vector_store.delete_user_data.assert_awaited_once()
+    args, kwargs = vector_store.delete_user_data.await_args
+    assert args == (acct, "bob")
+    cleanup_ctx = kwargs["ctx"]
+    assert isinstance(cleanup_ctx, RequestContext)
+    assert cleanup_ctx.account_id == acct
+    assert cleanup_ctx.user.user_id == "bob"
+    assert cleanup_ctx.role == Role.ROOT
 
 
 # ---- Role management ----
