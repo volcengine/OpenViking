@@ -2999,11 +2999,37 @@ class VikingFS:
 
     # ========== Relation Table Internal Methods ==========
 
+    async def _resolve_relation_table_path(
+        self, resource_path: str, ctx: Optional[RequestContext] = None
+    ) -> str:
+        """Resolve the path to the relation table file for a resource.
+
+        For directories: ``{resource_path}/.relations.json``
+        For files: ``{parent_dir}/.{filename}.relations.json`` (sidecar file)
+
+        If stat fails (e.g. new resource not yet committed), falls back to
+        the directory convention for backward compatibility.
+        """
+        try:
+            stat_result = await self._async_agfs.stat(resource_path)
+            is_dir = stat_result.get("isDir", False) if isinstance(stat_result, dict) else False
+        except Exception:
+            is_dir = True  # backward compatible fallback
+
+        if is_dir:
+            return f"{resource_path}/.relations.json"
+
+        # File resource: store relation table as a sidecar in the parent directory
+        parts = resource_path.rstrip("/").split("/")
+        filename = parts[-1]
+        parent = "/".join(parts[:-1]) or "/"
+        return f"{parent}/.{filename}.relations.json"
+
     async def _read_relation_table(
-        self, dir_path: str, ctx: Optional[RequestContext] = None
+        self, resource_path: str, ctx: Optional[RequestContext] = None
     ) -> List[RelationEntry]:
-        """Read .relations.json."""
-        table_path = f"{dir_path}/.relations.json"
+        """Read relation table for a resource (file or directory)."""
+        table_path = await self._resolve_relation_table_path(resource_path, ctx=ctx)
         try:
             content = self._handle_agfs_read(await self._async_agfs.read(table_path))
             data = json.loads(content.decode("utf-8"))
@@ -3028,14 +3054,14 @@ class VikingFS:
         return entries
 
     async def _write_relation_table(
-        self, dir_path: str, entries: List[RelationEntry], ctx: Optional[RequestContext] = None
+        self, resource_path: str, entries: List[RelationEntry], ctx: Optional[RequestContext] = None
     ) -> None:
-        """Write .relations.json."""
+        """Write relation table for a resource (file or directory)."""
+        table_path = await self._resolve_relation_table_path(resource_path, ctx=ctx)
         # Use flat list format
         data = [entry.to_dict() for entry in entries]
 
         content = json.dumps(data, ensure_ascii=False, indent=2)
-        table_path = f"{dir_path}/.relations.json"
         if isinstance(content, str):
             content = content.encode("utf-8")
 
