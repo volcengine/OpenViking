@@ -14,6 +14,44 @@ class SkillLoader:
 
     FRONTMATTER_PATTERN = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)$", re.DOTALL)
 
+    @staticmethod
+    def _normalize_allowed_tools(value: Any) -> list[str]:
+        """Normalize standard scalar and legacy list forms of ``allowed-tools``."""
+        if isinstance(value, list):
+            if any(not isinstance(tool, str) for tool in value):
+                raise ValueError(
+                    "Skill 'allowed-tools' must be a space-separated string or an array of strings"
+                )
+            return value
+        if not isinstance(value, str):
+            raise ValueError(
+                "Skill 'allowed-tools' must be a space-separated string or an array of strings"
+            )
+
+        tools: list[str] = []
+        current: list[str] = []
+        depth = 0
+        for char in value.strip():
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth < 0:
+                    raise ValueError("Skill 'allowed-tools' has unbalanced parentheses")
+
+            if depth == 0 and (char.isspace() or char == ","):
+                if current:
+                    tools.append("".join(current))
+                    current = []
+                continue
+            current.append(char)
+
+        if depth != 0:
+            raise ValueError("Skill 'allowed-tools' has unbalanced parentheses")
+        if current:
+            tools.append("".join(current))
+        return tools
+
     @classmethod
     def load(cls, path: str) -> Dict[str, Any]:
         """Load Skill from file and return as dict."""
@@ -43,10 +81,7 @@ class SkillLoader:
 
         allowed_tools_declared = "allowed-tools" in meta
         allowed_tools = meta.get("allowed-tools", [])
-        if not isinstance(allowed_tools, list) or any(
-            not isinstance(tool, str) for tool in allowed_tools
-        ):
-            raise ValueError("Skill 'allowed-tools' must be an array of strings")
+        allowed_tools = cls._normalize_allowed_tools(allowed_tools)
 
         return {
             "name": meta["name"],
@@ -79,8 +114,9 @@ class SkillLoader:
             allowed_tools = skill_dict.get("allowed-tools")
         if allowed_tools is None:
             allowed_tools = []
+        allowed_tools = cls._normalize_allowed_tools(allowed_tools)
         if allowed_tools or skill_dict.get("allowed_tools_declared"):
-            frontmatter["allowed-tools"] = allowed_tools
+            frontmatter["allowed-tools"] = " ".join(allowed_tools)
 
         tags = skill_dict.get("tags") or []
         if tags:

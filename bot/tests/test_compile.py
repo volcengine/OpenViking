@@ -8,7 +8,6 @@ from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.agent.tools.compile import CompileScopedTool, SubmitWikiBundleTool
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.compile.models import (
-    CompileFailure,
     CompileLimits,
     CompileRequest,
     CompileTask,
@@ -41,18 +40,40 @@ def _page(page_id: int, title: str, **overrides):
 
 def test_skill_loader_distinguishes_missing_and_explicit_empty_allowed_tools():
     missing = SkillLoader.parse("---\nname: a\ndescription: A\n---\nDo it")
-    empty = SkillLoader.parse(
-        "---\nname: a\ndescription: A\nallowed-tools: []\n---\nDo it"
-    )
+    empty = SkillLoader.parse("---\nname: a\ndescription: A\nallowed-tools: []\n---\nDo it")
     assert missing["allowed_tools_declared"] is False
     assert empty["allowed_tools_declared"] is True
-    assert "allowed-tools: []" in SkillLoader.to_skill_md(empty)
+    assert "allowed-tools: ''" in SkillLoader.to_skill_md(empty)
 
 
-def test_skill_loader_rejects_non_string_allowed_tools():
-    with pytest.raises(ValueError, match="array of strings"):
+def test_skill_loader_accepts_standard_and_legacy_allowed_tools_forms():
+    standard = SkillLoader.parse(
+        "---\nname: a\ndescription: A\nallowed-tools: Read Write Bash(git:*)\n---\nDo it"
+    )
+    ara = SkillLoader.parse(
+        "---\nname: a\ndescription: A\n"
+        "allowed-tools: Read, Write, Bash(python *|git clone *), Glob\n---\nDo it"
+    )
+    legacy = SkillLoader.parse(
+        "---\nname: a\ndescription: A\nallowed-tools: [Read, Write]\n---\nDo it"
+    )
+
+    assert standard["allowed_tools"] == ["Read", "Write", "Bash(git:*)"]
+    assert ara["allowed_tools"] == [
+        "Read",
+        "Write",
+        "Bash(python *|git clone *)",
+        "Glob",
+    ]
+    assert legacy["allowed_tools"] == ["Read", "Write"]
+
+
+def test_skill_loader_rejects_invalid_allowed_tools():
+    with pytest.raises(ValueError, match="space-separated string or an array of strings"):
+        SkillLoader.parse("---\nname: a\ndescription: A\nallowed-tools: [Read, 3]\n---\nDo it")
+    with pytest.raises(ValueError, match="unbalanced parentheses"):
         SkillLoader.parse(
-            "---\nname: a\ndescription: A\nallowed-tools: [Read, 3]\n---\nDo it"
+            "---\nname: a\ndescription: A\nallowed-tools: Read Bash(git:*\n---\nDo it"
         )
 
 
@@ -400,9 +421,14 @@ def test_request_registry_honors_allowed_tools_and_compile_blocklist():
     available = ToolRegistry()
     for name in (
         "read_file",
+        "write_file",
+        "edit_file",
+        "exec",
         "web_search",
         "message",
         "openviking_list",
+        "openviking_grep",
+        "openviking_glob",
         "openviking_multi_read",
         "openviking_add_resource",
     ):
@@ -418,7 +444,7 @@ def test_request_registry_honors_allowed_tools_and_compile_blocklist():
         "catalog_uris": set(),
     }
 
-    empty, empty_ov_names = service._build_request_registry(
+    empty, empty_ov_names, empty_unavailable = service._build_request_registry(
         parsed_skill={"allowed_tools_declared": True, "allowed_tools": []},
         **common,
     )
@@ -429,11 +455,19 @@ def test_request_registry_honors_allowed_tools_and_compile_blocklist():
         "submit_wiki_bundle",
     ]
     assert empty_ov_names == {"openviking_list", "openviking_multi_read"}
+    assert empty_unavailable == []
 
-    selected, ov_names = service._build_request_registry(
+    selected, ov_names, unavailable = service._build_request_registry(
         parsed_skill={
             "allowed_tools_declared": True,
-            "allowed_tools": ["Read", "WebSearch", "openviking_list"],
+            "allowed_tools": [
+                "Read",
+                "WebSearch",
+                "openviking_list",
+                "message",
+                "openviking_add_resource",
+                "made_up_tool",
+            ],
         },
         **common,
     )
@@ -445,16 +479,63 @@ def test_request_registry_honors_allowed_tools_and_compile_blocklist():
         "submit_wiki_bundle",
     ]
     assert ov_names == {"openviking_list", "openviking_multi_read"}
+    assert unavailable == ["made_up_tool", "message", "openviking_add_resource"]
 
-    with pytest.raises(CompileFailure) as error:
-        service._build_request_registry(
-            parsed_skill={
-                "allowed_tools_declared": True,
-                "allowed_tools": ["made_up_tool"],
-            },
-            **common,
-        )
-    assert error.value.code == "SKILL_CAPABILITY_UNAVAILABLE"
+    ara, ara_ov_names, ara_unavailable = service._build_request_registry(
+        parsed_skill={
+            "allowed_tools_declared": True,
+            "allowed_tools": [
+                "Read",
+                "Write",
+                "Edit",
+                "Bash(python *|git clone *|ls *|mkdir *)",
+                "Glob",
+                "Grep",
+                "Task",
+            ],
+        },
+        **common,
+    )
+    assert ara.tool_names == [
+        "read_file",
+        "write_file",
+        "edit_file",
+        "openviking_list",
+        "openviking_multi_read",
+        "submit_wiki_bundle",
+    ]
+    assert ara_ov_names == {"openviking_list", "openviking_multi_read"}
+    assert ara_unavailable == [
+        "Bash(python *|git clone *|ls *|mkdir *)",
+        "Glob",
+        "Grep",
+        "Task",
+    ]
+
+
+def test_compile_prompt_explains_unavailable_tools_to_agent_only():
+    request = SanitizedCompileRequest.model_validate(
+        {
+            "from": ["viking://resources/source"],
+            "to": "viking://resources/wiki",
+            "skill": "viking://agent/skills/ara",
+            "reason": "Compile the research",
+        }
+    )
+
+    system, user = BotCompileService._build_prompts(
+        request=request,
+        skill_content="Follow the ARA method.",
+        sources=[],
+        catalog=[],
+        available_tools=["read_file", "submit_wiki_bundle"],
+        unavailable_tools=["Bash(...)", "Glob", "Grep", "Task"],
+    )
+
+    assert "Compile host capability notice" in system
+    assert '"Bash(...)"' in system
+    assert "Do not claim that unavailable validation steps" in system
+    assert "unavailable" not in user
 
 
 @pytest.mark.asyncio

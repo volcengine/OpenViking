@@ -557,5 +557,6 @@ def test_skill_loader_to_skill_md_round_trip_with_lists():
         "content": "## 核心规范\n- 先读文件",
         "source_path": "",
         "allowed_tools": ["Read"],
+        "allowed_tools_declared": True,
         "tags": ["session-derived"],
     }
