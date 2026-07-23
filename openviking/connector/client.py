@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import httpx
 
@@ -60,11 +60,18 @@ class ConnectorClient:
         api_key: str,
         *,
         tos_path: Optional[str] = None,
-        path_prefix: Optional[List[str]] = None,
+        to: Optional[str] = None,
         include_child: bool = True,
+        param_config: Optional[Dict[str, Any]] = None,
+        auth_config: Optional[Dict[str, Any]] = None,
         extra_params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Submit a document import job via the configured doc/add endpoint.
+
+        ``to`` is the exact OpenViking file or directory target. Source-specific
+        settings stay inside ``param_config``; source credentials stay inside
+        ``auth_config``, the only body field redacted from request logs on
+        every hop, and must never be merged into ``param_config``.
 
         Returns the Connector response dict (contains task key / id on success).
         """
@@ -75,8 +82,12 @@ class ConnectorClient:
         }
         if tos_path is not None:
             payload["tos_path"] = tos_path
-        if path_prefix is not None:
-            payload["path_prefix"] = path_prefix
+        if to is not None:
+            payload["to"] = to
+        if param_config:
+            payload["param_config"] = param_config
+        if auth_config:
+            payload["auth_config"] = auth_config
         if extra_params:
             # Authentication belongs exclusively in the Authorization header.
             payload.update({key: value for key, value in extra_params.items() if key != "api_key"})
