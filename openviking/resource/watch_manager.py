@@ -576,14 +576,62 @@ class WatchManager:
         self,
         task_id: str,
         auth_state: Optional[Dict[str, Any]],
-    ) -> None:
-        """Update private auth state for an existing watch task."""
+        *,
+        expected_revision: Optional[int] = None,
+    ) -> Optional[int]:
+        """Update private auth state when the watched task is still current.
+
+        Returns the new revision after a successful write. When an execution
+        raced with a task update, the stale credentials are rejected and the
+        current active task is left immediately due.
+        """
         async with self._lock:
             task = self._tasks.get(task_id)
             if not task:
-                return
+                return None
+
+            if expected_revision is not None and task.revision != expected_revision:
+                if task.is_active and task.watch_interval > 0:
+                    task.next_execution_time = datetime.now()
+                    await self._save_tasks()
+                return None
+
             task.auth_state = auth_state
+            task.revision += 1
             await self._save_tasks()
+            return task.revision
+
+    async def deactivate_task_if_revision(
+        self,
+        task_id: str,
+        *,
+        expected_revision: int,
+        account_id: str,
+        user_id: str,
+        role: str,
+    ) -> bool:
+        """Deactivate a task only when the executing revision is still current."""
+        async with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return False
+
+            if not self._check_permission(task, account_id, user_id, role):
+                raise PermissionDeniedError(
+                    f"User {account_id}/{user_id} does not have permission to update task {task_id}"
+                )
+
+            if task.revision != expected_revision:
+                if task.is_active and task.watch_interval > 0:
+                    task.next_execution_time = datetime.now()
+                    await self._save_tasks()
+                return False
+
+            task.is_active = False
+            task.next_execution_time = None
+            task.revision += 1
+            await self._save_tasks()
+            return True
 
     def _plan_move_tasks_under_uri_unlocked(
         self,

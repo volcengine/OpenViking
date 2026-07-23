@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.resource.feishu_watch_auth import FeishuRefreshedToken
 from openviking.resource.watch_manager import WatchManager, WatchTask
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.service.resource_service import ResourceService
@@ -115,6 +116,57 @@ class TestWatchSchedulerResourceExistence:
             task.task_id,
             expected_revision=task.revision,
         )
+
+    @pytest.mark.asyncio
+    async def test_stale_target_lookup_cannot_deactivate_updated_task(self, tmp_path):
+        from openviking_cli.exceptions import NotFoundError
+
+        stat_started = asyncio.Event()
+        allow_stat_to_finish = asyncio.Event()
+
+        class BlockingMissingVikingFS:
+            async def stat(self, uri, ctx=None):
+                stat_started.set()
+                await allow_stat_to_finish.wait()
+                raise NotFoundError(uri, "resource")
+
+        source = tmp_path / "source.txt"
+        source.write_text("ok")
+        resource_service = ResourceService()
+        scheduler = WatchScheduler(
+            resource_service=resource_service,
+            viking_fs=BlockingMissingVikingFS(),
+            check_interval=1,
+        )
+        manager = WatchManager(viking_fs=None)
+        await manager.initialize()
+        scheduler._watch_manager = manager
+        task = await manager.create_task(
+            path=str(source),
+            to_uri="viking://resources/codeask/wiki",
+            watch_interval=30.0,
+        )
+        task.next_execution_time = datetime.now() - timedelta(seconds=1)
+        executed_revision = task.revision
+
+        execution = asyncio.create_task(scheduler._execute_task(task))
+        await stat_started.wait()
+        await manager.update_task(
+            task_id=task.task_id,
+            account_id=task.account_id,
+            user_id=task.user_id,
+            role=task.original_role,
+            instruction="updated while target lookup was waiting",
+        )
+        allow_stat_to_finish.set()
+        await execution
+
+        updated = await manager.get_task(task.task_id)
+        assert updated is not None
+        assert updated.revision == executed_revision + 1
+        assert updated.is_active is True
+        assert updated.instruction == "updated while target lookup was waiting"
+        assert [due.task_id for due in await manager.get_due_tasks()] == [task.task_id]
 
 
 class TestWatchSchedulerFeishuPrecheck:
@@ -520,6 +572,102 @@ class TestWatchSchedulerFeishuPrecheck:
         assert credential_reads == 2
         assert len(resource_service.calls) == 1
         assert updated.sync_state["feishu_sync_fingerprint_v1"] != first_fingerprint
+
+    @pytest.mark.asyncio
+    async def test_stale_oauth_refresh_cannot_overwrite_rotated_credentials(self, monkeypatch):
+        resource_service, scheduler, manager, task, _ = await self._setup_task(monkeypatch)
+        old_auth = {
+            "provider": "feishu",
+            "access_token": "access-old",
+            "refresh_token": "refresh-old",
+            "expires_at": None,
+        }
+        task = await manager.update_task(
+            task_id=task.task_id,
+            account_id=task.account_id,
+            user_id=task.user_id,
+            role=task.original_role,
+            auth_state=old_auth,
+        )
+        task.next_execution_time = datetime.now() - timedelta(seconds=1)
+        executed_revision = task.revision
+        refresh_started = asyncio.Event()
+        allow_refresh_to_finish = asyncio.Event()
+
+        class BlockingOAuthClient:
+            async def refresh_user_access_token(self, refresh_token):
+                assert refresh_token == "refresh-old"
+                refresh_started.set()
+                await allow_refresh_to_finish.wait()
+                return FeishuRefreshedToken(
+                    access_token="access-stale",
+                    refresh_token="refresh-stale",
+                    expires_in=3600,
+                )
+
+        scheduler._feishu_oauth_client = BlockingOAuthClient()
+        execution = asyncio.create_task(scheduler._execute_task(task))
+        await refresh_started.wait()
+        rotated_auth = {
+            "provider": "feishu",
+            "access_token": "access-rotated",
+            "refresh_token": "refresh-rotated",
+            "expires_at": "2999-01-01T00:00:00+00:00",
+        }
+        await manager.update_task(
+            task_id=task.task_id,
+            account_id=task.account_id,
+            user_id=task.user_id,
+            role=task.original_role,
+            auth_state=rotated_auth,
+        )
+        allow_refresh_to_finish.set()
+        await execution
+
+        updated = await manager.get_task(task.task_id)
+        assert updated is not None
+        assert updated.revision == executed_revision + 1
+        assert updated.auth_state == rotated_auth
+        assert resource_service.calls == []
+        assert [due.task_id for due in await manager.get_due_tasks()] == [task.task_id]
+
+    @pytest.mark.asyncio
+    async def test_successful_oauth_refresh_revision_is_used_for_execution_commit(
+        self, monkeypatch
+    ):
+        resource_service, scheduler, manager, task, _ = await self._setup_task(monkeypatch)
+        task = await manager.update_task(
+            task_id=task.task_id,
+            account_id=task.account_id,
+            user_id=task.user_id,
+            role=task.original_role,
+            auth_state={
+                "provider": "feishu",
+                "access_token": "access-old",
+                "refresh_token": "refresh-old",
+                "expires_at": None,
+            },
+        )
+        executed_revision = task.revision
+        scheduler._fetch_feishu_latest_modify_time = AsyncMock(return_value=100)
+
+        class SuccessfulOAuthClient:
+            async def refresh_user_access_token(self, refresh_token):
+                return FeishuRefreshedToken(
+                    access_token="access-new",
+                    refresh_token="refresh-new",
+                    expires_in=3600,
+                )
+
+        scheduler._feishu_oauth_client = SuccessfulOAuthClient()
+        await scheduler._execute_task(task)
+
+        updated = await manager.get_task(task.task_id)
+        assert updated is not None
+        assert updated.revision == executed_revision + 1
+        assert updated.auth_state["access_token"] == "access-new"
+        assert updated.last_execution_time is not None
+        assert "feishu_sync_fingerprint_v1" in updated.sync_state
 
     def test_sync_state_is_private_but_persisted(self):
         task = WatchTask(

@@ -33,6 +33,10 @@ _FEISHU_SYNC_FINGERPRINT_KEY = "feishu_sync_fingerprint_v1"
 _FEISHU_ACCESS_TOKEN_KEY = "feishu_access_token"
 
 
+class _StaleWatchTaskError(RuntimeError):
+    """Raised when an awaited execution loses its task revision."""
+
+
 class WatchScheduler:
     """Scheduled task scheduler for resource watch tasks.
 
@@ -368,6 +372,8 @@ class WatchScheduler:
         except asyncio.CancelledError:
             cancelled = True
             raise
+        except _StaleWatchTaskError as e:
+            logger.info("[WatchScheduler] Task %s became stale: %s", task.task_id, e)
         except FileNotFoundError as e:
             should_deactivate = True
             deactivation_reason = f"Resource not found: {e}"
@@ -384,18 +390,25 @@ class WatchScheduler:
             try:
                 if not cancelled:
                     if should_deactivate:
-                        await asyncio.shield(
-                            self._watch_manager.update_task(
+                        deactivated = await asyncio.shield(
+                            self._watch_manager.deactivate_task_if_revision(
                                 task_id=task.task_id,
+                                expected_revision=task.revision,
                                 account_id=task.account_id,
                                 user_id=task.user_id,
                                 role=getattr(task, "original_role", None) or str(Role.USER),
-                                is_active=False,
                             )
                         )
-                        logger.info(
-                            f"[WatchScheduler] Deactivated task {task.task_id}: {deactivation_reason}"
-                        )
+                        if deactivated:
+                            logger.info(
+                                f"[WatchScheduler] Deactivated task {task.task_id}: "
+                                f"{deactivation_reason}"
+                            )
+                        else:
+                            logger.info(
+                                f"[WatchScheduler] Rejected stale deactivation for task "
+                                f"{task.task_id}; task remains due"
+                            )
                     else:
                         sync_state_updates = None
                         if (
@@ -468,7 +481,14 @@ class WatchScheduler:
         refreshed = await self._get_feishu_oauth_client().refresh_user_access_token(refresh_token)
         updated = apply_feishu_refreshed_token(auth_state, refreshed)
         if self._watch_manager is not None:
-            await self._watch_manager.update_auth_state(task.task_id, updated)
+            new_revision = await self._watch_manager.update_auth_state(
+                task.task_id,
+                updated,
+                expected_revision=task.revision,
+            )
+            if new_revision is None:
+                raise _StaleWatchTaskError("OAuth refresh lost a concurrent task update")
+            task.revision = new_revision
         return updated
 
     def _get_feishu_oauth_client(self):
