@@ -27,9 +27,15 @@ export type ContextEngineLifecycleLogger = {
   warn?: (msg: string) => void;
 };
 
+export type CommitOpenVikingSessionOptions = {
+  wait?: boolean;
+  keepRecentCount?: number;
+};
+
 export type CommitOpenVikingSessionParams = {
   sessionId: string;
   sessionKey?: string;
+  commitOptions?: CommitOpenVikingSessionOptions;
   getClient: () => Promise<Pick<OpenVikingClient, "commitSession">>;
   logger: ContextEngineLifecycleLogger;
   rememberSessionAgentId?: (ctx: {
@@ -343,6 +349,7 @@ function buildAssembledContext(
 export async function commitOpenVikingSession({
   sessionId,
   sessionKey,
+  commitOptions,
   getClient,
   logger,
   rememberSessionAgentId,
@@ -363,8 +370,8 @@ export async function commitOpenVikingSession({
       ovSessionId: ovId,
     });
     const commitResult = await client.commitSession(ovId, {
-      wait: true,
-      keepRecentCount: 0,
+      wait: commitOptions?.wait ?? true,
+      keepRecentCount: commitOptions?.keepRecentCount ?? 0,
     });
     const memCount = totalExtractedMemories(commitResult.memories_extracted);
     if (commitResult.status === "failed") {
