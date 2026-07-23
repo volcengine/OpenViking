@@ -76,7 +76,7 @@ class _RecoveringLockManager:
 class _FakeVikingFS:
     async def exists(self, uri, ctx=None):
         del uri, ctx
-        return False
+        return True
 
     def _uri_to_path(self, uri, ctx=None):
         del ctx

@@ -57,6 +57,10 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Default max consecutive retries per URI before marking as permanently failed.
+# Prevents token-burn loops (see #1595: 35.96M tokens from a single import).
+DEFAULT_MAX_RETRIES_PER_URI = 3
+
 
 @dataclass
 class DiffResult:
@@ -101,16 +105,38 @@ class SemanticProcessor(DequeueHandlerBase):
     _request_stats_order: List[str] = []
     _max_cached_stats = 256
 
-    def __init__(self, max_concurrent_llm: int = 64):
+    def __init__(
+        self, max_concurrent_llm: int = 64, max_retries_per_uri: int = DEFAULT_MAX_RETRIES_PER_URI
+    ):
         """
         Initialize SemanticProcessor.
 
         Args:
             max_concurrent_llm: Maximum concurrent LLM calls
+            max_retries_per_uri: Max consecutive failures per URI before dropping
         """
         self.max_concurrent_llm = max_concurrent_llm
+        self.max_retries_per_uri = max_retries_per_uri
         self._default_ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
         self._circuit_breaker = CircuitBreaker()
+
+        # Track consecutive retry counts per URI to prevent infinite retry loops.
+        # Maps coalesce_key -> number of consecutive failures since last success.
+        self._retry_counts: Dict[str, int] = {}
+
+    @staticmethod
+    def _retry_key(msg: SemanticMsg) -> str:
+        """Build a tenant-aware retry key. Uses coalesce_key if present,
+        otherwise constructs from msg fields to avoid cross-tenant collisions."""
+        if msg.coalesce_key:
+            return msg.coalesce_key
+        return build_semantic_coalesce_key(
+            context_type=msg.context_type,
+            uri=msg.uri,
+            account_id=msg.account_id or "default",
+            user_id=msg.user_id or "default",
+            peer_id=getattr(msg, "peer_id", None) or "default",
+        )
 
     @classmethod
     def _cache_dag_stats(cls, telemetry_id: str, uri: str, stats: DagStats) -> None:
@@ -249,6 +275,30 @@ class SemanticProcessor(DequeueHandlerBase):
         data: Optional[Dict[str, Any]],
         error: Exception,
     ) -> None:
+        retry_key = self._retry_key(msg)
+        current_count = self._retry_counts.get(retry_key, 0) + 1
+        self._retry_counts[retry_key] = current_count
+
+        if current_count >= self.max_retries_per_uri:
+            logger.warning(
+                "Max retries (%d) reached for %s, dropping to prevent token burn. Last error: %s",
+                self.max_retries_per_uri,
+                retry_key,
+                error,
+            )
+            self._retry_counts.pop(retry_key, None)
+            self._merge_request_stats(msg.telemetry_id, error_count=1)
+            get_request_wait_tracker().mark_semantic_failed(
+                msg.telemetry_id,
+                msg.id,
+                f"Max retries ({self.max_retries_per_uri}) exceeded: {error}",
+            )
+            self.report_error(
+                f"Max retries ({self.max_retries_per_uri}) exceeded for {retry_key}: {error}",
+                data,
+            )
+            return
+
         try:
             await self._reenqueue_semantic_msg(msg)
             self._merge_request_stats(msg.telemetry_id, requeue_count=1)
@@ -328,6 +378,8 @@ class SemanticProcessor(DequeueHandlerBase):
                     msg.uri,
                     msg.coalesce_version,
                 )
+                retry_key = self._retry_key(msg)
+                self._retry_counts.pop(retry_key, None)
                 if msg.telemetry_id and msg.id:
                     get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
                 self.report_success()
@@ -345,6 +397,30 @@ class SemanticProcessor(DequeueHandlerBase):
                 self.report_requeue()
                 self.report_success()
                 return None
+            # File existence check: skip processing if the source file is gone.
+            # Prevents infinite retry loops on deleted files.
+            try:
+                viking_fs = get_viking_fs()
+                check_ctx = self._ctx_from_semantic_msg(msg)
+                file_exists = await viking_fs.exists(msg.uri, ctx=check_ctx)
+                if not file_exists:
+                    logger.warning(
+                        "Source URI does not exist, dropping from queue: %s",
+                        msg.uri,
+                    )
+                    self._retry_counts.pop(self._retry_key(msg), None)
+                    if msg.telemetry_id and msg.id:
+                        get_request_wait_tracker().mark_semantic_failed(
+                            msg.telemetry_id, msg.id, "Source URI does not exist"
+                        )
+                    self.report_error(f"Source URI does not exist: {msg.uri}", data)
+                    return None
+            except Exception as check_err:
+                logger.debug(
+                    "Could not check existence for %s, proceeding anyway: %s",
+                    msg.uri,
+                    check_err,
+                )
             collector = resolve_telemetry(msg.telemetry_id)
             telemetry_ctx = bind_telemetry(collector) if collector is not None else nullcontext()
             with telemetry_ctx:
@@ -459,6 +535,8 @@ class SemanticProcessor(DequeueHandlerBase):
                     logger.info(f"Completed semantic generation for: {msg.uri}")
                     self.report_success()
                     self._circuit_breaker.record_success()
+                    retry_key = self._retry_key(msg)
+                    self._retry_counts.pop(retry_key, None)
                     return None
                 finally:
                     reset_root_observability_context(root_context_token)
