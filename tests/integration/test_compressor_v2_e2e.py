@@ -226,9 +226,10 @@ class TestCompressorV2EndToEnd:
         print("Server uses its own ov.conf configuration")
         print("Note: Data cleanup is handled by test_restart_openviking_server.sh")
 
-        # The test passes if it doesn't throw an exception
-        # Memory extraction happens in background, v2 writes directly to storage
-        assert True
+        # The test passes if the background task completed successfully
+        # and the user-memories listing returned a list (empty or otherwise).
+        assert task_result["status"] == "completed"
+        assert isinstance(user_memories, list)
 
     @pytest.mark.integration
     @pytest.mark.asyncio
