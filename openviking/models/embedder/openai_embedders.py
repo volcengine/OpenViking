@@ -78,6 +78,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         provider: str = "openai",
         configured_provider: Optional[str] = None,
         encoding_format: Optional[Literal["float", "base64"]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
     ):
         """Initialize OpenAI-Compatible Dense Embedder
 
@@ -107,6 +108,10 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
                             ``"float"`` to send/receive plain JSON arrays — the recommended
                             workaround when the upstream gateway cannot deserialize base64
                             embedding payloads correctly.
+            extra_body: Extra JSON body fields merged into every embeddings request
+                       (e.g., OpenRouter provider routing:
+                       {'provider': {'sort': 'latency'}}). Keys set explicitly via
+                       query_param/document_param take precedence on conflict.
 
         Raises:
             ValueError: If api_key is not provided and env vars are not set
@@ -126,6 +131,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         self.query_param = query_param
         self.document_param = document_param
         self.encoding_format = encoding_format
+        self.extra_body = extra_body
         self._provider = provider.lower()
         self.provider = (configured_provider or provider).lower()
         self._client_kwargs: Dict[str, Any] = {"api_key": self.api_key or "no-key"}
@@ -236,15 +242,21 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
     def _build_extra_body(self, is_query: bool = False) -> Optional[Dict[str, Any]]:
         """Build extra_body dict for OpenAI-compatible parameters
 
+        Starts from the configured ``extra_body`` (a general passthrough for
+        OpenAI-compatible gateways, e.g. OpenRouter provider routing), then
+        applies the query/document parameters on top so explicit
+        query_param/document_param keys always win on conflict.
+
         Args:
             is_query: Flag to indicate if this is for query embeddings
 
         Returns:
-            Dict containing input_type and other parameters if non-symmetric mode is active.
-            Supports key=value format for multiple parameters (e.g., "input_type=query,task=search").
+            Dict containing the configured extra body plus input_type and other
+            parameters if non-symmetric mode is active. Supports key=value
+            format for multiple parameters (e.g., "input_type=query,task=search").
             Only supported by OpenAI-compatible third-party models.
         """
-        extra_body = {}
+        extra_body = dict(self.extra_body) if self.extra_body else {}
 
         # Determine which parameter to use based on is_query flag
         active_param = None
