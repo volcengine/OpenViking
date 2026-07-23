@@ -223,6 +223,7 @@ openviking-server doctor
 | `input` | str | 输入类型：`"text"` 或 `"multimodal"` |
 | `batch_size` | int | 批量请求大小 |
 | `encoding_format` | str | （仅 OpenAI / Azure）Embedding 值的传输格式：`"float"` 或 `"base64"`。留空时使用 OpenAI Python SDK 默认值；当上游网关无法正确处理 base64 embedding payload 时，可设置为 `"float"`。 |
+| `extra_body` | object | （仅 OpenAI / Azure）合并进每次 embedding 请求体的额外 JSON 字段。适用于接受厂商专有字段的 OpenAI 兼容网关，例如 OpenRouter 的 provider 路由 `{"provider": {"sort": "latency"}}`。发生冲突时，显式设置的 `query_param`/`document_param` 键优先。 |
 
 `embedding.max_retries` 仅对瞬时错误生效，例如 `429`、`5xx`、超时和连接错误；`400`、`401`、`403`、`AccountOverdue` 这类永久错误不会自动重试。退避策略为指数退避，初始延迟 `0.5s`，上限 `8s`，并带随机抖动。
 
@@ -290,6 +291,29 @@ openviking-server doctor
 ```
 
 `encoding_format` 是可选字段，只会传给 `provider: "openai"` 和 `provider: "azure"`。留空时使用 OpenAI Python SDK 默认行为；如果 OpenAI 兼容上游网关无法正确反序列化 base64 embedding payload，可设置为 `"float"`。
+
+**OpenRouter provider 路由示例:**
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "openai",
+      "api_key": "your-openrouter-api-key",
+      "api_base": "https://openrouter.ai/api/v1",
+      "model": "qwen/qwen3-embedding-8b",
+      "dimension": 4096,
+      "extra_body": {
+        "provider": {
+          "sort": "latency"
+        }
+      }
+    }
+  }
+}
+```
+
+`extra_body` 会合并进每次 embedding 请求，因此无需改动代码即可调优接受厂商专有字段的 OpenAI 兼容网关（例如 OpenRouter 的 provider 路由偏好）。该字段只会传给 `provider: "openai"` 和 `provider: "azure"`。
 
 **Azure OpenAI provider 的 JSON float embedding 示例:**
 
