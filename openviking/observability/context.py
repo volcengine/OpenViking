@@ -23,7 +23,7 @@ import contextvars
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterator, Optional
+from typing import Any, Dict, Optional
 
 from openviking.telemetry.span_models import OperationSpanAttributes, RootSpanAttributes
 
@@ -324,32 +324,6 @@ def bind_execution_context(
 
     try:
         yield ctx.execution_trace_id, ctx.execution_span_id
-    finally:
-        reset_observability_context(token)
-
-
-@contextmanager
-def bind_background_observability_context(
-    *,
-    http_method: str,
-    http_route: str,
-    request_id: str,
-    url_path: Optional[str] = None,
-    account_id: Optional[str] = None,
-    user_id: Optional[str] = None,
-) -> Iterator[RootSpanAttributes]:
-    """Bind queue/scheduler identity so background model usage stays tenant-scoped."""
-    root_attrs = RootSpanAttributes(
-        http_method=http_method,
-        http_route=http_route,
-        request_id=request_id,
-        url_path=url_path,
-        account_id=account_id,
-        user_id=user_id,
-    )
-    token = bind_root_context(root_attrs)
-    try:
-        yield root_attrs
     finally:
         reset_observability_context(token)
 

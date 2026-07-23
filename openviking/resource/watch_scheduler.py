@@ -10,7 +10,6 @@ import asyncio
 from datetime import datetime
 from typing import Any, Dict, Optional, Set
 
-from openviking.observability.context import bind_background_observability_context
 from openviking.resource.feishu_watch_auth import (
     FeishuOAuthClient,
     FeishuTokenRefreshError,
@@ -283,27 +282,19 @@ class WatchScheduler:
                                 raise
 
                 if not should_deactivate:
-                    with bind_background_observability_context(
-                        http_method="SCHEDULE",
-                        http_route="/resource/watch",
-                        request_id=task.task_id,
-                        url_path=task.to_uri or task.path,
-                        account_id=task.account_id,
-                        user_id=task.user_id,
-                    ):
-                        result = await self._resource_service.add_resource(
-                            path=task.path,
-                            ctx=ctx,
-                            to=task.to_uri,
-                            parent=task.parent_uri,
-                            reason=task.reason,
-                            instruction=task.instruction,
-                            build_index=getattr(task, "build_index", True),
-                            summarize=getattr(task, "summarize", False),
-                            watch_interval=task.watch_interval,
-                            skip_watch_management=True,
-                            **processor_kwargs,
-                        )
+                    result = await self._resource_service.add_resource(
+                        path=task.path,
+                        ctx=ctx,
+                        to=task.to_uri,
+                        parent=task.parent_uri,
+                        reason=task.reason,
+                        instruction=task.instruction,
+                        build_index=getattr(task, "build_index", True),
+                        summarize=getattr(task, "summarize", False),
+                        watch_interval=task.watch_interval,
+                        skip_watch_management=True,
+                        **processor_kwargs,
+                    )
 
                     logger.info(
                         f"[WatchScheduler] Task {task.task_id} executed successfully, "

@@ -8,10 +8,7 @@ import json
 from contextlib import suppress
 from typing import Any, Dict, Optional
 
-from openviking.observability.context import (
-    bind_background_observability_context,
-    bind_execution_context,
-)
+from openviking.observability.context import bind_execution_context
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import TaskStatus, get_task_tracker
 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
@@ -122,18 +119,7 @@ class AddResourceProcessor(DequeueHandlerBase):
                 user_id=ctx.user.user_id,
             )
 
-        with (
-            bind_execution_context(),
-            bind_telemetry(telemetry),
-            bind_background_observability_context(
-                http_method="QUEUE",
-                http_route="/queuefs/add-resource",
-                request_id=msg.telemetry_id or msg.task_id,
-                url_path=msg.root_uri,
-                account_id=msg.account_id,
-                user_id=msg.user_id,
-            ),
-        ):
+        with bind_execution_context(), bind_telemetry(telemetry):
             try:
                 await tracker.start(
                     msg.task_id,

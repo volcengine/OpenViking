@@ -7,11 +7,15 @@ import concurrent.futures
 import json
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from openviking.observability.context import bind_background_observability_context
+from openviking.observability import (
+    bind_root_observability_context,
+    reset_root_observability_context,
+)
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import get_task_tracker
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
+from openviking.telemetry.span_models import create_root_span_attributes
 from openviking_cli.session.user_id import UserIdentifier
 
 if TYPE_CHECKING:
@@ -51,15 +55,19 @@ class SessionCommitProcessor(DequeueHandlerBase):
             )
             return
         await session.load()
-        with bind_background_observability_context(
+        root_attrs = create_root_span_attributes(
             http_method="QUEUE",
             http_route="/queuefs/session-commit",
             request_id=msg.task_id,
             url_path=msg.session_uri,
-            account_id=msg.user.get("account_id"),
-            user_id=msg.user.get("user_id"),
-        ):
+        )
+        root_attrs.account_id = ctx.account_id
+        root_attrs.user_id = ctx.user.user_id
+        root_token = bind_root_observability_context(root_attrs)
+        try:
             await session.resume_queued_commit(msg)
+        finally:
+            reset_root_observability_context(root_token)
 
     async def on_dequeue(
         self, data: Optional[Dict[str, Any]]

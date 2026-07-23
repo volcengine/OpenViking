@@ -1,15 +1,21 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import asyncio
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 from openviking.message import Message, TextPart
+from openviking.observability.context import get_root_observability_context
+from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import TaskTracker, set_task_tracker
 from openviking.session.session import Session
 from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
+from openviking.storage.queuefs.session_commit_processor import SessionCommitProcessor
+from openviking_cli.session.user_id import UserIdentifier
 
 
 class _TaskStore:
@@ -84,3 +90,33 @@ async def test_resume_queued_commit_continues_phase2(monkeypatch):
     assert [
         item.id for item in session._run_memory_extraction.await_args.kwargs["messages"]
     ] == ["archived"]
+
+
+@pytest.mark.asyncio
+async def test_session_commit_consumer_restores_identity():
+    observed = {}
+
+    async def resume(_message):
+        root = get_root_observability_context()
+        observed.update(account_id=root.account_id, user_id=root.user_id)
+
+    session = SimpleNamespace(
+        exists=AsyncMock(return_value=True),
+        load=AsyncMock(),
+        resume_queued_commit=resume,
+    )
+    service = SimpleNamespace(session=lambda *_args, **_kwargs: session)
+    processor = SessionCommitProcessor(service, asyncio.get_running_loop())
+    message = SessionCommitMsg(
+        task_id="task-1",
+        session_id="session-1",
+        session_uri="viking://user/sessions/session-1",
+        archive_uri="viking://user/sessions/session-1/history/archive-1",
+        user={"account_id": "account-1", "user_id": "user-1"},
+    )
+    ctx = RequestContext(user=UserIdentifier("account-1", "user-1"), role=Role.USER)
+
+    await processor._process(message, ctx)
+
+    assert observed == {"account_id": "account-1", "user_id": "user-1"}
+    assert get_root_observability_context() is None
