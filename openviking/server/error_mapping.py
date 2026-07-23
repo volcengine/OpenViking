@@ -24,6 +24,7 @@ from openviking.pyagfs.exceptions import (
     AGFSNotSupportedError,
     AGFSPermissionDeniedError,
     AGFSPluginError,
+    AGFSResourceExhaustedError,
     AGFSSerializationError,
     AGFSTimeoutError,
     GitConcurrentCommitError,
@@ -38,6 +39,7 @@ from openviking_cli.exceptions import (
     NotFoundError,
     OpenVikingError,
     PermissionDeniedError,
+    ResourceExhaustedError,
     UnavailableError,
     UnimplementedError,
 )
@@ -515,6 +517,8 @@ def map_exception(
         return InvalidArgumentError(str(exc), details=_file_directory_details(resource))
     if isinstance(exc, AGFSDirectoryNotEmptyError):
         return FailedPreconditionError(str(exc), details=_resource_details(resource))
+    if isinstance(exc, AGFSResourceExhaustedError):
+        return ResourceExhaustedError(str(exc), details=_resource_details(resource))
     if isinstance(exc, AGFSInvalidOperationError):
         return InvalidArgumentError(str(exc), details=_resource_details(resource))
     if isinstance(

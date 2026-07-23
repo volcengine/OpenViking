@@ -1,6 +1,6 @@
 """Unit tests for AsyncHTTPClient git_* methods that drive /api/v1/snapshot/*."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import pytest
 
@@ -233,3 +233,63 @@ async def test_git_log_empty_paths_is_unfiltered():
     assert call["method"] == "GET"
     assert call["path"] == "/api/v1/snapshot/log"
     assert call["params"] == {"branch": "main", "limit": 5}
+
+
+async def test_git_diff_gets_with_refs_and_path():
+    client, fake = _client_with_fake()
+    client._handle_response = lambda resp: {
+        "path": "viking://resources/a.md",
+        "from_commit": "old",
+        "to_commit": "new",
+        "change_type": "modified",
+        "diff_text": "@@ -1 +1 @@\n-old\n+new\n",
+    }
+    fake.next_response = object()
+
+    result = await client.git_diff(
+        "viking://resources/a.md",
+        from_ref="old",
+        to_ref="new",
+    )
+
+    assert result["change_type"] == "modified"
+    call = fake.calls[-1]
+    assert call == {
+        "method": "GET",
+        "path": "/api/v1/snapshot/diff",
+        "params": {
+            "path": "viking://resources/a.md",
+            "from": "old",
+            "to": "new",
+        },
+        "headers": None,
+    }
+
+
+async def test_git_diff_omits_optional_from_ref():
+    client, fake = _client_with_fake()
+    fake.next_response = object()
+
+    await client.git_diff("viking://resources/a.md", to_ref="new")
+
+    assert fake.calls[-1]["params"] == {
+        "path": "viking://resources/a.md",
+        "to": "new",
+    }
+
+
+async def test_snapshot_namespace_exposes_diff():
+    client, fake = _client_with_fake()
+    client._handle_response = lambda resp: {"change_type": "added", "diff_text": "+new\n"}
+    fake.next_response = object()
+
+    result = await client.snapshot.diff(
+        "viking://resources/a.md",
+        to_ref="new",
+    )
+
+    assert result["change_type"] == "added"
+    assert fake.calls[-1]["params"] == {
+        "path": "viking://resources/a.md",
+        "to": "new",
+    }

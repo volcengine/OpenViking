@@ -1592,6 +1592,22 @@ impl HttpClient {
         self.get("/api/v1/snapshot/log", &params).await
     }
 
+    pub async fn snapshot_diff(
+        &self,
+        path: &str,
+        from_ref: Option<&str>,
+        to_ref: &str,
+    ) -> Result<Value> {
+        let mut params = vec![
+            ("path".to_string(), path.to_string()),
+            ("to".to_string(), to_ref.to_string()),
+        ];
+        if let Some(from_ref) = from_ref {
+            params.push(("from".to_string(), from_ref.to_string()));
+        }
+        self.get("/api/v1/snapshot/diff", &params).await
+    }
+
     pub async fn snapshot_ignore_get(&self) -> Result<Value> {
         self.get("/api/v1/snapshot/ignore", &[]).await
     }
@@ -1923,6 +1939,23 @@ mod tests {
 
         let requests = requests_rx.await.expect("requests should be captured");
         assert_gateway_token_retry(&requests);
+    }
+
+    #[tokio::test]
+    async fn snapshot_diff_sends_path_and_refs() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+
+        client
+            .snapshot_diff("viking://resources/a.md", Some("old"), "new")
+            .await
+            .expect("snapshot diff should succeed");
+
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.starts_with("GET /api/v1/snapshot/diff?"));
+        assert!(request.contains("path=viking%3A%2F%2Fresources%2Fa.md"));
+        assert!(request.contains("from=old"));
+        assert!(request.contains("to=new"));
     }
 
     fn assert_gateway_token_retry(requests: &[String]) {

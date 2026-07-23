@@ -863,6 +863,16 @@ export class OpenVikingClient {
       query: { branch, limit, paths },
     });
   }
+  /** Compare one file between two snapshot refs. */
+  gitDiff(path: string, toRef: string, fromRef?: string): Promise<JsonObject> {
+    return this.request("GET", "/api/v1/snapshot/diff", {
+      query: {
+        path: normalizeURI(path),
+        from: fromRef,
+        to: toRef,
+      },
+    });
+  }
   /** Return the account `.ovgitignore` content. */
   async gitGetIgnore(): Promise<string> {
     const result = await this.request<unknown>(

@@ -28,6 +28,7 @@ serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 gix-hash = "0.14"
 bytes = "1.5"
+similar = "3.1"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("yuanrong-native", "mooncake-native"))'] }
