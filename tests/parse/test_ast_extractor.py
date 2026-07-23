@@ -1603,23 +1603,16 @@ void launch_add(const float* a, const float* b, float* out, int n) {
         assert "language: cuda" in text
         assert "function add_kernel" in text
         assert "class CagraIndex" in text
-        assert "function build" in text
+        assert "method build" in text
         assert "function launch_add" in text
         assert "__global__" not in text
         assert "blockIdx" not in text
 
     def test_query_provider_is_config_selectable(self, monkeypatch):
-        from types import SimpleNamespace
-
         import openviking.parse.parsers.code.ast as ast_api
+        from openviking.parse.parsers.code.ast import providers
 
-        monkeypatch.setattr(
-            ast_api,
-            "get_openviking_config",
-            lambda: SimpleNamespace(
-                code=SimpleNamespace(code_skeleton_provider="repomap_query")
-            ),
-        )
+        monkeypatch.setattr(providers, "_configured_provider", lambda: "repomap_query")
 
         text = ast_api.extract_skeleton(
             "sample.py",
@@ -1639,17 +1632,10 @@ void launch_add(const float* a, const float* b, float* out, int n) {
 
 class TestProcessSkeletonProvider:
     def test_process_provider_is_config_selectable_and_simplified(self, monkeypatch):
-        from types import SimpleNamespace
-
         import openviking.parse.parsers.code.ast as ast_api
+        from openviking.parse.parsers.code.ast import providers
 
-        monkeypatch.setattr(
-            ast_api,
-            "get_openviking_config",
-            lambda: SimpleNamespace(
-                code=SimpleNamespace(code_skeleton_provider="process")
-            ),
-        )
+        monkeypatch.setattr(providers, "_configured_provider", lambda: "process")
 
         code = '''"""Module top doc."""
 

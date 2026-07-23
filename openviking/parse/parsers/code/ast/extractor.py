@@ -67,7 +67,7 @@ def _registry_factory(lang: str) -> LanguageExtractor:
 class ASTExtractor:
     """Dispatches to per-language tree-sitter extractors for supported languages.
 
-    Unsupported languages return None, signalling the caller to fall back to LLM.
+    Unsupported languages return None.
     """
 
     def __init__(self, extractor_factory: Optional[Callable[[str], LanguageExtractor]] = None):
@@ -100,7 +100,7 @@ class ASTExtractor:
             return extractor
         except Exception as e:
             logger.warning(
-                "AST extractor unavailable for language '%s', falling back to LLM: %s", lang, e
+                "AST extractor unavailable for language '%s': %s", lang, e
             )
             self._cache[lang] = None
             return None
@@ -131,8 +131,7 @@ class ASTExtractor:
     ) -> Optional[str]:
         """Extract skeleton text from source code.
 
-        Returns None for unsupported languages or on extraction failure,
-        signalling the caller to fall back to LLM.
+        Returns None for unsupported languages or on extraction failure.
 
         Args:
             verbose: If True, include full docstrings (for ast_llm / LLM input).

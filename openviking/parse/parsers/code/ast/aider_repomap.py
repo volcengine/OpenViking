@@ -185,7 +185,7 @@ def _extract_with_grep_ast(
     try:
         from grep_ast import TreeContext
     except Exception as exc:
-        logger.warning("grep-ast RepoMap extractor unavailable, falling back to LLM: %s", exc)
+        logger.warning("grep-ast RepoMap extractor unavailable: %s", exc)
         return None
 
     try:
@@ -224,7 +224,7 @@ def _query_captures(rel_name: str, content: str):
         from grep_ast import filename_to_lang
         from grep_ast.tsl import get_language, get_parser
     except Exception as exc:
-        logger.warning("grep-ast query extractor unavailable, falling back to LLM: %s", exc)
+        logger.warning("grep-ast query extractor unavailable: %s", exc)
         raise
 
     lang = filename_to_lang(rel_name)

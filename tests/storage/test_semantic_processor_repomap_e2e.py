@@ -29,7 +29,7 @@ class _NoLLMVLM:
 
 
 class _FallbackVLM:
-    def __init__(self, response: str = "fallback summary"):
+    def __init__(self, response: str = "LLM summary"):
         self.calls = 0
         self.prompts = []
         self.response = response
@@ -45,7 +45,7 @@ class _FallbackVLM:
 
 @pytest.mark.asyncio
 async def test_semantic_processor_uses_aider_repomap_skeleton(monkeypatch):
-    import openviking.parse.parsers.code.ast as ast_mod
+    from openviking.parse.parsers.code.ast import providers
     import openviking.session.memory.utils.language as language_mod
     import openviking.storage.queuefs.semantic_processor as semantic_processor_mod
     from openviking.storage.queuefs.semantic_processor import SemanticProcessor
@@ -74,7 +74,7 @@ async def test_semantic_processor_uses_aider_repomap_skeleton(monkeypatch):
 
     monkeypatch.setattr(semantic_processor_mod, "get_openviking_config", lambda: config)
     monkeypatch.setattr(semantic_processor_mod, "get_viking_fs", lambda: _FakeFS(code))
-    monkeypatch.setattr(ast_mod, "_configured_skeleton_provider", lambda: "aider_repomap")
+    monkeypatch.setattr(providers, "_configured_provider", lambda: "aider_repomap")
     monkeypatch.setattr(language_mod, "resolve_output_language", lambda content: "English")
 
     result = await SemanticProcessor()._generate_text_summary(
@@ -93,7 +93,7 @@ async def test_semantic_processor_uses_aider_repomap_skeleton(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_semantic_processor_uses_query_skeleton(monkeypatch):
-    import openviking.parse.parsers.code.ast as ast_mod
+    from openviking.parse.parsers.code.ast import providers
     import openviking.session.memory.utils.language as language_mod
     import openviking.storage.queuefs.semantic_processor as semantic_processor_mod
     from openviking.storage.queuefs.semantic_processor import SemanticProcessor
@@ -119,7 +119,7 @@ async def test_semantic_processor_uses_query_skeleton(monkeypatch):
 
     monkeypatch.setattr(semantic_processor_mod, "get_openviking_config", lambda: config)
     monkeypatch.setattr(semantic_processor_mod, "get_viking_fs", lambda: _FakeFS(code))
-    monkeypatch.setattr(ast_mod, "_configured_skeleton_provider", lambda: "repomap_query")
+    monkeypatch.setattr(providers, "_configured_provider", lambda: "repomap_query")
     monkeypatch.setattr(language_mod, "resolve_output_language", lambda content: "English")
 
     result = await SemanticProcessor()._generate_text_summary(
@@ -140,7 +140,7 @@ async def test_semantic_processor_uses_query_skeleton(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_semantic_processor_uses_process_auto_skeleton_for_new_language(monkeypatch):
-    import openviking.parse.parsers.code.ast as ast_mod
+    from openviking.parse.parsers.code.ast import providers
     import openviking.session.memory.utils.language as language_mod
     import openviking.storage.queuefs.semantic_processor as semantic_processor_mod
     from openviking.storage.queuefs.semantic_processor import SemanticProcessor
@@ -165,7 +165,7 @@ async def test_semantic_processor_uses_process_auto_skeleton_for_new_language(mo
 
     monkeypatch.setattr(semantic_processor_mod, "get_openviking_config", lambda: config)
     monkeypatch.setattr(semantic_processor_mod, "get_viking_fs", lambda: _FakeFS(code))
-    monkeypatch.setattr(ast_mod, "_configured_skeleton_provider", lambda: "process")
+    monkeypatch.setattr(providers, "_configured_provider", lambda: "process")
     monkeypatch.setattr(language_mod, "resolve_output_language", lambda content: "English")
 
     result = await SemanticProcessor()._generate_text_summary(
@@ -184,9 +184,8 @@ async def test_semantic_processor_uses_process_auto_skeleton_for_new_language(mo
 
 
 @pytest.mark.asyncio
-async def test_semantic_processor_process_provider_falls_back_for_denied_config(monkeypatch):
-    import openviking.parse.parsers.code.ast as ast_mod
-    import openviking.session.memory.utils.language as language_mod
+async def test_semantic_processor_process_provider_returns_deterministic_text_for_denied_config(monkeypatch):
+    from openviking.parse.parsers.code.ast import providers
     import openviking.storage.queuefs.semantic_processor as semantic_processor_mod
     from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 
@@ -198,7 +197,7 @@ async def test_semantic_processor_process_provider_falls_back_for_denied_config(
             *(f"  key_{i}: value_{i}" for i in range(120)),
         ]
     )
-    vlm = _FallbackVLM("LLM fallback summary for config")
+    vlm = _FallbackVLM()
     config = SimpleNamespace(
         vlm=vlm,
         code=SimpleNamespace(code_summary_mode="ast", code_skeleton_provider="process"),
@@ -207,8 +206,7 @@ async def test_semantic_processor_process_provider_falls_back_for_denied_config(
 
     monkeypatch.setattr(semantic_processor_mod, "get_openviking_config", lambda: config)
     monkeypatch.setattr(semantic_processor_mod, "get_viking_fs", lambda: _FakeFS(content))
-    monkeypatch.setattr(ast_mod, "_configured_skeleton_provider", lambda: "process")
-    monkeypatch.setattr(language_mod, "resolve_output_language", lambda content: "English")
+    monkeypatch.setattr(providers, "_configured_provider", lambda: "process")
 
     result = await SemanticProcessor()._generate_text_summary(
         file_path="viking://resources/service.yaml",
@@ -218,5 +216,42 @@ async def test_semantic_processor_process_provider_falls_back_for_denied_config(
     )
 
     assert result["content"] == content
-    assert result["summary"] == "LLM fallback summary for config"
-    assert vlm.calls == 1
+    assert result["summary"] == (
+        "# service.yaml [process]\n\n"
+        "No extractable code skeleton (unsupported language or no definitions found)."
+    )
+    assert vlm.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_non_llm_code_summary_uses_skeleton_without_vlm(monkeypatch):
+    import openviking.storage.queuefs.semantic_processor as semantic_processor_mod
+    from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+
+    class UnavailableVLM:
+        def is_available(self):
+            raise AssertionError("non-LLM code summary must not check VLM availability")
+
+        async def get_completion_async(self, prompt):
+            raise AssertionError("non-LLM code summary must not call VLM")
+
+    code = "def load_config(path):\n    return path\n"
+    config = SimpleNamespace(
+        vlm=UnavailableVLM(),
+        code=SimpleNamespace(code_summary_mode="ast", code_skeleton_provider="ov_ast"),
+        semantic=SimpleNamespace(max_file_content_chars=2_000_000, max_skeleton_chars=2_000_000),
+    )
+
+    monkeypatch.setattr(semantic_processor_mod, "get_openviking_config", lambda: config)
+    monkeypatch.setattr(semantic_processor_mod, "get_viking_fs", lambda: _FakeFS(code))
+
+    result = await SemanticProcessor()._generate_text_summary(
+        file_path="viking://resources/app.py",
+        file_name="app.py",
+        llm_sem=asyncio.Semaphore(1),
+        ctx=None,
+    )
+
+    assert result["content"] == code
+    assert result["summary"].startswith("# app.py [Python]")
+    assert "def load_config(path)" in result["summary"]
