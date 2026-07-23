@@ -460,6 +460,36 @@ async def test_grep_maps_agfs_matches_to_viking_uris(monkeypatch, fs):
 
 
 @pytest.mark.asyncio
+async def test_grep_filters_relation_sidecar_matches_from_agfs(monkeypatch, fs):
+    async def fake_grep(**kwargs):
+        return {
+            "matches": [
+                {"file": "source.md", "line": 1, "content": "visible match"},
+                {
+                    "file": "source.md.relations.json",
+                    "line": 1,
+                    "content": "internal match",
+                },
+            ],
+            "files_scanned": 2,
+        }
+
+    monkeypatch.setattr(fs._async_agfs, "grep", fake_grep)
+
+    result = await fs.grep("viking://resources", pattern="match")
+
+    assert result["matches"] == [
+        {
+            "line": 1,
+            "uri": "viking://resources/source.md",
+            "content": "visible match",
+        }
+    ]
+    assert result["count"] == 1
+    assert result["match_count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_grep_applies_node_limit_to_backend_results(monkeypatch, fs):
     async def fake_grep(**kwargs):
         return {

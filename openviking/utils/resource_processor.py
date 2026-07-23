@@ -17,7 +17,7 @@ from openviking.parse.tree_builder import TreeBuilder
 from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
 from openviking.storage.errors import LockAcquisitionError
-from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
+from openviking.storage.internal_names import is_storage_internal_entry_name
 from openviking.storage.transaction import (
     LOCK_TIMEOUT_DEFAULT,
     NO_LOCK,
@@ -321,7 +321,7 @@ class ResourceProcessor:
                                         if not name or name in {".", ".."}:
                                             continue
                                         names.append(str(name))
-                                    if all(name in STORAGE_INTERNAL_ENTRY_NAMES for name in names):
+                                    if all(is_storage_internal_entry_name(name) for name in names):
                                         target_preexisting = False
                             except Exception:
                                 pass

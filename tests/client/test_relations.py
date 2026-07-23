@@ -3,7 +3,10 @@
 
 """Relation tests"""
 
+import pytest
+
 from openviking import AsyncOpenViking
+from openviking_cli.exceptions import InvalidArgumentError
 
 
 class TestLink:
@@ -57,6 +60,80 @@ class TestLink:
         link = next((r for r in relations if r.get("uri") == target_uri), None)
         assert link is not None
         assert link.get("reason") == "File source test"
+
+
+class TestFileRelationSidecars:
+    """Regression coverage for file-source relation metadata."""
+
+    async def test_file_relation_sidecar_is_hidden_and_not_directly_writable(
+        self, client: AsyncOpenViking
+    ):
+        source_uri = "viking://resources/hidden-sidecar-source.md"
+        target_uri = "viking://resources/hidden-sidecar-target.md"
+        sidecar_uri = f"{source_uri}.relations.json"
+
+        await client.write(source_uri, "source", mode="create")
+        await client.write(target_uri, "target", mode="create")
+        await client.link(from_uri=source_uri, uris=target_uri, reason="hidden sidecar")
+
+        entries = await client.ls("viking://resources", show_all_hidden=True)
+        assert sidecar_uri not in {entry["uri"] for entry in entries}
+
+        tree = await client.tree("viking://resources", show_all_hidden=True)
+        assert sidecar_uri not in {entry["uri"] for entry in tree}
+
+        with pytest.raises(
+            InvalidArgumentError, match="cannot write derived semantic file directly"
+        ):
+            await client.write(sidecar_uri, "collision", mode="create")
+
+    async def test_file_relation_sidecar_follows_mv_and_rm(self, client: AsyncOpenViking):
+        source_uri = "viking://resources/move-sidecar-source.md"
+        target_uri = "viking://resources/move-sidecar-target.md"
+        moved_uri = "viking://resources/move-sidecar-destination.md"
+        source_sidecar_uri = f"{source_uri}.relations.json"
+        moved_sidecar_uri = f"{moved_uri}.relations.json"
+        viking_fs = client._service.viking_fs
+
+        await client.write(source_uri, "source", mode="create")
+        await client.write(target_uri, "target", mode="create")
+        await client.link(from_uri=source_uri, uris=target_uri, reason="move sidecar")
+        assert await viking_fs.exists(source_sidecar_uri, ctx=client._ctx)
+
+        await client.mv(source_uri, moved_uri)
+
+        relations = await client.relations(moved_uri)
+        assert any(relation.get("uri") == target_uri for relation in relations)
+        assert not await viking_fs.exists(source_sidecar_uri, ctx=client._ctx)
+        assert await viking_fs.exists(moved_sidecar_uri, ctx=client._ctx)
+
+        await client.rm(moved_uri)
+        assert not await viking_fs.exists(moved_sidecar_uri, ctx=client._ctx)
+
+        orphan_uri = "viking://resources/orphan-sidecar-source.md"
+        orphan_sidecar_uri = f"{orphan_uri}.relations.json"
+        await viking_fs.write_file(orphan_sidecar_uri, "[]", ctx=client._ctx)
+        assert await viking_fs.exists(orphan_sidecar_uri, ctx=client._ctx)
+
+        await client.rm(orphan_uri)
+        assert not await viking_fs.exists(orphan_sidecar_uri, ctx=client._ctx)
+
+    async def test_move_file_preserves_file_relation_sidecar(self, client: AsyncOpenViking):
+        source_uri = "viking://resources/direct-move-sidecar-source.md"
+        target_uri = "viking://resources/direct-move-sidecar-target.md"
+        moved_uri = "viking://resources/direct-move-sidecar-destination.md"
+        viking_fs = client._service.viking_fs
+
+        await client.write(source_uri, "source", mode="create")
+        await client.write(target_uri, "target", mode="create")
+        await client.link(from_uri=source_uri, uris=target_uri, reason="direct move sidecar")
+
+        await viking_fs.move_file(source_uri, moved_uri, ctx=client._ctx)
+
+        relations = await client.relations(moved_uri)
+        assert any(relation.get("uri") == target_uri for relation in relations)
+        assert not await viking_fs.exists(f"{source_uri}.relations.json", ctx=client._ctx)
+        assert await viking_fs.exists(f"{moved_uri}.relations.json", ctx=client._ctx)
 
 
 class TestUnlink:

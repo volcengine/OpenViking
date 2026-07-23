@@ -153,6 +153,7 @@ def test_is_name_visible_at_account_root(fs, name, parent_path, expected):
     [
         ("my_dir", "/local/test_account/resources", True),
         ("normal_dir", "/local/test_account/resources/foo", True),
+        ("file.md.relations.json", "/local/test_account/resources", False),
         ("_system", "/local/test_account/resources", False),
         ("tasks", "/local/test_account/resources/bar", False),
         (".path.ovlock", "/local/test_account/resources", False),
@@ -222,6 +223,42 @@ def test_is_tree_entry_visible_multiwrite_meta_filtered(monkeypatch, fs):
             is_dir=False,
         )
         assert fs._is_tree_entry_visible(entry, "/local/test_account", _default_ctx()) is False
+
+
+def test_is_tree_entry_visible_file_relation_sidecar_filtered(monkeypatch, fs):
+    patch_visibility(monkeypatch, fs, is_accessible=True)
+    entry = make_entry(
+        "/local/test_account/resources/file.md.relations.json",
+        "file.md.relations.json",
+        is_dir=False,
+    )
+    assert fs._is_tree_entry_visible(entry, "/local/test_account", _default_ctx()) is False
+
+
+@pytest.mark.asyncio
+async def test_ls_entries_hides_file_relation_sidecars_unless_needed_for_copy(monkeypatch, fs):
+    async def fake_ls(_path):
+        return [
+            {"name": "notes.md"},
+            {"name": ".relations.json"},
+            {"name": "notes.md.relations.json"},
+            {"name": ".path.ovlock"},
+        ]
+
+    monkeypatch.setattr(fs._async_agfs, "ls", fake_ls)
+
+    visible = await fs._ls_entries("/local/test_account/resources")
+    assert [entry["name"] for entry in visible] == ["notes.md"]
+
+    copy_entries = await fs._ls_entries(
+        "/local/test_account/resources",
+        include_relation_sidecars=True,
+    )
+    assert [entry["name"] for entry in copy_entries] == [
+        "notes.md",
+        ".relations.json",
+        "notes.md.relations.json",
+    ]
 
 
 def test_is_tree_entry_visible_default_ctx(monkeypatch, fs):
