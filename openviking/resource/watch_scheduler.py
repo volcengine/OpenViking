@@ -410,39 +410,50 @@ class WatchScheduler:
                                 f"{task.task_id}; task remains due"
                             )
                     else:
-                        sync_state_updates = None
-                        if (
-                            resource_sync_succeeded
-                            and not skip_resource_sync
-                            and require_queue_status
-                        ):
-                            destination_state = await self._fetch_destination_sync_state(
-                                task.to_uri,
-                                ctx,
-                            )
-                            feishu_sync_fingerprint = self._build_feishu_sync_fingerprint(
-                                task,
-                                processor_kwargs=processor_kwargs,
-                                source_version=feishu_source_version,
-                                destination_state=destination_state,
-                                auth_context=feishu_auth_context,
-                            )
-                            if feishu_sync_fingerprint is not None:
-                                sync_state_updates = {
-                                    _FEISHU_SYNC_FINGERPRINT_KEY: feishu_sync_fingerprint
-                                }
-                        if sync_state_updates is None:
-                            update_execution_time = self._watch_manager.update_execution_time(
-                                task.task_id,
-                                expected_revision=task.revision,
-                            )
-                        else:
-                            update_execution_time = self._watch_manager.update_execution_time(
+
+                        async def finalize_execution_state() -> bool:
+                            sync_state_updates = None
+                            if (
+                                resource_sync_succeeded
+                                and not skip_resource_sync
+                                and require_queue_status
+                            ):
+                                destination_state = await self._fetch_destination_sync_state(
+                                    task.to_uri,
+                                    ctx,
+                                )
+                                final_fingerprint = self._build_feishu_sync_fingerprint(
+                                    task,
+                                    processor_kwargs=processor_kwargs,
+                                    source_version=feishu_source_version,
+                                    destination_state=destination_state,
+                                    auth_context=feishu_auth_context,
+                                )
+                                if final_fingerprint is not None:
+                                    sync_state_updates = {
+                                        _FEISHU_SYNC_FINGERPRINT_KEY: final_fingerprint
+                                    }
+                            if sync_state_updates is None:
+                                return await self._watch_manager.update_execution_time(
+                                    task.task_id,
+                                    expected_revision=task.revision,
+                                )
+                            return await self._watch_manager.update_execution_time(
                                 task.task_id,
                                 expected_revision=task.revision,
                                 sync_state_updates=sync_state_updates,
                             )
-                        execution_state_committed = await asyncio.shield(update_execution_time)
+
+                        finalization_task = asyncio.create_task(finalize_execution_state())
+                        try:
+                            execution_state_committed = await asyncio.shield(finalization_task)
+                        except asyncio.CancelledError:
+                            # Once the resource sync has completed, cancellation must not
+                            # strand its post-sync stat/fingerprint without the matching
+                            # revision commit. Preserve cancellation, but only re-raise
+                            # after the finalization unit reaches its terminal state.
+                            await finalization_task
+                            raise
                         if execution_state_committed:
                             logger.info(
                                 f"[WatchScheduler] Updated execution time for task {task.task_id}"
