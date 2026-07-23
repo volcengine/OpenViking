@@ -150,7 +150,7 @@ _FRAMEWORK_HTTP_STATUS_TO_ERROR_CODE = {
     404: "NOT_FOUND",
     409: "CONFLICT",
     422: "INVALID_ARGUMENT",
-    429: "RESOURCE_EXHAUSTED",
+    429: "RESOURCE_EXCEEDED",
     502: "UNAVAILABLE",
     503: "UNAVAILABLE",
     504: "DEADLINE_EXCEEDED",
@@ -711,10 +711,23 @@ def create_app(
 
     # MCP endpoint — serves 5 tools (search, read, store, forget, health)
     # via streamable HTTP for Claude Code and other MCP clients.
-    from starlette.routing import Route
+    from starlette.routing import Match, Route
 
     from openviking.server.mcp_endpoint import create_mcp_app
 
-    app.routes.append(Route("/mcp", endpoint=create_mcp_app(), methods=["GET", "POST", "DELETE"]))
+    class _ScopedRoute(Route):
+        """Expose the selected route through ``scope["route"]``, matching
+        ``APIRoute.matches``, so outer observability can resolve the static
+        ``/mcp`` route template."""
+
+        def matches(self, scope):
+            match, child_scope = super().matches(scope)
+            if match != Match.NONE:
+                child_scope["route"] = self
+            return match, child_scope
+
+    app.routes.append(
+        _ScopedRoute("/mcp", endpoint=create_mcp_app(), methods=["GET", "POST", "DELETE"])
+    )
 
     return app
