@@ -84,6 +84,70 @@ async def test_encrypted_writes_lock_final_and_temp_paths(
     assert agfs.storage["/local/default/resources/note.md"] == expected_bytes
 
 
+@pytest.mark.asyncio
+async def test_encrypted_write_with_existing_handle_locks_only_final_path(monkeypatch):
+    """An outer write lock makes the deterministic staging-path lock redundant."""
+    import openviking.storage.transaction as transaction_module
+
+    _RecordingLockContext.calls.clear()
+    monkeypatch.setattr(transaction_module, "LockContext", _RecordingLockContext)
+    monkeypatch.setattr(transaction_module, "get_lock_manager", lambda: object())
+
+    agfs = _FakeAGFS()
+    fs = VikingFS(agfs=agfs, encryptor=object())
+    outer_handle = object()
+
+    await fs.write_file(
+        "viking://resources/note.md",
+        "hello",
+        lock_handle=outer_handle,
+    )
+
+    assert _RecordingLockContext.calls == [
+        (
+            ["/local/default/resources/note.md"],
+            "exact",
+            {"timeout": 1.0, "handle": outer_handle},
+        )
+    ]
+    assert agfs.storage["/local/default/resources/note.md"] == b"hello"
+
+
+@pytest.mark.asyncio
+async def test_lock_temp_tree_acquires_tree_lock_for_temp_scope(monkeypatch):
+    """A parser temp tree gets one outer tree lock whose handle can be reused."""
+    import openviking.storage.transaction as transaction_module
+
+    _RecordingLockContext.calls.clear()
+    monkeypatch.setattr(transaction_module, "LockContext", _RecordingLockContext)
+    monkeypatch.setattr(transaction_module, "get_lock_manager", lambda: object())
+
+    fs = VikingFS(agfs=_FakeAGFS(), encryptor=object())
+
+    async with fs.lock_temp_tree("viking://temp/request-123") as handle:
+        assert isinstance(handle, _RecordingLockContext)
+
+    assert _RecordingLockContext.calls == [
+        (
+            ["/local/default/temp/request-123"],
+            "tree",
+            {},
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_lock_temp_tree_rejects_non_temp_scope():
+    """Only request-private temp trees may use the optimized outer lock."""
+    from openviking_cli.exceptions import InvalidArgumentError
+
+    fs = VikingFS(agfs=_FakeAGFS(), encryptor=object())
+
+    with pytest.raises(InvalidArgumentError, match="temp"):
+        async with fs.lock_temp_tree("viking://resources/project/doc"):
+            pass
+
+
 @pytest.mark.parametrize(
     ("final_path", "temp_path"),
     [

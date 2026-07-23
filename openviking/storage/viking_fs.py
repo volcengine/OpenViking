@@ -19,10 +19,21 @@ import json
 import os
 import re
 import time
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, TypeVar, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    TypeVar,
+    Union,
+)
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
@@ -378,9 +389,15 @@ class VikingFS:
 
         from openviking.storage.transaction import LockContext, get_lock_manager
 
+        # Coordinated writes already pass a handle that protects the final path.
+        # Re-acquire that path to preserve safety for callers whose handle owns
+        # only an ancestor lock, but avoid a redundant lock-file round trip for
+        # the deterministic staging path. Writers without an outer handle still
+        # need the full dual-path lock.
+        lock_paths = [path] if lock_handle is not None else self._encrypted_write_lock_paths(path)
         async with LockContext(
             get_lock_manager(),
-            self._encrypted_write_lock_paths(path),
+            lock_paths,
             lock_mode="exact",
             # Encrypted writes lock both the final path and the deterministic
             # staging path under `.encrypt_stage`. Keeping the global default
@@ -3461,6 +3478,24 @@ class VikingFS:
         if real_ctx is None:
             return VikingURI.create_temp_uri()
         return VikingURI.create_temp_uri(space=real_ctx.user.user_space_name())
+
+    @asynccontextmanager
+    async def lock_temp_tree(
+        self,
+        uri: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> AsyncIterator["LockHandle"]:
+        """Lock one request-private temp tree and yield its reusable handle."""
+        normalized_uri = self._normalize_uri(uri)
+        if VikingURI(normalized_uri).scope != "temp":
+            raise InvalidArgumentError(f"Temp tree lock requires a temp URI: {normalized_uri}")
+        self._ensure_mutable_access(normalized_uri, ctx)
+        path = self._uri_to_path(normalized_uri, ctx=ctx)
+
+        from openviking.storage.transaction import LockContext, get_lock_manager
+
+        async with LockContext(get_lock_manager(), [path], lock_mode="tree") as handle:
+            yield handle
 
     async def persist_temp_tree(
         self,

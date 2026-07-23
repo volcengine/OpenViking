@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for MarkdownParser relative-link rewriting on ingest."""
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -231,7 +232,7 @@ class FakeVikingFS:
             content = content.encode("utf-8")
         self.files[uri] = content
 
-    async def write_file_bytes(self, uri, content):
+    async def write_file_bytes(self, uri, content, **kw):
         self.files[uri] = content
 
     async def read(self, uri, offset=0, size=-1):
@@ -302,6 +303,10 @@ class FakeVikingFS:
     def create_temp_uri(self):
         self._temp_counter += 1
         return f"viking://temp/md_{self._temp_counter}"
+
+    @asynccontextmanager
+    async def lock_temp_tree(self, uri, ctx=None):
+        yield object()
 
 
 def _decode(v):

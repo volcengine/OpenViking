@@ -123,7 +123,7 @@ class _Layout:
 
 
 if TYPE_CHECKING:
-    pass
+    from openviking.storage.transaction import LockHandle
 
 
 class MarkdownParser(BaseParser):
@@ -281,9 +281,15 @@ class MarkdownParser(BaseParser):
 
             # Phase 2 — write only: replay the plan against the real VikingFS,
             # rewriting links and ingesting local images.
-            await self._apply_layout(
-                layout, base_dir=base_dir, allowed_media_dirs=allowed_media_dirs
-            )
+            viking_fs = self._get_viking_fs()
+            await viking_fs.mkdir(layout.temp_uri, exist_ok=True)
+            async with viking_fs.lock_temp_tree(layout.temp_uri) as lock_handle:
+                await self._apply_layout(
+                    layout,
+                    base_dir=base_dir,
+                    allowed_media_dirs=allowed_media_dirs,
+                    lock_handle=lock_handle,
+                )
 
             parse_time = time.time() - start_time
             logger.info(f"[MarkdownParser] Parse completed in {parse_time:.2f}s")
@@ -391,6 +397,7 @@ class MarkdownParser(BaseParser):
         *,
         base_dir: Optional[Path] = None,
         allowed_media_dirs: Optional[List[Path]] = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> None:
         """Phase 2 (write only): replay ``layout.ops`` against the real VikingFS —
         create dirs, write each section (rewriting relative links when enabled), then
@@ -400,11 +407,16 @@ class MarkdownParser(BaseParser):
             if op.kind == "mkdir":
                 await viking_fs.mkdir(op.uri, exist_ok=op.exist_ok)
             else:
-                await self._write_section(op.uri, op.content)
+                await self._write_section(op.uri, op.content, lock_handle=lock_handle)
 
         # Ingest local image files, placing each image next to the markdown file
         # that references it.
-        await self._ingest_local_images(layout.root_dir, base_dir, allowed_media_dirs)
+        await self._ingest_local_images(
+            layout.root_dir,
+            base_dir,
+            allowed_media_dirs,
+            lock_handle=lock_handle,
+        )
 
     # ========== Helper Methods ==========
 
@@ -547,6 +559,7 @@ class MarkdownParser(BaseParser):
         root_dir: str,
         base_dir: Optional[Path] = None,
         allowed_media_dirs: Optional[List[Path]] = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> None:
         """
         Scan every processed markdown file under ``root_dir`` and copy the local
@@ -646,7 +659,11 @@ class MarkdownParser(BaseParser):
 
                     # Write next to the markdown file
                     viking_path = f"{md_dir}/{unique_filename}"
-                    await viking_fs.write_file_bytes(viking_path, image_bytes)
+                    await viking_fs.write_file_bytes(
+                        viking_path,
+                        image_bytes,
+                        lock_handle=lock_handle,
+                    )
                     logger.debug(f"[MarkdownParser] Copied image to VikingFS: {viking_path}")
 
                     # Record mapping for post-commit rewrite
@@ -670,6 +687,7 @@ class MarkdownParser(BaseParser):
             await viking_fs.write_file(
                 f"{root_prefix}/{IMAGE_MAPPINGS_FILENAME}",
                 json.dumps(mappings, ensure_ascii=False),
+                lock_handle=lock_handle,
             )
 
     def _resolve_image_path(
@@ -1081,7 +1099,12 @@ class MarkdownParser(BaseParser):
             return section_dir[len(root) + 1 :]
         return ""
 
-    async def _write_section(self, uri: str, content: str) -> None:
+    async def _write_section(
+        self,
+        uri: str,
+        content: str,
+        lock_handle: Optional["LockHandle"] = None,
+    ) -> None:
         """Write a markdown section file, rewriting relative links when enabled."""
         ctx = self._rewrite_ctx
         if ctx and ctx.get("enabled") and ctx.get("source_path") and ctx.get("import_root"):
@@ -1092,7 +1115,11 @@ class MarkdownParser(BaseParser):
                 section_subpath=self._section_subpath(uri, ctx["root_dir"]),
                 import_root=ctx["import_root"],
             )
-        await self._get_viking_fs().write_file(uri, content)
+        await self._get_viking_fs().write_file(
+            uri,
+            content,
+            lock_handle=lock_handle,
+        )
 
     # ========== New Parsing Logic (v5.0) ==========
 

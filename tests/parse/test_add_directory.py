@@ -13,6 +13,7 @@ Verifies that:
 - Errors during parsing are captured as warnings.
 """
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, patch
@@ -52,12 +53,12 @@ class FakeVikingFS:
         self.files[uri] = data
         return uri
 
-    async def write_file(self, uri: str, content: Any) -> None:
+    async def write_file(self, uri: str, content: Any, **kw) -> None:
         if isinstance(content, str):
             content = content.encode("utf-8")
         self.files[uri] = content
 
-    async def write_file_bytes(self, uri: str, content: bytes) -> None:
+    async def write_file_bytes(self, uri: str, content: bytes, **kw) -> None:
         self.files[uri] = content
 
     # ---- read / list operations ------------------------------------------
@@ -65,7 +66,22 @@ class FakeVikingFS:
     async def read(self, uri: str, offset: int = 0, size: int = -1) -> bytes:
         return self.files.get(uri, b"")
 
-    async def ls(self, uri: str) -> List[Dict[str, Any]]:
+    async def read_file(self, uri: str, **kw) -> str:
+        if uri not in self.files:
+            raise FileNotFoundError(uri)
+        data = self.files[uri]
+        return data.decode("utf-8") if isinstance(data, bytes) else data
+
+    async def glob(self, pattern: str, uri: str = "", **kw) -> Dict[str, List[str]]:
+        suffix = pattern.rsplit("*", 1)[-1]
+        prefix = uri.rstrip("/") + "/"
+        return {
+            "matches": [
+                path for path in self.files if path.startswith(prefix) and path.endswith(suffix)
+            ]
+        }
+
+    async def ls(self, uri: str, **kw) -> List[Dict[str, Any]]:
         """List direct children of *uri* (mirrors real AGFS entry format)."""
         prefix = uri.rstrip("/") + "/"
         children: Dict[str, bool] = {}  # name → is_dir
@@ -111,6 +127,10 @@ class FakeVikingFS:
     def create_temp_uri(self) -> str:
         self._temp_counter += 1
         return f"viking://temp/dir_{self._temp_counter}"
+
+    @asynccontextmanager
+    async def lock_temp_tree(self, uri: str, ctx=None):
+        yield object()
 
 
 # ---------------------------------------------------------------------------
@@ -216,12 +236,8 @@ class TestDirectoryParserBasic:
         (tmp_path / "notes").mkdir()
         (tmp_path / "08_Attachments").mkdir()
         (tmp_path / "notes" / "article.md").write_text("keep", encoding="utf-8")
-        (tmp_path / "notes" / "private.excalidraw.md").write_text(
-            "exclude", encoding="utf-8"
-        )
-        (tmp_path / "08_Attachments" / "diagram.md").write_text(
-            "ignore", encoding="utf-8"
-        )
+        (tmp_path / "notes" / "private.excalidraw.md").write_text("exclude", encoding="utf-8")
+        (tmp_path / "08_Attachments" / "diagram.md").write_text("ignore", encoding="utf-8")
         (tmp_path / "main.py").write_text("exclude by include", encoding="utf-8")
 
         with (
