@@ -869,7 +869,7 @@ class AsyncHTTPClient:
         return self._handle_response(response)
 
     async def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
-        http_timeout = timeout if timeout else 600.0
+        http_timeout = timeout if timeout and timeout > 0 else 600.0
         response = await self._request(
             "POST",
             "/api/v1/system/wait",

@@ -1,3 +1,6 @@
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
@@ -112,6 +115,43 @@ async def test_async_http_client_reindex_posts_content_reindex():
             "dry_run": True,
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_wait_processed_preserves_zero_timeout():
+    class WaitHandler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            length = int(self.headers["Content-Length"])
+            self.server.received_path = self.path
+            self.server.received_body = json.loads(self.rfile.read(length))
+            response = json.dumps({"status": "ok", "result": {"status": "completed"}})
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(response)))
+            self.end_headers()
+            self.wfile.write(response.encode())
+
+        def log_message(self, _format, *args):
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), WaitHandler)
+    server.received_path = None
+    server.received_body = None
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    client = AsyncHTTPClient(url=f"http://127.0.0.1:{server.server_port}")
+
+    try:
+        await client.initialize()
+        result = await client.wait_processed(timeout=0)
+    finally:
+        await client.close()
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert result == {"status": "completed"}
+    assert server.received_path.startswith("/api/v1/system/wait")
+    assert server.received_body == {"timeout": 0}
 
 
 def test_sync_http_client_reindex_forwards_to_async_client():
