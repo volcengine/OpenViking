@@ -29,7 +29,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from openviking.parse.accessors.mime_types import IANA_MEDIA_TYPE_TO_EXTENSION
 from openviking.parse.base import NodeType, ParseResult, ResourceNode, create_parse_result
-from openviking.parse.markdown_regex import MARKDOWN_IMAGE_PATTERN
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.code.ast.extractor import get_extractor
 from openviking.parse.parsers.constants import (
@@ -174,7 +173,7 @@ class MarkdownParser(BaseParser):
         self._code_block_pattern = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
         self._inline_code_pattern = re.compile(r"`([^`]+)`")
         self._link_pattern = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
-        self._image_pattern = MARKDOWN_IMAGE_PATTERN
+        self._image_pattern = re.compile(r"!\[([^\]]*)\]\(((?:[^()]|\([^()]*\))+)\)")
         self._list_pattern = re.compile(r"^(\s*)[-*+]\s+(.+)$", re.MULTILINE)
         self._numbered_list_pattern = re.compile(r"^(\s*)\d+\.\s+(.+)$", re.MULTILINE)
         self._frontmatter_pattern = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
