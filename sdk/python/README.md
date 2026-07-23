@@ -47,6 +47,7 @@ Common client fields:
 - `user_id`: legacy alias for `user`
 - `actor_peer_id`: optional actor peer override
 - `agent_id`: legacy alias for `actor_peer_id`
+- `event_hooks`: optional `httpx.AsyncClient` event hooks, such as async request or response hooks
 
 Compatibility notes:
 
@@ -86,6 +87,7 @@ client = SyncHTTPClient(
     url="http://127.0.0.1:1933",
     api_key="your-user-key",
 )
+client.initialize()
 
 healthy = client.health()
 print("health:", healthy)
@@ -111,6 +113,7 @@ async def main() -> None:
         url="http://127.0.0.1:1933",
         api_key="your-user-key",
     )
+    await client.initialize()
 
     healthy = await client.health()
     print("health:", healthy)
@@ -137,6 +140,7 @@ asyncio.run(main())
 from openviking_sdk import SyncHTTPClient
 
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
+client.initialize()
 result = client.create_session("demo-session")
 print(result)
 ```
@@ -149,6 +153,7 @@ print(result)
 from openviking_sdk import SyncHTTPClient
 
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
+client.initialize()
 
 result = client.add_resource(
     "/path/to/notes.md",
@@ -165,6 +170,7 @@ print(result)
 from openviking_sdk import SyncHTTPClient
 
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
+client.initialize()
 
 client.mkdir("viking://resources/demo-dir")
 print(client.ls("viking://resources"))
@@ -177,6 +183,7 @@ print(client.read("viking://resources/demo-dir/example.md"))
 from openviking_sdk import SyncHTTPClient
 
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
+client.initialize()
 
 result = client.find("hello", limit=5)
 print(result)
@@ -209,6 +216,7 @@ root_client = SyncHTTPClient(
     url="http://127.0.0.1:1933",
     api_key="your-root-key",
 )
+root_client.initialize()
 
 result = root_client.admin_create_account(
     account_id="demo-account",
@@ -251,6 +259,7 @@ The SDK maps server-side error codes to Python exceptions.
 from openviking_sdk import OpenVikingError, SyncHTTPClient
 
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
+client.initialize()
 
 try:
     print(client.read("viking://resources/not-exists.md"))

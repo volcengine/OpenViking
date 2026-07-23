@@ -125,6 +125,7 @@ class WhatsAppChannel(BaseChannel):
 
             await self._handle_message(
                 sender_id=sender_id,
+                sender_name=data.get("pushName") or sender_id,
                 chat_id=sender,  # Use full LID for replies
                 content=content,
                 metadata={

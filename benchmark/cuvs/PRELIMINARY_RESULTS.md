@@ -6,6 +6,14 @@ GPU, one public ANN dataset, and deterministic synthetic vectors for exact
 high-dimensional scaling. Every reported row aggregates five independent
 processes as median +/- median absolute deviation (MAD).
 
+> **Historical scope (pre-microbatch):** Every result below was collected from
+> the measured revisions named in this document, before opt-in request
+> micro-batching and its warm admission fast path were implemented. Statements
+> about the "current integration" describe those measured revisions, not the
+> later implementation. The tables are retained as historical engineering
+> checkpoints and must not be used to infer current concurrent-request
+> throughput.
+
 ## Public-dataset setup
 
 - Harness revision: `5dbc6a570404c9d1e2c8b584f6447919d0fee62a`
@@ -72,10 +80,10 @@ budget keeps the native path for that query and allows a later retry.
 
 ## Batch size 1
 
-This is the closest index-level approximation of the current OpenViking
-single-query integration. It includes Python dispatch, host-to-device query
-copy, GPU execution, and result copy back to host. It excludes embedding,
-HTTP, record lookup, reranking, and LLM work.
+This is the closest index-level approximation of the measured pre-microbatch
+OpenViking single-query integration. It includes Python dispatch,
+host-to-device query copy, GPU execution, and result copy back to host. It
+excludes embedding, HTTP, record lookup, reranking, and LLM work.
 
 | Backend | Recall@10 | warm p50 (ms/query) | warm p95 (ms/query) | warm QPS |
 | --- | ---: | ---: | ---: | ---: |
@@ -408,8 +416,8 @@ cuVS keeps a strong low-concurrency advantage, but its throughput remains near
 615--677 QPS as concurrency increases. Native CPU search scales across the
 thread pool and crosses cuVS between concurrency 4 and 16. cuVS p50 rises from
 1.5 ms to 92.6 ms at concurrency 64 because requests queue behind the current
-index-wide lock; this integration does not yet use concurrent CUDA streams or
-micro-batching.
+index-wide lock; the measured revision did not yet use concurrent CUDA streams
+or micro-batching.
 
 ### Cached 10% filter
 
@@ -462,7 +470,7 @@ the same rebuild delay amortized across more requests released together.
 2. CAGRA requires recall-matched tuning; an approximate label alone does not
    imply better performance.
 3. CAGRA can improve batched capacity around Recall@10=0.96, but this benefit
-   requires batching that the current OpenViking integration does not expose.
+   required batching that the measured pre-microbatch revision did not expose.
 4. Collection-level unfiltered lookup retained an approximately 9.0x warm-p50
    benefit at 100K x 768D in these runs, but native int8 versus the configured
    cuVS float32 device representation is not an equal-memory or equal-quality
@@ -480,10 +488,10 @@ the same rebuild delay amortized across more requests released together.
 8. GloVe-100 and normalized Gaussian vectors are engineering datasets, not a
    representative agent-memory corpus.
 9. At the async service facade, cuVS wins cached tenant search through
-   concurrency 4, but native crosses it by concurrency 16. The current cuVS
-   lock holds throughput near 600--680 QPS and turns concurrency into queueing
-   latency rather than GPU parallelism.
-10. The next engineering step is to evaluate a read-safe immutable snapshot
-    with concurrent searches or micro-batching, plus background rebuild. A
-    later end-to-end matrix should then add HTTP, embedding, reranking, and a
-    real agent-memory workload.
+   concurrency 4, but native crosses it by concurrency 16. On the measured
+   revision, the cuVS lock holds throughput near 600--680 QPS and turns
+   concurrency into queueing latency rather than GPU parallelism.
+10. For this historical checkpoint, the next engineering step was to evaluate
+    a read-safe immutable snapshot with concurrent searches or micro-batching,
+    plus background rebuild. A later end-to-end matrix should then add HTTP,
+    embedding, reranking, and a real agent-memory workload.

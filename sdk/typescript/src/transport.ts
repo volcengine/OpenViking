@@ -89,25 +89,35 @@ export class OpenVikingTransport {
       body = JSON.stringify(options.body);
     }
     const controller = new AbortController();
-    const abort = () => controller.abort(options.signal?.reason);
+    let abortSource: "caller" | "timeout" | undefined;
+    const abort = () => {
+      if (controller.signal.aborted) return;
+      abortSource = "caller";
+      controller.abort(options.signal?.reason);
+    };
     options.signal?.addEventListener("abort", abort, { once: true });
     if (options.signal?.aborted) abort();
-    const timer = setTimeout(
-      () =>
-        controller.abort(new DOMException("Request timed out", "TimeoutError")),
-      this.timeout,
-    );
+    const timer = setTimeout(() => {
+      if (controller.signal.aborted) return;
+      abortSource = "timeout";
+      controller.abort(new DOMException("Request timed out", "TimeoutError"));
+    }, this.timeout);
     try {
       const init: RequestInit = { method, headers, signal: controller.signal };
       if (body !== undefined) init.body = body;
       return await consume(await this.fetcher(url, init));
     } catch (error) {
-      if (error instanceof OpenVikingError) throw error;
-      if (controller.signal.aborted)
-        throw new OpenVikingError("Request timed out or was aborted", {
+      if (abortSource === "timeout")
+        throw new OpenVikingError("Request timed out", {
           code: "DEADLINE_EXCEEDED",
           cause: error,
         });
+      if (abortSource === "caller")
+        throw new OpenVikingError("Request was aborted by the caller", {
+          code: "ABORTED",
+          cause: error,
+        });
+      if (error instanceof OpenVikingError) throw error;
       throw new OpenVikingError(
         error instanceof Error ? error.message : "Network request failed",
         { code: "UNAVAILABLE", cause: error },

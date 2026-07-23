@@ -848,7 +848,7 @@ Reranking model for search result refinement. Supports VikingDB (Volcengine), Co
     "provider": "openai",
     "api_key": "your-api-key",
     "api_base": "https://dashscope.aliyuncs.com/compatible-api/v1/reranks",
-    "model": "qwen3-vl-rerank",
+    "model": "qwen3-rerank",
     "timeout": 120,
     "max_input_tokens": 2048,
     "threshold": 0.1

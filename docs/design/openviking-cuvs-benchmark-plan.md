@@ -184,13 +184,22 @@ ground truth 计算 recall。
 
 ## 当前集成的吞吐限制
 
-当前 Python integration 一次只提交一个 query，并在一次 GPU search 期间持有 index lock；同时
-每次调用都会创建 query device array 并把结果同步回 host。因此：
+默认路径仍按一次公开 API 请求提交一个 query。当前已提供默认关闭、仅适用于 brute-force 的
+request micro-batching：它可把兼容的并发单 query 请求合并为最多 8 行的 matrix-query。
+对于当前 generation 的 clean immutable snapshot，无 filter 或 device filter cache hit 可通过
+warm fast path 直接入队，不获取 caller 侧 device gate；dirty/cold snapshot、filter cache miss
+和 device filter preparation 仍先走串行的 gated preparation。入队后只有 micro-batch worker
+会在持有 device-search gate 时执行 GPU matrix search，caller 不会持 gate 等待结果。
 
-- batch > 1 的 L1 结果代表 cuVS 的能力上限，不等同于当前 OpenViking API 的吞吐；
-- L2/L3 必须以 batch=1 为主，并明确记录并发请求是否被 lock 串行化；
-- 如果 L1 与 L2 差距明显，下一阶段优先实现 persistent device buffers、CUDA streams 或
-  dynamic batching，再评估最大吞吐。
+这消除了旧版“一次 GPU search 全程持有 caller/index lock”的主要并发瓶颈，但每次 dispatch
+仍会创建 query/result device array，并在返回前把结果同步到 host。因此：
+
+- batch > 1 的 L1 结果仍代表显式 vector-index batch 的能力上限，不等同于公开 API 吞吐；
+- L2/L3 应继续以单 query 请求为主，同时分别测默认关闭和 opt-in micro-batching，并记录
+  实际 batch-size 分布、`batch_wait`、`gpu_gate_queue`、QPS 与 P95；
+- 下一阶段优先评估 persistent query/result buffers、allocator reuse 和 host 同步优化，再决定
+  是否支持 CAGRA micro-batching 或多个并行 batch dispatch；OpenViking 的 scheduler 与 cuVS
+  官方的 Dynamic Batching 组件不是同一实现。
 
 ## 主要图表
 

@@ -470,6 +470,7 @@ Below are all HTTP API endpoints provided by OpenViking, grouped by functional m
 | POST | `/api/v1/snapshot/commit` | Save the current workspace state as a new snapshot |
 | GET | `/api/v1/snapshot/log` | Walk commit history newest-first |
 | GET | `/api/v1/snapshot/show` | View commit metadata, or read a file from a commit |
+| GET | `/api/v1/snapshot/diff` | Compare one file between two snapshots |
 | POST | `/api/v1/snapshot/restore` | Restore a directory or the whole account tree to a past snapshot (forward commit) |
 
 ### Content
@@ -606,7 +607,7 @@ Subsequent API documentation is organized by functional module as follows:
 | [Resources](02-resources.md) - Resource management API | Adding, importing, exporting resources and skills |
 | [Retrieval](06-retrieval.md) - Search API | Search, relations, context acquisition |
 | [File System](03-filesystem.md) - File system operations | Directory operations, content reading and writing |
-| [Snapshots](11-snapshot.md) - Multi-version management | Snapshot commit, history walk, version restore |
+| [Snapshots](11-snapshot.md) - Multi-version management | Snapshot commit, history walk, single-file diff, version restore |
 | [Sessions](05-sessions.md) - Session management | Session creation, message management, memory extraction |
 | [Skills](04-skills.md) - Skill management API | Skill management |
 | [System](07-system.md) - System and monitoring API | System status, monitoring, debug API |

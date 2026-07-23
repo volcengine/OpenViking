@@ -240,6 +240,7 @@ class DiscordChannel(BaseChannel):
 
         await self._handle_message(
             sender_id=sender_id,
+            sender_name=author.get("global_name") or author.get("username") or sender_id,
             chat_id=channel_id,
             content="\n".join(p for p in content_parts if p) or "[empty message]",
             media=media_paths,

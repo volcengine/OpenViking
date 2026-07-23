@@ -23,6 +23,7 @@ logger = get_logger(__name__)
 
 # Common text files that have no extension but should be treated as text.
 _EXTENSIONLESS_TEXT_NAMES: Set[str] = {
+    "README",
     "LICENSE",
     "LICENCE",
     "MAKEFILE",

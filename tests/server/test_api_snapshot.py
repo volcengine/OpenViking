@@ -343,6 +343,71 @@ async def test_diff_reports_missing_final_newline(client_with_resource, service)
     assert "\\ No newline at end of file" in result["diff_text"]
 
 
+async def test_diff_reports_deleted_path(client_with_resource, service):
+    client, _ = client_with_resource
+    path = "viking://resources/snapshot_diff_deleted_fixture.md"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    await service.viking_fs.write_file(path, b"deleted content\n", ctx=ctx)
+    from_commit = (
+        await client.post(
+            "/api/v1/snapshot/commit",
+            json={"message": "snapshot diff deleted v1", "paths": [path]},
+        )
+    ).json()["result"]["commit_oid"]
+
+    await service.viking_fs.rm(path, ctx=ctx)
+    to_commit = (
+        await client.post(
+            "/api/v1/snapshot/commit",
+            json={"message": "snapshot diff deleted v2", "paths": [path]},
+        )
+    ).json()["result"]["commit_oid"]
+
+    response = await client.get(
+        "/api/v1/snapshot/diff",
+        params={"path": path, "from": from_commit, "to": to_commit},
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["change_type"] == "deleted"
+    assert "-deleted content" in result["diff_text"]
+
+
+async def test_diff_reports_unchanged_path(client_with_resource, service):
+    client, _ = client_with_resource
+    path = "viking://resources/snapshot_diff_unchanged_fixture.md"
+    other_path = "viking://resources/snapshot_diff_other_fixture.md"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    await service.viking_fs.write_file(path, b"unchanged content\n", ctx=ctx)
+    from_commit = (
+        await client.post(
+            "/api/v1/snapshot/commit",
+            json={"message": "snapshot diff unchanged v1", "paths": [path]},
+        )
+    ).json()["result"]["commit_oid"]
+
+    await service.viking_fs.write_file(other_path, b"advance snapshot\n", ctx=ctx)
+    to_commit = (
+        await client.post(
+            "/api/v1/snapshot/commit",
+            json={"message": "snapshot diff unchanged v2", "paths": [other_path]},
+        )
+    ).json()["result"]["commit_oid"]
+
+    response = await client.get(
+        "/api/v1/snapshot/diff",
+        params={"path": path, "from": from_commit, "to": to_commit},
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["change_type"] == "unchanged"
+    assert result["diff_text"] == ""
+
+
 # ---------------------------------------------------------------------------
 # restore (apply) — forward-commit chain + reindex hook + concurrent-commit 409
 # ---------------------------------------------------------------------------

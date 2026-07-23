@@ -31,10 +31,33 @@ pub trait ObjectStore: Send + Sync + 'static {
         zlib_body: Bytes,
     ) -> Result<(), ObjectStoreError>;
 
-    /// Read and decompress an object.
+    /// Read a compressed loose object.
     ///
-    /// Returns the full uncompressed bytes (including Git header: "type size\0content").
+    /// Returns the zlib-compressed bytes written by [`ObjectStore::put`].
     async fn get(&self, account: &str, oid: &ObjectId) -> Result<Bytes, ObjectStoreError>;
+
+    /// Read a compressed loose object without exceeding `max_bytes`.
+    ///
+    /// Production backends should override this method so the limit is checked
+    /// before the complete object is materialized. The default preserves
+    /// compatibility for custom stores while still enforcing the contract
+    /// before returning to the caller.
+    async fn get_limited(
+        &self,
+        account: &str,
+        oid: &ObjectId,
+        max_bytes: u64,
+    ) -> Result<Bytes, ObjectStoreError> {
+        let bytes = self.get(account, oid).await?;
+        let size = bytes.len() as u64;
+        if size > max_bytes {
+            return Err(ObjectStoreError::ReadLimitExceeded {
+                size,
+                limit: max_bytes,
+            });
+        }
+        Ok(bytes)
+    }
 
     /// Check if an object exists without reading its content.
     ///
