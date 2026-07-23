@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import {
   BotIcon,
@@ -52,8 +53,15 @@ export function AgentPanel({
   onSessionChange: (sessionId: string) => void
 }) {
   const { t } = useTranslation('playground')
+  const queryClient = useQueryClient()
   const [sessionId, setSessionId] = useState(
     initialSessionId ?? createRandomUuid(),
+  )
+  // A client-generated UUID is not yet persisted on the backend. Only
+  // sessions that exist on the backend should be read from /context; reading
+  // a draft id would produce a guaranteed 404.
+  const [isSessionPersisted, setIsSessionPersisted] = useState(
+    Boolean(initialSessionId),
   )
   const [historyOpen, setHistoryOpen] = useState(false)
   const [sessionError, setSessionError] = useState<string | null>(null)
@@ -67,7 +75,9 @@ export function AgentPanel({
   const [playgroundSessionIds, setPlaygroundSessionIds] = useState<string[]>(
     () => readPlaygroundAgentSessionIds(),
   )
-  const { data: historyMessages } = useSessionMessages(sessionId)
+  const { data: historyMessages } = useSessionMessages(
+    isSessionPersisted ? sessionId : undefined,
+  )
   const chat = useChat({
     initialMessages: historyMessages,
     persistMessages: true,
@@ -96,6 +106,7 @@ export function AgentPanel({
       )
       setSessionTitle(result.session_id, t('agent.newSessionTitle'))
       setSessionId(result.session_id)
+      setIsSessionPersisted(true)
       onSessionChange(result.session_id)
       setHistoryOpen(false)
     } catch (error) {
@@ -112,6 +123,7 @@ export function AgentPanel({
       creationStartedRef.current = true
       setSessionError(null)
       setIsCreatingSession(false)
+      setIsSessionPersisted(true)
       setPlaygroundSessionIds(registerPlaygroundAgentSessionId(nextSessionId))
       setSessionId(nextSessionId)
       onSessionChange(nextSessionId)
@@ -142,6 +154,21 @@ export function AgentPanel({
     chat.streamingReasoning,
     chat.streamingToolCalls,
   ])
+
+  // When the first exchange completes for a client-generated (draft) session,
+  // the POST /messages call auto-creates the session on the backend. Mark it
+  // as persisted so subsequent reads go to /context, and invalidate the
+  // sessions list so the history dialog picks up the new session.
+  useEffect(() => {
+    if (
+      !isSessionPersisted &&
+      chat.status === 'idle' &&
+      chat.messages.length > 0
+    ) {
+      setIsSessionPersisted(true)
+      queryClient.invalidateQueries({ queryKey: ['sessions'] })
+    }
+  }, [chat.status, chat.messages.length, isSessionPersisted, queryClient])
 
   const send = useCallback(
     (message: string) => {
