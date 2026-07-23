@@ -36,6 +36,106 @@ _FENCE_PATTERN = re.compile(r"^(\s{0,3})(`{3,}|~{3,})")
 _LIST_ITEM_PATTERN = re.compile(r"^(\s{0,3})([-*+]|\d{1,9}[.)])(\s+)")
 
 
+def _split_markdown_image_target(payload: str) -> tuple[str, str]:
+    """Return ``(destination, exact_title_suffix)`` for one image payload.
+
+    This scans once from the end instead of making the image regex choose an
+    ambiguous whitespace boundary. Callers can still prefer the full payload
+    when it names an existing file or sidecar key.
+    """
+    content_end = len(payload)
+    while content_end > 0 and payload[content_end - 1].isspace():
+        content_end -= 1
+    if content_end == 0:
+        return payload, ""
+
+    closing = payload[content_end - 1]
+    if closing not in {'"', "'", ")"}:
+        return payload, ""
+
+    slash = content_end - 2
+    while slash >= 0 and payload[slash] == "\\":
+        slash -= 1
+    if (content_end - slash - 2) % 2:
+        return payload, ""
+
+    opening = -1
+    if closing in {'"', "'"}:
+        index = content_end - 2
+        while index >= 0:
+            if payload[index] != closing:
+                index -= 1
+                continue
+            slash = index - 1
+            while slash >= 0 and payload[slash] == "\\":
+                slash -= 1
+            if (index - slash - 1) % 2 == 0:
+                opening = index
+                break
+            index = slash
+    else:
+        depth = 1
+        index = content_end - 2
+        while index >= 0:
+            char = payload[index]
+            if char not in "()":
+                index -= 1
+                continue
+            slash = index - 1
+            while slash >= 0 and payload[slash] == "\\":
+                slash -= 1
+            if (index - slash - 1) % 2:
+                index = slash
+                continue
+            if char == ")":
+                depth += 1
+            else:
+                depth -= 1
+                if depth == 0:
+                    opening = index
+                    break
+            index = slash
+
+    if opening <= 0:
+        return payload, ""
+
+    separator_start = opening
+    while separator_start > 0 and payload[separator_start - 1].isspace():
+        separator_start -= 1
+    if separator_start == opening or not payload[:separator_start].strip():
+        return payload, ""
+
+    return payload[:separator_start], payload[separator_start:]
+
+
+def _artifact_image_candidate(
+    image_ref: str,
+    md_dir: Path,
+    root: Path,
+    *,
+    strip_suffix: bool = True,
+) -> Optional[Path]:
+    # Query/fragment suffixes are reference syntax, not literal filenames. The
+    # title-ambiguity caller opts out for its compatibility-first exact probe.
+    ref = image_ref.strip()
+    if not ref or _is_remote_uri(ref):
+        return None
+
+    path_part = re.split(r"[?#]", ref, maxsplit=1)[0] if strip_suffix else ref
+    ref_path = Path(path_part)
+    if not path_part or ref_path.is_absolute():
+        return None
+
+    try:
+        candidate = (md_dir / ref_path).resolve()
+        candidate.relative_to(root)
+    except (OSError, ValueError):
+        return None
+    if candidate.parent != md_dir or not candidate.is_file():
+        return None
+    return candidate
+
+
 def build_artifact_image_mappings(root_dir: Path) -> Dict[str, Dict[str, str]]:
     """Build the sidecar mapping for an already-materialized parser artifact.
 
@@ -58,38 +158,44 @@ def build_artifact_image_mappings(root_dir: Path) -> Dict[str, Dict[str, str]]:
 
         protected = _protected_ranges(content)
 
-        refs = [(match.start(), match.group(2)) for match in _IMAGE_PATTERN.finditer(content)]
-        refs.extend((match.start(), match.group(2)) for match in HTML_IMG_PATTERN.finditer(content))
+        refs = [
+            (match.start(), match.end(), match.group(2), True)
+            for match in _IMAGE_PATTERN.finditer(content)
+        ]
+        refs.extend(
+            (match.start(), match.end(), match.group(2), False)
+            for match in HTML_IMG_PATTERN.finditer(content)
+        )
 
         file_mappings: Dict[str, str] = {}
         md_dir = md_path.parent.resolve()
-        for pos, original_ref in refs:
-            if any(start <= pos < end for start, end in protected):
+
+        for start, end, original_ref, is_markdown in refs:
+            if _span_intersects_protected_ranges(start, end, protected):
                 continue
 
-            ref = original_ref.strip()
-            if not ref or _is_remote_uri(ref):
-                continue
-
-            # Queries/fragments are not part of the local filesystem path, but
-            # the exact original reference remains the mapping key used later.
-            path_part = re.split(r"[?#]", ref, maxsplit=1)[0]
-            ref_path = Path(path_part)
-            if not path_part or ref_path.is_absolute():
-                continue
-
-            try:
-                candidate = (md_dir / ref_path).resolve()
-                candidate.relative_to(root)
-            except (OSError, ValueError):
+            destination, title = (
+                _split_markdown_image_target(original_ref) if is_markdown else (original_ref, "")
+            )
+            mapping_ref = original_ref
+            if title:
+                # Compatibility first: an existing literal filename such as
+                # ``photo.png (copy)`` remains a path, not a title-bearing ref.
+                candidate = _artifact_image_candidate(
+                    original_ref, md_dir, root, strip_suffix=False
+                )
+                if candidate is None:
+                    candidate = _artifact_image_candidate(destination, md_dir, root)
+                    if candidate is not None:
+                        mapping_ref = destination
+            else:
+                candidate = _artifact_image_candidate(original_ref, md_dir, root)
+            if candidate is None:
                 continue
 
             # The existing sidecar contract stores only the final filename and
             # rewrite_image_uris resolves it beside the markdown file.
-            if candidate.parent != md_dir or not candidate.is_file():
-                continue
-
-            file_mappings[original_ref] = candidate.name
+            file_mappings[mapping_ref] = candidate.name
 
         if file_mappings:
             mappings[md_path.relative_to(root).as_posix()] = file_mappings
@@ -217,7 +323,33 @@ def _protected_ranges(content: str):
 
         prev_blank = is_blank
 
-    return ranges
+    if not ranges:
+        return []
+
+    merged = []
+    for start, end in sorted(ranges):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _span_intersects_protected_ranges(
+    start: int,
+    end: int,
+    ranges: list[tuple[int, int]],
+) -> bool:
+    """Return whether ``[start, end)`` overlaps sorted, disjoint ``ranges``."""
+    low = 0
+    high = len(ranges)
+    while low < high:
+        middle = (low + high) // 2
+        if ranges[middle][1] <= start:
+            low = middle + 1
+        else:
+            high = middle
+    return low < len(ranges) and ranges[low][0] < end
 
 
 async def _discover_mappings(
@@ -384,11 +516,8 @@ def _rewrite_content(
 
     protected = _protected_ranges(content)
 
-    def _in_protected(pos: int) -> bool:
-        for s, e in protected:
-            if s <= pos < e:
-                return True
-        return False
+    def _in_protected(start: int, end: int) -> bool:
+        return _span_intersects_protected_ranges(start, end, protected)
 
     def _mapped_uri(path: str) -> Optional[str]:
         """viking:// URI for *path* if the mapping covers it, else None."""
@@ -404,10 +533,19 @@ def _rewrite_content(
     def replacer(match: re.Match) -> str:
         nonlocal rewrite_count
         alt_text = match.group(1)
-        path = match.group(2)
+        payload = match.group(2)
+        path = payload
+        title = ""
+        # The sidecar is the provenance boundary. ``available_images`` only
+        # validates mapped targets; it cannot safely infer an original ref.
+        if payload not in mappings:
+            destination, title_suffix = _split_markdown_image_target(payload)
+            if title_suffix:
+                path = destination
+                title = title_suffix
 
         # Skip image references that live inside code blocks / inline code.
-        if _in_protected(match.start()):
+        if _in_protected(*match.span()):
             return match.group(0)
 
         if _is_remote_uri(path):
@@ -417,13 +555,13 @@ def _rewrite_content(
         if uri is None:
             return match.group(0)
         rewrite_count += 1
-        return f"![{alt_text}]({uri})"
+        return f"![{alt_text}]({uri}{title})"
 
     def img_tag_replacer(match: re.Match) -> str:
         nonlocal rewrite_count
         path = match.group(2)
 
-        if _in_protected(match.start()):
+        if _in_protected(*match.span()):
             return match.group(0)
 
         if _is_remote_uri(path):
