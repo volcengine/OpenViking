@@ -349,6 +349,49 @@ openviking write viking://resources/docs/api.md \
 
 ---
 
+### set_tags()
+
+更新文件或目录的显式检索标签元数据。打过标签的内容之后可以通过 `find()` 和 `search()` 的 `tags` 过滤器检索。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| uri | str | 是 | - | 要打标签的文件或目录 URI |
+| tags | List[str] | 是 | - | 要应用的标签，例如 `project:alpha` 或 `env:prod` |
+| mode | str | 否 | `replace` | `replace` 覆盖显式标签；`append` 在保留已有标签的基础上追加 |
+| recursive | bool | 否 | `false` | 当 `uri` 是目录时，是否递归应用到子节点 |
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+client.set_tags(
+    "viking://resources/projects/alpha",
+    tags=["project:alpha", "env:prod"],
+    recursive=True,
+)
+```
+
+**HTTP API**
+
+```
+POST /api/v1/content/set_tags
+```
+
+```bash
+curl -X POST "http://localhost:1933/api/v1/content/set_tags" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "uri": "viking://resources/projects/alpha",
+    "tags": ["project:alpha", "env:prod"],
+    "mode": "replace",
+    "recursive": true
+  }'
+```
+
+---
+
 ### ls()
 
 列出目录内容。
