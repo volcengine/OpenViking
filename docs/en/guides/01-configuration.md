@@ -1713,10 +1713,10 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "code_summary_mode": "ast"
   },
   "server": {
-    "host": "string",
+    "host": "127.0.0.1",
     "port": 1933,
     "root_api_key": "string",
-    "cors_origins": ["string"]
+    "cors_origins": ["*"]
   }
 }
 ```
