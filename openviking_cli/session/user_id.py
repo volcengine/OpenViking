@@ -72,4 +72,6 @@ class UserIdentifier(object):
         return self.__str__()
 
     def __eq__(self, other):
+        if not isinstance(other, UserIdentifier):
+            return NotImplemented
         return self._account_id == other._account_id and self._user_id == other._user_id
