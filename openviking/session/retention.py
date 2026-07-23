@@ -422,6 +422,14 @@ def plan_retention(
     older_turns = turns[:selected_start]
     latest_turn = retained_turns[-1]
     if latest_turn.estimated_tokens > token_budget:
+        if latest_turn.anchor is None:
+            # A legacy assistant-only prefix has no stable User anchor for a
+            # partial-Turn checkpoint. Archive it as a complete unit so Phase 2
+            # can summarize it without producing an invalid checkpoint plan.
+            return RetentionPlan(
+                archive_messages=_flatten_turns([*older_turns, latest_turn]),
+                retained_messages=[],
+            )
         return _partial_latest_turn_plan(
             older_turns,
             latest_turn,

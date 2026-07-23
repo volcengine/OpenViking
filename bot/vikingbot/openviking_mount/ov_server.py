@@ -1,4 +1,3 @@
-import asyncio
 import base64
 import json
 import re
@@ -1218,16 +1217,3 @@ class VikingClient:
             await self.admin_user_client.close()
         for client in self._user_clients.values():
             await client.close()
-
-
-async def ov_test():
-    client = await VikingClient.create(
-                    "shared",
-                    connection=None,
-                    config=load_config(),
-                )
-    context = await client.get_session_context("feishu__cli_a9004efb34b8dcd2__oc_0136f3040a8732d006cff21bfb14f5ca", 5000)
-    print(context)
-
-if __name__ == '__main__':
-    asyncio.run(ov_test())

@@ -3408,37 +3408,50 @@ class Session:
         memories_extracted: Dict[str, int],
         telemetry_snapshot: Any,
     ) -> None:
-        """Reload and merge latest meta state before persisting commit results."""
-        latest_meta = self._meta
-        try:
-            meta_content = await self._viking_fs.read_file(
-                f"{self._session_uri}/.meta.json",
-                ctx=self.ctx,
-            )
-            latest_meta = SessionMeta.from_dict(json.loads(meta_content))
-        except Exception:
+        """Merge Phase 2 results without overwriting concurrent root updates."""
+        from openviking.storage.transaction import LockContext, get_lock_manager
+
+        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
+        async with LockContext(
+            get_lock_manager(),
+            [session_path],
+            lock_mode="exact",
+            timeout=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS,
+        ):
             latest_meta = self._meta
+            try:
+                meta_content = await self._viking_fs.read_file(
+                    f"{self._session_uri}/.meta.json",
+                    ctx=self.ctx,
+                )
+                latest_meta = SessionMeta.from_dict(json.loads(meta_content))
+            except Exception:
+                latest_meta = self._meta
 
-        if telemetry_snapshot:
-            llm = telemetry_snapshot.summary.get("tokens", {}).get("llm", {})
-            latest_meta.llm_token_usage["prompt_tokens"] += llm.get("input", 0)
-            latest_meta.llm_token_usage["completion_tokens"] += llm.get("output", 0)
-            latest_meta.llm_token_usage["total_tokens"] += llm.get("total", 0)
-            latest_meta.llm_token_usage["cached_tokens"] += llm.get("prompt_cached", 0)
-            latest_meta.llm_token_usage["reasoning_tokens"] += llm.get("completion_reasoning", 0)
-            embedding = telemetry_snapshot.summary.get("tokens", {}).get("embedding", {})
-            latest_meta.embedding_token_usage["total_tokens"] += embedding.get("total", 0)
+            if telemetry_snapshot:
+                llm = telemetry_snapshot.summary.get("tokens", {}).get("llm", {})
+                latest_meta.llm_token_usage["prompt_tokens"] += llm.get("input", 0)
+                latest_meta.llm_token_usage["completion_tokens"] += llm.get("output", 0)
+                latest_meta.llm_token_usage["total_tokens"] += llm.get("total", 0)
+                latest_meta.llm_token_usage["cached_tokens"] += llm.get("prompt_cached", 0)
+                latest_meta.llm_token_usage["reasoning_tokens"] += llm.get(
+                    "completion_reasoning", 0
+                )
+                embedding = telemetry_snapshot.summary.get("tokens", {}).get("embedding", {})
+                latest_meta.embedding_token_usage["total_tokens"] += embedding.get("total", 0)
 
-        latest_meta.commit_count = max(latest_meta.commit_count, archive_index)
-        for cat, count in memories_extracted.items():
-            latest_meta.memories_extracted[cat] = latest_meta.memories_extracted.get(cat, 0) + count
-            latest_meta.memories_extracted["total"] = (
-                latest_meta.memories_extracted.get("total", 0) + count
-            )
-        latest_meta.last_commit_at = get_current_timestamp()
-        latest_meta.message_count = await self._read_live_message_count()
-        self._meta = latest_meta
-        await self._save_meta()
+            latest_meta.commit_count = max(latest_meta.commit_count, archive_index)
+            for cat, count in memories_extracted.items():
+                latest_meta.memories_extracted[cat] = (
+                    latest_meta.memories_extracted.get(cat, 0) + count
+                )
+                latest_meta.memories_extracted["total"] = (
+                    latest_meta.memories_extracted.get("total", 0) + count
+                )
+            latest_meta.last_commit_at = get_current_timestamp()
+            latest_meta.message_count = await self._read_live_message_count()
+            self._meta = latest_meta
+            await self._save_meta()
 
     async def _read_live_message_count(self) -> int:
         """Count current live session messages from persisted storage."""

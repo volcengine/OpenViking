@@ -152,6 +152,28 @@ def test_oversized_latest_turn_keeps_anchor_and_atomic_raw_tail():
     assert plan.checkpoint_source_message_ids == archived_ids[1:]
 
 
+def test_oversized_legacy_assistant_only_turn_archives_without_checkpoint():
+    messages = [
+        _message("a1", "assistant", "A" * 1000),
+        _message("a2", "assistant", "B" * 1000),
+        _message("a3", "assistant", "C" * 1000),
+    ]
+
+    plan = plan_retention(
+        messages,
+        keep_recent_turn_count=1,
+        token_budget=150,
+        min_raw_tail_steps=1,
+    )
+
+    assert [message.id for message in plan.archive_messages] == ["a1", "a2", "a3"]
+    assert plan.retained_messages == []
+    assert plan.turn_anchor is None
+    assert plan.checkpoint_source_message_ids == []
+    assert plan.partial_turn is False
+    assert plan.budget_exceeded is False
+
+
 def test_complete_old_turns_are_archived_before_splitting_latest_turn():
     messages = [
         _message("u1", "user", "first"),

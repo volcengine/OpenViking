@@ -133,6 +133,36 @@ async def _wait_for_task(task_id: str, timeout: float = 30.0) -> dict:
     raise TimeoutError(f"Task {task_id} did not complete within {timeout}s")
 
 
+async def test_oversized_legacy_assistant_only_commit_completes_without_checkpoint(
+    client: AsyncOpenViking,
+):
+    session = client.session(session_id="legacy_assistant_only_turn_test")
+    for index in range(3):
+        session.add_message("assistant", [TextPart(str(index) * 1000)])
+
+    result = await session.commit_async(
+        retention_mode="turn_budget",
+        keep_recent_turn_count=1,
+        retained_message_token_budget=150,
+        min_raw_tail_steps=1,
+    )
+    task = await _wait_for_task(result["task_id"])
+    context = await session.get_session_context()
+
+    assert task["status"] == "completed"
+    assert context["latest_archive_overview"]
+    assert context["messages"] == []
+    archive_meta = json.loads(
+        await session._viking_fs.read_file(
+            f"{result['archive_uri']}/.meta.json",
+            ctx=session.ctx,
+        )
+    )
+    assert archive_meta["retention_plan"]["partial_turn"] is False
+    assert archive_meta["retention_plan"]["turn_anchor_message_id"] is None
+    assert archive_meta.get("checkpoints", []) == []
+
+
 class TestGetContextForSearch:
     """Test get_context_for_search"""
 

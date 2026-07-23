@@ -1335,6 +1335,54 @@ async def test_concurrent_stale_workers_append_without_losing_messages(
     ]
 
 
+async def test_phase2_meta_merge_serializes_with_concurrent_append(
+    client: AsyncOpenViking,
+    monkeypatch,
+):
+    initial = client.session(session_id="phase2_meta_append_lock_test")
+    await initial.add_message_async("user", [TextPart("first")])
+
+    phase2 = client.session(session_id=initial.session_id)
+    appending = client.session(session_id=initial.session_id)
+    await phase2.load()
+    await appending.load()
+
+    phase2_inside_save = asyncio.Event()
+    allow_phase2_save = asyncio.Event()
+    original_save_meta = phase2._save_meta
+
+    async def delayed_save_meta():
+        phase2_inside_save.set()
+        await allow_phase2_save.wait()
+        await original_save_meta()
+
+    monkeypatch.setattr(phase2, "_save_meta", delayed_save_meta)
+    merge_task = asyncio.create_task(
+        phase2._merge_and_save_commit_meta(
+            archive_index=1,
+            memories_extracted={},
+            telemetry_snapshot=None,
+        )
+    )
+    await phase2_inside_save.wait()
+
+    append_task = asyncio.create_task(
+        appending.add_message_async("assistant", [TextPart("second")])
+    )
+    await asyncio.sleep(0.05)
+    assert not append_task.done()
+
+    allow_phase2_save.set()
+    await asyncio.gather(merge_task, append_task)
+
+    fresh = client.session(session_id=initial.session_id)
+    await fresh.load()
+    assert [message.content for message in fresh.messages] == ["first", "second"]
+    assert fresh.meta.message_count == 2
+    assert fresh.meta.total_message_count == 2
+    assert fresh.meta.commit_count == 1
+
+
 async def test_add_waits_for_commit_root_rewrite_and_remains_live(
     client: AsyncOpenViking,
     monkeypatch,
