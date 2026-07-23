@@ -38,7 +38,7 @@ pipx upgrade openviking
 
 :::
 
-安装完成后，可以使用 `ov`、`openviking` 和 `openviking-server` 命令。
+安装完成后，可以使用客户端命令 `ov`（`openviking` 是其别名）和服务端命令 `openviking-server`。
 
 ### 方式二：通过 Docker 启动 (作为独立服务)
 

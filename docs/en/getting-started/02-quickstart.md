@@ -38,7 +38,7 @@ pipx upgrade openviking
 
 :::
 
-After installation, the `ov`, `openviking`, and `openviking-server` commands are available.
+After installation, use `ov` as the client command (`openviking` is an alias) and `openviking-server` as the server command.
 
 ### Option 2: Start via Docker (As an independent service)
 
