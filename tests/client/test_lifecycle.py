@@ -80,9 +80,52 @@ class TestClientInitialization:
                 content="again",
                 peer_id="explicit-peer",
             )
+            session = await client._client._service.sessions.get(
+                "legacy-session",
+                client._client._ctx,
+                auto_create=False,
+            )
             assert session.messages[-1].peer_id == "explicit-peer"
         finally:
             await AsyncOpenViking.reset()
+
+    async def test_add_message_rejects_auto_commit_policy_in_embedded_mode(
+        self, client: AsyncOpenViking
+    ):
+        with pytest.raises(TypeError, match="auto_commit_policy"):
+            await client.add_message(
+                "embedded-auto-commit-policy",
+                "user",
+                content="hello",
+                auto_commit_policy={"enabled": True},
+            )
+
+    async def test_batch_add_messages_rejects_auto_commit_policy_in_embedded_mode(
+        self, client: AsyncOpenViking
+    ):
+        with pytest.raises(TypeError, match="auto_commit_policy"):
+            await client.batch_add_messages(
+                "embedded-batch-auto-commit-policy",
+                [{"role": "user", "content": "hello"}],
+                auto_commit_policy={"enabled": True},
+            )
+
+    async def test_batch_add_messages_ignores_per_message_auto_commit_policy_in_embedded_mode(
+        self, client: AsyncOpenViking
+    ):
+        result = await client.batch_add_messages(
+            "embedded-batch-per-message-auto-commit-policy",
+            [
+                {
+                    "role": "user",
+                    "content": "hello",
+                    "auto_commit_policy": {"pending_token_threshold": 1},
+                }
+            ],
+        )
+
+        assert result["message_count"] == 1
+        assert result["added"] == 1
 
 
 class TestClientClose:

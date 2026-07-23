@@ -1108,6 +1108,59 @@ Legacy compatibility example:
 }
 ```
 
+##### Session Auto Commit Configuration
+
+`memory.session_auto_commit` controls server-wide automatic session commit behavior.
+
+```json
+{
+  "memory": {
+    "session_auto_commit": {
+      "default_enabled": false,
+      "idle_enabled": false,
+      "check_interval_seconds": 60.0,
+      "scan_batch_size": 16,
+      "scan_batch_pause_seconds": 0.0
+    }
+  }
+}
+```
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `default_enabled` | bool | Enables auto commit by default for newly created sessions that do not explicitly provide `config.auto_commit_policy`. When `false`, those sessions keep auto commit disabled | `false` |
+| `idle_enabled` | bool | Enables the server-side idle-timeout auto-commit scheduler. When disabled, the idle scheduler is not started. Token- and message-count immediate triggering still works | `false` |
+| `check_interval_seconds` | float | Poll interval for the idle scheduler in seconds. Must be greater than `0` | `60.0` |
+| `scan_batch_size` | int | Maximum number of session meta files read concurrently in each idle scan batch. Must be greater than `0` | `16` |
+| `scan_batch_pause_seconds` | float | Optional pause between idle scan batches, in seconds. Use this to reduce storage pressure during large scans | `0.0` |
+
+Notes:
+
+- `memory.session_auto_commit` is a server-wide control surface, not a per-session business policy.
+- Per-session auto-commit behavior is configured through the session-level `auto_commit_policy` (see the table below). It is set when creating a session (`POST /api/v1/sessions` with a `config` object), edited later via `PATCH /api/v1/sessions/{session_id}`, and viewed via `GET /api/v1/sessions/{session_id}`.
+- When `default_enabled=false`, sessions created without `config.auto_commit_policy` keep auto commit disabled and return `auto_commit_policy: null`. Providing `{}` or any policy field explicitly enables auto commit for that session and fills missing fields from the defaults below.
+- When `default_enabled=true`, sessions created without `config.auto_commit_policy` get the default policy below.
+- When `idle_enabled=false`:
+  - `SessionAutoCommitScheduler` is not started
+- When `idle_enabled=true`:
+  - `SessionAutoCommitScheduler` wakes up periodically and scans session `.meta.json` files under AGFS `/local/{account}/user/{user}/sessions`
+  - It does not perform a dedicated startup recovery sweep; idle detection happens only on periodic scans
+- Token- and message-count auto commit run inline after message writes, do not depend on the scheduler, and are unaffected by this switch.
+
+###### Per-session Auto Commit Policy
+
+When a session carries an `auto_commit_policy`, any field you omit falls back to the recommended default below. Sessions without a stored policy keep auto commit disabled. Values are clamped into `[0, max]`, and unknown keys are rejected with `InvalidArgumentError`. See [Sessions API](../api/05-sessions.md#create_session) for how to set and view it.
+
+| Field | Type | Default | Max | Description |
+|-------|------|---------|-----|-------------|
+| `pending_token_threshold` | int | 10000 | 50000 | When uncommitted pending tokens exceed this value (strictly greater-than), an auto commit is triggered after a message write. |
+| `message_count_threshold` | int | 50 | 500 | When the uncommitted live message count exceeds this value (strictly greater-than), an auto commit is triggered after a message write. |
+| `idle_timeout_seconds` | int | 86400 | 604800 | After this many idle seconds, a session with uncommitted content becomes eligible for the server-side idle scheduler. Idle-timeout commits archive the full backlog and ignore `keep_recent_count`. |
+| `keep_recent_count` | int | 2 | 500 | Number of recent live messages to keep (not archived) on a threshold-triggered auto commit. Idle-timeout commits ignore this and commit everything. |
+| `min_commit_interval_seconds` | int | 0 | 604800 | Minimum seconds between two automatic commits (throttle). |
+
+Code entry: `openviking/session/auto_commit_policy.py:AutoCommitPolicy`.
+
 
 ##### S3 Backend Configuration
 
@@ -1368,6 +1421,7 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 | `extraction_enabled` | Whether session commit runs long-term memory extraction. | `true` |
 | `session_skill_extraction_enabled` | Whether session commit also extracts reusable skills into the current user's skill directory. | `false` |
 | `link_enabled` | Whether memory extraction writes and resolves memory links. | `false` |
+| `session_auto_commit` | Server-wide automatic session commit controls. This belongs under `memory`, not under `server`; see [Session Auto Commit Configuration](#session-auto-commit-configuration). | See section above |
 
 ### ovcli.conf
 

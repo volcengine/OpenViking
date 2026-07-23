@@ -73,6 +73,41 @@ class ToolPartRequest(BaseModel):
 PartRequest = TextPartRequest | ContextPartRequest | ToolPartRequest
 
 
+class AutoCommitPolicyRequest(BaseModel):
+    """Session-level auto-commit policy overrides.
+
+    All fields are optional so the same model works for create (defaults fill
+    the rest) and PATCH (only provided fields are merged). Numeric bounds are
+    intentionally not enforced here: ``AutoCommitPolicy`` clamps every value
+    into ``[0, max]`` so clamping stays defined in a single place and applies
+    equally to the HTTP, SDK, and CLI entrypoints.
+    """
+
+    pending_token_threshold: Optional[int] = None
+    message_count_threshold: Optional[int] = None
+    idle_timeout_seconds: Optional[int] = None
+    keep_recent_count: Optional[int] = None
+    min_commit_interval_seconds: Optional[int] = None
+
+    model_config = {"extra": "forbid"}
+
+
+class SessionConfigRequest(BaseModel):
+    """Session config container."""
+
+    auto_commit_policy: Optional[AutoCommitPolicyRequest] = None
+
+    model_config = {"extra": "forbid"}
+
+
+class UpdateSessionConfigRequest(BaseModel):
+    """Request model for PATCH /sessions/{id} config updates."""
+
+    config: SessionConfigRequest
+
+    model_config = {"extra": "forbid"}
+
+
 class AddMessageRequest(BaseModel):
     """Request model for adding a message.
 
@@ -103,12 +138,16 @@ class AddMessageRequest(BaseModel):
             raise ValueError("Either 'content' or 'parts' must be provided")
         return self
 
+    model_config = {"extra": "ignore"}
+
 
 class BatchAddMessageRequest(BaseModel):
     """Request model for adding multiple messages in a single request."""
 
     messages: List[AddMessageRequest] = Field(..., max_length=100)
     telemetry: TelemetryRequest = False
+
+    model_config = {"extra": "ignore"}
 
 
 class UsedRequest(BaseModel):
@@ -123,6 +162,7 @@ class CreateSessionRequest(BaseModel):
 
     session_id: Optional[str] = None
     memory_policy: Optional[Dict[str, Any]] = None
+    config: Optional[SessionConfigRequest] = None
     telemetry: TelemetryRequest = False
 
 
@@ -193,17 +233,25 @@ async def create_session(
     """
     service = get_service()
 
+    auto_commit_policy_payload: Optional[Dict[str, Any]] = None
+    if request.config is not None and request.config.auto_commit_policy is not None:
+        auto_commit_policy_payload = request.config.auto_commit_policy.model_dump(
+            exclude_none=True
+        )
+
     async def _create() -> dict[str, Any]:
         await service.initialize_user_directories(_ctx)
         session = await service.sessions.create(
             _ctx,
             request.session_id,
             memory_policy=request.memory_policy,
+            auto_commit_policy=auto_commit_policy_payload,
         )
         return {
             "session_id": session.session_id,
             "uri": session.uri,
             "user": session.user.to_dict(),
+            "config": service.sessions.effective_session_config(session),
         }
 
     execution = await run_operation(
@@ -242,7 +290,43 @@ async def get_session(
     result["uri"] = session.uri
     result["user"] = session.user.to_dict()
     result["pending_tokens"] = int(session.meta.pending_tokens or 0)
+    result["config"] = service.sessions.effective_session_config(session)
     return Response(status="ok", result=result)
+
+
+@router.patch("/{session_id}")
+async def update_session(
+    request: UpdateSessionConfigRequest,
+    session_id: str = Path(..., description="Session ID"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Update a session's config (partial update / merge semantics).
+
+    Only fields present in the request body are changed; omitted fields keep
+    their current values.
+    """
+    from openviking_cli.exceptions import NotFoundError
+
+    service = get_service()
+    try:
+        session = await service.sessions.get(session_id, _ctx, auto_create=False)
+    except NotFoundError:
+        return error_response("NOT_FOUND", f"Session {session_id} not found")
+
+    config_patch: Dict[str, Any] = {}
+    if "auto_commit_policy" in request.config.model_fields_set:
+        if request.config.auto_commit_policy is None:
+            config_patch["auto_commit_policy"] = {}
+        else:
+            config_patch["auto_commit_policy"] = (
+                request.config.auto_commit_policy.model_dump(exclude_none=True)
+            )
+
+    config = await service.sessions.update_session_config(session, config_patch)
+    return Response(
+        status="ok",
+        result={"session_id": session_id, "config": config},
+    )
 
 
 @router.get("/{session_id}/tool-results")
@@ -458,6 +542,12 @@ async def add_message(
                 }
             ]
         )
+        await service.sessions.maybe_schedule_auto_commit(
+            session_id,
+            _ctx,
+            reason_hint="message_write",
+            session=session,
+        )
         return {
             "session_id": session_id,
             "message_count": len(session.messages),
@@ -498,6 +588,12 @@ async def batch_add_messages(
                 }
             )
         msgs = session.add_messages(specs)
+        await service.sessions.maybe_schedule_auto_commit(
+            session_id,
+            _ctx,
+            reason_hint="message_write",
+            session=session,
+        )
         return {
             "session_id": session_id,
             "message_count": len(session.messages),

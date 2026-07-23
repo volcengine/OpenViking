@@ -337,6 +337,68 @@ pub async fn add_messages(
     Ok(())
 }
 
+fn build_auto_commit_policy(
+    pending_token_threshold: Option<u32>,
+    message_count_threshold: Option<u32>,
+    idle_timeout_seconds: Option<u32>,
+    keep_recent_count: Option<u32>,
+    min_commit_interval_seconds: Option<u32>,
+) -> Result<serde_json::Map<String, serde_json::Value>> {
+    let mut policy = serde_json::Map::new();
+    if let Some(value) = pending_token_threshold {
+        policy.insert("pending_token_threshold".to_string(), json!(value));
+    }
+    if let Some(value) = message_count_threshold {
+        policy.insert("message_count_threshold".to_string(), json!(value));
+    }
+    if let Some(value) = idle_timeout_seconds {
+        policy.insert("idle_timeout_seconds".to_string(), json!(value));
+    }
+    if let Some(value) = keep_recent_count {
+        policy.insert("keep_recent_count".to_string(), json!(value));
+    }
+    if let Some(value) = min_commit_interval_seconds {
+        policy.insert("min_commit_interval_seconds".to_string(), json!(value));
+    }
+    if policy.is_empty() {
+        return Err(Error::Client(
+            "at least one auto-commit-policy option must be set \
+             (--pending-tokens, --message-count, --idle-timeout, --keep-recent, --min-interval)"
+                .to_string(),
+        ));
+    }
+    Ok(policy)
+}
+
+pub async fn set_auto_commit_policy(
+    client: &HttpClient,
+    session_id: &str,
+    pending_token_threshold: Option<u32>,
+    message_count_threshold: Option<u32>,
+    idle_timeout_seconds: Option<u32>,
+    keep_recent_count: Option<u32>,
+    min_commit_interval_seconds: Option<u32>,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let policy = build_auto_commit_policy(
+        pending_token_threshold,
+        message_count_threshold,
+        idle_timeout_seconds,
+        keep_recent_count,
+        min_commit_interval_seconds,
+    )?;
+    let path = format!("/api/v1/sessions/{}", url_encode(session_id));
+    let body = json!({
+        "config": {
+            "auto_commit_policy": serde_json::Value::Object(policy),
+        }
+    });
+    let response: serde_json::Value = client.patch(&path, &body, &[]).await?;
+    output_success(&response, output_format, compact);
+    Ok(())
+}
+
 pub async fn commit_session(
     client: &HttpClient,
     session_id: &str,
@@ -414,7 +476,7 @@ fn url_encode(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_messages, render_session_get_for_table};
+    use super::{build_auto_commit_policy, message_body, parse_messages, render_session_get_for_table};
     use crate::error::Error;
     use serde_json::json;
 
@@ -512,6 +574,55 @@ mod tests {
         let result = json!({"status": "ok"});
 
         assert!(render_session_get_for_table(&result).is_none());
+    }
+
+    #[test]
+    fn build_auto_commit_policy_rejects_empty_options() {
+        let result =
+            build_auto_commit_policy(None, None, None, None, None).expect_err("empty should fail");
+
+        match result {
+            Error::Client(message) => {
+                assert!(message.contains("at least one auto-commit-policy option"));
+            }
+            other => panic!("expected client error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_auto_commit_policy_maps_prd_fields() {
+        let policy = build_auto_commit_policy(Some(8000), Some(40), Some(600), Some(10), Some(60))
+            .expect("policy should build");
+
+        assert_eq!(
+            serde_json::Value::Object(policy),
+            json!({
+                "pending_token_threshold": 8000,
+                "message_count_threshold": 40,
+                "idle_timeout_seconds": 600,
+                "keep_recent_count": 10,
+                "min_commit_interval_seconds": 60
+            })
+        );
+    }
+
+    #[test]
+    fn build_auto_commit_policy_includes_only_set_fields() {
+        let policy = build_auto_commit_policy(Some(1000), None, None, None, None)
+            .expect("policy should build");
+
+        assert_eq!(
+            serde_json::Value::Object(policy),
+            json!({"pending_token_threshold": 1000})
+        );
+    }
+
+    #[test]
+    fn message_body_preserves_message_shape_without_auto_commit_policy() {
+        let body = message_body("user", "hello");
+
+        assert_eq!(body, json!({"role": "user", "content": "hello"}));
+        assert!(body.get("auto_commit_policy").is_none());
     }
 
     fn strip_ansi(input: &str) -> String {

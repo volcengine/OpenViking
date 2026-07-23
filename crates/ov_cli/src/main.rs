@@ -1290,6 +1290,37 @@ enum SessionCommands {
         #[arg(value_name = "session-id")]
         session_id: String,
     },
+    /// Manage a session's auto commit policy
+    #[command(name = "auto-commit-policy")]
+    AutoCommitPolicy {
+        #[command(subcommand)]
+        action: SessionAutoCommitPolicyCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum SessionAutoCommitPolicyCommands {
+    /// Update a session's auto commit policy (partial merge)
+    Set {
+        /// Session ID
+        #[arg(value_name = "session-id")]
+        session_id: String,
+        /// Trigger auto commit when pending tokens exceed this threshold (max 50000).
+        #[arg(long = "pending-tokens", value_name = "tokens")]
+        pending_token_threshold: Option<u32>,
+        /// Trigger auto commit when uncommitted messages exceed this count (max 500).
+        #[arg(long = "message-count", value_name = "count")]
+        message_count_threshold: Option<u32>,
+        /// Force auto commit after this many idle seconds (max 604800).
+        #[arg(long = "idle-timeout", value_name = "seconds")]
+        idle_timeout_seconds: Option<u32>,
+        /// Keep this many recent live messages after a threshold commit (max 500).
+        #[arg(long = "keep-recent", value_name = "count")]
+        keep_recent_count: Option<u32>,
+        /// Minimum seconds between two auto commits (max 604800).
+        #[arg(long = "min-interval", value_name = "seconds")]
+        min_commit_interval_seconds: Option<u32>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2282,6 +2313,7 @@ fn is_session_subcommand(token: &str) -> bool {
             | "add-message"
             | "add-messages"
             | "commit"
+            | "auto-commit-policy"
     )
 }
 
@@ -3723,6 +3755,8 @@ mod tests {
             &["ov", "session", "add-message"],
             &["ov", "session", "add-messages"],
             &["ov", "session", "commit"],
+            &["ov", "session", "auto-commit-policy"],
+            &["ov", "session", "auto-commit-policy", "set"],
             &["ov", "privacy", "categories"],
             &["ov", "privacy", "list"],
             &["ov", "privacy", "get"],

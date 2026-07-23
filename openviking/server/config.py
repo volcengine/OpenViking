@@ -22,6 +22,7 @@ from openviking_cli.utils.config.consts import (
     OPENVIKING_CONFIG_ENV,
     SYSTEM_CONFIG_DIR,
 )
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 
 logger = get_logger(__name__)
 
@@ -392,6 +393,11 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
             "To maintain the previous behavior, set encryption.api_key_hashing.enabled=true. "
             "See documentation for more details."
         )
+
+    try:
+        OpenVikingConfigSingleton.initialize(config_path=str(path))
+    except ValueError as e:
+        raise ValueError(f"Invalid OpenViking config in {path}:\n{e}") from e
 
     try:
         config = ServerConfig.model_validate(server_data)

@@ -10,6 +10,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional
 from uuid import uuid4
 
@@ -19,6 +20,7 @@ from openviking.message import Message, Part
 from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext, Role
+from openviking.session.auto_commit_policy import AutoCommitPolicy
 from openviking.session.memory.constants import EXECUTION_MEMORY_TYPES
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.session.tool_result_store import (
@@ -37,7 +39,7 @@ from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.model_retry import is_retryable_api_error, retry_async
 from openviking.utils.time_utils import get_current_timestamp
 from openviking.utils.token_estimation import estimate_text_tokens
-from openviking_cli.exceptions import FailedPreconditionError
+from openviking_cli.exceptions import FailedPreconditionError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger, run_async
 from openviking_cli.utils.config import get_openviking_config
@@ -56,6 +58,12 @@ _PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS = 1800.0
 _MEMORY_EXTRACTION_MAX_RETRIES = 3
 _MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS = 1.0
 _MEMORY_EXTRACTION_RETRY_MAX_DELAY_SECONDS = 8.0
+_COMMIT_BOUNDARY_META_LOCK_TIMEOUT_SECONDS = 30.0
+_PHASE2_EXTRACTION_DONE_MARKER = ".extraction_done.json"
+
+
+class _CommitMetaMergePending(RuntimeError):
+    """Phase 2 side effects finished, but commit meta still needs retry."""
 
 
 def _wm_debug(msg: str) -> None:
@@ -273,6 +281,11 @@ class SessionMeta:
     # process restarts.
     keep_recent_count: int = 0
     memory_policy: Optional[Dict[str, Any]] = None
+    auto_commit_policy: Optional[Dict[str, Any]] = None
+    last_message_at: str = ""
+    auto_commit_last_error: str = ""
+    auto_commit_last_error_at: str = ""
+    last_auto_commit_at: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         data = {
@@ -290,6 +303,13 @@ class SessionMeta:
             "pending_tokens": self.pending_tokens,
             "keep_recent_count": self.keep_recent_count,
             "memory_policy": dict(self.memory_policy) if self.memory_policy is not None else None,
+            "auto_commit_policy": (
+                dict(self.auto_commit_policy) if self.auto_commit_policy is not None else None
+            ),
+            "last_message_at": self.last_message_at,
+            "auto_commit_last_error": self.auto_commit_last_error,
+            "auto_commit_last_error_at": self.auto_commit_last_error_at,
+            "last_auto_commit_at": self.last_auto_commit_at,
         }
         if self.total_message_count is not None:
             data["total_message_count"] = self.total_message_count
@@ -333,6 +353,11 @@ class SessionMeta:
             pending_tokens=max(0, int(data.get("pending_tokens", 0) or 0)),
             keep_recent_count=max(0, int(data.get("keep_recent_count", 0) or 0)),
             memory_policy=data.get("memory_policy"),
+            auto_commit_policy=data.get("auto_commit_policy"),
+            last_message_at=data.get("last_message_at", ""),
+            auto_commit_last_error=data.get("auto_commit_last_error", ""),
+            auto_commit_last_error_at=data.get("auto_commit_last_error_at", ""),
+            last_auto_commit_at=data.get("last_auto_commit_at", ""),
         )
 
 
@@ -403,31 +428,17 @@ class Session:
             return
 
         try:
-            content = await self._viking_fs.read_file(
-                f"{self._session_uri}/messages.jsonl", ctx=self.ctx
-            )
-            self._messages = [
-                Message.from_dict(json.loads(line))
-                for line in content.strip().split("\n")
-                if line.strip()
-            ]
+            self._messages = await self._read_live_messages()
             logger.info(f"Session loaded: {self.session_id} ({len(self._messages)} messages)")
         except (FileNotFoundError, Exception):
             logger.debug(f"Session {self.session_id} not found, starting fresh")
 
         # Restore compression_index (scan history directory)
-        try:
-            history_items = await self._viking_fs.ls(f"{self._session_uri}/history", ctx=self.ctx)
-            archives = [
-                item["name"] for item in history_items if item["name"].startswith("archive_")
-            ]
-            if archives:
-                max_index = max(int(a.split("_")[1]) for a in archives)
-                self._compression.compression_index = max_index
-                self._stats.compression_count = len(archives)
-                logger.debug(f"Restored compression_index: {max_index}")
-        except Exception:
-            pass
+        max_index, archive_count = await self._read_archive_history_state()
+        if max_index:
+            self._compression.compression_index = max_index
+            self._stats.compression_count = archive_count
+            logger.debug(f"Restored compression_index: {max_index}")
 
         # Load .meta.json
         try:
@@ -445,6 +456,22 @@ class Session:
             self._meta.created_by_account_id = self.ctx.account_id
         if not self._meta.created_by_user_id:
             self._meta.created_by_user_id = self.ctx.user.user_id
+        # Always reconcile live message counters from messages.jsonl so restart
+        # recovery does not trust stale .meta.json values.
+        self._meta.message_count = len(self._messages)
+        if self._meta.total_message_count is not None:
+            self._meta.total_message_count = max(
+                int(self._meta.total_message_count or 0),
+                self._meta.commit_count + len(self._messages),
+            )
+        # Auto-commit remains disabled when no policy is stored. When present,
+        # normalize the stored policy so missing fields are filled and bounds are
+        # clamped. The policy's keep_recent_count is a commit-time reservation
+        # only and is intentionally NOT mirrored onto meta.keep_recent_count.
+        if self._meta.auto_commit_policy is not None:
+            self._meta.auto_commit_policy = AutoCommitPolicy.from_dict(
+                self._meta.auto_commit_policy
+            ).to_dict()
         # WM v2: always rebuild pending_tokens from current messages so the
         # counter stays consistent across restarts and is also backfilled for
         # legacy sessions whose .meta.json predates these fields. O(n) once,
@@ -452,6 +479,45 @@ class Session:
         self._rebuild_pending_tokens()
 
         self._loaded = True
+
+    async def _read_live_messages(self) -> List[Message]:
+        """Read current live messages from persisted JSONL storage."""
+        try:
+            content = await self._viking_fs.read_file(
+                f"{self._session_uri}/messages.jsonl", ctx=self.ctx
+            )
+        except (FileNotFoundError, NotFoundError):
+            return []
+        return [
+            Message.from_dict(json.loads(line))
+            for line in content.strip().split("\n")
+            if line.strip()
+        ]
+
+    async def _read_archive_history_state(self) -> tuple[int, int]:
+        """Return the highest persisted archive index and archive count."""
+        try:
+            history_items = await self._viking_fs.ls(f"{self._session_uri}/history", ctx=self.ctx)
+        except Exception:
+            return 0, 0
+
+        max_index = 0
+        archive_count = 0
+        for item in history_items:
+            name = item.get("name", "")
+            if not name.startswith("archive_"):
+                continue
+            archive_count += 1
+            try:
+                max_index = max(max_index, int(name.split("_", 1)[1]))
+            except (IndexError, ValueError):
+                continue
+        return max_index, archive_count
+
+    async def _read_latest_archive_index(self) -> int:
+        """Return the highest persisted archive index for this session."""
+        max_index, _archive_count = await self._read_archive_history_state()
+        return max_index
 
     def _rebuild_pending_tokens(self) -> None:
         """Recompute ``pending_tokens`` from the current message list.
@@ -903,12 +969,36 @@ class Session:
                 pushed_out = self._messages[-(keep + 1)]
                 self._meta.pending_tokens += int(pushed_out.estimated_tokens or 0)
 
-        self._append_messages_to_jsonl_batch(messages)
-
         self._meta.message_count = len(self._messages)
         if self._meta.total_message_count is not None:
             self._meta.total_message_count += len(messages)
-        self._save_meta_sync()
+        if messages:
+            self._meta.last_message_at = get_current_timestamp()
+
+        use_session_lock = self._should_use_auto_commit_append_lock()
+        self._append_messages_to_jsonl_batch(
+            messages,
+            use_session_lock=use_session_lock,
+            save_meta_under_lock=use_session_lock,
+        )
+        if not use_session_lock:
+            self._save_meta_sync()
+
+    def _should_use_auto_commit_append_lock(self) -> bool:
+        """Return True when the latest persisted session config uses auto commit."""
+        if self._meta.auto_commit_policy is not None:
+            return True
+        if not self._viking_fs:
+            return False
+        try:
+            latest_meta = run_async(self._read_latest_meta_or_current())
+        except Exception:
+            return False
+        if latest_meta.auto_commit_policy is None:
+            return False
+        self._meta.auto_commit_policy = latest_meta.auto_commit_policy
+        self._meta.keep_recent_count = latest_meta.keep_recent_count
+        return True
 
     def add_messages(
         self,
@@ -1059,6 +1149,8 @@ class Session:
         keep_recent_count: int = 0,
         *,
         memory_policy: Optional[Dict[str, Any]] = None,
+        persist_keep_recent_count: bool = True,
+        record_auto_commit_success: bool = False,
     ) -> Dict[str, Any]:
         """Archive immediately and enqueue restart-safe Phase 2 processing.
 
@@ -1074,6 +1166,12 @@ class Session:
                 behavior of archiving everything. The plugin's afterTurn path
                 typically passes its configured value (default 10); the compact
                 path passes ``0``.
+            persist_keep_recent_count: When ``True`` (default), ``keep_recent_count``
+                is remembered in meta for subsequent add_message() accounting. The
+                idle full-commit path passes ``False`` with ``keep_recent_count=0``
+                so a one-off full archive does not wipe the stored keep preference.
+            record_auto_commit_success: When ``True``, persist auto-commit success
+                status in the same meta update as the archive boundary.
 
         Returns a task_id for tracking Phase 2 progress.
         """
@@ -1084,6 +1182,11 @@ class Session:
 
         trace_id = tracer.get_trace_id()
         keep_recent_count = max(0, int(keep_recent_count or 0))
+        stored_keep_recent_count = (
+            keep_recent_count
+            if persist_keep_recent_count
+            else max(0, int(self._meta.keep_recent_count or 0))
+        )
         effective_policy = MemoryPolicy.from_dict(
             memory_policy if memory_policy is not None else self._meta.memory_policy
         )
@@ -1095,31 +1198,28 @@ class Session:
         )
 
         # ===== Phase 1: Snapshot + clear (path-lock protected) =====
-        # Fast pre-check: skip lock entirely if no messages (common case avoids
-        # unnecessary filesystem lock acquisition).
-        if not self._messages:
-            self._meta.pending_tokens = 0
-            self._meta.keep_recent_count = keep_recent_count
-            await self._save_meta()
-            get_current_telemetry().set("memory.extracted", 0)
-            return {
-                "session_id": self.session_id,
-                "status": "skipped",
-                "task_id": None,
-                "archive_uri": None,
-                "archived": False,
-                "reason": "no_messages",
-                "trace_id": trace_id,
-            }
-
         # Use filesystem-based distributed lock so this works across workers/processes.
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        async with LockContext(get_lock_manager(), [session_path], lock_mode="exact"):
+        async with LockContext(
+            get_lock_manager(),
+            [session_path],
+            lock_mode="exact",
+        ):
+            self._messages = await self._read_live_messages()
+            self._meta = await self._read_latest_meta_or_current()
+            self._meta.message_count = len(self._messages)
+            self._compression.compression_index = max(
+                self._compression.compression_index,
+                int(self._meta.commit_count or 0),
+                await self._read_latest_archive_index(),
+            )
+            self._rebuild_pending_tokens()
+
             # Authoritative check under lock: handles the race where two concurrent
             # callers both passed the pre-check but only the first should archive.
             if not self._messages:
                 self._meta.pending_tokens = 0
-                self._meta.keep_recent_count = keep_recent_count
+                self._meta.keep_recent_count = stored_keep_recent_count
                 await self._save_meta()
                 get_current_telemetry().set("memory.extracted", 0)
                 return {
@@ -1139,7 +1239,7 @@ class Session:
             total = len(self._messages)
             if keep_recent_count > 0 and total <= keep_recent_count:
                 self._meta.pending_tokens = 0
-                self._meta.keep_recent_count = keep_recent_count
+                self._meta.keep_recent_count = stored_keep_recent_count
                 self._meta.message_count = total
                 await self._save_meta()
                 get_current_telemetry().set("memory.extracted", 0)
@@ -1154,9 +1254,8 @@ class Session:
                 }
 
             self._compression.compression_index += 1
-            archive_uri = (
-                f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
-            )
+            archive_index = self._compression.compression_index
+            archive_uri = f"{self._session_uri}/history/archive_{archive_index:03d}"
             if keep_recent_count > 0:
                 split_idx = total - keep_recent_count
                 messages_to_archive = self._messages[:split_idx]
@@ -1176,30 +1275,36 @@ class Session:
                         ctx=self.ctx,
                     )
                 self._messages = retained_messages
+                retained_message_count = len(retained_messages)
                 await self._write_to_agfs_async(messages=self._messages)
             except Exception as e:
                 logger.error(f"[commit] Failed to persist archive/live messages: {e}")
                 self._messages = list(messages_to_archive) + list(retained_messages)
                 self._compression.compression_index -= 1
                 raise
+
         # Lock released; live session now contains only the retained tail.
 
-        # WM v2: live session is now the retained tail; pending_tokens resets
-        # because anything that was pending has been archived.
-        self._meta.message_count = len(self._messages)
-        self._meta.pending_tokens = 0
-        self._meta.keep_recent_count = keep_recent_count
-        self._meta.commit_count = max(
-            self._meta.commit_count,
-            self._compression.compression_index,
-        )
-        self._meta.last_commit_at = get_current_timestamp()
-        await self._save_meta()
+        try:
+            await self._merge_and_save_commit_boundary_meta(
+                archive_index=archive_index,
+                retained_message_count=retained_message_count,
+                stored_keep_recent_count=stored_keep_recent_count,
+                record_auto_commit_success=record_auto_commit_success,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[commit] Failed to persist commit boundary meta for %s; "
+                "continuing to enqueue Phase 2 for %s: %s",
+                self.session_id,
+                archive_uri,
+                exc,
+            )
 
         self._compression.original_count += len(messages_to_archive)
         logger.info(
             f"Archived: {len(messages_to_archive)} messages → "
-            f"history/archive_{self._compression.compression_index:03d}/"
+            f"history/archive_{archive_index:03d}/"
         )
 
         # Snapshot mutable state for Phase 2.
@@ -1214,6 +1319,9 @@ class Session:
             actor_peer_id=self.ctx.actor_peer_id,
             memory_policy=effective_memory_policy,
             usage_uris=list(dict.fromkeys(u.uri for u in usage_snapshot if u.uri)),
+            retained_message_count=retained_message_count,
+            stored_keep_recent_count=stored_keep_recent_count,
+            record_auto_commit_success=record_auto_commit_success,
         )
         await get_queue_manager().enqueue(QueueManager.SESSION_COMMIT, queue_msg.to_dict())
         await get_task_tracker().create(
@@ -1300,6 +1408,9 @@ class Session:
             first_message_id=archive_messages[0].id,
             last_message_id=archive_messages[-1].id,
             memory_policy=msg.memory_policy,
+            retained_message_count=msg.retained_message_count,
+            stored_keep_recent_count=msg.stored_keep_recent_count,
+            record_auto_commit_success=msg.record_auto_commit_success,
         )
 
     async def _run_usage_reporting(
@@ -1334,6 +1445,9 @@ class Session:
         first_message_id: str,
         last_message_id: str,
         memory_policy: Optional[Dict[str, Any]],
+        retained_message_count: Optional[int] = None,
+        stored_keep_recent_count: Optional[int] = None,
+        record_auto_commit_success: bool = False,
     ) -> None:
         """Phase 2: Extract memories, write relations, enqueue — runs in background."""
         from openviking.service.task_tracker import get_task_tracker
@@ -1359,6 +1473,21 @@ class Session:
                 account_id=self.ctx.account_id,
                 user_id=self.ctx.user.user_id,
             )
+            extraction_done = await self._read_extraction_done_file(archive_uri)
+            if extraction_done:
+                await self._complete_phase2_from_extraction_done(
+                    task_id=task_id,
+                    archive_uri=archive_uri,
+                    extraction_done=extraction_done,
+                    archive_index=archive_index,
+                    first_message_id=first_message_id,
+                    last_message_id=last_message_id,
+                    retained_message_count=retained_message_count,
+                    stored_keep_recent_count=stored_keep_recent_count,
+                    record_auto_commit_success=record_auto_commit_success,
+                )
+                return
+
             request_wait_tracker.register_request(telemetry.telemetry_id)
             register_telemetry(telemetry)
             try:
@@ -1660,40 +1789,50 @@ class Session:
 
             # Phase 2 complete — update meta with telemetry and commit info
             snapshot = telemetry.finish("ok")
-            await self._merge_and_save_commit_meta(
-                archive_index=archive_index,
+            result_payload = self._build_phase2_result_payload(
+                archive_uri=archive_uri,
                 memories_extracted=memories_extracted,
-                telemetry_snapshot=snapshot,
+                extracted_skill_results=extracted_skill_results,
+                usage_events_extracted=usage_events_extracted,
+                active_count_updated=active_count_updated,
+                memory_diff_uri=memory_diff_uri,
             )
+            await self._write_extraction_done_file(
+                archive_uri,
+                first_message_id=first_message_id,
+                last_message_id=last_message_id,
+                memories_extracted=memories_extracted,
+                telemetry_summary=snapshot.summary if snapshot else {},
+                result_payload=result_payload,
+            )
+            try:
+                await self._merge_and_save_commit_meta(
+                    archive_index=archive_index,
+                    memories_extracted=memories_extracted,
+                    telemetry_snapshot=snapshot,
+                    retained_message_count=retained_message_count,
+                    stored_keep_recent_count=stored_keep_recent_count,
+                    record_auto_commit_success=record_auto_commit_success,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[commit] Failed to merge final commit meta for %s; "
+                    "leaving queue item pending for metadata retry: %s",
+                    archive_uri,
+                    exc,
+                )
+                raise _CommitMetaMergePending("commit meta merge pending") from exc
 
             # Write .done last so a recovered queue item can skip completed work.
             await self._write_done_file(archive_uri, first_message_id, last_message_id)
-
-            result_payload = {
-                "session_id": self.session_id,
-                "archive_uri": archive_uri,
-                "memories_extracted": memories_extracted,
-                "session_skills_extracted": len(extracted_skill_results),
-                "session_skill_uris": [
-                    item.get("uri") or item.get("root_uri")
-                    for item in extracted_skill_results
-                    if isinstance(item, dict) and (item.get("uri") or item.get("root_uri"))
-                ],
-                "usage_events_extracted": usage_events_extracted,
-                "active_count_updated": active_count_updated,
-                "token_usage": {
-                    "llm": dict(self._meta.llm_token_usage),
-                    "embedding": dict(self._meta.embedding_token_usage),
-                    "total": {
-                        "total_tokens": self._meta.llm_token_usage["total_tokens"]
-                        + self._meta.embedding_token_usage["total_tokens"],
-                        "cached_tokens": self._meta.llm_token_usage["cached_tokens"],
-                        "reasoning_tokens": self._meta.llm_token_usage["reasoning_tokens"],
-                    },
-                },
-            }
-            if memory_diff_uri:
-                result_payload["memory_diff_uri"] = memory_diff_uri
+            result_payload = self._build_phase2_result_payload(
+                archive_uri=archive_uri,
+                memories_extracted=memories_extracted,
+                extracted_skill_results=extracted_skill_results,
+                usage_events_extracted=usage_events_extracted,
+                active_count_updated=active_count_updated,
+                memory_diff_uri=memory_diff_uri,
+            )
 
             await tracker.complete(
                 task_id,
@@ -1703,6 +1842,14 @@ class Session:
             )
             logger.info(f"Session {self.session_id} memory extraction completed")
         except asyncio.CancelledError:
+            raise
+        except _CommitMetaMergePending:
+            await tracker.update_stage(
+                task_id,
+                "meta_pending",
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
+            )
             raise
         except Exception as e:
             await self._write_failed_marker(
@@ -1736,6 +1883,150 @@ class Session:
             content=content,
             ctx=self.ctx,
         )
+
+    def _build_phase2_result_payload(
+        self,
+        *,
+        archive_uri: str,
+        memories_extracted: Dict[str, int],
+        extracted_skill_results: list[dict],
+        usage_events_extracted: int,
+        active_count_updated: int,
+        memory_diff_uri: Optional[str],
+    ) -> Dict[str, Any]:
+        result_payload: Dict[str, Any] = {
+            "session_id": self.session_id,
+            "archive_uri": archive_uri,
+            "memories_extracted": memories_extracted,
+            "session_skills_extracted": len(extracted_skill_results),
+            "session_skill_uris": [
+                item.get("uri") or item.get("root_uri")
+                for item in extracted_skill_results
+                if isinstance(item, dict) and (item.get("uri") or item.get("root_uri"))
+            ],
+            "usage_events_extracted": usage_events_extracted,
+            "active_count_updated": active_count_updated,
+            "token_usage": {
+                "llm": dict(self._meta.llm_token_usage),
+                "embedding": dict(self._meta.embedding_token_usage),
+                "total": {
+                    "total_tokens": self._meta.llm_token_usage["total_tokens"]
+                    + self._meta.embedding_token_usage["total_tokens"],
+                    "cached_tokens": self._meta.llm_token_usage["cached_tokens"],
+                    "reasoning_tokens": self._meta.llm_token_usage["reasoning_tokens"],
+                },
+            },
+        }
+        if memory_diff_uri:
+            result_payload["memory_diff_uri"] = memory_diff_uri
+        return result_payload
+
+    async def _write_extraction_done_file(
+        self,
+        archive_uri: str,
+        *,
+        first_message_id: str,
+        last_message_id: str,
+        memories_extracted: Dict[str, int],
+        telemetry_summary: Dict[str, Any],
+        result_payload: Dict[str, Any],
+    ) -> None:
+        """Write Phase 2 side-effect marker before final metadata merge."""
+        if not self._viking_fs:
+            return
+        content = json.dumps(
+            {
+                "starting_message_id": first_message_id,
+                "ending_message_id": last_message_id,
+                "memories_extracted": memories_extracted,
+                "telemetry_summary": telemetry_summary,
+                "result_payload": result_payload,
+            },
+            ensure_ascii=False,
+        )
+        await self._viking_fs.write_file(
+            uri=f"{archive_uri}/{_PHASE2_EXTRACTION_DONE_MARKER}",
+            content=content,
+            ctx=self.ctx,
+        )
+
+    async def _read_extraction_done_file(self, archive_uri: str) -> Optional[Dict[str, Any]]:
+        if not self._viking_fs:
+            return None
+        try:
+            content = await self._viking_fs.read_file(
+                f"{archive_uri}/{_PHASE2_EXTRACTION_DONE_MARKER}",
+                ctx=self.ctx,
+            )
+            payload = json.loads(content)
+        except Exception:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    async def _complete_phase2_from_extraction_done(
+        self,
+        *,
+        task_id: str,
+        archive_uri: str,
+        extraction_done: Dict[str, Any],
+        archive_index: int,
+        first_message_id: str,
+        last_message_id: str,
+        retained_message_count: Optional[int],
+        stored_keep_recent_count: Optional[int],
+        record_auto_commit_success: bool,
+    ) -> None:
+        """Retry only final metadata completion after Phase 2 side effects succeeded."""
+        from openviking.service.task_tracker import get_task_tracker
+
+        memories_extracted = dict(extraction_done.get("memories_extracted") or {})
+        telemetry_snapshot = SimpleNamespace(
+            summary=dict(extraction_done.get("telemetry_summary") or {})
+        )
+        try:
+            await self._merge_and_save_commit_meta(
+                archive_index=archive_index,
+                memories_extracted=memories_extracted,
+                telemetry_snapshot=telemetry_snapshot,
+                retained_message_count=retained_message_count,
+                stored_keep_recent_count=stored_keep_recent_count,
+                record_auto_commit_success=record_auto_commit_success,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[commit] Failed to retry final commit meta for %s; "
+                "leaving queue item pending: %s",
+                archive_uri,
+                exc,
+            )
+            raise _CommitMetaMergePending("commit meta merge pending") from exc
+
+        done_first = str(extraction_done.get("starting_message_id") or first_message_id)
+        done_last = str(extraction_done.get("ending_message_id") or last_message_id)
+        await self._write_done_file(archive_uri, done_first, done_last)
+
+        result_payload = dict(extraction_done.get("result_payload") or {})
+        result_payload["session_id"] = self.session_id
+        result_payload["archive_uri"] = archive_uri
+        result_payload["memories_extracted"] = memories_extracted
+        result_payload["token_usage"] = {
+            "llm": dict(self._meta.llm_token_usage),
+            "embedding": dict(self._meta.embedding_token_usage),
+            "total": {
+                "total_tokens": self._meta.llm_token_usage["total_tokens"]
+                + self._meta.embedding_token_usage["total_tokens"],
+                "cached_tokens": self._meta.llm_token_usage["cached_tokens"],
+                "reasoning_tokens": self._meta.llm_token_usage["reasoning_tokens"],
+            },
+        }
+        tracker = get_task_tracker()
+        await tracker.complete(
+            task_id,
+            result_payload,
+            account_id=self.ctx.account_id,
+            user_id=self.ctx.user.user_id,
+        )
+        logger.info(f"Session {self.session_id} memory extraction metadata retry completed")
 
     async def _write_failed_marker(
         self,
@@ -2112,8 +2403,66 @@ class Session:
         archive_index: int,
         memories_extracted: Dict[str, int],
         telemetry_snapshot: Any,
+        *,
+        retained_message_count: Optional[int] = None,
+        stored_keep_recent_count: Optional[int] = None,
+        record_auto_commit_success: bool = False,
     ) -> None:
         """Reload and merge latest meta state before persisting commit results."""
+        from openviking.storage.transaction import LockContext, get_lock_manager
+
+        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
+        async with LockContext(
+            get_lock_manager(),
+            [session_path],
+            lock_mode="exact",
+            timeout=_COMMIT_BOUNDARY_META_LOCK_TIMEOUT_SECONDS,
+        ):
+            live_message_count = await self._read_live_message_count()
+            latest_meta = await self._read_latest_meta_or_current()
+            latest_messages = await self._read_live_messages()
+
+            if telemetry_snapshot:
+                llm = telemetry_snapshot.summary.get("tokens", {}).get("llm", {})
+                latest_meta.llm_token_usage["prompt_tokens"] += llm.get("input", 0)
+                latest_meta.llm_token_usage["completion_tokens"] += llm.get("output", 0)
+                latest_meta.llm_token_usage["total_tokens"] += llm.get("total", 0)
+                latest_meta.llm_token_usage["cached_tokens"] += llm.get("prompt_cached", 0)
+                latest_meta.llm_token_usage["reasoning_tokens"] += llm.get(
+                    "completion_reasoning", 0
+                )
+                embedding = telemetry_snapshot.summary.get("tokens", {}).get("embedding", {})
+                latest_meta.embedding_token_usage["total_tokens"] += embedding.get("total", 0)
+
+            latest_meta.commit_count = max(latest_meta.commit_count, archive_index)
+            for cat, count in memories_extracted.items():
+                latest_meta.memories_extracted[cat] = (
+                    latest_meta.memories_extracted.get(cat, 0) + count
+                )
+                latest_meta.memories_extracted["total"] = (
+                    latest_meta.memories_extracted.get("total", 0) + count
+                )
+            now = get_current_timestamp()
+            latest_meta.last_commit_at = now
+            if stored_keep_recent_count is not None:
+                latest_meta.keep_recent_count = max(0, int(stored_keep_recent_count or 0))
+            if record_auto_commit_success:
+                latest_meta.auto_commit_last_error = ""
+                latest_meta.auto_commit_last_error_at = ""
+                latest_meta.last_auto_commit_at = now
+            self._meta = latest_meta
+            self._messages = latest_messages
+            self._meta.message_count = max(live_message_count, len(latest_messages))
+            if (
+                retained_message_count is not None
+                and self._meta.message_count <= max(0, int(retained_message_count or 0))
+            ):
+                self._meta.pending_tokens = 0
+            else:
+                self._rebuild_pending_tokens()
+            await self._save_meta()
+
+    async def _read_latest_meta_or_current(self) -> SessionMeta:
         latest_meta = self._meta
         try:
             meta_content = await self._viking_fs.read_file(
@@ -2123,27 +2472,48 @@ class Session:
             latest_meta = SessionMeta.from_dict(json.loads(meta_content))
         except Exception:
             latest_meta = self._meta
+        return latest_meta
 
-        if telemetry_snapshot:
-            llm = telemetry_snapshot.summary.get("tokens", {}).get("llm", {})
-            latest_meta.llm_token_usage["prompt_tokens"] += llm.get("input", 0)
-            latest_meta.llm_token_usage["completion_tokens"] += llm.get("output", 0)
-            latest_meta.llm_token_usage["total_tokens"] += llm.get("total", 0)
-            latest_meta.llm_token_usage["cached_tokens"] += llm.get("prompt_cached", 0)
-            latest_meta.llm_token_usage["reasoning_tokens"] += llm.get("completion_reasoning", 0)
-            embedding = telemetry_snapshot.summary.get("tokens", {}).get("embedding", {})
-            latest_meta.embedding_token_usage["total_tokens"] += embedding.get("total", 0)
+    async def _merge_and_save_commit_boundary_meta(
+        self,
+        *,
+        archive_index: int,
+        retained_message_count: int,
+        stored_keep_recent_count: int,
+        record_auto_commit_success: bool,
+    ) -> None:
+        """Persist Phase 1 commit metadata without clobbering newer message meta."""
+        from openviking.storage.transaction import LockContext, get_lock_manager
 
-        latest_meta.commit_count = max(latest_meta.commit_count, archive_index)
-        for cat, count in memories_extracted.items():
-            latest_meta.memories_extracted[cat] = latest_meta.memories_extracted.get(cat, 0) + count
-            latest_meta.memories_extracted["total"] = (
-                latest_meta.memories_extracted.get("total", 0) + count
-            )
-        latest_meta.last_commit_at = get_current_timestamp()
-        latest_meta.message_count = await self._read_live_message_count()
-        self._meta = latest_meta
-        await self._save_meta()
+        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
+        async with LockContext(
+            get_lock_manager(),
+            [session_path],
+            lock_mode="exact",
+            timeout=_COMMIT_BOUNDARY_META_LOCK_TIMEOUT_SECONDS,
+        ):
+            latest_messages = await self._read_live_messages()
+            latest_meta = await self._read_latest_meta_or_current()
+            live_message_count = len(latest_messages)
+
+            if live_message_count <= retained_message_count:
+                latest_meta.message_count = retained_message_count
+                latest_meta.pending_tokens = 0
+            else:
+                latest_meta.message_count = live_message_count
+
+            latest_meta.keep_recent_count = stored_keep_recent_count
+            latest_meta.commit_count = max(latest_meta.commit_count, archive_index)
+            latest_meta.last_commit_at = get_current_timestamp()
+            if record_auto_commit_success:
+                latest_meta.auto_commit_last_error = ""
+                latest_meta.auto_commit_last_error_at = ""
+                latest_meta.last_auto_commit_at = get_current_timestamp()
+            self._meta = latest_meta
+            self._messages = latest_messages
+            if live_message_count > retained_message_count:
+                self._rebuild_pending_tokens()
+            await self._save_meta()
 
     async def _read_live_message_count(self) -> int:
         """Count current live session messages from persisted storage."""
@@ -2157,6 +2527,32 @@ class Session:
         except Exception:
             return len(self._messages)
         return len([line for line in content.strip().split("\n") if line.strip()])
+
+    async def _save_auto_append_meta_from_authoritative_state(
+        self,
+        appended_count: int,
+        last_message_at: str,
+    ) -> None:
+        """Merge auto-append metadata from the lock-protected persisted state."""
+        latest_meta = await self._read_latest_meta_or_current()
+        latest_messages = await self._read_live_messages()
+
+        self._meta = latest_meta
+        self._messages = latest_messages
+        self._meta.message_count = len(latest_messages)
+        if self._meta.total_message_count is not None:
+            try:
+                latest_total = int(self._meta.total_message_count or 0)
+            except (TypeError, ValueError):
+                latest_total = len(latest_messages) - appended_count
+            self._meta.total_message_count = max(
+                latest_total + appended_count,
+                len(latest_messages),
+            )
+        if last_message_at:
+            self._meta.last_message_at = last_message_at
+        self._rebuild_pending_tokens()
+        await self._save_meta()
 
     def _extract_abstract_from_summary(self, summary: str) -> str:
         """Extract one-sentence overview from structured summary."""
@@ -3214,18 +3610,64 @@ class Session:
             ctx=self.ctx,
         )
 
-    def _append_messages_to_jsonl_batch(self, messages: List[Message]) -> None:
+    def _append_messages_to_jsonl_batch(
+        self,
+        messages: List[Message],
+        *,
+        use_session_lock: bool = False,
+        save_meta_under_lock: bool = False,
+    ) -> None:
         """Append multiple messages to messages.jsonl in a single write."""
         if not self._viking_fs:
             return
-        batch_content = "".join(msg.to_jsonl() + "\n" for msg in messages)
         run_async(
-            self._viking_fs.append_file(
+            self._append_messages_to_jsonl_batch_async(
+                messages,
+                use_session_lock=use_session_lock,
+                save_meta_under_lock=save_meta_under_lock,
+            )
+        )
+
+    async def _append_messages_to_jsonl_batch_async(
+        self,
+        messages: List[Message],
+        *,
+        use_session_lock: bool = False,
+        save_meta_under_lock: bool = False,
+    ) -> None:
+        """Append messages, optionally under the lock used by auto-commit live rewrites."""
+        if not self._viking_fs:
+            return
+
+        batch_content = "".join(msg.to_jsonl() + "\n" for msg in messages)
+        if not use_session_lock:
+            await self._viking_fs.append_file(
                 f"{self._session_uri}/messages.jsonl",
                 batch_content,
                 ctx=self.ctx,
             )
-        )
+            if save_meta_under_lock:
+                await self._save_meta()
+            return
+
+        from openviking.storage.transaction import LockContext, get_lock_manager
+
+        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
+        async with LockContext(
+            get_lock_manager(),
+            [session_path],
+            lock_mode="exact",
+        ):
+            await self._viking_fs.append_file(
+                f"{self._session_uri}/messages.jsonl",
+                batch_content,
+                ctx=self.ctx,
+            )
+            if save_meta_under_lock:
+                await self._save_auto_append_meta_from_authoritative_state(
+                    len(messages),
+                    self._meta.last_message_at,
+                )
 
     def _generate_abstract(self) -> str:
         """Generate one-sentence summary for session."""

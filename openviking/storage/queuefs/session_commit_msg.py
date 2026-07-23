@@ -16,6 +16,9 @@ class SessionCommitMsg:
     actor_peer_id: Optional[str] = None
     memory_policy: Dict[str, Any] = field(default_factory=dict)
     usage_uris: List[str] = field(default_factory=list)
+    retained_message_count: Optional[int] = None
+    stored_keep_recent_count: Optional[int] = None
+    record_auto_commit_success: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

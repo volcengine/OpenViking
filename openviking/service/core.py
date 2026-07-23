@@ -22,6 +22,7 @@ from openviking.service.relation_service import RelationService
 from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
 from openviking.service.resource_service import ResourceService
 from openviking.service.search_service import SearchService
+from openviking.service.session_auto_commit import SessionAutoCommitScheduler
 from openviking.service.session_service import SessionService
 from openviking.service.task_tracker import set_task_tracker
 from openviking.session import create_session_compressor
@@ -44,6 +45,7 @@ from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import OPENVIKING_ENABLE_RECORDER_ENV, get_openviking_config
 from openviking_cli.utils.config.git_config import GitConfig
+from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
 from openviking_cli.utils.config.open_viking_config import initialize_openviking_config
 from openviking_cli.utils.config.storage_config import StorageConfig
 
@@ -91,6 +93,7 @@ class OpenVikingService:
         self._lock_manager: Optional[LockManager] = None
         self._directory_initializer: Optional[DirectoryInitializer] = None
         self._watch_scheduler: Optional[WatchScheduler] = None
+        self._session_auto_commit_scheduler: Optional[SessionAutoCommitScheduler] = None
         self._encryptor: Optional[Any] = None
         self._privacy_config_service: Optional[UserPrivacyConfigService] = None
         self._data_dir_lock_acquired = False
@@ -409,6 +412,20 @@ class OpenVikingService:
             viking_fs=self._viking_fs,
             session_service=self._session_service,
         )
+        try:
+            session_auto_commit_config = get_openviking_config().memory.session_auto_commit
+        except Exception:
+            session_auto_commit_config = SessionAutoCommitConfig()
+        self._session_service.set_session_auto_commit_config(session_auto_commit_config)
+        if session_auto_commit_config.idle_enabled:
+            self._session_auto_commit_scheduler = SessionAutoCommitScheduler(
+                self._session_service,
+                session_auto_commit_config,
+                check_interval=session_auto_commit_config.check_interval_seconds,
+            )
+            await self._session_auto_commit_scheduler.start()
+        else:
+            self._session_auto_commit_scheduler = None
         self._debug_service.set_dependencies(
             vikingdb=self._vikingdb_manager,
             config=self._config,
@@ -459,6 +476,11 @@ class OpenVikingService:
             await self._watch_scheduler.stop()
             self._watch_scheduler = None
             logger.info("WatchScheduler stopped")
+
+        if self._session_auto_commit_scheduler:
+            await self._session_auto_commit_scheduler.stop()
+            self._session_auto_commit_scheduler = None
+            logger.info("SessionAutoCommitScheduler stopped")
 
         if self._queue_manager:
             await asyncio.to_thread(self._queue_manager.stop)

@@ -24,6 +24,9 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+if TYPE_CHECKING:
+    from openviking.snapshot_namespace import AsyncSnapshotNamespace
+
 
 if TYPE_CHECKING:
     from openviking.snapshot_namespace import AsyncSnapshotNamespace
@@ -146,18 +149,22 @@ class AsyncOpenViking:
         session_id: Optional[str] = None,
         telemetry: TelemetryRequest = False,
         memory_policy: Optional[Dict[str, Any]] = None,
+        config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a new session.
 
         Args:
             session_id: Optional session ID. If provided, creates a session with the given ID.
                        If None, creates a new session with auto-generated ID.
+            memory_policy: Optional default extraction policy for future commits.
+            config: Optional session config, e.g. ``{"auto_commit_policy": {...}}``.
         """
         await self._ensure_initialized()
         return await self._client.create_session(
             session_id,
             telemetry=telemetry,
             memory_policy=memory_policy,
+            config=config,
         )
 
     async def list_sessions(self) -> List[Any]:
@@ -169,6 +176,13 @@ class AsyncOpenViking:
         """Get session details."""
         await self._ensure_initialized()
         return await self._client.get_session(session_id, auto_create=auto_create)
+
+    async def update_session(
+        self, session_id: str, config: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Update a session's config (partial merge)."""
+        await self._ensure_initialized()
+        return await self._client.update_session(session_id, config=config)
 
     async def get_session_context(
         self, session_id: str, token_budget: int = 128_000

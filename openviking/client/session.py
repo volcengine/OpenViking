@@ -92,6 +92,10 @@ class Session:
             messages=messages,
         )
 
+    async def update_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Update the session's config (partial merge)."""
+        return await self._client.update_session(self.session_id, config=config)
+
     async def commit(
         self,
         telemetry: TelemetryRequest = False,

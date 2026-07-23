@@ -31,6 +31,7 @@ Create a new session. Sessions are containers for conversations, storing message
 
 **Code Entries:**
 - `openviking/session/session.py:Session.__init__()` - Core Session class
+- `openviking/session/auto_commit_policy.py:AutoCommitPolicy` - Auto-commit policy defaults and validation
 - `openviking/server/routers/sessions.py:create_session()` - HTTP route
 - `openviking_cli/client/base.py:BaseClient.create_session()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:new_session()` - CLI command
@@ -43,6 +44,19 @@ Create a new session. Sessions are containers for conversations, storing message
 |-----------|------|----------|---------|-------------|
 | session_id | str | No | None | Session ID. Creates new session with auto-generated ID if None |
 | memory_policy | object | No | None | Default memory extraction policy for the session. Optional `self` and `peer` switches control write targets, optional `working_memory.enabled=false` skips archive summaries, and optional top-level `memory_types` limits extraction to specific enabled memory schemas. When `memory_types` is omitted or `null`, all enabled memory schemas are allowed. Invalid shapes or unknown memory types are rejected with `InvalidArgumentError`. |
+| config | object | No | None | Optional session config. Currently supports an `auto_commit_policy` object (see table below). Any provided fields are validated, clamped to their bounds, and merged over the defaults; the effective policy is returned in the response `result.config` and persisted into session metadata. If no policy is provided, auto commit is disabled unless `memory.session_auto_commit.default_enabled=true`. |
+
+`config.auto_commit_policy` fields (all optional; omitted fields fall back to the defaults when a policy is present):
+
+| Field | Type | Default | Max | Description |
+|-------|------|---------|-----|-------------|
+| `pending_token_threshold` | int | 10000 | 50000 | When uncommitted pending tokens exceed this value (strictly greater-than), an auto commit is triggered after a message write. |
+| `message_count_threshold` | int | 50 | 500 | When the uncommitted live message count exceeds this value (strictly greater-than), an auto commit is triggered after a message write. |
+| `idle_timeout_seconds` | int | 86400 | 604800 | After this many idle seconds, a session with uncommitted content becomes eligible for the server-side idle scheduler. An idle-timeout commit archives the full backlog and ignores `keep_recent_count`. |
+| `keep_recent_count` | int | 2 | 500 | Number of recent live messages to keep (not archived) on a threshold-triggered auto commit. Idle-timeout commits ignore this and commit everything. |
+| `min_commit_interval_seconds` | int | 0 | 604800 | Minimum seconds between two automatic commits (throttle). |
+
+All fields have a minimum of `0` and are clamped into `[0, max]`. Unknown keys are rejected with `InvalidArgumentError`.
 
 #### 3. Usage Examples
 
@@ -63,6 +77,22 @@ curl -X POST http://localhost:1933/api/v1/sessions \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{"session_id": "my-custom-session-id"}'
+
+# Create new session with a custom auto-commit policy
+curl -X POST http://localhost:1933/api/v1/sessions \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "config": {
+      "auto_commit_policy": {
+        "pending_token_threshold": 8000,
+        "message_count_threshold": 40,
+        "idle_timeout_seconds": 600,
+        "keep_recent_count": 10,
+        "min_commit_interval_seconds": 0
+      }
+    }
+  }'
 ```
 
 **Python SDK**
@@ -80,6 +110,20 @@ print(f"Session ID: {result['session_id']}")
 # Create new session with specified ID
 result = await client.create_session(session_id="my-custom-session-id")
 print(f"Session ID: {result['session_id']}")
+
+# Create new session with a custom auto-commit policy
+result = await client.create_session(
+    config={
+        "auto_commit_policy": {
+            "pending_token_threshold": 8000,
+            "message_count_threshold": 40,
+            "idle_timeout_seconds": 600,
+            "keep_recent_count": 10,
+            "min_commit_interval_seconds": 0,
+        }
+    }
+)
+print(result["config"]["auto_commit_policy"])
 ```
 
 **TypeScript SDK**
@@ -118,6 +162,9 @@ ov session new
     "user": {
       "account_id": "default",
       "user_id": "alice"
+    },
+    "config": {
+      "auto_commit_policy": null
     }
   },
   "time": 0.1
@@ -227,6 +274,7 @@ Get session details including metadata, message statistics, commit history, etc.
 - `commit_count`: Number of successful commits
 - `memories_extracted`: Count statistics of extracted memories by category
 - `last_commit_at`: Time of last commit
+- `config`: Effective session config with defaults filled in, including the `auto_commit_policy` object
 
 **Code Entries:**
 - `openviking/session/session.py:Session.load()` - Session loading
@@ -343,7 +391,116 @@ ov session get a1b2c3d4
       "account_id": "default",
       "user_id": "alice"
     },
-    "pending_tokens": 450
+    "pending_tokens": 450,
+    "config": {
+      "auto_commit_policy": {
+        "pending_token_threshold": 10000,
+        "message_count_threshold": 50,
+        "idle_timeout_seconds": 86400,
+        "keep_recent_count": 2,
+        "min_commit_interval_seconds": 0
+      }
+    }
+  }
+}
+```
+
+---
+
+### update_session()
+
+#### 1. API Implementation Introduction
+
+Update a session's config with partial (merge) semantics. Only the fields present in the request body are overwritten; omitted fields keep their current values. Today the only configurable section is `auto_commit_policy`; setting it enables auto commit for that session and fills omitted policy fields from defaults.
+
+**Code Entries:**
+- `openviking/server/routers/sessions.py:update_session()` - HTTP route
+- `openviking/service/session_service.py:SessionService.update_session_config()` - Merge and persist
+- `openviking/session/auto_commit_policy.py:AutoCommitPolicy` - Policy defaults and validation
+- `openviking_cli/client/base.py:BaseClient.update_session()` - Python SDK
+- `crates/ov_cli/src/commands/session.rs:set_auto_commit_policy()` - CLI command
+
+#### 2. Interface and Parameter Description
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| session_id | str | Yes | - | Session ID |
+| config | object | Yes | - | Session config patch. Provide `auto_commit_policy` with any subset of its fields; only the provided fields are overwritten. |
+
+The `auto_commit_policy` fields, defaults, and bounds are the same as in [`create_session()`](#create_session). Any provided values are validated and clamped into `[0, max]`, and unknown keys are rejected with `InvalidArgumentError`.
+
+#### 3. Usage Examples
+
+**HTTP API**
+
+```http
+PATCH /api/v1/sessions/{session_id}
+```
+
+```bash
+# Update only the fields you want; others keep their current values
+curl -X PATCH http://localhost:1933/api/v1/sessions/a1b2c3d4 \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "config": {
+      "auto_commit_policy": {
+        "pending_token_threshold": 8000,
+        "message_count_threshold": 40
+      }
+    }
+  }'
+```
+
+**Python SDK**
+
+```python
+import openviking as ov
+
+client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
+
+result = await client.update_session(
+    "a1b2c3d4",
+    config={
+        "auto_commit_policy": {
+            "pending_token_threshold": 8000,
+            "message_count_threshold": 40,
+        }
+    },
+)
+print(result["config"]["auto_commit_policy"])
+```
+
+**CLI**
+
+```bash
+# At least one flag is required; only the provided fields are changed
+ov session auto-commit-policy set a1b2c3d4 \
+  --pending-tokens 8000 \
+  --message-count 40 \
+  --idle-timeout 600 \
+  --keep-recent 10 \
+  --min-interval 60
+```
+
+**Response Example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "session_id": "a1b2c3d4",
+    "config": {
+      "auto_commit_policy": {
+        "pending_token_threshold": 8000,
+        "message_count_threshold": 40,
+        "idle_timeout_seconds": 86400,
+        "keep_recent_count": 2,
+        "min_commit_interval_seconds": 0
+      }
+    }
   }
 }
 ```
@@ -897,7 +1054,8 @@ Add multiple messages to a session in a single request. Suitable for scenarios t
 | messages | List[AddMessageRequest] | Yes | - | List of messages, each following the same format as `add_message()`, max 100 |
 | telemetry | bool | No | False | Whether to attach operation telemetry data |
 
-> **Note**: Each message follows the exact same format as `add_message()`, supporting both `content` (simple mode) and `parts` (Parts mode). If you need to add more than 100 messages, call in batches.
+> **Note**:
+> 1. Each message supports both `content` (simple mode) and `parts` (Parts mode). If you need to add more than 100 messages, call in batches.
 
 #### 3. Usage Examples
 

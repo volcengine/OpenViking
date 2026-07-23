@@ -100,6 +100,23 @@ context = client.session("demo-session").get_session_context(token_budget=4096)
 print("context:", context)
 ```
 
+也可以通过 SDK 直接开启 session 自动 commit：
+
+```python
+policy = {
+    "pending_token_threshold": 512,
+    "idle_timeout_seconds": 60,
+    "keep_recent_count": 2,
+}
+
+client.update_session_config(
+    "demo-session",
+    {"auto_commit_policy": policy},
+)
+
+client.session("demo-session").add_message("user", "让它自动提交")
+```
+
 ## 快速开始：异步客户端
 
 ```python

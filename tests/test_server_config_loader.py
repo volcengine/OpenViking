@@ -12,6 +12,7 @@ from openviking.server.config import (
     load_server_config,
     map_bind_host_to_loopback,
 )
+from openviking_cli.utils.config import get_openviking_config
 
 
 def test_load_server_config_rejects_unknown_field(tmp_path):
@@ -82,6 +83,44 @@ def test_load_server_config_preserves_supported_fields(tmp_path):
     assert config.bot_api_url == "http://localhost:19999"
     assert config.observability.metrics.exporters.prometheus.enabled is True
     assert config.encryption_enabled is True
+
+
+def test_load_server_config_reads_session_auto_commit_from_memory_section(tmp_path):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "server": {"auth_mode": "trusted"},
+                "memory": {
+                    "session_auto_commit": {
+                        "default_enabled": True,
+                        "idle_enabled": True,
+                        "check_interval_seconds": 2.5,
+                        "scan_batch_size": 7,
+                        "scan_batch_pause_seconds": 0.1,
+                    }
+                },
+            }
+        )
+    )
+
+    server_config = load_server_config(str(config_path))
+    memory_config = get_openviking_config().memory
+
+    assert not hasattr(server_config, "memory")
+    assert memory_config.session_auto_commit.default_enabled is True
+    assert memory_config.session_auto_commit.idle_enabled is True
+    assert memory_config.session_auto_commit.check_interval_seconds == 2.5
+    assert memory_config.session_auto_commit.scan_batch_size == 7
+    assert memory_config.session_auto_commit.scan_batch_pause_seconds == 0.1
+
+
+def test_load_server_config_rejects_session_auto_commit_under_server(tmp_path):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(json.dumps({"server": {"session_auto_commit": {"idle_enabled": True}}}))
+
+    with pytest.raises(ValueError, match=r"server\.session_auto_commit"):
+        load_server_config(str(config_path))
 
 
 def test_load_server_config_rejects_legacy_queuefs_scope(tmp_path):

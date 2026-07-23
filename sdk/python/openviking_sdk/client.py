@@ -151,6 +151,9 @@ class Session:
     async def batch_add_messages(self, messages: list[dict]) -> Dict[str, Any]:
         return await self._client.batch_add_messages(self.session_id, messages)
 
+    async def update_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        return await self._client.update_session_config(self.session_id, config)
+
     async def commit(self, keep_recent_count: int = 0) -> Dict[str, Any]:
         return await self._client.commit_session(
             self.session_id, keep_recent_count=keep_recent_count
@@ -193,6 +196,9 @@ class SyncSession:
 
     def batch_add_messages(self, messages: list[dict]) -> Dict[str, Any]:
         return self._client.batch_add_messages(self.session_id, messages)
+
+    def update_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        return self._client.update_session_config(self.session_id, config)
 
     def commit(
         self,
@@ -1170,15 +1176,27 @@ class AsyncHTTPClient:
         session_id: Optional[str] = None,
         telemetry: Any = False,
         memory_policy: Optional[Dict[str, Any]] = None,
+        config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         json_body: Dict[str, Any] = {}
         if session_id is not None:
             json_body["session_id"] = session_id
         if memory_policy is not None:
             json_body["memory_policy"] = memory_policy
+        if config is not None:
+            json_body["config"] = config
         if telemetry is not False:
             json_body["telemetry"] = telemetry
         response = await self._request("POST", "/api/v1/sessions", json=json_body)
+        return self._handle_response_data(response).get("result", {})
+
+    async def update_session_config(self, session_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
+        session_path = self._path_segment(session_id)
+        response = await self._request(
+            "PATCH",
+            f"/api/v1/sessions/{session_path}",
+            json={"config": config},
+        )
         return self._handle_response_data(response).get("result", {})
 
     async def list_sessions(self) -> List[Any]:
@@ -1713,8 +1731,19 @@ class SyncHTTPClient:
         telemetry: Any = False,
     ) -> Dict[str, Any]:
         if telemetry is False:
-            return run_async(self._async_client.batch_add_messages(session_id, messages))
-        return run_async(self._async_client.batch_add_messages(session_id, messages, telemetry))
+            return run_async(
+                self._async_client.batch_add_messages(
+                    session_id,
+                    messages,
+                )
+            )
+        return run_async(
+            self._async_client.batch_add_messages(
+                session_id,
+                messages,
+                telemetry=telemetry,
+            )
+        )
 
     def add_skill(
         self,
@@ -2098,14 +2127,19 @@ class SyncHTTPClient:
         session_id: Optional[str] = None,
         telemetry: Any = False,
         memory_policy: Optional[Dict[str, Any]] = None,
+        config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.create_session(
                 session_id=session_id,
                 telemetry=telemetry,
                 memory_policy=memory_policy,
+                config=config,
             )
         )
+
+    def update_session_config(self, session_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
+        return run_async(self._async_client.update_session_config(session_id, config))
 
     def list_sessions(self) -> List[Any]:
         return run_async(self._async_client.list_sessions())
