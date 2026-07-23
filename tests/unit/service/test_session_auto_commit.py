@@ -389,7 +389,7 @@ async def test_maybe_schedule_auto_commit_rechecks_after_running_task_finishes(m
 
 
 @pytest.mark.asyncio
-async def test_deferred_auto_commit_recheck_respects_existing_claim(monkeypatch):
+async def test_maybe_schedule_auto_commit_rechecks_after_process_claim_released(monkeypatch):
     session = _FakeAutoCommitSession(
         _FakeSessionMeta(
             auto_commit_policy={
@@ -409,7 +409,98 @@ async def test_deferred_auto_commit_recheck_respects_existing_claim(monkeypatch)
     async def fake_run_auto_commit(session_id, ctx, *, reason):
         run_calls.append((session_id, reason))
 
+    async def no_sleep(_seconds):
+        service._auto_commit_claims.discard(claim)
+
     monkeypatch.setattr(service, "run_auto_commit", fake_run_auto_commit)
+    monkeypatch.setattr(session_service_module.asyncio, "sleep", no_sleep)
+    service._auto_commit_claims.add(claim)
+
+    did_schedule = await service.maybe_schedule_auto_commit(
+        "session_a",
+        _auto_commit_ctx(),
+        reason_hint="message_write",
+        session=session,
+    )
+    await service._auto_commit_pending_tasks[claim]
+
+    assert did_schedule is False
+    assert run_calls == [("session_a", "message_write")]
+
+
+@pytest.mark.asyncio
+async def test_maybe_schedule_auto_commit_rechecks_after_min_interval(monkeypatch):
+    session = _FakeAutoCommitSession(
+        _FakeSessionMeta(
+            auto_commit_policy={
+                "pending_token_threshold": 100,
+                "message_count_threshold": 500,
+                "keep_recent_count": 0,
+                "min_commit_interval_seconds": 60,
+            },
+            pending_tokens=101,
+            message_count=5,
+            last_auto_commit_at=datetime.now(timezone.utc).isoformat(),
+        )
+    )
+    service = _session_service_for_auto_commit_test(monkeypatch, session)
+    claim = ("acct_a", "user_b", "session_a")
+    run_calls: list[tuple[str, str]] = []
+    throttle_results = [True, True, False]
+
+    async def fake_run_auto_commit(session_id, ctx, *, reason):
+        run_calls.append((session_id, reason))
+
+    async def no_sleep(_seconds):
+        return None
+
+    def sequenced_throttle(_session, _policy):
+        if throttle_results:
+            return throttle_results.pop(0)
+        return False
+
+    monkeypatch.setattr(service, "run_auto_commit", fake_run_auto_commit)
+    monkeypatch.setattr(service, "_within_min_commit_interval", sequenced_throttle)
+    monkeypatch.setattr(session_service_module.asyncio, "sleep", no_sleep)
+
+    did_schedule = await service.maybe_schedule_auto_commit(
+        "session_a",
+        _auto_commit_ctx(),
+        reason_hint="message_write",
+        session=session,
+    )
+    await service._auto_commit_pending_tasks[claim]
+
+    assert did_schedule is False
+    assert run_calls == [("session_a", "message_write")]
+
+
+@pytest.mark.asyncio
+async def test_deferred_auto_commit_recheck_waits_for_existing_claim(monkeypatch):
+    session = _FakeAutoCommitSession(
+        _FakeSessionMeta(
+            auto_commit_policy={
+                "pending_token_threshold": 100,
+                "message_count_threshold": 500,
+                "keep_recent_count": 0,
+                "min_commit_interval_seconds": 0,
+            },
+            pending_tokens=101,
+            message_count=5,
+        )
+    )
+    service = _session_service_for_auto_commit_test(monkeypatch, session)
+    claim = ("acct_a", "user_b", "session_a")
+    run_calls: list[tuple[str, str]] = []
+
+    async def fake_run_auto_commit(session_id, ctx, *, reason):
+        run_calls.append((session_id, reason))
+
+    async def no_sleep(_seconds):
+        service._auto_commit_claims.discard(claim)
+
+    monkeypatch.setattr(service, "run_auto_commit", fake_run_auto_commit)
+    monkeypatch.setattr(session_service_module.asyncio, "sleep", no_sleep)
     service._auto_commit_claims.add(claim)
 
     await service._run_auto_commit_when_not_running(
@@ -418,8 +509,45 @@ async def test_deferred_auto_commit_recheck_respects_existing_claim(monkeypatch)
         "message_write",
     )
 
-    assert run_calls == []
-    assert claim in service._auto_commit_claims
+    assert run_calls == [("session_a", "message_write")]
+
+
+@pytest.mark.asyncio
+async def test_deferred_auto_commit_recheck_keeps_waiting_after_final_running_race(monkeypatch):
+    session = _FakeAutoCommitSession(
+        _FakeSessionMeta(
+            auto_commit_policy={
+                "pending_token_threshold": 100,
+                "message_count_threshold": 500,
+                "keep_recent_count": 0,
+                "min_commit_interval_seconds": 0,
+            },
+            pending_tokens=101,
+            message_count=5,
+        )
+    )
+    service = _session_service_for_auto_commit_test(monkeypatch, session)
+    claim = ("acct_a", "user_b", "session_a")
+    tracker = _SequencedTaskTracker([False, True, False, False])
+    run_calls: list[tuple[str, str]] = []
+
+    async def fake_run_auto_commit(session_id, ctx, *, reason):
+        run_calls.append((session_id, reason))
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(session_service_module, "get_task_tracker", lambda: tracker)
+    monkeypatch.setattr(service, "run_auto_commit", fake_run_auto_commit)
+    monkeypatch.setattr(session_service_module.asyncio, "sleep", no_sleep)
+
+    await service._run_auto_commit_when_not_running(
+        claim,
+        _auto_commit_ctx(),
+        "message_write",
+    )
+
+    assert run_calls == [("session_a", "message_write")]
 
 
 @pytest.mark.asyncio
@@ -616,7 +744,7 @@ async def test_scheduler_skips_sessions_without_auto_commit_policy():
 
 
 @pytest.mark.asyncio
-async def test_scheduler_skips_sessions_still_within_keep_recent_window():
+async def test_scheduler_schedules_idle_sessions_still_within_keep_recent_window():
     service = _FakeSessionService(
         [_session_entry("session_within_keep")],
         {
@@ -635,8 +763,9 @@ async def test_scheduler_skips_sessions_still_within_keep_recent_window():
 
     await scheduler._scan_once()
 
-    # All live messages are inside the keep window: nothing to commit.
-    assert service.calls == []
+    assert service.calls == [
+        ("session_within_keep", "idle_timeout", "user_b"),
+    ]
 
 
 @pytest.mark.asyncio

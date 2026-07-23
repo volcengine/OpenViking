@@ -342,11 +342,18 @@ def has_uncommitted_content(meta: Dict[str, Any]) -> bool:
     )
 
 
+def has_idle_uncommitted_content(meta: Dict[str, Any]) -> bool:
+    return bool(
+        _coerce_non_negative_int(meta.get("pending_tokens", 0)) > 0
+        or _coerce_non_negative_int(meta.get("message_count", 0)) > 0
+    )
+
+
 def _is_idle_policy_due(meta: Dict[str, Any], now: datetime) -> bool:
     idle_timeout = get_idle_timeout_seconds(meta.get("auto_commit_policy"))
     if idle_timeout is None:
         return False
-    if not has_uncommitted_content(meta):
+    if not has_idle_uncommitted_content(meta):
         return False
     next_check_at = compute_next_check_at(meta.get("last_message_at", ""), idle_timeout)
     if not next_check_at:

@@ -33,6 +33,7 @@ from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
 
 _BATCH_ADD_MESSAGE_KEYS = frozenset({"role", "content", "parts", "created_at", "peer_id"})
+_BATCH_ADD_MESSAGE_IGNORED_KEYS = frozenset({"auto_commit_policy"})
 
 
 def _to_jsonable(value: Any) -> Any:
@@ -1056,7 +1057,7 @@ class LocalClient(BaseClient):
         specs: list[dict[str, Any]] = []
 
         for index, message in enumerate(messages):
-            extra_keys = set(message) - _BATCH_ADD_MESSAGE_KEYS
+            extra_keys = set(message) - _BATCH_ADD_MESSAGE_KEYS - _BATCH_ADD_MESSAGE_IGNORED_KEYS
             if extra_keys:
                 allowed = ", ".join(sorted(_BATCH_ADD_MESSAGE_KEYS))
                 unknown = ", ".join(sorted(extra_keys))

@@ -20,6 +20,7 @@ from openviking.service.session_auto_commit import (
     get_message_count_threshold,
     get_min_commit_interval_seconds,
     get_token_threshold,
+    has_idle_uncommitted_content,
     has_uncommitted_content,
     is_next_check_due,
 )
@@ -430,12 +431,16 @@ class SessionService:
         if session is None:
             session = await self.get(session_id, ctx, auto_create=False)
         policy = session.meta.auto_commit_policy
+        claim = (ctx.account_id, ctx.user.user_id, session_id)
         if not self._should_run_auto_commit(session, policy, reason_hint):
+            if self._should_defer_message_write_auto_commit(session, policy, reason_hint):
+                async with self._auto_commit_claims_lock:
+                    self._schedule_auto_commit_recheck_locked(claim, ctx, reason_hint)
             return False
 
-        claim = (ctx.account_id, ctx.user.user_id, session_id)
         async with self._auto_commit_claims_lock:
             if claim in self._auto_commit_claims:
+                self._schedule_auto_commit_recheck_locked(claim, ctx, reason_hint)
                 return False
             tracker = get_task_tracker()
             if await tracker.has_running(
@@ -472,25 +477,39 @@ class SessionService:
     ) -> None:
         account_id, user_id, session_id = claim
         tracker = get_task_tracker()
-        while await tracker.has_running(
-            "session_commit",
-            session_id,
-            account_id=account_id,
-            user_id=user_id,
-        ):
-            await asyncio.sleep(max(0.1, self._session_auto_commit_config.check_interval_seconds))
-        async with self._auto_commit_claims_lock:
-            if claim in self._auto_commit_claims:
-                return
-            if await tracker.has_running(
+        while True:
+            async with self._auto_commit_claims_lock:
+                has_process_claim = claim in self._auto_commit_claims
+            has_running_task = await tracker.has_running(
                 "session_commit",
                 session_id,
                 account_id=account_id,
                 user_id=user_id,
-            ):
-                return
-            self._auto_commit_claims.add(claim)
-        await self.run_auto_commit(session_id, ctx, reason=reason)
+            )
+            if not has_process_claim and not has_running_task:
+                session = await self.get(session_id, ctx, auto_create=False)
+                policy = session.meta.auto_commit_policy
+                if self._should_run_auto_commit(session, policy, reason):
+                    acquired_claim = False
+                    async with self._auto_commit_claims_lock:
+                        if not await tracker.has_running(
+                            "session_commit",
+                            session_id,
+                            account_id=account_id,
+                            user_id=user_id,
+                        ) and claim not in self._auto_commit_claims:
+                            self._auto_commit_claims.add(claim)
+                            acquired_claim = True
+                    if acquired_claim:
+                        await self.run_auto_commit(session_id, ctx, reason=reason)
+                        return
+                    await asyncio.sleep(
+                        max(0.1, self._session_auto_commit_config.check_interval_seconds)
+                    )
+                    continue
+                if not self._should_defer_message_write_auto_commit(session, policy, reason):
+                    return
+            await asyncio.sleep(max(0.1, self._session_auto_commit_config.check_interval_seconds))
 
     async def run_auto_commit(self, session_id: str, ctx: RequestContext, *, reason: str) -> None:
         """Run one best-effort automatic commit and release process-local claim."""
@@ -574,28 +593,47 @@ class SessionService:
                 return False
             if self._within_min_commit_interval(session, policy):
                 return False
-            try:
-                pending_tokens = int(session.meta.pending_tokens or 0)
-                message_count = int(session.meta.message_count or 0)
-            except (TypeError, ValueError):
-                return False
-            token_threshold = get_token_threshold(policy)
-            if token_threshold is not None and pending_tokens > token_threshold:
-                return True
-            message_threshold = get_message_count_threshold(policy)
-            if message_threshold is not None and message_count > message_threshold:
-                return True
-            return False
+            return self._message_write_threshold_exceeded(session, policy)
 
         if reason == "idle_timeout":
             if not self._session_auto_commit_config.idle_enabled:
                 return False
             idle_timeout = get_idle_timeout_seconds(policy)
-            if idle_timeout is None or not self._has_uncommitted_content(session):
+            if idle_timeout is None or not has_idle_uncommitted_content(session.meta.to_dict()):
                 return False
             next_check_at = compute_next_check_at(session.meta.last_message_at, idle_timeout)
             if not next_check_at:
                 return False
             return is_next_check_due(next_check_at, datetime.now()) is True
 
+        return False
+
+    def _should_defer_message_write_auto_commit(
+        self,
+        session: Session,
+        policy: Any,
+        reason: str,
+    ) -> bool:
+        """Return True when threshold is met but a temporary block should be retried."""
+        if policy is None or reason != "message_write":
+            return False
+        if not self._has_uncommitted_content(session):
+            return False
+        if not self._message_write_threshold_exceeded(session, policy):
+            return False
+        return self._within_min_commit_interval(session, policy)
+
+    @staticmethod
+    def _message_write_threshold_exceeded(session: Session, policy: Any) -> bool:
+        try:
+            pending_tokens = int(session.meta.pending_tokens or 0)
+            message_count = int(session.meta.message_count or 0)
+        except (TypeError, ValueError):
+            return False
+        token_threshold = get_token_threshold(policy)
+        if token_threshold is not None and pending_tokens > token_threshold:
+            return True
+        message_threshold = get_message_count_threshold(policy)
+        if message_threshold is not None and message_count > message_threshold:
+            return True
         return False

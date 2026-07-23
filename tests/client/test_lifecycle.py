@@ -110,20 +110,22 @@ class TestClientInitialization:
                 auto_commit_policy={"enabled": True},
             )
 
-    async def test_batch_add_messages_rejects_per_message_auto_commit_policy_in_embedded_mode(
+    async def test_batch_add_messages_ignores_per_message_auto_commit_policy_in_embedded_mode(
         self, client: AsyncOpenViking
     ):
-        with pytest.raises(ValueError, match="unsupported field\\(s\\): auto_commit_policy"):
-            await client.batch_add_messages(
-                "embedded-batch-per-message-auto-commit-policy",
-                [
-                    {
-                        "role": "user",
-                        "content": "hello",
-                        "auto_commit_policy": {"enabled": True, "token_threshold": 1},
-                    }
-                ],
-            )
+        result = await client.batch_add_messages(
+            "embedded-batch-per-message-auto-commit-policy",
+            [
+                {
+                    "role": "user",
+                    "content": "hello",
+                    "auto_commit_policy": {"pending_token_threshold": 1},
+                }
+            ],
+        )
+
+        assert result["message_count"] == 1
+        assert result["added"] == 1
 
 
 class TestClientClose:
