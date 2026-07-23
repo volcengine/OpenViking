@@ -64,6 +64,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
         ctx: RequestContext = None,
         viking_fs: VikingFS = None,
         transaction_handle=None,
+        session_metadata: Optional[Dict[str, Any]] = None,
     ):
         self.messages = list(messages) if isinstance(messages, list) else messages
         self.latest_archive_overview = latest_archive_overview
@@ -83,6 +84,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
         self._link_enabled = config.memory.link_enabled if config.memory else False
         self._vision_messages_prepared = False
         self._vision_vlm = None
+        self._session_metadata = session_metadata
 
     @property
     def read_file_contents(self) -> Dict[str, MemoryFile]:
@@ -185,6 +187,8 @@ class SessionExtractContextProvider(ExtractContextProvider):
         return False
 
     def instruction(self) -> str:
+        from openviking.session.session_metadata import render_metadata_prompt_block
+
         output_language = self._output_language
         contains_resource_uri = self._conversation_contains_resource_uri()
         resource_uri_handling = (
@@ -207,7 +211,9 @@ class SessionExtractContextProvider(ExtractContextProvider):
             if contains_resource_uri
             else ""
         )
-        goal = f"""You are a memory extraction agent. Your task is to analyze conversations and update memories.
+        metadata_block = render_metadata_prompt_block(self._session_metadata)
+        metadata_section = f"{metadata_block}\n\n" if metadata_block else ""
+        goal = f"""{metadata_section}You are a memory extraction agent. Your task is to analyze conversations and update memories.
 
 ## Workflow
 1. Analyze the conversation and pre-fetched context

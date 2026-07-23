@@ -495,6 +495,31 @@ pub async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()>
             commands::session::commit_session(&client, &session_id, ctx.output_format, ctx.compact)
                 .await
         }
+        SessionCommands::SetMetadata {
+            session_id,
+            keys,
+            values,
+            replace,
+        } => {
+            if keys.len() != values.len() {
+                return Err(crate::error::Error::Client(format!(
+                    "set-metadata requires the same number of --key and --value flags (got {} and {})",
+                    keys.len(),
+                    values.len(),
+                )));
+            }
+            let pairs: Vec<(String, String)> =
+                keys.into_iter().zip(values.into_iter()).collect();
+            commands::session::set_session_metadata(
+                &client,
+                &session_id,
+                &pairs,
+                replace,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
     }
 }
 

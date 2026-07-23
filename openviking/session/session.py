@@ -273,6 +273,11 @@ class SessionMeta:
     # process restarts.
     keep_recent_count: int = 0
     memory_policy: Optional[Dict[str, Any]] = None
+    # Free-form, project-level personalization (architectural style, tech-stack
+    # preferences, project name, etc.). Injected into the memory extractor's
+    # system prompt so a single agent can keep distinct memory layers across
+    # projects without having to allocate a different agent_id per project.
+    metadata: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data = {
@@ -290,6 +295,7 @@ class SessionMeta:
             "pending_tokens": self.pending_tokens,
             "keep_recent_count": self.keep_recent_count,
             "memory_policy": dict(self.memory_policy) if self.memory_policy is not None else None,
+            "metadata": dict(self.metadata) if self.metadata is not None else None,
         }
         if self.total_message_count is not None:
             data["total_message_count"] = self.total_message_count
@@ -333,6 +339,7 @@ class SessionMeta:
             pending_tokens=max(0, int(data.get("pending_tokens", 0) or 0)),
             keep_recent_count=max(0, int(data.get("keep_recent_count", 0) or 0)),
             memory_policy=data.get("memory_policy"),
+            metadata=data.get("metadata"),
         )
 
 
@@ -1506,6 +1513,7 @@ class Session:
                                     allowed_memory_types=long_term_memory_types,
                                     allow_self_memory=self_memory_enabled,
                                     allowed_peer_ids=allowed_peer_ids,
+                                    session_metadata=self._meta.metadata,
                                 )
 
                             extraction_tasks.append(

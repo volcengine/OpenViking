@@ -123,6 +123,14 @@ class CreateSessionRequest(BaseModel):
 
     session_id: Optional[str] = None
     memory_policy: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None
+    telemetry: TelemetryRequest = False
+
+
+class UpdateMetadataRequest(BaseModel):
+    """Request model for updating session metadata."""
+
+    metadata: Dict[str, Any] = Field(default_factory=dict)
     telemetry: TelemetryRequest = False
 
 
@@ -190,7 +198,12 @@ async def create_session(
 
     If session_id is provided, creates a session with the given ID.
     If session_id is None, creates a new session with auto-generated ID.
+    Optional ``metadata`` carries free-form per-session personalization
+    (project name, tech-stack preferences, etc.) that is later injected into
+    the memory extractor's prompt.
     """
+    from openviking.session.session_metadata import MetadataValidationError
+
     service = get_service()
 
     async def _create() -> dict[str, Any]:
@@ -199,18 +212,23 @@ async def create_session(
             _ctx,
             request.session_id,
             memory_policy=request.memory_policy,
+            metadata=request.metadata,
         )
         return {
             "session_id": session.session_id,
             "uri": session.uri,
             "user": session.user.to_dict(),
+            "metadata": session.meta.metadata,
         }
 
-    execution = await run_operation(
-        operation="session.create",
-        telemetry=request.telemetry,
-        fn=_create,
-    )
+    try:
+        execution = await run_operation(
+            operation="session.create",
+            telemetry=request.telemetry,
+            fn=_create,
+        )
+    except MetadataValidationError as exc:
+        return error_response("INVALID_ARGUMENT", str(exc), details={"field": "metadata"})
     return Response(status="ok", result=execution.result, telemetry=execution.telemetry)
 
 
@@ -357,6 +375,39 @@ async def delete_session(
     service = get_service()
     await service.sessions.delete(session_id, _ctx)
     return Response(status="ok", result={"session_id": session_id})
+
+
+@router.patch("/{session_id}/metadata")
+async def update_session_metadata(
+    request: UpdateMetadataRequest,
+    session_id: str = Path(..., description="Session ID"),
+    replace: bool = Query(
+        False,
+        description="If true, replace existing metadata entirely instead of merging.",
+    ),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Merge (or replace) session metadata.
+
+    By default, keys in the request body are merged into the existing
+    metadata; pass ``replace=true`` to overwrite the dict entirely.
+    """
+    from openviking.session.session_metadata import MetadataValidationError
+    from openviking_cli.exceptions import NotFoundError
+
+    service = get_service()
+    try:
+        metadata = await service.sessions.update_metadata(
+            session_id,
+            _ctx,
+            request.metadata,
+            replace=replace,
+        )
+    except MetadataValidationError as exc:
+        return error_response("INVALID_ARGUMENT", str(exc), details={"field": "metadata"})
+    except NotFoundError:
+        return error_response("NOT_FOUND", f"Session {session_id} not found")
+    return Response(status="ok", result={"session_id": session_id, "metadata": metadata})
 
 
 class CommitRequest(BaseModel):

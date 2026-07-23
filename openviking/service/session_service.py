@@ -15,6 +15,11 @@ from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory_policy import MemoryPolicy
+from openviking.session.session_metadata import (
+    MetadataValidationError,
+    merge_metadata,
+    validate_metadata,
+)
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import (
@@ -134,6 +139,7 @@ class SessionService:
         ctx: RequestContext,
         session_id: Optional[str] = None,
         memory_policy: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Session:
         """Create a session and persist its root path.
 
@@ -142,6 +148,8 @@ class SessionService:
             session_id: Optional session ID. If provided, creates a session with the given ID.
                        If None, creates a new session with auto-generated ID.
             memory_policy: Optional default extraction policy for future commits.
+            metadata: Optional free-form per-session metadata dict (project name,
+                tech-stack preferences, etc.). Validated for size and key count.
 
         Raises:
             AlreadyExistsError: If a session with the given ID already exists
@@ -159,12 +167,34 @@ class SessionService:
                     set(MemoryTypeRegistry().list_names(include_disabled=False))
                 )
                 session.meta.memory_policy = policy.to_dict()
+            if metadata is not None:
+                session.meta.metadata = validate_metadata(metadata)
             await session.ensure_exists()
             self._record_lifecycle_metric("create", "ok")
             return session
         except Exception:
             self._record_lifecycle_metric("create", "error")
             raise
+
+    async def update_metadata(
+        self,
+        session_id: str,
+        ctx: RequestContext,
+        metadata: Dict[str, Any],
+        *,
+        replace: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """Merge (or replace) session metadata and persist it.
+
+        Returns the resulting metadata dict.
+        """
+        if not isinstance(metadata, dict):
+            raise MetadataValidationError("metadata must be a JSON object")
+        session = await self.get(session_id, ctx, auto_create=False)
+        merged = merge_metadata(session.meta.metadata, metadata, replace=replace)
+        session.meta.metadata = validate_metadata(merged)
+        await session._save_meta()  # noqa: SLF001 — service intentionally persists meta
+        return session.meta.metadata
 
     async def get(
         self, session_id: str, ctx: RequestContext, *, auto_create: bool = False
@@ -344,6 +374,7 @@ class SessionService:
             session_id=session_id,
             ctx=ctx,
             archive_uri=archive_uri,
+            session_metadata=session.meta.metadata,
         )
         self._record_lifecycle_metric("extract", "ok")
         return memories
