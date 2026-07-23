@@ -593,7 +593,6 @@ class BaseClient(ABC):
     ) -> List[Dict[str, Any]]:
         """Walk back along parents[0] up to limit commits."""
 
-    @abstractmethod
     async def git_diff(
         self,
         path: str,
@@ -601,7 +600,12 @@ class BaseClient(ABC):
         to_ref: str,
         from_ref: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Compare one file between two snapshot refs."""
+        """Compare one file between two snapshot refs.
+
+        The default keeps third-party subclasses written against older
+        OpenViking releases instantiable while making unsupported use explicit.
+        """
+        raise NotImplementedError("snapshot diff is not supported by this client")
 
     @abstractmethod
     async def git_get_ignore(self) -> str:

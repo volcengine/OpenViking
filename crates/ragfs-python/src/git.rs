@@ -205,6 +205,9 @@ fn classify_git_error(e: &ragfs::git::GitError) -> GitErrorMapping {
         GitError::RefStore(RefStoreError::Conflict { .. }) => {
             GitErrorMapping::PythonException("GitConcurrentCommitError")
         }
+        GitError::RefStore(RefStoreError::InvalidName(_)) => {
+            GitErrorMapping::PythonException("AGFSInvalidOperationError")
+        }
         GitError::RestoreWritebackPartial(_) => GitErrorMapping::RestoreWritebackPartial,
         GitError::ObjectStore(_)
         | GitError::RefStore(_)
@@ -544,7 +547,7 @@ pub fn log_entries_to_pylist(py: Python<'_>, entries: Vec<LogEntry>) -> PyResult
 mod tests {
     use super::*;
     use ragfs::core::MountableFS;
-    use ragfs::git::GitError;
+    use ragfs::git::{GitError, RefStoreError};
     use std::sync::Arc;
 
     fn local_cfg(base_dir: &str) -> ragfs::git::GitConfig {
@@ -783,6 +786,15 @@ mod tests {
             matched: 3,
             requested: 10,
         };
+        assert_eq!(
+            classify_git_error(&error),
+            GitErrorMapping::PythonException("AGFSInvalidOperationError")
+        );
+    }
+
+    #[test]
+    fn map_git_error_invalid_ref_name_classification() {
+        let error = GitError::RefStore(RefStoreError::InvalidName("bad ref".into()));
         assert_eq!(
             classify_git_error(&error),
             GitErrorMapping::PythonException("AGFSInvalidOperationError")

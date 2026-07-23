@@ -4,7 +4,7 @@ import pytest
 from openviking.server.identity import RequestContext, Role
 from openviking.storage import viking_fs as viking_fs_module
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import ResourceExhaustedError
+from openviking_cli.exceptions import PermissionDeniedError, ResourceExhaustedError
 from openviking_cli.session.user_id import UserIdentifier
 
 pytestmark = pytest.mark.asyncio
@@ -69,6 +69,9 @@ async def test_diff_reads_blobs_from_resolved_commit_oids():
         def _ctx_or_default(self, ctx):
             return ctx
 
+        def _ensure_access(self, uri, ctx):
+            return None
+
         async def show(self, target_ref, *, path=None, ctx=None, max_blob_bytes=None):
             if path is None:
                 return {"oid": from_oid if target_ref == "base" else to_oid}
@@ -108,9 +111,13 @@ class _DiffVikingFS:
         self._before = before
         self._after = after
         self.blob_read_limits = []
+        self.access_checks = []
 
     def _ctx_or_default(self, ctx):
         return ctx
+
+    def _ensure_access(self, uri, ctx):
+        self.access_checks.append((uri, ctx))
 
     async def show(self, target_ref, *, path=None, ctx=None, max_blob_bytes=None):
         if path is None:
@@ -153,6 +160,63 @@ async def test_diff_passes_file_size_limit_to_blob_reads(monkeypatch):
     )
 
     assert vfs.blob_read_limits == [123, 123]
+
+
+async def test_diff_checks_access_before_reading_snapshot_content():
+    path = "viking://user/other-user/memories/private.md"
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="account", user_id="user"),
+        role=Role.USER,
+    )
+    vfs = object.__new__(VikingFS)
+    show_calls = []
+
+    async def show(*args, **kwargs):
+        show_calls.append((args, kwargs))
+        return {"oid": "a" * 40}
+
+    vfs.show = show
+
+    with pytest.raises(PermissionDeniedError):
+        await VikingFS.diff(
+            vfs,
+            path=path,
+            from_ref="from",
+            to_ref="to",
+            ctx=ctx,
+        )
+
+    assert show_calls == []
+
+
+async def test_diff_rejects_excessive_line_count_before_building_diff(monkeypatch):
+    monkeypatch.setattr(viking_fs_module, "SNAPSHOT_DIFF_MAX_LINES", 2, raising=False)
+    vfs = _DiffVikingFS(b"a\nb\nc\n", b"a\nb\nd\n")
+
+    with pytest.raises(ResourceExhaustedError, match="line count limit"):
+        await VikingFS.diff(
+            vfs,
+            path="viking://user/user/memories/experiences/example.md",
+            from_ref="from",
+            to_ref="to",
+            ctx=_request_context(),
+        )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "one line",
+        "one line\n",
+        "one\r\ntwo\r\n",
+        "one\rtwo",
+        "one\u2028two\u2029",
+        "\n\n",
+    ],
+)
+async def test_snapshot_line_count_matches_splitlines(text):
+    assert viking_fs_module._snapshot_line_count(text) == len(text.splitlines())
 
 
 async def test_diff_rejects_output_over_size_limit(monkeypatch):

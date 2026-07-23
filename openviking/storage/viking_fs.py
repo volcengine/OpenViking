@@ -85,7 +85,28 @@ logger = get_logger(__name__)
 LS_ALL_NODES = 2**31 - 1
 SNAPSHOT_DIFF_MAX_FILE_BYTES = 10 * 1024 * 1024
 SNAPSHOT_DIFF_MAX_OUTPUT_BYTES = 20 * 1024 * 1024
+SNAPSHOT_DIFF_MAX_LINES = 100_000
 _T = TypeVar("_T")
+
+
+def _snapshot_line_count(text: str) -> int:
+    if not text:
+        return 0
+    line_breaks = (
+        "\n",
+        "\r",
+        "\v",
+        "\f",
+        "\x1c",
+        "\x1d",
+        "\x1e",
+        "\x85",
+        "\u2028",
+        "\u2029",
+    )
+    count = sum(text.count(separator) for separator in line_breaks)
+    count -= text.count("\r\n")
+    return count if text.endswith(line_breaks) else count + 1
 
 
 def _build_snapshot_unified_diff(
@@ -96,12 +117,21 @@ def _build_snapshot_unified_diff(
     before_bytes: Optional[bytes],
     after_bytes: Optional[bytes],
     max_output_bytes: int,
+    max_lines: int,
 ) -> tuple[str, str]:
     try:
         before = before_bytes.decode("utf-8") if before_bytes is not None else ""
         after = after_bytes.decode("utf-8") if after_bytes is not None else ""
     except UnicodeDecodeError as exc:
         raise InvalidArgumentError("snapshot diff only supports UTF-8 text files") from exc
+
+    for text in (before, after):
+        line_count = _snapshot_line_count(text)
+        if line_count > max_lines:
+            raise ResourceExhaustedError(
+                f"snapshot diff line count limit exceeded ({max_lines} lines per file)",
+                details={"limit_lines": max_lines, "path": path},
+            )
 
     if before_bytes is None:
         change_type = "added"
@@ -4110,6 +4140,7 @@ class VikingFS:
         """Return a unified text diff for one path between two snapshots."""
         real_ctx = self._ctx_or_default(ctx)
         path = canonicalize_uri(path, ctx=real_ctx)
+        self._ensure_access(path, real_ctx)
 
         from_meta: Optional[Dict[str, Any]] = None
         if from_ref:
@@ -4165,6 +4196,7 @@ class VikingFS:
             before_bytes=before_bytes,
             after_bytes=after_bytes,
             max_output_bytes=SNAPSHOT_DIFF_MAX_OUTPUT_BYTES,
+            max_lines=SNAPSHOT_DIFF_MAX_LINES,
         )
         return {
             "path": path,
