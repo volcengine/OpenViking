@@ -221,9 +221,34 @@ class OwnedLockLease(LockLease):
                 logger.warning("Failed to refresh lock handle %s: %s", self.handle_id, exc)
 
     async def _stop_refresh(self) -> None:
-        if self._refresh_task is None:
+        task = self._refresh_task
+        if task is None:
             return
-        self._refresh_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await self._refresh_task
+        # Drop our reference first so a re-entrant close()/handoff() is a no-op
+        # and the owning loop is free to retire the task.
         self._refresh_task = None
+
+        try:
+            current_loop: Optional[asyncio.AbstractEventLoop] = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        task_loop = task.get_loop()
+
+        if task_loop is current_loop:
+            # Same loop: cancel and await so the refresh coroutine is fully
+            # stopped before the caller proceeds to release the handle.
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+            return
+
+        if not task_loop.is_closed():
+            # Cross-loop: the refresh task is bound to another running loop.
+            # Marshal the cancellation back onto that loop instead of awaiting a
+            # future attached to a different loop (which raises RuntimeError).
+            # suppress(RuntimeError) guards the TOCTOU where the loop closes
+            # between the is_closed() check and call_soon_threadsafe().
+            with suppress(RuntimeError):
+                task_loop.call_soon_threadsafe(task.cancel)
+        # else: the owning loop is already closed; the task is dead. Drop it.
