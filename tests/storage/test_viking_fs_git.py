@@ -10,6 +10,41 @@ from openviking_cli.session.user_id import UserIdentifier
 pytestmark = pytest.mark.asyncio
 
 
+async def test_show_without_limit_preserves_existing_binding_call():
+    class RecordingAGFS:
+        def __init__(self):
+            self.calls = []
+
+        async def run(self, operation, **kwargs):
+            self.calls.append((operation, kwargs))
+            return {"oid": "a" * 40}
+
+    class ShowVikingFS:
+        def __init__(self):
+            self._async_agfs = RecordingAGFS()
+
+        def _ctx_or_default(self, ctx):
+            return ctx
+
+        def _uri_to_tree_path(self, path, *, ctx):
+            return path
+
+    vfs = ShowVikingFS()
+
+    await VikingFS.show(vfs, "main", ctx=_request_context())
+
+    assert vfs._async_agfs.calls == [
+        (
+            "git_show",
+            {
+                "account": "account",
+                "target_ref": "main",
+                "path": None,
+            },
+        )
+    ]
+
+
 @pytest.mark.skip(reason="needs git-enabled VikingFS fixture")
 async def test_show_blob_raw_returns_envelope(viking_fs_with_two_commits):
     """show_blob_raw must return the full {oid, size, bytes} dict, not strip it."""
@@ -34,7 +69,7 @@ async def test_diff_reads_blobs_from_resolved_commit_oids():
         def _ctx_or_default(self, ctx):
             return ctx
 
-        async def show(self, target_ref, *, path=None, ctx=None):
+        async def show(self, target_ref, *, path=None, ctx=None, max_blob_bytes=None):
             if path is None:
                 return {"oid": from_oid if target_ref == "base" else to_oid}
 
@@ -72,13 +107,15 @@ class _DiffVikingFS:
     def __init__(self, before: bytes, after: bytes):
         self._before = before
         self._after = after
+        self.blob_read_limits = []
 
     def _ctx_or_default(self, ctx):
         return ctx
 
-    async def show(self, target_ref, *, path=None, ctx=None):
+    async def show(self, target_ref, *, path=None, ctx=None, max_blob_bytes=None):
         if path is None:
             return {"oid": target_ref}
+        self.blob_read_limits.append(max_blob_bytes)
         return self._before if target_ref == "from" else self._after
 
 
@@ -101,6 +138,21 @@ async def test_diff_rejects_files_over_size_limit(monkeypatch):
             to_ref="to",
             ctx=_request_context(),
         )
+
+
+async def test_diff_passes_file_size_limit_to_blob_reads(monkeypatch):
+    monkeypatch.setattr(viking_fs_module, "SNAPSHOT_DIFF_MAX_FILE_BYTES", 123)
+    vfs = _DiffVikingFS(b"old\n", b"new\n")
+
+    await VikingFS.diff(
+        vfs,
+        path="viking://user/user/memories/experiences/example.md",
+        from_ref="from",
+        to_ref="to",
+        ctx=_request_context(),
+    )
+
+    assert vfs.blob_read_limits == [123, 123]
 
 
 async def test_diff_rejects_output_over_size_limit(monkeypatch):

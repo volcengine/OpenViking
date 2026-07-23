@@ -184,8 +184,10 @@ fn classify_git_error(e: &ragfs::git::GitError) -> GitErrorMapping {
         GitError::InvalidAccountId(_)
         | GitError::InvalidProjectDir(_)
         | GitError::InvalidPath(_) => GitErrorMapping::PythonException("AGFSInvalidPathError"),
-        GitError::BlobTooLarge { .. }
-        | GitError::TooManyFiles { .. }
+        GitError::BlobTooLarge { .. } => {
+            GitErrorMapping::PythonException("AGFSResourceExhaustedError")
+        }
+        GitError::TooManyFiles { .. }
         | GitError::TooManyLogPaths { .. }
         | GitError::LogPathTooDeep { .. }
         | GitError::LogScanLimitExceeded { .. }
@@ -375,6 +377,15 @@ pub fn parse_show_request(kwargs: &Bound<PyDict>) -> PyResult<ShowRequest> {
         target_ref: require_str(kwargs, "target_ref")?,
         path: optional_str(kwargs, "path")?,
     })
+}
+
+pub fn parse_show_max_blob_bytes(kwargs: &Bound<PyDict>) -> PyResult<Option<u64>> {
+    match kwargs.get_item("max_blob_bytes")? {
+        Some(value) if !value.is_none() => value.extract::<u64>().map(Some).map_err(|_| {
+            PyValueError::new_err("kwarg max_blob_bytes must be a non-negative integer")
+        }),
+        _ => Ok(None),
+    }
 }
 
 pub fn parse_log_request(kwargs: &Bound<PyDict>) -> PyResult<LogRequest> {
@@ -695,6 +706,18 @@ mod tests {
             );
             assert!(err.to_string().contains("200"));
         });
+    }
+
+    #[test]
+    fn blob_too_large_maps_to_resource_exhausted() {
+        let error = GitError::BlobTooLarge {
+            size: 200,
+            limit: 100,
+        };
+        assert_eq!(
+            classify_git_error(&error),
+            GitErrorMapping::PythonException("AGFSResourceExhaustedError")
+        );
     }
 
     #[test]

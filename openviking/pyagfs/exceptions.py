@@ -87,6 +87,12 @@ class AGFSInvalidOperationError(AGFSClientError):
     pass
 
 
+class AGFSResourceExhaustedError(AGFSClientError):
+    """Operation exceeded a configured resource limit"""
+
+    pass
+
+
 class AGFSIoError(AGFSClientError):
     """I/O error"""
 

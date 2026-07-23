@@ -1055,7 +1055,10 @@ impl RAGFSBindingClient {
         let empty = PyDict::new(py);
         let kw = kwargs.unwrap_or(&empty);
         let req = git::parse_show_request(kw)?;
-        let resp = py_detach_blocking(py, move || self.rt.block_on(svc.show(req)))
+        let max_blob_bytes = git::parse_show_max_blob_bytes(kw)?;
+        let resp = py_detach_blocking(py, move || {
+            self.rt.block_on(svc.show_with_limit(req, max_blob_bytes))
+        })
             .map_err(|e| git::map_git_error(py, e))?;
         git::show_response_to_pydict(py, resp)
     }

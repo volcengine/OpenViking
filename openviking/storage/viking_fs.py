@@ -43,6 +43,7 @@ from openviking.pyagfs.exceptions import (
     AGFSInvalidOperationError,
     AGFSNotFoundError,
     AGFSNotSupportedError,
+    AGFSResourceExhaustedError,
 )
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
@@ -4046,6 +4047,7 @@ class VikingFS:
         target_ref: str,
         *,
         path: Optional[str] = None,
+        max_blob_bytes: Optional[int] = None,
         ctx: Optional[RequestContext] = None,
     ) -> Union[Dict[str, Any], bytes]:
         """Read a commit's metadata or a single blob.
@@ -4057,12 +4059,14 @@ class VikingFS:
         real_ctx = self._ctx_or_default(ctx)
         account = real_ctx.account_id
         tree_path = self._uri_to_tree_path(path, ctx=real_ctx) if path else None
-        resp = await self._async_agfs.run(
-            "git_show",
-            account=account,
-            target_ref=target_ref,
-            path=tree_path,
-        )
+        kwargs: Dict[str, Any] = {
+            "account": account,
+            "target_ref": target_ref,
+            "path": tree_path,
+        }
+        if max_blob_bytes is not None:
+            kwargs["max_blob_bytes"] = max_blob_bytes
+        resp = await self._async_agfs.run("git_show", **kwargs)
         if path is not None and isinstance(resp, dict) and "bytes" in resp:
             return resp["bytes"]
         return resp
@@ -4123,9 +4127,20 @@ class VikingFS:
 
         async def read_optional(ref: str) -> Optional[bytes]:
             try:
-                value = await self.show(ref, path=path, ctx=real_ctx)
+                value = await self.show(
+                    ref,
+                    path=path,
+                    max_blob_bytes=SNAPSHOT_DIFF_MAX_FILE_BYTES,
+                    ctx=real_ctx,
+                )
             except AGFSNotFoundError:
                 return None
+            except AGFSResourceExhaustedError as exc:
+                raise ResourceExhaustedError(
+                    f"snapshot diff file size limit exceeded "
+                    f"({SNAPSHOT_DIFF_MAX_FILE_BYTES} bytes)",
+                    details={"limit_bytes": SNAPSHOT_DIFF_MAX_FILE_BYTES, "path": path},
+                ) from exc
             if not isinstance(value, bytes):
                 raise TypeError(f"git_show returned unexpected blob type: {type(value).__name__}")
             return value
