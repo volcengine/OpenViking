@@ -166,11 +166,9 @@ class MarkdownParser(BaseParser):
             config: Parser configuration (uses default if None)
         """
         self.config = config or ParserConfig()
-        self.extract_frontmatter = (
-            extract_frontmatter
-            if extract_frontmatter is not None
-            else getattr(self.config, "extract_frontmatter", True)
-        )
+        if extract_frontmatter is None:
+            extract_frontmatter = getattr(self.config, "extract_frontmatter", True)
+        self.extract_frontmatter = extract_frontmatter
 
         # Compile regex patterns for better performance
         self._heading_pattern = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
