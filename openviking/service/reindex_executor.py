@@ -55,11 +55,15 @@ PRUNE_ORPHAN_CANDIDATE_LIMIT = 100000
 PRUNE_OUTPUT_FIELDS = ["id", "uri", "level", "context_type", "account_id", "owner_user_id"]
 
 
-# Trailing markers VikingFS appends when a directory has no generated .abstract.md/.overview.md
-# (see openviking/storage/viking_fs.py). The rendered value is a placeholder, not semantic
-# content, and must never be embedded as an ABSTRACT (L0) / OVERVIEW (L1) vector (issue #2434).
+# Trailing markers a directory placeholder ends with. The rendered value is a
+# placeholder, not semantic content, and must never be embedded as an ABSTRACT
+# (L0) / OVERVIEW (L1) vector.
+#   not-ready = VikingFS transient placeholder, file not yet generated (#2434).
+#   no-substantive-content = permanent marker for an empty / title-only directory
+#                            that will never have a real summary (issue #3028).
 _ABSTRACT_NOT_READY_SUFFIX = "[Directory abstract is not ready]"
 _OVERVIEW_NOT_READY_SUFFIX = "[Directory overview is not ready]"
+_NO_SUBSTANTIVE_CONTENT_SUFFIX = "[Directory has no substantive content]"
 
 
 def _is_not_ready_sentinel(text: str, suffix: str) -> bool:
@@ -1567,14 +1571,22 @@ class ReindexExecutor:
             value = await get_viking_fs().abstract(uri, ctx=ctx)
         except Exception:
             return ""
-        return "" if _is_not_ready_sentinel(value, _ABSTRACT_NOT_READY_SUFFIX) else value
+        if _is_not_ready_sentinel(value, _ABSTRACT_NOT_READY_SUFFIX) or _is_not_ready_sentinel(
+            value, _NO_SUBSTANTIVE_CONTENT_SUFFIX
+        ):
+            return ""
+        return value
 
     async def _read_directory_overview(self, uri: str, *, ctx: RequestContext) -> str:
         try:
             value = await get_viking_fs().overview(uri, ctx=ctx)
         except Exception:
             return ""
-        return "" if _is_not_ready_sentinel(value, _OVERVIEW_NOT_READY_SUFFIX) else value
+        if _is_not_ready_sentinel(value, _OVERVIEW_NOT_READY_SUFFIX) or _is_not_ready_sentinel(
+            value, _NO_SUBSTANTIVE_CONTENT_SUFFIX
+        ):
+            return ""
+        return value
 
     async def _best_file_summary(self, uri: str, *, ctx: RequestContext) -> str:
         parent_uri = VikingURI(uri).parent.uri

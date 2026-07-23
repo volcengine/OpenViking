@@ -651,6 +651,11 @@ class SemanticConfig:
     memory_chunk_overlap: int = 200
     """Character overlap between adjacent memory chunks for context continuity."""
 
+    min_substantive_chars: int = 8
+    """Minimum weighted residual chars for a text file to be considered substantive
+    (heading/markup stripped, CJK weighted). Below this, the file is treated as
+    non-substantive and skipped for VLM summarization/vectorization (issue #3028)."""
+
     def __post_init__(self):
         if self.memory_chunk_chars <= 0:
             raise ValueError("memory_chunk_chars must be positive")

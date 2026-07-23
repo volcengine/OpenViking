@@ -5,7 +5,7 @@
 import asyncio
 import threading
 from dataclasses import dataclass, field
-from typing import ClassVar, Dict, List, Optional, Set
+from typing import Any, ClassVar, Dict, List, Optional, Set
 from weakref import WeakKeyDictionary
 
 from openviking.server.identity import RequestContext
@@ -33,7 +33,7 @@ class DirNode:
     file_paths: List[str]
     file_index: Dict[str, int]
     child_index: Dict[str, int]
-    file_summaries: List[Optional[Dict[str, str]]]
+    file_summaries: List[Optional[Dict[str, Any]]]
     children_abstracts: List[Optional[Dict[str, str]]]
     pending: int
     dispatched: bool = False
@@ -60,7 +60,7 @@ class VectorizeTask:
     semantic_msg_id: Optional[str] = None
     # For file tasks
     file_path: Optional[str] = None
-    summary_dict: Optional[Dict[str, str]] = None
+    summary_dict: Optional[Dict[str, Any]] = None
     parent_uri: Optional[str] = None
     use_summary: bool = False
     # For directory tasks
@@ -679,7 +679,9 @@ class SemanticDagExecutor:
             self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - 1)
 
         try:
-            if need_vectorize:
+            # Skip vectorization of non-substantive files (issue #3028); media
+            # and code summaries default True. Keep the existing code-repo logic.
+            if need_vectorize and summary_dict.get("has_substantive_content", True):
                 use_summary = self._is_code_repo and bool(summary_dict.get("summary"))
                 task = VectorizeTask(
                     task_type="file",
@@ -693,6 +695,11 @@ class SemanticDagExecutor:
                     use_summary=use_summary,
                 )
                 await self._add_vectorize_task(task)
+            elif need_vectorize:
+                # Content changed and is now non-substantive: any previously
+                # embedded DETAIL record at this exact URI is stale — remove it
+                # (issue #3028). Idempotent no-op when nothing was embedded.
+                await self._viking_fs._delete_from_vector_store([file_path], ctx=self._ctx)
         except Exception as e:
             logger.error(f"Failed to schedule vectorization for {file_path}: {e}", exc_info=True)
         await self._on_file_done(parent_uri, file_path, summary_dict)
@@ -733,12 +740,18 @@ class SemanticDagExecutor:
         node.overview_scheduled = True
         self._schedule_work(DagWork(kind="overview", dir_uri=dir_uri))
 
-    def _finalize_file_summaries(self, node: DirNode) -> List[Dict[str, str]]:
-        summaries: List[Dict[str, str]] = []
+    def _finalize_file_summaries(self, node: DirNode) -> List[Dict[str, Any]]:
+        summaries: List[Dict[str, Any]] = []
         for idx, file_path in enumerate(node.file_paths):
             item = node.file_summaries[idx]
             if item is None:
-                summaries.append({"name": file_path.split("/")[-1], "summary": ""})
+                summaries.append(
+                    {
+                        "name": file_path.split("/")[-1],
+                        "summary": "",
+                        "has_substantive_content": False,
+                    }
+                )
             else:
                 summaries.append(item)
         return summaries
@@ -813,6 +826,18 @@ class SemanticDagExecutor:
                         dir_uri, file_summaries, children_abstracts
                     )
                 overview, abstract = self._processor._normalize_overview_generation(overview)
+
+            # Neutral (no-substantive-content) overview: write the sidecar but do
+            # not embed it, matching _is_not_ready_sentinel (issue #3028 / #2434).
+            from openviking.storage.queuefs.semantic_processor import is_neutral_overview
+
+            if is_neutral_overview(overview):
+                need_vectorize = False
+                # Directory became non-substantive: stale L0/L1 records at this
+                # exact URI must be removed (issue #3028). Deliberately inside
+                # this branch only — the write-failure path below also suppresses
+                # vectorization but must keep existing vectors.
+                await self._viking_fs._delete_from_vector_store([dir_uri], ctx=self._ctx)
 
             # Write directly, protected by the outer semantic lock.
             try:

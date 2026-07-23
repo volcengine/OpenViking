@@ -58,6 +58,150 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+# --- Substantive-content detector (issue #3028) -----------------------------
+# Regex-only markdown strip (no AST). Decides whether a text file has real
+# authored content or is just headings/markup/frontmatter that would make a VLM
+# hallucinate an L0/L1 summary. Spec: .wiki/issue-3028-...md §3.1/§3.2.
+
+# CJK ranges: Unified Ideographs, Hiragana, Katakana, Hangul, CJK punctuation.
+_CJK_RE = re.compile("[　-〿぀-ゟ゠-ヿ一-鿿가-힯]")
+_CJK_WEIGHT = 2.5  # CJK chars count heavier: 1 char ≈ 1 word (dense CJK has no spaces)
+_FRONTMATTER_RE = re.compile(
+    r"\A---\n.*?\n---[ \t]*(?:\n|\Z)", re.DOTALL
+)  # leading block only; closes at EOF too
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+_FENCE_RE = re.compile(r"^\s*(```|~~~)")
+_ATX_RE = re.compile(r"^\s*#{1,6}\s+\S")
+_SETEXT_UNDERLINE_RE = re.compile(r"^(=+|-+)$")  # === (h1) or --- (h2/divider)
+_HR_RE = re.compile(r"^([-*_])(\s*\1){2,}$")  # ---, ***, ___
+_BLOCKQUOTE_RE = re.compile(r"^\s*>+\s?")
+_LIST_RE = re.compile(r"^\s*([-*+]|\d+[.)])\s+")
+_TABLE_SEP_RE = re.compile(r"^[\s|:\-]+$")
+_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")  # keep alt
+_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")  # keep text
+_AUTOLINK_RE = re.compile(r"<[a-z][a-z0-9+.-]*://[^>]*>")
+_BARE_URL_RE = re.compile(r"(https?://|www\.)\S+")
+_EMPHASIS_RE = re.compile(r"(\*\*|\*|__|_|~~)")
+_PUNCT_ONLY_RE = re.compile(r"^[\W_\s]+$")
+
+
+def _weighted_len(residual: str) -> float:
+    """CJK-weighted content length; whitespace excluded (dense CJK has no spaces)."""
+    total = 0.0
+    for ch in residual:
+        if _CJK_RE.match(ch):
+            total += _CJK_WEIGHT
+        elif not ch.isspace():
+            total += 1.0
+    return total
+
+
+def has_substantive_content(text: str, min_chars: int = 8) -> bool:
+    """Return True if *text* has substantive content after stripping markdown.
+
+    Strips markdown structure (frontmatter, HTML comments, headings, setext/HR,
+    blockquote/list markers, table pipes, code fences, link/image markup,
+    emphasis markers) with regex only — no AST. Keeps code body, table cell
+    text, and link/image label text. Weighted length counts CJK chars heavier.
+    See issue #3028.
+    """
+    if not text:
+        return False
+
+    # 1. Normalize line endings first (reporter is on Windows → CRLF expected).
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    # 2. Leading YAML frontmatter only — never a mid-doc `---`.
+    text = _FRONTMATTER_RE.sub("", text)
+    # 3. HTML comments.
+    text = _HTML_COMMENT_RE.sub("", text)
+
+    kept: list[str] = []
+    in_fence = False
+    for line in text.split("\n"):
+        # 4. Code fences before heading/list rules, so a `#`/`-` inside a fenced
+        #    block isn't mistaken for a heading/list marker. Keep the body.
+        if _FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            kept.append(line)  # code body
+            continue
+
+        stripped = line.strip()
+        if _ATX_RE.match(line):
+            continue  # heading marker + text dropped
+        if _SETEXT_UNDERLINE_RE.match(stripped):
+            if kept and kept[-1].strip():
+                kept.pop()  # drop the heading text this underlines
+            continue
+        if _HR_RE.match(stripped):
+            continue
+
+        line = _BLOCKQUOTE_RE.sub("", line)
+        line = _LIST_RE.sub("", line)
+        if "|" in line and _TABLE_SEP_RE.match(line.strip()):
+            continue  # table separator row
+        line = line.replace("|", " ")  # keep cell text, drop pipes
+        line = _IMAGE_RE.sub(r"\1", line)  # keep alt
+        line = _LINK_RE.sub(r"\1", line)  # keep text
+        line = _AUTOLINK_RE.sub("", line)
+        line = _BARE_URL_RE.sub("", line)
+        line = line.replace("`", "")  # inline code markers, keep body
+        line = _EMPHASIS_RE.sub("", line)  # markers only, keep span
+        kept.append(line)
+
+    residual = " ".join(part for part in " ".join(kept).split() if part)
+    if not residual or _PUNCT_ONLY_RE.match(residual):
+        return False
+
+    return _weighted_len(residual) >= min_chars
+
+
+# Directory placeholder markers, all shaped like reindex_executor's sentinels
+# (single `#` header + suffix) so _is_not_ready_sentinel refuses to embed them.
+#   not-ready = VikingFS transient placeholder (the .overview.md/.abstract.md
+#               file is missing / not yet generated).
+#   no-substantive-content = our PERMANENT marker for an empty / title-only
+#               directory that will never have a real summary (issue #3028).
+_OVERVIEW_NOT_READY_MARKER = "[Directory overview is not ready]"
+_ABSTRACT_NOT_READY_MARKER = "[Directory abstract is not ready]"
+_OVERVIEW_NO_CONTENT_MARKER = "[Directory has no substantive content]"
+
+
+def _neutral_directory_overview(dir_name: str) -> str:
+    """Deterministic directory overview when there is no substantive content — no VLM."""
+    return f"# {dir_name}\n\n{_OVERVIEW_NO_CONTENT_MARKER}"
+
+
+def is_neutral_overview(text: str) -> bool:
+    """True if *text* is the no-substantive-content directory overview.
+
+    Same shape test as ``reindex_executor._is_not_ready_sentinel`` (a single
+    ``#`` header followed only by the marker) so the write-time vectorization
+    skip and the reindex embedding guard agree.
+    """
+    if not text:
+        return False
+    head = text.rstrip()
+    if not head.endswith(_OVERVIEW_NO_CONTENT_MARKER):
+        return False
+    head = head[: -len(_OVERVIEW_NO_CONTENT_MARKER)].strip()
+    return head.startswith("#") and "\n" not in head
+
+
+def _is_placeholder_abstract(text: Optional[str]) -> bool:
+    """True if *text* is empty or a placeholder directory abstract (transient
+    not-ready or permanent no-substantive-content)."""
+    t = (text or "").strip()
+    if not t:
+        return True
+    return (
+        t.endswith(_OVERVIEW_NO_CONTENT_MARKER)
+        or t.endswith(_OVERVIEW_NOT_READY_MARKER)
+        or t.endswith(_ABSTRACT_NOT_READY_MARKER)
+    )
+
+
 @dataclass
 class DiffResult:
     """Directory diff result for sync operations."""
@@ -654,12 +798,31 @@ class SemanticProcessor(DequeueHandlerBase):
             file_vectorize_items = [
                 (file_path, summary)
                 for file_path, summary in zip(file_paths, file_summaries, strict=False)
-                if file_path in paths_to_vectorize and summary is not None
+                if file_path in paths_to_vectorize
+                and summary is not None
+                and summary.get("has_substantive_content", True)
             ]
+            # Files whose fresh summary is non-substantive: any previously
+            # embedded DETAIL records at their exact URIs are stale — remove
+            # them (issue #3028). Idempotent no-op when nothing was embedded.
+            # Deleting before the sidecar write below is intentional: these
+            # files must not have vectors regardless of the write outcome.
+            stale_file_uris = [
+                file_path
+                for file_path, summary in zip(file_paths, file_summaries, strict=False)
+                if file_path in paths_to_vectorize
+                and summary is not None
+                and not summary.get("has_substantive_content", True)
+            ]
+            if stale_file_uris:
+                await viking_fs._delete_from_vector_store(stale_file_uris, ctx=ctx)
             generated_content = await self._generate_overview(
                 dir_uri, completed_summaries, [], llm_sem=llm_sem
             )
             overview, abstract = self._normalize_overview_generation(generated_content)
+            # Neutral (no-substantive-content) overview: write the sidecar but do
+            # not embed it, matching _is_not_ready_sentinel (issue #3028 / #2434).
+            skip_directory_vectorization = is_neutral_overview(overview)
 
             try:
                 wrote_semantics = await self._write_memory_directory_semantics(
@@ -691,7 +854,8 @@ class SemanticProcessor(DequeueHandlerBase):
                 tracker = EmbeddingTaskTracker.get_instance()
                 await tracker.register(
                     semantic_msg_id=msg.id,
-                    total_count=2 + len(file_vectorize_items),
+                    total_count=(0 if skip_directory_vectorization else 2)
+                    + len(file_vectorize_items),
                     on_complete=_on_complete,
                     metadata={"uri": dir_uri},
                 )
@@ -705,15 +869,21 @@ class SemanticProcessor(DequeueHandlerBase):
                     semantic_msg_id=msg.id,
                     preserve_existing_created_at=True,
                 )
-            await self._vectorize_directory(
-                uri=dir_uri,
-                context_type="memory",
-                abstract=abstract,
-                overview=overview,
-                ctx=ctx,
-                semantic_msg_id=msg.id,
-            )
-            logger.info(f"Vectorized abstract.md and overview.md for {dir_uri}")
+            if skip_directory_vectorization:
+                logger.info(f"Skipping directory vectorization for neutral overview: {dir_uri}")
+                # Directory became non-substantive: remove stale L0/L1 records
+                # at this exact URI (issue #3028). Idempotent when none exist.
+                await viking_fs._delete_from_vector_store([dir_uri], ctx=ctx)
+            else:
+                await self._vectorize_directory(
+                    uri=dir_uri,
+                    context_type="memory",
+                    abstract=abstract,
+                    overview=overview,
+                    ctx=ctx,
+                    semantic_msg_id=msg.id,
+                )
+                logger.info(f"Vectorized abstract.md and overview.md for {dir_uri}")
         finally:
             await lock.close()
 
@@ -1047,8 +1217,23 @@ class SemanticProcessor(DequeueHandlerBase):
 
         full_content = content or ""
 
-        def result(summary: str) -> Dict[str, Any]:
-            return {"name": file_name, "summary": summary, "content": full_content}
+        def result(summary: str, has_substantive: bool = True) -> Dict[str, Any]:
+            return {
+                "name": file_name,
+                "summary": summary,
+                "content": full_content,
+                "has_substantive_content": has_substantive,
+            }
+
+        # Substantive-content gate (issue #3028): skip the VLM for empty /
+        # title-only docs so it cannot hallucinate a summary. Run on the
+        # untruncated content; never gate code (code is always substantive).
+        file_type = self._detect_file_type(file_name)
+        if file_type != FILE_TYPE_CODE:
+            min_chars = get_openviking_config().semantic.min_substantive_chars
+            if not has_substantive_content(full_content, min_chars=min_chars):
+                logger.info("Skipping VLM for non-substantive file: %s", file_path)
+                return result("", has_substantive=False)
 
         # Limit content length
         max_chars = get_openviking_config().semantic.max_file_content_chars
@@ -1064,9 +1249,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         output_language = resolve_output_language(content)
 
-        # Detect file type and select appropriate prompt
-        file_type = self._detect_file_type(file_name)
-
+        # File type already detected above for the substantive-content gate.
         if file_type == FILE_TYPE_CODE:
             code_mode = get_openviking_config().code.code_summary_mode
 
@@ -1308,9 +1491,22 @@ class SemanticProcessor(DequeueHandlerBase):
         vlm = config.vlm
         semantic = config.semantic
 
+        # Substantive-content gate (issue #3028): drop non-substantive files (and
+        # placeholder child abstracts) from the overview prompt; if nothing
+        # substantive remains, write the deterministic neutral overview without
+        # the VLM so it cannot hallucinate over near-empty input.
+        file_summaries = [s for s in file_summaries if s.get("has_substantive_content", True)]
+        children_abstracts = [
+            c for c in children_abstracts if not _is_placeholder_abstract(c.get("abstract"))
+        ]
+        if not file_summaries and not children_abstracts:
+            return _neutral_directory_overview(dir_uri.split("/")[-1])
+
         if not vlm.is_available():
+            # VLM down is transient (retry later), not "empty" — keep the not-ready
+            # marker here; only genuinely non-substantive dirs get the no-content one.
             logger.warning("VLM not available, using default overview")
-            return f"# {dir_uri.split('/')[-1]}\n\n[Directory overview is not ready]"
+            return f"# {dir_uri.split('/')[-1]}\n\n{_OVERVIEW_NOT_READY_MARKER}"
 
         from openviking.session.memory.utils.language import resolve_output_language
 
