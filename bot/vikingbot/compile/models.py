@@ -22,6 +22,7 @@ class CompileLimits(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     source_roots: int = 16
+    source_catalog_entries: int = 200
     skill_files: int = 128
     skill_file_bytes: int = 8 * 1024 * 1024
     skill_total_bytes: int = 32 * 1024 * 1024
@@ -64,11 +65,35 @@ class WikiPageDraft(BaseModel):
     title: str
     page_type: str
     summary: str
-    body_markdown: str
-    source_ids: list[str]
+    body_markdown: str | None = Field(
+        default=None,
+        description=(
+            "Inline Markdown body for an actual Wiki page. Link relevant known source "
+            "URIs with ordinary Markdown links; never invent link targets."
+        )
+    )
+    body_workspace_path: str | None = Field(
+        default=None,
+        description=(
+            "Relative path of a reader-oriented UTF-8 Markdown Wiki body generated "
+            "separately from exact artifact files in the task workspace. Use ordinary "
+            "Markdown links when referencing supplied source catalog entries."
+        ),
+    )
+    source_ids: list[str] = Field(
+        description="Identifiers of supplied source roots that support this Wiki page."
+    )
     tags: list[str] = Field(default_factory=list)
     path_hint: str | None = None
     update_uri: str | None = None
+
+    @model_validator(mode="after")
+    def validate_body(self) -> "WikiPageDraft":
+        if (self.body_markdown is None) == (self.body_workspace_path is None):
+            raise ValueError(
+                "exactly one of body_markdown or body_workspace_path is required"
+            )
+        return self
 
 
 class CompileFileDraft(BaseModel):
@@ -106,9 +131,25 @@ class CompileFileDraft(BaseModel):
 class WikiBundleDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    pages: list[WikiPageDraft]
-    files: list[CompileFileDraft] = Field(default_factory=list)
-    links: list[WikiLink] = Field(default_factory=list)
+    pages: list[WikiPageDraft] = Field(
+        description=(
+            "Actual Wiki pages only; do not place Skill-prescribed artifact files here."
+        )
+    )
+    files: list[CompileFileDraft] = Field(
+        default_factory=list,
+        description=(
+            "Skill-prescribed exact-path artifacts, including Markdown, YAML, JSON, "
+            "and binary files; preserve every required path and format."
+        ),
+    )
+    links: list[WikiLink] = Field(
+        default_factory=list,
+        description=(
+            "Useful non-self relationships between generated Wiki pages only; omit "
+            "them when no valid related page exists."
+        ),
+    )
 
 
 class CompileErrorInfo(BaseModel):

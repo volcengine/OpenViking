@@ -7,6 +7,7 @@ import hashlib
 import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping
+from urllib.parse import unquote
 
 import yaml
 
@@ -29,6 +30,10 @@ from vikingbot.compile.models import CompileLimits, WikiBundleDraft
 
 _FRONTMATTER_RE = re.compile(r"\A---[ \t]*\n(.*?)\n---[ \t]*(?:\n|\Z)", re.DOTALL)
 _CITATION_LINE_RE = re.compile(r"^\[\d+\]\s+\[([^\]\n]+)\]\(([^)\n]+)\)\s*$")
+_BARE_VIKING_URI_RE = re.compile(
+    r"""viking://[^\s<>\[\](){}"'«»，。；：！？]+"""
+)
+_RELATED_PAGES_RE = re.compile(r"(?mi)^#{1,6}[ \t]+Related pages[ \t]*$")
 _RESERVED_FILENAMES = frozenset(
     {"index.md", "log.md", ".abstract.md", ".overview.md", ".relations.json"}
 )
@@ -131,18 +136,81 @@ def _citation_target_allowed(target: str, source_roots: Mapping[str, str]) -> bo
     return False
 
 
+def _linkify_source_uris(
+    body: str, source_roots: Mapping[str, str]
+) -> tuple[str, list[tuple[str, str]]]:
+    protected = LinkRenderer.protected_markdown_spans(body)
+    replacements: list[tuple[int, int, str]] = []
+    citations: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for match in _BARE_VIKING_URI_RE.finditer(body):
+        start = match.start()
+        target = match.group(0).rstrip(".,;:!?")
+        end = start + len(target)
+        if any(not (end <= span_start or start >= span_end) for span_start, span_end in protected):
+            continue
+        if start > 0 and end < len(body) and body[start - 1] == "<" and body[end] == ">":
+            continue
+        if not _citation_target_allowed(target, source_roots):
+            continue
+        label = unquote(target.rstrip("/").rsplit("/", 1)[-1]).removesuffix(".md")
+        label = label.replace("[", r"\[").replace("]", r"\]") or "Source"
+        replacements.append((start, end, f"[{label}]({target})"))
+        if target not in seen:
+            seen.add(target)
+            citations.append((label, target))
+
+    rendered = list(body)
+    for start, end, replacement in reversed(replacements):
+        rendered[start:end] = replacement
+    return "".join(rendered), citations
+
+
+def _render_related_pages(
+    body: str,
+    *,
+    page_uri: str,
+    incoming: list[StoredLink],
+    page_titles: Mapping[str, str],
+) -> str:
+    if not incoming or _RELATED_PAGES_RE.search(body):
+        return body
+    lines: list[str] = []
+    seen: set[str] = set()
+    for link in incoming:
+        source_uri = link.from_uri
+        if source_uri in seen:
+            continue
+        seen.add(source_uri)
+        target = LinkRenderer.relative_path(page_uri, source_uri) or source_uri
+        target = target.replace(" ", "%20").replace("(", "%28").replace(")", "%29")
+        if f"]({target})" in body:
+            continue
+        label = page_titles.get(source_uri) or source_uri.rstrip("/").rsplit("/", 1)[-1]
+        label = label.replace("[", r"\[").replace("]", r"\]")
+        lines.append(f"- [{label}]({target})")
+    if not lines:
+        return body
+    return body.rstrip() + "\n\n## Related pages\n\n" + "\n".join(lines)
+
+
 def _render_citations(
     body: str,
     *,
     old_body: str,
     source_ids: list[str],
     source_roots: Mapping[str, str],
+    inline_citations: list[tuple[str, str]] | None = None,
 ) -> str:
     body, draft_citations = _split_citations(body)
     _old_without_citations, old_citations = _split_citations(old_body)
     merged: list[tuple[str, str]] = []
     seen: set[str] = set()
-    for label, target in [*old_citations, *draft_citations]:
+    for label, target in [
+        *old_citations,
+        *draft_citations,
+        *(inline_citations or []),
+    ]:
         if not _citation_target_allowed(target, source_roots) or target in seen:
             continue
         seen.add(target)
@@ -334,6 +402,9 @@ class WikiRenderer:
                 )
 
         resolved_links = resolve_wiki_links(bundle.links, page_uris, strict=True)
+        page_titles = {
+            page_uris[page.page_id][0]: page.title.strip() for page in bundle.pages
+        }
         result = RenderedBundle()
         total_bytes = 0
         for page in bundle.pages:
@@ -356,12 +427,23 @@ class WikiRenderer:
                 [link.model_dump() for link in outgoing],
             )
             result.link_count += rendered_count
+            rendered_body, inline_citations = _linkify_source_uris(
+                rendered_body, source_roots
+            )
+            if not memory_target:
+                rendered_body = _render_related_pages(
+                    rendered_body,
+                    page_uri=uri,
+                    incoming=incoming,
+                    page_titles=page_titles,
+                )
             source_ids = list(dict.fromkeys(value.strip() for value in page.source_ids if value.strip()))
             rendered_body = _render_citations(
                 rendered_body,
                 old_body=old_body,
                 source_ids=source_ids,
                 source_roots=source_roots,
+                inline_citations=inline_citations,
             )
             visible = _frontmatter(
                 old=old_frontmatter,

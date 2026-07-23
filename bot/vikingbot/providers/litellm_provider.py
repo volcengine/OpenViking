@@ -1,6 +1,5 @@
 """LiteLLM provider implementation for multi-provider support."""
 
-import json
 import os
 from typing import Any, AsyncIterator
 
@@ -16,12 +15,12 @@ from vikingbot.providers.base import (
     ToolCallRequest,
     build_stream_response,
     merge_stream_tool_call_delta,
+    parse_tool_arguments,
     stream_delta_value,
 )
 from vikingbot.providers.registry import find_by_model, find_gateway
 from vikingbot.utils.helpers import cal_str_tokens
 from vikingbot.utils.tracing import get_current_response_id
-
 
 _OPENAI_REASONING_MODEL_PREFIXES = ("gpt-5", "openai/gpt-5", "o1", "o3", "o4")
 
@@ -521,11 +520,8 @@ class LiteLLMProvider(LLMProvider):
                 args = tc.function.arguments
                 tokens = cal_str_tokens(tc.function.name, text_type="en")
                 if isinstance(args, str):
-                    try:
-                        tokens += cal_str_tokens(args, text_type="mixed")
-                        args = json.loads(args)
-                    except json.JSONDecodeError:
-                        args = {"raw": args}
+                    tokens += cal_str_tokens(args, text_type="mixed")
+                args = parse_tool_arguments(args)
 
                 tool_calls.append(
                     ToolCallRequest(id=tc.id, name=tc.function.name, arguments=args, tokens=tokens)

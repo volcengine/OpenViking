@@ -26,6 +26,13 @@ from vikingbot.compile.renderer import (
 _LINK_FIELDS = frozenset({"f", "t", "link_type", "weight", "match_text", "description"})
 
 
+def _normalize_workspace_path(path: str) -> str:
+    normalized = sanitize_relative_viking_path(path)
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
+
+
 def _uri_in_roots(uri: str, roots: tuple[str, ...]) -> bool:
     normalized = str(uri or "").strip().rstrip("/")
     if not normalized.startswith("viking://"):
@@ -125,12 +132,16 @@ class SubmitWikiBundleTool(Tool):
         file_catalog_uris: set[str] | None = None,
         target_uri: str,
         limits: CompileLimits,
+        require_workspace_files: bool = False,
+        require_workspace_pages: bool = False,
     ):
         self.source_ids = source_ids
         self.catalog_uris = catalog_uris
         self.file_catalog_uris = file_catalog_uris or set()
         self.target_uri = target_uri.rstrip("/")
         self.limits = limits
+        self.require_workspace_files = require_workspace_files
+        self.require_workspace_pages = require_workspace_pages
         self.bundle: WikiBundleDraft | None = None
         self.file_payloads: list[bytes | None] = []
 
@@ -140,11 +151,33 @@ class SubmitWikiBundleTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Submit the final validated Wiki pages and explicitly declared raw output files."
+        return (
+            "Submit the final output only after every path and format explicitly required "
+            "by the Skill is represented. Treat only actual Wiki content as Wiki pages and "
+            "preserve exact-path Skill outputs as artifact files."
+        )
+
+    def validate_params(self, params: dict[str, Any]) -> list[str]:
+        if "raw" in params:
+            return ["use the tool schema directly; do not wrap the payload in a JSON string"]
+        return super().validate_params(params)
 
     @property
     def parameters(self) -> dict[str, Any]:
         schema = WikiBundleDraft.model_json_schema()
+        required = schema.setdefault("required", [])
+        if "files" not in required:
+            required.append("files")
+        if self.require_workspace_pages:
+            page_def = schema.get("$defs", {}).get("WikiPageDraft", {})
+            page_properties = page_def.get("properties", {})
+            if isinstance(page_properties, dict):
+                page_properties.pop("body_markdown", None)
+            page_required = page_def.setdefault("required", [])
+            if "body_markdown" in page_required:
+                page_required.remove("body_markdown")
+            if "body_workspace_path" not in page_required:
+                page_required.append("body_workspace_path")
         link_def = schema.get("$defs", {}).get("WikiLink", {})
         match_schema = link_def.get("properties", {}).get("match_text")
         if isinstance(match_schema, dict):
@@ -174,6 +207,9 @@ class SubmitWikiBundleTool(Tool):
             bundle = WikiBundleDraft.model_validate(
                 {"pages": pages, "files": files or [], "links": raw_links}
             )
+            bundle = await self._materialize_page_bodies(
+                bundle, tool_context=tool_context
+            )
             payloads = await self._validate_bundle(bundle, tool_context=tool_context)
         except (ValidationError, ValueError) as exc:
             return f"Error: Invalid Wiki bundle: {exc}"
@@ -183,6 +219,73 @@ class SubmitWikiBundleTool(Tool):
             f"Wiki bundle accepted with {len(bundle.pages)} page(s) and "
             f"{len(bundle.files)} file(s)."
         )
+
+    async def _read_workspace_bytes(
+        self,
+        workspace_path: str,
+        *,
+        tool_context: ToolContext,
+        label: str,
+    ) -> bytes:
+        try:
+            relative = _normalize_workspace_path(workspace_path)
+            if tool_context.sandbox_manager is None:
+                raise ValueError("task sandbox is unavailable")
+            sandbox = await tool_context.sandbox_manager.get_sandbox(
+                tool_context.session_key
+            )
+            return await sandbox.read_file_bytes(relative)
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError(
+                f"{label} workspace path could not be read: {workspace_path}"
+            ) from exc
+
+    async def _materialize_page_bodies(
+        self,
+        bundle: WikiBundleDraft,
+        *,
+        tool_context: ToolContext,
+    ) -> WikiBundleDraft:
+        artifact_workspace_paths = {
+            _normalize_workspace_path(file.workspace_path)
+            for file in bundle.files
+            if file.workspace_path is not None
+        }
+        pages = []
+        for page in bundle.pages:
+            if self.require_workspace_pages and page.body_markdown is not None:
+                raise ValueError(
+                    f"page {page.page_id} body must be generated with write_file and "
+                    "submitted using body_workspace_path instead of inline Markdown"
+                )
+            if page.body_workspace_path is None:
+                pages.append(page)
+                continue
+            workspace_path = _normalize_workspace_path(page.body_workspace_path)
+            if workspace_path in artifact_workspace_paths:
+                raise ValueError(
+                    f"page {page.page_id} body must be a separate reader-oriented "
+                    "workspace file, not an exact artifact file"
+                )
+            raw = await self._read_workspace_bytes(
+                workspace_path,
+                tool_context=tool_context,
+                label=f"page {page.page_id} body",
+            )
+            try:
+                body = raw.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise ValueError(
+                    f"page {page.page_id} body_workspace_path must contain UTF-8 Markdown"
+                ) from exc
+            pages.append(
+                page.model_copy(
+                    update={"body_markdown": body, "body_workspace_path": None}
+                )
+            )
+        return bundle.model_copy(update={"pages": pages})
 
     async def _validate_bundle(
         self, bundle: WikiBundleDraft, *, tool_context: ToolContext
@@ -198,10 +301,21 @@ class SubmitWikiBundleTool(Tool):
                 "raw artifact files are only supported for Resource targets; "
                 "re-run ov compile with a viking://resources/... target"
             )
+        if (
+            self.require_workspace_files
+            and len(bundle.files) > 1
+            and any(file.content is not None for file in bundle.files)
+        ):
+            raise ValueError(
+                "multi-file artifact bundles must be generated with write_file and "
+                "submitted using workspace_path instead of inline content"
+            )
         page_ids: set[int] = set()
         final_uris: set[str] = set()
         total_bytes = 0
         for page in bundle.pages:
+            if page.body_markdown is None:
+                raise ValueError(f"page {page.page_id} body was not materialized")
             if page.page_id in page_ids:
                 raise ValueError(f"duplicate page_id: {page.page_id}")
             page_ids.add(page.page_id)
@@ -255,34 +369,34 @@ class SubmitWikiBundleTool(Tool):
                 payload = None
                 content_bytes = file.content.encode("utf-8")
             else:
-                try:
-                    workspace_path = sanitize_relative_viking_path(file.workspace_path or "")
-                    if tool_context.sandbox_manager is None:
-                        raise ValueError("task sandbox is unavailable")
-                    sandbox = await tool_context.sandbox_manager.get_sandbox(
-                        tool_context.session_key
-                    )
-                    payload = await sandbox.read_file_bytes(workspace_path)
-                except ValueError:
-                    raise
-                except Exception as exc:
-                    raise ValueError(
-                        f"file {index} workspace_path could not be read: {file.workspace_path}"
-                    ) from exc
+                payload = await self._read_workspace_bytes(
+                    file.workspace_path or "",
+                    tool_context=tool_context,
+                    label=f"file {index}",
+                )
                 content_bytes = payload
             total_bytes += len(content_bytes)
             file_payloads.append(payload)
 
         if total_bytes > self.limits.output_total_bytes:
             raise ValueError("draft content size limit exceeded")
-        for link in bundle.links:
-            if link.f is None or link.t is None or link.f == link.t:
-                raise ValueError("link endpoints must be non-null and non-self")
+        page_by_id = {page.page_id: page for page in bundle.pages}
+        link_errors: list[str] = []
+        for index, link in enumerate(bundle.links):
+            prefix = f"links[{index}]"
+            if link.f is None or link.t is None:
+                link_errors.append(f"{prefix} endpoints must be non-null")
+                continue
+            if link.f == link.t:
+                link_errors.append(f"{prefix} must not be a self-link")
+                continue
             if link.f not in page_ids or link.t not in page_ids:
-                raise ValueError("link endpoints must reference bundle pages")
+                link_errors.append(f"{prefix} endpoints must reference bundle pages")
+                continue
             if not link.match_text:
-                raise ValueError("link match_text is required")
-            source_page = next(page for page in bundle.pages if page.page_id == link.f)
+                link_errors.append(f"{prefix} match_text is required")
+                continue
+            source_page = page_by_id[link.f]
             if (
                 LinkRenderer._find_match_span(
                     source_page.body_markdown,
@@ -291,7 +405,13 @@ class SubmitWikiBundleTool(Tool):
                 )
                 is None
             ):
-                raise ValueError(f"link anchor is not linkable: {link.match_text!r}")
+                link_errors.append(
+                    f"{prefix} from page {link.f} has non-linkable anchor "
+                    f"{link.match_text!r}; remove the link or use exact unprotected "
+                    "text from that page body"
+                )
+        if link_errors:
+            raise ValueError(f"{len(link_errors)} invalid link(s): " + "; ".join(link_errors))
         return file_payloads
 
 

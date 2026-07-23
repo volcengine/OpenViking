@@ -80,6 +80,71 @@ def test_skill_loader_rejects_invalid_allowed_tools():
         )
 
 
+def test_compile_bundle_schema_distinguishes_wiki_pages_and_artifact_files():
+    schema = WikiBundleDraft.model_json_schema()
+    properties = schema["properties"]
+    page_properties = schema["$defs"]["WikiPageDraft"]["properties"]
+
+    assert "Actual Wiki pages only" in properties["pages"]["description"]
+    assert "Markdown, YAML, JSON" in properties["files"]["description"]
+    assert "generated Wiki pages only" in properties["links"]["description"]
+    assert "known source URIs" in page_properties["body_markdown"]["description"]
+    assert "task workspace" in page_properties["body_workspace_path"]["description"]
+    assert "reader-oriented" in page_properties["body_workspace_path"]["description"]
+    assert "source catalog entries" in page_properties["body_workspace_path"]["description"]
+    assert "supplied source roots" in page_properties["source_ids"]["description"]
+
+
+def test_wiki_page_requires_exactly_one_body_source():
+    body = _page(1, "One")
+    body.pop("body_markdown")
+
+    with pytest.raises(ValueError, match="exactly one of body_markdown"):
+        WikiBundleDraft.model_validate({"pages": [body]})
+    with pytest.raises(ValueError, match="exactly one of body_markdown"):
+        WikiBundleDraft.model_validate(
+            {
+                "pages": [
+                    {
+                        **body,
+                        "body_markdown": "Inline",
+                        "body_workspace_path": "pages/one.md",
+                    }
+                ]
+            }
+        )
+
+
+def test_submit_tool_rejects_raw_payload_wrapper_with_actionable_hint():
+    tool = SubmitWikiBundleTool(
+        source_ids={"src_1"},
+        catalog_uris=set(),
+        target_uri="viking://resources/wiki",
+        limits=CompileLimits(),
+    )
+
+    assert tool.validate_params({"raw": "{}"}) == [
+        "use the tool schema directly; do not wrap the payload in a JSON string"
+    ]
+    assert {"pages", "files"} <= set(tool.parameters["required"])
+    assert "missing required files" in tool.validate_params({"pages": []})
+    assert tool.validate_params({"pages": [], "files": []}) == []
+
+
+def test_submit_tool_schema_requires_workspace_page_bodies_when_available():
+    tool = SubmitWikiBundleTool(
+        source_ids={"src_1"},
+        catalog_uris=set(),
+        target_uri="viking://resources/wiki",
+        limits=CompileLimits(),
+        require_workspace_pages=True,
+    )
+
+    page_schema = tool.parameters["$defs"]["WikiPageDraft"]
+    assert "body_markdown" not in page_schema["properties"]
+    assert "body_workspace_path" in page_schema["required"]
+
+
 def test_renderer_creates_okf_pages_links_and_citations():
     summary = "Residual building block designs, network variants, shortcut connection types, and design principles aligned with VGG architecture."
     bundle = WikiBundleDraft.model_validate(
@@ -109,6 +174,50 @@ def test_renderer_creates_okf_pages_links_and_citations():
     assert f"description: {summary}\n" in first["content"]
     assert "Read [Beta](./beta.md) next." in first["content"]
     assert "[1] [source](viking://resources/source)" in first["content"]
+
+
+def test_renderer_linkifies_source_uris_and_adds_resource_backlinks():
+    source_detail = "viking://resources/source/chapter_1.md"
+    outside = "viking://resources/outside/chapter.md"
+    bundle = WikiBundleDraft.model_validate(
+        {
+            "pages": [
+                _page(
+                    1,
+                    "Overview",
+                    body_markdown=(
+                        "Read Details next.\n\n"
+                        f"Source: {source_detail} section 2\n\n"
+                        f"Keep code unchanged: `{source_detail}`\n\n"
+                        f"Outside stays plain: {outside}"
+                    ),
+                ),
+                _page(2, "Details"),
+            ],
+            "links": [{"f": 1, "t": 2, "match_text": "Details"}],
+        }
+    )
+
+    rendered = WikiRenderer().render(
+        bundle=bundle,
+        target_uri="viking://resources/wiki",
+        source_roots={"src_1": "viking://resources/source"},
+        catalog_uris=set(),
+        existing_raw={},
+    )
+    operations = {operation["uri"]: operation["content"] for operation in rendered.operations}
+    overview = operations["viking://resources/wiki/overview.md"]
+    details = operations["viking://resources/wiki/details.md"]
+
+    assert "[Details](./details.md)" in overview
+    assert f"[chapter_1]({source_detail})" in overview
+    assert f"`{source_detail}`" in overview
+    assert outside in overview and f"]({outside})" not in overview
+    assert f"[1] [chapter_1]({source_detail})" in overview
+    assert "[2] [source](viking://resources/source)" in overview
+    assert "## Related pages" in details
+    assert "- [Overview](./overview.md)" in details
+    assert rendered.link_count == 1
 
 
 def test_renderer_adds_raw_text_and_workspace_binary_to_same_bundle():
@@ -349,6 +458,70 @@ async def test_submit_tool_rejects_protected_anchor_and_path_collision():
 
 
 @pytest.mark.asyncio
+async def test_submit_tool_reports_all_invalid_links():
+    tool = SubmitWikiBundleTool(
+        source_ids={"src_1"},
+        catalog_uris=set(),
+        target_uri="viking://resources/wiki",
+        limits=CompileLimits(),
+    )
+
+    result = await tool.execute(
+        ToolContext(),
+        pages=[
+            _page(1, "One", body_markdown="First page body"),
+            _page(2, "Two"),
+            _page(3, "Three"),
+        ],
+        links=[
+            {"f": 1, "t": 2, "match_text": "Missing One"},
+            {"f": 1, "t": 3, "match_text": "Missing Two"},
+        ],
+    )
+
+    assert result.startswith("Error: Invalid Wiki bundle: 2 invalid link(s):")
+    assert "links[0] from page 1 has non-linkable anchor 'Missing One'" in result
+    assert "links[1] from page 1 has non-linkable anchor 'Missing Two'" in result
+    assert tool.bundle is None
+
+
+@pytest.mark.asyncio
+async def test_submit_tool_requires_workspace_paths_for_multi_file_artifacts():
+    tool = SubmitWikiBundleTool(
+        source_ids={"src_1"},
+        catalog_uris=set(),
+        target_uri="viking://resources/wiki",
+        limits=CompileLimits(),
+        require_workspace_files=True,
+    )
+    result = await tool.execute(
+        ToolContext(),
+        pages=[],
+        files=[
+            {
+                "path": "logic/claims.md",
+                "content": "# Claims",
+            },
+            {
+                "path": "logic/concepts.md",
+                "workspace_path": "ara-output/logic/concepts.md",
+            },
+        ],
+    )
+
+    assert result.startswith("Error: Invalid Wiki bundle:")
+    assert "must be generated with write_file" in result
+    assert tool.bundle is None
+
+    accepted = await tool.execute(
+        ToolContext(),
+        pages=[],
+        files=[{"path": "PAPER.md", "content": "# Paper"}],
+    )
+    assert accepted == "Wiki bundle accepted with 0 page(s) and 1 file(s)."
+
+
+@pytest.mark.asyncio
 async def test_submit_tool_reads_explicit_workspace_file_and_rejects_memory_files():
     class Sandbox:
         async def read_file_bytes(self, path):
@@ -370,16 +543,16 @@ async def test_submit_tool_reads_explicit_workspace_file_and_rejects_memory_file
         target_uri="viking://resources/wiki",
         limits=CompileLimits(),
     )
-    accepted = await resource_tool.execute(
-        context,
-        pages=[],
-        files=[
+    params = {
+        "pages": [],
+        "files": [
             {
                 "path": "evidence/figure.png",
                 "workspace_path": "ara-output/figure.png",
             }
         ],
-    )
+    }
+    accepted = await resource_tool.execute(context, **params)
     assert not accepted.startswith("Error:")
     assert resource_tool.file_payloads == [b"PNG"]
 
@@ -396,6 +569,87 @@ async def test_submit_tool_reads_explicit_workspace_file_and_rejects_memory_file
     )
     assert rejected.startswith("Error:")
     assert "Resource targets" in rejected
+
+
+@pytest.mark.asyncio
+async def test_submit_tool_materializes_workspace_page_body_before_validation():
+    class Sandbox:
+        async def read_file_bytes(self, path):
+            return {
+                "wiki-pages/overview.md": b"Read Details next.",
+                "wiki-pages/details.md": b"Details body.",
+            }[path]
+
+    class Manager:
+        async def get_sandbox(self, session_key):
+            assert session_key is not None
+            return Sandbox()
+
+    context = ToolContext(
+        session_key=SessionKey(type="compile", channel_id="cmp", chat_id="cmp"),
+        sandbox_manager=Manager(),
+    )
+    tool = SubmitWikiBundleTool(
+        source_ids={"src_1"},
+        catalog_uris=set(),
+        target_uri="viking://resources/wiki",
+        limits=CompileLimits(),
+        require_workspace_pages=True,
+    )
+    overview = _page(1, "Overview")
+    overview.pop("body_markdown")
+    overview["body_workspace_path"] = "wiki-pages/overview.md"
+    details = _page(2, "Details")
+    details.pop("body_markdown")
+    details["body_workspace_path"] = "wiki-pages/details.md"
+
+    accepted = await tool.execute(
+        context,
+        pages=[overview, details],
+        files=[],
+        links=[{"f": 1, "t": 2, "match_text": "Details"}],
+    )
+    assert accepted == "Wiki bundle accepted with 2 page(s) and 0 file(s)."
+    assert tool.bundle is not None
+    assert tool.bundle.pages[0].body_markdown == "Read Details next."
+    assert tool.bundle.pages[0].body_workspace_path is None
+
+    rejected = await tool.execute(
+        context,
+        pages=[_page(1, "Inline")],
+        files=[],
+    )
+    assert "must be generated with write_file" in rejected
+    assert tool.bundle is None
+
+
+@pytest.mark.asyncio
+async def test_submit_tool_rejects_artifact_reused_as_wiki_body():
+    tool = SubmitWikiBundleTool(
+        source_ids={"src_1"},
+        catalog_uris=set(),
+        target_uri="viking://resources/wiki",
+        limits=CompileLimits(),
+        require_workspace_pages=True,
+    )
+    page = _page(1, "Overview")
+    page.pop("body_markdown")
+    page["body_workspace_path"] = "./ara-output/PAPER.md"
+
+    result = await tool.execute(
+        ToolContext(),
+        pages=[page],
+        files=[
+            {
+                "path": "PAPER.md",
+                "workspace_path": "ara-output/PAPER.md",
+            }
+        ],
+    )
+
+    assert result.startswith("Error: Invalid Wiki bundle:")
+    assert "separate reader-oriented workspace file" in result
+    assert tool.bundle is None
 
 
 class _EchoTool(Tool):
@@ -553,6 +807,74 @@ async def test_request_normalization_uses_default_reason_and_canonical_skill(mon
 
 
 @pytest.mark.asyncio
+async def test_source_context_builds_bounded_compact_recursive_catalog():
+    class Client:
+        client = None
+
+        def __init__(self):
+            self.client = self
+
+        async def overview(self, uri):
+            assert uri == "viking://resources/source"
+            return "Source overview"
+
+        async def list_resources(self, *, path, recursive, node_limit):
+            assert path == "viking://resources/source"
+            assert recursive is True
+            assert node_limit == 3
+            return [
+                {
+                    "name": "guide.md",
+                    "title": "Readable Guide",
+                    "uri": f"{path}/docs/guide.md",
+                    "isDir": False,
+                    "abstract": "A" * 600,
+                },
+                {
+                    "uri": f"{path}/docs",
+                    "isDir": True,
+                    "summary": "Documentation",
+                },
+                {
+                    "name": ".overview.md",
+                    "uri": f"{path}/.overview.md",
+                    "isDir": False,
+                },
+            ]
+
+    service = object.__new__(BotCompileService)
+    service.limits = CompileLimits(source_catalog_entries=3)
+    sources = await service._build_sources(
+        Client(), ["viking://resources/source"]
+    )
+
+    assert sources == [
+        {
+            "source_id": "src_1",
+            "directory_uri": "viking://resources/source",
+            "overview": "Source overview",
+            "entries": [
+                {
+                    "name": "guide.md",
+                    "title": "Readable Guide",
+                    "uri": "viking://resources/source/docs/guide.md",
+                    "is_dir": False,
+                    "summary": "A" * 500,
+                },
+                {
+                    "name": "docs",
+                    "title": "docs",
+                    "uri": "viking://resources/source/docs",
+                    "is_dir": True,
+                    "summary": "Documentation",
+                },
+            ],
+            "catalog_truncated": True,
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_target_catalog_includes_raw_files_and_marks_wiki_pages():
     class Client:
         async def tree(self, uri, *, node_limit):
@@ -637,6 +959,7 @@ def test_request_registry_honors_allowed_tools_and_compile_blocklist():
     )
     assert empty.tool_names == [
         "read_file",
+        "write_file",
         "openviking_list",
         "openviking_multi_read",
         "submit_wiki_bundle",
@@ -660,6 +983,7 @@ def test_request_registry_honors_allowed_tools_and_compile_blocklist():
     )
     assert selected.tool_names == [
         "read_file",
+        "write_file",
         "web_search",
         "openviking_list",
         "openviking_multi_read",
@@ -703,6 +1027,10 @@ def test_request_registry_honors_allowed_tools_and_compile_blocklist():
         "Bash(python *|git clone *|ls *|mkdir *)",
         "Task",
     ]
+    assert ara.get("submit_wiki_bundle").require_workspace_files is True
+    assert ara.get("submit_wiki_bundle").require_workspace_pages is True
+    assert empty.get("submit_wiki_bundle").require_workspace_files is True
+    assert empty.get("submit_wiki_bundle").require_workspace_pages is True
 
     lowercase, lowercase_ov_names, lowercase_unavailable = service._build_request_registry(
         parsed_skill={
@@ -739,14 +1067,24 @@ def test_compile_prompt_explains_unavailable_tools_to_agent_only():
     assert "Compile host capability notice" in system
     assert '"Bash(...)"' in system
     assert "Do not claim that unavailable validation or generation steps" in system
-    assert "use files for every Skill-prescribed artifact path, including Markdown" in system
-    assert "For a file-only artifact, submit pages=[]" in system
-    assert "link related generated pages through the submission tool" in system
+    assert "Preserve every required output type, path, and format" in system
+    assert "preserve Skill-prescribed artifact file trees as exact files" in system
     assert "bundle.links" not in system
     assert "match_text" not in system
-    assert "source entries by concrete URI" in system
-    assert "submit a compact files manifest with workspace_path" in system
+    assert "pages=[]" not in system
+    assert "workspace_path" not in system
+    assert "reference those workspace outputs in the final structured submission" in system
+    assert "Keep reader-oriented Wiki page bodies separate" in system
+    assert "use its URI as an ordinary Markdown link" in system
     assert "unavailable" not in user
+    assert "verify every output path and format explicitly required by the Skill" in user
+    for implementation_name in (
+        "submit_wiki_bundle",
+        "source_id",
+        "update_uri",
+        "workspace_path",
+    ):
+        assert implementation_name not in user
 
 
 @pytest.mark.asyncio

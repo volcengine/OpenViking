@@ -5,6 +5,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable, Literal
 
+import json_repair
+
 
 @dataclass
 class ToolCallRequest:
@@ -72,6 +74,27 @@ def merge_stream_tool_call_delta(
         entry["arguments"] += arguments
 
 
+def parse_tool_arguments(raw_arguments: Any) -> dict[str, Any]:
+    """Parse provider tool arguments, repairing only complete JSON objects."""
+    if isinstance(raw_arguments, dict):
+        return raw_arguments
+    if not isinstance(raw_arguments, str) or not raw_arguments:
+        return {}
+    try:
+        parsed = json.loads(raw_arguments)
+    except json.JSONDecodeError:
+        stripped = raw_arguments.strip()
+        if not (stripped.startswith("{") and stripped.endswith("}")):
+            return {"raw": raw_arguments}
+        try:
+            parsed = json_repair.loads(raw_arguments)
+        except (ValueError, TypeError, RecursionError):
+            return {"raw": raw_arguments}
+        if not isinstance(parsed, dict):
+            return {"raw": raw_arguments}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def build_stream_response(
     *,
     content: str,
@@ -88,15 +111,7 @@ def build_stream_response(
         if not name:
             continue
         raw_arguments = str(raw_tool_call.get("arguments") or "")
-        arguments: dict[str, Any]
-        if raw_arguments:
-            try:
-                parsed_arguments = json.loads(raw_arguments)
-                arguments = parsed_arguments if isinstance(parsed_arguments, dict) else {}
-            except json.JSONDecodeError:
-                arguments = {"raw": raw_arguments}
-        else:
-            arguments = {}
+        arguments = parse_tool_arguments(raw_arguments)
         tokens = token_counter(name, raw_arguments) if token_counter else 0
         tool_calls.append(
             ToolCallRequest(
