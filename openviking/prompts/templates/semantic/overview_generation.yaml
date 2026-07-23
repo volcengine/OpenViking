@@ -29,6 +29,8 @@ variables:
 
 template: |
   Output Language: {{ output_language }}
+  Write the entire overview consistently in {{ output_language }}; do not mix languages in headings, paragraphs, or list items.
+  Translate or rewrite all source summaries into {{ output_language }}; do not copy source text in another language.
 
   Generate an overview document based on the following directory content:
 
