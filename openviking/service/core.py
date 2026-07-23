@@ -412,14 +412,10 @@ class OpenVikingService:
             viking_fs=self._viking_fs,
             session_service=self._session_service,
         )
-        from openviking.server.dependencies import get_server_config
-
-        server_config = get_server_config()
-        session_auto_commit_config = (
-            server_config.memory.session_auto_commit
-            if server_config is not None
-            else SessionAutoCommitConfig()
-        )
+        try:
+            session_auto_commit_config = get_openviking_config().memory.session_auto_commit
+        except Exception:
+            session_auto_commit_config = SessionAutoCommitConfig()
         self._session_service.set_session_auto_commit_config(session_auto_commit_config)
         if session_auto_commit_config.idle_enabled:
             self._session_auto_commit_scheduler = SessionAutoCommitScheduler(

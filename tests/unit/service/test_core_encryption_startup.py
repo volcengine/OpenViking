@@ -225,14 +225,13 @@ async def test_initialize_skips_session_auto_commit_scheduler_when_idle_disabled
     monkeypatch.setattr("openviking.service.core.SkillProcessor", lambda **_kwargs: object())
     monkeypatch.setattr(
         "openviking.service.core.get_openviking_config",
-        lambda: SimpleNamespace(rerank=object(), retrieval=object(), grep=object()),
-    )
-    monkeypatch.setattr(
-        "openviking.server.dependencies.get_server_config",
         lambda: SimpleNamespace(
+            rerank=object(),
+            retrieval=object(),
+            grep=object(),
             memory=SimpleNamespace(
                 session_auto_commit=SessionAutoCommitConfig(idle_enabled=False)
-            )
+            ),
         ),
     )
 

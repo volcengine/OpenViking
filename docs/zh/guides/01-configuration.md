@@ -1388,6 +1388,7 @@ openviking-server --config /path/to/ov.conf
 | `extraction_enabled` | session commit 时是否执行长期记忆抽取。 | `true` |
 | `session_skill_extraction_enabled` | session commit 时是否同时抽取可复用 skill 到当前用户的 skill 目录。 | `false` |
 | `link_enabled` | 记忆抽取是否写入和解析 memory links。 | `false` |
+| `session_auto_commit` | 服务端 session 自动 commit 的全局控制项。该配置属于 `memory` 段，不属于 `server` 段；详见 [Session Auto Commit 配置](#session-auto-commit-配置)。 | 见上文 |
 
 ### ovcli.conf
 

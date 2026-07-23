@@ -12,6 +12,7 @@ from openviking.server.config import (
     load_server_config,
     map_bind_host_to_loopback,
 )
+from openviking_cli.utils.config import get_openviking_config
 
 
 def test_load_server_config_rejects_unknown_field(tmp_path):
@@ -103,13 +104,15 @@ def test_load_server_config_reads_session_auto_commit_from_memory_section(tmp_pa
         )
     )
 
-    config = load_server_config(str(config_path))
+    server_config = load_server_config(str(config_path))
+    memory_config = get_openviking_config().memory
 
-    assert config.memory.session_auto_commit.default_enabled is True
-    assert config.memory.session_auto_commit.idle_enabled is True
-    assert config.memory.session_auto_commit.check_interval_seconds == 2.5
-    assert config.memory.session_auto_commit.scan_batch_size == 7
-    assert config.memory.session_auto_commit.scan_batch_pause_seconds == 0.1
+    assert not hasattr(server_config, "memory")
+    assert memory_config.session_auto_commit.default_enabled is True
+    assert memory_config.session_auto_commit.idle_enabled is True
+    assert memory_config.session_auto_commit.check_interval_seconds == 2.5
+    assert memory_config.session_auto_commit.scan_batch_size == 7
+    assert memory_config.session_auto_commit.scan_batch_pause_seconds == 0.1
 
 
 def test_load_server_config_rejects_session_auto_commit_under_server(tmp_path):

@@ -1421,6 +1421,7 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 | `extraction_enabled` | Whether session commit runs long-term memory extraction. | `true` |
 | `session_skill_extraction_enabled` | Whether session commit also extracts reusable skills into the current user's skill directory. | `false` |
 | `link_enabled` | Whether memory extraction writes and resolves memory links. | `false` |
+| `session_auto_commit` | Server-wide automatic session commit controls. This belongs under `memory`, not under `server`; see [Session Auto Commit Configuration](#session-auto-commit-configuration). | See section above |
 
 ### ovcli.conf
 
