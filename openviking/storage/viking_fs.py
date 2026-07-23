@@ -14,7 +14,6 @@ Responsibilities:
 
 import asyncio
 import contextvars
-import difflib
 import hashlib
 import json
 import os

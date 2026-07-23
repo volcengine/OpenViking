@@ -30,19 +30,17 @@ class BaseClient(ABC):
         """Close the client and release resources."""
         ...
 
-    @abstractmethod
     async def get_memory_settings(self) -> Dict[str, Any]:
         """Return current-user memory setting overrides and effective values."""
-        ...
+        raise NotImplementedError("memory settings are not supported by this client")
 
-    @abstractmethod
     async def patch_memory_settings(
         self,
         *,
         agent_evolution_enabled: Any,
     ) -> Dict[str, Any]:
         """Update the current user's Agent Evolution override."""
-        ...
+        raise NotImplementedError("memory settings are not supported by this client")
 
     # ============= Resource Management =============
 
@@ -620,16 +618,6 @@ class BaseClient(ABC):
         OpenViking releases instantiable while making unsupported use explicit.
         """
         raise NotImplementedError("snapshot diff is not supported by this client")
-
-    @abstractmethod
-    async def git_diff(
-        self,
-        path: str,
-        *,
-        to_ref: str,
-        from_ref: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Compare one file between two snapshot refs."""
 
     @abstractmethod
     async def git_get_ignore(self) -> str:

@@ -90,6 +90,16 @@ def _has_add_targets(user_config: UserConfig | None) -> bool:
     )
 
 
+def _has_initial_user_config(user_config: UserConfig | None) -> bool:
+    return bool(
+        _has_add_targets(user_config)
+        or (
+            user_config is not None
+            and user_config.agent_evolution.enabled is not None
+        )
+    )
+
+
 def _validate_initial_user_config(
     service,
     user_ctx: RequestContext,
@@ -111,7 +121,7 @@ async def _write_initial_user_config(
     user_ctx: RequestContext,
     user_config: UserConfig | None,
 ) -> None:
-    if not _has_add_targets(user_config):
+    if not _has_initial_user_config(user_config):
         return
     await write_user_config(service.viking_fs, user_ctx, user_config)
 

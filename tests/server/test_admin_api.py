@@ -22,7 +22,7 @@ from openviking.server.config import ServerConfig
 from openviking.server.dependencies import set_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
-from openviking.server.user_config import read_user_add_targets
+from openviking.server.user_config import read_user_add_targets, read_user_config
 from openviking.service.core import OpenVikingService
 from openviking.service.task_store import (
     SYSTEM_TASK_ACCOUNT_ID,
@@ -329,6 +329,48 @@ async def test_create_user_paths_accept_initial_user_config(
         RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER),
     )
     assert bob_settings.resource_uri == "viking://user/resources/bob"
+
+
+async def test_create_user_paths_accept_agent_evolution_only_config(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app: FastAPI,
+):
+    acct = _uid()
+    viking_fs = lightweight_admin_app.state.fake_service.viking_fs
+
+    resp = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={
+            "account_id": acct,
+            "admin_user_id": "alice",
+            "user_config": {"agent_evolution": {"enabled": True}},
+        },
+        headers=root_headers(),
+    )
+    assert resp.status_code == 200, resp.text
+
+    alice_config = await read_user_config(
+        viking_fs,
+        RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ADMIN),
+    )
+    assert alice_config.agent_evolution.enabled is True
+
+    resp = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={
+            "user_id": "bob",
+            "role": "user",
+            "user_config": {"agent_evolution": {"enabled": False}},
+        },
+        headers=root_headers(),
+    )
+    assert resp.status_code == 200, resp.text
+
+    bob_config = await read_user_config(
+        viking_fs,
+        RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER),
+    )
+    assert bob_config.agent_evolution.enabled is False
 
 
 async def test_list_accounts(admin_client: httpx.AsyncClient):
