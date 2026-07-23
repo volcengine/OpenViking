@@ -1405,30 +1405,22 @@ class SemanticProcessor(DequeueHandlerBase):
         config = get_openviking_config()
         vlm = config.vlm
 
-        try:
-            prompt = render_prompt(
-                "semantic.overview_generation",
-                {
-                    "dir_name": dir_uri.split("/")[-1],
-                    "file_summaries": file_summaries_str,
-                    "children_abstracts": children_abstracts_str,
-                    "output_language": output_language,
-                },
-            )
+        prompt = render_prompt(
+            "semantic.overview_generation",
+            {
+                "dir_name": dir_uri.split("/")[-1],
+                "file_summaries": file_summaries_str,
+                "children_abstracts": children_abstracts_str,
+                "output_language": output_language,
+            },
+        )
 
-            with bind_telemetry_stage("resource_summarize"):
-                overview = await vlm.get_completion_async(prompt)
+        with bind_telemetry_stage("resource_summarize"):
+            overview = await vlm.get_completion_async(prompt)
 
-            overview = self._replace_index_references(overview, file_index_map)
+        overview = self._replace_index_references(overview, file_index_map)
 
-            return overview.strip()
-
-        except Exception as e:
-            logger.error(
-                f"Failed to generate overview for {dir_uri}: {e}",
-                exc_info=True,
-            )
-            return f"# {dir_uri.split('/')[-1]}\n\n[Directory overview is not generated]"
+        return overview.strip()
 
     async def _batched_generate_overview(
         self,
@@ -1459,10 +1451,9 @@ class SemanticProcessor(DequeueHandlerBase):
         # Generate partial overviews concurrently using global file indices.
         if llm_sem is None:
             llm_sem = asyncio.Semaphore(self.max_concurrent_llm)
-        partial_overviews = [None] * len(batches)
-        batch_prompts: List[Tuple[int, str, Dict[int, str]]] = []
+        batch_prompts: List[Tuple[str, Dict[int, str]]] = []
 
-        for batch_idx, batch in enumerate(batches):
+        for batch in batches:
             batch_lines = []
             child_lines = []
             batch_index_map = {}
@@ -1483,26 +1474,22 @@ class SemanticProcessor(DequeueHandlerBase):
                     "output_language": output_language,
                 },
             )
-            batch_prompts.append((batch_idx, prompt, batch_index_map))
+            batch_prompts.append((prompt, batch_index_map))
 
-        async def _run_batch(batch_idx: int, prompt: str, batch_index_map: Dict[int, str]) -> None:
-            try:
-                async with llm_sem:
-                    with bind_telemetry_stage("resource_summarize"):
-                        partial = await vlm.get_completion_async(prompt)
-                partial = self._replace_index_references(partial, batch_index_map)
-                partial_overviews[batch_idx] = partial.strip()
-            except Exception as e:
-                logger.warning(
-                    f"Failed to generate partial overview batch "
-                    f"{batch_idx + 1}/{len(batches)} for {dir_uri}: {e}"
-                )
+        async def _run_batch(prompt: str, batch_index_map: Dict[int, str]) -> str:
+            async with llm_sem:
+                with bind_telemetry_stage("resource_summarize"):
+                    partial = await vlm.get_completion_async(prompt)
+            partial = self._replace_index_references(partial, batch_index_map)
+            return partial.strip()
 
-        await asyncio.gather(*[_run_batch(*bp) for bp in batch_prompts])
-        partial_overviews = [p for p in partial_overviews if p is not None]
-
-        if not partial_overviews:
-            return f"# {dir_name}\n\n[Directory overview is not generated]"
+        batch_results = await asyncio.gather(
+            *[_run_batch(*bp) for bp in batch_prompts], return_exceptions=True
+        )
+        for result in batch_results:
+            if isinstance(result, BaseException):
+                raise result
+        partial_overviews = [result for result in batch_results if isinstance(result, str)]
 
         # If only one batch succeeded, use it directly
         if len(partial_overviews) == 1:
@@ -1510,26 +1497,19 @@ class SemanticProcessor(DequeueHandlerBase):
 
         # Merge partials only; each child abstract is already represented once.
         combined = "\n\n---\n\n".join(partial_overviews)
-        try:
-            prompt = render_prompt(
-                "semantic.overview_generation",
-                {
-                    "dir_name": dir_name,
-                    "file_summaries": combined,
-                    "children_abstracts": "None",
-                    "output_language": output_language,
-                },
-            )
-            with bind_telemetry_stage("resource_summarize"):
-                overview = await vlm.get_completion_async(prompt)
-            overview = self._replace_index_references(overview, file_index_map)
-            return overview.strip()
-        except Exception as e:
-            logger.error(
-                f"Failed to merge partial overviews for {dir_uri}: {e}",
-                exc_info=True,
-            )
-            return partial_overviews[0]
+        prompt = render_prompt(
+            "semantic.overview_generation",
+            {
+                "dir_name": dir_name,
+                "file_summaries": combined,
+                "children_abstracts": "None",
+                "output_language": output_language,
+            },
+        )
+        with bind_telemetry_stage("resource_summarize"):
+            overview = await vlm.get_completion_async(prompt)
+        overview = self._replace_index_references(overview, file_index_map)
+        return overview.strip()
 
     async def _vectorize_directory(
         self,
