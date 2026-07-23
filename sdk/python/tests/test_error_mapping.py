@@ -3,6 +3,7 @@ from openviking_sdk import AsyncHTTPClient
 from openviking_sdk.errors import (
     AbortedError,
     ConflictError,
+    DeadlineExceededError,
     OpenVikingError,
     ResourceExhaustedError,
     UnimplementedError,
@@ -41,3 +42,10 @@ def test_client_preserves_unknown_error_code():
 
     assert exc_info.value.code == "PROVIDER_SPECIFIC"
     assert exc_info.value.details == {"x": 1}
+
+
+def test_deadline_exceeded_includes_zero_timeout():
+    error = DeadlineExceededError("wait", 0)
+
+    assert str(error) == "Wait timed out after 0s"
+    assert error.details == {"operation": "wait", "timeout": 0}

@@ -97,7 +97,7 @@ class InternalError(OpenVikingError):
 class DeadlineExceededError(OpenVikingError):
     def __init__(self, operation: str = "operation", timeout: Optional[float] = None):
         message = f"{operation.capitalize()} timed out"
-        if timeout:
+        if timeout is not None:
             message += f" after {timeout}s"
         super().__init__(
             message,
