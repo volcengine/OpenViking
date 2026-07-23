@@ -95,6 +95,7 @@ class DummyStorage:
         target_directories=None,
         extra_filter=None,
         limit: int = 10,
+        offset: int = 0,
     ):
         self.child_search_calls.append(
             {
@@ -106,13 +107,15 @@ class DummyStorage:
                 "target_directories": target_directories,
                 "extra_filter": extra_filter,
                 "limit": limit,
+                "offset": offset,
             }
         )
         if parent_uri == "viking://resources":
-            return [
+            results = [
                 _result("viking://resources/file-a", 0.2, abstract="child A", category="doc"),
                 _result("viking://resources/file-b", 0.8, abstract="child B", category="doc"),
             ]
+            return results[offset : offset + limit]
         return []
 
 
@@ -162,6 +165,7 @@ class QuickSearchStorage(DummyStorage):
         target_directories=None,
         extra_filter=None,
         limit: int = 10,
+        offset: int = 0,
     ):
         self.child_search_calls.append(
             {
@@ -173,9 +177,11 @@ class QuickSearchStorage(DummyStorage):
                 "target_directories": target_directories,
                 "extra_filter": extra_filter,
                 "limit": limit,
+                "offset": offset,
             }
         )
-        return [_result(f"{parent_uri}/should-not-be-returned", 1.0, abstract="child")]
+        results = [_result(f"{parent_uri}/should-not-be-returned", 1.0, abstract="child")]
+        return results[offset : offset + limit]
 
 
 class DirectChildProxy:
@@ -188,11 +194,13 @@ class DirectChildProxy:
         target_directories=None,
         extra_filter=None,
         limit: int = 10,
+        offset: int = 0,
     ):
-        return [
+        results = [
             _result(f"{parent_uri}/file-a", 0.2, abstract="child A"),
             _result(f"{parent_uri}/file-b", 0.8, abstract="child B"),
         ]
+        return results[offset : offset + limit]
 
 
 class FakeRerankClient:

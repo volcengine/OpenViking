@@ -10,12 +10,12 @@ from openviking.retrieve import hierarchical_retriever as retriever_module
 from openviking.retrieve.hierarchical_retriever import (
     HierarchicalRetriever,
     RetrieverMode,
-    _SessionLogReplacementBudget,
     _classify_session_log_uri,
     _is_internal_session_log_result,
     _is_internal_session_log_uri,
     _search_children_excluding_session_logs,
     _search_in_tenant_excluding_session_logs,
+    _SessionLogReplacementBudget,
 )
 from openviking.server.identity import Role
 from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
@@ -217,35 +217,37 @@ async def test_filtered_child_search_pages_past_internal_hits():
 
 
 @pytest.mark.asyncio
-async def test_filtered_search_reports_scan_cap(monkeypatch, caplog):
+async def test_filtered_search_reports_scan_cap(monkeypatch):
     class FakeProxy:
         async def search_in_tenant(self, *, limit=10, **kwargs):
             del kwargs
             return [_result(f"viking://session/s{idx}/messages.jsonl") for idx in range(limit)]
 
     monkeypatch.setattr(retriever_module, "_SESSION_LOG_FILTER_MAX_SCAN_PAGES", 2)
-    with caplog.at_level("WARNING"):
-        (
-            results,
-            searches,
-            scanned,
-            truncated,
-        ) = await _search_in_tenant_excluding_session_logs(
-            FakeProxy(),
-            desired_limit=1,
-            page_limit=3,
-            query_vector=None,
-            sparse_query_vector=None,
-            context_type=None,
-            target_directories=[],
-            extra_filter=None,
-            level=None,
-        )
+    warning = MagicMock()
+    monkeypatch.setattr(retriever_module.logger, "warning", warning)
+    (
+        results,
+        searches,
+        scanned,
+        truncated,
+    ) = await _search_in_tenant_excluding_session_logs(
+        FakeProxy(),
+        desired_limit=1,
+        page_limit=3,
+        query_vector=None,
+        sparse_query_vector=None,
+        context_type=None,
+        target_directories=[],
+        extra_filter=None,
+        level=None,
+    )
 
     assert results == []
     assert (searches, scanned) == (2, 6)
     assert truncated is True
-    assert "request-wide replacement-page budget" in caplog.text
+    warning.assert_called_once()
+    assert "request-wide replacement-page budget" in warning.call_args.args[0]
 
     query_result = QueryResult(TypedQuery("notes", None, ""), [], [], truncated=truncated)
     output = FindResult([], [], [], query_results=[query_result]).to_dict(include_provenance=True)

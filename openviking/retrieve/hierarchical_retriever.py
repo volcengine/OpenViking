@@ -433,9 +433,7 @@ class HierarchicalRetriever:
         sparse_query_vector = None
         if self.embedder:
             if image_query and not getattr(self.embedder, "supports_multimodal", False):
-                raise InvalidArgumentError(
-                    "Image search requires a multimodal embedding model."
-                )
+                raise InvalidArgumentError("Image search requires a multimodal embedding model.")
             with telemetry.measure("search.embed_query"):
                 embedding_input = getattr(query, "embedding_input", None) or query.query
                 result: EmbedResult = await embed_compat(
@@ -460,7 +458,9 @@ class HierarchicalRetriever:
         replacement_page_budget = _new_session_log_replacement_budget()
         retrieval_truncated = False
         if mode == RetrieverMode.QUICK:
-            search_limit = max(limit * 5, 50) if image_query else max(limit, self.GLOBAL_SEARCH_TOPK)
+            search_limit = (
+                max(limit * 5, 50) if image_query else max(limit, self.GLOBAL_SEARCH_TOPK)
+            )
             with telemetry.measure("search.vector_retrieval"):
                 (
                     quick_results,
