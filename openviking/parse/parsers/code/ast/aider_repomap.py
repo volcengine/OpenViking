@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Aider RepoMap backed text skeleton extraction.
+"""Aider RepoMap-style text skeleton extraction.
 
 This module intentionally returns only formatted text for semantic indexing.
 The structured CodeSkeleton extractor remains the source of truth for code tools
@@ -8,7 +8,6 @@ that need symbol hierarchy and source spans.
 """
 
 import logging
-import tempfile
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
@@ -53,25 +52,6 @@ def _load_tag_query(lang: str) -> Optional[str]:
     return query_scm.strip() or None
 
 
-class _RepoMapIO:
-    """Minimal IO shim required by aider.repomap.RepoMap."""
-
-    def read_text(self, fname: str) -> str:
-        try:
-            return Path(fname).read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return ""
-
-    def tool_warning(self, message: str) -> None:
-        logger.warning("Aider RepoMap: %s", message)
-
-    def tool_error(self, message: str) -> None:
-        logger.error("Aider RepoMap: %s", message)
-
-    def tool_output(self, message: str) -> None:
-        logger.debug("Aider RepoMap: %s", message)
-
-
 def _normalise_repromap_name(file_name: str) -> str:
     """Recover the original code suffix for Viking resource body files.
 
@@ -104,14 +84,6 @@ def extract_repromap_skeleton(
         return None
 
     rel_name = _normalise_repromap_name(file_name)
-
-    try:
-        return _extract_with_aider_package(file_name, rel_name, content, verbose)
-    except ImportError:
-        pass
-    except Exception as exc:
-        logger.debug("External Aider RepoMap extraction failed for '%s': %s", file_name, exc)
-
     return _extract_with_grep_ast(file_name, rel_name, content, verbose)
 
 
@@ -146,34 +118,6 @@ def extract_query_skeleton(
     except Exception as exc:
         logger.warning("RepoMap query extraction failed for '%s': %s", file_name, exc)
         return None
-
-
-def _extract_with_aider_package(
-    file_name: str,
-    rel_name: str,
-    content: str,
-    verbose: bool,
-) -> Optional[str]:
-    from aider.repomap import RepoMap
-
-    with tempfile.TemporaryDirectory(prefix="ov-aider-repomap-") as tmpdir:
-        root = Path(tmpdir)
-        abs_path = root / rel_name
-        abs_path.parent.mkdir(parents=True, exist_ok=True)
-        abs_path.write_text(content, encoding="utf-8", errors="replace")
-
-        repo_map = RepoMap(root=tmpdir, io=_RepoMapIO(), map_tokens=0)
-        tags = repo_map.get_tags(str(abs_path), str(abs_path.relative_to(root)))
-        def_lines = sorted({tag.line for tag in tags if getattr(tag, "kind", None) == "def"})
-        if not def_lines:
-            return None
-
-        tree = repo_map.render_tree(str(abs_path), rel_name, def_lines).strip()
-        if not tree:
-            return None
-
-        mode = "verbose" if verbose else "compact"
-        return f"# {file_name} [aider-repomap, {mode}]\n\n{tree}"
 
 
 def _extract_with_grep_ast(
