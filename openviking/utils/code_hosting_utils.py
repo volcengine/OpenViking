@@ -7,10 +7,25 @@ This module provides shared functionality for parsing URLs from code hosting
 platforms like GitHub and GitLab.
 """
 
+from collections.abc import Iterable
 from typing import Optional
 from urllib.parse import ParseResult, parse_qs, unquote, urlparse
 
 from openviking_cli.utils.config import get_openviking_config
+
+
+def _normalize_host(host: str) -> str:
+    """Normalize a host for case- and trailing-dot-insensitive matching.
+
+    Mirrors :func:`openviking.utils.network_guard._normalize_host` so code-hosting
+    URL matching agrees with the egress allowlist: a fully-qualified trailing-dot
+    host (``github.com.``) and any letter casing resolve to the same canonical form.
+    """
+    return host.rstrip(".").lower()
+
+
+def _normalize_domains(domains: Iterable[str]) -> set[str]:
+    return {_normalize_host(domain) for domain in domains}
 
 
 def _domain_matches(parsed: ParseResult, domains: list[str]) -> bool:
@@ -25,8 +40,8 @@ def _domain_matches(parsed: ParseResult, domains: list[str]) -> bool:
     if not hostname:
         return False
 
-    normalized_domains = {domain.lower() for domain in domains}
-    host = hostname.lower()
+    normalized_domains = _normalize_domains(domains)
+    host = _normalize_host(hostname)
     candidates = {host}
 
     try:
@@ -45,10 +60,10 @@ def _extract_host(url: str) -> str:
         rest = url[4:]
         if ":" not in rest:
             return ""
-        return rest.split(":", 1)[0].strip().lower()
+        return _normalize_host(rest.split(":", 1)[0].strip())
 
     parsed = urlparse(url)
-    return (parsed.hostname or parsed.netloc or "").strip().lower()
+    return _normalize_host((parsed.hostname or parsed.netloc or "").strip())
 
 
 def _get_all_domains() -> list[str]:
@@ -122,10 +137,11 @@ def parse_code_hosting_url(url: str) -> Optional[str]:
         if ":" not in url[4:]:
             return None
         host_part, path_part = url[4:].split(":", 1)
-        if host_part not in all_domains:
+        host_part = _normalize_host(host_part)
+        if host_part not in _normalize_domains(all_domains):
             return None
         path_parts = [p for p in path_part.split("/") if p]
-        if host_part in _get_azure_devops_domains():
+        if host_part in _normalize_domains(_get_azure_devops_domains()):
             azure_repo_parts = _extract_azure_devops_ssh_repo_parts(path_parts)
             if azure_repo_parts:
                 return "/".join(
@@ -183,7 +199,7 @@ def is_github_url(url: str) -> bool:
         True if the URL is a GitHub URL
     """
     config = get_openviking_config()
-    return _extract_host(url) in config.code.github_domains
+    return _extract_host(url) in _normalize_domains(config.code.github_domains)
 
 
 def is_gitlab_url(url: str) -> bool:
@@ -196,7 +212,7 @@ def is_gitlab_url(url: str) -> bool:
         True if the URL is a GitLab URL
     """
     config = get_openviking_config()
-    return _extract_host(url) in config.code.gitlab_domains
+    return _extract_host(url) in _normalize_domains(config.code.gitlab_domains)
 
 
 def is_code_hosting_url(url: str) -> bool:
@@ -215,7 +231,7 @@ def is_code_hosting_url(url: str) -> bool:
         if ":" not in url[4:]:
             return False
         host_part = url[4:].split(":", 1)[0]
-        return host_part in all_domains
+        return _normalize_host(host_part) in _normalize_domains(all_domains)
 
     return _domain_matches(urlparse(url), all_domains)
 
@@ -294,7 +310,7 @@ def is_git_repo_url(url: str) -> bool:
         if path_parts and path_parts[-1].endswith(".git"):
             path_parts[-1] = path_parts[-1][:-4]
 
-        if _extract_host(url) in _get_azure_devops_domains():
+        if _extract_host(url) in _normalize_domains(_get_azure_devops_domains()):
             azure_repo_parts = _extract_azure_devops_repo_parts(path_parts)
             if azure_repo_parts:
                 if _is_azure_devops_browse_url(parsed.query):
@@ -314,7 +330,8 @@ def is_git_repo_url(url: str) -> bool:
             "wiki",
         }
         if (
-            _extract_host(url) in config.code.github_domains + config.code.gitlab_domains
+            _extract_host(url)
+            in _normalize_domains(config.code.github_domains + config.code.gitlab_domains)
             and len(path_parts) >= 3
             and path_parts[2] in non_repo_paths
         ):
