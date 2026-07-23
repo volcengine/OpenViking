@@ -155,25 +155,27 @@ class MarkdownParser(BaseParser):
 
     def __init__(
         self,
-        extract_frontmatter: bool = True,
+        extract_frontmatter: Optional[bool] = None,
         config: Optional[ParserConfig] = None,
     ):
         """
         Initialize the enhanced markdown parser.
 
         Args:
-            extract_frontmatter: Whether to extract YAML frontmatter
+            extract_frontmatter: Whether to extract YAML frontmatter. When None, uses config.
             config: Parser configuration (uses default if None)
         """
-        self.extract_frontmatter = extract_frontmatter
         self.config = config or ParserConfig()
+        if extract_frontmatter is None:
+            extract_frontmatter = getattr(self.config, "extract_frontmatter", True)
+        self.extract_frontmatter = extract_frontmatter
 
         # Compile regex patterns for better performance
         self._heading_pattern = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
         self._code_block_pattern = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
         self._inline_code_pattern = re.compile(r"`([^`]+)`")
         self._link_pattern = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
-        self._image_pattern = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+        self._image_pattern = re.compile(r"!\[([^\]]*)\]\(((?:[^()]|\([^()]*\))+)\)")
         self._list_pattern = re.compile(r"^(\s*)[-*+]\s+(.+)$", re.MULTILINE)
         self._numbered_list_pattern = re.compile(r"^(\s*)\d+\.\s+(.+)$", re.MULTILINE)
         self._frontmatter_pattern = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)

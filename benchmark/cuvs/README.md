@@ -181,11 +181,16 @@ vector limit disables the supplied ground truth because neighbor IDs may refer
 to omitted rows; include `native` or `cuvs_brute_force` in that case. A query
 limit retains the corresponding prefix of supplied ground truth.
 
-`query_batch_size=1` reflects the current OpenViking integration most closely.
-Larger batches measure the vector-index capacity: cuVS executes the batch on
-the GPU, while the current native wrapper processes each query sequentially.
-Do not present batch results as current server throughput without also running
-the collection/server benchmarks.
+`query_batch_size=1` most closely represents one public OpenViking API request
+and the default configuration, where request micro-batching is disabled.
+Opt-in brute-force micro-batching can internally coalesce compatible concurrent
+single-row API requests into one matrix-query call; that behavior must be
+measured through the collection/service concurrency path rather than inferred
+from this index harness. Larger explicit batches measure vector-index capacity:
+cuVS executes the batch on the GPU, while the current native wrapper processes
+each query sequentially. Do not present explicit batch results as server
+throughput without also running the collection/server benchmarks and reporting
+whether request micro-batching was enabled.
 
 ## First comparison matrix
 

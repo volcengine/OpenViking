@@ -540,9 +540,17 @@ pub(crate) fn normalize_custom_url(url: &str) -> String {
 pub fn redacted_config_value(config: &Config) -> Result<Value> {
     let mut value = serde_json::to_value(config)?;
     if let Some(object) = value.as_object_mut() {
-        for key in ["api_key", "root_api_key"] {
+        for key in ["api_key", "root_api_key", "gateway_token"] {
             if object.get(key).is_some_and(|value| !value.is_null()) {
                 object.insert(key.to_string(), Value::String("********".to_string()));
+            }
+        }
+        if let Some(headers) = object
+            .get_mut("extra_headers")
+            .and_then(Value::as_object_mut)
+        {
+            for value in headers.values_mut() {
+                *value = Value::String("********".to_string());
             }
         }
     }
@@ -791,6 +799,21 @@ mod tests {
         config.url = url.to_string();
         config.api_key = api_key.map(ToString::to_string);
         config
+    }
+
+    #[test]
+    fn redacted_config_masks_gateway_and_header_secrets() {
+        let mut config = sample_config("http://local", Some("api-secret"));
+        config.gateway_token = Some("gateway-secret".to_string());
+        config.extra_headers = Some(std::collections::HashMap::from([
+            ("Authorization".to_string(), "Bearer secret".to_string()),
+            ("X-Gateway-Token".to_string(), "header-secret".to_string()),
+        ]));
+
+        let redacted = super::redacted_config_value(&config).unwrap();
+        assert_eq!(redacted["gateway_token"], "********");
+        assert_eq!(redacted["extra_headers"]["Authorization"], "********");
+        assert_eq!(redacted["extra_headers"]["X-Gateway-Token"], "********");
     }
 
     #[test]

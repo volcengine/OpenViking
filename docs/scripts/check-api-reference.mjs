@@ -66,6 +66,7 @@ function splitTopLevel(source) {
 }
 
 const routes = new Map()
+const middlewareQueryParameters = new Set(['profile'])
 for (const file of fs.readdirSync(routerDir).filter((name) => name.endsWith('.py'))) {
   const source = fs.readFileSync(path.join(routerDir, file), 'utf8')
   const prefix = source.match(/router\s*=\s*APIRouter\([^)]*prefix=["']([^"']+)/s)?.[1] ?? ''
@@ -82,7 +83,8 @@ for (const file of fs.readdirSync(routerDir).filter((name) => name.endsWith('.py
     for (const parameter of splitTopLevel(signature)) {
       const queryMatch = parameter.match(/^([A-Za-z_]\w*)\s*:[\s\S]*?=\s*Query\(([\s\S]*)\)$/)
       if (queryMatch) {
-        query.set(queryMatch[1], /^\s*\.\.\.(?:\s*,|\s*$)/.test(queryMatch[2]))
+        const alias = queryMatch[2].match(/\balias\s*=\s*["']([^"']+)["']/)?.[1]
+        query.set(alias ?? queryMatch[1], /^\s*\.\.\.(?:\s*,|\s*$)/.test(queryMatch[2]))
         continue
       }
 
@@ -121,15 +123,42 @@ const errors = []
 let httpExamples = 0
 let typescriptCalls = 0
 const curlUrlPattern = String.raw`["']?https?:\/\/[^/\s"']+(\/[A-Za-z0-9_{}<>?=&./:-]+)`
-const explicitCurlPattern = new RegExp(
-  String.raw`\bcurl\b[^\n]*?(?:-X|--request)\s+(GET|POST|PUT|PATCH|DELETE)\s+` +
-    curlUrlPattern,
-  'g'
-)
-const implicitGetCurlPattern = new RegExp(
-  String.raw`\bcurl\b(?![^\n]*(?:-X|--request))[^\n]*?` + curlUrlPattern,
-  'g'
-)
+
+function curlReferences(source) {
+  const references = []
+  for (const match of source.matchAll(/\bcurl\b[^\n]*(?:\r?\n[ \t]+(?:--|-H\b)[^\n]*)*/g)) {
+    const command = match[0]
+    const url = command.match(new RegExp(curlUrlPattern))
+    if (!url) continue
+
+    const explicitMethod = command.match(
+      /(?:-X|--request)\s+(GET|POST|PUT|PATCH|DELETE)\b/
+    )?.[1]
+    const method = explicitMethod ?? 'GET'
+    let documentedPath = url[1]
+    const queryNames = Array.from(
+      command.matchAll(/--data-urlencode\s+["']?([A-Za-z_]\w*)=/g),
+      (item) => item[1]
+    )
+    if (queryNames.length) {
+      const existingNames = new Set(
+        (documentedPath.split('?')[1] ?? '')
+          .split('&')
+          .filter(Boolean)
+          .map((item) => item.split('=')[0])
+      )
+      const missing = queryNames.filter((name) => !existingNames.has(name))
+      if (missing.length) {
+        documentedPath += `${documentedPath.includes('?') ? '&' : '?'}${missing
+          .map((name) => `${name}={}`)
+          .join('&')}`
+      }
+    }
+    references.push([method, documentedPath])
+  }
+  return references
+}
+
 for (const file of apiDocs) {
   const source = fs.readFileSync(file, 'utf8')
   const relative = path.relative(repoRoot, file)
@@ -138,14 +167,7 @@ for (const file of apiDocs) {
       source.matchAll(/^\s*(GET|POST|PUT|PATCH|DELETE)\s+(\/[A-Za-z0-9_{}?=&./:-]+)/gm),
       (match) => [match[1], match[2]]
     ),
-    ...Array.from(
-      source.matchAll(explicitCurlPattern),
-      (match) => [match[1], match[2]]
-    ),
-    ...Array.from(
-      source.matchAll(implicitGetCurlPattern),
-      (match) => ['GET', match[1]]
-    )
+    ...curlReferences(source)
   ]
   for (const [method, documentedPath] of httpReferences) {
     const normalizedPath = normalizePath(documentedPath)
@@ -191,7 +213,7 @@ for (const file of apiDocs) {
         .map((item) => item.split('=')[0])
     )
     for (const name of queryNames) {
-      if (!contract.query.has(name)) {
+      if (!contract.query.has(name) && !middlewareQueryParameters.has(name)) {
         errors.push(`${relative}: ${route} has unknown query parameter ${name}`)
       }
     }

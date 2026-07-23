@@ -1185,6 +1185,21 @@ class LocalClient(BaseClient):
         """Walk back along parents[0] up to limit commits."""
         return await self._service.fs.log(branch=branch, limit=limit, paths=paths, ctx=self._ctx)
 
+    async def git_diff(
+        self,
+        path: str,
+        *,
+        to_ref: str,
+        from_ref: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Compare one file between two snapshot refs."""
+        return await self._service.fs.diff(
+            path=path,
+            from_ref=from_ref,
+            to_ref=to_ref,
+            ctx=self._ctx,
+        )
+
     async def git_get_ignore(self) -> str:
         """Return the account .ovgitignore content (empty string if absent)."""
         return await self._service.fs.get_gitignore(ctx=self._ctx)

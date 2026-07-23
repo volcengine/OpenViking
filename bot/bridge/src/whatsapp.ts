@@ -21,6 +21,7 @@ export interface InboundMessage {
   id: string;
   sender: string;
   pn: string;
+  pushName: string;
   content: string;
   timestamp: number;
   isGroup: boolean;
@@ -125,6 +126,7 @@ export class WhatsAppClient {
           id: msg.key.id || '',
           sender: msg.key.remoteJid || '',
           pn: msg.key.remoteJidAlt || '',
+          pushName: msg.pushName || '',
           content,
           timestamp: msg.messageTimestamp as number,
           isGroup,

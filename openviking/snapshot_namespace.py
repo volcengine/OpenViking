@@ -9,7 +9,7 @@ underneath.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking_cli.utils import run_async
 
@@ -85,6 +85,21 @@ class AsyncSnapshotNamespace:
     ) -> List[Dict[str, Any]]:
         await self._client._ensure_initialized()
         return await self._client._client.git_log(branch=branch, limit=limit, paths=paths)
+
+    async def diff(
+        self,
+        path: str,
+        *,
+        to_ref: str,
+        from_ref: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Compare one file between two snapshot refs."""
+        await self._client._ensure_initialized()
+        return await self._client._client.git_diff(
+            path,
+            from_ref=from_ref,
+            to_ref=to_ref,
+        )
 
     async def get_gitignore(self) -> str:
         """Return the account .ovgitignore content (empty string if absent)."""
@@ -173,6 +188,18 @@ class SyncSnapshotNamespace:
         paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         return run_async(self._ns().log(branch=branch, limit=limit, paths=paths))
+
+    def diff(
+        self,
+        path: str,
+        *,
+        to_ref: str,
+        from_ref: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Compare one file between two snapshot refs."""
+        return run_async(
+            self._ns().diff(path, from_ref=from_ref, to_ref=to_ref)
+        )
 
     def get_gitignore(self) -> str:
         return run_async(self._ns().get_gitignore())

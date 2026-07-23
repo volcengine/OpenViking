@@ -953,7 +953,7 @@ enum Commands {
         #[command(subcommand)]
         action: TaskCommands,
     },
-    /// [Version] Manage workspace snapshots (commit, restore, show, log)
+    /// [Version] Manage workspace snapshots (commit, restore, show, diff, log)
     Snapshot {
         #[command(subcommand)]
         cmd: SnapshotCmd,
@@ -1133,6 +1133,17 @@ pub(crate) enum SnapshotCmd {
         /// Show only commits touching any of these viking:// URIs (comma-separated); accepts files and directories.
         #[arg(long, value_delimiter = ',')]
         paths: Option<Vec<String>>,
+    },
+    /// Compare one file between two snapshots
+    Diff {
+        /// viking:// URI of the file to compare
+        path: String,
+        /// Older commit oid, branch, or tag; omit to compare an empty file
+        #[arg(long = "from")]
+        from_ref: Option<String>,
+        /// Newer commit oid, branch, or tag
+        #[arg(long = "to")]
+        to_ref: String,
     },
     /// Get the account .ovgitignore content
     IgnoreGet,
@@ -3261,11 +3272,11 @@ async fn main() {
 mod tests {
     use super::{
         Cli, CliContext, Commands, ConfigAddTarget, ConfigCommands, LanguageGateAction,
-        PrivacyCommands, SkillCommands, UploadCliOptions, find_command_index, first_command_token,
-        is_language_command_request, language_command_can_run_picker, language_gate_action,
-        language_required_message, legacy_upload_option_error, plain_help_misuse,
-        pre_parse_output_options, pre_parse_requires_cli_config_file, preprocess_cli_args,
-        preprocess_privacy_args,
+        PrivacyCommands, SkillCommands, SnapshotCmd, UploadCliOptions, find_command_index,
+        first_command_token, is_language_command_request, language_command_can_run_picker,
+        language_gate_action, language_required_message, legacy_upload_option_error,
+        plain_help_misuse, pre_parse_output_options, pre_parse_requires_cli_config_file,
+        preprocess_cli_args, preprocess_privacy_args,
     };
     use crate::config::{Config, DEFAULT_CUSTOM_URL};
     use crate::output::OutputFormat;
@@ -3294,6 +3305,37 @@ mod tests {
         assert_eq!(cli.account.as_deref(), Some("acme"));
         assert_eq!(cli.user.as_deref(), Some("alice"));
         assert_eq!(cli.actor_peer_id.as_deref(), Some("peer-a"));
+    }
+
+    #[test]
+    fn cli_parses_snapshot_diff_refs() {
+        let cli = Cli::try_parse_from([
+            "ov",
+            "snapshot",
+            "diff",
+            "viking://resources/a.md",
+            "--from",
+            "old",
+            "--to",
+            "new",
+        ])
+        .expect("snapshot diff should parse");
+
+        match cli.command {
+            Commands::Snapshot {
+                cmd:
+                    SnapshotCmd::Diff {
+                        path,
+                        from_ref,
+                        to_ref,
+                    },
+            } => {
+                assert_eq!(path, "viking://resources/a.md");
+                assert_eq!(from_ref.as_deref(), Some("old"));
+                assert_eq!(to_ref, "new");
+            }
+            _ => panic!("expected snapshot diff"),
+        }
     }
 
     #[test]

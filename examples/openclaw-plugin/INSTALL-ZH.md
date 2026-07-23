@@ -203,6 +203,37 @@ openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --forc
 openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --peer-role assistant --peer-prefix <PREFIX> --json
 ```
 
+#### 无法执行 CLI 时直接配置文件
+
+如果容器内无法执行 `openclaw` CLI，可以把以下字段合并到 OpenClaw 实际读取的配置文件。设置了 `OPENCLAW_CONFIG_PATH` 时使用该路径；否则通常是 `$OPENCLAW_STATE_DIR/openclaw.json`（默认 `~/.openclaw/openclaw.json`）。
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "openviking": {
+        "enabled": true,
+        "config": {
+          "mode": "remote",
+          "baseUrl": "http://openviking:1933",
+          "apiKey": "<API_KEY>",
+          "peer_role": "assistant"
+        }
+      }
+    },
+    "slots": {
+      "contextEngine": "openviking"
+    }
+  }
+}
+```
+
+- 插件必须已经安装；编辑前请备份配置，并把以上字段合并到现有 `plugins` 配置。
+- 如果配置中已有 `plugins.allow`，把 `openviking` 追加进去；如果没有，不要仅为本插件新建 allowlist。
+- `contextEngine` 是独占 slot；若已有其他 context engine，只有确认替换后再修改该字段。使用 root API key 时，还需在 `config` 中设置 `accountId` 和 `userId`。
+- 容器连接其他服务时，`baseUrl` 应使用容器内可访问的服务地址，而不是 `127.0.0.1`。
+- `apiKey` 会以明文保存；请限制文件权限或使用受控的 Secret 卷。修改后重启 Gateway、容器或 Pod。
+
 ### 3. 重启 OpenClaw Gateway
 
 ```bash
