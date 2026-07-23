@@ -298,6 +298,41 @@ class TestWatchSchedulerFeishuPrecheck:
         assert "feishu_sync_fingerprint_v1" in updated.sync_state
 
     @pytest.mark.asyncio
+    async def test_cancellation_survives_post_sync_finalization_failure(self, monkeypatch):
+        resource_service, scheduler, manager, task, _ = await self._setup_task(monkeypatch)
+        scheduler._fetch_feishu_latest_modify_time = AsyncMock(return_value=100)
+        original_fetch = scheduler._fetch_destination_sync_state
+        post_sync_stat_started = asyncio.Event()
+        allow_post_sync_stat = asyncio.Event()
+        fetch_count = 0
+
+        async def fail_post_sync_stat(to_uri, ctx):
+            nonlocal fetch_count
+            fetch_count += 1
+            if fetch_count == 2:
+                post_sync_stat_started.set()
+                await allow_post_sync_stat.wait()
+                raise RuntimeError("post-sync stat failed")
+            return await original_fetch(to_uri, ctx)
+
+        scheduler._fetch_destination_sync_state = fail_post_sync_stat
+        execution = asyncio.create_task(scheduler._execute_task(task))
+        await post_sync_stat_started.wait()
+
+        execution.cancel()
+        await asyncio.sleep(0)
+        assert not execution.done()
+        allow_post_sync_stat.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await execution
+
+        updated = await manager.get_task(task.task_id)
+        assert updated is not None
+        assert updated.last_execution_time is None
+        assert "feishu_sync_fingerprint_v1" not in updated.sync_state
+
+    @pytest.mark.asyncio
     async def test_unchanged_source_inputs_and_destination_skip_full_sync(self, monkeypatch):
         resource_service, scheduler, manager, task, _ = await self._setup_task(monkeypatch)
         scheduler._fetch_feishu_latest_modify_time = AsyncMock(return_value=100)

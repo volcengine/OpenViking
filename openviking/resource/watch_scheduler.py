@@ -452,7 +452,16 @@ class WatchScheduler:
                             # strand its post-sync stat/fingerprint without the matching
                             # revision commit. Preserve cancellation, but only re-raise
                             # after the finalization unit reaches its terminal state.
-                            await finalization_task
+                            try:
+                                await finalization_task
+                            except Exception as exc:
+                                logger.error(
+                                    "[WatchScheduler] Finalization failed for cancelled task "
+                                    "%s: %s",
+                                    task.task_id,
+                                    exc,
+                                    exc_info=True,
+                                )
                             raise
                         if execution_state_committed:
                             logger.info(
