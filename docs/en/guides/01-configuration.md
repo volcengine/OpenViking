@@ -1269,6 +1269,9 @@ Supports cloud-deployed VikingDB on Volcengine
   }
 }
 ```
+
+**Supported regions** (`volcengine` backend): `cn-beijing`, `cn-shanghai`, `cn-guangzhou`, and `ap-southeast-1` (Southeast Asia). When no explicit `host` is set, `region` selects the built-in VikingDB API host and should be one of these values.
+
 </details>
 
 <details>
