@@ -176,13 +176,19 @@ const OpenVikingCodingAgent = ({ t }) => {
         zh: <>如果你已拥有可用的 OpenViking 服务（<A href={LOCAL_DEPLOY_DOC}>本地部署</A>或 <A href={CLOUD_CONSOLE}>Volcengine Cloud 云服务</A>），只需一行命令即可完成插件安装：</>,
       })}</P>
 
-      <H3>{T({ en: 'Claude Code Plugin', zh: 'Claude Code 插件' })}</H3>
+      <P>{T({
+        en: <>Claude Code and Codex now share a single install script—it asks which harness to set up, so one command covers both:</>,
+        zh: <>Claude Code 和 Codex 现在共用同一个安装脚本，运行时会询问要安装哪个 harness，一条命令即可覆盖两者：</>,
+      })}</P>
 
-      <Pre lang="bash" filename="terminal">{`bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/claude-code-memory-plugin/setup-helper/install.sh)`}</Pre>
+      <Pre lang="bash" filename="terminal">{`bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh)`}</Pre>
 
-      <H3>{T({ en: 'Codex Plugin', zh: 'Codex 插件' })}</H3>
+      <P>{T({
+        en: <>In regions where GitHub is hard to reach, run the same script from the Volcengine TOS mirror (or choose “TOS mirror” when the installer asks about the download source):</>,
+        zh: <>GitHub 访问受限的地区，可从火山引擎 TOS 镜像运行同一个脚本（或在安装脚本询问下载源时选择「TOS 镜像」）：</>,
+      })}</P>
 
-      <Pre lang="bash" filename="terminal">{`bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/codex-memory-plugin/setup-helper/install.sh)`}</Pre>
+      <Pre lang="bash" filename="terminal">{`bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh)`}</Pre>
 
       <P>{T({
         en: 'The interactive installer guides you through connecting to a local server (no auth required) or a remote instance (via API key). It automatically configures ~/.openviking/ovcli.conf, clones the plugin source, and registers all necessary hooks and MCP services.',
@@ -584,8 +590,8 @@ OPENVIKING_BYPASS_SESSION=true      # Disable hooks entirely for highly sensitiv
 
       <Ul>
         <Li><Strong>{T({ en: 'Credentials never touch the disk', zh: '凭证绝不落盘' })}</Strong>{T({
-          en: ': API keys are dynamically injected into process environment variables via a shell wrapper. They are never written to .mcp.json, remaining entirely invisible to npm scripts and crash dumps.',
-          zh: '：API Key 通过 shell wrapper 动态注入到进程环境变量中，既不写进 .mcp.json，也避免被 npm、崩溃转储等子进程窃取。',
+          en: ': the bundled stdio MCP proxy reads your API key at runtime from ~/.openviking/ovcli.conf (or OPENVIKING_* env vars)—no shell wrapper required. It is never written into .mcp.json, so it stays out of the repo, crash dumps, and child processes.',
+          zh: '：插件自带的 stdio MCP 代理在运行时从 ~/.openviking/ovcli.conf（或 OPENVIKING_* 环境变量）读取 API Key，无需任何 shell wrapper。API Key 绝不写进 .mcp.json，因此不会进入仓库、崩溃转储或子进程。',
         })}</Li>
         <Li><Strong>{T({ en: 'Self-pollution prevention', zh: '防止记忆自污染' })}</Strong>{T({
           en: ': Before sending conversational records for LLM distillation, the plugin meticulously strips out <openviking-context> tags, ensuring that "answers generated using memory" aren\'t recursively stored as new knowledge.',
