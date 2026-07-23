@@ -26,5 +26,23 @@ class RetrievalConfig(BaseModel):
             "1 uses only the child score."
         ),
     )
+    graph_alpha: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Weight for blending graph connectivity into final retrieval scores. "
+            "0 disables graph-aware scoring; higher values reward well-connected results."
+        ),
+    )
+    graph_saturation_k: float = Field(
+        default=15.0,
+        ge=1.0,
+        description=(
+            "Controls the saturation point of the tanh mapping for graph_score. "
+            "Lower values = faster saturation (fewer edges needed to reach max score). "
+            "Used in graph_score = tanh(total_relations / graph_saturation_k)."
+        ),
+    )
 
     model_config = {"extra": "forbid"}

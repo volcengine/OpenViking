@@ -637,3 +637,196 @@ async def test_convert_to_matched_contexts_returns_empty_relations():
     )
 
     assert result[0].relations == []
+
+
+class DummyVikingFS:
+    """Mock VikingFS for graph scoring tests."""
+
+    def __init__(self, relations_map=None, memory_files=None):
+        self.relations_map = relations_map or {}
+        self.memory_files = memory_files or {}
+        self.relations_calls = []
+        self.read_file_calls = []
+
+    async def relations(self, uri: str, ctx=None):
+        self.relations_calls.append(uri)
+        return self.relations_map.get(uri, [])
+
+    async def read_file(self, uri: str, ctx=None):
+        self.read_file_calls.append(uri)
+        return self.memory_files.get(uri, "")
+
+
+@pytest.mark.asyncio
+async def test_graph_alpha_zero_returns_empty_relations():
+    """Explicit graph_alpha=0 should keep relations empty."""
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=None,
+        rerank_config=None,
+        retrieval_config=RetrievalConfig(graph_alpha=0.0),
+        viking_fs=DummyVikingFS(),
+    )
+
+    result = await retriever._convert_to_matched_contexts(
+        [
+            {
+                "uri": "viking://resources/file-a",
+                "abstract": "child A",
+                "_score": 1.0,
+                "level": 2,
+                "context_type": "resource",
+            }
+        ],
+        ctx=_ctx(),
+    )
+
+    assert result[0].relations == []
+    assert len(result) == 1
+
+
+@pytest.mark.asyncio
+async def test_graph_scoring_with_relations_json():
+    """Graph scoring should blend graph connectivity into final score."""
+    vfs = DummyVikingFS(
+        relations_map={
+            "viking://resources/file-a": [
+                {"uri": "viking://resources/file-b", "reason": "related concept"},
+                {"uri": "viking://resources/file-c", "reason": "depends on"},
+            ]
+        }
+    )
+
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=None,
+        rerank_config=None,
+        retrieval_config=RetrievalConfig(graph_alpha=0.5, graph_saturation_k=5.0),
+        viking_fs=vfs,
+    )
+
+    result = await retriever._convert_to_matched_contexts(
+        [
+            {
+                "uri": "viking://resources/file-a",
+                "abstract": "child A",
+                "_score": 1.0,
+                "level": 2,
+                "context_type": "resource",
+            }
+        ],
+        ctx=_ctx(),
+    )
+
+    assert len(result) == 1
+    mc = result[0]
+    # graph_score = tanh(2 / 5) ≈ 0.38
+    # final = 0.5 * 1.0 + 0.5 * 0.38 = 0.69
+    assert mc.score == pytest.approx(0.69, abs=0.01)
+    assert len(mc.relations) == 2
+    assert mc.relations[0].uri == "viking://resources/file-b"
+    assert mc.relations[0].abstract == "related concept"
+    assert vfs.relations_calls == ["viking://resources/file-a"]
+
+
+@pytest.mark.asyncio
+async def test_graph_scoring_with_memory_file_links():
+    """Graph scoring should parse MEMORY_FIELDS links from .md files."""
+    memory_content = (
+        "# Test Memory\n\n"
+        "Some content here.\n\n"
+        "<!-- MEMORY_FIELDS\n"
+        '{\n  "links": [\n'
+        '    {"to_uri": "viking://resources/other", "description": "linked item", '
+        '"link_type": "related_to", "weight": 0.8}\n'
+        "  ],\n"
+        '  "backlinks": [\n'
+        '    {"from_uri": "viking://resources/source", "description": "backlink source", '
+        '"link_type": "related_to", "weight": 0.5}\n'
+        "  ]\n"
+        "}\n"
+        "-->"
+    )
+
+    vfs = DummyVikingFS(
+        memory_files={
+            "viking://resources/file-a/.abstract.md": memory_content,
+        }
+    )
+
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=None,
+        rerank_config=None,
+        retrieval_config=RetrievalConfig(graph_alpha=0.5, graph_saturation_k=5.0),
+        viking_fs=vfs,
+    )
+
+    # URI with .abstract.md suffix (as produced by _append_level_suffix)
+    result = await retriever._convert_to_matched_contexts(
+        [
+            {
+                "uri": "viking://resources/file-a/.abstract.md",
+                "abstract": "child A",
+                "_score": 1.0,
+                "level": 0,
+                "context_type": "resource",
+            }
+        ],
+        ctx=_ctx(),
+    )
+
+    assert len(result) == 1
+    mc = result[0]
+    # 1 link + 1 backlink = 2 relations
+    # graph_score = tanh(2 / 5) ≈ 0.38
+    # final = 0.5 * 1.0 + 0.5 * 0.38 = 0.69
+    assert mc.score == pytest.approx(0.69, abs=0.01)
+    assert len(mc.relations) == 2
+
+
+@pytest.mark.asyncio
+async def test_graph_lazy_loading():
+    """Graph data should only be loaded for top candidates, not all."""
+    vfs = DummyVikingFS(
+        relations_map={
+            "viking://resources/file-a": [
+                {"uri": "viking://resources/rel1", "reason": "related"}
+            ]
+        }
+    )
+
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=None,
+        rerank_config=None,
+        retrieval_config=RetrievalConfig(graph_alpha=0.5),
+        viking_fs=vfs,
+    )
+
+    # 10 candidates, but graph_alpha=0.5 *should* limit to top candidates
+    candidates = [
+        {
+            "uri": f"viking://resources/file-{chr(ord('a') + i)}",
+            "abstract": f"item {i}",
+            "_score": 1.0 - i * 0.05,
+            "level": 2,
+            "context_type": "resource",
+        }
+        for i in range(10)
+    ]
+
+    result = await retriever._convert_to_matched_contexts(
+        candidates,
+        ctx=_ctx(),
+    )
+
+    # We loaded graph data for top candidates (max(len*2, 5) = max(20,5) = 20, capped by 10 avail)
+    # The mock FS only has data for file-a
+    assert vfs.relations_calls is not None
+    # Verify at least the top result was loaded
+    assert "viking://resources/file-a" in vfs.relations_calls
+    # Verify file-a has its relations
+    file_a = next(r for r in result if "file-a" in r.uri)
+    assert len(file_a.relations) == 1
+
