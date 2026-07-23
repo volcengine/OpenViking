@@ -141,11 +141,23 @@ class OpenAIVLM(VLMBase):
 
         return host.lower() in _DASHSCOPE_HOSTS
 
+    def _is_mimo_endpoint(self) -> bool:
+        """Return True for Xiaomi MiMo API endpoints."""
+        if not self.api_base:
+            return False
+        try:
+            host = urlparse(self.api_base).hostname or ""
+        except ValueError:
+            return False
+        return "xiaomimimo.com" in host.lower()
+
     def _apply_provider_specific_extra_body(self, kwargs: Dict[str, Any], thinking: bool) -> None:
         """Attach provider-specific raw body parameters understood by compatible APIs."""
         extra_body = dict(self.extra_request_body)
         if self._supports_enable_thinking():
             extra_body["enable_thinking"] = bool(thinking)
+        if self._is_mimo_endpoint():
+            extra_body["thinking"] = {"type": "enabled" if thinking else "disabled"}
         if extra_body:
             kwargs["extra_body"] = extra_body
 
