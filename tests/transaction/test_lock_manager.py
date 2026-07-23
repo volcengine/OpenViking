@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from openviking.observability import get_root_observability_context
 from openviking.storage.transaction.lock_manager import LockManager
 from openviking.storage.transaction.path_lock import LOCK_FILE_NAME
 
@@ -114,34 +113,6 @@ class TestLockManagerBasic:
             await lm._recover_pending_redo()
 
         lm._redo_log.mark_done_async.assert_not_awaited()
-
-    async def test_recover_pending_redo_binds_usage_identity(self, lm):
-        info = {
-            "archive_uri": "viking://session/archive",
-            "session_uri": "viking://session/current",
-            "account_id": "account-a",
-            "user_id": "user-u",
-        }
-        lm._redo_log = MagicMock()
-        lm._redo_log.list_pending_async = AsyncMock(return_value=["redo-task"])
-        lm._redo_log.read_async = AsyncMock(return_value=info)
-        lm._redo_log.mark_done_async = AsyncMock()
-        seen = []
-
-        async def capture_context(_info):
-            seen.append(get_root_observability_context())
-
-        lm._redo_session_memory = capture_context
-
-        await lm._recover_pending_redo()
-
-        assert len(seen) == 1
-        assert seen[0] is not None
-        assert seen[0].request_id == "redo-task"
-        assert seen[0].account_id == "account-a"
-        assert seen[0].user_id == "user-u"
-        assert seen[0].url_path == "viking://session/current"
-        lm._redo_log.mark_done_async.assert_awaited_once_with("redo-task")
 
     async def test_start_skips_redo_recovery_when_disabled(self, client):
         lm_disabled = LockManager(

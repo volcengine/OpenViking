@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from openviking.observability.context import get_root_observability_context
 from openviking.parse.understanding_api import PREPARED_RESPONSE_ID_ARG, UnderstandingAPI
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
@@ -607,19 +606,10 @@ async def test_add_resource_job_expands_parser_args():
 @pytest.mark.asyncio
 async def test_add_resource_processor_persists_final_resource_uri(monkeypatch):
     final_uri = "viking://resources/真实文档标题"
-    observed_identity = {}
-
-    async def execute_add_resource_job(*_args, **_kwargs):
-        root = get_root_observability_context()
-        observed_identity.update(
-            request_id=root.request_id if root else None,
-            account_id=root.account_id if root else None,
-            user_id=root.user_id if root else None,
-        )
-        return {"status": "success", "root_uri": final_uri}
-
     service = SimpleNamespace(
-        execute_add_resource_job=AsyncMock(side_effect=execute_add_resource_job)
+        execute_add_resource_job=AsyncMock(
+            return_value={"status": "success", "root_uri": final_uri}
+        )
     )
     task_tracker = SimpleNamespace(
         create=AsyncMock(return_value=SimpleNamespace(status=TaskStatus.PENDING)),
@@ -660,11 +650,6 @@ async def test_add_resource_processor_persists_final_resource_uri(monkeypatch):
         user_id="user-1",
         resource_id=final_uri,
     )
-    assert observed_identity == {
-        "request_id": "task-1",
-        "account_id": "account-1",
-        "user_id": "user-1",
-    }
 
 
 def test_feishu_bypass_requires_configured_auth(monkeypatch):

@@ -11,11 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
-from openviking.observability.events import (
-    ObservabilityEvent,
-    register_event_subscriber,
-    unregister_event_subscriber,
-)
+from openviking.observability.context import get_root_observability_context
 from openviking.server.identity import RequestContext, Role, UserIdentifier
 from openviking.storage.collection_schemas import (
     CollectionSchemas,
@@ -119,15 +115,18 @@ def _build_queue_payload() -> dict:
     return {"data": json.dumps(msg.to_dict())}
 
 
-def _build_queue_payload_for_account(account_id: str) -> dict:
+def _build_queue_payload_for_account(account_id: str, *, legacy: bool = False) -> dict:
+    context_data = {
+        "id": "id-1",
+        "uri": "viking://resources/sample",
+        "abstract": "sample",
+        "user": {"account_id": account_id, "user_id": "user-1"},
+    }
+    if not legacy:
+        context_data["account_id"] = account_id
     msg = EmbeddingMsg(
         message="hello",
-        context_data={
-            "id": "id-1",
-            "uri": "viking://resources/sample",
-            "account_id": str(account_id),
-            "abstract": "sample",
-        },
+        context_data=context_data,
         telemetry_id="telemetry-1",
     )
     return {"data": json.dumps(msg.to_dict())}
@@ -429,94 +428,38 @@ async def test_embedding_handler_treats_shutdown_write_lock_as_success(monkeypat
 
 @pytest.mark.asyncio
 async def test_embedding_handler_propagates_account_id_on_success(monkeypatch):
-    class _DummyVikingDB:
-        is_closing = False
-
-        async def upsert(self, _data, *, ctx):
-            return None
-
     captured: dict[str, object] = {}
-    embedder = _DummyEmbedder()
-    monkeypatch.setattr(
-        "openviking_cli.utils.config.get_openviking_config",
-        lambda: _DummyConfig(embedder),
-    )
-    monkeypatch.setattr(
-        "openviking.metrics.datasources.EmbeddingEventDataSource.record_success",
-        staticmethod(lambda **kwargs: captured.update(kwargs)),
-    )
-
-    handler = TextEmbeddingHandler(_DummyVikingDB())
-    await handler.on_dequeue(_build_queue_payload_for_account("acct-embed-success"))
-
-    assert captured["account_id"] == "acct-embed-success"
-
-
-@pytest.mark.asyncio
-async def test_embedding_handler_restores_legacy_usage_event_identity(monkeypatch):
-    upserted: dict[str, object] = {}
 
     class _DummyVikingDB:
         is_closing = False
 
         async def upsert(self, data, *, ctx, partial_update):
-            upserted.update(
-                data_account_id=data["account_id"],
-                ctx_account_id=ctx.account_id,
-                partial_update=partial_update,
-            )
+            captured["upsert"] = (data["account_id"], ctx.account_id, partial_update)
             return None
 
-    class _UsageReportingEmbedder(DenseEmbedderBase):
-        def __init__(self):
-            super().__init__("usage-reporting", config={})
-
+    class _IdentityCapturingEmbedder(_DummyEmbedder):
         def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-            del text, is_query
-            self.update_token_usage(
-                model_name=self.model_name,
-                provider="test",
-                prompt_tokens=7,
-                completion_tokens=0,
+            root = get_root_observability_context()
+            captured["root"] = (
+                root.request_id,
+                root.account_id,
+                root.user_id,
             )
-            return EmbedResult(dense_vector=[0.1, 0.2])
-
-        def get_dimension(self) -> int:
-            return 2
+            return super().embed(text, is_query=is_query)
 
     monkeypatch.setattr(
         "openviking_cli.utils.config.get_openviking_config",
-        lambda: _DummyConfig(_UsageReportingEmbedder()),
+        lambda: _DummyConfig(_IdentityCapturingEmbedder()),
+    )
+    handler = TextEmbeddingHandler(_DummyVikingDB())
+    await handler.on_dequeue(
+        _build_queue_payload_for_account("acct-embed-success", legacy=True)
     )
 
-    seen: list[ObservabilityEvent] = []
-    register_event_subscriber("embedding-identity-test", seen.append)
-    try:
-        msg = EmbeddingMsg(
-            message="hello",
-            context_data={
-                "id": "id-1",
-                "uri": "viking://resources/sample",
-                "abstract": "sample",
-                "user": {
-                    "account_id": "acct-embedding",
-                    "user_id": "user-embedding",
-                },
-            },
-            telemetry_id="telemetry-embedding",
-        )
-        handler = TextEmbeddingHandler(_DummyVikingDB())
-        await handler.on_dequeue({"data": json.dumps(msg.to_dict())})
-    finally:
-        unregister_event_subscriber("embedding-identity-test")
-
-    usage_event = next(event for event in seen if event.event_name == "embedding.call")
-    assert usage_event.request_id == "telemetry-embedding"
-    assert usage_event.account_id == "acct-embedding"
-    assert usage_event.user_id == "user-embedding"
-    assert upserted["data_account_id"] == "acct-embedding"
-    assert upserted["ctx_account_id"] == "acct-embedding"
-    assert upserted["partial_update"] is True
+    assert captured == {
+        "root": ("telemetry-1", "acct-embed-success", "user-1"),
+        "upsert": ("acct-embed-success", "acct-embed-success", True),
+    }
 
 
 @pytest.mark.asyncio
