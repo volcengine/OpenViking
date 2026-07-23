@@ -1436,7 +1436,7 @@ openviking add-resource ./docs --exclude "*.tmp"
 | `temp_upload.shared_prefix` | str | 分配 shared `temp_file_id` 对象时使用的 URI 前缀。 | `"viking://upload"` |
 | `user_config_defaults.add_targets.resource_uri` | str | `add_resource` 未传 `to` 和 `parent` 时使用的部署级默认资源添加目录。`viking://user/...` 会按请求用户解析。 | `null` |
 | `user_config_defaults.add_targets.skill_uri` | str | `add_skill` 未传 `target_uri` 时使用的部署级默认技能添加根目录。仅允许 `viking://user/skills` 和 `viking://agent/skills`。 | `null` |
-| `user_config_defaults.agent_evolution.enabled` | bool | 用户未显式覆盖时，控制 session commit 是否生成或更新 trajectories 和 experiences 的部署级默认值。 | `null`（有效值为 `false`） |
+| `user_config_defaults.agent_evolution.enabled` | bool | 用户未显式覆盖时，控制 session commit 是否生成或更新 cases、trajectories 和 experiences 的部署级默认值。 | `null`（有效值为 `false`） |
 
 `api_key` 模式使用 API Key 认证，也是默认模式；`trusted` 模式信任上游网关或受信调用方注入的 `X-OpenViking-Account` / `X-OpenViking-User` 请求头。
 

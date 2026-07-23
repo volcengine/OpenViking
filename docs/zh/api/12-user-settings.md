@@ -1,12 +1,12 @@
 # Agent 进化用户设置
 
-用户设置用于控制后续 session commit 是否生成或更新 `trajectories` 和 `experiences`。配置按用户隔离，保存在 `viking://user/<user_id>/settings/user_config.json`。
+用户设置用于控制后续 session commit 是否生成或更新 `cases`、`trajectories` 和 `experiences`。配置按用户隔离，保存在 `viking://user/<user_id>/settings/user_config.json`。
 
 ## 生效规则
 
 - `agent_evolution_enabled` 未显式配置时默认为 `false`。
 - 关闭后，session 归档、Working Memory 和其他记忆类型仍正常处理。
-- 关闭不会删除已有 trajectory 或 experience，也不影响已有 experience 的检索和读取。
+- 关闭不会删除已有 case、trajectory 或 experience，也不影响已有 experience 的检索和读取。
 - 开启后，session 级 `memory_policy.memory_types` 仍可限制单次 commit 的记忆类型。
 
 本接口不提供用户级 `memory_types`。需要限制单次 commit 时，请使用 session 的 `memory_policy.memory_types`。

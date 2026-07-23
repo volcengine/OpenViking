@@ -19,7 +19,10 @@ from openviking.message import Message, Part
 from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.server.config import ToolOutputExternalizationConfig, UserConfig
 from openviking.server.identity import RequestContext, Role
-from openviking.session.memory.constants import EXECUTION_MEMORY_TYPES
+from openviking.session.memory.constants import (
+    AGENT_EVOLUTION_MEMORY_TYPES,
+    EXECUTION_MEMORY_TYPES,
+)
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.session.tool_result_store import (
     ToolResultStore,
@@ -87,7 +90,7 @@ def _apply_agent_evolution_setting(
     effective_types = (
         _enabled_memory_types() if policy.memory_types is None else set(policy.memory_types)
     )
-    effective_types -= EXECUTION_MEMORY_TYPES
+    effective_types -= AGENT_EVOLUTION_MEMORY_TYPES
     return MemoryPolicy(
         self_enabled=policy.self_enabled,
         peer_enabled=policy.peer_enabled,

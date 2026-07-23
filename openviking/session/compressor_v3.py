@@ -23,6 +23,13 @@ from openviking.core.context import Context
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater, StreamingMemoryUpdaterConfig
+from openviking.session.memory.constants import (
+    AGENT_EVOLUTION_MEMORY_TYPES,
+    CASE_MEMORY_TYPE,
+    EXECUTION_MEMORY_TYPES,
+    EXPERIENCE_MEMORY_TYPE,
+    TRAJECTORY_MEMORY_TYPE,
+)
 from openviking.session.memory.dataclass import (
     MemoryFile,
     MemoryOperationSource,
@@ -77,10 +84,10 @@ from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
-_CASES_MEMORY_TYPE = "cases"
-_TRAJECTORIES_MEMORY_TYPE = "trajectories"
-_EXPERIENCES_MEMORY_TYPE = "experiences"
-_AGENT_MEMORY_TYPES = frozenset({_TRAJECTORIES_MEMORY_TYPE, _EXPERIENCES_MEMORY_TYPE})
+_CASES_MEMORY_TYPE = CASE_MEMORY_TYPE
+_TRAJECTORIES_MEMORY_TYPE = TRAJECTORY_MEMORY_TYPE
+_EXPERIENCES_MEMORY_TYPE = EXPERIENCE_MEMORY_TYPE
+_AGENT_MEMORY_TYPES = EXECUTION_MEMORY_TYPES
 _TRAINING_CASE_SPEC_PROTOCOL = "openviking.batch_train.case_spec.v1"
 _TRAINING_CASE_SPEC_HEADER = "# OpenViking Batch Training CaseSpec v1"
 _TRAINING_FAST_PATH_MEMORY_TYPES = frozenset({"cases", "trajectories", "experiences"})
@@ -296,6 +303,14 @@ class SessionCompressorV3:
         allow_self_memory: bool = True,
         allowed_peer_ids: Optional[set[str]] = None,
     ):
+        if not agent_evolution_enabled:
+            effective_types = (
+                set(create_default_registry().list_names(include_disabled=False))
+                if allowed_memory_types is None
+                else set(allowed_memory_types)
+            )
+            allowed_memory_types = effective_types - AGENT_EVOLUTION_MEMORY_TYPES
+
         message_list = list(messages)
         fast_path_case = _training_case_from_first_message(message_list, allowed_memory_types)
         if fast_path_case is not None:

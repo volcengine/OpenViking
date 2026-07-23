@@ -1,12 +1,12 @@
 # Agent Evolution User Settings
 
-User settings control whether future session commits generate or update `trajectories` and `experiences`. Settings are isolated per user and stored at `viking://user/<user_id>/settings/user_config.json`.
+User settings control whether future session commits generate or update `cases`, `trajectories`, and `experiences`. Settings are isolated per user and stored at `viking://user/<user_id>/settings/user_config.json`.
 
 ## Effective Behavior
 
 - `agent_evolution_enabled` defaults to `false` when it is not explicitly configured.
 - Disabling Agent Evolution does not stop session archiving, Working Memory, or other memory types.
-- Disabling it does not delete existing trajectories or experiences and does not affect experience retrieval or reads.
+- Disabling it does not delete existing cases, trajectories, or experiences and does not affect experience retrieval or reads.
 - When enabled, session-level `memory_policy.memory_types` can still restrict memory types for one commit.
 
 This API does not provide a persistent user-level `memory_types` setting. Use session `memory_policy.memory_types` for per-commit filtering.

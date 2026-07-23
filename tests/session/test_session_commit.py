@@ -95,6 +95,7 @@ class TestCommit:
         assert result["archived"] is True
         assert task_result["status"] == "completed"
         assert task_result["result"]["agent_evolution_enabled"] is False
+        assert "cases" not in task_result["result"]["effective_memory_types"]
         assert "trajectories" not in task_result["result"]["effective_memory_types"]
         assert "experiences" not in task_result["result"]["effective_memory_types"]
         assert task_result["result"]["agent_memory_skip_reason"] == ("agent_evolution_disabled")
@@ -102,6 +103,7 @@ class TestCommit:
             session_with_messages._session_compressor.extract_long_term_memories.call_args.kwargs
         )
         assert call_kwargs["agent_evolution_enabled"] is False
+        assert "cases" not in call_kwargs["allowed_memory_types"]
         assert "trajectories" not in call_kwargs["allowed_memory_types"]
         assert "experiences" not in call_kwargs["allowed_memory_types"]
 
@@ -124,6 +126,7 @@ class TestCommit:
 
         assert task_result["status"] == "completed"
         assert task_result["result"]["agent_evolution_enabled"] is True
+        assert "cases" in task_result["result"]["effective_memory_types"]
         assert "trajectories" in task_result["result"]["effective_memory_types"]
         assert "experiences" in task_result["result"]["effective_memory_types"]
         call_kwargs = (

@@ -6,21 +6,31 @@ from openviking.session.memory_policy import MemoryPolicy
 
 
 def test_enabled_agent_evolution_preserves_session_memory_types():
-    policy = MemoryPolicy.from_dict({"memory_types": ["profile", "events", "trajectories"]})
+    policy = MemoryPolicy.from_dict(
+        {"memory_types": ["profile", "events", "cases", "trajectories", "experiences"]}
+    )
 
     effective = session_module._apply_agent_evolution_setting(
         policy,
         agent_evolution_enabled=True,
     )
 
-    assert effective.memory_types == {"profile", "events", "trajectories"}
+    assert effective.memory_types == {
+        "profile",
+        "events",
+        "cases",
+        "trajectories",
+        "experiences",
+    }
     assert effective.self_enabled is True
     assert effective.peer_enabled is True
     assert effective.working_memory_enabled is True
 
 
 def test_disabled_agent_evolution_cannot_be_bypassed_by_session_policy():
-    policy = MemoryPolicy.from_dict({"memory_types": ["profile", "trajectories", "experiences"]})
+    policy = MemoryPolicy.from_dict(
+        {"memory_types": ["profile", "cases", "trajectories", "experiences"]}
+    )
 
     effective = session_module._apply_agent_evolution_setting(
         policy,
@@ -30,7 +40,7 @@ def test_disabled_agent_evolution_cannot_be_bypassed_by_session_policy():
     assert effective.memory_types == {"profile"}
 
 
-def test_disabled_agent_evolution_removes_execution_types_from_default_policy():
+def test_disabled_agent_evolution_removes_agent_memory_types_from_default_policy():
     effective = session_module._apply_agent_evolution_setting(
         MemoryPolicy.default(),
         agent_evolution_enabled=False,
@@ -38,6 +48,7 @@ def test_disabled_agent_evolution_removes_execution_types_from_default_policy():
 
     assert effective.memory_types is not None
     assert "profile" in effective.memory_types
+    assert "cases" not in effective.memory_types
     assert "trajectories" not in effective.memory_types
     assert "experiences" not in effective.memory_types
 

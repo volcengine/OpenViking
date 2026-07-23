@@ -542,7 +542,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             },
             HelpItem {
                 label: "ov user-settings set-memory --agent-evolution-enabled true",
-                description: "Enable future trajectory and experience production.",
+                description: "Enable future case, trajectory, and experience production.",
             },
         ],
         next_steps: &[HelpItem {

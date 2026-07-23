@@ -1469,7 +1469,7 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 | `temp_upload.shared_prefix` | str | URI prefix used when allocating shared `temp_file_id` objects. | `"viking://upload"` |
 | `user_config_defaults.add_targets.resource_uri` | str | Deployment default resource add directory used when `add_resource` omits both `to` and `parent`. `viking://user/...` resolves per request user. | `null` |
 | `user_config_defaults.add_targets.skill_uri` | str | Deployment default skill add root used when `add_skill` omits `target_uri`. Only `viking://user/skills` and `viking://agent/skills` are accepted. | `null` |
-| `user_config_defaults.agent_evolution.enabled` | bool | Deployment default controlling whether session commits generate or update trajectories and experiences when the user has no explicit override. | `null` (effective value is `false`) |
+| `user_config_defaults.agent_evolution.enabled` | bool | Deployment default controlling whether session commits generate or update cases, trajectories, and experiences when the user has no explicit override. | `null` (effective value is `false`) |
 
 `api_key` mode uses API keys and is the default. `trusted` mode trusts `X-OpenViking-Account` / `X-OpenViking-User` headers from a trusted gateway or internal caller.
 
