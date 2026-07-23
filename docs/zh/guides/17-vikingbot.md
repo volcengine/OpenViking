@@ -10,9 +10,27 @@ VikingBot 建议使用 Python 3.11 或更高版本。
 
 ### 从 PyPI 安装
 
-```bash
-pip install "openviking[bot]"
+选择你常用的 Python 包管理工具安装 VikingBot：
+
+::: code-group
+
+```bash [uv（推荐）]
+uv tool install "openviking[bot]" --upgrade
 ```
+
+```bash [pip]
+pip install "openviking[bot]" --upgrade --force-reinstall
+```
+
+```bash [pipx]
+# 安装
+pipx install "openviking[bot]"
+
+# 更新
+pipx upgrade openviking
+```
+
+:::
 
 安装后检查版本：
 

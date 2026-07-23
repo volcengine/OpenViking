@@ -9,7 +9,7 @@ import uuid
 import zipfile
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 from urllib.parse import quote
 
 import httpx
@@ -268,6 +268,7 @@ class AsyncHTTPClient:
         extra_headers: Optional[Dict[str, str]] = None,
         profile_enabled: Optional[bool] = None,
         upload_mode: Optional[str] = None,
+        event_hooks: Optional[Dict[str, List[Callable[..., Any]]]] = None,
     ):
         if actor_peer_id and agent_id:
             raise ValueError("actor_peer_id cannot be used with agent_id")
@@ -294,6 +295,9 @@ class AsyncHTTPClient:
         self._extra_headers = config.extra_headers
         self._profile_enabled = config.profile_enabled
         self._upload_mode = config.upload_mode
+        self._event_hooks = {
+            event: list(hooks) for event, hooks in (event_hooks or {}).items()
+        }
         self._http: Optional[httpx.AsyncClient] = None
         self._observer: Optional[_HTTPObserver] = None
         self._snapshot: Optional["AsyncHTTPSnapshotNamespace"] = None
@@ -313,6 +317,7 @@ class AsyncHTTPClient:
             base_url=self._url,
             headers=headers,
             timeout=self._timeout,
+            event_hooks=self._event_hooks,
             params={"profile": "1"} if self._profile_enabled else None,
         )
         self._observer = _HTTPObserver(self)

@@ -7,6 +7,33 @@ from openviking_sdk import AsyncHTTPClient, SyncHTTPClient
 from openviking_sdk.client import Session, SyncSession
 from openviking_sdk.errors import NotFoundError
 
+@pytest.mark.asyncio
+async def test_async_http_client_initialize_forwards_event_hooks():
+    async def request_hook(_request):
+        return None
+
+    async def later_hook(_request):
+        return None
+
+    event_hooks = {"request": [request_hook]}
+    fake_http = SimpleNamespace(aclose=AsyncMock())
+
+    with patch(
+        "openviking_sdk.client.httpx.AsyncClient",
+        return_value=fake_http,
+    ) as mock_async_client:
+        client = AsyncHTTPClient(
+            url="http://localhost:1933",
+            event_hooks=event_hooks,
+        )
+        await client.initialize()
+    event_hooks["request"].append(later_hook)
+
+    assert mock_async_client.call_args.kwargs["event_hooks"] == {
+        "request": [request_hook]
+    }
+    await client.close()
+
 
 @pytest.mark.asyncio
 async def test_async_http_client_batch_add_messages_posts_batch_payload():
