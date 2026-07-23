@@ -11,6 +11,7 @@ import pytest
 
 from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever, RetrieverMode
 from openviking.server.identity import RequestContext, Role
+from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.retrieve.types import ContextType, TypedQuery
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import RerankConfig, RetrievalConfig
@@ -238,6 +239,12 @@ def test_retriever_initializes_rerank_client(monkeypatch):
     assert retriever._rerank_client is fake_client
 
 
+def test_rerank_max_input_tokens_accepts_zero_or_at_least_128():
+    assert RerankConfig(max_input_tokens=0).max_input_tokens == 0
+    with pytest.raises(ValueError, match="max_input_tokens"):
+        RerankConfig(max_input_tokens=127)
+
+
 @pytest.mark.asyncio
 async def test_retrieve_uses_rerank_scores_in_thinking_mode(monkeypatch):
     fake_client = FakeRerankClient([0.95, 0.05, 0.11, 0.95])
@@ -286,6 +293,61 @@ async def test_rerank_scores_preserves_fallbacks_for_empty_documents(monkeypatch
 
     assert scores == [0.95, 0.8, 0.7, 0.05]
     assert fake_client.calls == [("hello", ["root A", "root D"])]
+
+
+@pytest.mark.asyncio
+async def test_rerank_scores_does_not_truncate_by_default(monkeypatch):
+    oversized_document = "summary-start " + ("填充内容" * 600) + " relevant-tail"
+    fake_client = FakeRerankClient([0.95])
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: fake_client,
+    )
+
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=DummyEmbedder(),
+        rerank_config=RerankConfig(ak="ak", sk="sk"),
+    )
+
+    await retriever._rerank_scores("query", [oversized_document], [0.2])
+
+    assert retriever.rerank_max_input_tokens == 0
+    assert fake_client.calls == [("query", [oversized_document])]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "oversized_document",
+    [
+        "summary-start " + ("filler " * 600) + " relevant-tail",
+        "摘要开头" + ("填充内容" * 600) + "相关结论",
+    ],
+)
+async def test_rerank_scores_bounds_oversized_documents_and_preserves_tail(
+    monkeypatch, oversized_document
+):
+    fake_client = FakeRerankClient([0.95])
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: fake_client,
+    )
+
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=DummyEmbedder(),
+        rerank_config=RerankConfig(ak="ak", sk="sk", max_input_tokens=128),
+    )
+
+    scores = await retriever._rerank_scores("query", [oversized_document], [0.2])
+
+    assert scores == [0.95]
+    rerank_query, rerank_documents = fake_client.calls[0]
+    bounded_document = rerank_documents[0]
+    assert estimate_text_tokens(rerank_query) + estimate_text_tokens(bounded_document) <= 128
+    assert "summary-start" in bounded_document or "摘要开头" in bounded_document
+    assert "relevant-tail" in bounded_document or "相关结论" in bounded_document
+    assert bounded_document != oversized_document
 
 
 @pytest.mark.asyncio

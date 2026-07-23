@@ -10,9 +10,27 @@ Python 3.11 or later is recommended for VikingBot.
 
 ### Install from PyPI
 
-```bash
-pip install "openviking[bot]"
+Choose your preferred Python package manager to install VikingBot:
+
+::: code-group
+
+```bash [uv (recommended)]
+uv tool install "openviking[bot]" --upgrade
 ```
+
+```bash [pip]
+pip install "openviking[bot]" --upgrade --force-reinstall
+```
+
+```bash [pipx]
+# Install
+pipx install "openviking[bot]"
+
+# Update
+pipx upgrade openviking
+```
+
+:::
 
 Verify the installation:
 

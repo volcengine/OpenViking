@@ -6,7 +6,6 @@ use crate::{
     config::{Config, display_config_home},
     config_wizard::{ConfigKind, ConfigStore},
     error::{Error, Result},
-    error_classifier::looks_like_auth_error,
     i18n::{Language, copy},
     theme,
 };
@@ -205,16 +204,18 @@ pub(crate) fn render_unreachable_status(
 enum StatusFailureKind {
     Authentication,
     Api,
+    Timeout,
     Connection,
 }
 
 impl StatusFailureKind {
     fn from_error(error: Option<&Error>) -> Self {
         match error {
-            Some(Error::Api { message, .. }) if looks_like_auth_error(message) => {
+            Some(error @ Error::Api { .. }) if error.code() == "UNAUTHENTICATED" => {
                 Self::Authentication
             }
             Some(Error::Api { .. }) => Self::Api,
+            Some(Error::Timeout(_)) => Self::Timeout,
             _ => Self::Connection,
         }
     }
@@ -223,6 +224,7 @@ impl StatusFailureKind {
         match self {
             Self::Authentication => copy(language, "Authentication failed", "认证失败"),
             Self::Api => copy(language, "Server error", "服务器错误"),
+            Self::Timeout => copy(language, "Timed out", "请求超时"),
             Self::Connection => copy(language, "Unreachable", "无法连接"),
         }
     }
@@ -234,6 +236,11 @@ impl StatusFailureKind {
                 language,
                 "OpenViking returned an API error",
                 "OpenViking 返回 API 错误",
+            ),
+            Self::Timeout => copy(
+                language,
+                "Server did not respond before the configured timeout",
+                "服务器未在配置的超时时间内响应",
             ),
             Self::Connection => copy(language, "Cannot reach server", "无法连接服务器"),
         }
@@ -263,6 +270,20 @@ impl StatusFailureKind {
                 (
                     "ov status --verbose",
                     copy(language, "Show backend error details", "显示后端错误详情"),
+                ),
+                (
+                    "ov health",
+                    copy(language, "Run a quick health check", "快速健康检查"),
+                ),
+            ],
+            Self::Timeout => vec![
+                (
+                    "ov config",
+                    copy(language, "Increase the request timeout", "提高请求超时时间"),
+                ),
+                (
+                    "ov config show",
+                    copy(language, "Show the active config", "查看当前配置"),
                 ),
                 (
                     "ov health",
@@ -886,8 +907,11 @@ mod tests {
 
     #[test]
     fn unreachable_status_distinguishes_auth_failures() {
-        let error = crate::error::Error::api(
-            "[AuthenticationError] API key invalid. Request ID: abc".to_string(),
+        let error = crate::error::Error::api_response(
+            Some("UNAUTHENTICATED".to_string()),
+            "API key invalid",
+            None,
+            401,
         );
         let rendered =
             super::render_unreachable_status(&sample_config(), Some("local"), 2, Some(&error));
@@ -896,7 +920,7 @@ mod tests {
         assert!(rendered.contains("Status        Authentication failed"));
         assert!(rendered.contains("Issue         API key rejected"));
         assert!(rendered.contains("ov config                 Edit the active API key"));
-        assert!(!rendered.contains("Request ID"));
+        assert!(!rendered.contains("API key invalid"));
     }
 
     #[test]

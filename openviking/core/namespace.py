@@ -173,15 +173,6 @@ def canonical_session_uri(ctx: RequestContext, session_id: Optional[str] = None)
     return f"{root}/{session_id}"
 
 
-def canonical_user_content_root(ctx: RequestContext, kind: str) -> str:
-    segment = _CONTENT_SEGMENT_BY_KIND[kind]
-    return f"{canonical_user_root(ctx)}/{segment}"
-
-
-def legacy_session_uri(session_id: Optional[str] = None) -> str:
-    if not session_id:
-        return "viking://session"
-    return f"viking://session/{session_id}"
 
 
 def is_session_uri(uri: str) -> bool:
@@ -311,19 +302,6 @@ def is_content_root_uri(
         and len(parts) == classification.content_index + 1
     )
 
-
-def is_content_namespace_root_uri(uri: str, ctx: RequestContext) -> bool:
-    try:
-        canonical_uri = canonicalize_uri(uri, ctx)
-    except (ValueError, NamespaceShapeError):
-        return False
-    parts = uri_parts(canonical_uri)
-    if parts == ["resources"]:
-        return True
-    classification = classify_uri(canonical_uri)
-    return (
-        classification.content_index is not None and len(parts) == classification.content_index + 1
-    )
 
 
 def _validate_peer_id_segments(parts: list[str]) -> None:

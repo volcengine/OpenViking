@@ -49,6 +49,22 @@ def test_maps_feishu_forbidden_to_permission_denied_and_keeps_details():
     assert exc.details["resource"] == "doc_token"
 
 
+def test_maps_missing_bitable_scope_without_parsing_message():
+    response = _fake_response(
+        code=99991672,
+        msg="opaque provider message",
+        http_status=400,
+    )
+
+    exc = _raised_error(response, operation="list bitable tables")
+
+    assert exc.code == "FAILED_PRECONDITION"
+    assert exc.message == (
+        "Feishu application is missing required Bitable permissions: "
+        "code=99991672, msg=opaque provider message"
+    )
+
+
 @pytest.mark.parametrize(
     ("http_status", "error_code"),
     [

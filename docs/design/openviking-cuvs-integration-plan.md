@@ -362,6 +362,10 @@ URI/path 使用更低阈值，是因为宽路径需要 native Trie traversal 和
 - mutation 不会破坏已被查询持有的 snapshot；同步 rebuild 仍由写锁合并为一次；
 - 同一 GPU 上不同 collection 的 admission/build 由进程级 coordinator 串行，避免并发超卖显存；
 - native fallback 不持有 GPU 锁，可以继续并发读取；
+- 边界明确的多调用 bulk ingest 可显式延迟 derived GPU maintenance；native/store 仍逐批
+  可见，最外层 scope 退出后只调度一次 rebuild，该 scope 不提供事务或原子性；
+- background worker 在 debounce 到期、candidate build 后和 commit 前都校验 generation；
+  index 替换会先继承 bulk suspension、停止旧 maintenance worker，再启动新 worker；
 - Store 是最终事实来源，重启后派生状态会重新收敛。
 
 ### 10.2 错误矩阵

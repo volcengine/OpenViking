@@ -35,12 +35,13 @@ export function createMemoryRecall({ config }) {
   return { injectRelevantMemories }
 }
 
-function extractCurrentUserText(parts) {
+export function extractCurrentUserText(parts) {
   const texts = []
   for (const part of parts) {
     if (part.type !== "text" || typeof part.text !== "string") continue
+    if (part.synthetic || part.ignored) continue
     if (part.text.includes("<openviking-context")) return null
-    if (!part.synthetic && !part.ignored) texts.push(part.text)
+    texts.push(part.text)
   }
   const joined = texts.join(" ").trim()
   return joined || null

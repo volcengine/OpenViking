@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for ExactPathLock semantics."""
 
+import asyncio
+import threading
+
 import pytest
 
 from openviking.storage.transaction.lock_handle import LockHandle
@@ -85,6 +88,43 @@ class _MemoryAgfs:
         return [{"name": name, "isDir": is_dir} for name, is_dir in names.items()]
 
 
+class _ConcurrentParentCreationAgfs(_MemoryAgfs):
+    def __init__(self, shared_parent: str):
+        super().__init__()
+        self.shared_parent = shared_parent
+        self._initial_stat_barrier = threading.Barrier(2)
+        self._state_lock = threading.Lock()
+        self._missing_stat_count = 0
+        self.mkdir_attempts = 0
+
+    def stat(self, path: str):
+        path = path.rstrip("/") or "/"
+        should_report_missing = False
+        if path == self.shared_parent:
+            with self._state_lock:
+                if self._missing_stat_count < 2:
+                    self._missing_stat_count += 1
+                    should_report_missing = True
+            if should_report_missing:
+                self._initial_stat_barrier.wait(timeout=5)
+                raise FileNotFoundError(path)
+        return super().stat(path)
+
+    def mkdir(self, path: str):
+        path = path.rstrip("/") or "/"
+        if path != self.shared_parent:
+            return super().mkdir(path)
+        with self._state_lock:
+            self.mkdir_attempts += 1
+            if path in self.dirs:
+                raise FileExistsError(path)
+            parent = self._parent(path)
+            if parent not in self.dirs:
+                raise FileNotFoundError(parent)
+            self.dirs.add(path)
+        return {"message": "created"}
+
+
 def _agfs_with_docs_dir() -> _MemoryAgfs:
     agfs = _MemoryAgfs()
     agfs.mkdir("/local")
@@ -103,6 +143,36 @@ async def test_exact_path_lock_allows_sibling_paths():
 
     assert await lock.acquire_exact_path("/local/default/resources/docs/a.md", first)
     assert await lock.acquire_exact_path("/local/default/resources/docs/b.md", second)
+
+    await lock.release(first)
+    await lock.release(second)
+
+
+@pytest.mark.asyncio
+async def test_exact_path_locks_tolerate_concurrent_parent_creation():
+    shared_parent = "/local/default/resources/shared"
+    agfs = _ConcurrentParentCreationAgfs(shared_parent)
+    agfs.mkdir("/local")
+    agfs.mkdir("/local/default")
+    agfs.mkdir("/local/default/resources")
+    lock = PathLockEngine(agfs)
+    first = LockHandle(id="exact-a")
+    second = LockHandle(id="exact-b")
+
+    acquired = await asyncio.gather(
+        lock.acquire_exact_path(f"{shared_parent}/a.md", first),
+        lock.acquire_exact_path(f"{shared_parent}/b.md", second),
+    )
+
+    assert acquired == [True, True]
+    assert agfs.mkdir_attempts == 2
+    exact_lock_paths = [
+        path
+        for path in agfs.files
+        if path.startswith(f"{shared_parent}/")
+        and path.rsplit("/", 1)[-1].startswith(EXACT_LOCK_FILE_PREFIX)
+    ]
+    assert len(exact_lock_paths) == 2
 
     await lock.release(first)
     await lock.release(second)

@@ -105,14 +105,18 @@ async def test_async_show_with_path(async_ns, fake_async_client):
 @pytest.mark.asyncio
 async def test_async_log_defaults(async_ns, fake_async_client):
     out = await async_ns.log()
-    fake_async_client._client.git_log.assert_awaited_once_with(branch="main", limit=20)
+    fake_async_client._client.git_log.assert_awaited_once_with(
+        branch="main", limit=20, paths=None
+    )
     assert len(out) == 1
 
 
 @pytest.mark.asyncio
 async def test_async_log_overrides(async_ns, fake_async_client):
-    await async_ns.log(branch="dev", limit=5)
-    fake_async_client._client.git_log.assert_awaited_once_with(branch="dev", limit=5)
+    await async_ns.log(branch="dev", limit=5, paths=["viking://resources/a.md"])
+    fake_async_client._client.git_log.assert_awaited_once_with(
+        branch="dev", limit=5, paths=["viking://resources/a.md"]
+    )
 
 
 @pytest.mark.asyncio
@@ -150,7 +154,7 @@ def test_sync_namespace_delegates_through_async(monkeypatch):
     inner_async_ns.show.assert_awaited_once_with("main", path="viking://x/a")
 
     sync_ns.log(branch="dev", limit=3)
-    inner_async_ns.log.assert_awaited_once_with(branch="dev", limit=3)
+    inner_async_ns.log.assert_awaited_once_with(branch="dev", limit=3, paths=None)
 
 
 def test_async_client_snapshot_property_is_lazy_and_cached():

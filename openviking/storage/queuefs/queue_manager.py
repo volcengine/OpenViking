@@ -69,7 +69,9 @@ class QueueManager:
     # Standard queue names
     EMBEDDING = "Embedding"
     SEMANTIC = "Semantic"
+    # Keep the on-disk name stable so pre-upgrade jobs remain recoverable.
     EXTERNAL_PARSE = "ExternalParse"
+    ADD_RESOURCE = "AddResource"
     SESSION_COMMIT = "SessionCommit"
 
     def __init__(

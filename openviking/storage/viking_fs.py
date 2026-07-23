@@ -382,6 +382,14 @@ class VikingFS:
             get_lock_manager(),
             self._encrypted_write_lock_paths(path),
             lock_mode="exact",
+            # Encrypted writes lock both the final path and the deterministic
+            # staging path under `.encrypt_stage`. Keeping the global default
+            # timeout at 0 is still desirable for ordinary path locks, but
+            # this specific dual-path write is much more exposed to short-lived
+            # contention between concurrent writers. A small 1-second wait here
+            # lets us ride out transient conflicts without broadening lock
+            # behavior for unrelated call sites.
+            timeout=1.0,
             handle=lock_handle,
         ):
             return await operation()
@@ -1473,12 +1481,6 @@ class VikingFS:
         if match_file == ".":
             return base_path
         return f"{base_path.rstrip('/')}/{match_file.lstrip('/')}"
-
-    def _calculate_grep_match_depth(self, match_file: str) -> int:
-        """Calculate relative depth from a grep result path relative to the query root."""
-        if not match_file or match_file == ".":
-            return 0
-        return len([part for part in match_file.split("/") if part])
 
     async def stat(
         self, uri: str, ctx: Optional[RequestContext] = None, skip_count: bool = False
@@ -2885,21 +2887,6 @@ class VikingFS:
                 except UnicodeDecodeError:
                     return data.decode("utf-8", errors="replace")
 
-    def _handle_agfs_content(self, result: Union[bytes, Any, None]) -> str:
-        """Handle AGFSClient content return types consistently."""
-        if isinstance(result, bytes):
-            return self._decode_bytes(result)
-        elif hasattr(result, "content") and result.content is not None:
-            return self._decode_bytes(result.content)
-        elif result is None:
-            return ""
-        else:
-            # Try to convert to string
-            try:
-                return str(result)
-            except Exception:
-                return ""
-
     # ========== Vector Sync Helper Methods ==========
 
     async def _collect_uris(
@@ -4063,6 +4050,7 @@ class VikingFS:
         *,
         branch: str = "main",
         limit: int = 20,
+        paths: Optional[List[str]] = None,
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """Walk back from ``branch``'s HEAD along ``parents[0]`` up to ``limit`` commits.
@@ -4073,25 +4061,16 @@ class VikingFS:
             return []
         real_ctx = self._ctx_or_default(ctx)
         account = real_ctx.account_id
-        head = await self._async_agfs.run(
-            "git_show",
-            account=account,
-            target_ref=branch,
-            path=None,
+        tree_paths = (
+            None if not paths else [self._uri_to_tree_path(path, ctx=real_ctx) for path in paths]
         )
-        results: List[Dict[str, Any]] = [head]
-        parents = head.get("parents") or []
-        while parents and len(results) < limit:
-            parent_oid = parents[0]
-            commit = await self._async_agfs.run(
-                "git_show",
-                account=account,
-                target_ref=parent_oid,
-                path=None,
-            )
-            results.append(commit)
-            parents = commit.get("parents") or []
-        return results
+        return await self._async_agfs.run(
+            "git_log",
+            account=account,
+            branch=branch,
+            limit=limit,
+            paths=tree_paths,
+        )
 
     def _collect_restore_vector_tasks(
         self,

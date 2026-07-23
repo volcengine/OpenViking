@@ -374,7 +374,7 @@ curl -i https://my.ov/mcp -d '{}' -H 'Content-Type: application/json' | grep -i 
 ## References
 
 - [Public Access & Reverse Proxy Guide](12-public-access.md) — HTTPS, Caddy, nginx, docker compose
-- [MCP Specification — Authorization](https://modelcontextprotocol.io/specification/2025-03-26/server/authorization)
+- [MCP Specification — Authorization](https://modelcontextprotocol.io/specification/2025-03-26/basic/authorization)
 - [RFC 8414 — OAuth 2.0 Authorization Server Metadata](https://datatracker.ietf.org/doc/html/rfc8414)
 - [RFC 9728 — OAuth 2.0 Protected Resource Metadata](https://datatracker.ietf.org/doc/html/rfc9728)
 - [RFC 7591 — Dynamic Client Registration](https://datatracker.ietf.org/doc/html/rfc7591)

@@ -7,6 +7,7 @@ from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSHTTPError,
     AGFSIsADirectoryError,
+    AGFSNotSupportedError,
     GitConcurrentCommitError,
 )
 from openviking.server.error_mapping import map_exception
@@ -86,6 +87,13 @@ def test_agfs_is_directory_maps_to_structured_invalid_argument():
         "expected": "file",
         "actual": "directory",
     }
+
+
+def test_agfs_not_supported_maps_to_unimplemented():
+    mapped = map_exception(AGFSNotSupportedError("git feature disabled"))
+
+    assert mapped is not None
+    assert mapped.code == "UNIMPLEMENTED"
 
 
 def test_value_error_invalid_uri_maps_to_invalid_uri():

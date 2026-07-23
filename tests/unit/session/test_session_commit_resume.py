@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.message import Message, TextPart
-from openviking.service.task_tracker import TaskTracker, reset_task_tracker, set_task_tracker
+from openviking.service.task_tracker import TaskTracker, set_task_tracker
 from openviking.session.session import Session
 from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
 
@@ -77,7 +77,7 @@ async def test_resume_queued_commit_continues_phase2(monkeypatch):
     try:
         await session.resume_queued_commit(message)
     finally:
-        reset_task_tracker()
+        set_task_tracker(None)
 
     session._run_memory_extraction.assert_awaited_once()
     assert session._run_memory_extraction.await_args.kwargs["task_id"] == "task-1"

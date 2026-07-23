@@ -6,9 +6,10 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from typing import Any, Dict, List, Optional
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator, Dict, List, Optional
 
-from openviking.core.namespace import canonicalize_uri, visible_roots
+from openviking.core.namespace import canonicalize_uri, uri_parts, visible_roots
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
 from openviking.storage.vectordb.collection.collection import Collection
@@ -67,6 +68,28 @@ URI_REWRITE_OUTPUT_FIELDS = [
 ]
 
 VIKINGDB_CONTENT_MAX_SIZE = 1024 * 1024
+
+
+async def _wait_for_task_completion_despite_cancellation(
+    task: asyncio.Task[Any],
+) -> Optional[asyncio.CancelledError]:
+    """Wait for an offloaded lifecycle operation without leaking its state."""
+
+    pending_cancellation: Optional[asyncio.CancelledError] = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as exc:
+            # A child that cancels itself did not complete the lifecycle
+            # operation and must still be reported by ``task.result()``.
+            if not task.cancelled() and pending_cancellation is None:
+                pending_cancellation = exc
+        except BaseException:
+            # Read the task's exception below so the caller can apply the
+            # lifecycle-specific exception ordering.
+            if not task.done():
+                raise
+    return pending_cancellation
 
 
 class _AsyncVectorAdapter:
@@ -135,9 +158,6 @@ class _SingleAccountBackend:
         if not self._meta_data_cache:
             self._meta_data_cache = coll.get_meta_data() or {}
         return self._meta_data_cache
-
-    def _refresh_meta_data(self, coll: Collection) -> None:
-        self._meta_data_cache = coll.get_meta_data() or {}
 
     def _filter_known_fields(self, data: Dict[str, Any]) -> Dict[str, Any]:
         try:
@@ -355,6 +375,12 @@ class _SingleAccountBackend:
                 f"(expected {len(expected_ids)}, got {len(normalized_ids)})"
             )
         return normalized_ids
+
+    async def begin_bulk_ingest(self) -> None:
+        await self._async_adapter.call("begin_bulk_ingest")
+
+    async def end_bulk_ingest(self) -> None:
+        await self._async_adapter.call("end_bulk_ingest")
 
     async def update(self, data: Dict[str, Any]) -> UpdateResult:
         """Strict update path. The target record must already exist."""
@@ -866,6 +892,36 @@ class VikingVectorIndexBackend:
             len(result),
         )
         return result
+
+    @asynccontextmanager
+    async def bulk_ingest(self, *, ctx: RequestContext) -> AsyncIterator[None]:
+        """Coalesce optional derived-index rebuilds across many write calls.
+
+        The scope is a performance hint only. It does not make the enclosed
+        writes transactional or atomic, and adapters that do not maintain a
+        derived local index treat it as a no-op.
+        """
+        backend = self._get_backend_for_context(ctx)
+        begin_task = asyncio.create_task(backend.begin_bulk_ingest())
+        entry_cancellation = await _wait_for_task_completion_despite_cancellation(begin_task)
+        # A failed or self-cancelled begin did not acquire the scope, so it
+        # must not be balanced with an end call.
+        begin_task.result()
+        if entry_cancellation is not None:
+            end_task = asyncio.create_task(backend.end_bulk_ingest())
+            await _wait_for_task_completion_despite_cancellation(end_task)
+            # Cleanup failures take priority because they mean the suspension
+            # may still be live. Otherwise preserve the original cancellation.
+            end_task.result()
+            raise entry_cancellation
+        try:
+            yield
+        finally:
+            end_task = asyncio.create_task(backend.end_bulk_ingest())
+            exit_cancellation = await _wait_for_task_completion_despite_cancellation(end_task)
+            end_task.result()
+            if exit_cancellation is not None:
+                raise exit_cancellation
 
     async def update(self, data: Dict[str, Any], *, ctx: RequestContext) -> UpdateResult:
         """Strict update path. The target record must already exist."""
@@ -1413,16 +1469,22 @@ class VikingVectorIndexBackend:
         if context_type:
             filters.append(Eq("context_type", context_type))
 
+        canonical_targets = [
+            canonicalize_uri(target_dir, ctx)
+            for target_dir in target_directories or []
+            if target_dir
+        ]
         tenant_filter = self._tenant_filter(ctx, context_type=context_type)
+        if tenant_filter and self._targets_within_visible_roots(ctx, canonical_targets):
+            # The target scopes are already narrower than the tenant-visible
+            # roots. Keep account isolation, but avoid recursively evaluating
+            # the broader path scopes as an additional filter.
+            tenant_filter = Eq("account_id", ctx.account_id)
         if tenant_filter:
             filters.append(tenant_filter)
 
-        if target_directories:
-            uri_conds = [
-                PathScope("uri", canonicalize_uri(target_dir, ctx), depth=-1)
-                for target_dir in target_directories
-                if target_dir
-            ]
+        if canonical_targets:
+            uri_conds = [PathScope("uri", target_dir, depth=-1) for target_dir in canonical_targets]
             if uri_conds:
                 filters.append(Or(uri_conds))
 
@@ -1436,6 +1498,20 @@ class VikingVectorIndexBackend:
             filters.append(In("level", level))
 
         return self._merge_filters(*filters)
+
+    @staticmethod
+    def _targets_within_visible_roots(ctx: RequestContext, canonical_targets: List[str]) -> bool:
+        if not canonical_targets:
+            return False
+
+        root_parts = [tuple(uri_parts(root)) for root in visible_roots(ctx)]
+        return all(
+            any(
+                len(target_parts) >= len(root) and target_parts[: len(root)] == root
+                for root in root_parts
+            )
+            for target_parts in (tuple(uri_parts(target)) for target in canonical_targets)
+        )
 
     @staticmethod
     def _tenant_filter(

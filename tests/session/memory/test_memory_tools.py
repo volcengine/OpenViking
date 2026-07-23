@@ -14,7 +14,6 @@ from openviking.session.memory.tools import (
     MemoryReadTool,
     MemorySearchTool,
     get_tool,
-    get_tool_schemas,
 )
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -261,9 +260,3 @@ class TestMemoryTools:
         read_tool = get_tool("read")
         assert read_tool is not None
         assert isinstance(read_tool, MemoryReadTool)
-
-        # Check get_tool_schemas
-        schemas = get_tool_schemas()
-        schema_names = [s["function"]["name"] for s in schemas]
-        assert "read" in schema_names
-        assert all(name in MEMORY_TOOLS_REGISTRY for name in schema_names)

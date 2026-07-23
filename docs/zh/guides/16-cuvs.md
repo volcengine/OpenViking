@@ -121,7 +121,14 @@ dense query 仍固定使用 cuVS。
 `auto_background_rebuild` 默认关闭。开启后，连续 mutation 会按
 `auto_rebuild_debounce_ms` 合并，worker 在不持有跨后端 mutation 锁的情况下构建
 新的 immutable GPU snapshot。默认 500 ms 用于避免普通 ingest 的中间 batch
-反复触发构建；batch 间隔更长的 bulk load 应配置更大的值。snapshot dirty 期间查询直接使用当前 native index，
+反复触发构建。对于边界明确、由多次调用组成的 bulk load，可把所有写入放在
+`async with backend.bulk_ingest(ctx=ctx):` scope 内：native 可见性和持久化仍按
+每次调用推进，但 derived GPU maintenance 会延迟到最外层 scope 退出后只调度一次。
+该 scope 只是 maintenance hint，不提供事务或原子性；退出 scope 只负责调度 rebuild，
+本身不等待 GPU ready。vector backend benchmark 会额外在正式计时 search 前显式等待
+最终 snapshot；无法识别 bulk 边界的调用方仍可按实际 batch 间隔调整 debounce。Auto
+仍为显式启用；未开启 Auto/background rebuild 时，该 scope 对派生维护为 no-op，不改变
+原生 CPU 检索、写入与 dtype 行为。snapshot dirty 期间查询直接使用当前 native index，
 不会把 GPU build 时间转化成请求排队时间。worker 只在 record generation 仍匹配时
 原子提交 label layout 和 GPU snapshot；过期 build 会被丢弃，并只重建最新一代。
 

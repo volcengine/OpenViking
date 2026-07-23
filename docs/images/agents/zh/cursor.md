@@ -14,7 +14,7 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 2. 在 **Cursor Settings → Hooks** 中确认生命周期 Hook 执行了 `cursor-hook.mjs`、URI 保护 Hook 执行了 `uri-guard.mjs`，且 prompt Hook 返回 `additional_context`。
 3. 在 **Cursor Settings → Tools & MCPs** 中确认 `openviking` 已连接。
 
-完整说明见 [Cursor 接入文档](https://github.com/volcengine/OpenViking/blob/main/docs/zh/agent-integrations/12-cursor.md)。
+完整说明见 [Cursor 接入文档](../../../zh/agent-integrations/12-cursor.md)。
 
 ## 故障排查
 

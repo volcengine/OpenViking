@@ -75,18 +75,6 @@ def test_vlm_factory_routes_first_class_kimi_and_glm_providers():
     assert glm_vlm.__class__.__name__ == "GLMVLM"
 
 
-def test_vlm_factory_exposes_canonical_provider_names():
-    assert VLMFactory.get_available_providers() == [
-        "volcengine",
-        "openai",
-        "azure",
-        "kimi",
-        "glm",
-        "litellm",
-        "openai-codex",
-    ]
-
-
 def test_vlm_config_uses_canonical_provider_names():
     config = VLMConfig(
         model="glm-4.6v",

@@ -30,6 +30,17 @@ logger = get_logger(__name__)
 
 _FEISHU_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(feishu://image/([^)]+)\)")
 _FEISHU_DOCUMENT_FORBIDDEN = 1770032
+_FEISHU_BITABLE_PERMISSION_REQUIRED = 99991672
+
+
+def _title_as_filename(title: str) -> str:
+    """Keep a Feishu display title intact while making it one filename segment.
+
+    Feishu titles may contain path separators.  ``original_filename`` is passed
+    through filename-oriented helpers downstream, so leaving separators in that
+    field makes ``Path(...).name`` silently discard the title prefix.
+    """
+    return title.replace("/", "_").replace("\\", "_")
 
 
 def _getattr_safe(obj, key: str, default=None):
@@ -69,15 +80,21 @@ def _raise_from_lark_response(
         msg,
         http_status,
     )
-    raise OpenVikingError(
-        f"Feishu {operation} failed: code={code}, msg={msg}",
-        code=(
+    if code == _FEISHU_BITABLE_PERMISSION_REQUIRED:
+        public_code = "FAILED_PRECONDITION"
+        message = (
+            "Feishu application is missing required Bitable permissions: "
+            f"code={code}, msg={msg}"
+        )
+    else:
+        public_code = (
             "PERMISSION_DENIED"
-            if code == _FEISHU_DOCUMENT_FORBIDDEN or "forbidden" in msg.lower()
+            if code == _FEISHU_DOCUMENT_FORBIDDEN
             else error_code_from_http_status(http_status)
-        ),
-        details=details,
-    )
+        )
+        message = f"Feishu {operation} failed: code={code}, msg={msg}"
+
+    raise OpenVikingError(message, code=public_code, details=details)
 
 
 @dataclass
@@ -247,7 +264,7 @@ class FeishuAccessor(DataAccessor):
                 "feishu_doc_type": doc.doc_type,
                 "feishu_token": doc.token,
                 "feishu_title": doc.title,
-                "original_filename": doc.title,
+                "original_filename": _title_as_filename(doc.title),
                 **doc.meta,
             }
 

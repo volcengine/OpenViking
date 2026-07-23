@@ -27,7 +27,7 @@ LOCK_TYPE_TREE = "T"
 _READ_ONLY_TREE_LOCK_TYPES = {"P", "S"}
 
 # Default poll interval when waiting for a lock (seconds)
-_POLL_INTERVAL = 0.2
+_POLL_INTERVAL = 0.1
 _WAIT_LOG_INTERVAL = 10.0
 _last_timeout_warning_at: dict[str, float] = {}
 
@@ -168,6 +168,9 @@ class PathLockEngine:
                 await self._async_agfs.mkdir(path)
                 logger.debug(f"Directory created: {path}")
             except Exception as e:
+                if await self._is_existing_directory_async(path):
+                    logger.debug(f"Directory created concurrently: {path}")
+                    return True
                 logger.warning(f"Failed to create directory {path}: {e}")
                 return False
         return True

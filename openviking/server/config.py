@@ -173,6 +173,26 @@ class UsageAuditConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class UsageReporterSinkConfig(BaseModel):
+    """Usage reporter sink configuration."""
+
+    type: Literal["custom"] = "custom"
+    class_path: Optional[str] = None
+    config: Dict[str, object] = Field(default_factory=dict)
+
+    model_config = {"extra": "forbid"}
+
+
+class UsageReporterConfig(BaseModel):
+    """Usage event reporter configuration."""
+
+    enabled: bool = False
+    extractors: List[Literal["memory_usage"]] = Field(default_factory=lambda: ["memory_usage"])
+    sinks: List[UsageReporterSinkConfig] = Field(default_factory=list)
+
+    model_config = {"extra": "forbid"}
+
+
 class TraceDumpBodyConfig(BaseModel):
     """HTTP body dump configuration.
 
@@ -237,6 +257,7 @@ class ServerConfig(BaseModel):
     encryption_enabled: bool = False  # Whether file-level AES encryption is enabled
     api_key_hashing_enabled: bool = False  # Whether API key Argon2id hashing is enabled (default: false, rely on file encryption)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    usage_reporter: UsageReporterConfig = Field(default_factory=UsageReporterConfig)
     # Public-facing base URL emitted in MCP-issued upload instructions. See
     # ``openviking.server.mcp_endpoint._resolve_public_base_url`` for the full
     # resolution chain: env var > this field > X-Forwarded-Host/Proto > Host header

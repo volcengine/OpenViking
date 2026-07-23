@@ -17,7 +17,6 @@ from openviking.service.task_tracker import (
     TaskTracker,
     _sanitize_error,
     get_task_tracker,
-    reset_task_tracker,
     set_task_tracker,
 )
 from openviking_cli.session.user_id import UserIdentifier
@@ -28,9 +27,9 @@ pytestmark = pytest.mark.asyncio
 @pytest.fixture(autouse=True)
 def clean_singleton():
     """Reset singleton before and after each test."""
-    reset_task_tracker()
+    set_task_tracker(None)
     yield
-    reset_task_tracker()
+    set_task_tracker(None)
 
 
 @pytest.fixture
@@ -150,6 +149,21 @@ async def test_complete_task(tracker: TaskTracker):
     assert retrieved.status == TaskStatus.COMPLETED
     assert retrieved.stage == "completed"
     assert retrieved.result == {"memories_extracted": 3}
+
+
+async def test_complete_task_updates_resource_id(tracker: TaskTracker):
+    task = await tracker.create("add_resource", resource_id=None, **_owner_kwargs())
+
+    await tracker.complete(
+        task.task_id,
+        {"root_uri": "viking://resources/real-title"},
+        resource_id="viking://resources/real-title",
+    )
+
+    retrieved = await tracker.get(task.task_id)
+    assert retrieved is not None
+    assert retrieved.resource_id == "viking://resources/real-title"
+    assert await tracker.list_tasks(resource_id="viking://resources/real-title") == [retrieved]
 
 
 async def test_task_result_redacts_user_key(tracker: TaskTracker):
@@ -422,7 +436,7 @@ async def test_singleton():
 
 async def test_singleton_reset():
     t1 = _set_fake_global_tracker()
-    reset_task_tracker()
+    set_task_tracker(None)
     t2 = _set_fake_global_tracker()
     assert t1 is not t2
 

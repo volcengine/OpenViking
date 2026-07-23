@@ -9,7 +9,6 @@ Manages file storage in .openviking/ directory for media files (images, tables, 
 import shutil
 from pathlib import Path
 from typing import Optional
-from uuid import uuid4
 
 from openviking_cli.utils.logger import get_logger
 
@@ -51,11 +50,6 @@ class StoragePath:
         self.openviking_dir = self.base_path / self.BASE_DIR
         self.media_dir = self.openviking_dir / self.MEDIA_DIR
         self.downloads_dir = self.openviking_dir / self.DOWNLOADS_DIR
-
-    def ensure_dirs(self) -> None:
-        """Create necessary directories if they don't exist."""
-        self.media_dir.mkdir(parents=True, exist_ok=True)
-        self.downloads_dir.mkdir(parents=True, exist_ok=True)
 
     def get_resource_media_dir(self, resource_name: str, media_type: str = "images") -> Path:
         """
@@ -134,24 +128,6 @@ class StoragePath:
         file_path.write_bytes(image_data)
         logger.debug(f"Saved table image: {file_path}")
         return file_path
-
-    def get_download_path(self, filename: Optional[str] = None, extension: str = ".pdf") -> Path:
-        """
-        Get path for downloading a file.
-
-        Args:
-            filename: Optional filename
-            extension: File extension
-
-        Returns:
-            Path for the download
-        """
-        self.ensure_dirs()
-
-        if filename is None:
-            filename = str(uuid4())
-
-        return self.downloads_dir / f"{filename}{extension}"
 
     def cleanup_resource_media(self, resource_name: str) -> None:
         """

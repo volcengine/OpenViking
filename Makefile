@@ -86,6 +86,12 @@ check-deps:
 	fi
 
 build: check-deps check-pip build-studio
+	@echo "Cleaning stale ragfs-python native artifacts from project .venv..."
+	@if [ -x .venv/bin/python ]; then \
+		.venv/bin/python -c 'import sysconfig; from pathlib import Path; roots = {Path(sysconfig.get_path("platlib")), Path(sysconfig.get_path("purelib"))}; removed = []; [removed.append(path) or path.unlink() for root in roots if root.exists() for path in root.rglob("*") if path.is_file() and path.name.startswith("ragfs_python") and path.suffix in {".so", ".pyd", ".dylib"}]; print("  [OK] removed stale ragfs artifacts from .venv" if removed else "  [OK] no stale ragfs artifacts found in .venv")'; \
+	else \
+		echo "  [SKIP] project .venv not found; skip ragfs native cleanup"; \
+	fi
 	@echo "Starting build process via setup.py..."
 	$(PYTHON) $(SETUP_PY) build_ext --inplace
 	@if command -v uv > /dev/null 2>&1 && uv pip --help > /dev/null 2>&1; then \

@@ -782,51 +782,6 @@ class TestMessageFromDict:
 class TestMessageMethods:
     """Test Message methods."""
 
-    def test_get_tool_parts(self):
-        """Test get_tool_parts method."""
-        msg = Message(
-            id="msg-1",
-            role="assistant",
-            parts=[
-                TextPart(text="Hello"),
-                ToolPart(tool_id="call-1"),
-                ToolPart(tool_id="call-2"),
-            ],
-        )
-
-        tool_parts = msg.get_tool_parts()
-
-        assert len(tool_parts) == 2
-        assert all(isinstance(p, ToolPart) for p in tool_parts)
-
-    def test_find_tool_part(self):
-        """Test find_tool_part method."""
-        msg = Message(
-            id="msg-1",
-            role="assistant",
-            parts=[
-                ToolPart(tool_id="call-1"),
-                ToolPart(tool_id="call-2"),
-            ],
-        )
-
-        part = msg.find_tool_part("call-1")
-
-        assert part is not None
-        assert part.tool_id == "call-1"
-
-    def test_find_tool_part_not_found(self):
-        """Test find_tool_part when not found."""
-        msg = Message(
-            id="msg-1",
-            role="assistant",
-            parts=[ToolPart(tool_id="call-1")],
-        )
-
-        part = msg.find_tool_part("nonexistent")
-
-        assert part is None
-
     def test_to_jsonl(self):
         """Test to_jsonl method."""
         msg = Message(

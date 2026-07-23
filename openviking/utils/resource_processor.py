@@ -135,6 +135,7 @@ class ResourceProcessor:
             "errors": [],
             "source_path": None,
         }
+        defer_post_processing = bool(kwargs.pop("defer_post_processing", False))
         preacquired_lock = kwargs.pop("resource_lock", NO_LOCK) or NO_LOCK
         telemetry = get_current_telemetry()
 
@@ -360,62 +361,107 @@ class ResourceProcessor:
                     except Exception:
                         pass
 
-            # ============ Phase 4: Optional Steps ============
-            build_index = kwargs.get("build_index", True)
-            temp_uri_for_summarize = temp_uri or parse_result.temp_dir_path
-            should_summarize = summarize or build_index
-            if should_summarize:
-                skip_vec = not build_index
-                is_code_repo = parse_result.source_format == "repository"
-                try:
-                    stage_start = time.perf_counter()
-                    stage_status = "ok"
-                    with telemetry.measure("resource.summarize"):
-                        summary_result = await self._get_summarizer().summarize(
-                            resource_uris=[result["root_uri"]],
-                            ctx=ctx,
-                            skip_vectorization=skip_vec,
-                            lock=resource_lock,
-                            temp_uris=[temp_uri_for_summarize],
-                            is_code_repo=is_code_repo,
-                            target_preexisting=target_preexisting,
-                            **kwargs,
-                        )
-                        if (
-                            resource_lock.active
-                            and summary_result.get("status") == "success"
-                            and summary_result.get("enqueued_count", 0) > 0
-                        ):
-                            await resource_lock.handoff()
-                            resource_lock = NO_LOCK
-                except Exception as e:
-                    logger.error(f"Summarization failed: {e}")
-                    result["warnings"] = result.get("warnings", []) + [f"Summarization failed: {e}"]
-                    stage_status = "error"
-                finally:
-                    try:
-                        ResourceIngestionEventDataSource.record_stage(
-                            stage="summarize",
-                            status=str(stage_status),
-                            duration_seconds=float(time.perf_counter() - stage_start),
-                            account_id=getattr(ctx, "account_id", None),
-                        )
-                    except Exception:
-                        pass
-
-            if resource_lock.active:
-                if not should_summarize and temp_uri and not source_committed:
-                    viking_fs = get_viking_fs()
-                    await viking_fs.persist_temp_tree(temp_uri, root_uri, ctx=ctx)
-                    await rewrite_image_uris(root_uri, ctx=ctx, lock_handle=resource_lock.handle)
-                    await viking_fs.delete_temp(parse_result.temp_dir_path, ctx=ctx)
-                await resource_lock.close()
+            prepared = {
+                "root_uri": root_uri,
+                "temp_uri": temp_uri or parse_result.temp_dir_path,
+                "temp_dir_path": parse_result.temp_dir_path,
+                "source_committed": source_committed,
+                "target_preexisting": target_preexisting,
+                "is_code_repo": parse_result.source_format == "repository",
+            }
+            if defer_post_processing:
+                result["_post_process"] = prepared
+                result["_resource_lock"] = resource_lock
+            else:
+                post_result = await self.finish_prepared_resource(
+                    prepared,
+                    ctx=ctx,
+                    resource_lock=resource_lock,
+                    summarize=summarize,
+                    **kwargs,
+                )
+                if post_result.get("warnings"):
+                    result.setdefault("warnings", []).extend(post_result["warnings"])
 
             # 恢复原始 temp_uri 用于输出
             if original_temp_uri is not None:
                 result["temp_uri"] = original_temp_uri
 
             return result
+
+    async def finish_prepared_resource(
+        self,
+        prepared: Dict[str, Any],
+        *,
+        ctx: RequestContext,
+        resource_lock: LockLease = NO_LOCK,
+        summarize: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Run the queue-producing phase for a resource already stored in VikingFS."""
+        from openviking.metrics.datasources.resource import ResourceIngestionEventDataSource
+
+        root_uri = str(prepared.get("root_uri") or "")
+        temp_uri = prepared.get("temp_uri")
+        temp_dir_path = prepared.get("temp_dir_path")
+        source_committed = bool(prepared.get("source_committed"))
+        target_preexisting = bool(prepared.get("target_preexisting"))
+        build_index = bool(kwargs.get("build_index", True))
+        should_summarize = summarize or build_index
+        result: Dict[str, Any] = {"status": "success", "root_uri": root_uri}
+
+        if should_summarize:
+            stage_start = time.perf_counter()
+            stage_status = "ok"
+            try:
+                with get_current_telemetry().measure("resource.summarize"):
+                    summary_result = await self._get_summarizer().summarize(
+                        resource_uris=[root_uri],
+                        ctx=ctx,
+                        skip_vectorization=not build_index,
+                        lock=resource_lock,
+                        temp_uris=[temp_uri],
+                        is_code_repo=bool(prepared.get("is_code_repo")),
+                        target_preexisting=target_preexisting,
+                        **kwargs,
+                    )
+                    if (
+                        resource_lock.active
+                        and summary_result.get("status") == "success"
+                        and summary_result.get("enqueued_count", 0) > 0
+                    ):
+                        await resource_lock.handoff()
+                        resource_lock = NO_LOCK
+            except Exception as exc:
+                logger.error("Summarization failed: %s", exc)
+                result["warnings"] = [f"Summarization failed: {exc}"]
+                stage_status = "error"
+            finally:
+                try:
+                    ResourceIngestionEventDataSource.record_stage(
+                        stage="summarize",
+                        status=stage_status,
+                        duration_seconds=float(time.perf_counter() - stage_start),
+                        account_id=getattr(ctx, "account_id", None),
+                    )
+                except Exception:
+                    pass
+
+        if resource_lock.active:
+            try:
+                if not should_summarize and temp_uri and not source_committed:
+                    viking_fs = get_viking_fs()
+                    await viking_fs.persist_temp_tree(temp_uri, root_uri, ctx=ctx)
+                    await rewrite_image_uris(
+                        root_uri,
+                        ctx=ctx,
+                        lock_handle=resource_lock.handle,
+                    )
+                    if temp_dir_path:
+                        await viking_fs.delete_temp(temp_dir_path, ctx=ctx)
+            finally:
+                await resource_lock.close()
+        return result
 
     async def reserve_unique_candidate(
         self,

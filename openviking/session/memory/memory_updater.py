@@ -76,12 +76,14 @@ async def write_stored_links(
     ctx: RequestContext,
     viking_fs: Any,
     skip_uris: Optional[set] = None,
+    lock_handle: Any = None,
 ) -> List[str]:
     """Write StoredLinks to their endpoint files' links/backlinks fields.
 
     For each link: from_uri's ``links`` receives the forward link;
     to_uri's ``backlinks`` receives the reverse reference.
     Files listed in skip_uris are skipped (caller handles them in the same write).
+    When lock_handle is provided, all endpoint rewrites reuse that transaction.
     Returns the endpoint URIs that were successfully rewritten.  Callers can
     use this to avoid reporting link-only edits for files that failed the
     read/modify/write step.
@@ -89,6 +91,7 @@ async def write_stored_links(
     from openviking.session.memory.merge_op.link_merge import merge_links
 
     skip = skip_uris or set()
+    lock_kwargs = {"lock_handle": lock_handle} if lock_handle is not None else {}
     file_links: Dict[str, Dict[str, List[StoredLink]]] = {}
     for link in links:
         if link.from_uri not in skip:
@@ -115,7 +118,12 @@ async def write_stored_links(
             if current_trace_id:
                 mf.extra_fields["last_update_trace_id"] = current_trace_id
             bump_memory_version(mf)
-            await viking_fs.write_file(uri, MemoryFileUtils.write(mf), ctx=ctx)
+            await viking_fs.write_file(
+                uri,
+                MemoryFileUtils.write(mf),
+                ctx=ctx,
+                **lock_kwargs,
+            )
             updated_uris.append(uri)
         except Exception as e:
             tracer.error(f"Failed to apply links to {uri}: {e}")
@@ -556,7 +564,6 @@ class MessageRange:
         result = []
         for i, msg_group in enumerate(self.elements):
             result.extend(self._format_contiguous_group(msg_group))
-            # Add "..." separator between non-contiguous message groups
             if i < len(self.elements) - 1:
                 result.append("...")
         return "\n".join(result)
@@ -675,9 +682,6 @@ class MemoryUpdateResult:
     def add_error(self, uri: str, error: Exception) -> None:
         self.errors.append((uri, error))
 
-    def has_changes(self) -> bool:
-        return len(self.written_uris) > 0 or len(self.edited_uris) > 0 or len(self.deleted_uris) > 0
-
     def summary(self) -> str:
         return (
             f"Written: {len(self.written_uris)}, "
@@ -713,10 +717,6 @@ class MemoryUpdater:
         self._registry = registry
         self._vikingdb = vikingdb
         self._transaction_handle = transaction_handle
-
-    def set_registry(self, registry: MemoryTypeRegistry) -> None:
-        """Set the memory type registry for URI resolution."""
-        self._registry = registry
 
     def _get_viking_fs(self):
         """Get or create VikingFS instance."""
@@ -816,23 +816,25 @@ class MemoryUpdater:
                 result.add_error("unknown", ValueError(error))
             return result
 
-        unresolved_ops = [
-            resolved_op for resolved_op in operations.upsert_operations if not resolved_op.uris
-        ]
-        if unresolved_ops:
-            missing = [
-                f"{resolved_op.memory_type}(page_id={resolved_op.page_id})"
-                for resolved_op in unresolved_ops
-            ]
-            raise ValueError(
-                f"Cannot apply operations: missing resolved URIs for {', '.join(missing)}"
+        applicable_upserts: List[ResolvedOperation] = []
+        has_unresolved_upserts = False
+        for resolved_op in operations.upsert_operations:
+            if resolved_op.uris:
+                applicable_upserts.append(resolved_op)
+                continue
+            has_unresolved_upserts = True
+            error_target = f"{resolved_op.memory_type}(page_id={resolved_op.page_id})"
+            resolution_error = ValueError("Missing resolved URI")
+            result.add_error(error_target, resolution_error)
+            tracer.error(
+                f"Skipping unresolved memory operation: {error_target}: {resolution_error}"
             )
 
         # Distribute resolved_links to corresponding upsert operations
         self._distribute_links_to_operations(operations)
 
         # Apply unified operations - _apply_edit returns True if edited, False if written
-        for resolved_op in operations.upsert_operations:
+        for resolved_op in applicable_upserts:
             try:
                 await self._apply_upsert(
                     resolved_op,
@@ -868,6 +870,13 @@ class MemoryUpdater:
         upserted_uri_keys = {_same_batch_delete_conflict_key(uri) for uri in upserted_uris}
         for file_content in operations.delete_file_contents:
             delete_uri = file_content.uri
+            if has_unresolved_upserts:
+                delete_error = ValueError(
+                    "Skipped delete because batch contains unresolved upsert URIs"
+                )
+                result.add_error(delete_uri, delete_error)
+                tracer.error(f"Skipping delete for {delete_uri}: {delete_error}")
+                continue
             if delete_uri in upserted_uris:
                 tracer.info(
                     f"[apply_operations] skipping delete for {delete_uri}: "
@@ -955,7 +964,12 @@ class MemoryUpdater:
                     source=RESOURCE_REF_SOURCE_SESSION_COMMIT,
                 )
                 if changed:
-                    await viking_fs.write_file(uri, MemoryFileUtils.write(mf), ctx=ctx)
+                    await viking_fs.write_file(
+                        uri,
+                        MemoryFileUtils.write(mf),
+                        ctx=ctx,
+                        lock_handle=self._transaction_handle,
+                    )
             except Exception as exc:
                 logger.warning("Failed to sync resource refs for %s: %s", uri, exc)
 
@@ -1072,7 +1086,12 @@ class MemoryUpdater:
                 content_template=schema.content_template,
                 extract_context=extract_context,
             )
-            await viking_fs.write_file(uri, new_full_content, ctx=ctx)
+            await viking_fs.write_file(
+                uri,
+                new_full_content,
+                ctx=ctx,
+                lock_handle=self._transaction_handle,
+            )
 
     def _distribute_links_to_operations(self, operations: ResolvedOperations) -> None:
         """Distribute resolved_links to corresponding upsert operations by URI.
@@ -1123,7 +1142,13 @@ class MemoryUpdater:
             if context_type_for_uri(uri) != "memory"
         }
         skip = upserted_uris | (deleted_uris or set()) | non_memory_endpoints
-        await write_stored_links(resolved_links, ctx, viking_fs, skip_uris=skip)
+        await write_stored_links(
+            resolved_links,
+            ctx,
+            viking_fs,
+            skip_uris=skip,
+            lock_handle=self._transaction_handle,
+        )
 
 
     async def _inherit_deleted_link_relations(
@@ -1201,7 +1226,12 @@ class MemoryUpdater:
                 if current_trace_id:
                     mf.extra_fields["last_update_trace_id"] = current_trace_id
                 bump_memory_version(mf)
-                await viking_fs.write_file(uri, MemoryFileUtils.write(mf), ctx=ctx)
+                await viking_fs.write_file(
+                    uri,
+                    MemoryFileUtils.write(mf),
+                    ctx=ctx,
+                    lock_handle=self._transaction_handle,
+                )
                 result.add_edited(uri)
             except Exception as e:
                 tracer.error(f"Failed to inherit deleted memory links for {uri}: {e}")
@@ -1413,13 +1443,23 @@ class MemoryUpdater:
                 entry.get("name", "") in {"", ".overview.md"} for entry in entries
             )
             try:
-                await viking_fs.rm(overview_path, recursive=False, ctx=ctx)
+                await viking_fs.rm(
+                    overview_path,
+                    recursive=False,
+                    ctx=ctx,
+                    lock_handle=self._transaction_handle,
+                )
             except Exception:
                 pass
             # Try to delete empty directory
             if can_delete_directory:
                 try:
-                    await viking_fs.rm(directory, recursive=True, ctx=ctx)
+                    await viking_fs.rm(
+                        directory,
+                        recursive=True,
+                        ctx=ctx,
+                        lock_handle=self._transaction_handle,
+                    )
                 except Exception:
                     pass
             return
@@ -1469,6 +1509,11 @@ class MemoryUpdater:
         # Write .overview.md to the directory
         overview_path = f"{directory.rstrip('/')}/.overview.md"
         try:
-            await viking_fs.write_file(overview_path, rendered, ctx=ctx)
+            await viking_fs.write_file(
+                overview_path,
+                rendered,
+                ctx=ctx,
+                lock_handle=self._transaction_handle,
+            )
         except Exception as e:
             tracer.error(f"Failed to write overview {overview_path}: {e}")

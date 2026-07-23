@@ -39,6 +39,9 @@ class TaskStatus(str, Enum):
     FAILED = "failed"
 
 
+_TERMINAL_STATUSES = (TaskStatus.COMPLETED, TaskStatus.FAILED)
+
+
 @dataclass
 class TaskRecord:
     """Immutable snapshot of an async task."""
@@ -95,12 +98,6 @@ def set_task_tracker(tracker: "TaskTracker") -> None:
     global _instance
     with _init_lock:
         _instance = tracker
-
-
-def reset_task_tracker() -> None:
-    """Reset singleton (for testing)."""
-    global _instance
-    _instance = None
 
 
 # ── Sanitization ──
@@ -339,7 +336,7 @@ class TaskTracker:
         """Transition task to RUNNING."""
         async with self._async_lock:
             task = await self._load_for_update(task_id, account_id, user_id)
-            if task:
+            if task and task.status not in _TERMINAL_STATUSES:
                 task.status = TaskStatus.RUNNING
                 if stage is not None:
                     task.stage = stage
@@ -358,7 +355,7 @@ class TaskTracker:
         """Update task stage without changing its lifecycle status."""
         async with self._async_lock:
             task = await self._load_for_update(task_id, account_id, user_id)
-            if task:
+            if task and task.status not in _TERMINAL_STATUSES:
                 task.stage = stage
                 task.updated_at = time.time()
                 await self._store.update(task)
@@ -371,19 +368,26 @@ class TaskTracker:
         result: Optional[Dict[str, Any]] = None,
         account_id: Optional[str] = None,
         user_id: Optional[str] = None,
+        *,
+        resource_id: Optional[str] = None,
     ) -> None:
         """Transition task to COMPLETED with optional result."""
+        transitioned = False
         async with self._async_lock:
             task = await self._load_for_update(task_id, account_id, user_id)
-            if task:
+            if task and task.status not in _TERMINAL_STATUSES:
                 task.status = TaskStatus.COMPLETED
                 task.stage = "completed"
                 task.result = result
+                if resource_id is not None:
+                    task.resource_id = resource_id
                 task.updated_at = time.time()
                 await self._store.update(task)
                 with self._lock:
                     self._tasks[task.task_id] = task
-        logger.info("[TaskTracker] Task %s completed", task_id)
+                transitioned = True
+        if transitioned:
+            logger.info("[TaskTracker] Task %s completed", task_id)
 
     async def fail(
         self,
@@ -393,9 +397,10 @@ class TaskTracker:
         user_id: Optional[str] = None,
     ) -> None:
         """Transition task to FAILED with sanitized error."""
+        transitioned = False
         async with self._async_lock:
             task = await self._load_for_update(task_id, account_id, user_id)
-            if task:
+            if task and task.status not in _TERMINAL_STATUSES:
                 task.status = TaskStatus.FAILED
                 task.stage = "failed"
                 task.error = _sanitize_error(error)
@@ -403,7 +408,9 @@ class TaskTracker:
                 await self._store.update(task)
                 with self._lock:
                     self._tasks[task.task_id] = task
-        logger.warning("[TaskTracker] Task %s failed: %s", task_id, _sanitize_error(error))
+                transitioned = True
+        if transitioned:
+            logger.warning("[TaskTracker] Task %s failed: %s", task_id, _sanitize_error(error))
 
     async def get(
         self,
