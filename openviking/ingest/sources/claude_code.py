@@ -39,6 +39,17 @@ class ClaudeCodeSource(JsonlLogSource):
     def default_paths(self) -> List[Path]:
         return [Path.home() / ".claude" / "projects"]
 
+    def session_ref_for_file(self, path: Path) -> SessionRef:
+        # Populate started_at so `ingest backfill --since` is honored (the docs'
+        # canonical example uses --harness claude_code); the per-record top-level
+        # "timestamp" that parse_line already reads is the session-start source.
+        return SessionRef(
+            harness=self.name,
+            native_session_id=self.session_id_for_file(path),
+            locator=str(path),
+            started_at=self._peek_first_timestamp(path),
+        )
+
     def parse_line(self, obj: Dict[str, Any], ref: SessionRef) -> List[NormalizedMessage]:
         if obj.get("type") not in ("user", "assistant"):
             return []
