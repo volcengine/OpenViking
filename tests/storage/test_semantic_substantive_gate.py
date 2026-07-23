@@ -206,12 +206,16 @@ class _FakeVikingFS:
     def __init__(self, tree):
         self._tree = tree
         self.writes = []
+        self.deleted = []
 
     async def ls(self, uri, node_limit=None, ctx=None):
         return self._tree.get(uri, [])
 
     async def write_file(self, path, content, ctx=None, lock_handle=None):
         self.writes.append((path, content))
+
+    async def _delete_from_vector_store(self, uris, ctx=None):
+        self.deleted.extend(uris)
 
     def _uri_to_path(self, uri, ctx=None):
         return uri.replace("viking://", "/local/acc1/")
@@ -224,10 +228,13 @@ class _GateFakeProcessor:
     def __init__(self):
         self.vectorized_files = []
         self.vectorized_dirs = []
+        # name -> bool; overrides the "sub in name" heuristic. Lets a test
+        # "rewrite" a file from substantive to non-substantive between runs.
+        self.substantive_override = {}
 
     async def _generate_single_file_summary(self, file_path, llm_sem=None, ctx=None):
         name = file_path.split("/")[-1]
-        substantive = "sub" in name
+        substantive = self.substantive_override.get(name, "sub" in name)
         return {
             "name": name,
             "summary": "s" if substantive else "",
@@ -266,15 +273,15 @@ class _DummyTracker:
         return None
 
 
-def _run_executor(monkeypatch, tree, root_uri):
+def _run_executor(monkeypatch, tree, root_uri, processor=None, fake_fs=None):
     _mock_transaction_layer(monkeypatch)
-    fake_fs = _FakeVikingFS(tree)
+    fake_fs = fake_fs or _FakeVikingFS(tree)
     monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
     monkeypatch.setattr(
         "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
         lambda: _DummyTracker(),
     )
-    processor = _GateFakeProcessor()
+    processor = processor or _GateFakeProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
     executor = SemanticDagExecutor(
         processor=processor, context_type="session", max_concurrent_llm=2, ctx=ctx
@@ -314,6 +321,133 @@ async def test_all_nonsubstantive_dir_not_vectorized(monkeypatch):
     assert processor.vectorized_dirs == []  # neutral overview not embedded
     written = dict(fake_fs.writes)
     assert written[f"{root_uri}/.overview.md"] == _neutral_directory_overview("test-session")
+
+
+# --------------------------------------------------------------------------- #
+# Transition cleanup — substantive -> non-substantive must DELETE stale records
+# (PR #3049 review), not merely skip re-vectorization.
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_rewritten_nonsubstantive_file_deletes_stale_vector(monkeypatch):
+    root_uri = "viking://session/test-session"
+    tree = {root_uri: [{"name": "sub_notes.md", "isDir": False}]}
+
+    # Pass 1: substantive content gets vectorized, nothing deleted.
+    processor, fake_fs, executor = _run_executor(monkeypatch, tree, root_uri)
+    await executor.run(root_uri)
+    assert len(processor.vectorized_files) == 1
+    file_uri = processor.vectorized_files[0]
+    assert fake_fs.deleted == []
+
+    # Pass 2: same file rewritten to non-substantive. A fresh full run
+    # (need_vectorize=True) exercises the same delete branch the incremental
+    # change-detection path takes.
+    processor.substantive_override["sub_notes.md"] = False
+    _, _, executor2 = _run_executor(
+        monkeypatch, tree, root_uri, processor=processor, fake_fs=fake_fs
+    )
+    await executor2.run(root_uri)
+
+    assert file_uri in fake_fs.deleted  # stale DETAIL record removed
+    assert processor.vectorized_files == [file_uri]  # no new vectorize scheduled
+
+
+@pytest.mark.asyncio
+async def test_dir_turned_neutral_deletes_stale_records(monkeypatch):
+    root_uri = "viking://session/test-session"
+    tree = {root_uri: [{"name": "sub_a.md", "isDir": False}]}
+
+    # Pass 1: dir has substantive content -> L0/L1 vectorized, nothing deleted.
+    processor, fake_fs, executor = _run_executor(monkeypatch, tree, root_uri)
+    await executor.run(root_uri)
+    assert processor.vectorized_dirs == [root_uri]
+    assert root_uri not in fake_fs.deleted
+
+    # Pass 2: only child rewritten non-substantive -> neutral overview.
+    processor.substantive_override["sub_a.md"] = False
+    _, _, executor2 = _run_executor(
+        monkeypatch, tree, root_uri, processor=processor, fake_fs=fake_fs
+    )
+    await executor2.run(root_uri)
+
+    assert root_uri in fake_fs.deleted  # stale L0/L1 records removed
+    assert processor.vectorized_dirs == [root_uri]  # neutral overview not re-embedded
+
+
+@pytest.mark.asyncio
+async def test_write_failure_suppression_does_not_delete(monkeypatch):
+    # A failed sidecar write suppresses vectorization but the content is still
+    # substantive — existing vectors must survive.
+    root_uri = "viking://session/test-session"
+    tree = {root_uri: [{"name": "sub_a.md", "isDir": False}]}
+    processor, fake_fs, executor = _run_executor(monkeypatch, tree, root_uri)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.write_semantic_sidecars",
+        AsyncMock(return_value=False),
+    )
+    await executor.run(root_uri)
+
+    assert processor.vectorized_dirs == []  # suppressed by write failure
+    assert fake_fs.deleted == []  # ...but nothing deleted
+
+
+# --------------------------------------------------------------------------- #
+# Memory path (_process_memory_directory) — same transition cleanup wiring
+# --------------------------------------------------------------------------- #
+class _MemoryFakeVikingFS(_FakeVikingFS):
+    async def read_file(self, path, ctx=None):
+        raise FileNotFoundError(path)
+
+
+async def _run_memory_processor(monkeypatch, file_names):
+    _mock_transaction_layer(monkeypatch)
+    monkeypatch.setattr(sp, "get_openviking_config", lambda: _fake_config(MagicMock()))
+    dir_uri = "viking://user/memories"
+    tree = {dir_uri: [{"name": n, "isDir": False} for n in file_names]}
+    fake_fs = _MemoryFakeVikingFS(tree)
+    monkeypatch.setattr(sp, "get_viking_fs", lambda: fake_fs)
+
+    processor = SemanticProcessor()
+    gate = _GateFakeProcessor()
+    monkeypatch.setattr(
+        processor, "_generate_single_file_summary", gate._generate_single_file_summary
+    )
+
+    async def _fake_overview(dir_uri, file_summaries, children_abstracts, llm_sem=None):
+        return await gate._generate_overview(dir_uri, file_summaries, children_abstracts)
+
+    monkeypatch.setattr(processor, "_generate_overview", _fake_overview)
+    monkeypatch.setattr(processor, "_vectorize_single_file", AsyncMock())
+    monkeypatch.setattr(processor, "_vectorize_directory", AsyncMock())
+
+    from openviking.storage.queuefs.semantic_msg import SemanticMsg
+
+    msg = SemanticMsg(uri=dir_uri, context_type="memory")
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
+    await processor._process_memory_directory(msg, ctx=ctx)
+    return processor, fake_fs, dir_uri
+
+
+@pytest.mark.asyncio
+async def test_memory_path_deletes_stale_file_vector(monkeypatch):
+    processor, fake_fs, dir_uri = await _run_memory_processor(
+        monkeypatch, ["sub_a.md", "heading_only.md"]
+    )
+
+    assert fake_fs.deleted == [f"{dir_uri}/heading_only.md"]  # stale DETAIL removed
+    processor._vectorize_directory.assert_awaited_once()  # dir still substantive
+
+
+@pytest.mark.asyncio
+async def test_memory_path_deletes_stale_dir_records_when_neutral(monkeypatch):
+    processor, fake_fs, dir_uri = await _run_memory_processor(
+        monkeypatch, ["heading_only.md", "frontmatter.md"]
+    )
+
+    assert f"{dir_uri}/heading_only.md" in fake_fs.deleted
+    assert f"{dir_uri}/frontmatter.md" in fake_fs.deleted
+    assert dir_uri in fake_fs.deleted  # neutral overview -> L0/L1 removed
+    processor._vectorize_directory.assert_not_awaited()
 
 
 if __name__ == "__main__":

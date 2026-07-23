@@ -802,6 +802,20 @@ class SemanticProcessor(DequeueHandlerBase):
                 and summary is not None
                 and summary.get("has_substantive_content", True)
             ]
+            # Files whose fresh summary is non-substantive: any previously
+            # embedded DETAIL records at their exact URIs are stale — remove
+            # them (issue #3028). Idempotent no-op when nothing was embedded.
+            # Deleting before the sidecar write below is intentional: these
+            # files must not have vectors regardless of the write outcome.
+            stale_file_uris = [
+                file_path
+                for file_path, summary in zip(file_paths, file_summaries, strict=False)
+                if file_path in paths_to_vectorize
+                and summary is not None
+                and not summary.get("has_substantive_content", True)
+            ]
+            if stale_file_uris:
+                await viking_fs._delete_from_vector_store(stale_file_uris, ctx=ctx)
             generated_content = await self._generate_overview(
                 dir_uri, completed_summaries, [], llm_sem=llm_sem
             )
@@ -857,6 +871,9 @@ class SemanticProcessor(DequeueHandlerBase):
                 )
             if skip_directory_vectorization:
                 logger.info(f"Skipping directory vectorization for neutral overview: {dir_uri}")
+                # Directory became non-substantive: remove stale L0/L1 records
+                # at this exact URI (issue #3028). Idempotent when none exist.
+                await viking_fs._delete_from_vector_store([dir_uri], ctx=ctx)
             else:
                 await self._vectorize_directory(
                     uri=dir_uri,

@@ -695,6 +695,11 @@ class SemanticDagExecutor:
                     use_summary=use_summary,
                 )
                 await self._add_vectorize_task(task)
+            elif need_vectorize:
+                # Content changed and is now non-substantive: any previously
+                # embedded DETAIL record at this exact URI is stale — remove it
+                # (issue #3028). Idempotent no-op when nothing was embedded.
+                await self._viking_fs._delete_from_vector_store([file_path], ctx=self._ctx)
         except Exception as e:
             logger.error(f"Failed to schedule vectorization for {file_path}: {e}", exc_info=True)
         await self._on_file_done(parent_uri, file_path, summary_dict)
@@ -828,6 +833,11 @@ class SemanticDagExecutor:
 
             if is_neutral_overview(overview):
                 need_vectorize = False
+                # Directory became non-substantive: stale L0/L1 records at this
+                # exact URI must be removed (issue #3028). Deliberately inside
+                # this branch only — the write-failure path below also suppresses
+                # vectorization but must keep existing vectors.
+                await self._viking_fs._delete_from_vector_store([dir_uri], ctx=self._ctx)
 
             # Write directly, protected by the outer semantic lock.
             try:
