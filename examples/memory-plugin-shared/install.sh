@@ -1356,6 +1356,7 @@ prepare_claude_hook_only_marketplace() {
   rm -rf "$tmp"
   mkdir -p "$plugin_dest"
   (cd "$plugin_dir" && tar --exclude node_modules --exclude .git -cf - .) | (cd "$plugin_dest" && tar -xf -)
+  rm -f "$plugin_dest/.mcp.json"
   node - "$plugin_dest/.claude-plugin/plugin.json" "$tmp/.claude-plugin/marketplace.json" "$MARKETPLACE_NAME" <<'NODE'
 const fs = require("node:fs");
 const [pluginManifestPath, marketplacePath, marketplaceName] = process.argv.slice(2);
@@ -1441,11 +1442,11 @@ install_claude_legacy() {
   hooks_src="$plugin_dir/hooks/hooks.json"
   ts=$(date +%Y%m%d-%H%M%S)
 
+  claude_cmd mcp remove openviking -s user >/dev/null 2>&1 || true
   if [ "$CLAUDE_HOOK_ONLY" -eq 1 ]; then
     info "Legacy mode: merging hooks into $CC_SETTINGS without registering the bundled MCP server"
   else
     info "Legacy mode: $CLAUDE_BIN mcp add (stdio proxy) + merging hooks into $CC_SETTINGS"
-    claude_cmd mcp remove openviking -s user >/dev/null 2>&1 || true
     claude_cmd mcp add --scope user openviking -- node "$plugin_dir/servers/mcp-proxy.mjs" || {
       err "$CLAUDE_BIN mcp add failed"
       return 1
