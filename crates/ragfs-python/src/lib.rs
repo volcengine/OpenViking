@@ -1063,6 +1063,38 @@ impl RAGFSBindingClient {
         git::show_response_to_pydict(py, resp)
     }
 
+    /// Build a bounded unified text diff outside the Python interpreter.
+    #[pyo3(signature = (**kwargs))]
+    fn git_diff_text(
+        &self,
+        py: Python<'_>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<String> {
+        let empty = PyDict::new(py);
+        let kw = kwargs.unwrap_or(&empty);
+        let req = git::parse_diff_text_request(kw)?;
+        let result = py_detach_blocking(py, move || {
+            git::build_bounded_unified_diff(
+                &req.before,
+                &req.after,
+                &req.fromfile,
+                &req.tofile,
+                req.timeout_ms,
+                req.max_output_bytes,
+            )
+        });
+        result.map_err(|err| match err {
+            git::BoundedDiffError::OutputTooLarge { limit } => git::new_py_err_pub(
+                py,
+                "AGFSResourceExhaustedError",
+                format!("snapshot diff output size limit exceeded ({limit} bytes)"),
+            ),
+            git::BoundedDiffError::Render(message) => {
+                git::new_py_err_pub(py, "AGFSInternalError", message)
+            }
+        })
+    }
+
     /// Walk snapshot history, optionally filtered to commits touching paths.
     #[pyo3(signature = (**kwargs))]
     fn git_log(

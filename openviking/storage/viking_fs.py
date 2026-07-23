@@ -14,7 +14,6 @@ Responsibilities:
 
 import asyncio
 import contextvars
-import difflib
 import hashlib
 import json
 import os
@@ -43,6 +42,7 @@ from openviking.pyagfs.exceptions import (
     AGFSInvalidOperationError,
     AGFSNotFoundError,
     AGFSNotSupportedError,
+    AGFSPathNotFoundError,
     AGFSResourceExhaustedError,
 )
 from openviking.resource.watch_storage import is_watch_task_control_uri
@@ -86,6 +86,7 @@ LS_ALL_NODES = 2**31 - 1
 SNAPSHOT_DIFF_MAX_FILE_BYTES = 10 * 1024 * 1024
 SNAPSHOT_DIFF_MAX_OUTPUT_BYTES = 20 * 1024 * 1024
 SNAPSHOT_DIFF_MAX_LINES = 100_000
+SNAPSHOT_DIFF_TIMEOUT_MS = 500
 _T = TypeVar("_T")
 
 
@@ -109,16 +110,13 @@ def _snapshot_line_count(text: str) -> int:
     return count if text.endswith(line_breaks) else count + 1
 
 
-def _build_snapshot_unified_diff(
+def _prepare_snapshot_diff(
     *,
     path: str,
-    from_oid: str,
-    to_oid: str,
     before_bytes: Optional[bytes],
     after_bytes: Optional[bytes],
-    max_output_bytes: int,
     max_lines: int,
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     try:
         before = before_bytes.decode("utf-8") if before_bytes is not None else ""
         after = after_bytes.decode("utf-8") if after_bytes is not None else ""
@@ -142,25 +140,7 @@ def _build_snapshot_unified_diff(
     else:
         change_type = "modified"
 
-    output: list[str] = []
-    output_bytes = 0
-    diff_lines = difflib.unified_diff(
-        before.splitlines(keepends=True),
-        after.splitlines(keepends=True),
-        fromfile=f"{path}@{from_oid}",
-        tofile=f"{path}@{to_oid}",
-    )
-    for line in diff_lines:
-        normalized = line if line.endswith("\n") else line + "\n\\ No newline at end of file\n"
-        output_bytes += len(normalized.encode("utf-8"))
-        if output_bytes > max_output_bytes:
-            raise ResourceExhaustedError(
-                f"snapshot diff output size limit exceeded ({max_output_bytes} bytes)",
-                details={"limit_bytes": max_output_bytes, "path": path},
-            )
-        output.append(normalized)
-
-    return change_type, "".join(output)
+    return change_type, before, after
 
 
 def _ensure_non_empty_search_query(query: str, image_url: Optional[str] = None) -> None:
@@ -4164,7 +4144,7 @@ class VikingFS:
                     max_blob_bytes=SNAPSHOT_DIFF_MAX_FILE_BYTES,
                     ctx=real_ctx,
                 )
-            except AGFSNotFoundError:
+            except AGFSPathNotFoundError:
                 return None
             except AGFSResourceExhaustedError as exc:
                 raise ResourceExhaustedError(
@@ -4188,16 +4168,29 @@ class VikingFS:
                     details={"limit_bytes": SNAPSHOT_DIFF_MAX_FILE_BYTES, "path": path},
                 )
 
-        change_type, diff_text = await asyncio.to_thread(
-            _build_snapshot_unified_diff,
+        change_type, before, after = await asyncio.to_thread(
+            _prepare_snapshot_diff,
             path=path,
-            from_oid=from_oid,
-            to_oid=to_oid,
             before_bytes=before_bytes,
             after_bytes=after_bytes,
-            max_output_bytes=SNAPSHOT_DIFF_MAX_OUTPUT_BYTES,
             max_lines=SNAPSHOT_DIFF_MAX_LINES,
         )
+        try:
+            diff_text = await self._async_agfs.run(
+                "git_diff_text",
+                before=before,
+                after=after,
+                fromfile=f"{path}@{from_oid}",
+                tofile=f"{path}@{to_oid}",
+                timeout_ms=SNAPSHOT_DIFF_TIMEOUT_MS,
+                max_output_bytes=SNAPSHOT_DIFF_MAX_OUTPUT_BYTES,
+            )
+        except AGFSResourceExhaustedError as exc:
+            raise ResourceExhaustedError(
+                f"snapshot diff output size limit exceeded "
+                f"({SNAPSHOT_DIFF_MAX_OUTPUT_BYTES} bytes)",
+                details={"limit_bytes": SNAPSHOT_DIFF_MAX_OUTPUT_BYTES, "path": path},
+            ) from exc
         return {
             "path": path,
             "from_commit": from_oid,

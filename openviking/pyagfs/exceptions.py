@@ -39,6 +39,12 @@ class AGFSNotFoundError(AGFSClientError):
     pass
 
 
+class AGFSPathNotFoundError(AGFSNotFoundError):
+    """Path not found inside a snapshot tree"""
+
+    pass
+
+
 class AGFSAlreadyExistsError(AGFSClientError):
     """File or directory already exists"""
 

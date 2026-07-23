@@ -1,6 +1,7 @@
 # tests/storage/test_viking_fs_git.py
 import pytest
 
+from openviking.pyagfs.exceptions import AGFSNotFoundError, AGFSPathNotFoundError
 from openviking.server.identity import RequestContext, Role
 from openviking.storage import viking_fs as viking_fs_module
 from openviking.storage.viking_fs import VikingFS
@@ -64,6 +65,7 @@ async def test_diff_reads_blobs_from_resolved_commit_oids():
 
     class MovingRefVikingFS:
         def __init__(self):
+            self._async_agfs = _RecordingDiffAGFS()
             self.blob_refs = []
 
         def _ctx_or_default(self, ctx):
@@ -110,6 +112,7 @@ class _DiffVikingFS:
     def __init__(self, before: bytes, after: bytes):
         self._before = before
         self._after = after
+        self._async_agfs = _RecordingDiffAGFS()
         self.blob_read_limits = []
         self.access_checks = []
 
@@ -124,6 +127,29 @@ class _DiffVikingFS:
             return {"oid": target_ref}
         self.blob_read_limits.append(max_blob_bytes)
         return self._before if target_ref == "from" else self._after
+
+
+class _RecordingDiffAGFS:
+    def __init__(self):
+        self.calls = []
+
+    async def run(self, operation, **kwargs):
+        self.calls.append((operation, kwargs))
+        assert operation == "git_diff_text"
+        before = kwargs["before"]
+        after = kwargs["after"]
+        output = (
+            f"--- {kwargs['fromfile']}\n"
+            f"+++ {kwargs['tofile']}\n"
+            "@@ -1 +1 @@\n"
+            f"-{before.rstrip()}\n"
+            f"+{after.rstrip()}\n"
+        )
+        if len(output.encode("utf-8")) > kwargs["max_output_bytes"]:
+            from openviking.pyagfs.exceptions import AGFSResourceExhaustedError
+
+            raise AGFSResourceExhaustedError("snapshot diff output size limit exceeded")
+        return output
 
 
 def _request_context() -> RequestContext:
@@ -234,15 +260,7 @@ async def test_diff_rejects_output_over_size_limit(monkeypatch):
         )
 
 
-async def test_diff_builds_unified_diff_off_event_loop(monkeypatch):
-    calls = []
-    original_to_thread = viking_fs_module.asyncio.to_thread
-
-    async def tracking_to_thread(func, /, *args, **kwargs):
-        calls.append(func)
-        return await original_to_thread(func, *args, **kwargs)
-
-    monkeypatch.setattr(viking_fs_module.asyncio, "to_thread", tracking_to_thread)
+async def test_diff_uses_bounded_native_diff_builder():
     vfs = _DiffVikingFS(b"old\n", b"new\n")
 
     result = await VikingFS.diff(
@@ -253,6 +271,59 @@ async def test_diff_builds_unified_diff_off_event_loop(monkeypatch):
         ctx=_request_context(),
     )
 
-    assert calls
+    assert vfs._async_agfs.calls == [
+        (
+            "git_diff_text",
+            {
+                "before": "old\n",
+                "after": "new\n",
+                "fromfile": (
+                    "viking://user/user/memories/experiences/example.md@from"
+                ),
+                "tofile": "viking://user/user/memories/experiences/example.md@to",
+                "timeout_ms": viking_fs_module.SNAPSHOT_DIFF_TIMEOUT_MS,
+                "max_output_bytes": viking_fs_module.SNAPSHOT_DIFF_MAX_OUTPUT_BYTES,
+            },
+        )
+    ]
     assert "-old" in result["diff_text"]
     assert "+new" in result["diff_text"]
+
+
+async def test_diff_treats_only_missing_tree_path_as_absent():
+    class MissingPathVikingFS(_DiffVikingFS):
+        async def show(self, target_ref, *, path=None, ctx=None, max_blob_bytes=None):
+            if path is None:
+                return {"oid": target_ref}
+            if target_ref == "to":
+                raise AGFSPathNotFoundError("path not found in tree")
+            return self._before
+
+    result = await VikingFS.diff(
+        MissingPathVikingFS(b"old\n", b""),
+        path="viking://user/user/memories/experiences/example.md",
+        from_ref="from",
+        to_ref="to",
+        ctx=_request_context(),
+    )
+
+    assert result["change_type"] == "deleted"
+
+
+async def test_diff_does_not_treat_missing_storage_object_as_absent():
+    class MissingObjectVikingFS(_DiffVikingFS):
+        async def show(self, target_ref, *, path=None, ctx=None, max_blob_bytes=None):
+            if path is None:
+                return {"oid": target_ref}
+            if target_ref == "to":
+                raise AGFSNotFoundError("object not found: deadbeef")
+            return self._before
+
+    with pytest.raises(AGFSNotFoundError, match="object not found"):
+        await VikingFS.diff(
+            MissingObjectVikingFS(b"old\n", b""),
+            path="viking://user/user/memories/experiences/example.md",
+            from_ref="from",
+            to_ref="to",
+            ctx=_request_context(),
+        )
