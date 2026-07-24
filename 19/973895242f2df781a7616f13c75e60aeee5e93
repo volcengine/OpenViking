@@ -1,0 +1,23 @@
+crates/ov_cli/src/commands/compile.rs
+  s_416615144c3c47::t_2e41cd5c1182ca 56-61
+crates/ov_cli/src/error_ui.rs
+  s_416615144c3c47::t_1974230cd23669 4,10,86-121,256-269,285-287,289-291,311-315,317-319,323-324,326-336,576-580,766,782,978,981,1101-1106,1109-1113,1115-1118,1124-1128,1137,1143-1146,1148
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "19973895242f2df781a7616f13c75e60aeee5e93",
+  "prompts": {},
+  "sessions": {
+    "s_416615144c3c47": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7fd5-8038-7b43-821f-92b54d6bdc51",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
