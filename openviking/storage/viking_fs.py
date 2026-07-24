@@ -50,6 +50,7 @@ from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.expr import And, PathScope, RawDSL
 from openviking.storage.internal_names import (
+    MEMORY_SUMMARY_CACHE_FILENAME,
     MULTIWRITE_PATH_LOCK_FILE,
     STORAGE_INTERNAL_ENTRY_NAMES,
 )
@@ -3710,7 +3711,9 @@ class VikingFS:
         ".abstract.md": ContextLevel.ABSTRACT,
         ".overview.md": ContextLevel.OVERVIEW,
     }
-    _NO_VECTOR_DERIVED = frozenset({".relations.json", ".ovgitignore"})
+    _NO_VECTOR_DERIVED = frozenset(
+        {".relations.json", ".ovgitignore", MEMORY_SUMMARY_CACHE_FILENAME}
+    )
 
     def _classify_restore_path(self, tree_path: str, *, deleted: bool) -> Optional[tuple]:
         """Classify a restore-affected tree path into a vector maintenance task.
@@ -3721,7 +3724,8 @@ class VikingFS:
         - ``dir/.abstract.md`` / ``dir/.overview.md`` → recompute (write) or
           delete (removal) ONLY that directory's L0/L1 vector:
           ``("reindex_marker"|"delete", dir_uri, ABSTRACT|OVERVIEW)``.
-        - ``.relations.json`` → ``None`` (not a vector text source).
+        - ``.relations.json`` / ``.summary_cache.json`` → ``None``
+          (not vector text sources).
         - anything else (a source file) → reindex (write) or delete (removal)
           its DETAIL vector:
           ``("reindex_file", file_uri, DETAIL)`` / ``("delete", file_uri, DETAIL)``.

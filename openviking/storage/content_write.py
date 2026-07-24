@@ -17,6 +17,7 @@ from openviking.session.memory.utils.resource_refs import (
     sync_memory_resource_refs,
 )
 from openviking.storage.errors import ResourceBusyError
+from openviking.storage.internal_names import MEMORY_SUMMARY_CACHE_FILENAME
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.transaction import get_lock_manager
@@ -39,7 +40,9 @@ logger = get_logger(__name__)
 if TYPE_CHECKING:
     from openviking.storage.transaction.lock_handle import LockHandle
 
-_DERIVED_FILENAMES = frozenset({".abstract.md", ".overview.md", ".relations.json"})
+_DERIVED_FILENAMES = frozenset(
+    {".abstract.md", ".overview.md", ".relations.json", MEMORY_SUMMARY_CACHE_FILENAME}
+)
 _CREATE_ALLOWED_EXTENSIONS = frozenset(
     {".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".py", ".js", ".ts"}
 )
