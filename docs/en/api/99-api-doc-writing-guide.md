@@ -168,10 +168,11 @@ Add resources to the knowledge base, supporting various sources such as local fi
 5. Build vector index
 
 **Code Entry**:
-- `openviking/core/client.py:OpenViking.add_resource()` - SDK entry
-- `openviking/resource/importer.py:ResourceImporter.import_resource()` - Core implementation
-- `openviking/server/routers/resources.py` - HTTP router
-- `openviking_cli/commands/resources.py` - CLI command
+- `openviking/async_client.py:AsyncOpenViking.add_resource()` - Async SDK entry
+- `openviking/sync_client.py:SyncOpenViking.add_resource()` - Sync SDK entry
+- `openviking/service/resource_service.py:ResourceService.add_resource()` - Core implementation
+- `openviking/server/routers/resources.py:add_resource()` - HTTP router
+- `crates/ov_cli/src/handlers.rs:handle_add_resource()` - CLI handler
 
 #### 2. Interface and Parameter Description
 

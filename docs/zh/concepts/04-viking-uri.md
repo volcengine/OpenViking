@@ -201,7 +201,7 @@ ov add-resource --parent-auto-create "viking://resources/emails/{calendar:today}
 ov read "viking://resources/logs/{calendar:yesterday}/app.log"
 
 # 准备明天的任务
-ov write --uri "viking://resources/tasks/{calendar:tomorrow}/todo.md" --content "规划一天"
+ov write "viking://resources/tasks/{calendar:tomorrow}/todo.md" --content "规划一天"
 
 # 上传月度报告 --parent-auto-create 可以简写为 -p
 ov add-resource --parent-auto-create "viking://resources/reports/{calendar:ym}" ./report.pdf

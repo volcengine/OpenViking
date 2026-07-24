@@ -13,7 +13,7 @@ openviking-server doctor
 
 ## Configuration File
 
-Create `~/.openviking/ov.conf` in your project directory:
+Create `~/.openviking/ov.conf` in your home configuration directory:
 
 ```json
 {
