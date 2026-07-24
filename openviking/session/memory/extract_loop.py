@@ -922,6 +922,8 @@ The final output of the model must strictly follow the JSON Schema format shown 
         return (
             "SEARCH/REPLACE patch could not be applied to the target memory file. "
             "The SEARCH text must be copied exactly from the read result of the file bound to that operation's page_id. "
+            "The SEARCH text must occur exactly once in the target file. "
+            "If it occurs more than once, include enough contiguous surrounding context to make the SEARCH text unique. "
             "Do not use SEARCH text from the conversation or from another page. "
             "If you copy from numbered read output, exclude the `line_number<TAB>` prefix from SEARCH and REPLACE text. "
             "If found_in_other_uris is non-empty, diagnose this as a possible page_id mismatch and choose the correct target page_id or rewrite the patch for the current page_id; do not silently move the patch. "

@@ -4,6 +4,8 @@
 Tests for MergeOp architecture - type-safe merge operations.
 """
 
+import pytest
+
 from openviking.session.memory.dataclass import (
     MemoryField,
 )
@@ -12,6 +14,7 @@ from openviking.session.memory.merge_op import (
     MergeOp,
     MergeOpFactory,
     PatchOp,
+    PatchParseError,
     SearchReplaceBlock,
     StrPatch,
     SumOp,
@@ -80,6 +83,30 @@ class TestPatchOp:
 
         op_int = PatchOp(FieldType.INT64)
         assert op_int.apply(100, 200) == 200
+
+    def test_apply_dict_patch(self):
+        """Dict-form string patches should be converted and applied."""
+        op = PatchOp(FieldType.STRING)
+        patch = {"blocks": [{"search": "hello world", "replace": "hello there"}]}
+
+        assert op.apply("hello world", patch) == "hello there"
+
+    def test_apply_invalid_dict_patch_falls_back_to_string_replacement(self):
+        """Invalid dict-form patches should preserve the compatibility fallback."""
+        op = PatchOp(FieldType.STRING)
+        patch = {"blocks": [{"search": "hello world"}]}
+
+        assert op.apply("hello world", patch) == str(patch)
+
+    def test_apply_dict_patch_propagates_patch_parse_error(self):
+        """Patch errors raised after dict conversion must reach the caller."""
+        op = PatchOp(FieldType.STRING)
+        patch = {
+            "blocks": [{"search": "status: pending", "replace": "status: done"}]
+        }
+
+        with pytest.raises(PatchParseError, match="matched 2 locations"):
+            op.apply("status: pending\nstatus: pending", patch)
 
 
 class TestSumOp:
@@ -268,6 +295,29 @@ class TestApplyStrPatch:
         result = apply_str_patch(original, patch)
         # Directly test apply_str_patch
         assert result == "hello there"
+
+    def test_duplicate_search_is_rejected(self):
+        """Ambiguous SEARCH content must fail instead of replacing globally."""
+        original = "status: pending\nstatus: pending"
+        patch = StrPatch(
+            blocks=[SearchReplaceBlock(search="status: pending", replace="status: done")]
+        )
+
+        with pytest.raises(PatchParseError, match="matched 2 locations"):
+            apply_str_patch(original, patch)
+
+    def test_duplicate_search_after_prior_block_is_rejected(self):
+        """A later ambiguous block must not return a partially applied patch."""
+        original = "title\nstatus: pending\nstatus: pending"
+        patch = StrPatch(
+            blocks=[
+                SearchReplaceBlock(search="title", replace="updated title"),
+                SearchReplaceBlock(search="status: pending", replace="status: done"),
+            ]
+        )
+
+        with pytest.raises(PatchParseError, match="matched 2 locations"):
+            apply_str_patch(original, patch)
 
     def test_numbered_multiline_patch_uses_inferred_start_line(self):
         """Tab-prefixed read output should target the numbered range."""

@@ -880,7 +880,14 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
             all_applied = False
             break
 
-        result_content = result_content.replace(search_content, replace_content)
+        match_count = result_content.count(search_content)
+        if match_count > 1:
+            raise PatchParseError(
+                f"SEARCH content matched {match_count} locations; "
+                "unable to determine which occurrence to replace"
+            )
+
+        result_content = result_content.replace(search_content, replace_content, 1)
 
     if all_applied:
         return result_content

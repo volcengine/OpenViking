@@ -899,6 +899,8 @@ class TestExtractLoopPatchRepair:
         assert len(vlm.messages) == 2
         second_call_content = "\n".join(message["content"] for message in vlm.messages[1])
         assert "SEARCH/REPLACE patch could not be applied" in second_call_content
+        assert "The SEARCH text must occur exactly once" in second_call_content
+        assert "include enough contiguous surrounding context" in second_call_content
         assert "Regenerate the complete operations JSON" in second_call_content
         assert target_uri in second_call_content
         assert other_uri in second_call_content
