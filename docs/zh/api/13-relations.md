@@ -17,7 +17,7 @@
 | reason | str | 否 | "" | 关联原因 |
 
 
-**Python SDK (Embedded / HTTP)**
+**Python SDK**
 
 ```python
 # 单个关联
@@ -112,7 +112,7 @@ openviking link viking://resources/docs/auth/ viking://resources/docs/security/ 
 | uri | str | 是 | - | Viking URI |
 
 
-**Python SDK (Embedded / HTTP)**
+**Python SDK**
 
 ```python
 relations = client.relations("viking://resources/docs/auth/")
@@ -173,7 +173,7 @@ openviking relations viking://resources/docs/auth/
 | to_uri | str | 是 | - | 要取消关联的目标 URI |
 
 
-**Python SDK (Embedded / HTTP)**
+**Python SDK**
 
 ```python
 client.unlink(
@@ -257,6 +257,19 @@ curl -X POST http://localhost:1933/api/v1/relations/build_graph \
     "output_uri":"viking://user/default/memories/.graph.html"
   }'
 ```
+
+**响应**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "graph_uri": "viking://user/default/memories/.graph.html"
+  }
+}
+```
+
+`graph_uri` 是已写入的自包含 HTML 文件 URI，可通过内容或文件系统 API 读取。
 
 该端点当前没有公共 SDK 或 CLI 封装，因此本节只展示 HTTP Tab。
 

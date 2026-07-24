@@ -6,7 +6,7 @@ The Watch API manages periodic resource checks, pausing, resuming, and manual tr
 
 ### Watch Management
 
-List, inspect, update, and trigger watch tasks created via [`add_resource`](#add_resource) with `watch_interval > 0`. The control plane is mirrored across REST (`/api/v1/watches`), the `ov task watch` CLI subcommand group, and a minimum-closure MCP surface (`list_watches` / `cancel_watch`) for agents.
+List, inspect, update, and trigger watch tasks created via [`add_resource`](02-resources.md#add_resource) with `watch_interval > 0`. The control plane is mirrored across REST (`/api/v1/watches`), the `ov task watch` CLI subcommand group, and a minimum-closure MCP surface (`list_watches` / `cancel_watch`) for agents.
 
 #### 1. API Implementation Overview
 
@@ -38,7 +38,7 @@ For every single-task endpoint the path `{task_id}` can be replaced with a `?to_
 | reason | string | Update the recorded reason for the watch. |
 | instruction | string | Update the semantic processing instruction. |
 
-Unrecognized fields are rejected with 422 (`extra="forbid"`). Fields left unset preserve their current values.
+Unrecognized fields are rejected with HTTP `400` and `INVALID_ARGUMENT` (`extra="forbid"` on the request model). Fields left unset preserve their current values.
 
 #### 3. Usage Examples
 
@@ -103,7 +103,9 @@ deleted, err := client.DeleteWatch(ctx, openviking.WatchRef{
 _, _, _, _ = watches, updated, triggered, deleted
 ```
 
-**CLI** (subcommands of `ov task watch`)
+**CLI**
+
+The following examples use the `ov task watch` subcommands:
 
 ```bash
 # List active watches (drop --active-only to include paused ones)
@@ -126,6 +128,66 @@ ov task watch trigger viking://resources/guide.md
 ov task watch rm viking://resources/guide.md
 ```
 
+**Response**
+
+Listing tasks returns:
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "tasks": [
+      {
+        "task_id": "7f02e980-8df9-4f27-a570-4d8428cbed8a",
+        "path": "https://example.com/guide.md",
+        "to_uri": "viking://resources/guide.md",
+        "parent_uri": "viking://resources",
+        "reason": "keep documentation current",
+        "instruction": "",
+        "watch_interval": 30,
+        "build_index": true,
+        "summarize": false,
+        "processor_kwargs": {},
+        "created_at": "2026-07-24T10:00:00",
+        "last_execution_time": null,
+        "next_execution_time": "2026-07-24T10:30:00",
+        "is_active": true,
+        "account_id": "default",
+        "user_id": "default",
+        "original_role": "user"
+      }
+    ],
+    "total": 1
+  }
+}
+```
+
+Getting one task and a successful update return the same task object directly in `result`. Delete and trigger return:
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "task_id": "7f02e980-8df9-4f27-a570-4d8428cbed8a",
+    "to_uri": "viking://resources/guide.md",
+    "deleted": true
+  }
+}
+```
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "task_id": "7f02e980-8df9-4f27-a570-4d8428cbed8a",
+    "to_uri": "viking://resources/guide.md",
+    "scheduled": true
+  }
+}
+```
+
+`scheduled=true` only confirms that background execution was scheduled. It does not mean re-ingestion has completed; read the task again and inspect `last_execution_time`.
+
 **MCP** (agent control plane — minimum closure only)
 
 ```text
@@ -133,7 +195,7 @@ list_watches()                                            # one line per task; U
 cancel_watch(to_uri="viking://resources/guide.md")        # idempotent removal by URI
 ```
 
-Pause / resume / trigger / update are intentionally not exposed via MCP — those power-user operations live on the CLI/REST surface to keep the agent system prompt compact. Creating a watch or changing its cadence from the agent side still goes through [`add_resource`](#add_resource) with `watch_interval`; pass `to` explicitly or let the system bind to the `root_uri` returned by this import.
+Pause / resume / trigger / update are intentionally not exposed via MCP — those power-user operations live on the CLI/REST surface to keep the agent system prompt compact. Creating a watch or changing its cadence from the agent side still goes through [`add_resource`](02-resources.md#add_resource) with `watch_interval`; pass `to` explicitly or let the system bind to the `root_uri` returned by this import.
 
 ---
 

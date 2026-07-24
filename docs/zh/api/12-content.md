@@ -15,7 +15,7 @@
 | uri | str | 是 | - | Viking URI（必须是目录） |
 
 
-**Python SDK (Embedded / HTTP)**
+**Python SDK**
 
 ```python
 abstract = client.abstract("viking://resources/docs/")
@@ -81,7 +81,7 @@ openviking abstract viking://resources/docs/
 | uri | str | 是 | - | Viking URI（必须是目录） |
 
 
-**Python SDK (Embedded / HTTP)**
+**Python SDK**
 
 ```python
 overview = client.overview("viking://resources/docs/")
@@ -154,7 +154,7 @@ openviking overview viking://resources/docs/
 - 公开 URI 参数接受 `resources` 和 `user` 作用域。访问 session 文件时，使用 `viking://user/{user_id}/sessions/{session_id}`，也可以使用向后兼容的 `viking://session/{session_id}` 别名。`temp`、`queue` 等内部作用域会返回 `INVALID_URI`。
 
 
-**Python SDK (Embedded / HTTP)**
+**Python SDK**
 
 ```python
 content = client.read("viking://resources/docs/api.md")
@@ -231,7 +231,7 @@ openviking read viking://resources/docs/api.md
 - 公共 API 已不再接受 `regenerate_semantics` 或 `revectorize`；写入后一定会自动刷新相关语义与向量。
 
 
-**Python SDK (Embedded / HTTP)**
+**Python SDK**
 
 ```python
 result = client.write(
@@ -347,6 +347,18 @@ curl --get http://localhost:1933/api/v1/content/download \
   --output logo.png
 ```
 
+**响应**
+
+成功时返回 HTTP `200` 和文件原始字节，不使用标准 JSON 响应包：
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename*=UTF-8''logo.png
+
+<binary body>
+```
+
 公共 SDK 和 CLI 当前没有独立的原始字节下载方法，因此本节只展示 HTTP Tab。
 
 ---
@@ -355,7 +367,7 @@ curl --get http://localhost:1933/api/v1/content/download \
 
 设置用于检索过滤的显式 `k=v` 标签。`replace` 替换已有标签，`append` 追加标签；对目录设置 `recursive=true` 时会更新目录下的文件。
 
-**Python SDK (Embedded / HTTP)**
+**Python SDK**
 
 ```python
 result = client.set_tags(
@@ -417,6 +429,33 @@ ov set-tags viking://resources/project/ \
   --recursive
 ```
 
+**响应**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources/project/",
+    "updated_uris": [
+      "viking://resources/project/guide.md"
+    ],
+    "root_uri": "viking://resources/project/",
+    "context_type": "resource",
+    "tags": [
+      "team=search",
+      "env=prod"
+    ],
+    "mode": "replace",
+    "success_count": 1,
+    "skipped_count": 0,
+    "failed_count": 0,
+    "tags_updated": true
+  }
+}
+```
+
+`updated_uris` 是实际更新的语义记录 URI；目录递归更新时，`success_count`、`skipped_count` 和 `failed_count` 汇总各目标的处理结果。
+
 ---
 
 ### reindex()
@@ -469,7 +508,7 @@ session 子树会被跳过。
 
 对于 `prune_orphans`，源文件是否存在以当前文件系统为准。如果整个目录已经不存在，该目录下的正文文件向量和语义 sidecar 向量（例如 `.abstract.md`、`.overview.md`）会一起清理。`dry_run` 用在其他模式时会被拒绝。
 
-**Python SDK (Embedded / HTTP)**
+**Python SDK**
 
 ```python
 result = client.reindex(

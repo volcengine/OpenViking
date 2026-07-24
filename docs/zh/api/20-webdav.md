@@ -2,6 +2,8 @@
 
 WebDAV 为 `resources` 命名空间提供文件协议访问。
 
+**代码入口**：`openviking/server/routers/webdav.py`
+
 ## WebDAV（Phase 1）
 
 OpenViking Server 也提供了一个面向资源文件的精简 WebDAV 适配层：
@@ -39,6 +41,13 @@ Phase 1 有意把范围控制得比较小：
 
 除 `OPTIONS` 外，WebDAV 请求使用与其他 OpenViking API 相同的认证头。路径必须位于 `resources` 下，不能通过 `..`、反斜杠或其他形式逃逸命名空间。
 
+| 请求头 | 使用方法 | 必填 | 说明 |
+|--------|----------|------|------|
+| `X-API-Key` | 除 `OPTIONS` 外 | 是 | OpenViking API Key |
+| `Depth` | `PROPFIND` | 否 | `0` 仅返回目标；其他值按一级深度处理 |
+| `Destination` | `MOVE` | 是 | `/webdav/resources` 下的目标路径 |
+| `Overwrite` | `MOVE` | 否 | 默认 `T`；设为 `F` 时不覆盖已有目标 |
+
 ### 查询目录
 
 `Depth` 仅支持 `0` 和一级深度；其他值按一级处理。成功时返回 `207 Multi-Status` 和 DAV XML。
@@ -49,6 +58,25 @@ Phase 1 有意把范围控制得比较小：
 curl -X PROPFIND http://localhost:1933/webdav/resources/docs \
   -H "X-API-Key: your-key" \
   -H "Depth: 1"
+```
+
+**响应示例**
+
+```xml
+<?xml version='1.0' encoding='utf-8'?>
+<d:multistatus xmlns:d="DAV:">
+  <d:response>
+    <d:href>/webdav/resources/docs/</d:href>
+    <d:propstat>
+      <d:prop>
+        <d:displayname>docs</d:displayname>
+        <d:resourcetype><d:collection /></d:resourcetype>
+        <d:getcontenttype>httpd/unix-directory</d:getcontenttype>
+      </d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status>
+    </d:propstat>
+  </d:response>
+</d:multistatus>
 ```
 
 ### 读取与写入文件
@@ -90,6 +118,16 @@ curl -X MOVE http://localhost:1933/webdav/resources/docs/readme.md \
 curl -X DELETE http://localhost:1933/webdav/resources/archive \
   -H "X-API-Key: your-key"
 ```
+
+**状态码**
+
+| 操作 | 成功状态 | 常见失败 |
+|------|----------|----------|
+| `GET` / `HEAD` | `200` | `404` 不存在；`405` 目标是目录 |
+| `PUT` | `201` 新建；`204` 覆盖 | `409` 父目录不存在；`415` 不是 UTF-8 |
+| `MKCOL` | `201` | `405` 已存在；`409` 父目录不存在 |
+| `MOVE` | `201` 新目标；`204` 覆盖 | `400` 缺少目标；`409` 目标父目录不存在；`412` 禁止覆盖 |
+| `DELETE` | `204` | `404` 不存在；`405` 尝试删除根目录 |
 
 WebDAV 是协议入口，不对应 OpenViking SDK 或 `ov` CLI 方法，因此本页只展示 HTTP Tab。需要 SDK/CLI 文件操作时使用[文件系统](03-filesystem.md)。
 

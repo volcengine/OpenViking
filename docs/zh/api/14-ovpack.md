@@ -328,6 +328,20 @@ ov backup ./backups/openviking.ovpack
 ov backup ./backups/openviking.ovpack --include-vectors
 ```
 
+**响应**
+
+HTTP 成功时返回 `application/zip` 字节流，不使用标准 JSON 响应包：
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/zip
+Content-Disposition: attachment; filename="openviking-backup.ovpack"
+
+<ovpack binary body>
+```
+
+Go SDK 和 CLI 将字节流写入指定路径，并返回或输出该本地路径。
+
 ---
 
 ### restore_ovpack
@@ -383,6 +397,19 @@ CLI：
 ov restore ./backups/openviking.ovpack --on-conflict overwrite
 ov restore ./backups/openviking.ovpack --on-conflict overwrite --vector-mode require
 ```
+
+**响应**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://"
+  }
+}
+```
+
+`uri` 是备份恢复到的公开 scope root。
 
 ---
 

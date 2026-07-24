@@ -70,7 +70,73 @@ recall(
 
 **Response**
 
-The response contains `entries`, `rendered`, and `stats`. `entries` preserves structured matches; `rendered` is the bounded text intended for direct context injection.
+```json
+{
+  "status": "ok",
+  "result": {
+    "entries": [
+      {
+        "uri": "viking://user/default/memories/preferences/api-docs.md",
+        "score": 0.82,
+        "type": "preferences",
+        "mode": "full",
+        "rank": 1,
+        "content": "The user prefers API documentation with HTTP, SDK, and CLI examples.",
+        "origin": "self"
+      }
+    ],
+    "rendered": "## Global Memory\n### Preferences\n[1] viking://user/default/memories/preferences/api-docs.md (score=0.8200)\nThe user prefers API documentation with HTTP, SDK, and CLI examples.",
+    "stats": {
+      "quotas": {
+        "events": 5,
+        "entities": 5,
+        "preferences": 3,
+        "experiences": 2
+      },
+      "roots": [
+        "viking://user/default/memories"
+      ],
+      "searched": {
+        "events": 2,
+        "entities": 1,
+        "preferences": 1,
+        "experiences": 0
+      },
+      "returned": 1,
+      "dropped": 0,
+      "max_chars": 6500,
+      "min_score": 0.1,
+      "peer_scope": "all",
+      "other_peer_penalties": {
+        "events": 0.1,
+        "entities": 0.1,
+        "preferences": 0.02,
+        "experiences": 0.02
+      },
+      "origins": {
+        "actor_peer": 0,
+        "self": 1,
+        "other_peer": 0
+      }
+    }
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `entries` | object[] | Structured matches selected by per-type quota and relevance |
+| `entries[].uri` | string | Viking URI of the memory entry |
+| `entries[].score` | number | Raw relevance score |
+| `entries[].type` | string | `events`, `entities`, `preferences`, or `experiences` |
+| `entries[].mode` | string | Rendering mode: `full`, `summary`, or `uri` |
+| `entries[].rank` | integer | Rank within the memory type, starting at `1` |
+| `entries[].origin` | string | Source: `actor_peer`, `self`, or `other_peer` |
+| `entries[].content` | string | Full content when `mode=full`; otherwise it may be omitted |
+| `entries[].summary` | string | Summary used for degraded rendering; otherwise it may be omitted |
+| `entries[].abstract` | string | Search-hit abstract; omitted when unavailable |
+| `rendered` | string | Text bounded by `max_chars` and ready for Agent context injection; empty when `render=false` |
+| `stats` | object | Effective quotas, roots, per-type search counts, returned and dropped counts, threshold, peer scope, and origin counts |
 
 The public Python, TypeScript, and Go SDKs and the `ov` CLI do not currently wrap type-quota recall, so this section shows only the HTTP tab and the existing MCP call.
 

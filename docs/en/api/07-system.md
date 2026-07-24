@@ -456,6 +456,20 @@ GET /api/v1/system/sync/{sync_path}
 ov system backend sync-status viking://resources
 ```
 
+**Response example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "path": "viking://resources",
+    "entry_count": 12
+  }
+}
+```
+
+`result` is supplied by the active filesystem backend. `path` identifies the queried scope and `entry_count` is the number of sync records in that scope. A backend may add diagnostics such as pending or failed records.
+
 ### backend_sync_retry()
 
 Retry incomplete multi-write backend synchronization work for a URI subtree. This endpoint requires ROOT or ADMIN permission.
@@ -485,6 +499,21 @@ POST /api/v1/system/sync/{sync_path}/retry
 ```bash
 ov system backend sync-retry viking://resources
 ```
+
+**Response example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "path": "viking://resources",
+    "retried": 2,
+    "failed": 0
+  }
+}
+```
+
+`retried` is the number of records rescheduled by this request, and `failed` is the number that could not be scheduled. A backend may include additional diagnostic fields.
 
 The public Python, TypeScript, and Go SDKs do not currently expose multi-write backend synchronization methods, so the sections above show only HTTP and CLI tabs.
 

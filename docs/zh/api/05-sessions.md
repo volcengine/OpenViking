@@ -373,6 +373,28 @@ curl --get http://localhost:1933/api/v1/sessions/session-id/tool-results \
   --data-urlencode "limit=50"
 ```
 
+**响应示例**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "tool_results": [
+      {
+        "tool_result_id": "tr_search_a1b2c3",
+        "tool_name": "search",
+        "original_chars": 48210,
+        "preview_chars": 2000,
+        "mime_type": "text/plain",
+        "synopsis_kind": "text",
+        "storage_uri": "viking://user/default/sessions/session-id/tool-results/tr_search_a1b2c3",
+        "offset_unit": "unicode_code_point"
+      }
+    ]
+  }
+}
+```
+
 ### read_tool_result()
 
 按 Unicode 字符范围读取一个外置工具结果。
@@ -398,6 +420,30 @@ curl --get http://localhost:1933/api/v1/sessions/session-id/tool-results/tool-re
   --data-urlencode "limit=20000"
 ```
 
+**响应示例**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "tool_result_id": "tr_search_a1b2c3",
+    "content": "工具返回的文本片段……",
+    "offset": 0,
+    "limit": 20000,
+    "offset_unit": "unicode_code_point",
+    "total_chars": 48210,
+    "has_more": true,
+    "metadata": {
+      "tool_name": "search",
+      "mime_type": "text/plain",
+      "sha256": "..."
+    }
+  }
+}
+```
+
+`include_metadata=false` 时省略 `metadata`。继续读取时，将下一次请求的 `offset` 设为当前 `offset` 加上 `content` 的 Unicode 字符数。
+
 ### search_tool_result()
 
 在一个外置工具结果中搜索文本，并返回命中位置附近的上下文。
@@ -419,6 +465,24 @@ curl --get http://localhost:1933/api/v1/sessions/session-id/tool-results/tool-re
   -H "X-API-Key: your-key" \
   --data-urlencode "q=authentication" \
   --data-urlencode "limit=20"
+```
+
+**响应示例**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "tool_result_id": "tr_search_a1b2c3",
+    "matches": [
+      {
+        "offset": 1284,
+        "offset_unit": "unicode_code_point",
+        "snippet": "...authentication failed because..."
+      }
+    ]
+  }
+}
 ```
 
 外置工具结果端点当前由 Server 和 Web Studio 使用，公共 SDK 与 CLI 暂未提供封装，因此以上小节只展示 HTTP Tab。

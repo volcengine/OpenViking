@@ -413,6 +413,22 @@ for (const file of allApiDocs) {
       `use a bold invocation label (${match[1]}) so examples render as tabs`
     )
   }
+  for (const match of source.matchAll(
+    /^\*\*(Python SDK|TypeScript SDK|JavaScript SDK|Go SDK|HTTP API|CLI)\*\*\s*[（(]/gm
+  )) {
+    errors.push(
+      `${relative}:${source.slice(0, match.index).split('\n').length}: ` +
+      `put the ${match[1]} qualifier inside the bold label with ASCII parentheses`
+    )
+  }
+  for (const match of source.matchAll(
+    /^\*\*(Python SDK|TypeScript SDK|JavaScript SDK|Go SDK|HTTP API|CLI)\s*（[^）]+）\*\*/gm
+  )) {
+    errors.push(
+      `${relative}:${source.slice(0, match.index).split('\n').length}: ` +
+      `use ASCII parentheses in the ${match[1]} invocation label`
+    )
+  }
 }
 
 if (errors.length) {

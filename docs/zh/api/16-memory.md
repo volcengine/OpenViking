@@ -70,7 +70,73 @@ recall(
 
 **响应**
 
-返回 `entries`、`rendered` 和 `stats`。`entries` 保留结构化结果；`rendered` 是适合直接注入上下文的有界文本。
+```json
+{
+  "status": "ok",
+  "result": {
+    "entries": [
+      {
+        "uri": "viking://user/default/memories/preferences/api-docs.md",
+        "score": 0.82,
+        "type": "preferences",
+        "mode": "full",
+        "rank": 1,
+        "content": "用户偏好在 API 文档中同时提供 HTTP、SDK 和 CLI 示例。",
+        "origin": "self"
+      }
+    ],
+    "rendered": "## Global Memory\n### Preferences\n[1] viking://user/default/memories/preferences/api-docs.md (score=0.8200)\n用户偏好在 API 文档中同时提供 HTTP、SDK 和 CLI 示例。",
+    "stats": {
+      "quotas": {
+        "events": 5,
+        "entities": 5,
+        "preferences": 3,
+        "experiences": 2
+      },
+      "roots": [
+        "viking://user/default/memories"
+      ],
+      "searched": {
+        "events": 2,
+        "entities": 1,
+        "preferences": 1,
+        "experiences": 0
+      },
+      "returned": 1,
+      "dropped": 0,
+      "max_chars": 6500,
+      "min_score": 0.1,
+      "peer_scope": "all",
+      "other_peer_penalties": {
+        "events": 0.1,
+        "entities": 0.1,
+        "preferences": 0.02,
+        "experiences": 0.02
+      },
+      "origins": {
+        "actor_peer": 0,
+        "self": 1,
+        "other_peer": 0
+      }
+    }
+  }
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `entries` | object[] | 结构化召回结果，按类型配额和相关性筛选 |
+| `entries[].uri` | string | 记忆条目的 Viking URI |
+| `entries[].score` | number | 原始相关性分数 |
+| `entries[].type` | string | `events`、`entities`、`preferences` 或 `experiences` |
+| `entries[].mode` | string | 渲染方式：`full`、`summary` 或 `uri` |
+| `entries[].rank` | integer | 该记忆类型内的排名，从 `1` 开始 |
+| `entries[].origin` | string | 来源：`actor_peer`、`self` 或 `other_peer` |
+| `entries[].content` | string | `mode=full` 时返回的正文；否则可能省略 |
+| `entries[].summary` | string | 使用摘要降级时返回；否则可能省略 |
+| `entries[].abstract` | string | 检索命中的摘要；没有摘要时省略 |
+| `rendered` | string | 已受 `max_chars` 限制、可直接注入 Agent 上下文的文本；`render=false` 时为空字符串 |
+| `stats` | object | 实际配额、检索根、各类型检索量、返回量、丢弃量、阈值、peer 范围及来源统计 |
 
 公共 Python、TypeScript、Go SDK 和 `ov` CLI 当前尚未封装类型配额召回，因此本节只展示 HTTP Tab，并补充实际存在的 MCP 调用。
 

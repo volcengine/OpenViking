@@ -45,12 +45,14 @@ curl -X GET http://localhost:1933/api/v1/tasks/uuid-xxx \
 **Python SDK**
 
 ```python
-import openviking as ov
+from openviking_sdk import AsyncHTTPClient
 
-client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
+client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+await client.initialize()
 
-task = await client.get_task(task_id="uuid-xxx")
+task = await client.get_task("uuid-xxx")
 print(f"Status: {task['status']}")
+await client.close()
 ```
 
 **TypeScript SDK**
@@ -171,9 +173,10 @@ curl -X GET "http://localhost:1933/api/v1/tasks?task_type=session_commit&status=
 **Python SDK**
 
 ```python
-import openviking as ov
+from openviking_sdk import AsyncHTTPClient
 
-client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
+client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+await client.initialize()
 
 tasks = await client.list_tasks(
     task_type="session_commit",
@@ -182,6 +185,7 @@ tasks = await client.list_tasks(
 )
 for task in tasks:
     print(task["task_id"], task["status"])
+await client.close()
 ```
 
 **TypeScript SDK**

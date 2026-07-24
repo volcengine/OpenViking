@@ -15,7 +15,7 @@ Read L0 abstract (~100 tokens summary).
 | uri | str | Yes | - | Viking URI (must be a directory) |
 
 
-**Python SDK (Embedded / HTTP)**
+**Python SDK**
 
 ```python
 abstract = client.abstract("viking://resources/docs/")
@@ -81,7 +81,7 @@ Read L1 overview, applies to directories.
 | uri | str | Yes | - | Viking URI (must be a directory) |
 
 
-**Python SDK (Embedded / HTTP)**
+**Python SDK**
 
 ```python
 overview = client.overview("viking://resources/docs/")
@@ -154,7 +154,7 @@ Read L2 full content.
 - Public URI parameters accept `resources` and `user` scopes. For session files, use `viking://user/{user_id}/sessions/{session_id}` or the backward-compatible `viking://session/{session_id}` alias. Internal scopes such as `temp` and `queue` return `INVALID_URI`.
 
 
-**Python SDK (Embedded / HTTP)**
+**Python SDK**
 
 ```python
 content = client.read("viking://resources/docs/api.md")
@@ -231,7 +231,7 @@ Update an existing file, or create a new one when `mode="create"`, and automatic
 - The public API no longer accepts `regenerate_semantics` or `revectorize`; write always refreshes related semantics and vectors.
 
 
-**Python SDK (Embedded / HTTP)**
+**Python SDK**
 
 ```python
 result = client.write(
@@ -347,6 +347,18 @@ curl --get http://localhost:1933/api/v1/content/download \
   --output logo.png
 ```
 
+**Response**
+
+On success, the endpoint returns HTTP `200` with the raw file bytes instead of the standard JSON envelope:
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename*=UTF-8''logo.png
+
+<binary body>
+```
+
 The public SDKs and CLI do not currently expose a dedicated raw-byte download method, so this section shows only the HTTP tab.
 
 ---
@@ -355,7 +367,7 @@ The public SDKs and CLI do not currently expose a dedicated raw-byte download me
 
 Set explicit `k=v` tags used by retrieval filters. `replace` replaces existing tags, while `append` adds tags. When the target is a directory, `recursive=true` applies the update to files below it.
 
-**Python SDK (Embedded / HTTP)**
+**Python SDK**
 
 ```python
 result = client.set_tags(
@@ -417,6 +429,33 @@ ov set-tags viking://resources/project/ \
   --recursive
 ```
 
+**Response**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources/project/",
+    "updated_uris": [
+      "viking://resources/project/guide.md"
+    ],
+    "root_uri": "viking://resources/project/",
+    "context_type": "resource",
+    "tags": [
+      "team=search",
+      "env=prod"
+    ],
+    "mode": "replace",
+    "success_count": 1,
+    "skipped_count": 0,
+    "failed_count": 0,
+    "tags_updated": true
+  }
+}
+```
+
+`updated_uris` contains the semantic record URIs actually updated. For recursive directory updates, `success_count`, `skipped_count`, and `failed_count` summarize all targets.
+
 ---
 
 ### reindex()
@@ -469,7 +508,7 @@ For `semantic_and_vectors`, semantic generation and vector rebuilding are sequen
 
 For `prune_orphans`, source existence is checked against the filesystem. If an entire directory is missing, vector records for files and semantic sidecars below that directory, such as `.abstract.md` and `.overview.md`, are pruned together. `dry_run` is rejected for other modes.
 
-**Python SDK (Embedded / HTTP)**
+**Python SDK**
 
 ```python
 result = client.reindex(

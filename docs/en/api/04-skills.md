@@ -622,6 +622,82 @@ curl -X DELETE "http://localhost:1933/api/v1/skills/old-skill" \
   -H "X-API-Key: your-key"
 ```
 
+### Skill Management Responses
+
+List and search return a `skills` array and `total`. Without `target_uri`, `root_uris` identifies the private user and shared Agent roots; with a target, the response contains a single `root_uri`.
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "root_uris": [
+      "viking://user/default/skills",
+      "viking://agent/skills"
+    ],
+    "skills": [
+      {
+        "type": "skill",
+        "name": "search-web",
+        "uri": "viking://user/default/skills/search-web",
+        "root_uri": "viking://user/default/skills/search-web",
+        "skill_md_uri": "viking://user/default/skills/search-web/SKILL.md",
+        "description": "Search the web for current information",
+        "tags": [],
+        "allowed_tools": [],
+        "score": 0.87,
+        "match_reason": "semantic",
+        "level": 0
+      }
+    ],
+    "total": 1
+  }
+}
+```
+
+Reading one skill returns the metadata above and conditionally adds `abstract`, `overview`, `content`, `files`, and `source` according to `level` and the `include_*` parameters.
+
+Validation returns `valid`, `strict`, normalized metadata, `body_lines`, `errors`, and `warnings`. Invalid input still uses a successful response envelope with `valid=false`:
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "valid": false,
+    "strict": false,
+    "name": "search-web",
+    "description": "",
+    "tags": [],
+    "allowed_tools": [],
+    "body_lines": 0,
+    "errors": [
+      {
+        "rule": "description_required",
+        "message": "description is required",
+        "field": "description"
+      }
+    ],
+    "warnings": []
+  }
+}
+```
+
+A successful update returns the same processing result as `add_skill` with an additional `"action": "update"`. A successful delete returns:
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "name": "old-skill",
+    "uri": "viking://user/default/skills/old-skill",
+    "root_uri": "viking://user/default/skills/old-skill",
+    "estimated_deleted_count": 4,
+    "privacy_deleted": false
+  }
+}
+```
+
+`estimated_deleted_count` appears only when the filesystem can estimate the number of deleted entries.
+
 ## Best Practices
 
 ### Clear Descriptions

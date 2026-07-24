@@ -329,6 +329,20 @@ ov backup ./backups/openviking.ovpack
 ov backup ./backups/openviking.ovpack --include-vectors
 ```
 
+**Response**
+
+On HTTP success, the endpoint returns an `application/zip` byte stream instead of the standard JSON envelope:
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/zip
+Content-Disposition: attachment; filename="openviking-backup.ovpack"
+
+<ovpack binary body>
+```
+
+The Go SDK and CLI write the stream to the requested path and return or print that local path.
+
 ---
 
 ### restore_ovpack
@@ -386,6 +400,19 @@ CLI:
 ov restore ./backups/openviking.ovpack --on-conflict overwrite
 ov restore ./backups/openviking.ovpack --on-conflict overwrite --vector-mode require
 ```
+
+**Response**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://"
+  }
+}
+```
+
+`uri` is the public scope root restored from the backup.
 
 ---
 

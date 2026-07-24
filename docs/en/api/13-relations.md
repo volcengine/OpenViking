@@ -17,7 +17,7 @@ Create relations between resources.
 | reason | str | No | "" | Reason for the link |
 
 
-**Python SDK (Embedded / HTTP)**
+**Python SDK**
 
 ```python
 # Single link
@@ -112,7 +112,7 @@ Get relations for a resource.
 | uri | str | Yes | - | Viking URI |
 
 
-**Python SDK (Embedded / HTTP)**
+**Python SDK**
 
 ```python
 relations = client.relations("viking://resources/docs/auth/")
@@ -173,7 +173,7 @@ Remove a relation.
 | to_uri | str | Yes | - | Target URI to unlink |
 
 
-**Python SDK (Embedded / HTTP)**
+**Python SDK**
 
 ```python
 client.unlink(
@@ -257,6 +257,19 @@ curl -X POST http://localhost:1933/api/v1/relations/build_graph \
     "output_uri":"viking://user/default/memories/.graph.html"
   }'
 ```
+
+**Response**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "graph_uri": "viking://user/default/memories/.graph.html"
+  }
+}
+```
+
+`graph_uri` is the URI of the generated self-contained HTML file. Read it through the content or filesystem API.
 
 This endpoint does not currently have a public SDK or CLI wrapper, so this section shows only the HTTP tab.
 

@@ -450,6 +450,20 @@ GET /api/v1/system/sync/{sync_path}
 ov system backend sync-status viking://resources
 ```
 
+**响应示例**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "path": "viking://resources",
+    "entry_count": 12
+  }
+}
+```
+
+`result` 由当前文件系统后端返回；`path` 标识查询范围，`entry_count` 表示该范围内的同步记录数。具体后端可能附加待同步、失败记录等诊断字段。
+
 ### backend_sync_retry()
 
 重试指定 URI 子树中尚未完成的多写后端同步工作。该接口要求 ROOT 或 ADMIN 权限。
@@ -479,6 +493,21 @@ POST /api/v1/system/sync/{sync_path}/retry
 ```bash
 ov system backend sync-retry viking://resources
 ```
+
+**响应示例**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "path": "viking://resources",
+    "retried": 2,
+    "failed": 0
+  }
+}
+```
+
+`retried` 是本次重新调度的记录数，`failed` 是重试调度失败的记录数；具体后端可能附加额外诊断字段。
 
 公共 Python、TypeScript 和 Go SDK 当前没有多写后端同步方法，因此以上小节只展示 HTTP 和 CLI Tab。
 

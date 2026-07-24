@@ -373,6 +373,28 @@ curl --get http://localhost:1933/api/v1/sessions/session-id/tool-results \
   --data-urlencode "limit=50"
 ```
 
+**Response example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "tool_results": [
+      {
+        "tool_result_id": "tr_search_a1b2c3",
+        "tool_name": "search",
+        "original_chars": 48210,
+        "preview_chars": 2000,
+        "mime_type": "text/plain",
+        "synopsis_kind": "text",
+        "storage_uri": "viking://user/default/sessions/session-id/tool-results/tr_search_a1b2c3",
+        "offset_unit": "unicode_code_point"
+      }
+    ]
+  }
+}
+```
+
 ### read_tool_result()
 
 Read one externalized tool result by Unicode character range.
@@ -398,6 +420,30 @@ curl --get http://localhost:1933/api/v1/sessions/session-id/tool-results/tool-re
   --data-urlencode "limit=20000"
 ```
 
+**Response example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "tool_result_id": "tr_search_a1b2c3",
+    "content": "A chunk of the tool output...",
+    "offset": 0,
+    "limit": 20000,
+    "offset_unit": "unicode_code_point",
+    "total_chars": 48210,
+    "has_more": true,
+    "metadata": {
+      "tool_name": "search",
+      "mime_type": "text/plain",
+      "sha256": "..."
+    }
+  }
+}
+```
+
+`metadata` is omitted when `include_metadata=false`. To continue reading, set the next request's `offset` to the current `offset` plus the Unicode character count of `content`.
+
 ### search_tool_result()
 
 Search within one externalized tool result and return context around each match.
@@ -419,6 +465,24 @@ curl --get http://localhost:1933/api/v1/sessions/session-id/tool-results/tool-re
   -H "X-API-Key: your-key" \
   --data-urlencode "q=authentication" \
   --data-urlencode "limit=20"
+```
+
+**Response example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "tool_result_id": "tr_search_a1b2c3",
+    "matches": [
+      {
+        "offset": 1284,
+        "offset_unit": "unicode_code_point",
+        "snippet": "...authentication failed because..."
+      }
+    ]
+  }
+}
 ```
 
 These endpoints are currently used by the Server and Web Studio. The public SDKs and CLI do not wrap them, so the sections above show only the HTTP tab.

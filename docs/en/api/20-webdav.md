@@ -2,6 +2,8 @@
 
 WebDAV provides file-protocol access to the `resources` namespace.
 
+**Code entry point**: `openviking/server/routers/webdav.py`
+
 ## WebDAV (Phase 1)
 
 OpenViking Server also exposes a minimal WebDAV adapter for resource files:
@@ -39,6 +41,13 @@ Behavior notes:
 
 Except for `OPTIONS`, WebDAV requests use the same authentication headers as other OpenViking APIs. Paths must remain under `resources` and cannot escape through `..`, backslashes, or equivalent forms.
 
+| Header | Methods | Required | Description |
+|--------|---------|----------|-------------|
+| `X-API-Key` | All except `OPTIONS` | Yes | OpenViking API key |
+| `Depth` | `PROPFIND` | No | `0` returns only the target; other values use one level |
+| `Destination` | `MOVE` | Yes | Target path below `/webdav/resources` |
+| `Overwrite` | `MOVE` | No | Defaults to `T`; set `F` to preserve an existing target |
+
 ### List a collection
 
 `Depth` supports `0` and one level; other values are treated as one level. A successful response is `207 Multi-Status` with DAV XML.
@@ -49,6 +58,25 @@ Except for `OPTIONS`, WebDAV requests use the same authentication headers as oth
 curl -X PROPFIND http://localhost:1933/webdav/resources/docs \
   -H "X-API-Key: your-key" \
   -H "Depth: 1"
+```
+
+**Response Example**
+
+```xml
+<?xml version='1.0' encoding='utf-8'?>
+<d:multistatus xmlns:d="DAV:">
+  <d:response>
+    <d:href>/webdav/resources/docs/</d:href>
+    <d:propstat>
+      <d:prop>
+        <d:displayname>docs</d:displayname>
+        <d:resourcetype><d:collection /></d:resourcetype>
+        <d:getcontenttype>httpd/unix-directory</d:getcontenttype>
+      </d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status>
+    </d:propstat>
+  </d:response>
+</d:multistatus>
 ```
 
 ### Read and write files
@@ -90,6 +118,16 @@ curl -X MOVE http://localhost:1933/webdav/resources/docs/readme.md \
 curl -X DELETE http://localhost:1933/webdav/resources/archive \
   -H "X-API-Key: your-key"
 ```
+
+**Status Codes**
+
+| Operation | Success | Common failures |
+|-----------|---------|-----------------|
+| `GET` / `HEAD` | `200` | `404` missing; `405` target is a directory |
+| `PUT` | `201` create; `204` overwrite | `409` parent missing; `415` body is not UTF-8 |
+| `MKCOL` | `201` | `405` already exists; `409` parent missing |
+| `MOVE` | `201` new target; `204` overwrite | `400` destination missing; `409` destination parent missing; `412` overwrite disabled |
+| `DELETE` | `204` | `404` missing; `405` resources root cannot be deleted |
 
 WebDAV is a protocol entry point rather than an OpenViking SDK or `ov` CLI surface, so this page shows only the HTTP tab. Use [File System](03-filesystem.md) for SDK and CLI file operations.
 
