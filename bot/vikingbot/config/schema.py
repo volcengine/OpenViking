@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
+from pydantic.json_schema import SkipJsonSchema
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from openviking_cli.utils.config.vlm_config import VLMCredential
@@ -841,6 +842,7 @@ class Config(BaseSettings):
 
     _root_vlm_config: Any = PrivateAttr(default=None)
 
+    inherits_root_vlm_state: SkipJsonSchema[bool] = Field(default=False, repr=False)
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     channels: list[Any] = Field(default_factory=list)
     providers: ProvidersConfig = Field(
@@ -868,6 +870,19 @@ class Config(BaseSettings):
     storage_workspace: Optional[str] = None  # From ov.conf root level storage.workspace
     use_local_memory: bool = False
     mode: BotMode = BotMode.NORMAL
+
+    @model_validator(mode="after")
+    def sync_root_vlm_inheritance_state(self) -> "Config":
+        """Restore runtime inheritance state after serialization round-trips."""
+        self.agents.set_inherits_root_vlm(self.inherits_root_vlm_state)
+        return self
+
+    def set_inherits_root_vlm(self, value: bool) -> None:
+        self.inherits_root_vlm_state = bool(value)
+        self.agents.set_inherits_root_vlm(value)
+
+    def inherits_root_vlm(self) -> bool:
+        return self.inherits_root_vlm_state
 
     def set_root_vlm_config(self, vlm_config: Any) -> None:
         self._root_vlm_config = vlm_config
@@ -921,7 +936,7 @@ class Config(BaseSettings):
         """Match the effective Bot provider config. Returns (config, spec_name)."""
         del model
 
-        if not self.agents.inherits_root_vlm():
+        if not self.inherits_root_vlm():
             if self.agents.credentials:
                 credential = self.agents.credentials[0]
                 return (

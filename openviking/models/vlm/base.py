@@ -632,6 +632,7 @@ class MultiCredentialVLM(VLMBase):
         config = {
             "model": first.model,
             "provider": first.provider,
+            "thinking": first.thinking,
         }
         super().__init__(config)
 

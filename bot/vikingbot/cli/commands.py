@@ -327,7 +327,7 @@ def _make_provider(config, langfuse_client: Any = None):
         raise RuntimeError("No LLM model configured. Please set it in ~/.openviking/ov.conf")
 
     inherits_root_vlm = False
-    inherits_root_vlm_getter = getattr(p, "inherits_root_vlm", None)
+    inherits_root_vlm_getter = getattr(config, "inherits_root_vlm", None)
     if callable(inherits_root_vlm_getter):
         inherits_root_vlm = bool(inherits_root_vlm_getter())
 
