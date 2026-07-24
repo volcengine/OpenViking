@@ -330,6 +330,7 @@ class TestConfigWriting:
 
         assert _write_config(config, config_path) is True
         assert config_path.exists()
+        assert config_path.stat().st_mode & 0o777 == 0o600
 
         loaded = json.loads(config_path.read_text(encoding="utf-8"))
         assert loaded["embedding"]["dense"]["provider"] == "ollama"
@@ -343,6 +344,7 @@ class TestConfigWriting:
 
         backup = tmp_path / "ov.conf.bak"
         assert backup.exists()
+        assert backup.stat().st_mode & 0o777 == 0o600
         assert json.loads(backup.read_text())["old"] is True
 
     def test_creates_parent_dirs(self, tmp_path):
@@ -351,6 +353,31 @@ class TestConfigWriting:
 
         assert _write_config(config, config_path) is True
         assert config_path.exists()
+
+    def test_replace_failure_preserves_existing_config(self, tmp_path):
+        config_path = tmp_path / "ov.conf"
+        config_path.write_text('{"old": true}', encoding="utf-8")
+
+        with patch("openviking_cli.setup_wizard.os.replace", side_effect=OSError("replace")):
+            assert _write_config({"new": True}, config_path) is False
+
+        assert json.loads(config_path.read_text()) == {"old": True}
+        assert not list(tmp_path.glob(".ov.conf.*"))
+
+    def test_backup_copy_failure_leaves_no_public_backup(self, tmp_path):
+        config_path = tmp_path / "ov.conf"
+        config_path.write_text('{"secret": true}', encoding="utf-8")
+
+        def fail_after_partial_copy(source, target):
+            target.write(source.read(1))
+            raise OSError("copy")
+
+        with patch("openviking_cli.setup_wizard.shutil.copyfileobj", fail_after_partial_copy):
+            assert _write_config({"new": True}, config_path) is False
+
+        assert json.loads(config_path.read_text()) == {"secret": True}
+        assert not (tmp_path / "ov.conf.bak").exists()
+        assert not list(tmp_path.glob(".ov.conf*.*"))
 
     def test_run_init_redacts_summary_output(self, tmp_path):
         config_path = tmp_path / "ov.conf"
@@ -947,7 +974,11 @@ class TestPartialUpdate:
 
     def test_update_server_only(self, tmp_path):
         config_path = tmp_path / "ov.conf"
-        config_path.write_text(json.dumps(_existing_config()), encoding="utf-8")
+        original = _existing_config()
+        original["server"].update(
+            {"auth_mode": "trusted", "workers": 4, "temp_upload": {"default_mode": "shared"}}
+        )
+        config_path.write_text(json.dumps(original), encoding="utf-8")
 
         with (
             patch(
@@ -961,8 +992,37 @@ class TestPartialUpdate:
             assert _update_existing_config(config_path, "server") == 0
 
         data = json.loads(config_path.read_text(encoding="utf-8"))
-        assert data["server"] == {"host": "0.0.0.0", "root_api_key": "rk"}
+        assert data["server"] == {
+            "host": "0.0.0.0",
+            "root_api_key": "rk",
+            "auth_mode": "trusted",
+            "workers": 4,
+            "temp_upload": {"default_mode": "shared"},
+        }
         assert data["vlm"] == _existing_config()["vlm"]
+
+    def test_update_server_local_removes_root_key_only(self, tmp_path):
+        config_path = tmp_path / "ov.conf"
+        original = _existing_config()
+        original["server"].update({"auth_mode": "api_key", "root_api_key": "rk", "workers": 4})
+        config_path.write_text(json.dumps(original), encoding="utf-8")
+
+        with (
+            patch(
+                "openviking_cli.setup_wizard._wizard_server",
+                return_value={"host": "127.0.0.1", "port": 1933},
+            ),
+            patch("openviking_cli.setup_wizard._prompt_confirm", return_value=True),
+            patch("openviking_cli.setup_wizard._post_save_actions", return_value=None),
+            patch("builtins.print"),
+        ):
+            assert _update_existing_config(config_path, "server") == 0
+
+        assert json.loads(config_path.read_text())["server"] == {
+            "host": "127.0.0.1",
+            "port": 1933,
+            "workers": 4,
+        }
 
     def test_embedding_dimension_change_requires_confirmation(self, tmp_path):
         config_path = tmp_path / "ov.conf"
