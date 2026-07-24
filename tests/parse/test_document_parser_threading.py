@@ -148,24 +148,76 @@ async def test_excel_parser_offloads_xls_conversion(monkeypatch, tmp_path: Path)
 
 @pytest.mark.asyncio
 async def test_powerpoint_parser_offloads_pptx_conversion(monkeypatch, tmp_path: Path):
+    from openviking_cli.utils import storage as storage_module
+    from openviking_cli.utils.storage import StoragePath
+
     parser = powerpoint.PowerPointParser()
     seen = _stub_markdown_parse(parser)
     calls = _patch_to_thread(monkeypatch, powerpoint)
     fake_pptx = SimpleNamespace()
     monkeypatch.setitem(sys.modules, "pptx", fake_pptx)
+    storage = StoragePath(base_path=tmp_path / "storage")
+    monkeypatch.setattr(storage_module, "get_storage", lambda: storage)
 
-    def convert(path: Path, pptx_module) -> str:
+    def convert(
+        path: Path,
+        pptx_module,
+        resource_name=None,
+        storage=None,
+        generated_media_paths=None,
+    ) -> str:
         assert pptx_module is fake_pptx
         return "# converted pptx"
 
     monkeypatch.setattr(parser, "_convert_to_markdown", convert)
     source = tmp_path / "sample.pptx"
     source.write_bytes(b"placeholder")
+    caller_media_dir = tmp_path / "shared-media"
+    rewrite_root = str(tmp_path / "import-root")
 
-    result = await parser.parse(source)
+    result = await parser.parse(
+        source,
+        enable_link_rewrite=True,
+        link_rewrite_root=rewrite_root,
+        allowed_media_dirs=[caller_media_dir],
+    )
 
-    assert calls == [(convert, (source, fake_pptx), {})]
+    assert len(calls) == 1
+    func, args, _ = calls[0]
+    assert func is convert
+    assert args[0] == source
+    assert args[1] is fake_pptx
+    assert args[2].startswith("pptx-")
+    assert args[3] is storage
+    assert args[4] == {}
     assert seen["content"] == "# converted pptx"
+    assert seen["kwargs"]["base_dir"] == tmp_path
+    assert seen["kwargs"]["enable_link_rewrite"] is True
+    assert seen["kwargs"]["link_rewrite_root"] == rewrite_root
+    assert seen["kwargs"]["allowed_media_dirs"] == [caller_media_dir]
+    assert seen["kwargs"]["preferred_media_paths"] == {}
+    assert result.source_format == "pptx"
+    assert result.parser_name == "PowerPointParser"
+
+
+@pytest.mark.asyncio
+async def test_powerpoint_parser_forwards_kwargs_for_content_source():
+    parser = powerpoint.PowerPointParser()
+    seen = _stub_markdown_parse(parser)
+
+    result = await parser.parse(
+        "# inline deck",
+        enable_link_rewrite=True,
+        link_rewrite_root="/import/root",
+        allowed_media_dirs=[Path("/import/media")],
+    )
+
+    assert seen["content"] == "# inline deck"
+    assert seen["kwargs"] == {
+        "enable_link_rewrite": True,
+        "link_rewrite_root": "/import/root",
+        "allowed_media_dirs": [Path("/import/media")],
+    }
     assert result.source_format == "pptx"
     assert result.parser_name == "PowerPointParser"
 
