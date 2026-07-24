@@ -54,6 +54,7 @@ def tmp_tree(tmp_path: Path) -> Path:
     # subdir with mixed
     sub = tmp_path / "src"
     sub.mkdir()
+    (sub / ".nested").write_text("hidden", encoding="utf-8")
     (sub / "app.py").write_text("code", encoding="utf-8")
     (sub / "custom.bin").write_bytes(b"\x00\x01")
 
@@ -112,6 +113,7 @@ class TestScanDirectoryTraversal:
         assert ".hidden" not in all_rel
         assert "empty.txt" not in all_rel
         assert any("empty" in s or "dot" in s for s in result.skipped)
+        assert "src/.nested (dot file)" in result.skipped
 
 
 class TestScanDirectoryClassification:
@@ -301,6 +303,7 @@ class TestIncludeExclude:
         assert "drafts/skip.py" not in rel_paths
         skipped_reasons = " ".join(result.skipped)
         assert "excluded by include" in skipped_reasons
+        assert "drafts/skip.py (excluded by include filter)" in result.skipped
 
     def test_exclude_path_prefix(self, tmp_with_drafts: Path, registry: ParserRegistry) -> None:
         result: DirectoryScanResult = scan_directory(
@@ -318,6 +321,7 @@ class TestIncludeExclude:
         assert "drafts/skip.py" not in rel_paths
         skipped_reasons = " ".join(result.skipped)
         assert "excluded by exclude" in skipped_reasons
+        assert "drafts/draft.pdf (excluded by exclude filter)" in result.skipped
 
     def test_include_and_exclude_combined(
         self, tmp_with_drafts: Path, registry: ParserRegistry
@@ -437,9 +441,9 @@ class TestGitignoreHandling:
         assert "src/sub/skip.tmp" not in rel_paths
         # .tmp is no longer accepted in src/sub/ due to nested gitignore
         assert "src/sub/skip.log" not in rel_paths
-        assert any("src/skip.log (gitignore)" in s for s in result.skipped)
-        assert any("src/sub/skip.tmp (gitignore)" in s for s in result.skipped)
-        assert any("src/sub/skip.log (gitignore)" in s for s in result.skipped)
+        assert "src/skip.log (gitignore)" in result.skipped
+        assert "src/sub/skip.tmp (gitignore)" in result.skipped
+        assert "src/sub/skip.log (gitignore)" in result.skipped
 
     def test_respects_negation(self, tmp_path: Path, registry: ParserRegistry) -> None:
         (tmp_path / ".gitignore").write_text("*.tmp\n!important.tmp\n", encoding="utf-8")

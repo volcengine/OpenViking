@@ -270,17 +270,17 @@ def scan_directory(
 
             skip, reason = _should_skip_file(file_path)
             if skip:
-                result.skipped.append(f"{rel_path} ({reason})")
+                result.skipped.append(f"{rel_path_norm} ({reason})")
                 continue
             if gitignore_matcher.is_ignored_file(file_path, dir_spec):
-                result.skipped.append(f"{rel_path} (gitignore)")
+                result.skipped.append(f"{rel_path_norm} (gitignore)")
                 continue
 
             if include_patterns and not _matches_include(name, include_patterns):
-                result.skipped.append(f"{rel_path} (excluded by include filter)")
+                result.skipped.append(f"{rel_path_norm} (excluded by include filter)")
                 continue
             if exclude_patterns and _matches_exclude(rel_path_norm, name, exclude_patterns):
-                result.skipped.append(f"{rel_path} (excluded by exclude filter)")
+                result.skipped.append(f"{rel_path_norm} (excluded by exclude filter)")
                 continue
 
             classification = _classify_file(file_path, effective_registry)
