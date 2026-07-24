@@ -28,7 +28,10 @@ from openviking.utils.path_safety import (
 from openviking_cli.utils import VikingURI
 from vikingbot.compile.models import CompileLimits, WikiBundleDraft
 
-_FRONTMATTER_RE = re.compile(r"\A---[ \t]*\n(.*?)\n---[ \t]*(?:\n|\Z)", re.DOTALL)
+_FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
+_FRONTMATTER_START_RE = re.compile(rb"\A---[ \t]*\r?\n")
+_FRONTMATTER_END_RE = re.compile(rb"\r?\n---[ \t]*(?:\r?\n|\Z)")
+_OKF_TYPE_DECLARATION_RE = re.compile(rb"""(?m)^(?:type|["']type["'])[ \t]*:""")
 _CITATION_LINE_RE = re.compile(r"^\[\d+\]\s+\[([^\]\n]+)\]\(([^)\n]+)\)\s*$")
 _BARE_VIKING_URI_RE = re.compile(
     r"""viking://[^\s<>\[\](){}"'«»，。；：！？]+"""
@@ -63,6 +66,57 @@ def _split_frontmatter(content: str) -> tuple[dict[str, Any], str]:
     if not isinstance(parsed, dict):
         raise ValueError("existing OKF frontmatter must be a YAML object")
     return parsed, content[match.end() :]
+
+
+def has_unclosed_frontmatter(content: bytes) -> bool:
+    opening = _FRONTMATTER_START_RE.match(content)
+    return opening is not None and _FRONTMATTER_END_RE.search(
+        content[opening.end() :]
+    ) is None
+
+
+def validate_declared_okf_markdown(path: str, content: bytes) -> str | None:
+    """Validate a Markdown artifact and return its declared OKF type, if any."""
+    if not path.casefold().endswith(".md"):
+        return
+    opening = _FRONTMATTER_START_RE.match(content)
+    if opening is None:
+        return
+
+    remainder = content[opening.end() :]
+    closing = _FRONTMATTER_END_RE.search(remainder)
+    raw_frontmatter = remainder[: closing.start()] if closing else remainder
+    raw_declares_type = _OKF_TYPE_DECLARATION_RE.search(raw_frontmatter) is not None
+
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        if raw_declares_type:
+            raise ValueError(f'OKF Markdown file "{path}" must be UTF-8') from exc
+        return
+
+    match = _FRONTMATTER_RE.match(text)
+    if match is None:
+        if raw_declares_type:
+            raise ValueError(f'OKF Markdown file "{path}" has unterminated YAML frontmatter')
+        return
+    try:
+        frontmatter = yaml.safe_load(match.group(1))
+    except yaml.YAMLError as exc:
+        if raw_declares_type:
+            raise ValueError(f'OKF Markdown file "{path}" has invalid YAML frontmatter') from exc
+        return
+    if not isinstance(frontmatter, dict):
+        if raw_declares_type:
+            raise ValueError(f'OKF Markdown file "{path}" frontmatter must be a YAML object')
+        return
+    if "type" not in frontmatter:
+        return
+    if not isinstance(frontmatter["type"], str) or not frontmatter["type"].strip():
+        raise ValueError(
+            f'OKF Markdown file "{path}" frontmatter field "type" must be a non-empty string'
+        )
+    return frontmatter["type"].strip()
 
 
 def _normalize_tags(tags: list[str]) -> list[str]:
@@ -303,7 +357,7 @@ class WikiRenderer:
         existing_bytes: Mapping[str, bytes] | None = None,
         file_payloads: list[bytes | None] | None = None,
     ) -> RenderedBundle:
-        file_catalog_uris = file_catalog_uris or set()
+        file_catalog_uris = set(catalog_uris) | set(file_catalog_uris or ())
         existing_bytes = existing_bytes or {}
         file_payloads = file_payloads or []
         if len(bundle.pages) > self.limits.output_pages:
@@ -312,7 +366,8 @@ class WikiRenderer:
             raise ValueError("Wiki bundle exceeds the file limit")
         if not bundle.pages and bundle.links:
             raise ValueError("an empty Wiki bundle cannot contain links")
-        memory_target = context_type_for_uri(target_uri) == "memory"
+        target_type = context_type_for_uri(target_uri)
+        memory_target = target_type == "memory"
         if memory_target and bundle.files:
             raise ValueError("raw artifact files are only supported for Resource targets")
 
@@ -352,7 +407,7 @@ class WikiRenderer:
                 hint = page.path_hint or VikingURI.sanitize_segment(title)
                 relative = validate_relative_page_path(hint)
                 uri = safe_join_viking_uri(target_uri, relative).rstrip("/")
-                if uri in catalog_uris:
+                if uri in file_catalog_uris:
                     raise ValueError(f"Wiki page already exists; use update_uri: {uri}")
             if uri in output_uris:
                 raise ValueError(f"duplicate final Wiki path: {uri}")
@@ -500,6 +555,13 @@ class WikiRenderer:
             total_bytes += len(candidate)
             if total_bytes > self.limits.output_total_bytes:
                 raise ValueError("Wiki bundle exceeds the final content size limit")
+            if target_type == "resource":
+                page_type = validate_declared_okf_markdown(uri, candidate)
+                if file.update_uri and uri in catalog_uris and page_type is None:
+                    raise ValueError(
+                        "an existing Wiki page updated as a raw file must retain "
+                        "valid OKF frontmatter with a non-empty type"
+                    )
 
             is_update = file.update_uri is not None
             old = existing_bytes.get(uri)
@@ -526,7 +588,9 @@ __all__ = [
     "RenderedBundle",
     "WikiRenderer",
     "content_hash",
+    "has_unclosed_frontmatter",
     "is_reserved_wiki_page_uri",
+    "validate_declared_okf_markdown",
     "validate_relative_file_path",
     "validate_relative_page_path",
 ]

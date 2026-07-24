@@ -36,7 +36,11 @@ from vikingbot.compile.models import (
     WikiBundleDraft,
     utc_now,
 )
-from vikingbot.compile.renderer import WikiRenderer
+from vikingbot.compile.renderer import (
+    WikiRenderer,
+    has_unclosed_frontmatter,
+    validate_declared_okf_markdown,
+)
 from vikingbot.compile.store import CompileTaskStore
 from vikingbot.config.schema import SandboxMode, SessionKey
 from vikingbot.openviking_mount.ov_server import VikingClient
@@ -76,6 +80,8 @@ _SKILL_EXCLUDED_FILES = frozenset(
     {".abstract.md", ".overview.md", ".relations.json", ".source.json"}
 )
 _CATALOG_EXCLUDED_FILES = _SKILL_EXCLUDED_FILES | {"index.md", "log.md"}
+_CATALOG_FRONTMATTER_LINES = 128
+_CATALOG_READ_CONCURRENCY = 10
 _REQUIREMENT_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 
 
@@ -852,32 +858,76 @@ class BotCompileService:
         self, client: VikingClient, target_uri: str
     ) -> list[dict[str, Any]]:
         entries = await client.tree(target_uri, node_limit=self.limits.target_catalog_pages + 1)
-        catalog: list[dict[str, Any]] = []
-        page_count = 0
+        catalog_entries: list[tuple[Mapping[str, Any], str, str]] = []
         for entry in entries:
             if not isinstance(entry, Mapping) or entry.get("isDir"):
                 continue
             uri = str(entry.get("uri") or "").rstrip("/")
             name = uri.rsplit("/", 1)[-1]
-            if name.lower() in _CATALOG_EXCLUDED_FILES:
+            if not uri or name.lower() in _CATALOG_EXCLUDED_FILES:
                 continue
-            is_page = name.lower().endswith(".md")
+            catalog_entries.append((entry, uri, name))
+            if len(catalog_entries) > self.limits.target_catalog_pages:
+                raise CompileFailure(
+                    "RESOURCE_EXHAUSTED",
+                    "Target output catalog limit exceeded",
+                    stage="collecting_context",
+                )
+
+        semaphore = asyncio.Semaphore(_CATALOG_READ_CONCURRENCY)
+
+        async def read_page_type(
+            entry: Mapping[str, Any], uri: str, name: str
+        ) -> str | None:
+            if not name.lower().endswith(".md"):
+                return None
+            try:
+                async with semaphore:
+                    prefix = await client.read_raw(
+                        uri, offset=0, limit=_CATALOG_FRONTMATTER_LINES
+                    )
+                    payload = prefix.encode("utf-8")
+                    if has_unclosed_frontmatter(payload):
+                        size = entry.get("size")
+                        if (
+                            isinstance(size, int)
+                            and size > self.limits.output_total_bytes
+                        ):
+                            return None
+                        payload = (await client.read_raw(uri)).encode("utf-8")
+                return validate_declared_okf_markdown(uri, payload)
+            except Exception as exc:
+                logger.warning(
+                    "Compile target catalog treated {} as an artifact: {}",
+                    uri,
+                    exc,
+                )
+                return None
+
+        page_types = await asyncio.gather(
+            *(
+                read_page_type(entry, uri, name)
+                for entry, uri, name in catalog_entries
+            )
+        )
+        catalog: list[dict[str, Any]] = []
+        page_count = 0
+        for (entry, uri, name), page_type in zip(
+            catalog_entries, page_types, strict=True
+        ):
+            is_page = page_type is not None
             if is_page:
                 page_count += 1
             item = {
                 "uri": uri,
                 "kind": "wiki_page" if is_page else "file",
                 "title": name.removesuffix(".md") if is_page else name,
-                "type": str(entry.get("type") or ""),
+                "type": page_type or str(entry.get("type") or ""),
                 "summary": str(entry.get("abstract") or entry.get("summary") or ""),
             }
             if is_page:
                 item["page_id"] = page_count
             catalog.append(item)
-            if len(catalog) > self.limits.target_catalog_pages:
-                raise CompileFailure(
-                    "RESOURCE_EXHAUSTED", "Target output catalog limit exceeded", stage="collecting_context"
-                )
         return catalog
 
     async def _connect_mcp_if_needed(

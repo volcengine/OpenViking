@@ -360,6 +360,104 @@ def test_renderer_adds_raw_text_and_workspace_binary_to_same_bundle():
     ]
 
 
+def test_renderer_accepts_minimal_okf_artifact_with_unknown_fields():
+    content = (
+        "---\n"
+        "type: research_artifact\n"
+        "ara_version: 1.0\n"
+        "custom: anything\n"
+        "---\n\n"
+        "# Research artifact\n"
+    )
+    bundle = WikiBundleDraft.model_validate(
+        {"pages": [], "files": [{"path": "research.md", "content": content}]}
+    )
+
+    rendered = WikiRenderer().render(
+        bundle=bundle,
+        target_uri="viking://resources/wiki",
+        source_roots={},
+        catalog_uris=set(),
+        existing_raw={},
+    )
+
+    assert rendered.operations[0]["content"] == content
+
+
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        ("---\ntype:\n---\n", 'field "type" must be a non-empty string'),
+        ("---\ntype: [concept]\n---\n", 'field "type" must be a non-empty string'),
+        ("---\ntype: concept\nauthors: [\n---\n", "invalid YAML frontmatter"),
+        ("---\ntype: concept\n# no closing delimiter", "unterminated YAML frontmatter"),
+    ],
+)
+def test_renderer_rejects_invalid_declared_okf_artifact(content, message):
+    bundle = WikiBundleDraft.model_validate(
+        {"pages": [], "files": [{"path": "invalid.md", "content": content}]}
+    )
+
+    with pytest.raises(ValueError, match=message):
+        WikiRenderer().render(
+            bundle=bundle,
+            target_uri="viking://resources/wiki",
+            source_roots={},
+            catalog_uris=set(),
+            existing_raw={},
+        )
+
+
+def test_renderer_checks_size_before_parsing_okf_artifact():
+    content = "---\ntype: [broken\n---\n"
+    bundle = WikiBundleDraft.model_validate(
+        {"pages": [], "files": [{"path": "large.md", "content": content}]}
+    )
+
+    with pytest.raises(ValueError, match="final content size limit"):
+        WikiRenderer(CompileLimits(output_total_bytes=8)).render(
+            bundle=bundle,
+            target_uri="viking://resources/wiki",
+            source_roots={},
+            catalog_uris=set(),
+            existing_raw={},
+        )
+
+
+def test_renderer_rejects_page_path_colliding_with_artifact():
+    bundle = WikiBundleDraft.model_validate(
+        {"pages": [_page(1, "PAPER", path_hint="PAPER.md")]}
+    )
+
+    with pytest.raises(ValueError, match="already exists"):
+        WikiRenderer().render(
+            bundle=bundle,
+            target_uri="viking://resources/wiki",
+            source_roots={"src_1": "viking://resources/source"},
+            catalog_uris=set(),
+            file_catalog_uris={"viking://resources/wiki/PAPER.md"},
+            existing_raw={},
+        )
+
+
+def test_renderer_raw_update_cannot_remove_okf_from_existing_wiki_page():
+    uri = "viking://resources/wiki/existing.md"
+    bundle = WikiBundleDraft.model_validate(
+        {"pages": [], "files": [{"update_uri": uri, "content": "# Plain Markdown"}]}
+    )
+
+    with pytest.raises(ValueError, match="must retain valid OKF"):
+        WikiRenderer().render(
+            bundle=bundle,
+            target_uri="viking://resources/wiki",
+            source_roots={},
+            catalog_uris={uri},
+            file_catalog_uris={uri},
+            existing_raw={},
+            existing_bytes={uri: b"---\ntype: concept\n---\n\n# Existing"},
+        )
+
+
 def test_renderer_raw_file_update_uses_byte_hash_and_detects_unchanged():
     uri = "viking://resources/wiki/trace/exploration_tree.yaml"
     old = b"nodes: []\n"
@@ -528,7 +626,8 @@ def test_memory_renderer_round_trips_fields_and_only_bumps_changed_version():
 async def test_submit_tool_rejects_protected_anchor_and_path_collision():
     tool = SubmitWikiBundleTool(
         source_ids={"src_1"},
-        catalog_uris={"viking://resources/wiki/existing.md"},
+        catalog_uris=set(),
+        file_catalog_uris={"viking://resources/wiki/existing.md"},
         target_uri="viking://resources/wiki",
         limits=CompileLimits(),
     )
@@ -552,6 +651,51 @@ async def test_submit_tool_rejects_protected_anchor_and_path_collision():
     accepted = await tool.execute(context, pages=[], links=[])
     assert not accepted.startswith("Error:")
     assert tool.bundle is not None and tool.bundle.pages == []
+
+
+@pytest.mark.asyncio
+async def test_submit_tool_checks_size_before_parsing_okf_artifact():
+    tool = SubmitWikiBundleTool(
+        source_ids={"src_1"},
+        catalog_uris=set(),
+        target_uri="viking://resources/wiki",
+        limits=CompileLimits(output_total_bytes=8),
+    )
+
+    result = await tool.execute(
+        ToolContext(),
+        pages=[],
+        files=[
+            {
+                "path": "large.md",
+                "content": "---\ntype: [broken\n---\n",
+            }
+        ],
+    )
+
+    assert result.startswith("Error: Invalid Wiki bundle:")
+    assert "draft content size limit exceeded" in result
+
+
+@pytest.mark.asyncio
+async def test_submit_tool_raw_update_cannot_remove_okf_from_existing_wiki_page():
+    uri = "viking://resources/wiki/existing.md"
+    tool = SubmitWikiBundleTool(
+        source_ids={"src_1"},
+        catalog_uris={uri},
+        file_catalog_uris={uri},
+        target_uri="viking://resources/wiki",
+        limits=CompileLimits(),
+    )
+
+    result = await tool.execute(
+        ToolContext(),
+        pages=[],
+        files=[{"update_uri": uri, "content": "# Plain Markdown"}],
+    )
+
+    assert result.startswith("Error: Invalid Wiki bundle:")
+    assert "must retain valid OKF frontmatter" in result
 
 
 @pytest.mark.asyncio
@@ -613,9 +757,22 @@ async def test_submit_tool_requires_workspace_paths_for_multi_file_artifacts():
     accepted = await tool.execute(
         ToolContext(),
         pages=[],
-        files=[{"path": "PAPER.md", "content": "# Paper"}],
+        files=[
+            {
+                "path": "PAPER.md",
+                "content": "---\ntitle: ARA Paper\nauthors: [Ada]\n---\n\n# Paper",
+            }
+        ],
     )
     assert accepted == "Wiki bundle accepted with 0 page(s) and 1 file(s)."
+
+    rejected = await tool.execute(
+        ToolContext(),
+        pages=[],
+        files=[{"path": "concept.md", "content": "---\ntype: ''\n---\n"}],
+    )
+    assert rejected.startswith("Error: Invalid Wiki bundle:")
+    assert 'field "type" must be a non-empty string' in rejected
 
 
 @pytest.mark.asyncio
@@ -666,6 +823,43 @@ async def test_submit_tool_reads_explicit_workspace_file_and_rejects_memory_file
     )
     assert rejected.startswith("Error:")
     assert "Resource targets" in rejected
+
+
+@pytest.mark.asyncio
+async def test_submit_tool_rejects_non_utf8_declared_okf_workspace_markdown():
+    class Sandbox:
+        async def read_file_bytes(self, path):
+            assert path == "generated/concept.md"
+            return b"---\ntype: concept\n---\n\xff"
+
+    class Manager:
+        async def get_sandbox(self, session_key):
+            return Sandbox()
+
+    context = ToolContext(
+        session_key=SessionKey(type="compile", channel_id="cmp", chat_id="cmp"),
+        sandbox_manager=Manager(),
+    )
+    tool = SubmitWikiBundleTool(
+        source_ids={"src_1"},
+        catalog_uris=set(),
+        target_uri="viking://resources/wiki",
+        limits=CompileLimits(),
+    )
+
+    rejected = await tool.execute(
+        context,
+        pages=[],
+        files=[
+            {
+                "path": "concept.md",
+                "workspace_path": "generated/concept.md",
+            }
+        ],
+    )
+
+    assert rejected.startswith("Error: Invalid Wiki bundle:")
+    assert "must be UTF-8" in rejected
 
 
 @pytest.mark.asyncio
@@ -1286,28 +1480,78 @@ async def test_source_context_builds_bounded_compact_recursive_catalog():
 @pytest.mark.asyncio
 async def test_target_catalog_includes_raw_files_and_marks_wiki_pages():
     class Client:
+        def __init__(self):
+            self.reads = []
+
         async def tree(self, uri, *, node_limit):
             assert uri == "viking://resources/ara"
             assert node_limit == CompileLimits().target_catalog_pages + 1
             return [
                 {"uri": f"{uri}/Overview.md", "isDir": False, "abstract": "Overview"},
+                {"uri": f"{uri}/PAPER.md", "isDir": False},
+                {"uri": f"{uri}/broken.md", "isDir": False},
+                {"uri": f"{uri}/Long.md", "isDir": False, "size": 2048},
                 {"uri": f"{uri}/trace/tree.yaml", "isDir": False},
                 {"uri": f"{uri}/figures/chart.png", "isDir": False},
                 {"uri": f"{uri}/.overview.md", "isDir": False},
             ]
 
+        async def read_raw(self, uri, *, offset=0, limit=-1):
+            assert offset == 0
+            self.reads.append((uri, limit))
+            content = {
+                "viking://resources/ara/Overview.md": (
+                    "---\ntype: overview\ncustom: kept\n---\n\n# Overview"
+                ),
+                "viking://resources/ara/PAPER.md": (
+                    "---\ntitle: ARA Paper\nauthors: [Ada]\n---\n\n# Paper"
+                ),
+                "viking://resources/ara/broken.md": "---\ntype:\n---\n",
+                "viking://resources/ara/Long.md": (
+                    "---\n"
+                    + "".join(f"custom_{index}: value\n" for index in range(130))
+                    + "type: long_form\n---\n\n# Long"
+                ),
+            }[uri]
+            if limit == -1:
+                return content
+            return "".join(content.splitlines(keepends=True)[:limit])
+
     service = object.__new__(BotCompileService)
     service.limits = CompileLimits()
-    catalog = await service._build_catalog(Client(), "viking://resources/ara")
+    client = Client()
+    catalog = await service._build_catalog(client, "viking://resources/ara")
 
     assert catalog == [
         {
             "uri": "viking://resources/ara/Overview.md",
             "kind": "wiki_page",
             "title": "Overview",
-            "type": "",
+            "type": "overview",
             "summary": "Overview",
             "page_id": 1,
+        },
+        {
+            "uri": "viking://resources/ara/PAPER.md",
+            "kind": "file",
+            "title": "PAPER.md",
+            "type": "",
+            "summary": "",
+        },
+        {
+            "uri": "viking://resources/ara/broken.md",
+            "kind": "file",
+            "title": "broken.md",
+            "type": "",
+            "summary": "",
+        },
+        {
+            "uri": "viking://resources/ara/Long.md",
+            "kind": "wiki_page",
+            "title": "Long",
+            "type": "long_form",
+            "summary": "",
+            "page_id": 2,
         },
         {
             "uri": "viking://resources/ara/trace/tree.yaml",
@@ -1324,6 +1568,14 @@ async def test_target_catalog_includes_raw_files_and_marks_wiki_pages():
             "summary": "",
         },
     ]
+    assert client.reads.count(("viking://resources/ara/Long.md", 128)) == 1
+    assert client.reads.count(("viking://resources/ara/Long.md", -1)) == 1
+    assert {uri for uri, _ in client.reads} == {
+        "viking://resources/ara/Overview.md",
+        "viking://resources/ara/PAPER.md",
+        "viking://resources/ara/broken.md",
+        "viking://resources/ara/Long.md",
+    }
 
 
 class _NamedTool(_EchoTool):

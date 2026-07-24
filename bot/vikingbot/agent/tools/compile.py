@@ -23,6 +23,7 @@ from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.compile.models import CompileLimits, WikiBundleDraft
 from vikingbot.compile.renderer import (
     is_reserved_wiki_page_uri,
+    validate_declared_okf_markdown,
     validate_relative_file_path,
     validate_relative_page_path,
 )
@@ -141,7 +142,8 @@ class SubmitWikiBundleTool(Tool):
     ):
         self.source_ids = source_ids
         self.catalog_uris = catalog_uris
-        self.file_catalog_uris = file_catalog_uris or set()
+        self.file_catalog_uris = set(catalog_uris)
+        self.file_catalog_uris.update(file_catalog_uris or ())
         self.target_uri = target_uri.rstrip("/")
         self.limits = limits
         self.require_workspace_files = require_workspace_files
@@ -376,7 +378,7 @@ class SubmitWikiBundleTool(Tool):
                 hint = page.path_hint or VikingURI.sanitize_segment(page.title.strip())
                 relative = validate_relative_page_path(hint)
                 final_uri = safe_join_viking_uri(self.target_uri, relative).rstrip("/")
-                if final_uri in self.catalog_uris:
+                if final_uri in self.file_catalog_uris:
                     raise ValueError(
                         f"page {page.page_id} path exists; use its update_uri"
                     )
@@ -418,6 +420,15 @@ class SubmitWikiBundleTool(Tool):
                 )
                 content_bytes = payload
             total_bytes += len(content_bytes)
+            if total_bytes > self.limits.output_total_bytes:
+                raise ValueError("draft content size limit exceeded")
+            if target_type == "resource":
+                page_type = validate_declared_okf_markdown(final_uri, content_bytes)
+                if file.update_uri and final_uri in self.catalog_uris and page_type is None:
+                    raise ValueError(
+                        f"file {index} updates an existing Wiki page and must retain "
+                        "valid OKF frontmatter with a non-empty type"
+                    )
             file_payloads.append(payload)
 
         if total_bytes > self.limits.output_total_bytes:

@@ -610,8 +610,8 @@ class VikingClient:
     async def tree(self, uri: str, *, node_limit: int = 1000) -> List[Dict[str, Any]]:
         return await self.client.tree(uri, node_limit=node_limit)
 
-    async def read_raw(self, uri: str) -> str:
-        return await self.client.read_raw(uri)
+    async def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+        return await self.client.read_raw(uri, offset=offset, limit=limit)
 
     async def download_bytes(self, uri: str) -> bytes:
         return await self.client.download_bytes(uri)
