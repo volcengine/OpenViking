@@ -16,7 +16,11 @@ from typing import Optional
 
 import uvicorn
 
-from openviking.server.app import create_app
+from openviking.server.app import (
+    WORKER_BOT_API_URL_ENV,
+    WORKER_WITH_BOT_ENV,
+    create_app,
+)
 from openviking.server.config import get_server_url_from_server_data, load_server_config
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.config_loader import resolve_config_path
@@ -160,10 +164,6 @@ def main():
     )
     parser.add_argument(
         "--bot",
-        action="store_true",
-        help="Also start vikingbot gateway after server starts",
-    )
-    parser.add_argument(
         "--with-bot",
         action="store_true",
         dest="with_bot",
@@ -290,8 +290,10 @@ def main():
             # can independently import the application.  We stash the
             # resolved config path in an env-var so that the factory can
             # pick it up (ServerConfig already reads OPENVIKING_CONFIG_FILE).
+            os.environ[WORKER_WITH_BOT_ENV] = "1" if config.with_bot else "0"
+            os.environ[WORKER_BOT_API_URL_ENV] = config.bot_api_url
             uvicorn.run(
-                "openviking.server.app:create_app",
+                "openviking.server.app:create_worker_app",
                 factory=True,
                 host=config.host,
                 port=config.port,
