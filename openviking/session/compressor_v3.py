@@ -1488,7 +1488,7 @@ def _case_experience_links_via_trajectories(
         if not _plan_item_has_source_trajectory(item, trajectory_uris):
             continue
         uri = _experience_plan_item_uri(item, root_uri)
-        if touched and uri not in touched:
+        if uri not in touched:
             continue
         if uri in seen:
             continue
