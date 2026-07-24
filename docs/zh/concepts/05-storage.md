@@ -60,7 +60,7 @@ viking://user/skills          →  /local/{account_id}/user/{user_id}/skills
 
 ### 关联管理
 
-VikingFS 通过 `.relations.json` 管理资源间的关联：
+VikingFS 通过文件或目录资源旁边的 `.relations.json` 伴随文件管理资源间的关联：
 
 ```python
 # 创建关联

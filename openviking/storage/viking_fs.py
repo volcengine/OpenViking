@@ -51,7 +51,10 @@ from openviking.server.identity import RequestContext, Role
 from openviking.storage.expr import And, PathScope, RawDSL
 from openviking.storage.internal_names import (
     MULTIWRITE_PATH_LOCK_FILE,
-    STORAGE_INTERNAL_ENTRY_NAMES,
+    file_relation_sidecar_path,
+    is_relation_sidecar_name,
+    is_storage_internal_entry_name,
+    relation_table_path,
 )
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.image_search import build_multimodal_embedding_input
@@ -641,6 +644,7 @@ class VikingFS:
         self._ensure_delete_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
+        relation_sidecar_path = file_relation_sidecar_path(path)
 
         async def _estimate_deleted_count(target_path: str, real_ctx: RequestContext) -> int:
             """Estimate number of nodes to be deleted using vector index."""
@@ -667,14 +671,25 @@ class VikingFS:
                 if mapped is not None:
                     raise mapped from exc
                 raise
-            # Path does not exist: clean up any orphan index records and return
-            uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
-            uris_to_delete.append(target_uri)
-            real_ctx = self._ctx_or_default(ctx)
-            estimated_count = await _estimate_deleted_count(path, real_ctx)
-            await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
-            logger.info(f"[VikingFS] rm target not found, cleaned orphan index: {uri}")
-            return {"estimated_deleted_count": estimated_count}
+            # A missing file can still leave behind its sibling relation table.
+            # Treat it as part of the file's lifecycle while cleaning orphan index records.
+            try:
+                async with LockContext(
+                    get_lock_manager(),
+                    [path, relation_sidecar_path],
+                    lock_mode="exact",
+                    handle=lock_handle,
+                ):
+                    await self._remove_path_if_exists(relation_sidecar_path)
+                    uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
+                    uris_to_delete.append(target_uri)
+                    real_ctx = self._ctx_or_default(ctx)
+                    estimated_count = await _estimate_deleted_count(path, real_ctx)
+                    await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
+                    logger.info(f"[VikingFS] rm target not found, cleaned orphan index: {uri}")
+                    return {"estimated_deleted_count": estimated_count}
+            except LockAcquisitionError:
+                raise ResourceBusyError(f"Resource is being processed: {uri}", uri=uri)
 
         if is_dir:
             if not recursive:
@@ -685,7 +700,7 @@ class VikingFS:
             lock_paths = [path]
             lock_mode = "tree"
         else:
-            lock_paths = [path]
+            lock_paths = [path, relation_sidecar_path]
             lock_mode = "exact"
 
         try:
@@ -713,6 +728,8 @@ class VikingFS:
                             f"Directory not empty: {uri}. Use recursive=True to delete non-empty directories."
                         )
                     raise
+                if not is_dir:
+                    await self._remove_path_if_exists(relation_sidecar_path)
                 # Add estimated_deleted_count to the result
                 if isinstance(result, dict):
                     result["estimated_deleted_count"] = estimated_count
@@ -784,6 +801,11 @@ class VikingFS:
         real_ctx = self._ctx_or_default(ctx)
         old_uri = canonicalize_uri(old_uri, real_ctx)
         new_uri = canonicalize_uri(new_uri, real_ctx)
+        file_relation_sidecar_paths = (
+            [file_relation_sidecar_path(old_path), file_relation_sidecar_path(new_path)]
+            if not is_dir
+            else []
+        )
 
         lock_context = (
             LockContext(
@@ -797,7 +819,7 @@ class VikingFS:
             if is_dir
             else LockContext(
                 get_lock_manager(),
-                [old_path, new_path],
+                [old_path, new_path, *file_relation_sidecar_paths],
                 lock_mode="exact",
                 handle=lock_handle,
             )
@@ -844,13 +866,16 @@ class VikingFS:
                     if is_dir:
                         await self._async_agfs.rm(new_path, recursive=True)
                     else:
-                        await self._async_agfs.rm(new_path)
+                        await self._remove_path_if_exists(new_path)
+                        await self._remove_path_if_exists(file_relation_sidecar_paths[1])
                 except Exception:
                     pass
                 raise
 
             # Delete source
             await self._async_agfs.rm(old_path, recursive=is_dir)
+            if not is_dir:
+                await self._remove_path_if_exists(file_relation_sidecar_paths[0])
             return {}
 
     async def system_sync_status(
@@ -896,9 +921,7 @@ class VikingFS:
                 recursive=is_dir,
                 fs_ctx={"account_id": self._ctx_or_default(ctx).account_id},
             )
-            return
-
-        if is_dir:
+        elif is_dir:
             await self._copy_dir_through_vikingfs(
                 old_uri, new_uri, ctx=ctx, lock_handle=lock_handle
             )
@@ -906,6 +929,14 @@ class VikingFS:
             await self._copy_file_through_vikingfs(
                 old_uri,
                 new_uri,
+                ctx=ctx,
+                lock_handle=lock_handle,
+            )
+
+        if not is_dir:
+            await self._copy_file_relation_sidecar(
+                old_path,
+                new_path,
                 ctx=ctx,
                 lock_handle=lock_handle,
             )
@@ -920,7 +951,8 @@ class VikingFS:
         """Recursively copy a directory through VikingFS read/write hooks."""
         await self.mkdir(new_uri, exist_ok=True, ctx=ctx)
 
-        entries = await self.ls(old_uri, show_all_hidden=True, ctx=ctx)
+        old_path = self._uri_to_path(old_uri, ctx=ctx)
+        entries = await self._ls_entries(old_path, ctx=ctx, include_relation_sidecars=True)
         for entry in entries:
             name = entry.get("name", "")
             if not name or name in (".", ".."):
@@ -952,6 +984,41 @@ class VikingFS:
         """Copy one file through VikingFS read/write hooks without deleting source."""
         content_bytes = await self.read_file_bytes(from_uri, ctx=ctx)
         await self.write_file_bytes(to_uri, content_bytes, ctx=ctx, lock_handle=lock_handle)
+
+    async def _remove_path_if_exists(self, path: str) -> None:
+        """Remove a file path while allowing an already-absent sidecar."""
+        try:
+            await self._async_agfs.rm(path)
+        except Exception as exc:
+            if not is_not_found_error(exc):
+                raise
+
+    async def _copy_file_relation_sidecar(
+        self,
+        source_path: str,
+        destination_path: str,
+        *,
+        ctx: Optional[RequestContext] = None,
+        lock_handle: Optional["LockHandle"] = None,
+    ) -> None:
+        """Copy a file source's relation sidecar or clear stale destination metadata."""
+        source_sidecar_path = file_relation_sidecar_path(source_path)
+        destination_sidecar_path = file_relation_sidecar_path(destination_path)
+        try:
+            await self._async_agfs.stat(source_sidecar_path)
+        except Exception as exc:
+            if not is_not_found_error(exc):
+                raise
+            await self._remove_path_if_exists(destination_sidecar_path)
+            return
+
+        content = self._handle_agfs_read(await self._async_agfs.read(source_sidecar_path))
+        await self._ensure_parent_dirs(destination_sidecar_path, ctx=ctx)
+        await self._run_with_encrypted_write_lock(
+            destination_sidecar_path,
+            lambda: self._async_agfs.write(destination_sidecar_path, content),
+            lock_handle=lock_handle,
+        )
 
     async def grep(
         self,
@@ -1251,6 +1318,8 @@ class VikingFS:
         files_scanned = 0
 
         for file_uri in file_uris:
+            if is_storage_internal_entry_name(file_uri.rstrip("/").rsplit("/", 1)[-1]):
+                continue
             files_scanned += 1
             try:
                 content_bytes = await self.read(file_uri, ctx=ctx)
@@ -1342,6 +1411,8 @@ class VikingFS:
                 continue
 
             agfs_file_path = self._resolve_grep_match_agfs_path(path, match_file)
+            if is_storage_internal_entry_name(agfs_file_path.rsplit("/", 1)[-1]):
+                continue
 
             file_uri = self._path_to_uri(agfs_file_path, ctx=ctx)
             if not self._is_accessible(file_uri, real_ctx):
@@ -1480,6 +1551,8 @@ class VikingFS:
         except Exception:
             return file_uris
         if not root_stat.get("isDir", False):
+            if is_storage_internal_entry_name(normalized_uri.rstrip("/").rsplit("/", 1)[-1]):
+                return file_uris
             file_uris.append(normalized_uri)
             return file_uris
 
@@ -2296,16 +2369,14 @@ class VikingFS:
         for uri in uris:
             self._ensure_access(uri, ctx)
 
-        from_path = self._uri_to_path(from_uri, ctx=ctx)
-
-        entries = await self._read_relation_table(from_path, ctx=ctx)
+        entries = await self._read_relation_table(from_uri, ctx=ctx)
         existing_ids = {e.id for e in entries}
 
         link_id = next(f"link_{i}" for i in range(1, 10000) if f"link_{i}" not in existing_ids)
 
         entries.append(RelationEntry(id=link_id, uris=uris, reason=reason))
 
-        await self._write_relation_table(from_path, entries, ctx=ctx)
+        await self._write_relation_table(from_uri, entries, ctx=ctx)
         logger.debug(f"[VikingFS] Created link: {from_uri} -> {uris}")
 
     async def unlink(
@@ -2317,10 +2388,9 @@ class VikingFS:
         """Delete relation."""
         self._ensure_mutable_access(from_uri, ctx)
         self._ensure_access(uri, ctx)
-        from_path = self._uri_to_path(from_uri, ctx=ctx)
 
         try:
-            entries = await self._read_relation_table(from_path, ctx=ctx)
+            entries = await self._read_relation_table(from_uri, ctx=ctx)
 
             entry_to_modify = None
             for entry in entries:
@@ -2338,7 +2408,7 @@ class VikingFS:
                 entries.remove(entry_to_modify)
                 logger.debug(f"[VikingFS] Removed empty entry: {entry_to_modify.id}")
 
-            await self._write_relation_table(from_path, entries, ctx=ctx)
+            await self._write_relation_table(from_uri, entries, ctx=ctx)
             logger.debug(f"[VikingFS] Removed link: {from_uri} -> {uri}")
 
         except Exception as e:
@@ -2350,8 +2420,7 @@ class VikingFS:
     ) -> List[RelationEntry]:
         """Get relation table."""
         self._ensure_access(uri, ctx)
-        path = self._uri_to_path(uri, ctx=ctx)
-        return await self._read_relation_table(path, ctx=ctx)
+        return await self._read_relation_table(uri, ctx=ctx)
 
     # ========== Tree Traversal (Refactored) ==========
 
@@ -2364,7 +2433,7 @@ class VikingFS:
         parts = [p for p in parent_path.strip("/").split("/") if p]
         if len(parts) == 2 and parts[0] == "local":
             return name in VikingURI.LISTABLE_SCOPES
-        return name not in STORAGE_INTERNAL_ENTRY_NAMES
+        return not is_storage_internal_entry_name(name)
 
     def _ancestor_is_filtered(self, entry_path: str, base_path: str) -> bool:
         """Check if any ancestor directory of entry_path would be filtered by _ls_entries.
@@ -2835,7 +2904,11 @@ class VikingFS:
     _ROOT_PATH = "/local"
 
     async def _ls_entries(
-        self, path: str, ctx: Optional[RequestContext] = None
+        self,
+        path: str,
+        ctx: Optional[RequestContext] = None,
+        *,
+        include_relation_sidecars: bool = False,
     ) -> List[Dict[str, Any]]:
         """List directory entries, filtering out internal directories.
 
@@ -2846,7 +2919,12 @@ class VikingFS:
         parts = [p for p in path.strip("/").split("/") if p]
         if len(parts) == 2 and parts[0] == "local":
             return [e for e in entries if e.get("name") in VikingURI.LISTABLE_SCOPES]
-        return [e for e in entries if e.get("name") not in STORAGE_INTERNAL_ENTRY_NAMES]
+        return [
+            entry
+            for entry in entries
+            if not is_storage_internal_entry_name(entry.get("name", ""))
+            or (include_relation_sidecars and is_relation_sidecar_name(entry.get("name", "")))
+        ]
 
     def _path_to_uri(self, path: str, ctx: Optional[RequestContext] = None) -> str:
         """/local/{account}/... -> viking://...
@@ -3061,10 +3139,10 @@ class VikingFS:
     # ========== Relation Table Internal Methods ==========
 
     async def _read_relation_table(
-        self, dir_path: str, ctx: Optional[RequestContext] = None
+        self, uri: str, ctx: Optional[RequestContext] = None
     ) -> List[RelationEntry]:
-        """Read .relations.json."""
-        table_path = f"{dir_path}/.relations.json"
+        """Read relation table for a file or directory source."""
+        table_path = await self._relation_table_path(uri, ctx=ctx)
         try:
             content = self._handle_agfs_read(await self._async_agfs.read(table_path))
             data = json.loads(content.decode("utf-8"))
@@ -3089,18 +3167,30 @@ class VikingFS:
         return entries
 
     async def _write_relation_table(
-        self, dir_path: str, entries: List[RelationEntry], ctx: Optional[RequestContext] = None
+        self, uri: str, entries: List[RelationEntry], ctx: Optional[RequestContext] = None
     ) -> None:
-        """Write .relations.json."""
+        """Write relation table for a file or directory source."""
         # Use flat list format
         data = [entry.to_dict() for entry in entries]
 
         content = json.dumps(data, ensure_ascii=False, indent=2)
-        table_path = f"{dir_path}/.relations.json"
+        table_path = await self._relation_table_path(uri, ctx=ctx)
         if isinstance(content, str):
             content = content.encode("utf-8")
 
         await self._async_agfs.write(table_path, content)
+
+    async def _relation_table_path(
+        self, uri: str, ctx: Optional[RequestContext] = None
+    ) -> str:
+        """Return the canonical relation table path for a source URI."""
+        path = self._uri_to_path(uri, ctx=ctx)
+        try:
+            stat = await self._async_agfs.stat(path)
+        except Exception:
+            stat = {}
+        is_dir = isinstance(stat, dict) and stat.get("isDir", False)
+        return relation_table_path(path, is_dir=is_dir)
 
     # ========== Batch Read (backward compatible) ==========
 
@@ -3506,9 +3596,12 @@ class VikingFS:
         self._ensure_mutable_access(from_uri, ctx)
         self._ensure_mutable_access(to_uri, ctx)
         from_path = self._uri_to_path(from_uri, ctx=ctx)
+        to_path = self._uri_to_path(to_uri, ctx=ctx)
 
         await self._copy_file_through_vikingfs(from_uri, to_uri, ctx=ctx)
+        await self._copy_file_relation_sidecar(from_path, to_path, ctx=ctx)
         await self._async_agfs.rm(from_path)
+        await self._remove_path_if_exists(file_relation_sidecar_path(from_path))
 
     # ========== Temp File Operations (backward compatible) ==========
 
@@ -3547,7 +3640,7 @@ class VikingFS:
         self._ensure_mutable_access(temp_uri, ctx)
         path = self._uri_to_path(temp_uri, ctx=ctx)
         try:
-            for entry in await self._ls_entries(path, ctx=ctx):
+            for entry in await self._ls_entries(path, ctx=ctx, include_relation_sidecars=True):
                 name = entry.get("name", "")
                 if name in [".", ".."]:
                     continue
@@ -3710,7 +3803,7 @@ class VikingFS:
         ".abstract.md": ContextLevel.ABSTRACT,
         ".overview.md": ContextLevel.OVERVIEW,
     }
-    _NO_VECTOR_DERIVED = frozenset({".relations.json", ".ovgitignore"})
+    _NO_VECTOR_DERIVED = frozenset({".ovgitignore"})
 
     def _classify_restore_path(self, tree_path: str, *, deleted: bool) -> Optional[tuple]:
         """Classify a restore-affected tree path into a vector maintenance task.
@@ -3730,7 +3823,7 @@ class VikingFS:
         (no parent directory to scope an L0/L1 vector to).
         """
         parent, _, name = tree_path.rpartition("/")
-        if name in self._NO_VECTOR_DERIVED:
+        if name in self._NO_VECTOR_DERIVED or is_relation_sidecar_name(name):
             return None
         level = self._DIR_MARKER_LEVELS.get(name)
         if level is not None:

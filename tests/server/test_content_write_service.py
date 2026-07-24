@@ -20,6 +20,19 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest.mark.asyncio
+async def test_write_rejects_file_relation_sidecar_suffix(service):
+    ctx = RequestContext(user=service.user, role=Role.USER)
+
+    with pytest.raises(InvalidArgumentError, match="cannot write derived semantic file directly"):
+        await service.fs.write(
+            "viking://resources/source.md.relations.json",
+            content="[]",
+            ctx=ctx,
+            mode="create",
+        )
+
+
+@pytest.mark.asyncio
 async def test_write_updates_memory_file_and_parent_overview(service):
     ctx = RequestContext(user=service.user, role=Role.USER)
     memory_dir = f"viking://user/{ctx.user.user_space_name()}/memories/preferences"

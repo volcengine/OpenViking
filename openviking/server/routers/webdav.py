@@ -18,7 +18,7 @@ from fastapi.responses import Response as FastAPIResponse
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
-from openviking.storage.internal_names import WEBDAV_RESERVED_FILENAMES
+from openviking.storage.internal_names import is_webdav_reserved_filename
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.utils.uri import VikingURI
@@ -65,7 +65,7 @@ def _ensure_exposed_path(resource_path: str) -> None:
     if not resource_path:
         return
     parts = resource_path.split("/")
-    if any(part in WEBDAV_RESERVED_FILENAMES for part in parts):
+    if any(is_webdav_reserved_filename(part) for part in parts):
         raise NotFoundError(resource_path, "resource")
 
 
@@ -199,7 +199,7 @@ def _exposed_child_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]
         name = str(entry.get("name", "") or "")
         if not name or name in {".", ".."}:
             continue
-        if name in WEBDAV_RESERVED_FILENAMES:
+        if is_webdav_reserved_filename(name):
             continue
         exposed.append(entry)
     return exposed
