@@ -94,6 +94,7 @@ class OpenVikingService:
         self._encryptor: Optional[Any] = None
         self._privacy_config_service: Optional[UserPrivacyConfigService] = None
         self._data_dir_lock_acquired = False
+        self._data_dir_lock_path: Optional[str] = None
 
         # Sub-services
         self._fs_service = FSService()
@@ -198,13 +199,23 @@ class OpenVikingService:
         if not self._config.storage.skip_process_lock:
             from openviking.utils.process_lock import acquire_data_dir_lock
 
-            acquire_data_dir_lock(self._config.storage.workspace)
+            self._data_dir_lock_path = acquire_data_dir_lock(self._config.storage.workspace)
         else:
             logger.warning(
                 "Skipping workspace process lock for '%s'; multi-process access may corrupt data",
                 self._config.storage.workspace,
             )
         self._data_dir_lock_acquired = True
+
+    def _release_data_dir_lock(self) -> None:
+        """Release the process-level workspace lock after service shutdown."""
+        lock_path = getattr(self, "_data_dir_lock_path", None)
+        if lock_path is not None:
+            from openviking.utils.process_lock import release_data_dir_lock
+
+            release_data_dir_lock(lock_path)
+            self._data_dir_lock_path = None
+        self._data_dir_lock_acquired = False
 
     @property
     def _agfs(self) -> Any:
@@ -491,6 +502,7 @@ class OpenVikingService:
         if get_service_or_none() is self:
             set_service(None)
 
+        self._release_data_dir_lock()
         logger.info("OpenVikingService closed")
 
     async def reindex(

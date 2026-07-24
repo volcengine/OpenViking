@@ -8,14 +8,17 @@ directory, which causes silent failures in AGFS and VectorDB.
 
 import atexit
 import os
-import signal
 import sys
+import threading
 
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
 LOCK_FILENAME = ".openviking.pid"
+
+_lock_refcounts: dict[str, int] = {}
+_lock_refcounts_guard = threading.Lock()
 
 
 class DataDirectoryLocked(RuntimeError):
@@ -69,6 +72,24 @@ def _is_pid_alive(pid: int) -> bool:
     return True
 
 
+def release_data_dir_lock(lock_path: str) -> None:
+    """Release one local owner and remove its PID file after the last release."""
+    lock_key = os.path.realpath(os.path.abspath(lock_path))
+    with _lock_refcounts_guard:
+        refcount = _lock_refcounts.get(lock_key, 0)
+        if refcount > 1:
+            _lock_refcounts[lock_key] = refcount - 1
+            return
+        if refcount == 1:
+            del _lock_refcounts[lock_key]
+
+        try:
+            if _read_pid_file(lock_path) == os.getpid():
+                os.remove(lock_path)
+        except OSError:
+            pass
+
+
 def acquire_data_dir_lock(data_dir: str) -> str:
     """Acquire an advisory PID lock on *data_dir*.
 
@@ -76,50 +97,45 @@ def acquire_data_dir_lock(data_dir: str) -> str:
 
     Raises ``DataDirectoryLocked`` if another live process already holds the
     lock, with a message that explains the situation and suggests HTTP mode.
+    Raises ``OSError`` if the PID file cannot be created or updated.
     """
     lock_path = os.path.join(data_dir, LOCK_FILENAME)
+    lock_key = os.path.realpath(os.path.abspath(lock_path))
     my_pid = os.getpid()
 
-    existing_pid = _read_pid_file(lock_path)
-    if existing_pid and existing_pid != my_pid and _is_pid_alive(existing_pid):
-        raise DataDirectoryLocked(
-            f"Another OpenViking process (PID {existing_pid}) is already using "
-            f"the data directory '{data_dir}'. Running multiple OpenViking "
-            f"instances on the same data directory causes silent storage "
-            f"contention and data corruption.\n\n"
-            f"To fix this, use one of these approaches:\n"
-            f"  1. Use HTTP mode: start a single openviking-server and connect "
-            f"via --transport http (recommended for multi-session hosts)\n"
-            f"  2. Use separate data directories for each instance\n"
-            f"  3. Stop the other process (PID {existing_pid}) first"
-        )
+    with _lock_refcounts_guard:
+        existing_pid = _read_pid_file(lock_path)
+        if existing_pid and existing_pid != my_pid and _is_pid_alive(existing_pid):
+            raise DataDirectoryLocked(
+                f"Another OpenViking process (PID {existing_pid}) is already using "
+                f"the data directory '{data_dir}'. Running multiple OpenViking "
+                f"instances on the same data directory causes silent storage "
+                f"contention and data corruption.\n\n"
+                f"To fix this, use one of these approaches:\n"
+                f"  1. Use HTTP mode: start a single openviking-server and connect "
+                f"via --transport http (recommended for multi-session hosts)\n"
+                f"  2. Use separate data directories for each instance\n"
+                f"  3. Stop the other process (PID {existing_pid}) first"
+            )
 
-    # Write our PID (overwrites stale lock from a dead process).
-    try:
-        os.makedirs(data_dir, exist_ok=True)
-        with open(lock_path, "w") as f:
-            f.write(str(my_pid))
-    except OSError as exc:
-        logger.warning("Could not write PID lock %s: %s", lock_path, exc)
-        return lock_path
+        # A same-process reentrant acquire already owns a valid PID file. Avoid
+        # rewriting it so every successful acquire maps to exactly one local ref.
+        if existing_pid != my_pid:
+            try:
+                os.makedirs(data_dir, exist_ok=True)
+                with open(lock_path, "w") as f:
+                    f.write(str(my_pid))
+            except OSError as exc:
+                logger.warning("Could not write PID lock %s: %s", lock_path, exc)
+                raise
+
+        _lock_refcounts[lock_key] = _lock_refcounts.get(lock_key, 0) + 1
 
     # Schedule cleanup on exit.
     def _cleanup(*_args: object) -> None:
-        try:
-            if os.path.isfile(lock_path):
-                stored = _read_pid_file(lock_path)
-                if stored == my_pid:
-                    os.remove(lock_path)
-        except OSError:
-            pass
+        release_data_dir_lock(lock_path)
 
     atexit.register(_cleanup)
-    # Also try to clean up on SIGTERM (graceful shutdown).
-    try:
-        signal.signal(signal.SIGTERM, lambda sig, frame: (_cleanup(), sys.exit(0)))
-    except (OSError, ValueError):
-        # signal.signal() can fail in non-main threads.
-        pass
 
     logger.debug("Acquired data directory lock: %s (PID %d)", lock_path, my_pid)
     return lock_path

@@ -95,11 +95,13 @@ def test_ensure_data_dir_lock_acquired_once(monkeypatch, tmp_path):
         storage=SimpleNamespace(workspace=str(tmp_path), skip_process_lock=False)
     )
     service._data_dir_lock_acquired = False
+    service._data_dir_lock_path = None
 
     service._ensure_data_dir_lock_acquired()
     service._ensure_data_dir_lock_acquired()
 
     assert calls == [str(tmp_path)]
+    assert service._data_dir_lock_path == str(tmp_path / ".openviking.pid")
 
 
 def test_ensure_data_dir_lock_respects_skip_process_lock(monkeypatch, tmp_path):
@@ -117,8 +119,28 @@ def test_ensure_data_dir_lock_respects_skip_process_lock(monkeypatch, tmp_path):
         storage=SimpleNamespace(workspace=str(tmp_path), skip_process_lock=True)
     )
     service._data_dir_lock_acquired = False
+    service._data_dir_lock_path = None
 
     service._ensure_data_dir_lock_acquired()
 
     assert calls == []
     assert service._data_dir_lock_acquired is True
+    assert service._data_dir_lock_path is None
+
+
+def test_release_data_dir_lock_clears_service_state(monkeypatch, tmp_path):
+    calls = []
+    lock_path = str(tmp_path / ".openviking.pid")
+    monkeypatch.setattr(
+        "openviking.utils.process_lock.release_data_dir_lock",
+        calls.append,
+    )
+    service = OpenVikingService.__new__(OpenVikingService)
+    service._data_dir_lock_acquired = True
+    service._data_dir_lock_path = lock_path
+
+    service._release_data_dir_lock()
+
+    assert calls == [lock_path]
+    assert service._data_dir_lock_acquired is False
+    assert service._data_dir_lock_path is None
