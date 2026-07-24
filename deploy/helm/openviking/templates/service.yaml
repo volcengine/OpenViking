@@ -4,8 +4,22 @@ metadata:
   name: {{ include "openviking.fullname" . }}
   labels:
     {{- include "openviking.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   type: {{ .Values.service.type }}
+  {{- if and (eq .Values.service.type "LoadBalancer") .Values.service.loadBalancerIP }}
+  loadBalancerIP: {{ .Values.service.loadBalancerIP | quote }}
+  {{- end }}
+  {{- if and (or (eq .Values.service.type "LoadBalancer") (eq .Values.service.type "NodePort")) .Values.service.externalTrafficPolicy }}
+  externalTrafficPolicy: {{ .Values.service.externalTrafficPolicy }}
+  {{- end }}
+  {{- if and (eq .Values.service.type "LoadBalancer") .Values.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml .Values.service.loadBalancerSourceRanges | nindent 4 }}
+  {{- end }}
   ports:
     - port: {{ .Values.service.port }}
       targetPort: http
