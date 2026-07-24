@@ -133,7 +133,11 @@ async def test_session_context_skips_pending_archive_with_missing_messages(monke
     monkeypatch.setattr(
         session,
         "_list_archive_refs",
-        AsyncMock(return_value=[{"archive_uri": archive_uri, "index": 1}]),
+        AsyncMock(
+            return_value=[
+                {"archive_id": "archive_001", "archive_uri": archive_uri, "index": 1}
+            ]
+        ),
     )
 
     context = await session.get_context_for_search(query="test")
