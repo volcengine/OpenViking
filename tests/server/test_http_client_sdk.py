@@ -241,6 +241,7 @@ async def test_sdk_batch_add_messages_and_commit_keep_recent_count(http_client):
         ],
     )
     assert batch_result["added"] == 3
+    assert batch_result["pending_tokens"] > 0
 
     pre_commit = await client.get_session_context(session_id)
     assert [m["role"] for m in pre_commit["messages"]] == ["user", "assistant", "user"]

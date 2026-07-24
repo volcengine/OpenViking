@@ -349,6 +349,64 @@ class Usage:
     timestamp: str = field(default_factory=get_current_timestamp)
 
 
+# Per-user-space serialization of commit Phase 2 memory extraction.
+# Same-space extraction runs one at a time (decision + apply see the previous
+# run's completed state); different spaces run in parallel. An optional global
+# semaphore (memory.phase2_max_concurrent > 0) adds resource backpressure.
+# Callers key each task by space:lane (long_term / execution) so the two
+# disjoint extraction lanes may run in parallel within the same space;
+# phase2_per_space_max_concurrent is therefore per-space-per-lane.
+_phase2_space_semaphores = {}
+_phase2_space_limit = None
+_phase2_global_semaphore = None
+_phase2_global_limit = None
+
+
+def _get_phase2_space_semaphore(space_key):
+    """Return the per user space Phase 2 semaphore for space_key."""
+    global _phase2_space_semaphores, _phase2_space_limit
+    from openviking_cli.utils.config import get_openviking_config
+
+    limit = max(
+        1, int(getattr(get_openviking_config().memory, "phase2_per_space_max_concurrent", 1))
+    )
+    if _phase2_space_limit != limit:
+        _phase2_space_semaphores = {}
+        _phase2_space_limit = limit
+        logger.info("Phase2 per-space semaphore limit=%s", limit)
+    sem = _phase2_space_semaphores.get(space_key)
+    if sem is None:
+        sem = asyncio.Semaphore(limit)
+        _phase2_space_semaphores[space_key] = sem
+    return sem
+
+
+def _get_phase2_global_semaphore():
+    """Optional process-wide Phase 2 cap; returns None when disabled (default)."""
+    global _phase2_global_semaphore, _phase2_global_limit
+    from openviking_cli.utils.config import get_openviking_config
+
+    limit = int(getattr(get_openviking_config().memory, "phase2_max_concurrent", 0))
+    if limit <= 0:
+        return None
+    if _phase2_global_semaphore is None or _phase2_global_limit != limit:
+        _phase2_global_semaphore = asyncio.Semaphore(limit)
+        _phase2_global_limit = limit
+        logger.info("Phase2 global semaphore limit=%s", limit)
+    return _phase2_global_semaphore
+
+
+async def _run_memory_extraction_with_limit(space_key, coro):
+    """Serialize a Phase 2 extraction coroutine per user space (plus optional global cap)."""
+    space_sem = _get_phase2_space_semaphore(space_key)
+    global_sem = _get_phase2_global_semaphore()
+    async with space_sem:
+        if global_sem is None:
+            return await coro
+        async with global_sem:
+            return await coro
+
+
 class Session:
     """Session management class - Message = role + parts."""
 
@@ -675,7 +733,7 @@ class Session:
         part.tool_output_group_budget_chars = cfg.assistant_turn_inline_budget_chars
         return True
 
-    def _externalize_tool_part(
+    async def _externalize_tool_part(
         self,
         msg: Message,
         part: ToolPart,
@@ -694,19 +752,17 @@ class Session:
 
         digest = sha256_text(original_output)
         try:
-            stored = run_async(
-                store.write(
-                    content=original_output,
-                    tool_id=part.tool_id,
-                    tool_name=part.tool_name,
-                    message_id=msg.id,
-                    user_id=self.ctx.user.user_id if self.ctx and self.ctx.user else None,
-                    peer_id=msg.peer_id,
-                    created_at=msg.created_at,
-                    preview_chars=preview_chars,
-                    mime_type=part.tool_output_mime_type or "text/plain",
-                    synopsis=synopsis,
-                )
+            stored = await store.write(
+                content=original_output,
+                tool_id=part.tool_id,
+                tool_name=part.tool_name,
+                message_id=msg.id,
+                user_id=self.ctx.user.user_id if self.ctx and self.ctx.user else None,
+                peer_id=msg.peer_id,
+                created_at=msg.created_at,
+                preview_chars=preview_chars,
+                mime_type=part.tool_output_mime_type or "text/plain",
+                synopsis=synopsis,
             )
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
@@ -756,7 +812,7 @@ class Session:
         part.tool_output_group_original_chars = group_original_chars
         part.tool_output_group_budget_chars = cfg.assistant_turn_inline_budget_chars
 
-    def _externalize_large_tool_output_group(self, messages: List[Message]) -> None:
+    async def _externalize_large_tool_output_group(self, messages: List[Message]) -> None:
         cfg = self._tool_output_externalization_config
         if not cfg.enabled:
             return
@@ -867,7 +923,7 @@ class Session:
                 else "turn_budget"
             )
             synopsis, _rendered_len = prepared_externalized_preview(idx, part, preview_chars)
-            self._externalize_tool_part(
+            await self._externalize_tool_part(
                 msg,
                 part,
                 cfg,
@@ -878,15 +934,15 @@ class Session:
                 synopsis=synopsis,
             )
 
-    def _externalize_large_tool_outputs(self, msg: Message) -> None:
-        self._externalize_large_tool_output_group([msg])
+    async def _externalize_large_tool_outputs(self, msg: Message) -> None:
+        await self._externalize_large_tool_output_group([msg])
 
     def _is_tool_result_aggregate(self, role: str, parts: List[Part]) -> bool:
         return (
             role == "user" and len(parts) > 1 and all(isinstance(part, ToolPart) for part in parts)
         )
 
-    def _append_messages(self, messages: List[Message]) -> None:
+    async def _append_messages(self, messages: List[Message]) -> None:
         """Append multiple messages: update lists, stats, JSONL, meta."""
         for msg in messages:
             self._messages.append(msg)
@@ -903,23 +959,18 @@ class Session:
                 pushed_out = self._messages[-(keep + 1)]
                 self._meta.pending_tokens += int(pushed_out.estimated_tokens or 0)
 
-        self._append_messages_to_jsonl_batch(messages)
+        await self._append_messages_to_jsonl_batch(messages)
 
         self._meta.message_count = len(self._messages)
         if self._meta.total_message_count is not None:
             self._meta.total_message_count += len(messages)
-        self._save_meta_sync()
+        await self._save_meta()
 
-    def add_messages(
+    async def _add_messages_async(
         self,
         messages_spec: List[dict],
     ) -> List[Message]:
-        """Add multiple messages in a single batch.
-
-        Args:
-            messages_spec: List of dicts, each with keys:
-                role, parts, peer_id (optional), created_at (optional)
-        """
+        """Async implementation shared by async entrypoints and sync wrappers."""
         all_messages = []
         for i, spec in enumerate(messages_spec):
             if "role" not in spec:
@@ -948,7 +999,7 @@ class Session:
                     )
                     for part in parts
                 ]
-                self._externalize_large_tool_output_group(msgs)
+                await self._externalize_large_tool_output_group(msgs)
                 all_messages.extend(msgs)
             else:
                 msg = Message(
@@ -958,11 +1009,23 @@ class Session:
                     peer_id=peer_id,
                     created_at=created_at,
                 )
-                self._externalize_large_tool_outputs(msg)
+                await self._externalize_large_tool_outputs(msg)
                 all_messages.append(msg)
 
-        self._append_messages(all_messages)
+        await self._append_messages(all_messages)
         return all_messages
+
+    def add_messages(
+        self,
+        messages_spec: List[dict],
+    ) -> List[Message]:
+        """Add multiple messages in a single batch and wait for persistence.
+
+        Args:
+            messages_spec: List of dicts, each with keys:
+                role, parts, peer_id (optional), created_at (optional)
+        """
+        return run_async(self._add_messages_async(messages_spec))
 
     def add_message(
         self,
@@ -1482,6 +1545,8 @@ class Session:
 
                         extraction_tasks: List[Any] = []
                         extraction_labels: List[str] = []
+                        # Same-space same-lane extractions serialize; archive summary stays parallel.
+                        _phase2_space_key = f"{self.ctx.account_id}:{self.ctx.user.user_id}"
                         if working_memory_enabled:
                             extraction_tasks.append(
                                 _run_retryable_phase2_step("archive_summary", _run_archive_summary)
@@ -1495,17 +1560,20 @@ class Session:
                                 # surface so _run_retryable_phase2_step can retry them
                                 # (and so a final failure is recorded as a skipped
                                 # archive instead of silently dropping the memory).
-                                return await self._session_compressor.extract_long_term_memories(
-                                    messages=extraction_messages,
-                                    user=self.user,
-                                    session_id=self.session_id,
-                                    ctx=self.ctx,
-                                    strict_extract_errors=True,
-                                    latest_archive_overview=latest_archive_overview,
-                                    archive_uri=archive_uri,
-                                    allowed_memory_types=long_term_memory_types,
-                                    allow_self_memory=self_memory_enabled,
-                                    allowed_peer_ids=allowed_peer_ids,
+                                return await _run_memory_extraction_with_limit(
+                                    f"{_phase2_space_key}:long_term",
+                                    self._session_compressor.extract_long_term_memories(
+                                        messages=extraction_messages,
+                                        user=self.user,
+                                        session_id=self.session_id,
+                                        ctx=self.ctx,
+                                        strict_extract_errors=True,
+                                        latest_archive_overview=latest_archive_overview,
+                                        archive_uri=archive_uri,
+                                        allowed_memory_types=long_term_memory_types,
+                                        allow_self_memory=self_memory_enabled,
+                                        allowed_peer_ids=allowed_peer_ids,
+                                    ),
                                 )
 
                             extraction_tasks.append(
@@ -1521,14 +1589,17 @@ class Session:
                             async def _run_execution_memory_extraction() -> Any:
                                 # See _run_long_term_memory_extraction: surface errors
                                 # so retries can engage and final failures are visible.
-                                return await self._session_compressor.extract_execution_memories(
-                                    messages=extraction_messages,
-                                    ctx=self.ctx,
-                                    strict_extract_errors=True,
-                                    latest_archive_overview=latest_archive_overview,
-                                    archive_uri=archive_uri,
-                                    allowed_memory_types=execution_memory_types,
-                                    include_session_skills=session_skill_extraction_enabled,
+                                return await _run_memory_extraction_with_limit(
+                                    f"{_phase2_space_key}:execution",
+                                    self._session_compressor.extract_execution_memories(
+                                        messages=extraction_messages,
+                                        ctx=self.ctx,
+                                        strict_extract_errors=True,
+                                        latest_archive_overview=latest_archive_overview,
+                                        archive_uri=archive_uri,
+                                        allowed_memory_types=execution_memory_types,
+                                        include_session_skills=session_skill_extraction_enabled,
+                                    ),
                                 )
 
                             extraction_tasks.append(
@@ -1860,46 +1931,77 @@ class Session:
     # ============= Internal methods =============
 
     async def _collect_session_context_components(self) -> Dict[str, Any]:
-        """Collect the latest summary archive and merged pending/live messages."""
-        completed_archives = await self._get_completed_archive_refs()
+        """Collect overview (if newest terminal is .done) and messages after that terminal.
+
+        Scan archives from newest to oldest. ``.done`` and ``.failed.json`` are both
+        terminal:
+
+        - newest terminal is ``.done`` → return that archive's overview (if readable)
+          plus messages from newer non-terminal archives and live messages;
+        - newest terminal is ``.failed`` → no overview; only subsequent messages;
+        - no terminal yet → no overview; all non-terminal archive messages + live.
+
+        Older archives are not probed once the first terminal is found.
+        """
+        archive_refs = await self._list_archive_refs()
+        pending_newer: List[Dict[str, Any]] = []
         latest_archive = None
-        pre_archive_abstracts: List[Dict[str, Any]] = []
         failed_archives = 0
+        terminal_seen = False
 
-        for archive in completed_archives:
-            if latest_archive is None:
+        for archive in archive_refs:  # newest → oldest
+            state = await self._archive_terminal_state(archive["archive_uri"])
+            if state == "pending":
+                if not terminal_seen:
+                    pending_newer.append(archive)
+                continue
+
+            terminal_seen = True
+            if state == "done":
                 overview = await self._read_archive_overview(archive["archive_uri"])
-                if not overview:
-                    failed_archives += 1
-                    continue
-
-                latest_archive = {
-                    "archive_id": archive["archive_id"],
-                    "archive_uri": archive["archive_uri"],
-                    "overview": overview,
-                    "overview_tokens": await self._read_archive_overview_tokens(
-                        archive["archive_uri"], overview
-                    ),
-                }
-            abstract = await self._read_archive_abstract(archive["archive_uri"])
-            if abstract:
-                pre_archive_abstracts.append(
-                    {
+                if overview:
+                    latest_archive = {
                         "archive_id": archive["archive_id"],
-                        "abstract": abstract,
-                        "tokens": estimate_text_tokens(abstract),
+                        "archive_uri": archive["archive_uri"],
+                        "overview": overview,
+                        "overview_tokens": await self._read_archive_overview_tokens(
+                            archive["archive_uri"], overview
+                        ),
                     }
-                )
+                else:
+                    failed_archives = 1
             else:
-                failed_archives += 1
+                # .failed.json — terminal without a usable summary for context.
+                failed_archives = 1
+            break
+
+        pending_messages: List[Message] = []
+        # pending_newer was collected newest-first; restore chronological order.
+        for archive in reversed(pending_newer):
+            pending_messages.extend(await self._read_archive_messages(archive["archive_uri"]))
 
         return {
             "latest_archive": latest_archive,
-            "pre_archive_abstracts": pre_archive_abstracts,
-            "total_archives": len(completed_archives),
+            "pre_archive_abstracts": [],
+            "total_archives": len(archive_refs),
             "failed_archives": failed_archives,
-            "messages": await self._get_pending_archive_messages() + list(self._messages),
+            "messages": pending_messages + list(self._messages),
         }
+
+    async def _archive_terminal_state(self, archive_uri: str) -> str:
+        """Return ``done``, ``failed``, or ``pending`` for one archive directory."""
+        if not self._viking_fs:
+            return "pending"
+        try:
+            await self._viking_fs.read_file(f"{archive_uri}/.done", ctx=self.ctx)
+            return "done"
+        except Exception:
+            pass
+        try:
+            await self._viking_fs.read_file(f"{archive_uri}/.failed.json", ctx=self.ctx)
+            return "failed"
+        except Exception:
+            return "pending"
 
     async def _list_archive_refs(self) -> List[Dict[str, Any]]:
         """List archive refs sorted by archive index descending."""
@@ -2034,41 +2136,23 @@ class Session:
         return summary["overview"] if summary else ""
 
     async def _get_pending_archive_messages(self) -> List[Message]:
-        """Return messages from in-progress archives newer than the latest completed archive."""
-        # Seed from 0 rather than ``commit_count``: Phase 1 bumps ``commit_count``
-        # as soon as an archive's messages are written, before its Phase 2 memory
-        # extraction finishes and the ``.done`` marker is written. The in-flight
-        # archive's index therefore equals ``commit_count``, so seeding from
-        # ``commit_count`` would treat that still-pending archive as already
-        # completed and drop its messages from the assembled context (issue #3129).
-        # Completed archives are detected below via their ``.done`` marker.
-        latest_completed_index = 0
-        pending_archives: List[Dict[str, Any]] = []
-        for archive in sorted(await self._list_archive_refs(), key=lambda item: item["index"]):
-            try:
-                await self._viking_fs.read_file(f"{archive['archive_uri']}/.done", ctx=self.ctx)
-                latest_completed_index = max(latest_completed_index, archive["index"])
-                continue
-            except Exception:
-                pass
+        """Return messages from non-terminal archives newer than the newest terminal.
 
-            try:
-                await self._viking_fs.read_file(
-                    f"{archive['archive_uri']}/.failed.json",
-                    ctx=self.ctx,
-                )
+        ``.done`` and ``.failed.json`` both count as terminal cutoffs. Scanning
+        newest-first avoids treating an in-flight archive as completed when
+        Phase 1 has bumped ``commit_count`` before ``.done`` is written.
+        """
+        pending_newer: List[Dict[str, Any]] = []
+        for archive in await self._list_archive_refs():
+            state = await self._archive_terminal_state(archive["archive_uri"])
+            if state == "pending":
+                pending_newer.append(archive)
                 continue
-            except Exception:
-                pass
-
-            pending_archives.append(archive)
+            break
 
         pending_messages: List[Message] = []
-        for archive in pending_archives:
-            if archive["index"] <= latest_completed_index:
-                continue
+        for archive in reversed(pending_newer):
             pending_messages.extend(await self._read_archive_messages(archive["archive_uri"]))
-
         return pending_messages
 
     @staticmethod
@@ -3214,17 +3298,15 @@ class Session:
             ctx=self.ctx,
         )
 
-    def _append_messages_to_jsonl_batch(self, messages: List[Message]) -> None:
+    async def _append_messages_to_jsonl_batch(self, messages: List[Message]) -> None:
         """Append multiple messages to messages.jsonl in a single write."""
         if not self._viking_fs:
             return
         batch_content = "".join(msg.to_jsonl() + "\n" for msg in messages)
-        run_async(
-            self._viking_fs.append_file(
-                f"{self._session_uri}/messages.jsonl",
-                batch_content,
-                ctx=self.ctx,
-            )
+        await self._viking_fs.append_file(
+            f"{self._session_uri}/messages.jsonl",
+            batch_content,
+            ctx=self.ctx,
         )
 
     def _generate_abstract(self) -> str:

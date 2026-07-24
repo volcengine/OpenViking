@@ -11,7 +11,9 @@ import asyncio
 import heapq
 import logging
 import math
+import threading
 import time
+import weakref
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -40,6 +42,27 @@ from openviking_cli.utils.config import RerankConfig, RetrievalConfig
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Process-wide rerank concurrency budget. HierarchicalRetriever is
+# constructed per search request, so the semaphore must live at module
+# scope, keyed per event loop (same pattern as the embedding semaphore in
+# models/embedder/base.py). Limit comes from rerank.max_concurrent.
+_RERANK_SEMAPHORES: (
+    "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, tuple[asyncio.Semaphore, int]]"
+) = weakref.WeakKeyDictionary()
+_RERANK_SEM_LOCK = threading.Lock()
+
+
+def _get_rerank_semaphore(max_concurrent: int) -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    limit = max(1, int(max_concurrent))
+    with _RERANK_SEM_LOCK:
+        state = _RERANK_SEMAPHORES.get(loop)
+        if state is None or state[1] != limit:
+            semaphore = asyncio.Semaphore(limit)
+            _RERANK_SEMAPHORES[loop] = (semaphore, limit)
+            return semaphore
+        return state[0]
 
 
 class RetrieverMode(str):
@@ -76,6 +99,9 @@ class HierarchicalRetriever:
         self.embedder = embedder
         self.rerank_config = rerank_config
         self.rerank_max_input_tokens = rerank_config.max_input_tokens if rerank_config else 0
+        self.rerank_max_concurrent = (
+            max(1, int(rerank_config.max_concurrent)) if rerank_config else 4
+        )
         self.retrieval_config = retrieval_config or RetrievalConfig()
         self.hotness_alpha = self.retrieval_config.hotness_alpha
         self.score_propagation_alpha = self.retrieval_config.score_propagation_alpha
@@ -246,38 +272,33 @@ class HierarchicalRetriever:
                         f"  [{i}] URI: {uri}, score: {score:.4f}, level: {result_level}, account_id: {account_id}"
                     )
 
-            # Step 3: Pick recursive entry points from directory hits and explicit roots.
-            directory_scores = [self._finite_score(r.get("_score", 0.0)) for r in global_results]
-            if self._rerank_client and mode == RetrieverMode.THINKING:
-                directory_scores = await self._rerank_scores(
-                    query.query,
-                    [str(r.get("abstract", "")) for r in global_results],
-                    directory_scores,
-                )
+            # Rerank every global hit in ONE call and hand the scores to both
+            # _merge_starting_points and _prepare_initial_candidates by identity,
+            # instead of each path issuing its own rerank call.
+            global_rerank_scores: Optional[Dict[int, float]] = None
+            if self._rerank_client and mode == RetrieverMode.THINKING and global_results:
+                docs = [str(r.get("abstract", "")) for r in global_results]
+                fallbacks = [
+                    self._finite_score(r.get("_score", 0.0)) for r in global_results
+                ]
+                scores = await self._rerank_scores(query.query, docs, fallbacks)
+                global_rerank_scores = {id(r): s for r, s in zip(global_results, scores)}
 
-            starting_points = []
-            seen_starting_uris = set()
-            for result, score in zip(global_results, directory_scores, strict=True):
-                uri = result.get("uri", "")
-                if not uri or uri in seen_starting_uris:
-                    continue
-                starting_points.append((uri, score))
-                seen_starting_uris.add(uri)
-
-            for uri in root_uris:
-                if uri not in seen_starting_uris:
-                    starting_points.append((uri, 0.0))
-                    seen_starting_uris.add(uri)
+            # Step 3: Merge starting points
+            starting_points = self._merge_starting_points(
+                root_uris,
+                global_results,
+                precomputed_scores=global_rerank_scores,
+            )
 
             # Add directory hits to the result pool only when explicitly requested.
-            initial_candidates = []
+            initial_candidates: List[Dict[str, Any]] = []
             if level is not None:
-                for result, score in zip(global_results, directory_scores, strict=True):
-                    if result.get("level", 2) not in level:
-                        continue
-                    candidate = dict(result)
-                    candidate["_score"] = score
-                    initial_candidates.append(candidate)
+                filtered = [r for r in global_results if r.get("level", 2) in level]
+                initial_candidates = self._prepare_initial_candidates(
+                    filtered,
+                    precomputed_scores=global_rerank_scores,
+                )
 
             # Step 4: Recursive search
             with telemetry.measure("search.vector_retrieval"):
@@ -347,7 +368,12 @@ class HierarchicalRetriever:
         documents: List[str],
         fallback_scores: List[float],
     ) -> List[float]:
-        """Return rerank scores or fall back to vector scores."""
+        """Return rerank scores or fall back to vector scores.
+
+        Caps process-wide in-flight rerank calls with a semaphore so true
+        concurrency (enabled by running rerank in a worker thread) does not
+        exceed the provider's rate limit. Scoring semantics are unchanged.
+        """
         if not self._rerank_client or not documents:
             return fallback_scores
 
@@ -369,11 +395,13 @@ class HierarchicalRetriever:
             ]
 
         try:
-            scores = await asyncio.to_thread(
-                self._rerank_client.rerank_batch,
-                rerank_query,
-                [document for _, document in rerank_documents],
-            )
+            semaphore = _get_rerank_semaphore(self.rerank_max_concurrent)
+            async with semaphore:
+                scores = await asyncio.to_thread(
+                    self._rerank_client.rerank_batch,
+                    rerank_query,
+                    [document for _, document in rerank_documents],
+                )
         except Exception as e:
             logger.warning(
                 "[HierarchicalRetriever] Rerank failed, fallback to vector scores: %s", e
@@ -390,6 +418,70 @@ class HierarchicalRetriever:
         for score, (index, _) in zip(scores, rerank_documents, strict=True):
             normalized_scores[index] = self._finite_score(score, fallback_scores[index])
         return normalized_scores
+
+    def _merge_starting_points(
+        self,
+        root_uris: List[str],
+        global_results: List[Dict[str, Any]],
+        precomputed_scores: Optional[Dict[int, float]] = None,
+    ) -> List[Tuple[str, float]]:
+        """Merge starting points.
+
+        Rerank scores, when available, are looked up from
+        ``precomputed_scores`` (keyed by ``id(result)``) rather than reranked
+        here; the caller reranks all global hits once and shares the scores
+        with this method and ``_prepare_initial_candidates``.
+
+        Returns:
+            List of (uri, parent_score) tuples
+        """
+        points = []
+        seen = set()
+
+        for r in global_results:
+            uri = r.get("uri", "")
+            if not uri or uri in seen:
+                continue
+            fallback = self._finite_score(r.get("_score", 0.0))
+            score = (
+                precomputed_scores.get(id(r), fallback)
+                if precomputed_scores is not None
+                else fallback
+            )
+            points.append((uri, score))
+            seen.add(uri)
+
+        for uri in root_uris:
+            if uri not in seen:
+                points.append((uri, 0.0))
+                seen.add(uri)
+
+        return points
+
+    def _prepare_initial_candidates(
+        self,
+        global_results: List[Dict[str, Any]],
+        precomputed_scores: Optional[Dict[int, float]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Preserve rerank scores for global hits added to the result pool.
+
+        Scores are looked up from ``precomputed_scores`` (keyed by
+        ``id(result)``); see ``_merge_starting_points`` for where they come
+        from.
+        """
+        initial_candidates = []
+        for r in global_results:
+            fallback = self._finite_score(r.get("_score", 0.0))
+            score = (
+                precomputed_scores.get(id(r), fallback)
+                if precomputed_scores is not None
+                else fallback
+            )
+            candidate = dict(r)
+            candidate["_score"] = score
+            initial_candidates.append(candidate)
+
+        return initial_candidates
 
     async def _recursive_search(
         self,
@@ -485,8 +577,30 @@ class HierarchicalRetriever:
                 *(search_children(current_uri) for current_uri, _ in batch)
             )
 
+            # Rerank every directory in this round in ONE call instead of one
+            # call per directory. Rerank scores each (query, doc) pair
+            # independently, so the merged scores are identical to reranking
+            # each directory's results on their own.
+            merged_round_scores: Optional[List[float]] = None
+            round_slices: List[Tuple[int, int]] = []
+            if self._rerank_client and mode == RetrieverMode.THINKING:
+                round_docs: List[str] = []
+                round_fallbacks: List[float] = []
+                for results in batch_results:
+                    round_slices.append((len(round_docs), len(results)))
+                    round_docs.extend(str(r.get("abstract", "")) for r in results)
+                    round_fallbacks.extend(
+                        self._finite_score(r.get("_score", 0.0)) for r in results
+                    )
+                if round_docs:
+                    merged_round_scores = await self._rerank_scores(
+                        query, round_docs, round_fallbacks
+                    )
+
             telemetry = get_current_telemetry()
-            for (_, current_score), results in zip(batch, batch_results, strict=True):
+            for batch_index, ((_, current_score), results) in enumerate(
+                zip(batch, batch_results, strict=True)
+            ):
                 telemetry.count("vector.searches", 1)
                 telemetry.count("vector.scored", len(results))
                 telemetry.count("vector.scanned", len(results))
@@ -494,10 +608,13 @@ class HierarchicalRetriever:
                 if not results:
                     continue
 
-                query_scores = [self._finite_score(r.get("_score", 0.0)) for r in results]
-                if self._rerank_client and mode == RetrieverMode.THINKING:
-                    documents = [str(r.get("abstract", "")) for r in results]
-                    query_scores = await self._rerank_scores(query, documents, query_scores)
+                if merged_round_scores is not None:
+                    start_idx, length = round_slices[batch_index]
+                    query_scores = merged_round_scores[start_idx : start_idx + length]
+                else:
+                    query_scores = [
+                        self._finite_score(r.get("_score", 0.0)) for r in results
+                    ]
 
                 for r, score in zip(results, query_scores, strict=True):
                     uri = r.get("uri", "")

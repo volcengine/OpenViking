@@ -272,7 +272,8 @@ async def search(
     service = get_service()
     ctx = _get_ctx()
     session = None
-    if session_id:
+    # Intent off: skip session.load — SearchService will not scan session either.
+    if session_id and service.search.is_intent_enabled():
         session = service.sessions.session(ctx, session_id)
         await session.load()
     result = await service.search.search(
@@ -423,9 +424,13 @@ async def remember(messages: list[StoreMessage]) -> str:
     session = await service.sessions.get(session_id, ctx, auto_create=True)
     for msg in messages:
         if msg.content:
-            session.add_message(
-                msg.role,
-                [TextPart(text=msg.content)],
+            await session._add_messages_async(
+                [
+                    {
+                        "role": msg.role,
+                        "parts": [TextPart(text=msg.content)],
+                    }
+                ]
             )
     await service.sessions.commit_async(session_id, ctx)
     return f"Stored {len(messages)} message(s) and committed for memory extraction."
