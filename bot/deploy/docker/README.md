@@ -212,30 +212,28 @@ REMOVE_IMAGE=true REMOVE_VOLUME=true ./deploy/docker/stop.sh
 
 ## 配置文件
 
-首次部署时，脚本会自动创建配置文件：`~/.vikingbot/config.json`
+首次部署时，脚本会自动创建配置文件：`~/.vikingbot/ov.conf`。脚本同时生成随机 Gateway Token；在非本机请求中通过 `X-Gateway-Token` 请求头传入该值。
 
 编辑该文件填入你的 API keys：
 
 ```json
 {
-  "providers": {
-    "openrouter": {
-      "apiKey": "sk-or-xxx"
+  "bot": {
+    "agents": {
+      "provider": "openrouter",
+      "model": "openrouter/anthropic/claude-3.5-sonnet",
+      "api_key": "sk-or-xxx"
+    },
+    "gateway": {
+      "host": "0.0.0.0",
+      "port": 18791,
+      "token": "脚本生成的随机值"
     }
-  },
-  "agents": {
-    "defaults": {
-      "model": "openrouter/anthropic/claude-3.5-sonnet"
-    }
-  },
-  "gateway": {
-    "host": "0.0.0.0",
-    "port": 18791
   }
 }
 ```
 
-**重要：** Console Web UI 端口是 **18791**，不是 18790！
+**重要：** `bot.gateway.port` 必须与 `CONTAINER_PORT` 一致；脚本默认都使用 **18791**。
 
 ## 访问控制台
 
