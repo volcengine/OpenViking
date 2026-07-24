@@ -186,7 +186,7 @@ def resolve_client_config(
     account: Optional[str] = None,
     user: Optional[str] = None,
     actor_peer_id: Optional[str] = None,
-    timeout: float = 60.0,
+    timeout: Optional[float] = None,
     extra_headers: Optional[dict[str, str]] = None,
     profile_enabled: Optional[bool] = None,
     upload_mode: Optional[str] = None,
@@ -211,13 +211,16 @@ def resolve_client_config(
     if resolved_actor_peer_id is None and cli_config is not None and cli_config.agent_id:
         resolved_actor_peer_id = cli_config.agent_id
 
-    resolved_timeout = timeout
-    if timeout == 60.0:
+    if timeout is not None:
+        resolved_timeout = timeout
+    else:
         env_timeout = os.getenv("OPENVIKING_TIMEOUT")
         if env_timeout:
             resolved_timeout = float(env_timeout)
         elif cli_config is not None:
             resolved_timeout = cli_config.timeout
+        else:
+            resolved_timeout = 60.0
 
     resolved_profile_enabled = bool(profile_enabled)
     if profile_enabled is None and cli_config is not None:

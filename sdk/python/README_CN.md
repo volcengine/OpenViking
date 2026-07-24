@@ -98,6 +98,8 @@ print("session:", session)
 client.session("demo-session").add_message("user", "hello from sdk")
 context = client.session("demo-session").get_session_context(token_budget=4096)
 print("context:", context)
+
+client.close()
 ```
 
 ## 快速开始：异步客户端
