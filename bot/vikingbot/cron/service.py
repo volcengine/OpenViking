@@ -58,6 +58,7 @@ class CronService:
         self._store: CronStore | None = None
         self._timer_task: asyncio.Task | None = None
         self._running = False
+        self._executing = False
 
     def _load_store(self) -> CronStore:
         """Load jobs from disk."""
@@ -166,8 +167,15 @@ class CronService:
         )
 
     def stop(self) -> None:
-        """Stop the cron service."""
+        """Stop the cron service.
+
+        Safe to call while a tick is executing: cancelling the timer
+        task delivers CancelledError to the in-flight _on_timer, which
+        resets _executing and skips re-arming (``_running`` is already
+        False by then, so no new timer task can be created).
+        """
         self._running = False
+        self._executing = False
         if self._timer_task:
             self._timer_task.cancel()
             self._timer_task = None
@@ -191,7 +199,16 @@ class CronService:
         return min(times) if times else None
 
     def _arm_timer(self) -> None:
-        """Schedule the next timer tick."""
+        """Schedule the next timer tick.
+
+        Does nothing when a tick is currently executing jobs
+        (_executing is True), because cancelling the timer task would
+        interrupt the in-flight job execution.  The executing tick
+        re-arms the timer itself once all jobs have completed (unless
+        the tick was cancelled, e.g. by stop()).
+        """
+        if self._executing:
+            return
         if self._timer_task:
             self._timer_task.cancel()
 
@@ -210,9 +227,21 @@ class CronService:
         self._timer_task = asyncio.create_task(tick())
 
     async def _on_timer(self) -> None:
-        """Handle timer tick - run due jobs."""
+        """Handle timer tick -- run every job that is now due.
+
+        Sets _executing = True so that external callers (add_job,
+        remove_job, enable_job, etc.) do not cancel the timer task
+        while we are still executing.  Re-arms the timer once all due
+        jobs have been processed -- also on job errors, but not when
+        the tick itself is cancelled (service stop or event-loop
+        shutdown), where scheduling a new timer task would leak a
+        pending task.
+        """
         if not self._store:
             return
+
+        if self._executing:
+            return  # re-entrancy guard: a tick is already in progress
 
         now = _now_ms()
         due_jobs = [
@@ -221,11 +250,21 @@ class CronService:
             if j.enabled and j.state.next_run_at_ms and now >= j.state.next_run_at_ms
         ]
 
-        for job in due_jobs:
-            await self._execute_job(job)
-
-        self._save_store()
-        self._arm_timer()
+        self._executing = True
+        rearm = True
+        try:
+            for job in due_jobs:
+                await self._execute_job(job)
+            self._save_store()
+        except asyncio.CancelledError:
+            # The tick task itself was cancelled (stop() or event-loop
+            # shutdown): propagate without scheduling a new timer task.
+            rearm = False
+            raise
+        finally:
+            self._executing = False
+            if rearm:
+                self._arm_timer()
 
     async def _execute_job(self, job: CronJob) -> None:
         """Execute a single job."""
