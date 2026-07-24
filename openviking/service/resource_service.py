@@ -496,6 +496,18 @@ class ResourceService:
         self._ensure_initialized()
         normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
         kwargs.update(normalized_args.processor_kwargs)
+        from openviking.connector.routing import CONNECTOR_CREDENTIAL_ARGS
+
+        credential_args = sorted(
+            set(kwargs).intersection(CONNECTOR_CREDENTIAL_ARGS.get("git", frozenset()))
+        )
+        if credential_args:
+            raise InvalidArgumentError(
+                "Git credential args "
+                f"{credential_args} cannot be used with the native asynchronous import "
+                "pipeline because it persists job parameters. Use a Connector-compatible "
+                "request instead."
+            )
 
         target = ContentTargetSpec.from_fields(
             ctx=ctx,
@@ -1224,24 +1236,59 @@ class ResourceService:
         not allow the type, or cannot honor the request parameters —
         degrading such a request would only fail later with a misleading
         parse error. Source types the standard pipeline can also handle
-        degrade to it instead when parameters are unsupported.
+        degrade to it instead when parameters are unsupported, unless the
+        request carries Connector-only credentials; credentialed requests
+        fail closed so secrets never enter a durable native job.
         """
-        from openviking.connector.routing import detect_connector_add_type
+        from openviking.connector.routing import (
+            CONNECTOR_CREDENTIAL_ARGS,
+            detect_connector_add_type,
+            is_full_commit_sha,
+        )
         from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
         detected = detect_connector_add_type(path)
         if detected is None:
             return False
         add_type, connector_only = detected
+        connector_args = connector_args or {}
+        credential_args = sorted(
+            set(connector_args).intersection(CONNECTOR_CREDENTIAL_ARGS.get(add_type, frozenset()))
+        )
 
         config = get_openviking_config().connector
         if not config.enable or add_type not in config.allowed_add_types:
+            if credential_args:
+                raise InvalidArgumentError(
+                    f"Credential args {credential_args} for '{add_type}' require Connector "
+                    "import, but the Connector is disabled or does not allow this source type."
+                )
             if connector_only:
                 raise InvalidArgumentError(
                     f"'{path}' can only be imported through the Connector integration, "
                     "which is disabled or does not allow this source type."
                 )
             return False
+
+        if add_type == "git":
+            from openviking.parse.accessors.git_accessor import GitAccessor
+
+            _, _, commit = GitAccessor()._parse_repo_source(path, **connector_args)
+            if commit and not is_full_commit_sha(str(commit)):
+                # The plugin fetches pinned commits by SHA over the wire and
+                # cannot resolve abbreviated forms; the standard pipeline
+                # resolves them locally after a full clone.
+                if credential_args:
+                    raise InvalidArgumentError(
+                        f"Credential args {credential_args} for 'git' cannot fall back to the "
+                        "standard import pipeline; pass a full 40-character commit SHA."
+                    )
+                logger.info(
+                    "Connector git import degrades to the standard pipeline: "
+                    "abbreviated commit SHA %r needs a local clone to resolve.",
+                    commit,
+                )
+                return False
 
         if ctx is not None and (to or parent):
             target = ContentTargetSpec.from_fields(
@@ -1261,7 +1308,7 @@ class ResourceService:
             build_index=build_index,
             summarize=summarize,
             watch_interval=watch_interval,
-            connector_args=connector_args or {},
+            connector_args=connector_args,
             kwargs=kwargs or {},
             to=to,
             parent=parent,
@@ -1271,6 +1318,11 @@ class ResourceService:
         detail = "; ".join(unsupported)
         if connector_only:
             raise InvalidArgumentError(f"Connector import does not support: {detail}")
+        if credential_args:
+            raise InvalidArgumentError(
+                f"Credential args {credential_args} for '{add_type}' cannot fall back to the "
+                f"standard import pipeline. Connector import does not support: {detail}"
+            )
         logger.info(
             f"[ResourceService] Connector does not support {detail} for path {path}; "
             "falling back to the standard import pipeline"
@@ -1414,11 +1466,21 @@ class ResourceService:
                 )
             tos_path = source_path
         elif add_type == "git":
+            from openviking.parse.accessors.git_accessor import GitAccessor
+
             # Source-specific settings stay in param_config. The exact target
             # is transported separately as the top-level ``to`` field.
-            param_config = {"repo_url": path.strip()}
-            branch = forwarded_args.get("branch") or forwarded_args.get("ref")
-            if branch:
+            repo_url, branch, commit = GitAccessor()._parse_repo_source(
+                path.strip(), **forwarded_args
+            )
+            param_config = {"repo_url": repo_url}
+            if commit:
+                # Routing already degraded abbreviated SHAs to the standard
+                # pipeline. Preserve the native accessor's historical precedence:
+                # when both commit and branch/ref are present, send only the full
+                # commit SHA so the plugin receives an unambiguous pinned request.
+                param_config["commit"] = str(commit)
+            elif branch:
                 param_config["branch"] = str(branch)
         else:  # pragma: no cover - detection only yields tos/git today
             raise InvalidArgumentError(f"Connector add_type '{add_type}' is not supported.")
