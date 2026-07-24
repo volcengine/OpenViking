@@ -37,7 +37,7 @@ from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.model_retry import is_retryable_api_error, retry_async
 from openviking.utils.time_utils import get_current_timestamp
 from openviking.utils.token_estimation import estimate_text_tokens
-from openviking_cli.exceptions import FailedPreconditionError
+from openviking_cli.exceptions import FailedPreconditionError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger, run_async
 from openviking_cli.utils.config import get_openviking_config
@@ -1165,6 +1165,13 @@ class Session:
                 messages_to_archive = self._messages.copy()
                 retained_messages = []
 
+            original_live_messages = list(self._messages)
+            original_live_content = ""
+            if self._viking_fs:
+                original_live_content = await self._viking_fs.read_file(
+                    f"{self._session_uri}/messages.jsonl", ctx=self.ctx
+                )
+            live_rewrite_started = False
             try:
                 # Persist archive raw messages before trimming live messages so
                 # an archive write failure cannot drop live conversation history.
@@ -1176,11 +1183,26 @@ class Session:
                         ctx=self.ctx,
                     )
                 self._messages = retained_messages
+                live_rewrite_started = True
                 await self._write_to_agfs_async(messages=self._messages)
+                await self._verify_live_messages_persisted(self._messages)
             except Exception as e:
                 logger.error(f"[commit] Failed to persist archive/live messages: {e}")
-                self._messages = list(messages_to_archive) + list(retained_messages)
+                self._messages = original_live_messages
                 self._compression.compression_index -= 1
+                if live_rewrite_started and self._viking_fs:
+                    try:
+                        await self._viking_fs.write_file(
+                            uri=f"{self._session_uri}/messages.jsonl",
+                            content=original_live_content,
+                            ctx=self.ctx,
+                        )
+                    except Exception as rollback_error:
+                        raise RuntimeError(
+                            "Failed to persist archive/live messages and restore the "
+                            f"original live messages: persist error: {e}; "
+                            f"rollback error: {rollback_error}"
+                        ) from rollback_error
                 raise
         # Lock released; live session now contains only the retained tail.
 
@@ -3213,6 +3235,33 @@ class Session:
             content=overview,
             ctx=self.ctx,
         )
+
+    async def _verify_live_messages_persisted(self, messages: List[Message]) -> None:
+        """Confirm the Phase 1 live-message rewrite reached persistent storage."""
+        if not self._viking_fs:
+            return
+
+        uri = f"{self._session_uri}/messages.jsonl"
+        try:
+            content = await self._viking_fs.read_file(uri, ctx=self.ctx)
+        except NotFoundError:
+            if not messages:
+                return
+            raise RuntimeError("Live messages persistence verification failed: file is missing")
+
+        try:
+            persisted = [json.loads(line) for line in content.splitlines() if line.strip()]
+            expected = [json.loads(message.to_jsonl()) for message in messages]
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                "Live messages persistence verification failed: invalid JSONL"
+            ) from exc
+
+        if persisted != expected:
+            raise RuntimeError(
+                "Live messages persistence verification failed: stored messages "
+                "do not match the committed live-message state"
+            )
 
     def _append_messages_to_jsonl_batch(self, messages: List[Message]) -> None:
         """Append multiple messages to messages.jsonl in a single write."""
