@@ -5,6 +5,7 @@ import {
   CheckCircle2Icon,
   CircleDashedIcon,
   CircleXIcon,
+  ChevronRightIcon,
   ClipboardListIcon,
   LoaderCircleIcon,
   RefreshCwIcon,
@@ -39,14 +40,18 @@ import {
 import { useAppConnection } from '#/hooks/use-app-connection'
 import { getOvResult, getTasks } from '#/lib/ov-client'
 import { cn } from '#/lib/utils'
+import { TaskDetailSheet } from '#/routes/tasks/-components/task-detail-sheet'
+import {
+  normalizeTasks,
+  normalizeTaskStatus,
+} from '#/routes/tasks/-lib/task-record'
+import type { TaskRecord, TaskStatus } from '#/routes/tasks/-lib/task-record'
 import { getTaskDate } from '#/routes/tasks/-lib/task-time'
-import type { TaskTimestamp } from '#/routes/tasks/-lib/task-time'
 
 export const Route = createFileRoute('/tasks')({
   component: TasksRoute,
 })
 
-type TaskStatus = 'completed' | 'failed' | 'pending' | 'running' | 'unknown'
 type TaskStatusFilter = Exclude<TaskStatus, 'unknown'> | 'all'
 
 type TaskTypeFilter =
@@ -59,13 +64,6 @@ type TaskTypeFilter =
   | 'session_commit'
   | 'snapshot_restore_reindex'
   | 'all'
-
-type TaskRecord = TaskTimestamp & {
-  resource_id?: string
-  status?: string
-  task_id?: string
-  task_type?: string
-}
 
 const DEFAULT_PAGE_SIZE = 20
 const MAX_TASKS = 200
@@ -87,15 +85,6 @@ const TASK_STATUS_OPTIONS: Exclude<TaskStatusFilter, 'all'>[] = [
   'failed',
 ]
 
-function normalizeTasks(value: unknown): TaskRecord[] {
-  if (!Array.isArray(value)) {
-    return []
-  }
-  return value.filter(
-    (item): item is TaskRecord => Boolean(item) && typeof item === 'object',
-  )
-}
-
 async function fetchTasks(
   taskType: TaskTypeFilter,
   status: TaskStatusFilter,
@@ -113,18 +102,6 @@ async function fetchTasks(
   return normalizeTasks(result)
 }
 
-function normalizeStatus(status: string | undefined): TaskStatus {
-  if (
-    status === 'completed' ||
-    status === 'failed' ||
-    status === 'pending' ||
-    status === 'running'
-  ) {
-    return status
-  }
-  return 'unknown'
-}
-
 function TasksRoute() {
   const { i18n, t } = useTranslation('tasksPage')
   const { identityScopeKey } = useAppConnection()
@@ -133,6 +110,9 @@ function TasksRoute() {
   const [taskType, setTaskType] = React.useState<TaskTypeFilter>('all')
   const [statusFilter, setStatusFilter] =
     React.useState<TaskStatusFilter>('all')
+  const [selectedTaskId, setSelectedTaskId] = React.useState<string | null>(
+    null,
+  )
   const tasksQuery = useQuery({
     queryFn: () => fetchTasks(taskType, statusFilter),
     queryKey: ['tasks', identityScopeKey, taskType, statusFilter],
@@ -161,7 +141,7 @@ function TasksRoute() {
   }
 
   const renderStatus = (rawStatus: string | undefined) => {
-    const status = normalizeStatus(rawStatus)
+    const status = normalizeTaskStatus(rawStatus)
     const Icon =
       status === 'completed'
         ? CheckCircle2Icon
@@ -341,25 +321,55 @@ function TasksRoute() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {tasks.map((task, index) => (
-                  <TableRow key={task.task_id || String(index)}>
-                    <TableCell>
-                      <code className="text-xs">
-                        {task.task_id || `#${pageOffset + index + 1}`}
-                      </code>
-                    </TableCell>
-                    <TableCell className="font-medium">
-                      {task.task_type || '-'}
-                    </TableCell>
-                    <TableCell className="max-w-72 truncate text-muted-foreground">
-                      {task.resource_id || '-'}
-                    </TableCell>
-                    <TableCell>{renderStatus(task.status)}</TableCell>
-                    <TableCell className="whitespace-nowrap text-right text-muted-foreground">
-                      {formatTime(task)}
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {tasks.map((task, index) => {
+                  const taskId = task.task_id
+                  return (
+                    <TableRow
+                      key={taskId || String(index)}
+                      tabIndex={taskId ? 0 : undefined}
+                      aria-label={
+                        taskId ? t('detail.openLabel', { taskId }) : undefined
+                      }
+                      className={cn(
+                        taskId &&
+                          'cursor-pointer outline-none hover:bg-muted/35 focus-visible:bg-muted/35 focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-inset',
+                      )}
+                      onClick={() => {
+                        if (taskId) setSelectedTaskId(taskId)
+                      }}
+                      onKeyDown={(event) => {
+                        if (
+                          taskId &&
+                          (event.key === 'Enter' || event.key === ' ')
+                        ) {
+                          event.preventDefault()
+                          setSelectedTaskId(taskId)
+                        }
+                      }}
+                    >
+                      <TableCell>
+                        <span className="flex items-center gap-2">
+                          <code className="min-w-0 truncate text-xs">
+                            {taskId || `#${pageOffset + index + 1}`}
+                          </code>
+                          {taskId ? (
+                            <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                          ) : null}
+                        </span>
+                      </TableCell>
+                      <TableCell className="font-medium">
+                        {task.task_type || '-'}
+                      </TableCell>
+                      <TableCell className="max-w-72 truncate text-muted-foreground">
+                        {task.resource_id || '-'}
+                      </TableCell>
+                      <TableCell>{renderStatus(task.status)}</TableCell>
+                      <TableCell className="whitespace-nowrap text-right text-muted-foreground">
+                        {formatTime(task)}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
               </TableBody>
             </Table>
           </div>
@@ -422,6 +432,15 @@ function TasksRoute() {
           </div>
         </Card>
       )}
+
+      <TaskDetailSheet
+        identityScopeKey={identityScopeKey}
+        open={Boolean(selectedTaskId)}
+        taskId={selectedTaskId}
+        onOpenChange={(open) => {
+          if (!open) setSelectedTaskId(null)
+        }}
+      />
     </div>
   )
 }

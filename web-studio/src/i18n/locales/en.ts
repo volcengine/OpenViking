@@ -156,6 +156,28 @@ const en = {
     emptyFiltered: 'No matching tasks',
     emptyFilteredDescription: 'Adjust or clear the filters to see other tasks.',
     loadFailed: 'Could not load tasks',
+    detail: {
+      title: 'Task details',
+      loading: 'Loading task details...',
+      loadFailed: 'Could not load task details',
+      retry: 'Retry',
+      openLabel: 'View details for task {{taskId}}',
+      fields: {
+        status: 'Task status',
+        type: 'Task type',
+        stage: 'Current stage',
+        resource: 'Resource',
+        createdAt: 'Created',
+        updatedAt: 'Updated',
+      },
+      error: 'Failure reason',
+      result: 'Result',
+      noResult: 'No result yet',
+      noResultDescription:
+        'Results returned by the API will appear here when the task completes.',
+      noResultFailedDescription:
+        'This task did not return a result. See the failure reason above.',
+    },
     filters: {
       label: 'Filter',
       type: 'Task type',
