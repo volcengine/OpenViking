@@ -347,6 +347,78 @@ test("auto-recall prefers the server recall endpoint when available", async () =
   }
 });
 
+test("auto-recall uses bounded archive grep only after an empty historical recall", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-archive-fallback-"));
+  const requests = [];
+
+  try {
+    await withMockOpenViking(async (req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (req.method === "GET" && url.pathname === "/health") {
+        writeJson(res, { status: "ok", result: { ok: true } });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/v1/search/recall") {
+        requests.push({ path: url.pathname, body: await readRequestBody(req) });
+        writeJson(res, { status: "ok", result: { entries: [], rendered: "" } });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/v1/search/grep") {
+        const body = await readRequestBody(req);
+        requests.push({ path: url.pathname, body });
+        writeJson(res, {
+          status: "ok",
+          result: {
+            matches: [{
+              uri: "viking://user/alice/sessions/cx-old/history/archive_001/.overview.md",
+              line: 4,
+              content: "release-42 used ./scripts/publish.sh --canary",
+            }],
+          },
+        });
+        return;
+      }
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "error", error: "not found" }));
+    }, async (baseUrl) => {
+      const result = await runAutoRecall(
+        { prompt: "What command did we use previously for release-42?", session_id: "codex:archive" },
+        {
+          OPENVIKING_AUTO_RECALL: "1",
+          OPENVIKING_CODEX_STATE_DIR: stateDir,
+          OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
+          OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
+          OPENVIKING_CREDENTIAL_SOURCE: "env",
+          OPENVIKING_RECALL_COMPRESS: "0",
+          OPENVIKING_MIN_QUERY_LENGTH: "1",
+          OPENVIKING_TIMEOUT_MS: "5000",
+          OPENVIKING_URL: baseUrl,
+          OPENVIKING_USER: "alice",
+        },
+      );
+
+      const output = JSON.parse(result.stdout.trim());
+      assert.match(output.hookSpecificOutput.additionalContext, /read-only-fallback/);
+      assert.match(output.hookSpecificOutput.additionalContext, /publish\.sh --canary/);
+      assert.match(output.hookSpecificOutput.additionalContext, /archive_001\/\.overview\.md#L4/);
+    });
+
+    assert.deepEqual(requests.map((request) => request.path), [
+      "/api/v1/search/recall",
+      "/api/v1/search/grep",
+    ]);
+    assert.deepEqual(requests[1].body, {
+      uri: "viking://user/alice/sessions",
+      pattern: "release-42|release",
+      case_insensitive: true,
+      node_limit: 12,
+      level_limit: 10,
+    });
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("auto-recall applies the relevance compressor to server recall entries", async () => {
   const result = await runEndpointCompressionCase({
     prompt: "Explain HTTP 429",

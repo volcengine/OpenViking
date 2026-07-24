@@ -26,7 +26,7 @@ import {
   markRecallCompressorRuntimeFailed,
 } from "./recall-compressor-profile.mjs";
 import { deriveOvSessionId } from "./session-state.mjs";
-import { postRecall } from "./shared/recall-core.mjs";
+import { buildArchiveFallbackBlock, postRecall } from "./shared/recall-core.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
 const cfg = loadConfig();
@@ -342,6 +342,13 @@ async function recallViaTypeQuotaEndpoint(query) {
   return { context, items };
 }
 
+async function recallFromArchiveFallback(query) {
+  return buildArchiveFallbackBlock(fetchJSON, cfg, query, {
+    actorPeerId: effectivePeer.peerId,
+    log,
+  });
+}
+
 function truncateText(text, maxChars) {
   const value = String(text || "").trim();
   if (value.length <= maxChars) return value;
@@ -581,8 +588,8 @@ async function main() {
   const endpointRecall = await recallViaTypeQuotaEndpoint(userPrompt);
   if (endpointRecall !== null) {
     if (!endpointRecall.context && endpointRecall.items.length === 0) {
-      log("skip", { stage: "recall_endpoint", reason: "no results" });
-      emit();
+      log("recall_endpoint", { reason: "no results; trying archive fallback" });
+      emit(await recallFromArchiveFallback(userPrompt));
       return;
     }
     const compressedContext = endpointRecall.items.length > 0
@@ -595,8 +602,8 @@ async function main() {
       ? endpointFallback
       : compressedContext;
     if (!memoryContext) {
-      log("skip", { stage: "recall_endpoint", reason: "compressor found no relevant memory" });
-      emit();
+      log("recall_endpoint", { reason: "compressor found no relevant memory; trying archive fallback" });
+      emit(await recallFromArchiveFallback(userPrompt));
       return;
     }
     log("recall_endpoint", {
@@ -611,8 +618,8 @@ async function main() {
   const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
   const allMemories = await searchAll(userPrompt, candidateLimit, recallSessionId);
   if (allMemories.length === 0) {
-    log("skip", { stage: "search", reason: "no results" });
-    emit();
+    log("search", { reason: "no results; trying archive fallback" });
+    emit(await recallFromArchiveFallback(userPrompt));
     return;
   }
 
@@ -637,8 +644,8 @@ async function main() {
 
   const memories = pickMemories(processed, cfg.recallLimit, userPrompt);
   if (memories.length === 0) {
-    log("skip", { stage: "pick", reason: "no memories survived ranking" });
-    emit();
+    log("pick", { reason: "no memories survived ranking; trying archive fallback" });
+    emit(await recallFromArchiveFallback(userPrompt));
     return;
   }
 
@@ -663,7 +670,7 @@ async function main() {
   const compressedContext = await compressMemoryContext(userPrompt, memoryItems);
   const memoryContext = compressedContext === null ? fallbackDigest(memoryItems) : compressedContext;
 
-  emit(memoryContext);
+  emit(memoryContext || await recallFromArchiveFallback(userPrompt));
 }
 
 main().catch((err) => { logError("uncaught", err); emit(); });
