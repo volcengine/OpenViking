@@ -779,6 +779,7 @@ enum Commands {
             long = "node-limit",
             alias = "limit",
             default_value = "256",
+            value_parser = clap::value_parser!(i32).range(1..),
             value_name = "n",
             help_heading = "Common options"
         )]
@@ -4545,6 +4546,16 @@ mod tests {
         );
         let client = ctx.get_client();
         assert_eq!(client.api_key(), Some("root-key"));
+    }
+
+    #[test]
+    fn cli_glob_rejects_non_positive_node_limit() {
+        for node_limit in ["0", "-1"] {
+            assert!(
+                Cli::try_parse_from(["ov", "glob", "**/*", "--node-limit", node_limit]).is_err()
+            );
+        }
+        assert!(Cli::try_parse_from(["ov", "glob", "**/*", "--node-limit", "1"]).is_ok());
     }
 
     #[test]

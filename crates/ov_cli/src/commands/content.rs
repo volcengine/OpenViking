@@ -3,7 +3,6 @@ use crate::error::Result;
 use crate::output::OutputFormat;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
-use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
@@ -100,7 +99,17 @@ pub async fn get(client: &HttpClient, uri: &str, local_path: &str) -> Result<()>
     let bytes = client.get_bytes(uri).await?;
 
     // Write to local file
-    let mut file = File::create(path)?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                crate::error::Error::Client(format!("File already exists: {}", local_path))
+            } else {
+                crate::error::Error::Io(error)
+            }
+        })?;
     file.write_all(&bytes)?;
     file.flush()?;
 

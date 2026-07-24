@@ -37,6 +37,13 @@ pub async fn handle_add_resource(
     if !is_url {
         use std::path::Path;
 
+        if watch_interval > 0.0 {
+            return Err(Error::Client(
+                "A local path cannot be watched. Use a URL, sitemap, or RSS source, or re-import the local content when it changes."
+                    .to_string(),
+            ));
+        }
+
         // Unescape path: replace backslash followed by space with just space
         let unescaped_path = path.replace("\\ ", " ");
         let path_obj = Path::new(&unescaped_path);
