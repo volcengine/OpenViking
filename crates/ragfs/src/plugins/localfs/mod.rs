@@ -1132,7 +1132,11 @@ impl FileSystem for LocalFileSystem {
         level_limit: Option<usize>,
         continuation_token: Option<String>,
     ) -> Result<GlobPage> {
-        validate_virtual_path(path)?;
+        // Use the same guard as every other op: `validate_virtual_path` alone lets an
+        // absolute remainder (e.g. `//etc` from a `//`-double-slash mount path) through,
+        // and `glob_via_walk`'s `resolve_virtual_path` would then join it over the base.
+        // `resolve_path` adds the is_absolute check; discard the PathBuf, keep the guard.
+        self.resolve_path(path)?;
         let base_path = self.base_path.clone();
         let path_owned = path.to_string();
         let pattern_owned = pattern.to_string();
@@ -1231,6 +1235,33 @@ mod tests {
 
         let escape_path = format!("/local/{}", dir.path().join("secret.txt").display());
         let err = fs.read(&escape_path, 0, 0).await.unwrap_err();
+        assert!(matches!(err, Error::InvalidPath(_)));
+    }
+
+    #[tokio::test]
+    async fn test_localfs_glob_mount_rejects_absolute_remainder() {
+        let dir = TempDir::new().unwrap();
+        let mount = dir.path().join("mount");
+        std::fs::create_dir(&mount).unwrap();
+        write_file(dir.path(), "secret.txt", "secret");
+
+        let fs = MountableFS::new();
+        fs.register_plugin(LocalFSPlugin::new()).await;
+        let params = HashMap::from([(
+            "local_dir".to_string(),
+            ConfigValue::String(mount.to_string_lossy().into_owned()),
+        )]);
+        fs.mount(PluginConfig::single_backend("localfs", "/local", params))
+            .await
+            .unwrap();
+
+        // `/local/<abs dir>` -> remainder `//<abs dir>` would otherwise join over the mount
+        // base and let glob list a host directory outside the mount.
+        let escape_path = format!("/local/{}", dir.path().display());
+        let err = fs
+            .glob_directory(&escape_path, "**/*", false, None, None, None)
+            .await
+            .unwrap_err();
         assert!(matches!(err, Error::InvalidPath(_)));
     }
 
