@@ -236,6 +236,8 @@ class CodeConfig(CodeHostingConfig):
 
     Attributes:
         code_summary_mode: Summary generation mode ("llm" | "ast" | "ast_llm")
+        code_skeleton_provider: Skeleton provider for ast/ast_llm
+            ("ov_ast" | "aider_repomap" | "repomap_query" | "process")
         extract_functions: Whether to extract function definitions
         extract_classes: Whether to extract class definitions
         extract_imports: Whether to extract import statements
@@ -249,6 +251,9 @@ class CodeConfig(CodeHostingConfig):
     """
 
     code_summary_mode: str = "ast"  # "llm" | "ast" | "ast_llm"
+    code_skeleton_provider: str = (
+        "ov_ast"  # "ov_ast" | "aider_repomap" | "repomap_query" | "process"
+    )
     extract_functions: bool = True
     extract_classes: bool = True
     extract_imports: bool = True
@@ -275,6 +280,18 @@ class CodeConfig(CodeHostingConfig):
             raise ValueError(
                 f"Invalid code_summary_mode '{self.code_summary_mode}'. "
                 "Must be 'llm', 'ast', or 'ast_llm'"
+            )
+
+        if self.code_skeleton_provider not in (
+            "ov_ast",
+            "aider_repomap",
+            "repomap_query",
+            "aider_query",
+            "process",
+        ):
+            raise ValueError(
+                f"Invalid code_skeleton_provider '{self.code_skeleton_provider}'. "
+                "Must be 'ov_ast', 'aider_repomap', 'repomap_query', or 'process'"
             )
 
         if self.max_line_length <= 0:

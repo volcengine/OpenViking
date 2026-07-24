@@ -2,17 +2,15 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Public API for AST-based code skeleton extraction."""
 
-from typing import Optional
-
-from openviking.parse.parsers.code.ast.extractor import get_extractor
+from openviking.parse.parsers.code.ast.providers import extract_skeleton_with_provider
 
 
-def extract_skeleton(file_name: str, content: str, verbose: bool = False) -> Optional[str]:
+def extract_skeleton(file_name: str, content: str, verbose: bool = False) -> str:
     """Extract a skeleton from source code.
 
     Supports Python, JS/TS, Java, C/C++, Rust, Go via tree-sitter.
-    Returns None for unsupported languages or on extraction failure,
-    signalling the caller to fall back to LLM.
+    Returns deterministic provider output for unsupported languages or extraction
+    failures; callers should not use this API to trigger LLM summarization.
 
     Args:
         file_name: File name with extension (used for language detection).
@@ -21,9 +19,9 @@ def extract_skeleton(file_name: str, content: str, verbose: bool = False) -> Opt
                  If False, only first line of each docstring (for ast / embedding).
 
     Returns:
-        Plain-text skeleton string, or None if unsupported / failed.
+        Plain-text skeleton string.
     """
-    return get_extractor().extract_skeleton(file_name, content, verbose=verbose)
+    return extract_skeleton_with_provider(file_name, content, verbose=verbose)
 
 
 __all__ = ["extract_skeleton"]

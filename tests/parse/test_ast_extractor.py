@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for AST-based code skeleton extraction."""
 
+from pathlib import Path
+
 from openviking.parse.parsers.code.ast.skeleton import ClassSkeleton, CodeSkeleton, FunctionSig
 
 # ---------------------------------------------------------------------------
@@ -1452,3 +1454,291 @@ class TestASTExtractorDispatch:
         # treated as code.
         assert not self.extractor.supports("notes.md")
         assert not self.extractor.supports("viking://resources/notes.md")
+
+
+# ---------------------------------------------------------------------------
+# Aider RepoMap skeleton provider
+# ---------------------------------------------------------------------------
+
+
+class TestAiderRepoMapSkeletonProvider:
+    def test_vendored_aider_queries_available(self):
+        query_dir = (
+            Path(__file__).parents[2]
+            / "openviking/parse/parsers/code/ast/queries/tree-sitter-language-pack"
+        )
+        query_files = sorted(query_dir.glob("*-tags.scm"))
+
+        assert len(query_files) >= 31
+        assert (query_dir / "python-tags.scm").exists()
+        assert (query_dir / "ruby-tags.scm").exists()
+        assert (query_dir / "swift-tags.scm").exists()
+        assert (query_dir / "typescript-tags.scm").exists()
+
+    def test_python_repomap_skeleton(self):
+        from openviking.parse.parsers.code.ast.aider_repomap import extract_repromap_skeleton
+
+        code = """\
+class Foo:
+    def bar(self, x):
+        return x + 1
+
+
+def helper(y):
+    return Foo().bar(y)
+"""
+
+        text = extract_repromap_skeleton("sample.py", code)
+        assert text is not None
+        assert "[aider-repomap" in text
+        assert "class Foo" in text
+        assert "def bar" in text
+        assert "def helper" in text
+
+    def test_viking_resource_md_uses_parent_extension(self):
+        from openviking.parse.parsers.code.ast.aider_repomap import extract_repromap_skeleton
+
+        code = "def helper(y):\n    return y\n"
+        text = extract_repromap_skeleton(
+            "viking://resources/sample.py/sample.md",
+            code,
+        )
+        assert text is not None
+        assert "def helper" in text
+
+    def test_vendored_ruby_query_repomap_skeleton(self):
+        from openviking.parse.parsers.code.ast.aider_repomap import extract_repromap_skeleton
+
+        code = """\
+class Greeter
+  def hello(name)
+    "hello #{name}"
+  end
+end
+"""
+
+        text = extract_repromap_skeleton("greeter.rb", code)
+        assert text is not None
+        assert "class Greeter" in text
+        assert "def hello" in text
+
+    def test_local_typescript_query_repomap_skeleton(self):
+        from openviking.parse.parsers.code.ast.aider_repomap import extract_repromap_skeleton
+
+        code = """\
+class Greeter {
+  hello(name: string): string {
+    return `hello ${name}`;
+  }
+}
+"""
+
+        text = extract_repromap_skeleton("greeter.ts", code)
+        assert text is not None
+        assert "class Greeter" in text
+        assert "hello" in text
+
+    def test_local_php_query_repomap_skeleton(self):
+        from openviking.parse.parsers.code.ast.aider_repomap import extract_repromap_skeleton
+
+        code = """\
+<?php
+class Greeter {
+    public function hello($name) {
+        return "hello " . $name;
+    }
+}
+"""
+
+        text = extract_repromap_skeleton("greeter.php", code)
+        assert text is not None
+        assert "class Greeter" in text
+        assert "hello" in text
+
+    def test_query_provider_outputs_symbol_list_without_context(self):
+        from openviking.parse.parsers.code.ast.aider_repomap import extract_query_skeleton
+
+        code = """\
+class Foo:
+    def bar(self, x):
+        return x + 1
+
+
+def helper(y):
+    return Foo().bar(y)
+"""
+
+        text = extract_query_skeleton("sample.py", code)
+        assert text is not None
+        assert text.startswith("# sample.py [repomap-query, compact]")
+        assert "language: python" in text
+        assert "- L1: class Foo" in text
+        assert "- L2: function bar" in text
+        assert "- L6: function helper" in text
+        assert "return Foo().bar" not in text
+
+    def test_query_provider_handles_cuda_symbols(self):
+        from openviking.parse.parsers.code.ast.aider_repomap import extract_query_skeleton
+
+        code = """\
+#include <cuda_runtime.h>
+namespace cuvs {
+template <typename T>
+__global__ void add_kernel(const T* a, const T* b, T* out, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) out[i] = a[i] + b[i];
+}
+class CagraIndex {
+public:
+    void build(float* data, int rows) {}
+};
+void launch_add(const float* a, const float* b, float* out, int n) {
+    add_kernel<<<(n + 255) / 256, 256>>>(a, b, out, n);
+}
+}
+"""
+
+        text = extract_query_skeleton("sample.cu", code)
+        assert text is not None
+        assert "language: cuda" in text
+        assert "function add_kernel" in text
+        assert "class CagraIndex" in text
+        assert "method build" in text
+        assert "function launch_add" in text
+        assert "__global__" not in text
+        assert "blockIdx" not in text
+
+    def test_query_provider_is_config_selectable(self, monkeypatch):
+        import openviking.parse.parsers.code.ast as ast_api
+        from openviking.parse.parsers.code.ast import providers
+
+        monkeypatch.setattr(providers, "_configured_provider", lambda: "repomap_query")
+
+        text = ast_api.extract_skeleton(
+            "sample.py",
+            "class Foo:\n    def bar(self):\n        return 1\n",
+        )
+
+        assert text is not None
+        assert text.startswith("# sample.py [repomap-query, compact]")
+        assert "class Foo" in text
+        assert "function bar" in text
+
+
+# ---------------------------------------------------------------------------
+# process() skeleton provider
+# ---------------------------------------------------------------------------
+
+
+class TestProcessSkeletonProvider:
+    def test_process_provider_is_config_selectable_and_simplified(self, monkeypatch):
+        import openviking.parse.parsers.code.ast as ast_api
+        from openviking.parse.parsers.code.ast import providers
+
+        monkeypatch.setattr(providers, "_configured_provider", lambda: "process")
+
+        code = '''"""Module top doc."""
+
+import os
+from typing import List
+
+
+class Greeter:
+    """Greets people."""
+
+    def greet(self, who: str) -> str:
+        """Return a greeting."""
+        return f"Hello {who}"
+
+
+def make_greeter(name: str) -> Greeter:
+    return Greeter()
+'''
+
+        text = ast_api.extract_skeleton("greeter.py", code)
+
+        assert text is not None
+        assert "# greeter.py [Python]" in text
+        assert "class Greeter" in text
+        assert "+ greet()" in text
+        assert "def make_greeter()" in text
+        assert "who: str" not in text
+        assert "-> str" not in text
+        assert "module:" not in text
+        assert '"""' not in text
+
+    def test_process_auto_provider_handles_new_languages(self):
+        from openviking.parse.parsers.code.ast.languages.process_engine import ProcessAutoExtractor
+
+        extractor = ProcessAutoExtractor()
+
+        cases = {
+            "Example.kt": (
+                "Kotlin",
+                "class Example { fun run(): Int { return 1 } }\n",
+                "class Example",
+            ),
+            "Example.swift": (
+                "Swift",
+                "struct Example { func run() -> Int { return 1 } }\n",
+                "class Example",
+            ),
+            "Example.scala": (
+                "Scala",
+                "class Example { def run(): Int = 1 }\n",
+                "class Example",
+            ),
+            "greeter.rb": (
+                "Ruby",
+                'class Greeter\n  def hello(name)\n    "hello #{name}"\n  end\nend\n',
+                "class Greeter",
+            ),
+        }
+
+        for file_name, (display, code, expected) in cases.items():
+            text = extractor.extract_skeleton(file_name, code)
+            assert text is not None
+            assert f"# {file_name} [{display}]" in text
+            assert expected in text
+
+    def test_process_auto_provider_keeps_original_languages(self):
+        from openviking.parse.parsers.code.ast.languages.process_engine import ProcessAutoExtractor
+
+        extractor = ProcessAutoExtractor()
+
+        cases = {
+            "sample.py": "class Example:\n    def run(self):\n        return 1\n",
+            "sample.ts": "class Example { run(): number { return 1; } }\n",
+            "sample.go": "package main\n\nfunc Run() int { return 1 }\n",
+        }
+
+        for file_name, code in cases.items():
+            assert extractor.supports(file_name)
+            assert extractor.extract_skeleton(file_name, code) is not None
+
+    def test_process_auto_provider_uses_parent_extension_for_viking_markdown_body(self):
+        from openviking.parse.parsers.code.ast.languages.process_engine import ProcessAutoExtractor
+
+        extractor = ProcessAutoExtractor()
+        text = extractor.extract_skeleton(
+            "viking://resources/sample.kt/sample.md",
+            "class Example { fun run(): Int { return 1 } }\n",
+        )
+
+        assert text is not None
+        assert "# viking://resources/sample.kt/sample.md [Kotlin]" in text
+        assert "class Example" in text
+
+    def test_process_auto_provider_denies_document_and_config_like_files(self):
+        from openviking.parse.parsers.code.ast.languages.process_engine import ProcessAutoExtractor
+
+        extractor = ProcessAutoExtractor()
+
+        for file_name in [
+            "README.md",
+            "config.json",
+            "config.yaml",
+            "page.html",
+        ]:
+            assert not extractor.supports(file_name)
+            assert extractor.extract_skeleton(file_name, "class Example {}\n") is None

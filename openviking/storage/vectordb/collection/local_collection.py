@@ -54,6 +54,46 @@ from openviking_cli.utils.logger import default_logger as logger
 
 # Use imported constants, no longer defined here
 AUTO_ID_KEY = SpecialFields.AUTO_ID.value
+_LOCAL_FIELDS_MAX_BYTES = 60_000
+_LOCAL_FIELDS_TRUNCATABLE_TEXT_FIELDS = ("content", "abstract")
+
+
+def _truncate_utf8(text: str, byte_limit: int) -> str:
+    encoded = text.encode("utf-8")
+    if len(encoded) <= byte_limit:
+        return text
+    return encoded[:byte_limit].decode("utf-8", errors="ignore")
+
+
+def _safe_fields_json(data: Dict[str, Any]) -> str:
+    fields = safe_json_dumps(data, ensure_ascii=False)
+    if len(fields.encode("utf-8")) <= _LOCAL_FIELDS_MAX_BYTES:
+        return fields
+
+    compact = dict(data)
+    for field in _LOCAL_FIELDS_TRUNCATABLE_TEXT_FIELDS:
+        value = compact.get(field)
+        if not isinstance(value, str) or not value:
+            continue
+        current_size = len(safe_json_dumps(compact, ensure_ascii=False).encode("utf-8"))
+        if current_size <= _LOCAL_FIELDS_MAX_BYTES:
+            break
+        over = current_size - _LOCAL_FIELDS_MAX_BYTES
+        target = max(0, len(value.encode("utf-8")) - over - 1024)
+        compact[field] = _truncate_utf8(value, target)
+
+    fields = safe_json_dumps(compact, ensure_ascii=False)
+    while len(fields.encode("utf-8")) > _LOCAL_FIELDS_MAX_BYTES:
+        shrunk = False
+        for field in _LOCAL_FIELDS_TRUNCATABLE_TEXT_FIELDS:
+            value = compact.get(field)
+            if isinstance(value, str) and value:
+                compact[field] = _truncate_utf8(value, max(0, len(value.encode("utf-8")) // 2))
+                shrunk = True
+        if not shrunk:
+            break
+        fields = safe_json_dumps(compact, ensure_ascii=False)
+    return fields
 
 
 class _MutationMarker:
@@ -841,7 +881,7 @@ class LocalCollection(ICollection):
                 if sparse_dict and isinstance(sparse_dict, dict):
                     cands_list[i].sparse_raw_terms = list(sparse_dict.keys())
                     cands_list[i].sparse_values = list(sparse_dict.values())
-            cands_list[i].fields = safe_json_dumps(data, ensure_ascii=False)
+            cands_list[i].fields = _safe_fields_json(data)
             cands_list[i].expire_ns_ts = time.time_ns() + ttl * 1000000000 if ttl > 0 else 0
 
         if not self.store_mgr:

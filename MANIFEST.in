@@ -13,6 +13,7 @@ graft crates/ragfs
 graft crates/ragfs-cache-redis
 graft crates/ragfs-python
 recursive-include openviking *.yaml
+recursive-include openviking/parse/parsers/code/ast/queries *.md *.txt *.scm
 
 # sdist should be source-only: never ship runtime binaries from working tree
 prune openviking/bin

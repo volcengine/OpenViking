@@ -510,7 +510,11 @@ async def vectorize_file(
                     logger.warning(f"No summary available for {file_path}, skipping vectorization")
                     return
             else:
-                if summary and effective_text_source in {"summary_first", "summary_only"}:
+                if summary and effective_text_source == "summary_only":
+                    # Keep both embedding and full-text payload summary-sized. Large
+                    # source files can exceed the local vector store's string limit.
+                    context.set_vectorize(Vectorize(text=summary, full_text=summary))
+                elif summary and effective_text_source == "summary_first":
                     # Use summary for vectorization, but reuse the single raw text read for BM25.
                     context.set_vectorize(Vectorize(text=summary, full_text=content or summary))
                 else:
