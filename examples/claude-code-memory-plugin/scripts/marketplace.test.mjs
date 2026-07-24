@@ -193,6 +193,21 @@ test("legacy hook-only install removes a prior user MCP registration", { skip: !
   assert.ok(commands.filter((command) => command === "mcp remove openviking -s user").length >= 2);
 });
 
+test("modern hook-only install removes a legacy user MCP registration", { skip: !canRunBash }, (t) => {
+  const fixture = createInstallerFixture();
+  t.after(() => rmSync(fixture.root, { recursive: true, force: true }));
+
+  assertInstallerSuccess(runClaudeInstaller(fixture, "legacy"));
+  assert.ok(existsSync(join(fixture.stateDir, "openviking-mcp")));
+
+  assertInstallerSuccess(runClaudeInstaller(fixture, "modern", ["--claude-hook-only"]));
+
+  assert.equal(existsSync(join(fixture.stateDir, "openviking-mcp")), false);
+  const commands = readFileSync(join(fixture.stateDir, "commands"), "utf-8").trim().split("\n");
+  assert.ok(commands.some((command) => command.startsWith("mcp add --scope user openviking -- node ")));
+  assert.ok(commands.filter((command) => command === "mcp remove openviking -s user").length >= 2);
+});
+
 test("Claude hooks include optional skill experience PostToolUse Read hook", () => {
   const hooks = readJson(join(pluginDir, "hooks", "hooks.json"));
   const postToolUse = hooks.hooks?.PostToolUse;

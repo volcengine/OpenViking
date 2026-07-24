@@ -1409,6 +1409,7 @@ claude_marketplace_sync() { # claude_marketplace_sync <add-target> <expected-sou
 
 install_claude_modern() {
   if [ "$CLAUDE_HOOK_ONLY" -eq 1 ]; then
+    claude_cmd mcp remove openviking -s user >/dev/null 2>&1 || true
     prepare_claude_hook_only_marketplace || return 1
     claude_marketplace_sync "$CC_HOOK_ONLY_MKT_DIR" "$CC_HOOK_ONLY_MKT_DIR" || return 1
   else
