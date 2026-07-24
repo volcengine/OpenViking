@@ -251,12 +251,27 @@ export class TakeoverCore {
     ];
   }
 
-  async onTurnSynced(estTokens) {
-    if (!this.enabled) return false;
+  noteSynced(estTokens) {
+    if (!this.enabled) return;
     this.pendingTokens += Math.max(0, Math.floor(Number(estTokens) || 0));
+  }
+
+  /**
+   * Commit iff the threshold has been crossed. Callers decide *when*: turn_end
+   * only accumulates (noteSynced); the commit — which includes an overview poll
+   * of up to pollMax×pollMs — runs from agent_settled / before_agent_start so
+   * it never stalls an in-flight agent run.
+   */
+  async commitIfDue() {
+    if (!this.enabled) return false;
     if (this.pendingTokens < this.config.takeoverTokenThreshold) return false;
     if (this.lastSeenUserTurns <= this.config.takeoverKeepRecentTurns) return false;
     return this.commitAndAdvance();
+  }
+
+  async onTurnSynced(estTokens) {
+    this.noteSynced(estTokens);
+    return this.commitIfDue();
   }
 
   async commitAndAdvance() {

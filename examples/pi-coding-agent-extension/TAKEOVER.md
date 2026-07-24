@@ -23,16 +23,26 @@ State is persisted as a pi custom entry:
 pi.appendEntry("ov-takeover", state)
 ```
 
+On pi >= 0.81 these entries are rendered in interactive mode via
+`pi.registerEntryRenderer("ov-takeover", ...)` — a dim one-line boundary
+status (expand to preview the overview) that never enters the LLM context.
+
 On startup the extension scans the branch from the end, restores the latest
 entry, and restores `SyncManager`'s watermark so `pi -c` does not resend the
 same branch entries to OpenViking.
 
 ## Runtime Flow
 
-1. `turn_end` captures new branch entries into the OpenViking session.
+1. `turn_end` captures new branch entries into the OpenViking session and
+   accumulates token pressure. It never commits: the commit sequence includes
+   an overview poll (up to `overviewPollMax × overviewPollMs`) that must not
+   stall an in-flight agent run.
 2. The capture path uses a disk pending queue when OpenViking is temporarily
    unreachable.
-3. When `pendingTokens >= takeover.tokenThreshold`, takeover tries to advance.
+3. When `pendingTokens >= takeover.tokenThreshold`, takeover tries to advance
+   from `agent_settled` (pi >= 0.81: the run is fully settled, no retry,
+   compaction, or queued continuation pending). On older pi the advance runs
+   fire-and-forget from the next `before_agent_start` instead.
 4. Advance requires a successful flush barrier: all current-session
    `addMessage` queue entries must be delivered. Pending `commitSession`
    entries and entries for other sessions do not block the barrier.

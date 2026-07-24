@@ -58,6 +58,8 @@ export class TakeoverCore {
   };
   restore(entries: any[]): this["state"];
   transformContext(messages: TakeoverMessage[]): TakeoverMessage[];
+  noteSynced(estTokens: number): void;
+  commitIfDue(): Promise<boolean>;
   onTurnSynced(estTokens: number): Promise<boolean>;
   commitAndAdvance(): Promise<boolean>;
   handleBeforeCompact(preparation?: { firstKeptEntryId?: string; tokensBefore?: number }): Promise<
