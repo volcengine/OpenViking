@@ -339,12 +339,13 @@ class URLTypeDetector:
     @staticmethod
     def _extract_filename_from_disposition(content_disposition: str) -> Optional[str]:
         """
-        Extract filename from Content-Disposition header per RFC 6266.
+        Extract filename from Content-Disposition header per RFC 6266 / RFC 5987.
 
         Handles formats:
             - inline; filename="2601.00014v1.pdf"
             - attachment; filename=document.pdf
             - attachment; filename*=UTF-8''encoded.pdf
+            - attachment; filename*=iso-8859-1''r%E9sum%E9.pdf
             - attachment; filename="foo.pdf"; size=12345
 
         Args:
@@ -357,25 +358,54 @@ class URLTypeDetector:
             return None
 
         import re
+        from urllib.parse import unquote_to_bytes
 
         content_disposition = content_disposition.strip()
 
-        # Try filename*=UTF-8''... format first (RFC 5987)
-        utf8_match = re.search(r"filename\*=UTF-8''([^;]+)", content_disposition, re.I)
-        if utf8_match:
-            from urllib.parse import unquote
+        # RFC 5987 / RFC 8187 extended parameter: filename*=charset'lang'value.
+        # (?:^|;)\s* anchors the match to a parameter boundary so unrelated
+        # tokens such as ``xfilename*=`` are never treated as the real
+        # parameter. Some servers wrap the value in quotes, tolerate that too.
+        ext_match = re.search(
+            r"(?:^|;)\s*filename\*\s*=\s*(\"[^\"]*\"|[^;]*)",
+            content_disposition,
+            re.I,
+        )
+        if ext_match:
+            extended_value = ext_match.group(1).strip().strip('"')
+            # Accept any charset (not just UTF-8) and an optional language tag;
+            # some servers percent-encode the single-quote separators as %27,
+            # so split on either form.
+            parts = re.split(r"'|%27", extended_value, maxsplit=2)
+            if len(parts) == 3:
+                charset, _language, encoded_filename = parts
+                charset = charset.strip().lower()
+                if charset:
+                    try:
+                        # Decode strictly: an unknown charset or bytes that are
+                        # invalid for the declared charset must not produce a
+                        # mojibake filename when a plain filename= may exist.
+                        filename = unquote_to_bytes(encoded_filename).decode(charset)
+                        if filename:
+                            return filename
+                    except (LookupError, UnicodeDecodeError):
+                        pass
+            # Malformed, unknown-charset, undecodable, or empty extended values
+            # fall through to the plain filename= parameter below.
 
-            return unquote(utf8_match.group(1))
-
-        # Try filename="..." format (quoted-string)
-        quoted_match = re.search(r'filename="([^"]+)"', content_disposition, re.I)
+        # Quoted filename (quoted-string form), anchored to a parameter
+        # boundary so e.g. ``myfilename="..."`` is not picked up.
+        quoted_match = re.search(r'(?:^|;)\s*filename\s*=\s*"([^"]*)"', content_disposition, re.I)
         if quoted_match:
-            return quoted_match.group(1)
+            return quoted_match.group(1) or None
 
-        # Try filename=... format (token)
-        simple_match = re.search(r"filename=([^;]+)", content_disposition, re.I)
+        # Bare token filename. (?!\*) ensures we never capture the extended
+        # filename*= parameter token here.
+        simple_match = re.search(
+            r"(?:^|;)\s*filename\s*=\s*(?!\*)([^;]+)", content_disposition, re.I
+        )
         if simple_match:
-            return simple_match.group(1).strip()
+            return simple_match.group(1).strip() or None
 
         return None
 

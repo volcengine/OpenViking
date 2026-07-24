@@ -434,3 +434,52 @@ def _zip_bytes(files):
         for name, content in files.items():
             zf.writestr(name, content)
     return buffer.getvalue()
+
+
+class TestExtractFilenameFromDisposition:
+    """RFC 6266 / RFC 5987 Content-Disposition filename parsing."""
+
+    @pytest.mark.parametrize(
+        ("header", "expected"),
+        [
+            ('inline; filename="2601.00014v1.pdf"', "2601.00014v1.pdf"),
+            ("attachment; filename=document.pdf", "document.pdf"),
+            ("attachment; filename*=UTF-8''encoded.pdf", "encoded.pdf"),
+            ('attachment; filename="foo.pdf"; size=12345', "foo.pdf"),
+            ("attachment; filename*=UTF-8''report%20final.pdf", "report final.pdf"),
+            ("attachment; filename*=iso-8859-1''r%E9sum%E9.pdf", "r\xe9sum\xe9.pdf"),
+            (
+                "attachment; filename*=UTF-8''r%C3%A9sum%C3%A9.pdf; filename=resume.pdf",
+                "r\u00e9sum\u00e9.pdf",
+            ),
+            ("attachment; size=100; filename*=Shift_JIS%27%27a.txt", "a.txt"),
+            ("attachment; filename*=Shift_JIS''%93%FA%96%7B.txt", "\u65e5\u672c.txt"),
+            ("attachment; filename*=UTF-8'en'%E4%B8%AD%E6%96%87.txt", "\u4e2d\u6587.txt"),
+            ("attachment;filename*=UTF-8''%E6%96%87%E4%BB%B6.txt", "\u6587\u4ef6.txt"),
+            ('attachment; filename="a b.txt"', "a b.txt"),
+            ("attachment; filename=", None),
+            ("", None),
+            ("inline", None),
+            # Unknown charset must not yield a mis-decoded name; fall back to
+            # the plain filename= parameter when one exists.
+            ("attachment; filename*=unknown''broken.txt; filename=fallback.txt", "fallback.txt"),
+            ("attachment; filename*=unknown''broken.txt", None),
+            # Bytes invalid for the declared charset must not yield a name with
+            # replacement characters; fall back to the plain parameter.
+            ("attachment; filename*=UTF-8''%FF%FE.txt; filename=fallback.txt", "fallback.txt"),
+            ("attachment; filename*=UTF-8''%FF%FE.txt", None),
+            # Empty extended values fall back to the plain parameter.
+            ("attachment; filename*=UTF-8''; filename=fallback.txt", "fallback.txt"),
+            ('attachment; filename*=""; filename=fallback.txt', "fallback.txt"),
+            # Parameter matching is anchored to a boundary: xfilename*= and
+            # myfilename= are unrelated parameters, not filename(*)=.
+            ("attachment; xfilename*=UTF-8''evil.txt; filename=good.txt", "good.txt"),
+            ("attachment; xfilename*=UTF-8''evil.txt", None),
+            ("attachment; myfilename=notme.txt", None),
+            ("attachment; myfilename=notme.txt; filename=real.txt", "real.txt"),
+            # Malformed extended value without RFC 5987 separators.
+            ("attachment; filename*=not-an-extended-value", None),
+        ],
+    )
+    def test_extract_filename_from_disposition(self, header, expected):
+        assert URLTypeDetector._extract_filename_from_disposition(header) == expected
