@@ -1,5 +1,6 @@
 import { fetchFind, fetchFindAllTypes, fetchSearch } from '#/lib/retrieval'
 import {
+  deleteFs,
   getContentRead,
   getContentAbstract,
   getContentOverview,
@@ -216,6 +217,21 @@ export async function saveFileContent(
           content,
           mode: 'replace',
           wait: false,
+        },
+      }),
+    )
+  } catch (error) {
+    throw toVikingApiError(error)
+  }
+}
+
+export async function deleteFile(uri: string): Promise<void> {
+  try {
+    await getOvResult(
+      deleteFs({
+        query: {
+          uri,
+          recursive: false,
         },
       }),
     )

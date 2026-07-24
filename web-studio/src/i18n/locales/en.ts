@@ -843,6 +843,13 @@ const en = {
     },
     filePreview: {
       cancel: 'Cancel',
+      delete: 'Delete',
+      deleteConfirmDescription:
+        'Delete {{name}} permanently? This action cannot be undone.',
+      deleteConfirmTitle: 'Delete this file?',
+      deleteFailed: 'Could not delete the file: {{message}}',
+      deleteSuccess: 'Deleted {{name}}',
+      deleting: 'Deleting...',
       edit: 'Edit',
       emptyFile: '(empty file)',
       emptyPrompt: 'Select a file to preview it here',
