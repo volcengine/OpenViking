@@ -849,6 +849,7 @@ function PlaygroundActionContent({
         />
       ) : (
         <AgentPanel
+          currentUri={currentUri}
           initialSessionId={sessionId}
           onOpenResource={onOpenResource}
           onSessionChange={onSessionChange}

@@ -1338,6 +1338,7 @@ class AgentLoop:
             if not isinstance(openviking_connection, dict):
                 openviking_connection = None
             msg.openviking_connection = openviking_connection
+            current_dir = msg.metadata.get("current_dir") if msg.metadata else None
             actor_peer_id = getattr(msg, "actor_peer_id", None) or msg.sender_id
             msg.actor_peer_id = actor_peer_id
             profile_user_list = []
@@ -1503,6 +1504,7 @@ class AgentLoop:
                 is_group_chat=is_group_chat,
                 eval=self._eval,
                 openviking_connection=openviking_connection,
+                current_dir=current_dir,
                 enable_subagents=self._subagents_enabled(),
                 config=self.config,
             )

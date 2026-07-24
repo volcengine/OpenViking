@@ -41,10 +41,12 @@ import {
 } from '../-lib/utils'
 
 export function AgentPanel({
+  currentUri,
   initialSessionId,
   onOpenResource,
   onSessionChange,
 }: {
+  currentUri?: string
   initialSessionId?: string
   onOpenResource: ResourceOpenHandler
   onSessionChange: (sessionId: string) => void
@@ -157,9 +159,9 @@ export function AgentPanel({
 
   const send = useCallback(
     (message: string) => {
-      void chat.send(message)
+      void chat.send(message, { current_dir: currentUri })
     },
-    [chat],
+    [chat, currentUri],
   )
 
   const isStreaming = chat.status === 'streaming'

@@ -77,6 +77,7 @@ function waitForNextFrame(): Promise<void> {
 
 type SendOptions = {
   displayMessage?: string
+  current_dir?: string
 }
 
 function buildAssistantMessage(
@@ -334,7 +335,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
       try {
         const response = await sendChatStream(
-          { message, session_id: sessionId },
+          { message, session_id: sessionId, current_dir: sendOptions?.current_dir },
           controller.signal,
         )
 

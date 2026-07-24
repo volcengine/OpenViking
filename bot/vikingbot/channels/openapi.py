@@ -1158,7 +1158,10 @@ class OpenAPIChannel(BaseChannel):
         disabled_tools = list(request.disabled_tools or [])
         if "message" not in disabled_tools:
             disabled_tools.append("message")
-        return {"disabled_tools": disabled_tools}
+        metadata: dict[str, Any] = {"disabled_tools": disabled_tools}
+        if request.current_dir:
+            metadata["current_dir"] = request.current_dir
+        return metadata
 
     def _request_openviking_connection(self, request: ChatRequest) -> dict[str, Any] | None:
         if request.openviking_connection:
