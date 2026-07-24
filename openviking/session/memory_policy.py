@@ -33,7 +33,12 @@ def _target_enabled(data: Any, *, default_enabled: bool, key: str = "target") ->
     extra_keys = set(data) - _TARGET_KEYS
     if extra_keys:
         raise InvalidArgumentError(_memory_policy_keys_error(key))
-    return bool(data.get("enabled", default_enabled))
+    if "enabled" not in data:
+        return default_enabled
+    enabled = data["enabled"]
+    if not isinstance(enabled, bool):
+        raise InvalidArgumentError(f"memory_policy.{key}.enabled must be a boolean")
+    return enabled
 
 
 def _parse_memory_types(data: Any) -> Optional[set[str]]:

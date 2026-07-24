@@ -43,12 +43,15 @@ def safe_external_peer(raw: Optional[str]) -> Optional[str]:
     text = str(raw).strip()
     if not text:
         return None
+    if not text.isascii():
+        encoded = base64.urlsafe_b64encode(text.encode("utf-8")).decode("ascii").rstrip("=")
+        return safe_peer_id(f"ext-{encoded}")
     sanitized = _sanitize_component(text)
     if sanitized:
         pid = safe_peer_id(sanitized)
         if pid:
             return pid
-    # Non-ASCII / unsanitizable -> stable, valid, unique fallback.
+    # Unsanitizable ASCII -> stable, valid, unique fallback.
     encoded = base64.urlsafe_b64encode(text.encode("utf-8")).decode("ascii").rstrip("=")
     return safe_peer_id(f"ext-{encoded}")
 

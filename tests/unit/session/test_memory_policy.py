@@ -66,6 +66,12 @@ def test_memory_policy_rejects_invalid_working_memory_shape():
         MemoryPolicy.from_dict({"working_memory": {"enabled": True, "mode": "summary"}})
 
 
+@pytest.mark.parametrize("target", ["self", "peer", "working_memory"])
+def test_memory_policy_rejects_non_boolean_enabled(target):
+    with pytest.raises(InvalidArgumentError, match="enabled must be a boolean"):
+        MemoryPolicy.from_dict({target: {"enabled": "false"}})
+
+
 def test_memory_policy_rejects_invalid_memory_types():
     policy = MemoryPolicy.from_dict({"memory_types": ["profile", "missing"]})
 
