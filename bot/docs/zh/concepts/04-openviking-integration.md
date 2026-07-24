@@ -188,8 +188,22 @@ VikingBot Session metadata 记录 OpenViking 同步状态：
 | 配置 | 作用 |
 |------|------|
 | `agents.commit_token_threshold` | pending token 达到该值后 commit |
-| `agents.commit_keep_recent_count` | commit 后保留的最近消息数 |
+| `agents.commit_keep_recent_turn_count` | commit 后最多保留的最近逻辑 Turn 数；默认 `3` |
+| `agents.commit_retained_message_token_budget` | commit 后 retained messages 与 checkpoint 的 token 预算；默认 `6000` |
+| `agents.commit_min_raw_tail_steps` | 最新 Turn 超出预算时，至少原样保留的末尾 assistant Step 数；默认 `1` |
+| `agents.commit_keep_recent_count` | 已废弃的物理消息数配置，仅为兼容旧配置文件而保留 |
 | `agents.memory_window` | 本地历史窗口，也可触发消息数阈值提交 |
+
+一个逻辑 Turn 从真实 user query 开始，包含下一条真实 user query 之前的全部 assistant Step；每个 Step 会将 assistant 文本、工具调用和对应工具结果作为不可拆分的整体处理。系统先按 `commit_keep_recent_turn_count` 选择最近 Turn，再用 `commit_retained_message_token_budget` 约束 retained 内容。如果最新 Turn 本身超出预算，则保留 user query 和至少 `commit_min_raw_tail_steps` 个最新 Step，较早 Step 进入同一次归档生成的 checkpoint。
+
+迁移旧配置时，`commit_keep_recent_count` 不会自动换算为 Turn 数，当前 VikingBot 的 Turn-aware commit 也不再读取它。该字段仍被配置模型接受，因此已有 `ov.conf` 不会因未知字段而加载失败。如果只保留旧字段，系统会使用三个新字段的默认值；需要保持自定义保留策略时，应显式配置新字段，例如：
+
+```yaml
+agents:
+  commit_keep_recent_turn_count: 3
+  commit_retained_message_token_budget: 6000
+  commit_min_raw_tail_steps: 1
+```
 
 消息使用本地索引增量同步，避免每轮重复 append。同步失败会写入 metadata 并记录日志，但不会让可选记忆能力阻断基础对话。
 

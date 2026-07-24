@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { CompassIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { useAppConnection } from '#/hooks/use-app-connection'
 import { useChat } from '#/lib/sessions/use-chat'
 import { useSessionMessages } from '#/lib/sessions/use-sessions'
 import { useSessionTitles } from '#/lib/sessions/use-session-titles'
@@ -16,12 +17,14 @@ interface ThreadProps {
 }
 
 export function Thread({ sessionId }: ThreadProps) {
-  const { getTitle } = useSessionTitles()
+  const { identityScopeKey } = useAppConnection()
+  const { getTitle } = useSessionTitles(identityScopeKey)
   const title = getTitle(sessionId)
 
   const { data: historyMessages } = useSessionMessages(sessionId)
 
   const chat = useChat({
+    identityScopeKey,
     sessionId,
     initialMessages: historyMessages,
     persistMessages: true,
@@ -55,10 +58,7 @@ export function Thread({ sessionId }: ThreadProps) {
     scrollRafRef.current = requestAnimationFrame(() => {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
     })
-  }, [
-    chat.messages.length,
-    chat.streamingParts,
-  ])
+  }, [chat.messages.length, chat.streamingParts])
 
   const [showBackground, setShowBackground] = useState(false)
 

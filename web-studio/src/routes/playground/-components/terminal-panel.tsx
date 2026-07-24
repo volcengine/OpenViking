@@ -67,6 +67,7 @@ import type {
 } from '../-lib/types'
 import {
   cleanVikingUri,
+  createIdentityStorageKey,
   entryToRef,
   getErrorMessage,
   readStoredJsonArray,
@@ -249,9 +250,9 @@ type ParsedOptions = {
   positional: string[]
 }
 
-function loadCommandHistory(): string[] {
+function loadCommandHistory(storageKey: string): string[] {
   return readStoredJsonArray(
-    TERMINAL_COMMAND_HISTORY_STORAGE_KEY,
+    storageKey,
     (item) => {
       if (typeof item !== 'string') return undefined
       const trimmed = item.trim()
@@ -261,11 +262,8 @@ function loadCommandHistory(): string[] {
   )
 }
 
-function persistCommandHistory(history: string[]): void {
-  writeStoredJson(
-    TERMINAL_COMMAND_HISTORY_STORAGE_KEY,
-    history.slice(0, TERMINAL_COMMAND_HISTORY_LIMIT),
-  )
+function persistCommandHistory(storageKey: string, history: string[]): void {
+  writeStoredJson(storageKey, history.slice(0, TERMINAL_COMMAND_HISTORY_LIMIT))
 }
 
 function normalizeRefs(value: unknown): ResourceRef[] | undefined {
@@ -285,9 +283,9 @@ function normalizeRefs(value: unknown): ResourceRef[] | undefined {
   return refs.length > 0 ? refs : undefined
 }
 
-function loadTerminalHistory(): TerminalEntry[] {
+function loadTerminalHistory(storageKey: string): TerminalEntry[] {
   return readStoredJsonArray(
-    TERMINAL_ENTRY_HISTORY_STORAGE_KEY,
+    storageKey,
     (item): TerminalEntry | undefined => {
       if (typeof item !== 'object' || item === null) return undefined
       const record = item as Record<string, unknown>
@@ -314,15 +312,15 @@ function loadTerminalHistory(): TerminalEntry[] {
   )
 }
 
-function persistTerminalHistory(history: TerminalEntry[]): void {
-  writeStoredJson(
-    TERMINAL_ENTRY_HISTORY_STORAGE_KEY,
-    history.slice(-TERMINAL_ENTRY_HISTORY_LIMIT),
-  )
+function persistTerminalHistory(
+  storageKey: string,
+  history: TerminalEntry[],
+): void {
+  writeStoredJson(storageKey, history.slice(-TERMINAL_ENTRY_HISTORY_LIMIT))
 }
 
-function clearPersistedTerminalHistory(): void {
-  removeStoredValue(TERMINAL_ENTRY_HISTORY_STORAGE_KEY)
+function clearPersistedTerminalHistory(storageKey: string): void {
+  removeStoredValue(storageKey)
 }
 
 function extractVikingUris(text: string): string[] {
@@ -462,13 +460,25 @@ export function TerminalPanel({
   sessionId?: string
 }) {
   const { t } = useTranslation('playground')
-  const { connectionRole } = useAppConnection()
+  const { connectionRole, identityScopeKey } = useAppConnection()
+  const commandHistoryStorageKey = createIdentityStorageKey(
+    TERMINAL_COMMAND_HISTORY_STORAGE_KEY,
+    identityScopeKey,
+  )
+  const terminalHistoryStorageKey = createIdentityStorageKey(
+    TERMINAL_ENTRY_HISTORY_STORAGE_KEY,
+    identityScopeKey,
+  )
   const [command, setCommand] = useState('')
   const [running, setRunning] = useState(false)
   const [suggestionsOpen, setSuggestionsOpen] = useState(false)
   const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0)
-  const [commandHistory, setCommandHistory] = useState(loadCommandHistory)
-  const [history, setHistory] = useState(loadTerminalHistory)
+  const [commandHistory, setCommandHistory] = useState(() =>
+    loadCommandHistory(commandHistoryStorageKey),
+  )
+  const [history, setHistory] = useState(() =>
+    loadTerminalHistory(terminalHistoryStorageKey),
+  )
   const [historyOpen, setHistoryOpen] = useState(false)
   const [inputFocused, setInputFocused] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -592,18 +602,16 @@ export function TerminalPanel({
 
             if (!isChoosingSubcommand) return []
 
-            return SESSION_SUBCOMMANDS.filter(
-              (item) => {
-                const description = t(
-                  `terminal.commandExamples.${item.examples[0]}.description`,
-                )
-                return (
-                  !partial ||
-                  item.key.toLowerCase().startsWith(partial.toLowerCase()) ||
-                  description.toLowerCase().includes(partial.toLowerCase())
-                )
-              },
-            ).map((item) => {
+            return SESSION_SUBCOMMANDS.filter((item) => {
+              const description = t(
+                `terminal.commandExamples.${item.examples[0]}.description`,
+              )
+              return (
+                !partial ||
+                item.key.toLowerCase().startsWith(partial.toLowerCase()) ||
+                description.toLowerCase().includes(partial.toLowerCase())
+              )
+            }).map((item) => {
               return {
                 ...activeCommand,
                 command: item.key,
@@ -735,10 +743,7 @@ export function TerminalPanel({
   }, [suggestions.length])
 
   useEffect(() => {
-    suggestionRefs.current = suggestionRefs.current.slice(
-      0,
-      suggestions.length,
-    )
+    suggestionRefs.current = suggestionRefs.current.slice(0, suggestions.length)
   }, [suggestions.length])
 
   useEffect(() => {
@@ -755,37 +760,45 @@ export function TerminalPanel({
     })
   }, [history.length, running])
 
-  const append = useCallback((entry: Omit<TerminalEntry, 'id'>) => {
-    setHistory((prev) => {
-      const next = [
-        ...prev,
-        {
-          ...entry,
-          id: `${Date.now()}-${prev.length}`,
-        },
-      ].slice(-TERMINAL_ENTRY_HISTORY_LIMIT)
-      persistTerminalHistory(next)
-      return next
-    })
-  }, [])
+  const append = useCallback(
+    (entry: Omit<TerminalEntry, 'id'>) => {
+      setHistory((prev) => {
+        const next = [
+          ...prev,
+          {
+            ...entry,
+            id: `${Date.now()}-${prev.length}`,
+          },
+        ].slice(-TERMINAL_ENTRY_HISTORY_LIMIT)
+        persistTerminalHistory(terminalHistoryStorageKey, next)
+        return next
+      })
+    },
+    [terminalHistoryStorageKey],
+  )
 
   const clearHistory = useCallback(() => {
     setHistory([])
-    clearPersistedTerminalHistory()
-  }, [])
+    clearPersistedTerminalHistory(terminalHistoryStorageKey)
+  }, [terminalHistoryStorageKey])
 
-  const rememberCommand = useCallback((raw: string) => {
-    const trimmed = raw.trim()
-    if (!trimmed) return
-    setCommandHistory((prev) => {
-      const next = [
-        trimmed,
-        ...prev.filter((item) => item.toLowerCase() !== trimmed.toLowerCase()),
-      ].slice(0, TERMINAL_COMMAND_HISTORY_LIMIT)
-      persistCommandHistory(next)
-      return next
-    })
-  }, [])
+  const rememberCommand = useCallback(
+    (raw: string) => {
+      const trimmed = raw.trim()
+      if (!trimmed) return
+      setCommandHistory((prev) => {
+        const next = [
+          trimmed,
+          ...prev.filter(
+            (item) => item.toLowerCase() !== trimmed.toLowerCase(),
+          ),
+        ].slice(0, TERMINAL_COMMAND_HISTORY_LIMIT)
+        persistCommandHistory(commandHistoryStorageKey, next)
+        return next
+      })
+    },
+    [commandHistoryStorageKey],
+  )
 
   const runCommand = useCallback(
     async (raw: string) => {
@@ -1017,7 +1030,10 @@ export function TerminalPanel({
               case 'create': {
                 const requestedId = positional.shift()
                 const result = await createSession(requestedId)
-                registerPlaygroundAgentSessionId(result.session_id)
+                registerPlaygroundAgentSessionId(
+                  result.session_id,
+                  identityScopeKey,
+                )
                 onSessionChange(result.session_id)
                 append({
                   body: joinBodyLines([
@@ -1035,7 +1051,7 @@ export function TerminalPanel({
               case 'switch': {
                 const id = positional.shift()
                 if (!id) throw new Error(t('terminal.sessionUsage'))
-                registerPlaygroundAgentSessionId(id)
+                registerPlaygroundAgentSessionId(id, identityScopeKey)
                 onSessionChange(id)
                 append({
                   body: t('terminal.sessionSwitchedBody', { id }),
@@ -1138,7 +1154,10 @@ export function TerminalPanel({
                     ? positional.slice(0, roleIndex).join(' ')
                     : requireCurrentSession()
                 const role = positional[roleIndex] as 'user' | 'assistant'
-                const content = positional.slice(roleIndex + 1).join(' ').trim()
+                const content = positional
+                  .slice(roleIndex + 1)
+                  .join(' ')
+                  .trim()
                 if (!content) throw new Error(t('terminal.sessionUsage'))
                 const result = await addMessage(id, role, content)
                 append({
@@ -1277,6 +1296,7 @@ export function TerminalPanel({
       currentUri,
       entries,
       groupLabels,
+      identityScopeKey,
       onOpenAddResource,
       onOpenResource,
       onSessionChange,

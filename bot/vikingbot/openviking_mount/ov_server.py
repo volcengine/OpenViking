@@ -1124,6 +1124,10 @@ class VikingClient:
         keep_recent_count: int = 0,
         user_id: Optional[str] = None,
         memory_policy: Optional[Dict[str, Any]] = None,
+        retention_mode: Optional[str] = None,
+        keep_recent_turn_count: Optional[int] = None,
+        retained_message_token_budget: Optional[int] = None,
+        min_raw_tail_steps: Optional[int] = None,
     ) -> Dict[str, Any]:
         await self.ensure_session(
             session_id,
@@ -1133,9 +1137,20 @@ class VikingClient:
             else self.default_memory_policy(),
         )
         client = await self._session_client_for_user(user_id)
+        retention_kwargs = {
+            key: value
+            for key, value in {
+                "retention_mode": retention_mode,
+                "keep_recent_turn_count": keep_recent_turn_count,
+                "retained_message_token_budget": retained_message_token_budget,
+                "min_raw_tail_steps": min_raw_tail_steps,
+            }.items()
+            if value is not None
+        }
         return await client.commit_session(
             session_id,
             keep_recent_count=keep_recent_count,
+            **retention_kwargs,
         )
 
     async def commit(
@@ -1146,6 +1161,10 @@ class VikingClient:
         keep_recent_count: int = 0,
         peer_id: Optional[str] = None,
         memory_policy: Optional[Dict[str, Any]] = None,
+        retention_mode: Optional[str] = None,
+        keep_recent_turn_count: Optional[int] = None,
+        retained_message_token_budget: Optional[int] = None,
+        min_raw_tail_steps: Optional[int] = None,
     ):
         """Append messages to a stable session and commit it."""
         session_user_id = self._effective_session_user_id(user_id)
@@ -1163,11 +1182,22 @@ class VikingClient:
             default_user_peer_id=self._peer_id(peer_id),
             session_user_id=session_user_id,
         )
+        retention_kwargs = {
+            key: value
+            for key, value in {
+                "retention_mode": retention_mode,
+                "keep_recent_turn_count": keep_recent_turn_count,
+                "retained_message_token_budget": retained_message_token_budget,
+                "min_raw_tail_steps": min_raw_tail_steps,
+            }.items()
+            if value is not None
+        }
         commit_result = await self.commit_session(
             session_id,
             keep_recent_count=keep_recent_count,
             user_id=session_user_id,
             memory_policy=session_memory_policy,
+            **retention_kwargs,
         )
         logger.debug(
             f"Committed OpenViking session {session_id}, "

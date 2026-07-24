@@ -90,6 +90,46 @@ async def test_async_http_client_batch_add_messages_url_encodes_session_id():
 
 
 @pytest.mark.asyncio
+async def test_async_http_client_sends_message_semantics_and_turn_retention():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {"result": {"status": "ok"}}
+
+    await client.add_message(
+        "demo-session",
+        "assistant",
+        parts=[{"type": "text", "text": "checking"}],
+        turn_id="turn-1",
+        message_kind="assistant_step",
+        source_message_ids=["u1"],
+    )
+    await client.commit_session(
+        "demo-session",
+        retention_mode="turn_budget",
+        keep_recent_turn_count=3,
+        retained_message_token_budget=12_000,
+        min_raw_tail_steps=1,
+    )
+
+    assert fake_http.post.await_args_list[0].kwargs["json"] == {
+        "role": "assistant",
+        "parts": [{"type": "text", "text": "checking"}],
+        "turn_id": "turn-1",
+        "message_kind": "assistant_step",
+        "source_message_ids": ["u1"],
+    }
+    assert fake_http.post.await_args_list[1].kwargs["json"] == {
+        "keep_recent_count": 0,
+        "telemetry": False,
+        "retention_mode": "turn_budget",
+        "keep_recent_turn_count": 3,
+        "retained_message_token_budget": 12_000,
+        "min_raw_tail_steps": 1,
+    }
+
+
+@pytest.mark.asyncio
 async def test_async_http_client_reindex_posts_content_reindex():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))

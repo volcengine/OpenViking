@@ -98,9 +98,21 @@ export function removeStoredValue(key: string): void {
   }
 }
 
-export function readPlaygroundAgentSessionIds(): string[] {
+export function createIdentityStorageKey(
+  key: string,
+  identityScopeKey: string,
+): string {
+  return `${key}.${encodeURIComponent(identityScopeKey)}`
+}
+
+export function readPlaygroundAgentSessionIds(
+  identityScopeKey: string,
+): string[] {
   return readStoredJsonArray(
-    PLAYGROUND_AGENT_SESSIONS_STORAGE_KEY,
+    createIdentityStorageKey(
+      PLAYGROUND_AGENT_SESSIONS_STORAGE_KEY,
+      identityScopeKey,
+    ),
     (sessionId) =>
       typeof sessionId === 'string' && sessionId.length > 0
         ? sessionId
@@ -108,17 +120,28 @@ export function readPlaygroundAgentSessionIds(): string[] {
   )
 }
 
-export function registerPlaygroundAgentSessionId(sessionId: string): string[] {
+export function registerPlaygroundAgentSessionId(
+  sessionId: string,
+  identityScopeKey: string,
+): string[] {
   const trimmed = sessionId.trim()
   if (typeof window === 'undefined') return trimmed ? [trimmed] : []
-  if (!trimmed) return readPlaygroundAgentSessionIds()
+  if (!trimmed) return readPlaygroundAgentSessionIds(identityScopeKey)
 
   const next = [
     trimmed,
-    ...readPlaygroundAgentSessionIds().filter((item) => item !== trimmed),
+    ...readPlaygroundAgentSessionIds(identityScopeKey).filter(
+      (item) => item !== trimmed,
+    ),
   ].slice(0, 50)
 
-  writeStoredJson(PLAYGROUND_AGENT_SESSIONS_STORAGE_KEY, next)
+  writeStoredJson(
+    createIdentityStorageKey(
+      PLAYGROUND_AGENT_SESSIONS_STORAGE_KEY,
+      identityScopeKey,
+    ),
+    next,
+  )
 
   return next
 }

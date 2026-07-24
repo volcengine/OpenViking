@@ -1,9 +1,10 @@
 const en = {
   appShell: {
     footer: {
-      connection: 'Connection & Identity',
+      connection: 'Connection Settings',
       docs: 'Documentation',
       github: 'GitHub',
+      users: 'User Management',
     },
     header: {
       defaultTitle: 'OpenViking Studio',
@@ -36,6 +37,50 @@ const en = {
       noSessions: 'No sessions',
       workspaceGroupLabel: 'OpenViking Studio',
     },
+  },
+  accountSwitcher: {
+    create: 'Create account',
+    dialog: {
+      accountLabel: 'Account',
+      accountPlaceholder: 'team-account',
+      adminLabel: 'Initial admin user',
+      cancel: 'Cancel',
+      description:
+        'Create a workspace and its first administrator. Studio switches to it after creation.',
+      submit: 'Create and switch',
+      title: 'Create account',
+    },
+    empty: 'No matching accounts',
+    errors: {
+      loadAccounts: 'Could not load accounts',
+      noCreatedKey:
+        'The account was created, but the server did not return a data credential.',
+      noUsableKey:
+        'This account has no plaintext user API key available for data access.',
+      noUsers: 'This account has no available users.',
+    },
+    loading: 'Loading accounts...',
+    manualSwitch: {
+      description:
+        'The server did not expose a plaintext credential for {{account}}. Enter a User API Key from that account.',
+      hint: 'Studio only verifies the key and switches the active data identity. It will not modify or rotate the server credential.',
+      keyLabel: 'User API Key',
+      keyPlaceholder: 'Paste a User API Key for the target account',
+      manageOnly: 'Manage without a User Key',
+      submit: 'Verify and switch',
+      title: 'Enter a User API Key',
+    },
+    memberCount: '{{count}} users',
+    searchPlaceholder: 'Search accounts',
+    toast: {
+      created: 'Created and switched to {{account}}',
+      createdSwitchFailed:
+        'Created {{account}}, but data identity switching failed: {{error}}. The Account remains available for management.',
+      managementSwitched:
+        'Switched management to {{account}}. Select or create a User Key before opening tenant data.',
+      switched: 'Switched to {{account}}',
+    },
+    unset: 'No account selected',
   },
   common: {
     action: {
@@ -106,12 +151,15 @@ const en = {
       addAccount: 'Add account',
       addUser: 'Add user',
       cancel: 'Cancel',
+      changeRole: 'Change the role for {{user}}',
+      confirmRoleChange: 'Confirm change',
       copy: 'Copy',
+      currentIdentity: 'Current identity',
       refresh: 'Refresh',
       regenerate: 'Regenerate',
       save: 'Save',
+      switchIdentity: 'Switch identity',
       use: 'Use',
-      useForData: 'Use as User API Key',
     },
     connection: {
       accountListLimited:
@@ -121,11 +169,45 @@ const en = {
         'Use a User API Key for tenant data APIs and an optional Root or account-admin key for control APIs.',
       devMode:
         'Development mode is active — identity is automatic and no API key is required.',
-      noKey:
-        'Add a Root API Key to manage accounts and mint user keys. The User API Key alone powers the Playground and data APIs.',
+      keyGuide: {
+        control: {
+          primary:
+            'Your User API Key already enables the Playground and data access. Regular users do not need a control credential.',
+          secondary:
+            'To switch Accounts or manage users, request a Root Key from the deployment admin or an Admin Key from the current Account admin. The Root Key is stored at server.root_api_key in the server-side ov.conf.',
+          title: 'Need to manage Accounts or users?',
+        },
+        data: {
+          primary:
+            'The Root/Admin API Key is mainly for management. The Playground and tenant data APIs require a User API Key bound to a user identity.',
+          secondary:
+            'Select or create a user in User Management, or regenerate its key, then use it as the User API Key.',
+          title: 'A User API Key is still required',
+        },
+        empty: {
+          primary:
+            'Regular users should request a User API Key from their Account admin.',
+          secondary:
+            'Deployment admins can find the Root API Key at server.root_api_key in the server-side ov.conf. Add it here, then create or regenerate a User Key in User Management.',
+          title: 'No OpenViking API Key yet?',
+        },
+        learnMore: 'Learn how to get an API Key',
+        trusted: {
+          primary:
+            'This trusted server enforces Root Key validation. The browser needs the same Root API Key for management and tenant data requests.',
+          secondary:
+            'Request the Root Key from the deployment admin; it is stored at server.root_api_key in the server-side ov.conf. Trusted-mode data identity comes from Account/User assertions and does not need a User API Key.',
+          title: 'This trusted server requires a Root API Key',
+        },
+      },
       rootHint: 'Lists accounts and users, and mints or rotates keys.',
       title: 'Connection settings',
       userHint: 'Used by the Playground and tenant data APIs.',
+    },
+    connectionPage: {
+      description:
+        'Configure the OpenViking server connection, control credential, and active data credential.',
+      title: 'Connection settings',
     },
     dialogs: {
       addAccount: {
@@ -134,9 +216,16 @@ const en = {
         title: 'Add account',
       },
       addUser: {
+        currentAccountDescription:
+          'Create a user in {{accountId}}. The generated key is shown only once.',
         description:
           'Register a user under an existing account. The generated key will be shown once.',
         title: 'Add user',
+      },
+      changeRole: {
+        description:
+          'Change the role for {{account}} / {{user}} to {{role}}. The new permissions take effect immediately.',
+        title: 'Change user role?',
       },
       regenerate: {
         description:
@@ -182,8 +271,21 @@ const en = {
     loading: 'Loading identities...',
     management: {
       accountFilter: 'Accounts',
+      accessDeniedDescription:
+        'User management requires a validated Root or Account Admin API key.',
+      accessDeniedTitle: 'User management unavailable',
+      currentAccountDescription:
+        'Manage users and access credentials in the {{account}} workspace.',
       description:
         'Review users and credentials for selected accounts, then add users or rotate keys from the web UI.',
+      memberListDescription:
+        '"Switch identity" uses that user for data pages such as Playground and Retrieval without changing the active Root/Admin management credential.',
+      memberListDescriptionRoot:
+        'You can change member roles here. "Switch identity" only changes the user used by data pages such as Playground and Retrieval; it does not change the active Root management credential.',
+      memberListTitle: 'Workspace members',
+      noUsableKey:
+        'This user has no plaintext API key available for data access.',
+      openConnection: 'Open connection settings',
       title: 'User management',
     },
     page: {
@@ -204,6 +306,7 @@ const en = {
     },
     roles: {
       admin: 'Admin',
+      root: 'Root',
       user: 'User',
     },
     serverMode: {
@@ -230,8 +333,9 @@ const en = {
       connectionSaved: 'Connection saved',
       copyFailed: 'Copy failed',
       copied: 'Copied',
-      dataKeySelected: 'User API key selected',
+      dataKeySelected: 'Data access identity switched',
       keyRegenerated: 'API key regenerated',
+      roleUpdated: "{{user}}'s role changed to {{role}}",
       userCreated: 'User created',
     },
   },
