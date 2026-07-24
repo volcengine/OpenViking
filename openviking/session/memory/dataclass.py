@@ -163,6 +163,7 @@ class MemoryOperationSource(BaseModel):
 
     extraction_id: Optional[str] = None
     session_id: Optional[str] = None
+    message_ids: List[str] = Field(default_factory=list)
     archive_uri: Optional[str] = None
     task_id: Optional[str] = None
     trace_id: Optional[str] = None

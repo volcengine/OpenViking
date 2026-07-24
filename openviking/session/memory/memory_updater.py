@@ -33,6 +33,10 @@ from openviking.session.memory.utils.memory_file_utils import (
     bump_memory_version,
     next_memory_version,
 )
+from openviking.session.memory.utils.provenance import (
+    merge_memory_provenance,
+    provenance_sources_for_operation,
+)
 from openviking.session.memory.utils.resource_refs import (
     RESOURCE_REF_SOURCE_SESSION_COMMIT,
     sync_memory_resource_refs,
@@ -130,7 +134,6 @@ async def write_stored_links(
     return updated_uris
 
 
-
 def _remap_link_dict(link: Dict[str, Any], uri_remap: Dict[str, str]) -> Dict[str, Any]:
     remapped = dict(link or {})
     if remapped.get("from_uri") in uri_remap:
@@ -151,6 +154,7 @@ def remap_stored_links(links: List[StoredLink], uri_remap: Dict[str, str]) -> Li
             continue
         remapped_links.append(link.model_copy(update={"from_uri": from_uri, "to_uri": to_uri}))
     return remapped_links
+
 
 def _operation_trace_id(op: ResolvedOperation) -> str | None:
     source = getattr(op, "source", None)
@@ -293,6 +297,7 @@ class ExtractContext:
     def get_year(self, ranges_str: str) -> str:
         """根据 ranges 字符串获取第一条消息的年份，fallback 到当前年份"""
         from datetime import datetime
+
         if not ranges_str:
             return str(datetime.now().year)
         msg_range = self.read_message_ranges(ranges_str)
@@ -304,6 +309,7 @@ class ExtractContext:
     def get_month(self, ranges_str: str) -> str:
         """根据 ranges 字符串获取第一条消息的月份，fallback 到当前月份"""
         from datetime import datetime
+
         if not ranges_str:
             return f"{datetime.now().month:02d}"
         msg_range = self.read_message_ranges(ranges_str)
@@ -315,6 +321,7 @@ class ExtractContext:
     def get_day(self, ranges_str: str) -> str:
         """根据 ranges 字符串获取第一条消息的日期，fallback 到当前日期"""
         from datetime import datetime
+
         if not ranges_str:
             return f"{datetime.now().day:02d}"
         msg_range = self.read_message_ranges(ranges_str)
@@ -567,6 +574,21 @@ class MessageRange:
             if i < len(self.elements) - 1:
                 result.append("...")
         return "\n".join(result)
+
+    def source_message_ids(self) -> List[str]:
+        """Return deduplicated original message IDs covered by this range."""
+        message_ids: List[str] = []
+        for message_group in self.elements:
+            for message in message_group:
+                chunk_meta = self._chunk_meta_for(message)
+                message_id = (
+                    chunk_meta.source_message_id
+                    if chunk_meta is not None
+                    else getattr(message, "id", None)
+                )
+                if message_id:
+                    message_ids.append(str(message_id))
+        return list(dict.fromkeys(message_ids))
 
     def _format_contiguous_group(self, msg_group: List[Message]) -> List[str]:
         formatted = []
@@ -1005,6 +1027,12 @@ class MemoryUpdater:
             source_trace_id = _operation_trace_id(resolved_op)
             if source_trace_id:
                 metadata["last_update_trace_id"] = source_trace_id
+            provenance = merge_memory_provenance(
+                old_content.extra_fields.get("provenance") if old_content is not None else None,
+                provenance_sources_for_operation(resolved_op),
+            )
+            if provenance:
+                metadata["provenance"] = provenance
             # Process fields defined in schema (apply merge_op)
             for field in schema.fields:
                 if field.name in resolved_op.memory_fields:
@@ -1150,7 +1178,6 @@ class MemoryUpdater:
             lock_handle=self._transaction_handle,
         )
 
-
     async def _inherit_deleted_link_relations(
         self,
         operations: ResolvedOperations,
@@ -1173,7 +1200,9 @@ class MemoryUpdater:
             try:
                 content = await viking_fs.read_file(deleted_uri, ctx=ctx)
             except Exception as e:
-                tracer.error(f"Failed to read deleted memory links for replacement {deleted_uri}: {e}")
+                tracer.error(
+                    f"Failed to read deleted memory links for replacement {deleted_uri}: {e}"
+                )
                 continue
             if not content:
                 continue
