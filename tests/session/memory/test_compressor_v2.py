@@ -6,6 +6,7 @@ Test for SessionCompressorV2.
 Uses MockVikingFS and real VLM (from config).
 """
 
+import asyncio
 import logging
 from types import SimpleNamespace
 from typing import Any, Dict, List
@@ -611,6 +612,112 @@ class TestCompressorV2:
         assert kwargs["tree_paths"] == ["/local/default/user/default/memories/events"]
 
     @pytest.mark.asyncio
+    async def test_extract_long_term_memories_releases_refreshed_lock_after_failure(self):
+        """A failed v2 extraction must stop refreshing and release its schema locks."""
+        compressor = SessionCompressorV2(vikingdb=None)
+        user = UserIdentifier.the_default_user()
+        ctx = RequestContext(user=user, role=Role.ROOT)
+        messages = [Message(id="msg-test", role="user", parts=[TextPart("test")])]
+        events: List[str] = []
+
+        class FakeVikingFS:
+            agfs = object()
+
+            def _uri_to_path(self, uri: str, ctx=None) -> str:
+                return uri
+
+        class DummyProvider:
+            _isolation_handler = None
+
+            async def prepare_extraction_messages(self):
+                pass
+
+            def get_extract_context(self):
+                return ExtractContext(messages)
+
+            def get_memory_schemas(self, _ctx):
+                return []
+
+        class DummyIsolationHandler:
+            def prepare_messages(self):
+                pass
+
+            def get_read_scope(self):
+                return SimpleNamespace(user_ids=["default"])
+
+        provider = DummyProvider()
+        refresh_seen = asyncio.Event()
+
+        class DummyOrchestrator:
+            context_provider = provider
+            _transaction_handle = None
+
+            async def run(self):
+                await asyncio.wait_for(refresh_seen.wait(), timeout=1.0)
+                raise RuntimeError("extraction failed")
+
+        handle = SimpleNamespace(id="handle-lease", locks=["/memories"])
+        active_handles = {handle.id: handle}
+
+        async def acquire_exact_tree_batch(*args, **kwargs):
+            events.append("acquire")
+            return True
+
+        async def refresh_lock(_handle):
+            events.append("refresh")
+            refresh_seen.set()
+
+        async def release(_handle):
+            events.append("release")
+            active_handles.pop(_handle.id, None)
+
+        lock_manager = SimpleNamespace(
+            _path_lock=SimpleNamespace(_lock_expire=0.02),
+            create_handle=lambda: handle,
+            get_handle=active_handles.get,
+            acquire_exact_tree_batch=AsyncMock(side_effect=acquire_exact_tree_batch),
+            refresh_lock=AsyncMock(side_effect=refresh_lock),
+            release=AsyncMock(side_effect=release),
+        )
+        config = SimpleNamespace(
+            memory=SimpleNamespace(
+                v2_lock_max_retries=1,
+                v2_lock_retry_interval_seconds=0.0,
+            )
+        )
+
+        with (
+            patch("openviking.session.compressor_v2.get_viking_fs", return_value=FakeVikingFS()),
+            patch("openviking.session.compressor_v2.get_openviking_config", return_value=config),
+            patch("openviking.storage.transaction.init_lock_manager"),
+            patch("openviking.storage.transaction.get_lock_manager", return_value=lock_manager),
+            patch(
+                "openviking.session.memory.memory_type_registry.create_default_registry",
+                return_value=SimpleNamespace(initialize_memory_files=AsyncMock()),
+            ),
+            patch(
+                "openviking.session.memory.session_extract_context_provider.SessionExtractContextProvider",
+                return_value=provider,
+            ),
+            patch(
+                "openviking.session.compressor_v2.MemoryIsolationHandler",
+                return_value=DummyIsolationHandler(),
+            ),
+            patch.object(compressor, "_get_or_create_react", return_value=DummyOrchestrator()),
+        ):
+            with pytest.raises(RuntimeError, match="extraction failed"):
+                await compressor.extract_long_term_memories(
+                    messages=messages,
+                    ctx=ctx,
+                    strict_extract_errors=True,
+                )
+
+        assert events[0] == "acquire"
+        assert "refresh" in events
+        assert events[-1] == "release"
+        lock_manager.release.assert_awaited_once_with(handle)
+
+    @pytest.mark.asyncio
     async def test_extract_phase_runs_post_apply_before_lock_release(self):
         """Agent experience source metadata should be updated inside the schema lock."""
         compressor = SessionCompressorV2(vikingdb=None)
@@ -638,11 +745,14 @@ class TestCompressorV2:
             def _get_registry(self):
                 return object()
 
+        refresh_seen = asyncio.Event()
+
         class DummyExtractLoop:
             def __init__(self, **kwargs):
                 pass
 
             async def run(self):
+                await asyncio.wait_for(refresh_seen.wait(), timeout=1.0)
                 return (
                     ResolvedOperations(
                         upsert_operations=[
@@ -673,7 +783,7 @@ class TestCompressorV2:
                 v2_lock_retry_interval_seconds=0.0,
             ),
         )
-        handle = SimpleNamespace(id="handle-1", locks=[])
+        handle = SimpleNamespace(id="handle-1", locks=["/memories"])
 
         async def acquire_exact_tree_batch(*args, **kwargs):
             events.append("acquire")
@@ -682,9 +792,16 @@ class TestCompressorV2:
         async def release(_handle):
             events.append("release")
 
+        async def refresh_lock(_handle):
+            events.append("refresh")
+            refresh_seen.set()
+
         lock_manager = SimpleNamespace(
+            _path_lock=SimpleNamespace(_lock_expire=0.02),
             create_handle=lambda: handle,
+            get_handle=lambda handle_id: handle if handle_id == handle.id else None,
             acquire_exact_tree_batch=AsyncMock(side_effect=acquire_exact_tree_batch),
+            refresh_lock=AsyncMock(side_effect=refresh_lock),
             release=AsyncMock(side_effect=release),
         )
 
@@ -712,7 +829,9 @@ class TestCompressorV2:
             )
 
         assert result[0] == ["viking://user/default/memories/experiences/debug.md"]
-        assert events == ["acquire", "apply", "post_apply", "release"]
+        assert events[0] == "acquire"
+        assert "refresh" in events
+        assert events[-3:] == ["apply", "post_apply", "release"]
 
     @pytest.mark.asyncio
     async def test_append_trajectories_uses_exact_lock(self):
