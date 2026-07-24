@@ -140,9 +140,11 @@ transformContext auto recall 流程：
 5. 如果归档成功，再回读 `getSessionContext`，获取最新 `latest_archive_overview` 作为 summary：`context-engine.ts:1605`。
 6. 返回 tokensBefore/tokensAfter、latest archive id 和 summary。
 
-### 4.6 `before_reset`：重置前保护性提交
+### 4.6 `session_end` / `before_reset`：会话结束保护性提交
 
-插件监听 `before_reset`，在 reset 前尽量 commit 当前 OpenViking session，避免对话被重置时未归档内容丢失：`index.ts:1919`。
+插件在 `session_end` 和 `before_reset` 时调用 `commitSession(wait=false, keepRecentCount=0)`：Phase 1 会先归档全部剩余消息，Phase 2 记忆抽取在服务端异步继续，因此 `/new`、Webchat 新建会话、reset 和 gateway 关闭不需要等待抽取完成。
+
+若 OpenClaw 同时触发 `before_reset` 和 `session_end`，插件按解析后的 OpenViking session id 去重正在执行的 commit，避免同一批消息被并发重复归档；失败的 commit 会释放去重状态，允许后续生命周期事件重试。实现位置：`plugin/openviking-lifecycle-hooks.ts`、`services/context-lifecycle-service.ts`。
 
 ---
 

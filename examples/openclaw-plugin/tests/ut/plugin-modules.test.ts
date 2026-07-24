@@ -439,6 +439,7 @@ describe("plugin module seams", () => {
     registerOpenVikingLifecycleHooks({
       api,
       rememberSessionAgentId,
+      toOVSessionId: (sessionId, sessionKey) => sessionKey ?? sessionId,
       isBypassedSession: (ctx) => ctx?.sessionKey === "bypass",
       verboseRoutingInfo,
       getContextEngine: () => ({ commitOVSession }),
@@ -456,14 +457,26 @@ describe("plugin module seams", () => {
     await handlers.get("session_end")?.({}, { sessionId: "session-2", agentId: "agent-main" });
     expect(rememberSessionAgentId).toHaveBeenCalledWith({ sessionId: "session-1", agentId: "agent-main" });
     expect(rememberSessionAgentId).toHaveBeenCalledWith({ sessionId: "session-2", agentId: "agent-main" });
+    expect(commitOVSession).toHaveBeenCalledWith(
+      { sessionId: "session-2", sessionKey: undefined },
+      { wait: false, keepRecentCount: 0 },
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      "openviking: committed OV session on session_end for session=session-2",
+    );
 
     await handlers.get("before_reset")?.({}, { sessionId: "session-3", sessionKey: "key-3" });
-    expect(commitOVSession).toHaveBeenCalledWith({ sessionId: "session-3", sessionKey: "key-3" });
-    expect(logger.info).toHaveBeenCalledWith("openviking: committed OV session on reset for session=session-3");
+    expect(commitOVSession).toHaveBeenCalledWith(
+      { sessionId: "session-3", sessionKey: "key-3" },
+      { wait: false, keepRecentCount: 0 },
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      "openviking: committed OV session on before_reset for session=session-3",
+    );
 
     await handlers.get("before_reset")?.({}, { sessionId: "session-4", sessionKey: "bypass" });
     expect(verboseRoutingInfo).toHaveBeenCalledWith(expect.stringContaining("bypassing before_reset"));
-    expect(commitOVSession).toHaveBeenCalledTimes(1);
+    expect(commitOVSession).toHaveBeenCalledTimes(2);
   });
 
   it("registers the context engine through a dedicated plugin module", () => {
