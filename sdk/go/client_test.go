@@ -124,6 +124,9 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 		if !ok || len(levels) != 2 || levels[0] != float64(0) || levels[1] != float64(2) {
 			t.Fatalf("level = %#v", body["level"])
 		}
+		if tags, ok := body["tags"].([]any); !ok || len(tags) != 2 || tags[0] != "topic=docs" || tags[1] != "kind=api" {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
 		requireBodyKeysAbsent(t, body, "agent_id", "agent_uri")
 		writeOK(t, w, map[string]any{
 			"resources": []map[string]any{
@@ -141,6 +144,7 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 		Until:       "2026-06-18",
 		TimeField:   "created_at",
 		Level:       []int{0, 2},
+		Tags:        []string{"topic=docs", "kind=api"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -156,7 +160,7 @@ func TestFindOmitsSearchFiltersWhenUnset(t *testing.T) {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
 		body := readJSONBody(t, r)
-		requireBodyKeysAbsent(t, body, "since", "until", "time_field", "level", "agent_id", "agent_uri")
+		requireBodyKeysAbsent(t, body, "since", "until", "time_field", "level", "tags", "agent_id", "agent_uri")
 		writeOK(t, w, map[string]any{"resources": []any{}})
 	}))
 	defer closeServer()
@@ -406,6 +410,9 @@ func TestSearchSendsSessionAndSearchFilters(t *testing.T) {
 		if !ok || len(levels) != 1 || levels[0] != float64(2) {
 			t.Fatalf("level = %#v", body["level"])
 		}
+		if tags, ok := body["tags"].([]any); !ok || len(tags) != 1 || tags[0] != "topic=docs" {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
 		requireBodyKeysAbsent(t, body, "agent_id", "agent_uri")
 		writeOK(t, w, map[string]any{"resources": []any{}})
 	}))
@@ -418,6 +425,7 @@ func TestSearchSendsSessionAndSearchFilters(t *testing.T) {
 		Until:     "2026-06-18",
 		TimeField: "updated_at",
 		Level:     []int{2},
+		Tags:      []string{"topic=docs"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -429,7 +437,7 @@ func TestSearchOmitsSearchFiltersWhenUnset(t *testing.T) {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
 		body := readJSONBody(t, r)
-		requireBodyKeysAbsent(t, body, "since", "until", "time_field", "level", "agent_id", "agent_uri")
+		requireBodyKeysAbsent(t, body, "since", "until", "time_field", "level", "tags", "agent_id", "agent_uri")
 		writeOK(t, w, map[string]any{"resources": []any{}})
 	}))
 	defer closeServer()
@@ -456,6 +464,46 @@ func TestSearchSendsImageURI(t *testing.T) {
 		TargetURI: "viking://resources/images",
 		Image:     "viking://resources/images/cat.png",
 	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRelationRequests(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/v1/relations":
+			if got := r.URL.Query().Get("uri"); got != "viking://resources/from" {
+				t.Fatalf("uri = %q", got)
+			}
+			writeOK(t, w, []map[string]any{{"uri": "viking://resources/to"}})
+		case "POST /api/v1/relations/link":
+			body := readJSONBody(t, r)
+			targets, ok := body["to_uris"].([]any)
+			if body["from_uri"] != "viking://resources/from" || body["reason"] != "related" ||
+				!ok || len(targets) != 1 || targets[0] != "viking://resources/to" {
+				t.Fatalf("link body = %#v", body)
+			}
+			writeOK(t, w, map[string]any{"linked": true})
+		case "DELETE /api/v1/relations/link":
+			body := readJSONBody(t, r)
+			if body["from_uri"] != "viking://resources/from" || body["to_uri"] != "viking://resources/to" {
+				t.Fatalf("unlink body = %#v", body)
+			}
+			writeOK(t, w, map[string]any{"unlinked": true})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer closeServer()
+
+	relations, err := client.Relations(context.Background(), "resources/from")
+	if err != nil || len(relations) != 1 {
+		t.Fatalf("relations = %#v, err = %v", relations, err)
+	}
+	if err := client.Link(context.Background(), "resources/from", []string{"resources/to"}, "related"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Unlink(context.Background(), "resources/from", "resources/to"); err != nil {
 		t.Fatal(err)
 	}
 }
