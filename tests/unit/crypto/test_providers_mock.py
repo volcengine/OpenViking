@@ -28,6 +28,7 @@ from openviking.crypto.providers import (
     PROVIDER_LOCAL,
     PROVIDER_VAULT,
     PROVIDER_VOLCENGINE,
+    ConfigError,
     LocalFileProvider,
     VaultProvider,
     VolcengineKMSProvider,
@@ -238,6 +239,27 @@ class TestVaultProviderMock:
 
         assert len(root_key) == 32
         client.secrets.kv.v1.create_or_update_secret.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_persist_failure_clears_cache_and_retries(
+        self, vault_mock_provider, vault_invalid_path
+    ):
+        """A failed persist must not leave an unpersisted ephemeral key cached."""
+        client = Mock()
+        client.secrets.kv.v1.read_secret.side_effect = vault_invalid_path()
+        client.secrets.kv.v1.create_or_update_secret.side_effect = RuntimeError("write outage")
+        vault_mock_provider._get_client = AsyncMock(return_value=client)
+        vault_mock_provider._encrypt_with_vault = AsyncMock(return_value=b"vault:ciphertext")
+
+        with pytest.raises(ConfigError, match="data loss risk"):
+            await vault_mock_provider.get_root_key()
+
+        # Cache must be cleared so a retry re-reads Vault instead of returning
+        # via the get_root_key fast path a key that was never persisted.
+        assert vault_mock_provider._root_key is None
+        with pytest.raises(ConfigError, match="data loss risk"):
+            await vault_mock_provider.get_root_key()
+        assert client.secrets.kv.v1.read_secret.call_count == 2
 
     @pytest.mark.asyncio
     async def test_root_key_decrypt_failure_never_creates(

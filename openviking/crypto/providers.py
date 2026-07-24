@@ -437,9 +437,13 @@ class VaultProvider(BaseProvider):
 
             self._root_key = secrets.token_bytes(32)
 
-            # Encrypt and store root key in Vault kv
-            encrypted_root_key = await self._encrypt_with_vault(self._root_key)
+            # Encrypt and store root key in Vault kv. Any failure here (transit
+            # encrypt down, KV write outage) must clear the cached ephemeral key
+            # before raising: otherwise a retried get_root_key() hits the
+            # `self._root_key is not None` fast path and encrypts data with a key
+            # that was never persisted — the data-loss class this provider guards.
             try:
+                encrypted_root_key = await self._encrypt_with_vault(self._root_key)
                 if self.kv_version == 2:
                     await asyncio.to_thread(
                         client.secrets.kv.v2.create_or_update_secret,
@@ -464,6 +468,7 @@ class VaultProvider(BaseProvider):
                     )
                 logger.info("Created and stored new root key in Vault")
             except Exception as e:
+                self._root_key = None
                 raise ConfigError(
                     f"Failed to persist root key to Vault. "
                     f"Refusing to start with ephemeral key (data loss risk): {e}"
