@@ -51,6 +51,19 @@ class TestGeminiDenseEmbedderInit:
         mock_client_class.assert_called_once()
 
     @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_init_forwards_api_base_to_http_options(self, mock_client_class):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        GeminiDenseEmbedder(
+            "gemini-embedding-2-preview",
+            api_key="test-key",
+            api_base="https://gateway.example.com",
+        )
+
+        http_options = mock_client_class.call_args.kwargs["http_options"]
+        assert http_options.base_url == "https://gateway.example.com"
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
     def test_default_dimension_3072(self, mock_client_class):
         from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
 

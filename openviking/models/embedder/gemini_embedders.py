@@ -123,6 +123,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         task_type: Optional[str] = None,
         query_param: Optional[str] = None,
         document_param: Optional[str] = None,
+        api_base: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(model_name, config)
@@ -140,12 +141,13 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
             self.client = genai.Client(
                 api_key=api_key,
                 http_options=HttpOptions(
+                    base_url=api_base,
                     retry_options=HttpRetryOptions(
                         attempts=max(self.max_retries + 1, 1),
                         initial_delay=0.5,
                         max_delay=8.0,
                         exp_base=2.0,
-                    )
+                    ),
                 ),
             )
         else:
@@ -153,6 +155,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         self.task_type = task_type
         self.query_param = query_param
         self.document_param = document_param
+        self.api_base = api_base
         self._dimension = dimension or self._default_dimension(model_name)
         self._token_limit = _MODEL_TOKEN_LIMITS.get(model_name, _DEFAULT_TOKEN_LIMIT)
 
