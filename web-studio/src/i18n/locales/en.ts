@@ -9,6 +9,14 @@ const en = {
       users: 'User Management',
     },
     header: {
+      currentUser: {
+        account: 'Account',
+        accountSummary: 'Account · {{account}}',
+        openMenu: 'View current user {{user}}',
+        signedInAs: 'Current data identity',
+        unset: 'Not set',
+        user: 'User',
+      },
       defaultTitle: 'OpenViking Studio',
     },
     navigation: {

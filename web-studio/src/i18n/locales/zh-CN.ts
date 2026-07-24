@@ -9,6 +9,14 @@ const zhCN = {
       users: '用户管理',
     },
     header: {
+      currentUser: {
+        account: 'Account',
+        accountSummary: 'Account · {{account}}',
+        openMenu: '查看当前用户 {{user}}',
+        signedInAs: '当前数据访问身份',
+        unset: '未设置',
+        user: 'User',
+      },
       defaultTitle: 'OpenViking Studio',
     },
     navigation: {
