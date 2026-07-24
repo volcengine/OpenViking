@@ -152,7 +152,7 @@ struct Cli {
     #[arg(long = "actor-peer-id", global = true, hide = true)]
     actor_peer_id: Option<String>,
 
-    /// Use root API key for admin, system, reindex, and task status/list commands
+    /// Use root API key for admin, system, reindex, and task status/list/cancel commands
     #[arg(long, global = true, hide = true)]
     sudo: bool,
 
@@ -1033,7 +1033,9 @@ impl Commands {
             Self::Admin { .. } | Self::System { .. } | Self::Reindex { .. } => true,
             Self::Task { action } => matches!(
                 action,
-                TaskCommands::Status { .. } | TaskCommands::List { .. }
+                TaskCommands::Status { .. }
+                    | TaskCommands::List { .. }
+                    | TaskCommands::Cancel { .. }
             ),
             _ => false,
         }
@@ -1065,12 +1067,18 @@ enum TaskCommands {
         #[arg(value_name = "task-id")]
         task_id: String,
     },
+    /// Cancel a pending or running add-resource task
+    Cancel {
+        /// Task ID returned by add-resource
+        #[arg(value_name = "task-id")]
+        task_id: String,
+    },
     /// List all tracked tasks
     List {
         /// Filter by task type (e.g. add_resource, add_skill, session_commit, reindex)
         #[arg(long, value_name = "type")]
         task_type: Option<String>,
-        /// Filter by status (pending, running, completed, failed)
+        /// Filter by status (pending, running, completed, failed, cancelled)
         #[arg(long, value_name = "status")]
         status: Option<String>,
     },
@@ -2644,7 +2652,7 @@ async fn main() {
         let (title, message, actions) = match language {
             i18n::Language::En => (
                 "Command Error",
-                "--sudo is only supported for admin, system, reindex, task status, and task list commands.",
+                "--sudo is only supported for admin, system, reindex, task status, task list, and task cancel commands.",
                 vec![
                     error_ui::ErrorAction::new("ov admin --help", "Show admin commands"),
                     error_ui::ErrorAction::new("ov system --help", "Show system commands"),
@@ -2654,7 +2662,7 @@ async fn main() {
             ),
             i18n::Language::ZhCn => (
                 "命令错误",
-                "--sudo 只支持 admin、system、reindex、task status 和 task list 命令。",
+                "--sudo 只支持 admin、system、reindex、task status、task list 和 task cancel 命令。",
                 vec![
                     error_ui::ErrorAction::new("ov admin --help", "查看管理命令"),
                     error_ui::ErrorAction::new("ov system --help", "查看系统命令"),
@@ -2964,6 +2972,10 @@ async fn main() {
             TaskCommands::Status { task_id } => {
                 let client = ctx.get_client();
                 commands::task::status(&client, &task_id, ctx.output_format, ctx.compact).await
+            }
+            TaskCommands::Cancel { task_id } => {
+                let client = ctx.get_client();
+                commands::task::cancel(&client, &task_id, ctx.output_format, ctx.compact).await
             }
             TaskCommands::List { task_type, status } => {
                 let client = ctx.get_client();
@@ -4105,7 +4117,7 @@ mod tests {
     }
 
     #[test]
-    fn sudo_supports_task_status_and_list_only() {
+    fn sudo_supports_task_status_list_and_cancel_only() {
         let status = Cli::try_parse_from(["ov", "--sudo", "task", "status", "task-123"])
             .expect("sudo task status should parse");
         assert!(status.sudo);
@@ -4122,6 +4134,11 @@ mod tests {
         .expect("sudo task list should parse");
         assert!(list.sudo);
         assert!(list.command.supports_sudo());
+
+        let cancel = Cli::try_parse_from(["ov", "--sudo", "task", "cancel", "task-123"])
+            .expect("sudo task cancel should parse");
+        assert!(cancel.sudo);
+        assert!(cancel.command.supports_sudo());
 
         let watch = Cli::try_parse_from(["ov", "--sudo", "task", "watch", "ls"])
             .expect("sudo task watch should still parse before runtime validation");

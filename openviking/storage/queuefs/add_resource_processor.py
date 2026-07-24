@@ -21,6 +21,10 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+class AddResourceTaskCancelled(Exception):
+    """Internal control flow for cooperative user-requested cancellation."""
+
+
 class AddResourceProcessor(DequeueHandlerBase):
     """Own an add-resource task until it reaches a terminal state and can be ACKed."""
 
@@ -88,7 +92,6 @@ class AddResourceProcessor(DequeueHandlerBase):
         if task.status in (TaskStatus.COMPLETED, TaskStatus.FAILED):
             self.report_success()
             return None
-
         resource_lock = None
         try:
             resource_lock = await self._load_lock(msg, ctx)
@@ -104,6 +107,19 @@ class AddResourceProcessor(DequeueHandlerBase):
             self.report_error(f"Invalid lock_handoff: {exc}", data)
             return None
 
+        if task.status == TaskStatus.CANCELLED:
+            try:
+                await self._resource_service.rollback_cancelled_add_resource(
+                    msg,
+                    ctx=ctx,
+                    resource_lock=resource_lock,
+                )
+            finally:
+                if resource_lock is not None:
+                    await resource_lock.close()
+            self.report_success()
+            return None
+
         telemetry_id = msg.telemetry_id or ""
         telemetry = resolve_telemetry(telemetry_id) if telemetry_id else None
         if telemetry is None:
@@ -114,6 +130,8 @@ class AddResourceProcessor(DequeueHandlerBase):
                 telemetry.telemetry_id = telemetry_id
 
         async def _set_stage(stage: str) -> None:
+            if tracker.is_cancelled(msg.task_id):
+                raise AddResourceTaskCancelled
             await tracker.update_stage(
                 msg.task_id,
                 stage,
@@ -135,6 +153,19 @@ class AddResourceProcessor(DequeueHandlerBase):
                     resource_lock=resource_lock,
                     stage_callback=_set_stage,
                 )
+                current_task = await tracker.get(
+                    msg.task_id,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                if current_task is not None and current_task.status == TaskStatus.CANCELLED:
+                    await self._resource_service.rollback_cancelled_add_resource(
+                        msg,
+                        ctx=ctx,
+                        resource_lock=resource_lock,
+                    )
+                    self.report_success()
+                    return None
                 if result.get("status") == "error":
                     errors = result.get("errors") or ["resource processing failed"]
                     await tracker.fail(
@@ -155,12 +186,32 @@ class AddResourceProcessor(DequeueHandlerBase):
                     )
                     self.report_error("queue processing failed", data)
                     return None
-                await tracker.complete(
+                completed = await tracker.complete(
                     msg.task_id,
                     result,
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
                     resource_id=result.get("root_uri"),
+                )
+                if not completed:
+                    current_task = await tracker.get(
+                        msg.task_id,
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                    )
+                    if current_task is not None and current_task.status == TaskStatus.CANCELLED:
+                        await self._resource_service.rollback_cancelled_add_resource(
+                            msg,
+                            ctx=ctx,
+                            resource_lock=resource_lock,
+                        )
+                self.report_success()
+                return None
+            except AddResourceTaskCancelled:
+                await self._resource_service.rollback_cancelled_add_resource(
+                    msg,
+                    ctx=ctx,
+                    resource_lock=resource_lock,
                 )
                 self.report_success()
                 return None

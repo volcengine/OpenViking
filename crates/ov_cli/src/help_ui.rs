@@ -2178,7 +2178,7 @@ fn localized_global_option_description<'a>(
         "compact" => "紧凑输出",
         "account" => "覆盖账户",
         "user" => "覆盖用户",
-        "sudo" => "admin、system、reindex、task status/list 使用 root API Key",
+        "sudo" => "admin、system、reindex、task status/list/cancel 使用 root API Key",
         _ => description,
     }
 }
@@ -2693,7 +2693,9 @@ mod tests {
         assert!(rendered.contains("ov tui"));
         assert!(rendered.contains("-c, --compact <true|false>"));
         assert!(
-            rendered.contains("Use root API key for admin, system, reindex, and task status/list")
+            rendered.contains(
+                "Use root API key for admin, system, reindex, and task status/list/cancel"
+            )
         );
     }
 

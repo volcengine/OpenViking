@@ -48,7 +48,7 @@ Configure `root_api_key` in `~/.openviking/ovcli.conf`:
 - `ov --sudo system` - System utility commands
 - `ov --sudo reindex` - Rebuild indexes
 - `ov --sudo admin migrate` - Legacy agent/session migration and cleanup
-- `ov --sudo task status/list` - Query root/system background tasks, such as migration tasks
+- `ov --sudo task status/list/cancel` - Query root/system tasks and cancel `add_resource` tasks
 
 ### Usage Limitations
 

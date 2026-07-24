@@ -32,6 +32,7 @@ from openviking.parse.parsers.media.utils import (
 )
 from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext, Role
+from openviking.service.task_tracker import TaskStatus, get_task_tracker
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
@@ -322,6 +323,24 @@ class SemanticProcessor(DequeueHandlerBase):
 
             assert data is not None
             msg = SemanticMsg.from_dict(data)
+            source_task_cancelled = False
+            task_tracker = None
+            if msg.source_task_id:
+                task_tracker = get_task_tracker()
+                source_task = await task_tracker.get(
+                    msg.source_task_id,
+                    account_id=msg.account_id,
+                    user_id=msg.user_id,
+                )
+                source_task_cancelled = (
+                    source_task is not None and source_task.status == TaskStatus.CANCELLED
+                )
+
+            def _source_task_is_cancelled() -> bool:
+                return source_task_cancelled or (
+                    task_tracker is not None and task_tracker.is_cancelled(msg.source_task_id)
+                )
+
             if is_semantic_msg_stale(msg):
                 logger.info(
                     "Skipping stale semantic message: uri=%s version=%s",
@@ -332,19 +351,20 @@ class SemanticProcessor(DequeueHandlerBase):
                     get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
                 self.report_success()
                 return None
-            # Circuit breaker: if API is known-broken, re-enqueue and wait
-            try:
-                self._circuit_breaker.check()
-            except CircuitBreakerOpen:
-                logger.warning(
-                    f"Circuit breaker is open, re-enqueueing semantic message: {msg.uri}"
-                )
-                await self._reenqueue_semantic_msg(msg)
-                self._merge_request_stats(msg.telemetry_id, requeue_count=1)
-                get_request_wait_tracker().record_semantic_requeue(msg.telemetry_id)
-                self.report_requeue()
-                self.report_success()
-                return None
+            # Cancelled work does not need an API, so it must not wait behind the breaker.
+            if not _source_task_is_cancelled():
+                try:
+                    self._circuit_breaker.check()
+                except CircuitBreakerOpen:
+                    logger.warning(
+                        f"Circuit breaker is open, re-enqueueing semantic message: {msg.uri}"
+                    )
+                    await self._reenqueue_semantic_msg(msg)
+                    self._merge_request_stats(msg.telemetry_id, requeue_count=1)
+                    get_request_wait_tracker().record_semantic_requeue(msg.telemetry_id)
+                    self.report_requeue()
+                    self.report_success()
+                    return None
             collector = resolve_telemetry(msg.telemetry_id)
             telemetry_ctx = bind_telemetry(collector) if collector is not None else nullcontext()
             with telemetry_ctx:
@@ -374,6 +394,13 @@ class SemanticProcessor(DequeueHandlerBase):
                     )
                     lock_transferred = False
                     try:
+                        if _source_task_is_cancelled():
+                            if msg.telemetry_id and msg.id:
+                                get_request_wait_tracker().mark_semantic_done(
+                                    msg.telemetry_id, msg.id
+                                )
+                            self.report_success()
+                            return None
                         if msg.context_type == "memory":
                             lock_transferred = True
                             await self._process_memory_directory(
@@ -442,6 +469,9 @@ class SemanticProcessor(DequeueHandlerBase):
                                 skip_vectorization=msg.skip_vectorization,
                                 coalesce_key=msg.coalesce_key,
                                 coalesce_version=msg.coalesce_version,
+                                is_cancelled=_source_task_is_cancelled
+                                if task_tracker is not None
+                                else None,
                             )
                             lock_transferred = True
                             await executor.run(run_uri)

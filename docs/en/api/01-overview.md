@@ -533,6 +533,7 @@ Below are all HTTP API endpoints provided by OpenViking, grouped by functional m
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/tasks/{task_id}` | Get background task status |
+| POST | `/api/v1/tasks/{task_id}/cancel` | Cancel a pending or running `add_resource` task |
 | GET | `/api/v1/tasks` | List background tasks (supports filtering by type, status, resource) |
 
 ### Observer

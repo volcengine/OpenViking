@@ -1204,6 +1204,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/extract \
 - `running`: 任务执行中
 - `completed`: 任务成功完成
 - `failed`: 任务失败
+- `cancelled`: `add_resource` 任务已取消
 
 **代码入口**：
 - `openviking/server/routers/tasks.py:get_task()` - HTTP 路由
@@ -1317,6 +1318,59 @@ if task != nil {
 
 ---
 
+### cancel_task()
+
+#### 1. API 实现介绍
+
+取消 pending 或 running 状态的 `add_resource` 任务。端点会先持久化 `cancelled` 状态再返回；
+worker 的协作排空和安全回滚可能仍在后台收尾。
+
+对已取消任务重复调用是幂等的。其他用户拥有的任务返回 `NOT_FOUND`；completed、failed 或
+非 `add_resource` 任务返回 `FAILED_PRECONDITION`。Root 管理员可结合已配置的租户身份使用
+`ov --sudo task cancel`。
+
+**代码入口**：
+- `openviking/server/routers/tasks.py:cancel_task()` - HTTP 路由
+- `openviking/service/resource_service.py:ResourceService.cancel_add_resource_task()` - 所有权与状态校验
+
+#### 2. 接口和参数说明
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| task_id | str | 是 | - | `add_resource` 返回的任务 ID |
+
+#### 3. 使用示例
+
+```http
+POST /api/v1/tasks/{task_id}/cancel
+```
+
+```bash
+ov task cancel uuid-xxx
+
+curl -X POST http://localhost:1933/api/v1/tasks/uuid-xxx/cancel \
+  -H "X-API-Key: your-key"
+```
+
+**响应示例**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "task_id": "uuid-xxx",
+    "task_type": "add_resource",
+    "status": "cancelled",
+    "resource_id": "viking://resources/guide",
+    "stage": "cancelled"
+  }
+}
+```
+
+回滚只会删除由该任务创建的目标。预先存在的目标和所有权未知的旧任务永远不会被删除。
+
+---
+
 ### list_tasks()
 
 #### 1. API 实现介绍
@@ -1334,7 +1388,7 @@ if task != nil {
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | task_type | str | 否 | None | 按任务类型过滤，例如 `session_commit` |
-| status | str | 否 | None | 按任务状态过滤：`pending`、`running`、`completed`、`failed` |
+| status | str | 否 | None | 按任务状态过滤：`pending`、`running`、`completed`、`failed`、`cancelled` |
 | resource_id | str | 否 | None | 按资源 ID 过滤，例如会话 ID |
 | limit | int | 否 | 50 | 最多返回的任务条数 |
 

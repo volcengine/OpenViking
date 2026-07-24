@@ -528,6 +528,7 @@ JSON 输出 - 错误：
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/v1/tasks/{task_id}` | 获取单个后台任务状态 |
+| POST | `/api/v1/tasks/{task_id}/cancel` | 取消 pending 或 running 状态的 `add_resource` 任务 |
 | GET | `/api/v1/tasks` | 列出后台任务（支持按类型、状态、资源过滤） |
 
 ### 观测端点

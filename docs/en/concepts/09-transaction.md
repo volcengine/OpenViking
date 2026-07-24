@@ -156,6 +156,13 @@ remove the directory lock file.
 
 During this period, `rm` attempting to acquire a TreeLock on the same path will fail with `ResourceBusyError`.
 
+Cancellation is cooperative across the durable add-resource worker and its semantic DAG. The task
+record is first persisted as `cancelled`, new DAG work and semantic writes then stop, and in-flight
+work drains before rollback. Rollback runs while the lifecycle lock is still held and releases it
+afterward. The queue message records whether this task created the target: rollback removes only a
+target with `target_created=true`; a pre-existing target, and a legacy message whose ownership is
+unknown, are never deleted.
+
 **Incremental update** (target already exists) — temp stays in place:
 
 ```

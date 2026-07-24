@@ -35,6 +35,8 @@ class AddResourceMsg:
     args: Dict[str, Any] = field(default_factory=dict)
     lock_handoff_retry: int = 0
     source_name: Optional[str] = None
+    target_preexisting: Optional[bool] = None
+    target_created: Optional[bool] = None
     watch_interval: float = 0
     skip_watch_management: bool = True
     defer_target_resolution: bool = False
@@ -107,6 +109,14 @@ class AddResourceMsg:
             args=args,
             lock_handoff_retry=lock_handoff_retry,
             source_name=data.get("source_name"),
+            target_preexisting=(
+                bool(data["target_preexisting"])
+                if data.get("target_preexisting") is not None
+                else None
+            ),
+            target_created=(
+                data["target_created"] if isinstance(data.get("target_created"), bool) else None
+            ),
             prepared=prepared,
             watch_interval=float(data.get("watch_interval", 0) or 0),
             skip_watch_management=bool(data.get("skip_watch_management", True)),

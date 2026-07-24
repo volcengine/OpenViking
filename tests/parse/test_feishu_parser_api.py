@@ -503,6 +503,7 @@ async def test_uat_producer_cancellation_respects_queue_ownership(
         tree_builder=SimpleNamespace(
             resolve_target_uri=AsyncMock(return_value=(root_uri, None))
         ),
+        target_contains_preexisting_data=AsyncMock(return_value=False),
     )
     task_tracker = SimpleNamespace(
         create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
@@ -542,7 +543,10 @@ async def test_uat_producer_cancellation_respects_queue_ownership(
     )
 
     service = ResourceService(
-        viking_fs=SimpleNamespace(_uri_to_path=lambda _uri, ctx: "/resources/fixed"),
+        viking_fs=SimpleNamespace(
+            _uri_to_path=lambda _uri, ctx: "/resources/fixed",
+            exists=AsyncMock(return_value=False),
+        ),
         resource_processor=resource_processor,
         skill_processor=SimpleNamespace(),
     )
@@ -674,6 +678,7 @@ async def test_add_resource_processor_persists_final_resource_uri(monkeypatch):
         create=AsyncMock(return_value=SimpleNamespace(status=TaskStatus.PENDING)),
         start=AsyncMock(),
         update_stage=AsyncMock(),
+        get=AsyncMock(return_value=SimpleNamespace(status=TaskStatus.RUNNING)),
         complete=AsyncMock(),
         fail=AsyncMock(),
     )
