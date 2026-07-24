@@ -94,6 +94,8 @@ IGNORE_EXTENSIONS = {
 }
 
 # Code file extensions for file type detection
+TYPESCRIPT_MPEG_TS_EXTENSION = ".ts"
+
 CODE_EXTENSIONS = {
     ".py",
     ".pyi",
