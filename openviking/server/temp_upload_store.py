@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
@@ -25,12 +26,22 @@ from openviking_cli.utils.config.open_viking_config import get_openviking_config
 _CHUNK_SIZE = 1024 * 1024
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(_CHUNK_SIZE):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 @dataclass
 class ResolvedTempUpload:
     mode: str
     temp_file_id: str
     original_filename: Optional[str]
     local_path: str
+    source_sha256: str
+    source_size: int
     lock_handle: Any = None
 
     async def cleanup(self) -> None:
@@ -73,11 +84,14 @@ def _parse_shared_temp_file_id(temp_file_id: str) -> Optional[str]:
     return upload_id
 
 
-async def _stream_upload_to_local_temp(upload_file: Any, max_size_bytes: int) -> tuple[str, int]:
+async def _stream_upload_to_local_temp(
+    upload_file: Any, max_size_bytes: int
+) -> tuple[str, int, str]:
     suffix = Path(upload_file.filename or "upload.tmp").suffix or ".tmp"
     fd, temp_path = tempfile.mkstemp(prefix="ov_http_upload_", suffix=suffix)
     os.close(fd)
     total = 0
+    digest = hashlib.sha256()
     try:
         with open(temp_path, "wb") as f:
             while True:
@@ -90,7 +104,8 @@ async def _stream_upload_to_local_temp(upload_file: Any, max_size_bytes: int) ->
                         f"Upload exceeds size limit ({max_size_bytes} bytes)."
                     )
                 f.write(chunk)
-        return temp_path, total
+                digest.update(chunk)
+        return temp_path, total, digest.hexdigest()
     except Exception:
         with suppress(FileNotFoundError):
             os.unlink(temp_path)
@@ -178,6 +193,7 @@ class TempUploadStore:
         temp_file_path = temp_dir / temp_filename
 
         total = 0
+        digest = hashlib.sha256()
         with open(temp_file_path, "wb") as f:
             while True:
                 chunk = await upload_file.read(_CHUNK_SIZE)
@@ -192,20 +208,22 @@ class TempUploadStore:
                         f"Upload exceeds size limit ({self.temp_cfg.shared_max_size_bytes} bytes)."
                     )
                 f.write(chunk)
+                digest.update(chunk)
 
-        if upload_file.filename:
-            meta_path = temp_dir / f"{temp_filename}.ov_upload.meta"
-            meta = {
-                "original_filename": upload_file.filename,
-                "upload_time": time.time(),
-            }
-            with open(meta_path, "w", encoding="utf-8") as f:
-                json.dump(meta, f)
+        meta_path = temp_dir / f"{temp_filename}.ov_upload.meta"
+        meta = {
+            "original_filename": upload_file.filename or "",
+            "upload_time": time.time(),
+            "size": total,
+            "sha256": digest.hexdigest(),
+        }
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f)
 
         return temp_filename
 
     async def _save_shared(self, upload_file: Any, ctx: RequestContext) -> str:
-        temp_path, total_size = await _stream_upload_to_local_temp(
+        temp_path, total_size, source_sha256 = await _stream_upload_to_local_temp(
             upload_file, self.temp_cfg.shared_max_size_bytes
         )
         upload_id = uuid.uuid4().hex
@@ -226,7 +244,7 @@ class TempUploadStore:
             "content_type": getattr(upload_file, "content_type", None),
             "file_ext": Path(upload_file.filename or "").suffix,
             "size": total_size,
-            "sha256": None,
+            "sha256": source_sha256,
             "storage_uri": content_uri,
             "state": "uploaded",
             "created_at": now,
@@ -287,12 +305,16 @@ class TempUploadStore:
 
         meta_path = upload_temp_dir / f"{temp_file_id}.ov_upload.meta"
         meta = _read_upload_meta(meta_path)
-        original_filename = meta.get("original_filename") if meta else None
+        original_filename = (meta.get("original_filename") or None) if meta else None
+        source_size = resolved_path.stat().st_size
+        source_sha256 = _sha256_file(resolved_path)
         return ResolvedTempUpload(
             mode="local",
             temp_file_id=temp_file_id,
             original_filename=original_filename,
             local_path=str(resolved_path),
+            source_sha256=source_sha256,
+            source_size=source_size,
         )
 
     async def _resolve_shared(
@@ -342,11 +364,15 @@ class TempUploadStore:
                     os.unlink(temp_path)
                 raise
 
+            source_sha256 = hashlib.sha256(content).hexdigest()
+            source_size = len(content)
             return ResolvedTempUpload(
                 mode="shared",
                 temp_file_id=temp_file_id,
                 original_filename=meta.get("original_filename") or None,
                 local_path=temp_path,
+                source_sha256=source_sha256,
+                source_size=source_size,
                 lock_handle=handle,
             )
         except Exception:

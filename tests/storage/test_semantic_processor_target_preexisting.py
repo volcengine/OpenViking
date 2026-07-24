@@ -18,27 +18,31 @@ class _SyncVikingFS:
         self.contents = {
             "viking://temp/import/a.md": "new",
             "viking://temp/import/b.md": "same",
+            "viking://temp/import/.source.json": "new source metadata",
             "viking://resources/root/a.md": "old",
             "viking://resources/root/b.md": "same",
             "viking://resources/root/.overview.md": "FILES:\n- b.md: old summary",
             "viking://resources/root/.abstract.md": "old abstract",
+            "viking://resources/root/.source.json": "old source metadata",
         }
         self.entries = {
             "viking://temp/import": [
                 {"name": "a.md", "isDir": False},
                 {"name": "b.md", "isDir": False},
+                {"name": ".source.json", "isDir": False},
             ],
             "viking://resources/root": [
                 {"name": "a.md", "isDir": False},
                 {"name": "b.md", "isDir": False},
                 {"name": ".overview.md", "isDir": False},
                 {"name": ".abstract.md", "isDir": False},
+                {"name": ".source.json", "isDir": False},
             ],
         }
         self.deleted_temp = []
 
     async def exists(self, uri, ctx=None):
-        return uri in self.entries
+        return uri in self.entries or uri in self.contents
 
     async def ls(self, uri, show_all_hidden=False, node_limit=None, ctx=None):
         return self.entries.get(uri, [])
@@ -60,6 +64,13 @@ class _SyncVikingFS:
 
     async def delete_temp(self, uri, ctx=None):
         self.deleted_temp.append(uri)
+
+
+class _FailingSyncVikingFS(_SyncVikingFS):
+    async def mv(self, src, dst, ctx=None, lock_handle=None):
+        if src == "viking://temp/import/a.md":
+            raise OSError("injected move failure")
+        await super().mv(src, dst, ctx=ctx, lock_handle=lock_handle)
 
 
 class _FakeDagExecutor:
@@ -148,7 +159,25 @@ async def test_sync_diff_reports_target_uris_and_preserves_sidecars(monkeypatch)
         "FILES:\n- b.md: old summary"
     )
     assert fake_fs.contents["viking://resources/root/.abstract.md"] == "old abstract"
+    assert fake_fs.contents["viking://resources/root/.source.json"] == "new source metadata"
     assert fake_fs.deleted_temp == ["viking://temp/import"]
+
+
+@pytest.mark.asyncio
+async def test_sync_failure_does_not_advance_source_metadata(monkeypatch):
+    fake_fs = _FailingSyncVikingFS()
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: fake_fs,
+    )
+
+    await SemanticProcessor()._sync_topdown_recursive(
+        "viking://temp/import",
+        "viking://resources/root",
+        lock=NO_LOCK,
+    )
+
+    assert fake_fs.contents["viking://resources/root/.source.json"] == "old source metadata"
 
 
 @pytest.mark.asyncio
