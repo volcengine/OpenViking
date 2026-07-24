@@ -66,6 +66,9 @@ def ensure_config(config_path: Path | None = None) -> Config:
 
         # Create default config with empty bot section
         default_config = Config()
+        # The built-in AgentsConfig model is a runtime fallback, not an
+        # explicit Bot model override. Do not persist it as one.
+        default_config.set_inherits_root_vlm(True)
         save_config(default_config, config_path, include_defaults=True)
         logger.info(f"[green]✓[/green] Created default config at {config_path}")
 
@@ -99,6 +102,21 @@ def load_config() -> Config:
             # Extract bot section
             bot_data = full_data.get("bot", {})
             bot_data = convert_keys(bot_data)
+            raw_agents = bot_data.get("agents", {})
+            bot_model_explicit = bool(
+                isinstance(raw_agents, dict) and str(raw_agents.get("model") or "").strip()
+            )
+            bot_credentials_explicit = bool(
+                isinstance(raw_agents, dict)
+                and isinstance(raw_agents.get("credentials"), list)
+                and raw_agents["credentials"]
+            )
+            bot_vlm_explicit = bot_model_explicit or bot_credentials_explicit
+            if bot_credentials_explicit and not bot_model_explicit:
+                # AgentsConfig has a built-in model default for standalone
+                # legacy use. Do not let it become an implicit fallback for an
+                # explicitly configured Bot credential chain.
+                raw_agents["model"] = ""
 
             # Extract storage.workspace from root level, default to ~/.openviking_data
             storage_data = full_data.get("storage", {})
@@ -107,12 +125,21 @@ def load_config() -> Config:
             else:
                 bot_data["storage_workspace"] = "~/.openviking/data"
 
-            # Extract and merge vlm config for model settings only
-            # Provider config is directly read from OpenVikingConfig at runtime
+            # Extract the root VLM config. When Bot does not explicitly configure
+            # agents.model or agents.credentials, the runtime inherits this
+            # complete config rather than only the flattened primary model.
             vlm_data = full_data.get("vlm", {})
             vlm_data = convert_keys(vlm_data)
+            root_vlm_config = None
             if vlm_data:
-                _merge_vlm_model_config(bot_data, vlm_data)
+                from openviking_cli.utils.config.vlm_config import VLMConfig
+
+                root_vlm_config = VLMConfig.model_validate(vlm_data)
+                _merge_vlm_model_config(
+                    bot_data,
+                    vlm_data,
+                    inherit_model=not bot_vlm_explicit,
+                )
 
             server_managed = _is_truthy_env(VIKINGBOT_WITH_OPENVIKING_SERVER_ENV)
             bot_server_data = {} if server_managed else bot_data.get("ov_server", {})
@@ -137,6 +164,8 @@ def load_config() -> Config:
             config.ov_server.set_config_source(ov_server_source)
             config.ov_server.set_api_key_source(api_key_source)
             config.ov_server.set_server_managed(server_managed)
+            config.set_root_vlm_config(root_vlm_config)
+            config.set_inherits_root_vlm(root_vlm_config is not None and not bot_vlm_explicit)
 
             return config
         except (json.JSONDecodeError, ValueError) as e:
@@ -146,11 +175,18 @@ def load_config() -> Config:
     return Config()
 
 
-def _merge_vlm_model_config(bot_data: dict, vlm_data: dict) -> None:
+def _merge_vlm_model_config(
+    bot_data: dict,
+    vlm_data: dict,
+    *,
+    inherit_model: bool = True,
+) -> None:
     """
-    Merge vlm model config into bot config.
+    Merge root VLM display/runtime defaults into Bot agents.
 
-    Only sets model parameters - provider config is read directly from OpenVikingConfig.
+    The complete root VLM object is retained separately for credentials and
+    failover; these flattened fields keep existing AgentLoop configuration
+    behavior and support Bot-specific generation overrides.
     """
     if vlm_data:
         if "agents" not in bot_data:
@@ -159,6 +195,9 @@ def _merge_vlm_model_config(bot_data: dict, vlm_data: dict) -> None:
     agents = bot_data.get("agents", {})
     if vlm_data and "timeout" not in agents:
         agents["timeout"] = vlm_data["timeout"] if "timeout" in vlm_data else 60.0
+
+    if not inherit_model:
+        return
 
     # Set default model from vlm.model
     if "agents" in bot_data:
@@ -711,6 +750,27 @@ def validate_openviking_auth(config: Config) -> None:
     return
 
 
+def reconcile_vlm_inheritance_after_edit(previous: Config, edited: Config) -> None:
+    """Update root-VLM inheritance state after an editor rebuilds Config.
+
+    Editors such as the Web Console serialize and reconstruct ``Config``. The
+    hidden inheritance marker must survive an unchanged round-trip, but it must
+    be cleared when the user explicitly edits the Bot-owned model connection.
+    Bot credentials are intentionally excluded from this comparison: when they
+    are added without editing the inherited model, ``save_config`` strips that
+    model so the two credential chains are not mixed.
+    """
+    if not previous.inherits_root_vlm():
+        return
+
+    ownership_fields = ("model", "provider", "api_key", "api_base")
+    if any(
+        getattr(previous.agents, field) != getattr(edited.agents, field)
+        for field in ownership_fields
+    ):
+        edited.set_inherits_root_vlm(False)
+
+
 def save_config(
     config: Config, config_path: Path | None = None, include_defaults: bool = False
 ) -> None:
@@ -736,6 +796,14 @@ def save_config(
 
     # Update bot section - only save fields that were explicitly set
     bot_data = config.model_dump(exclude_unset=not include_defaults)
+    bot_data.pop("inherits_root_vlm_state", None)
+    if config.inherits_root_vlm() or (config.agents.credentials and not config.agents.model):
+        # model was populated from the root VLM by load_config(); persisting it
+        # under bot.agents would make the next load treat it as an explicit Bot
+        # override and silently stop inheriting root credentials.
+        agents_data = bot_data.get("agents")
+        if isinstance(agents_data, dict):
+            agents_data.pop("model", None)
     if bot_data:
         full_data["bot"] = convert_to_camel(bot_data)
     else:

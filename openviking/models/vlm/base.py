@@ -331,6 +331,7 @@ class VLMFactory:
 
             return LiteLLMVLMProvider(config)
 
+
 def _annotate_vlm_error(exc: Exception, vlm_instance: "VLMBase") -> None:
     """Attach model and api_base info to an exception for better error diagnostics.
 
@@ -631,6 +632,7 @@ class MultiCredentialVLM(VLMBase):
         config = {
             "model": first.model,
             "provider": first.provider,
+            "thinking": first.thinking,
         }
         super().__init__(config)
 

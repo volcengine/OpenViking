@@ -133,6 +133,39 @@ ov find "我的回答偏好"
 }
 ```
 
+`bot.agents` 可以配置自己的有序 `credentials` 主备链；每项都配置 `model` 时，
+外层 `bot.agents.model` 可以省略：
+
+```json
+{
+  "bot": {
+    "agents": {
+      "credentials": [
+        {
+          "id": "bot-primary",
+          "provider": "volcengine",
+          "model": "bot-primary-model",
+          "api_key": "${BOT_PRIMARY_API_KEY}"
+        },
+        {
+          "id": "bot-backup",
+          "provider": "openai",
+          "model": "bot-backup-model",
+          "api_key": "${BOT_BACKUP_API_KEY}"
+        }
+      ],
+      "failback_timeout_seconds": 600,
+      "failback_request_count": 50
+    }
+  }
+}
+```
+
+优先级是确定的：存在非空的 `bot.agents.model` 或 `bot.agents.credentials` 时，
+使用 Bot 自己的模型/credentials；两者都省略时，完整继承根级 `vlm` 的模型、
+credentials 和 failover/failback 设置。配置 Bot credentials 但省略外层 model
+时，每个 credential 都必须配置自己的 `model`。两条 credentials 链不会混用。
+
 ### 2. 启动对话
 
 ```bash

@@ -133,6 +133,40 @@ If `ov.conf` already contains a root-level `vlm`, VikingBot inherits it. You can
 }
 ```
 
+The Bot can define its own ordered `credentials` failover chain. When every
+credential defines `model`, the outer `bot.agents.model` may be omitted:
+
+```json
+{
+  "bot": {
+    "agents": {
+      "credentials": [
+        {
+          "id": "bot-primary",
+          "provider": "volcengine",
+          "model": "bot-primary-model",
+          "api_key": "${BOT_PRIMARY_API_KEY}"
+        },
+        {
+          "id": "bot-backup",
+          "provider": "openai",
+          "model": "bot-backup-model",
+          "api_key": "${BOT_BACKUP_API_KEY}"
+        }
+      ],
+      "failback_timeout_seconds": 600,
+      "failback_request_count": 50
+    }
+  }
+}
+```
+
+The precedence is deterministic: a non-empty `bot.agents.model` or
+`bot.agents.credentials` uses the Bot's own model/credentials. When both are omitted,
+VikingBot inherits the complete root `vlm` model, credentials, and failover/failback
+settings. If Bot credentials are configured without an outer model, every credential
+must define its own `model`. The two credential chains are never mixed.
+
 ### 2. Start a Chat
 
 ```bash
