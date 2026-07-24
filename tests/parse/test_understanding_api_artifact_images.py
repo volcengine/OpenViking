@@ -16,6 +16,7 @@ class _FakeVikingFS:
     def __init__(self):
         self.files = {}
         self.dirs = set()
+        self.deleted_temps = []
 
     def create_temp_uri(self):
         return "viking://temp/artifact"
@@ -28,6 +29,9 @@ class _FakeVikingFS:
 
     async def write_file(self, uri, content):
         self.files[uri] = content.encode("utf-8")
+
+    async def delete_temp(self, uri):
+        self.deleted_temps.append(uri)
 
 
 def test_build_artifact_image_mappings_uses_existing_sibling_images(tmp_path: Path):
@@ -80,3 +84,19 @@ async def test_unpack_artifact_writes_image_mapping_sidecar(tmp_path: Path):
         "Ov测试_1.md": {"Ov测试_1_img1.png": "Ov测试_1_img1.png"}
     }
     assert fake_fs.files[f"{temp_uri}/resource/Ov测试_1_img1.png"] == b"png"
+
+
+@pytest.mark.asyncio
+async def test_unpack_artifact_cleans_temp_on_failure(tmp_path: Path):
+    invalid_zip = tmp_path / "invalid.zip"
+    invalid_zip.write_bytes(b"not-a-zip")
+    fake_fs = _FakeVikingFS()
+    api = UnderstandingAPI.__new__(UnderstandingAPI)
+
+    with (
+        patch("openviking.parse.understanding_api.get_viking_fs", return_value=fake_fs),
+        pytest.raises(zipfile.BadZipFile),
+    ):
+        await api._unpack_zip_to_temp_dir(invalid_zip, "resource")
+
+    assert fake_fs.deleted_temps == ["viking://temp/artifact"]

@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from openviking.parse.accessors.base import LocalResource, SourceType
 from openviking.parse.understanding_api import PREPARED_RESPONSE_ID_ARG, UnderstandingAPI
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
@@ -23,7 +24,7 @@ from openviking_cli.session.user_id import UserIdentifier
 async def test_feishu_parser_api_bypasses_accessor():
     result = object()
     router = SimpleNamespace(
-        should_use_understanding_api=lambda source: True,
+        should_use_understanding_directly=Mock(return_value=True),
         parse=AsyncMock(return_value=result),
     )
     processor = UnifiedResourceProcessor(vlm_processor=object())
@@ -39,36 +40,22 @@ async def test_feishu_parser_api_bypasses_accessor():
     router.parse.assert_awaited_once()
     (call_source,) = router.parse.await_args.args
     assert call_source == source
-    assert router.parse.await_args.kwargs["lark_file"] == {"user_access_token": "u-test"}
+    assert router.parse.await_args.kwargs["feishu_access_token"] == " u-test "
     assert "resource_name" not in router.parse.await_args.kwargs
 
 
 @pytest.mark.asyncio
 async def test_feishu_parser_api_uses_app_credentials_for_tenant_token(monkeypatch):
-    result = object()
-    router = SimpleNamespace(
-        should_use_understanding_api=lambda source: True,
-        parse=AsyncMock(return_value=result),
-    )
     oauth_client = SimpleNamespace(get_tenant_access_token=AsyncMock(return_value="t-test"))
-    processor = UnifiedResourceProcessor(vlm_processor=object())
-    processor._parser_router = router
-    processor._accessor_registry = SimpleNamespace(
-        access=AsyncMock(side_effect=AssertionError("accessor should not be called"))
-    )
-    monkeypatch.setattr(
-        "openviking.resource.feishu_watch_auth.load_feishu_app_credentials",
-        Mock(return_value=object()),
-    )
     monkeypatch.setattr(
         "openviking.resource.feishu_watch_auth.FeishuOAuthClient.from_config",
         Mock(return_value=oauth_client),
     )
+    api = _understanding_api_for_parse()
 
-    actual = await processor.process("https://example.larkoffice.com/docx/doxcnToken")
+    auth = await api._resolve_lark_file({})
 
-    assert actual is result
-    assert router.parse.await_args.kwargs["lark_file"] == {"tenant_access_token": "t-test"}
+    assert auth == {"tenant_access_token": "t-test"}
     oauth_client.get_tenant_access_token.assert_awaited_once_with()
 
 
@@ -76,7 +63,9 @@ async def test_feishu_parser_api_uses_app_credentials_for_tenant_token(monkeypat
 async def test_prepared_feishu_response_bypasses_accessor_without_credentials(monkeypatch):
     result = object()
     router = SimpleNamespace(
-        should_use_understanding_api=lambda source: True,
+        should_use_understanding_api=Mock(
+            side_effect=AssertionError("prepared response must not re-evaluate routing config")
+        ),
         parse=AsyncMock(return_value=result),
     )
     processor = UnifiedResourceProcessor(vlm_processor=object())
@@ -96,6 +85,73 @@ async def test_prepared_feishu_response_bypasses_accessor_without_credentials(mo
 
     assert actual is result
     assert router.parse.await_args.kwargs[PREPARED_RESPONSE_ID_ARG] == "response-1"
+    assert router.parse.await_args.kwargs["parser_backend"] == "understanding"
+    assert "lark_file" not in router.parse.await_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_feishu_without_understanding_auth_falls_back_to_accessor(monkeypatch, tmp_path):
+    markdown_path = tmp_path / "document.md"
+    markdown_path.write_text("content", encoding="utf-8")
+    resource = LocalResource(
+        path=markdown_path,
+        source_type=SourceType.FEISHU,
+        original_source="https://example.larkoffice.com/docx/doxcnToken",
+        meta={"extension": ".md"},
+        is_temporary=False,
+    )
+    result = object()
+    router = SimpleNamespace(
+        should_use_understanding_directly=Mock(return_value=False),
+        parse=AsyncMock(return_value=result),
+    )
+    accessor = SimpleNamespace(access=AsyncMock(return_value=resource))
+    processor = UnifiedResourceProcessor(vlm_processor=object())
+    processor._parser_router = router
+    processor._accessor_registry = accessor
+    monkeypatch.setattr(
+        "openviking.resource.feishu_watch_auth.load_feishu_app_credentials",
+        Mock(side_effect=ValueError("missing credentials")),
+    )
+
+    actual = await processor.process(resource.original_source)
+
+    assert actual is result
+    accessor.access.assert_awaited_once_with(resource.original_source)
+    router.parse.assert_awaited_once()
+    assert router.parse.await_args.args[0] is resource
+    assert "lark_file" not in router.parse.await_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_prepared_feishu_resource_is_not_bypassed(monkeypatch, tmp_path):
+    markdown_path = tmp_path / "document.md"
+    markdown_path.write_text("content", encoding="utf-8")
+    resource = LocalResource(
+        path=markdown_path,
+        source_type=SourceType.FEISHU,
+        original_source="https://example.larkoffice.com/docx/doxcnToken",
+        meta={"resolved_extension": ".md"},
+        is_temporary=False,
+    )
+    result = object()
+    router = SimpleNamespace(
+        should_use_understanding_api=Mock(
+            side_effect=AssertionError("prepared resources must not be routed before parsing")
+        ),
+        parse=AsyncMock(return_value=result),
+    )
+    processor = UnifiedResourceProcessor(vlm_processor=object())
+    processor._parser_router = router
+
+    actual = await processor.process(
+        resource.original_source,
+        prepared_resource=resource,
+        feishu_access_token="u-test",
+    )
+
+    assert actual is result
+    assert router.parse.await_args.args[0] is resource
     assert "lark_file" not in router.parse.await_args.kwargs
 
 
@@ -217,7 +273,11 @@ async def test_legacy_accessor_output_does_not_enable_lark_protocol(tmp_path: Pa
         zf.writestr("parsed/0.md", "content")
 
     api = _understanding_api_for_parse()
-    api._create_response_for_url = AsyncMock(return_value={"id": "response-1"})
+    api._create_file = AsyncMock(return_value={"id": "file-1"})
+    api._create_response_for_file = AsyncMock(return_value={"id": "response-1"})
+    api._create_response_for_url = AsyncMock(
+        side_effect=AssertionError("accessor output must stay local")
+    )
     api._poll_response = AsyncMock(
         return_value={"status": "completed", "result": {"zip_url": "https://tos/result.zip"}}
     )
@@ -230,11 +290,9 @@ async def test_legacy_accessor_output_does_not_enable_lark_protocol(tmp_path: Pa
         feishu_access_token="u-test",
     )
 
-    api._create_response_for_url.assert_awaited_once_with(
-        url="https://example.larkoffice.com/docx/doxcnToken",
-        doc_type="unknown",
-        lark_file=None,
-    )
+    api._create_file.assert_awaited_once_with(local_path=markdown_path)
+    api._create_response_for_file.assert_awaited_once_with(file_id="file-1")
+    api._create_response_for_url.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -336,11 +394,10 @@ def test_add_resource_message_round_trips_internal_fields():
 async def test_uat_producer_payload_reaches_worker_without_persisting_token(monkeypatch):
     source = "https://example.larkoffice.com/docx/doxcnToken"
     root_uri = "viking://resources/lark/doxcnToken"
-    parser_router = SimpleNamespace(
-        should_use_understanding_api=lambda _source: True,
-        submit_url=AsyncMock(return_value="response-1"),
-    )
+    submit_understanding = AsyncMock(return_value="response-1")
     resource_processor = SimpleNamespace(
+        should_use_understanding_directly=lambda _source, **_kwargs: True,
+        submit_understanding=submit_understanding,
         tree_builder=SimpleNamespace(
             resolve_target_uri=AsyncMock(return_value=(root_uri, root_uri))
         ),
@@ -377,14 +434,12 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(monk
         resource_processor=resource_processor,
         skill_processor=SimpleNamespace(),
     )
-    service._parser_router = parser_router
     monkeypatch.setattr(service, "_should_use_connector", Mock(return_value=False))
     monkeypatch.setattr(
         "openviking.service.resource_service.is_git_repo_url",
         Mock(return_value=False),
     )
     monkeypatch.setattr("openviking.service.resource_service.uuid4", Mock(return_value="task-1"))
-    monkeypatch.setattr(service, "_is_feishu_url", Mock(return_value=True))
     ctx = RequestContext(
         user=UserIdentifier("account-1", "user-1"),
         role=Role.USER,
@@ -401,15 +456,19 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(monk
 
     assert initial_result == {"status": "success", "task_id": "task-1"}
     assert task_tracker.create.await_args.kwargs["resource_id"] is None
-    parser_router.submit_url.assert_awaited_once_with(
+    submit_understanding.assert_awaited_once_with(
         source,
         feishu_access_token="u-secret",
+        custom_option="forwarded",
     )
     payload = queue_manager.enqueue.await_args.args[1]
     assert queue_manager.enqueue.await_args.args[0] == QueueManager.EXTERNAL_PARSE
     assert "u-secret" not in json.dumps(payload)
     assert payload["understanding_response_id"] == "response-1"
-    assert payload["args"] == {"custom_option": "forwarded"}
+    assert payload["args"] == {
+        "custom_option": "forwarded",
+        "parser_backend": "understanding",
+    }
 
     queued_msg = AddResourceMsg.from_dict(payload)
     service.add_resource = AsyncMock(
@@ -428,6 +487,7 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(monk
     call = service.add_resource.await_args
     assert call.kwargs[PREPARED_RESPONSE_ID_ARG] == "response-1"
     assert call.kwargs["args"] == {"custom_option": "forwarded"}
+    assert call.kwargs["parser_backend"] == "understanding"
 
 
 @pytest.mark.asyncio
@@ -450,11 +510,8 @@ async def test_local_prepared_job_uses_add_resource_queue(monkeypatch):
         resource_processor=resource_processor,
         skill_processor=SimpleNamespace(),
     )
-    service._enqueue_add_resource_job = AsyncMock(
-        return_value=SimpleNamespace(task_id="task-1")
-    )
+    service._enqueue_add_resource_job = AsyncMock(return_value=SimpleNamespace(task_id="task-1"))
     monkeypatch.setattr(service, "_should_use_connector", Mock(return_value=False))
-    monkeypatch.setattr(service, "_should_use_understanding_api", Mock(return_value=False))
     monkeypatch.setattr(
         "openviking.service.resource_service.is_git_repo_url",
         Mock(return_value=False),
@@ -495,14 +552,10 @@ async def test_uat_producer_cancellation_respects_queue_ownership(
     else:
         handoff.side_effect = asyncio.CancelledError
 
-    parser_router = SimpleNamespace(
-        should_use_understanding_api=lambda _source: True,
-        submit_url=submit_url,
-    )
     resource_processor = SimpleNamespace(
-        tree_builder=SimpleNamespace(
-            resolve_target_uri=AsyncMock(return_value=(root_uri, None))
-        ),
+        should_use_understanding_directly=lambda _source, **_kwargs: True,
+        submit_understanding=submit_url,
+        tree_builder=SimpleNamespace(resolve_target_uri=AsyncMock(return_value=(root_uri, None))),
     )
     task_tracker = SimpleNamespace(
         create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
@@ -546,13 +599,11 @@ async def test_uat_producer_cancellation_respects_queue_ownership(
         resource_processor=resource_processor,
         skill_processor=SimpleNamespace(),
     )
-    service._parser_router = parser_router
     monkeypatch.setattr(service, "_should_use_connector", Mock(return_value=False))
     monkeypatch.setattr(
         "openviking.service.resource_service.is_git_repo_url",
         Mock(return_value=False),
     )
-    monkeypatch.setattr(service, "_is_feishu_url", Mock(return_value=True))
     ctx = RequestContext(
         user=UserIdentifier("account-1", "user-1"),
         role=Role.USER,
@@ -575,14 +626,23 @@ async def test_uat_producer_cancellation_respects_queue_ownership(
         enqueue.assert_not_awaited()
     else:
         enqueue.assert_awaited_once()
+        assert enqueue.await_args.args[0] == QueueManager.EXTERNAL_PARSE
 
 
-def test_prepared_response_id_is_reserved_from_public_args():
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        (PREPARED_RESPONSE_ID_ARG, "response-1"),
+        ("parser_backend", "understanding"),
+        ("resolved_extension", ".pdf"),
+    ],
+)
+def test_internal_parser_fields_are_reserved_from_public_args(field, value):
     service = ResourceService()
 
-    with pytest.raises(InvalidArgumentError, match=PREPARED_RESPONSE_ID_ARG):
+    with pytest.raises(InvalidArgumentError, match=field):
         service._normalize_add_resource_args(
-            {PREPARED_RESPONSE_ID_ARG: "response-1"},
+            {field: value},
             watch_interval=0,
         )
 
@@ -722,21 +782,18 @@ async def test_add_resource_processor_persists_final_resource_uri(monkeypatch):
     assert queue_manager.enqueue.await_args.args[0] == QueueManager.ADD_RESOURCE
 
 
-def test_feishu_bypass_requires_configured_auth(monkeypatch):
-    router = SimpleNamespace(
-        should_use_understanding_api=lambda source: True,
-    )
-    processor = UnifiedResourceProcessor(vlm_processor=object())
-    processor._parser_router = router
+def test_feishu_direct_submission_requires_configured_auth(monkeypatch):
+    api = _understanding_api_for_parse()
+    source = "https://example.larkoffice.com/docx/doxcnToken"
+
+    assert api.can_submit_url_directly(source, feishu_access_token="u-test")
+
     monkeypatch.setattr(
         "openviking.resource.feishu_watch_auth.load_feishu_app_credentials",
         Mock(side_effect=ValueError("missing credentials")),
     )
 
-    assert not processor._should_bypass_feishu_accessor(
-        "https://example.larkoffice.com/docx/doxcnToken",
-        {},
-    )
+    assert not api.can_submit_url_directly(source)
 
 
 def test_normalize_lark_file_accepts_exactly_one_token():

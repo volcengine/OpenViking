@@ -7,7 +7,7 @@ Provides automatic parser selection based on file type.
 """
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 from openviking.parse.base import ParseResult
 from openviking.parse.parsers.base_parser import BaseParser
@@ -27,13 +27,7 @@ from openviking.parse.parsers.powerpoint import PowerPointParser
 from openviking.parse.parsers.text import TextParser
 from openviking.parse.parsers.word import WordParser
 from openviking.parse.parsers.zip_parser import ZipParser
-from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.parser_config import ParserConfig
-
-if TYPE_CHECKING:
-    from openviking.parse.custom import CustomParserProtocol
-
-logger = get_logger(__name__)
 
 
 class ParserRegistry:
@@ -45,15 +39,12 @@ class ParserRegistry:
 
     def __init__(
         self,
-        register_optional: bool = True,
         parser_configs: Optional[Dict[str, ParserConfig]] = None,
     ):
         """
         Initialize registry with default parsers.
 
         Args:
-            register_optional: Whether to register optional parsers
-                              that require extra dependencies
             parser_configs: Dictionary of parser configurations (from load_parser_configs_from_dict)
         """
         self._parsers: Dict[str, BaseParser] = {}
@@ -61,128 +52,32 @@ class ParserRegistry:
         self._parser_configs = parser_configs or {}
 
         # Register core parsers
-        self.register("text", TextParser(config=self._parser_configs.get("text")))
-        self.register("markdown", MarkdownParser(config=self._parser_configs.get("markdown")))
-        self.register("pdf", PDFParser(config=self._parser_configs.get("pdf")))
-        self.register("html", HTMLParser(config=self._parser_configs.get("html")))
+        self._register("text", TextParser(config=self._parser_configs.get("text")))
+        self._register("markdown", MarkdownParser(config=self._parser_configs.get("markdown")))
+        self._register("pdf", PDFParser(config=self._parser_configs.get("pdf")))
+        self._register("html", HTMLParser(config=self._parser_configs.get("html")))
 
         # Register markitdown-inspired parsers (built-in)
-        self.register("word", WordParser(config=self._parser_configs.get("word")))
-        self.register("legacy_doc", LegacyDocParser(config=self._parser_configs.get("legacy_doc")))
-        self.register("powerpoint", PowerPointParser(config=self._parser_configs.get("powerpoint")))
-        self.register("excel", ExcelParser(config=self._parser_configs.get("excel")))
-        self.register("epub", EPubParser(config=self._parser_configs.get("epub")))
-        self.register("zip", ZipParser())
-        self.register("directory", DirectoryParser())
+        self._register("word", WordParser(config=self._parser_configs.get("word")))
+        self._register("legacy_doc", LegacyDocParser(config=self._parser_configs.get("legacy_doc")))
+        self._register(
+            "powerpoint", PowerPointParser(config=self._parser_configs.get("powerpoint"))
+        )
+        self._register("excel", ExcelParser(config=self._parser_configs.get("excel")))
+        self._register("epub", EPubParser(config=self._parser_configs.get("epub")))
+        self._register("zip", ZipParser())
+        self._register("directory", DirectoryParser())
 
-        self.register("image", ImageParser(config=self._parser_configs.get("image")))
-        self.register("audio", AudioParser())
-        self.register("video", VideoParser())
+        self._register("image", ImageParser(config=self._parser_configs.get("image")))
+        self._register("audio", AudioParser())
+        self._register("video", VideoParser())
 
-    def register(self, name: str, parser: BaseParser) -> None:
-        """
-        Register a parser.
-
-        Args:
-            name: Parser name
-            parser: Parser instance
-        """
+    def _register(self, name: str, parser: BaseParser) -> None:
         self._parsers[name] = parser
 
         # Map extensions to parser name
         for ext in parser.supported_extensions:
             self._extension_map[ext.lower()] = name
-
-    def register_custom(
-        self,
-        handler: "CustomParserProtocol",
-        extensions: Optional[List[str]] = None,
-        name: Optional[str] = None,
-    ) -> None:
-        """
-        Register a custom parser (Protocol-based).
-
-        Args:
-            handler: Object implementing CustomParserProtocol
-            extensions: Optional list of extensions (overrides handler's extensions)
-            name: Optional parser name (default: "custom_N")
-
-        Example:
-            ```python
-            class MyParser:
-                @property
-                def supported_extensions(self) -> List[str]:
-                    return [".xyz"]
-
-                def can_handle(self, source) -> bool:
-                    return str(source).endswith(".xyz")
-
-                async def parse(self, source, **kwargs) -> ParseResult:
-                    ...
-
-            registry.register_custom(MyParser(), name="xyz_parser")
-            ```
-        """
-        from openviking.parse.custom import CustomParserWrapper
-
-        # Generate name if not provided
-        if name is None:
-            # Count existing custom parsers
-            custom_count = sum(1 for n in self._parsers if n.startswith("custom_"))
-            name = f"custom_{custom_count}"
-
-        # Wrap and register
-        wrapper = CustomParserWrapper(handler, extensions=extensions)
-        self.register(name, wrapper)  # type: ignore
-        logger.info(f"Registered custom parser '{name}' for {wrapper.supported_extensions}")
-
-    def register_callback(
-        self,
-        extension: str,
-        parse_fn: "Callable[[Union[str, Path]], ParseResult]",
-        name: Optional[str] = None,
-    ) -> None:
-        """
-        Register a callback function as a parser.
-
-        Args:
-            extension: File extension (e.g., ".xyz")
-            parse_fn: Async function that parses and returns ParseResult
-            name: Optional parser name (default: "callback_<ext>")
-
-        Example:
-            ```python
-            async def my_parser(source: Union[str, Path], **kwargs) -> ParseResult:
-                content = Path(source).read_text()
-                return create_parse_result(
-                    root=ResourceNode(type=NodeType.ROOT, content=content),
-                    source_path=str(source),
-                    source_format="custom",
-                    parser_name="my_parser",
-                )
-
-            registry.register_callback(".xyz", my_parser)
-            ```
-        """
-        from openviking.parse.custom import CallbackParserWrapper
-
-        # Generate name if not provided
-        if name is None:
-            name = f"callback{extension}"
-
-        # Wrap and register
-        wrapper = CallbackParserWrapper(extension, parse_fn, name=name)
-        self.register(name, wrapper)  # type: ignore
-        logger.info(f"Registered callback parser '{name}' for {extension}")
-
-    def unregister(self, name: str) -> None:
-        """Remove a parser from registry."""
-        if name in self._parsers:
-            parser = self._parsers[name]
-            for ext in parser.supported_extensions:
-                if self._extension_map.get(ext.lower()) == name:
-                    del self._extension_map[ext.lower()]
-            del self._parsers[name]
 
     def get_parser_for_file(self, path: Union[str, Path]) -> Optional[BaseParser]:
         """
