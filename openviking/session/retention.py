@@ -257,11 +257,18 @@ def fit_active_messages_to_budget(
     truncated_ids: set[str] = set()
     used_tokens = 0
 
-    def _select_group(group: List[Message], *, allow_truncate: bool) -> bool:
+    def _select_group(
+        group: List[Message],
+        *,
+        allow_truncate: bool,
+        max_budget: Optional[int] = None,
+    ) -> bool:
         nonlocal used_tokens
         if not group:
             return True
         remaining = max(0, token_budget - used_tokens)
+        if max_budget is not None:
+            remaining = min(remaining, max(0, int(max_budget)))
         group_tokens = _message_tokens(group)
         chosen = list(group)
         group_truncated: List[str] = []
@@ -279,12 +286,55 @@ def fit_active_messages_to_budget(
         return True
 
     latest = turns[-1]
-    if latest.anchor is not None:
-        _select_group([latest.anchor], allow_truncate=True)
-
     final_step = latest.steps[-1] if latest.steps else None
-    if final_step is not None:
-        _select_group(final_step.messages, allow_truncate=True)
+    anchor_group = [latest.anchor] if latest.anchor is not None else []
+    final_group = final_step.messages if final_step is not None else []
+
+    def _minimum_group_budget(group: List[Message]) -> Optional[int]:
+        """Return the smallest budget for which a truncated group is selectable."""
+        group_tokens = _message_tokens(group)
+        if not group or group_tokens == 0:
+            return 0
+
+        low = 1
+        high = min(group_tokens, token_budget)
+        minimum: Optional[int] = None
+        while low <= high:
+            candidate = (low + high) // 2
+            chosen, _ = _truncate_message_group(group, candidate)
+            if chosen:
+                minimum = candidate
+                high = candidate - 1
+            else:
+                low = candidate + 1
+        return minimum
+
+    # Anchor and final Step are both mandatory. Reserve part of the hard budget
+    # for the final Step before truncating the anchor; otherwise a long user
+    # query can consume the entire budget and silently drop the latest answer.
+    final_reserve = 0
+    if anchor_group and final_group:
+        anchor_minimum = _minimum_group_budget(anchor_group)
+        final_minimum = _minimum_group_budget(final_group)
+        if (
+            anchor_minimum is not None
+            and final_minimum is not None
+            and anchor_minimum + final_minimum <= token_budget
+        ):
+            final_reserve = min(
+                _message_tokens(final_group),
+                max(final_minimum, token_budget // 2),
+                token_budget - anchor_minimum,
+            )
+
+    if anchor_group:
+        _select_group(
+            anchor_group,
+            allow_truncate=True,
+            max_budget=token_budget - final_reserve,
+        )
+    if final_group:
+        _select_group(final_group, allow_truncate=True)
 
     checkpoint_steps = [
         step

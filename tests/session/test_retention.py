@@ -223,6 +223,22 @@ def test_active_budget_keeps_latest_anchor_and_final_without_mutating_raw():
     assert messages[-1].content == final_text
 
 
+def test_active_budget_reserves_space_for_long_anchor_and_final():
+    messages = [
+        _message("u1", "user", "U" * 100),
+        _message("a1", "assistant", "done"),
+    ]
+
+    plan = fit_active_messages_to_budget(messages, token_budget=5)
+
+    assert [message.id for message in plan.messages] == ["u1", "a1"]
+    assert plan.messages[0].content
+    assert plan.messages[1].content == "done"
+    assert plan.estimated_tokens <= 5
+    assert plan.dropped_message_ids == []
+    assert plan.truncated_message_ids == ["u1"]
+
+
 def test_active_budget_never_splits_an_assistant_tool_step():
     assistant = Message(
         id="a1",
