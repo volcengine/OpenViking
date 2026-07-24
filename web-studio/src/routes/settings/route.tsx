@@ -25,19 +25,13 @@ import { useAppConnection } from '#/hooks/use-app-connection'
 import { probeStudioConnection } from '#/lib/admin'
 import type { CapabilityProbeResult } from '#/lib/admin'
 import { DEFAULT_ACCOUNT_ID, DEFAULT_USER_ID } from '#/lib/admin-options'
+import { PLAIN_INPUT_PROPS } from '#/lib/form-input'
 import { cn } from '#/lib/utils'
 import type { ConnectionDraft } from '#/hooks/use-app-connection'
 
 export const Route = createFileRoute('/settings')({
   component: ConnectionSettingsRoute,
 })
-
-const PLAIN_INPUT_PROPS = {
-  autoCapitalize: 'none',
-  autoComplete: 'off',
-  autoCorrect: 'off',
-  spellCheck: false,
-} as const
 
 function getCapabilityIcon(result: CapabilityProbeResult | undefined) {
   if (!result) {

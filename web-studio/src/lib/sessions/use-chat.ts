@@ -131,6 +131,7 @@ function buildAssistantMessage(
 }
 
 export interface UseChatOptions {
+  identityScopeKey: string
   sessionId: string
   /** Initial messages to populate the chat. */
   initialMessages?: Message[]
@@ -154,7 +155,12 @@ export interface UseChatReturn {
 }
 
 export function useChat(options: UseChatOptions): UseChatReturn {
-  const { sessionId, initialMessages, persistMessages = true } = options
+  const {
+    identityScopeKey,
+    sessionId,
+    initialMessages,
+    persistMessages = true,
+  } = options
 
   const [messages, setMessages] = useState<Message[]>(initialMessages ?? [])
   const [status, setStatus] = useState<ChatStatus>('idle')
@@ -408,7 +414,10 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                 tool_status: 'running',
               }
               try {
-                toolPart.tool_input = JSON.parse(args) as Record<string, unknown>
+                toolPart.tool_input = JSON.parse(args) as Record<
+                  string,
+                  unknown
+                >
               } catch {
                 if (args) toolPart.tool_input = { raw: args }
               }
@@ -426,7 +435,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
               const pendingToolPart = accParts.find(
                 (part): part is ToolPart =>
                   part.type === 'tool' &&
-                  (part.tool_status === 'running' || part.tool_status === 'pending'),
+                  (part.tool_status === 'running' ||
+                    part.tool_status === 'pending'),
               )
               if (pendingToolCall) {
                 const result = streamEventDataToText(event.data)
@@ -486,7 +496,11 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         // Generate session title on first exchange
         if (sessionId && isFirstExchange) {
           // Immediate: use first user message as temp title
-          setSessionTitle(sessionId, displayMessage.slice(0, 20))
+          setSessionTitle(
+            identityScopeKey,
+            sessionId,
+            displayMessage.slice(0, 20),
+          )
         }
       } catch (err) {
         if (controller.signal.aborted) {
@@ -513,7 +527,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         abortRef.current = null
       }
     },
-    [status, sessionId, persistMessages],
+    [identityScopeKey, persistMessages, sessionId, status],
   )
 
   return {

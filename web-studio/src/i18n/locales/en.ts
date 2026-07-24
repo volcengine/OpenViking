@@ -66,6 +66,7 @@ const en = {
       hint: 'Studio only verifies the key and switches the active data identity. It will not modify or rotate the server credential.',
       keyLabel: 'User API Key',
       keyPlaceholder: 'Paste a User API Key for the target account',
+      manageOnly: 'Manage without a User Key',
       submit: 'Verify and switch',
       title: 'Enter a User API Key',
     },
@@ -73,6 +74,10 @@ const en = {
     searchPlaceholder: 'Search accounts',
     toast: {
       created: 'Created and switched to {{account}}',
+      createdSwitchFailed:
+        'Created {{account}}, but data identity switching failed: {{error}}. The Account remains available for management.',
+      managementSwitched:
+        'Switched management to {{account}}. Select or create a User Key before opening tenant data.',
       switched: 'Switched to {{account}}',
     },
     unset: 'No account selected',

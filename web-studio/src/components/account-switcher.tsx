@@ -38,30 +38,19 @@ import type {
   CreateAccountInput,
 } from '#/lib/admin'
 import { DEFAULT_USER_ID } from '#/lib/admin-options'
+import { PLAIN_INPUT_PROPS } from '#/lib/form-input'
 import { resolveStudioManagementCapabilities } from '#/lib/studio-permissions'
 import { cn } from '#/lib/utils'
 
-const PLAIN_INPUT_PROPS = {
-  autoCapitalize: 'none',
-  autoComplete: 'off',
-  autoCorrect: 'off',
-  spellCheck: false,
-} as const
-
 export function selectAccountUser(
   users: readonly AdminUser[],
-  currentUserId: string,
+  _currentUserId: string,
   requireApiKey: boolean,
 ): AdminUser | undefined {
   const candidates = requireApiKey
     ? users.filter((user) => Boolean(user.apiKey))
     : [...users]
-  return (
-    candidates.find((user) => user.userId === currentUserId) ??
-    candidates.find((user) => user.userId === DEFAULT_USER_ID) ??
-    candidates.find((user) => user.role === 'admin') ??
-    candidates[0]
-  )
+  return candidates[0]
 }
 
 export function AccountSwitcher() {
@@ -71,8 +60,10 @@ export function AccountSwitcher() {
     connection,
     connectionRole,
     isConnectionRoleLoading,
+    setGeneratedCredential,
     serverMode,
     switchIdentity,
+    switchManagementAccount,
   } = useAppConnection()
   const [open, setOpen] = React.useState(false)
   const [createOpen, setCreateOpen] = React.useState(false)
@@ -81,6 +72,7 @@ export function AccountSwitcher() {
   const [manualSwitch, setManualSwitch] = React.useState<{
     accountId: string
     apiKey: string
+    userId: string
   } | null>(null)
   const [createDraft, setCreateDraft] = React.useState<CreateAccountInput>({
     accountId: '',
@@ -140,30 +132,46 @@ export function AccountSwitcher() {
     setSwitchingAccountId(accountId)
     try {
       const users = await fetchAdminUsers(adminConnection, accountId)
-      const user = selectAccountUser(
-        users,
-        connection.userId,
-        serverMode === 'api_key',
-      )
-      if (!user) {
-        if (serverMode === 'api_key') {
-          setOpen(false)
-          setManualSwitch({ accountId, apiKey: '' })
-          return
-        }
+      const firstUser = selectAccountUser(users, connection.userId, false)
+      if (!firstUser) {
         throw new Error(t('errors.noUsers'))
       }
-      await switchIdentity({
-        accountId,
-        apiKey: user.apiKey || '',
-        userId: user.userId,
-      })
-      setOpen(false)
-      toast.success(
-        t('toast.switched', {
-          account: accountId,
-        }),
-      )
+
+      const candidates =
+        serverMode === 'api_key'
+          ? users.filter((user) => Boolean(user.apiKey))
+          : [firstUser]
+      let switchError: unknown
+      for (const user of candidates) {
+        try {
+          await switchIdentity({
+            accountId,
+            allowLegacyIdentityFallback: true,
+            apiKey: user.apiKey || '',
+            userId: user.userId,
+          })
+          setOpen(false)
+          toast.success(
+            t('toast.switched', {
+              account: accountId,
+            }),
+          )
+          return
+        } catch (error) {
+          switchError = error
+        }
+      }
+
+      if (serverMode === 'api_key') {
+        setOpen(false)
+        setManualSwitch({
+          accountId,
+          apiKey: '',
+          userId: firstUser.userId,
+        })
+        return
+      }
+      throw switchError
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))
     } finally {
@@ -177,23 +185,42 @@ export function AccountSwitcher() {
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : String(error)),
     onSuccess: async (result, input) => {
+      const accountId = result.accountId || input.accountId
+      const userId = result.userId || input.adminUserId
+      if (result.apiKey) {
+        setGeneratedCredential({
+          accountId,
+          apiKey: result.apiKey,
+          userId,
+        })
+      }
+      setCreateOpen(false)
+      setOpen(false)
+      setCreateDraft({ accountId: '', adminUserId: DEFAULT_USER_ID })
+      void queryClient.invalidateQueries({ queryKey: ['account-switcher'] })
+
       if (!result.apiKey && serverMode === 'api_key') {
-        toast.error(t('errors.noCreatedKey'))
+        await switchManagementAccount(accountId)
+        toast.warning(t('errors.noCreatedKey'))
         return
       }
+
       try {
-        await queryClient.invalidateQueries({ queryKey: ['account-switcher'] })
         await switchIdentity({
-          accountId: result.accountId || input.accountId,
+          accountId,
+          allowLegacyIdentityFallback: true,
           apiKey: result.apiKey,
-          userId: result.userId || input.adminUserId,
+          userId,
         })
-        setCreateOpen(false)
-        setOpen(false)
-        setCreateDraft({ accountId: '', adminUserId: DEFAULT_USER_ID })
         toast.success(t('toast.created', { account: input.accountId }))
       } catch (error) {
-        toast.error(error instanceof Error ? error.message : String(error))
+        await switchManagementAccount(accountId)
+        toast.error(
+          t('toast.createdSwitchFailed', {
+            account: input.accountId,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        )
       }
     },
   })
@@ -340,7 +367,7 @@ export function AccountSwitcher() {
               void switchIdentity({
                 accountId: target.accountId,
                 apiKey: target.apiKey,
-                userId: '',
+                userId: target.userId,
               })
                 .then(() => {
                   toast.success(
@@ -390,6 +417,35 @@ export function AccountSwitcher() {
               <Button
                 type="button"
                 variant="outline"
+                disabled={Boolean(switchingAccountId)}
+                onClick={() => {
+                  const targetAccountId = manualSwitch?.accountId
+                  if (!targetAccountId) {
+                    return
+                  }
+                  setSwitchingAccountId(targetAccountId)
+                  void switchManagementAccount(targetAccountId)
+                    .then(() => {
+                      setManualSwitch(null)
+                      toast.success(
+                        t('toast.managementSwitched', {
+                          account: targetAccountId,
+                        }),
+                      )
+                    })
+                    .catch((error: unknown) => {
+                      toast.error(
+                        error instanceof Error ? error.message : String(error),
+                      )
+                    })
+                    .finally(() => setSwitchingAccountId(''))
+                }}
+              >
+                {t('manualSwitch.manageOnly')}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
                 disabled={Boolean(switchingAccountId)}
                 onClick={() => setManualSwitch(null)}
               >

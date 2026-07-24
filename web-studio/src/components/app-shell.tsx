@@ -28,6 +28,7 @@ import {
 } from '#/components/ui/collapsible'
 import { CrossDeviceVerifyDialog } from '#/components/cross-device-verify-dialog'
 import { AccountSwitcher } from '#/components/account-switcher'
+import { GeneratedCredentialDialog } from '#/components/generated-credential-dialog'
 import { ScrollArea } from '#/components/ui/scroll-area'
 import {
   Sidebar,
@@ -58,11 +59,7 @@ import {
   useCreateSession,
   useDeleteSession,
 } from '#/lib/sessions/use-sessions'
-import {
-  useSessionTitles,
-  setSessionTitle,
-  removeSessionTitle,
-} from '#/lib/sessions/use-session-titles'
+import { useSessionTitles } from '#/lib/sessions/use-session-titles'
 
 type NavItem = {
   icon: React.ComponentType
@@ -208,12 +205,13 @@ function NavSessionsItem({
   title: string
 }) {
   const { t } = useTranslation(['appShell', 'sessions'])
+  const { identityScopeKey } = useAppConnection()
   const navigate = useNavigate()
   const isActive = pathname === '/sessions' || pathname.startsWith('/sessions/')
   const [open, setOpen] = React.useState(isActive)
 
   const { data: sessions, isLoading } = useSessionListByRecency()
-  const { getTitle } = useSessionTitles()
+  const { getTitle, removeTitle, setTitle } = useSessionTitles(identityScopeKey)
   const createSession = useCreateSession()
   const deleteSession = useDeleteSession()
 
@@ -230,19 +228,16 @@ function NavSessionsItem({
 
   const handleNewSession = React.useCallback(async () => {
     const result = await createSession.mutateAsync(undefined)
-    setSessionTitle(
-      result.session_id,
-      t('threadList.newSession', { ns: 'sessions' }),
-    )
+    setTitle(result.session_id, t('threadList.newSession', { ns: 'sessions' }))
     void navigate({ to: '/sessions', search: { s: result.session_id } })
-  }, [createSession, navigate, t])
+  }, [createSession, navigate, setTitle, t])
 
   const handleDeleteSession = React.useCallback(
     async (e: React.MouseEvent, id: string) => {
       e.stopPropagation()
       e.preventDefault()
       await deleteSession.mutateAsync(id)
-      removeSessionTitle(id)
+      removeTitle(id)
       if (activeSessionId === id) {
         void navigate({
           to: '/sessions',
@@ -250,7 +245,7 @@ function NavSessionsItem({
         })
       }
     },
-    [deleteSession, activeSessionId, navigate],
+    [activeSessionId, deleteSession, navigate, removeTitle],
   )
 
   return (
@@ -606,6 +601,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
         open={crossDeviceVerifyOpen}
         onOpenChange={setCrossDeviceVerifyOpen}
       />
+      <GeneratedCredentialDialog />
     </SidebarProvider>
   )
 }

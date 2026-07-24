@@ -28,10 +28,7 @@ import {
   useSessionListByRecency,
   useSessionMessages,
 } from '#/lib/sessions/use-sessions'
-import {
-  setSessionTitle,
-  useSessionTitles,
-} from '#/lib/sessions/use-session-titles'
+import { useSessionTitles } from '#/lib/sessions/use-session-titles'
 import { Composer } from '#/routes/sessions/-components/composer'
 import { MessageList } from '#/routes/sessions/-components/message-list'
 
@@ -65,12 +62,13 @@ export function AgentPanel({
   const createSession = useCreateSession()
   const { data: sessions, isLoading: isLoadingSessions } =
     useSessionListByRecency()
-  const { getTitle } = useSessionTitles()
+  const { getTitle, setTitle } = useSessionTitles(identityScopeKey)
   const [playgroundSessionIds, setPlaygroundSessionIds] = useState<string[]>(
     () => readPlaygroundAgentSessionIds(identityScopeKey),
   )
   const { data: historyMessages } = useSessionMessages(sessionId)
   const chat = useChat({
+    identityScopeKey,
     initialMessages: historyMessages,
     persistMessages: true,
     sessionId,
@@ -96,7 +94,7 @@ export function AgentPanel({
       setPlaygroundSessionIds(
         registerPlaygroundAgentSessionId(result.session_id, identityScopeKey),
       )
-      setSessionTitle(result.session_id, t('agent.newSessionTitle'))
+      setTitle(result.session_id, t('agent.newSessionTitle'))
       setSessionId(result.session_id)
       onSessionChange(result.session_id)
       setHistoryOpen(false)
@@ -112,6 +110,7 @@ export function AgentPanel({
     identityScopeKey,
     isCreatingSession,
     onSessionChange,
+    setTitle,
     t,
   ])
 

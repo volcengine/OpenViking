@@ -74,18 +74,12 @@ import type {
   UpdateUserRoleInput,
 } from '#/lib/admin'
 import { copyTextToClipboard } from '#/lib/clipboard'
+import { PLAIN_INPUT_PROPS } from '#/lib/form-input'
 import { resolveStudioManagementCapabilities } from '#/lib/studio-permissions'
 
 export const Route = createFileRoute('/users')({
   component: UserManagementRoute,
 })
-
-const PLAIN_INPUT_PROPS = {
-  autoCapitalize: 'none',
-  autoComplete: 'off',
-  autoCorrect: 'off',
-  spellCheck: false,
-} as const
 
 const USER_ROLE_OPTIONS: AdminUserRole[] = ['user', 'admin', 'root']
 
@@ -118,11 +112,11 @@ function UserManagementRoute() {
     connection,
     connectionRole,
     isConnectionRoleLoading,
+    setGeneratedCredential,
     serverMode,
     switchIdentity,
   } = useAppConnection()
   const [addUserOpen, setAddUserOpen] = React.useState(false)
-  const [keyResult, setKeyResult] = React.useState<KeyResult | null>(null)
   const [pendingRegenerateUser, setPendingRegenerateUser] =
     React.useState<AdminUser | null>(null)
   const [pendingRoleChange, setPendingRoleChange] =
@@ -168,9 +162,21 @@ function UserManagementRoute() {
     mutationFn: (input: CreateUserInput) =>
       createAdminUser(adminConnection, input),
     onError: (error) => toast.error(getErrorMessage(error)),
-    onSuccess: async (result) => {
-      setKeyResult(result)
+    onSuccess: async (result, input) => {
+      setGeneratedCredential(result)
       setAddUserOpen(false)
+      if (result.apiKey) {
+        try {
+          await switchIdentity({
+            accountId: result.accountId || input.accountId,
+            allowLegacyIdentityFallback: true,
+            apiKey: result.apiKey,
+            userId: result.userId || input.userId,
+          })
+        } catch (error) {
+          toast.error(getErrorMessage(error))
+        }
+      }
       toast.success(t('toast.userCreated'))
       await queryClient.invalidateQueries({ queryKey: ['managed-users'] })
       await queryClient.invalidateQueries({ queryKey: ['account-switcher'] })
@@ -182,7 +188,7 @@ function UserManagementRoute() {
       regenerateAdminUserKey(adminConnection, user.accountId, user.userId),
     onError: (error) => toast.error(getErrorMessage(error)),
     onSuccess: async (result, user) => {
-      setKeyResult(result)
+      setGeneratedCredential(result)
       setPendingRegenerateUser(null)
       if (
         user.accountId === connection.accountId &&
@@ -191,6 +197,7 @@ function UserManagementRoute() {
       ) {
         await switchIdentity({
           accountId: user.accountId,
+          allowLegacyIdentityFallback: true,
           apiKey: result.apiKey,
           userId: user.userId,
         })
@@ -240,6 +247,7 @@ function UserManagementRoute() {
     try {
       await switchIdentity({
         accountId,
+        allowLegacyIdentityFallback: true,
         apiKey: user.apiKey,
         userId,
       })
@@ -286,12 +294,6 @@ function UserManagementRoute() {
   const visibleKeys = users.filter(
     (user) => user.apiKey || user.keyPrefix,
   ).length
-  const keyResultIsCurrentIdentity =
-    Boolean(keyResult?.accountId && keyResult.userId) &&
-    keyResult?.accountId === connection.accountId &&
-    keyResult.userId === connection.userId
-  const keyResultIdentityKey = `${keyResult?.accountId || connection.accountId}:${keyResult?.userId || connection.userId}`
-
   return (
     <div className="flex w-full min-w-0 flex-col gap-5">
       <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -362,66 +364,6 @@ function UserManagementRoute() {
         </Card>
       </div>
 
-      {keyResult?.apiKey ? (
-        <Card className="border-primary/20 bg-primary/5 py-4">
-          <CardContent className="grid gap-3 px-5">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <p className="font-medium">{t('keyResult.title')}</p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {t('keyResult.description')}
-                </p>
-              </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => setKeyResult(null)}
-              >
-                {t('keyResult.dismiss')}
-              </Button>
-            </div>
-            <div className="flex min-w-0 flex-col gap-2 rounded-md border bg-background/80 p-3 sm:flex-row sm:items-center">
-              <code className="min-w-0 flex-1 truncate font-mono text-sm">
-                {keyResult.apiKey}
-              </code>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => void copyKey(keyResult.apiKey)}
-              >
-                <CopyIcon />
-                {t('actions.copy')}
-              </Button>
-              {keyResultIsCurrentIdentity ? (
-                <Badge
-                  variant="secondary"
-                  className="h-8 gap-1.5 px-3 font-normal"
-                >
-                  <CheckIcon />
-                  {t('actions.currentIdentity')}
-                </Badge>
-              ) : (
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={Boolean(switchingIdentityKey)}
-                  onClick={() => void useUserIdentity(keyResult)}
-                >
-                  {switchingIdentityKey === keyResultIdentityKey ? (
-                    <LoaderCircleIcon className="animate-spin" />
-                  ) : (
-                    <KeyRoundIcon />
-                  )}
-                  {t('actions.switchIdentity')}
-                </Button>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      ) : null}
-
       <Card className="overflow-hidden">
         <CardHeader className="border-b bg-muted/20">
           <CardTitle>{t('management.memberListTitle')}</CardTitle>
@@ -472,13 +414,14 @@ function UserManagementRoute() {
                     const isCurrentIdentity =
                       user.accountId === connection.accountId &&
                       user.userId === connection.userId
-                    const isSwitching =
-                      switchingIdentityKey === identityKey
+                    const isSwitching = switchingIdentityKey === identityKey
 
                     return (
                       <TableRow
                         key={identityKey}
-                        className={isCurrentIdentity ? 'bg-primary/[0.025]' : ''}
+                        className={
+                          isCurrentIdentity ? 'bg-primary/[0.025]' : ''
+                        }
                       >
                         <TableCell className="font-medium">
                           <div className="flex items-center gap-2">
@@ -495,8 +438,7 @@ function UserManagementRoute() {
                           </div>
                         </TableCell>
                         <TableCell>
-                          {canManageAccounts &&
-                          isAdminUserRole(user.role) ? (
+                          {canManageAccounts && isAdminUserRole(user.role) ? (
                             <Select
                               value={user.role}
                               disabled={updateRole.isPending}
@@ -535,9 +477,7 @@ function UserManagementRoute() {
                           ) : (
                             <Badge
                               variant={
-                                user.role === 'admin'
-                                  ? 'secondary'
-                                  : 'outline'
+                                user.role === 'admin' ? 'secondary' : 'outline'
                               }
                             >
                               {t(`roles.${user.role}`, {
@@ -660,9 +600,7 @@ function UserManagementRoute() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>
-              {t('dialogs.changeRole.title')}
-            </AlertDialogTitle>
+            <AlertDialogTitle>{t('dialogs.changeRole.title')}</AlertDialogTitle>
             <AlertDialogDescription>
               {t('dialogs.changeRole.description', {
                 account: pendingRoleChange?.accountId,

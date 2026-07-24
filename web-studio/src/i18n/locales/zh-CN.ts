@@ -64,6 +64,7 @@ const zhCN = {
       hint: 'API Key 只用于校验并切换当前数据身份，不会修改或重新生成服务端凭证。',
       keyLabel: 'User API Key',
       keyPlaceholder: '粘贴目标 Account 的 User API Key',
+      manageOnly: '仅管理该 Account',
       submit: '验证并切换',
       title: '输入 User API Key',
     },
@@ -71,6 +72,10 @@ const zhCN = {
     searchPlaceholder: '搜索 Account',
     toast: {
       created: '已创建并切换到 {{account}}',
+      createdSwitchFailed:
+        '{{account}} 已创建，但数据身份切换失败：{{error}}。仍可进入该 Account 管理用户。',
+      managementSwitched:
+        '管理空间已切换到 {{account}}。访问租户数据前，请先选择或创建 User Key。',
       switched: '已切换到 {{account}}',
     },
     unset: '未选择 Account',

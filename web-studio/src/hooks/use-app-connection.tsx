@@ -1,8 +1,11 @@
 import * as React from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
+import axios from 'axios'
 
-import { isOvClientError, ovClient } from '#/lib/ov-client'
+import { createClient } from '#/gen/ov-client/client'
+import { fetchAdminAccounts } from '#/lib/admin'
+import { getHealth, isOvClientError, ovClient } from '#/lib/ov-client'
 
 import { detectServerMode, normalizeBaseUrl } from './use-server-mode'
 import type { ServerMode } from './use-server-mode'
@@ -24,19 +27,30 @@ export type ConnectionIdentitySummary = {
   }
 }
 
+export type GeneratedCredential = {
+  accountId?: string
+  apiKey: string
+  userId?: string
+}
+
 type AppConnectionContextValue = {
+  clearGeneratedCredential: () => void
   connection: ConnectionDraft
   connectionRole: ConnectionRole
+  generatedCredential: GeneratedCredential | null
   identityScopeKey: string
   isConnectionRoleLoading: boolean
   openConnectionSettings: () => void
   saveConnection: (next: ConnectionDraft) => void
+  setGeneratedCredential: (credential: GeneratedCredential) => void
   serverMode: ServerMode
   switchIdentity: (identity: {
     accountId: string
+    allowLegacyIdentityFallback?: boolean
     apiKey: string
     userId: string
   }) => Promise<void>
+  switchManagementAccount: (accountId: string) => Promise<void>
 }
 
 const CONNECTION_STORAGE_KEY = 'ov_console_connection'
@@ -264,15 +278,13 @@ async function canListAccounts(connection: ConnectionDraft): Promise<boolean> {
   }
 
   try {
-    const response = await fetch(
-      `${normalizeBaseUrl(connection.baseUrl)}/api/v1/admin/accounts`,
-      {
-        headers: {
-          'X-API-Key': connection.adminApiKey,
-        },
-      },
-    )
-    return response.ok
+    await fetchAdminAccounts({
+      accountId: connection.accountId,
+      apiKey: connection.adminApiKey,
+      baseUrl: connection.baseUrl,
+      userId: connection.userId,
+    })
+    return true
   } catch {
     return false
   }
@@ -299,23 +311,23 @@ async function detectConnectionIdentity(
     headers['X-OpenViking-User'] = connection.userId
   }
 
-  const response = await fetch(
-    `${normalizeBaseUrl(connection.baseUrl)}/health`,
-    { headers },
-  )
-  if (!response.ok) {
-    return { accountId: '', role: 'unknown', userId: '' }
-  }
+  const client = createClient({
+    axios: axios.create(),
+    baseURL: normalizeBaseUrl(connection.baseUrl),
+    headers,
+    throwOnError: true,
+  })
+  const response = await getHealth({ client })
 
   // /health resolves the presented key and echoes back its identity:
   // { role, account_id, user_id }. We use role to gate the admin UI and
   // account_id to pin the assumed account for an account-admin key.
-  const data = (await response.json().catch(() => null)) as {
+  const data = response.data as {
     account_id?: unknown
     role?: unknown
     user_id?: unknown
-  } | null
-  const healthRole = isConnectionRole(data?.role) ? data.role : 'unknown'
+  }
+  const healthRole = isConnectionRole(data.role) ? data.role : 'unknown'
   // In trusted mode /health resolves the asserted tenant user, even when the
   // configured Root key is the credential authorizing Admin API calls. Probe
   // the actual control-plane endpoint so Root capabilities reflect what the
@@ -328,9 +340,63 @@ async function detectConnectionIdentity(
       : healthRole
 
   return {
-    accountId: typeof data?.account_id === 'string' ? data.account_id : '',
+    accountId: typeof data.account_id === 'string' ? data.account_id : '',
     role,
-    userId: typeof data?.user_id === 'string' ? data.user_id : '',
+    userId: typeof data.user_id === 'string' ? data.user_id : '',
+  }
+}
+
+export function synchronizeResolvedDataIdentity(
+  connection: ConnectionDraft,
+  identity: ConnectionIdentity,
+): ConnectionDraft | null {
+  if (
+    (identity.role !== 'admin' && identity.role !== 'user') ||
+    !identity.accountId ||
+    !identity.userId ||
+    (connection.accountId === identity.accountId &&
+      connection.userId === identity.userId)
+  ) {
+    return null
+  }
+
+  return {
+    ...connection,
+    accountId: identity.accountId,
+    userId: identity.userId,
+  }
+}
+
+export function resolveSwitchedIdentity(
+  requested: Pick<ConnectionDraft, 'accountId' | 'userId'>,
+  identity: ConnectionIdentity,
+  allowLegacyIdentityFallback = false,
+): Pick<ConnectionDraft, 'accountId' | 'userId'> | null {
+  if (
+    (identity.role === 'unknown' && !allowLegacyIdentityFallback) ||
+    (identity.accountId && identity.accountId !== requested.accountId) ||
+    (identity.userId &&
+      requested.userId &&
+      identity.userId !== requested.userId)
+  ) {
+    return null
+  }
+
+  return {
+    accountId: identity.accountId || requested.accountId,
+    userId: identity.userId || requested.userId,
+  }
+}
+
+export function createManagementAccountConnection(
+  connection: ConnectionDraft,
+  accountId: string,
+): ConnectionDraft {
+  return {
+    ...connection,
+    accountId: accountId.trim(),
+    apiKey: '',
+    userId: '',
   }
 }
 
@@ -428,6 +494,8 @@ export function AppConnectionProvider({
       ),
   )
   const [serverMode, setServerMode] = React.useState<ServerMode>('checking')
+  const [generatedCredential, setGeneratedCredential] =
+    React.useState<GeneratedCredential | null>(null)
 
   const openConnectionSettings = React.useCallback(() => {
     if (pathname !== '/settings') {
@@ -457,6 +525,7 @@ export function AppConnectionProvider({
 
   React.useEffect(() => {
     let cancelled = false
+    const isCancelled = () => cancelled
     const apiKey = connection.adminApiKey || connection.apiKey
     const roleProbe = resolveConnectionRoleProbeState({
       apiKey,
@@ -473,12 +542,35 @@ export function AppConnectionProvider({
     }
 
     void detectConnectionIdentity(connection)
-      .then(({ accountId, role, userId }) => {
-        if (cancelled) {
+      .then(async (controlIdentity) => {
+        if (isCancelled()) {
           return
         }
+        const dataIdentity =
+          connection.apiKey &&
+          (controlIdentity.role === 'root' ||
+            (controlIdentity.role === 'admin' &&
+              controlIdentity.accountId === connection.accountId))
+            ? await detectConnectionIdentity(connection, 'data')
+            : !connection.adminApiKey
+              ? controlIdentity
+              : null
+        if (isCancelled()) {
+          return
+        }
+
+        const { accountId, role } = controlIdentity
         setConnectionRole(role)
         setConnectionRoleLoading(false)
+        const dataConnection = dataIdentity
+          ? synchronizeResolvedDataIdentity(connection, dataIdentity)
+          : null
+        if (dataConnection) {
+          const next = synchronizeConnectionRuntime(dataConnection, serverMode)
+          queryClient.clear()
+          setConnection(next)
+          return
+        }
         // An account-admin Root key is scoped to its own account. Pin that
         // account as the assumed identity so admin and data calls target the
         // right tenant instead of failing with a mismatch (the server rejects
@@ -496,23 +588,6 @@ export function AppConnectionProvider({
           queryClient.clear()
           setConnection(next)
           return
-        }
-        // When the browser only has a data credential, the key itself is the
-        // source of truth in API-key mode. Mirror its resolved identity into
-        // the workspace label and scoped local state.
-        if (
-          !connection.adminApiKey &&
-          (role === 'admin' || role === 'user') &&
-          accountId &&
-          userId &&
-          (connection.accountId !== accountId || connection.userId !== userId)
-        ) {
-          const next = synchronizeConnectionRuntime(
-            { ...connection, accountId, userId },
-            serverMode,
-          )
-          queryClient.clear()
-          setConnection(next)
         }
       })
       .catch(() => {
@@ -564,14 +639,22 @@ export function AppConnectionProvider({
     }
 
     return {
+      clearGeneratedCredential: () => setGeneratedCredential(null),
       connection,
       connectionRole,
+      generatedCredential,
       identityScopeKey: createIdentityScopeKey(connection, serverMode),
       isConnectionRoleLoading,
       openConnectionSettings,
       saveConnection: commitConnection,
+      setGeneratedCredential,
       serverMode,
-      switchIdentity: async ({ accountId, apiKey, userId }) => {
+      switchIdentity: async ({
+        accountId,
+        allowLegacyIdentityFallback,
+        apiKey,
+        userId,
+      }) => {
         if (serverMode === 'dev' || serverMode === 'checking') {
           throw new Error(
             'The current server mode does not support identity switching.',
@@ -585,28 +668,48 @@ export function AppConnectionProvider({
           userId,
         })
         const identity = await detectConnectionIdentity(requested, 'data')
-        if (
-          identity.role === 'unknown' ||
-          identity.accountId !== requested.accountId ||
-          (requested.userId && identity.userId !== requested.userId)
-        ) {
+        const resolvedIdentity = resolveSwitchedIdentity(
+          requested,
+          identity,
+          allowLegacyIdentityFallback,
+        )
+        if (!resolvedIdentity) {
           throw new Error(
             'The selected credential does not match the target account and user.',
           )
         }
 
+        if (pathname === '/playground') {
+          await navigate({
+            replace: true,
+            search: { upload: false },
+            to: '/playground',
+          })
+        }
         commitConnection({
           ...requested,
-          accountId: identity.accountId,
-          userId: identity.userId,
+          ...resolvedIdentity,
         })
+      },
+      switchManagementAccount: async (accountId) => {
+        if (connectionRole !== 'root') {
+          throw new Error(
+            'Only a validated Root credential can switch management accounts.',
+          )
+        }
+        commitConnection(
+          createManagementAccountConnection(connection, accountId),
+        )
       },
     }
   }, [
     connection,
     connectionRole,
+    generatedCredential,
     isConnectionRoleLoading,
+    navigate,
     openConnectionSettings,
+    pathname,
     queryClient,
     serverMode,
   ])

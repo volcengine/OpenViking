@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  createManagementAccountConnection,
   createIdentityScopeKey,
+  resolveSwitchedIdentity,
   resolveConnectionRoleProbeState,
   resolveInitialApiKey,
   shouldRedirectToLoginOnApiError,
   synchronizeConnectionRuntime,
+  synchronizeResolvedDataIdentity,
 } from './use-app-connection'
 import { ovClient } from '#/lib/ov-client'
 
@@ -77,6 +80,101 @@ describe('createIdentityScopeKey', () => {
     )
 
     expect(scope).not.toContain('secret-user-key')
+  })
+})
+
+describe('synchronizeResolvedDataIdentity', () => {
+  it('updates the active account and user even when a Root control key is configured', () => {
+    const connection = {
+      accountId: 'account-a',
+      adminApiKey: 'root-key',
+      apiKey: 'account-b-user-key',
+      baseUrl: 'http://localhost:1933',
+      userId: 'alice',
+    }
+
+    expect(
+      synchronizeResolvedDataIdentity(connection, {
+        accountId: 'account-b',
+        role: 'user',
+        userId: 'bob',
+      }),
+    ).toEqual({
+      ...connection,
+      accountId: 'account-b',
+      userId: 'bob',
+    })
+  })
+
+  it('does not rewrite an already synchronized identity', () => {
+    const connection = {
+      accountId: 'account-b',
+      adminApiKey: 'root-key',
+      apiKey: 'account-b-user-key',
+      baseUrl: 'http://localhost:1933',
+      userId: 'bob',
+    }
+
+    expect(
+      synchronizeResolvedDataIdentity(connection, {
+        accountId: 'account-b',
+        role: 'user',
+        userId: 'bob',
+      }),
+    ).toBeNull()
+  })
+})
+
+describe('resolveSwitchedIdentity', () => {
+  it('uses the requested account and user for legacy health responses', () => {
+    expect(
+      resolveSwitchedIdentity(
+        { accountId: 'account-b', userId: 'bob' },
+        { accountId: '', role: 'user', userId: '' },
+      ),
+    ).toEqual({ accountId: 'account-b', userId: 'bob' })
+  })
+
+  it('rejects a credential that resolves to another identity', () => {
+    expect(
+      resolveSwitchedIdentity(
+        { accountId: 'account-b', userId: 'bob' },
+        { accountId: 'account-a', role: 'user', userId: 'alice' },
+      ),
+    ).toBeNull()
+  })
+
+  it('uses an Admin API credential association with legacy health endpoints', () => {
+    expect(
+      resolveSwitchedIdentity(
+        { accountId: 'account-b', userId: 'bob' },
+        { accountId: '', role: 'unknown', userId: '' },
+        true,
+      ),
+    ).toEqual({ accountId: 'account-b', userId: 'bob' })
+  })
+})
+
+describe('createManagementAccountConnection', () => {
+  it('keeps the Root credential while clearing stale tenant data credentials', () => {
+    expect(
+      createManagementAccountConnection(
+        {
+          accountId: 'account-a',
+          adminApiKey: 'root-key',
+          apiKey: 'account-a-user-key',
+          baseUrl: 'http://localhost:1933',
+          userId: 'alice',
+        },
+        ' account-b ',
+      ),
+    ).toEqual({
+      accountId: 'account-b',
+      adminApiKey: 'root-key',
+      apiKey: '',
+      baseUrl: 'http://localhost:1933',
+      userId: '',
+    })
   })
 })
 

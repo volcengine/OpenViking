@@ -19,12 +19,12 @@ const users: AdminUser[] = [
 ]
 
 describe('selectAccountUser', () => {
-  it('keeps the same user id when it exists in the target account', () => {
-    expect(selectAccountUser(users, 'alice', true)?.userId).toBe('alice')
+  it('selects the first user returned by the target account', () => {
+    expect(selectAccountUser(users, 'default', true)?.userId).toBe('alice')
   })
 
-  it('falls back to the default user for a new account', () => {
-    expect(selectAccountUser(users, 'missing', true)?.userId).toBe('default')
+  it('falls back to the first user for a new account', () => {
+    expect(selectAccountUser(users, 'missing', true)?.userId).toBe('alice')
   })
 
   it('rejects prefix-only users in API-key mode', () => {
