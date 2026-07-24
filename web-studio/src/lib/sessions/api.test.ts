@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { OvClientError } from '#/lib/ov-client'
+
 import { fetchSessionMessages } from './api'
 
 const {
@@ -83,7 +85,13 @@ describe('fetchSessionMessages', () => {
   it('keeps readable history when an unfinished archive is unavailable', async () => {
     getSessionBySessionIdMock.mockReturnValue(response({ commit_count: 2 }))
     getSessionIdArchiveByArchiveIdMock
-      .mockRejectedValueOnce(new Error('archive not found'))
+      .mockRejectedValueOnce(
+        new OvClientError({
+          code: 'NOT_FOUND',
+          message: 'archive not found',
+          statusCode: 404,
+        }),
+      )
       .mockReturnValueOnce(
         response({
           archive_id: 'archive_002',
@@ -97,5 +105,19 @@ describe('fetchSessionMessages', () => {
     const result = await fetchSessionMessages('session-1')
 
     expect(result.map(({ id }) => id)).toEqual(['2', '3'])
+  })
+
+  it('propagates archive failures that are not missing archives', async () => {
+    getSessionBySessionIdMock.mockReturnValue(response({ commit_count: 1 }))
+    getSessionIdArchiveByArchiveIdMock.mockRejectedValueOnce(
+      new Error('connection reset'),
+    )
+    getSessionIdContextMock.mockReturnValue(
+      response({ messages: [message('1', 'one')] }),
+    )
+
+    await expect(fetchSessionMessages('session-1')).rejects.toThrow(
+      'connection reset',
+    )
   })
 })

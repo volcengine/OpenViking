@@ -374,30 +374,41 @@ function TasksRoute() {
             </Table>
           </div>
           <div className="flex flex-col gap-3 border-t px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center justify-center gap-3 sm:justify-start">
-              <p className="text-sm text-muted-foreground">
-                {t('pagination.page', { page })}
+            <div className="flex flex-col items-center gap-1.5 sm:items-start">
+              <div className="flex items-center justify-center gap-3 sm:justify-start">
+                <p className="text-sm text-muted-foreground">
+                  {t('pagination.page', { page })}
+                </p>
+                <Select
+                  value={String(pageSize)}
+                  onValueChange={(value) => {
+                    setPageSize(Number(value))
+                    setPage(1)
+                  }}
+                >
+                  <SelectTrigger
+                    size="sm"
+                    aria-label={t('pagination.pageSize')}
+                  >
+                    <SelectValue>
+                      {t('pagination.pageSizeValue', { count: pageSize })}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PAGE_SIZE_OPTIONS.map((option) => (
+                      <SelectItem key={option} value={String(option)}>
+                        {t('pagination.pageSizeValue', { count: option })}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {t('pagination.scope', {
+                  count: allTasks.length,
+                  limit: MAX_TASKS,
+                })}
               </p>
-              <Select
-                value={String(pageSize)}
-                onValueChange={(value) => {
-                  setPageSize(Number(value))
-                  setPage(1)
-                }}
-              >
-                <SelectTrigger size="sm" aria-label={t('pagination.pageSize')}>
-                  <SelectValue>
-                    {t('pagination.pageSizeValue', { count: pageSize })}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {PAGE_SIZE_OPTIONS.map((option) => (
-                    <SelectItem key={option} value={String(option)}>
-                      {t('pagination.pageSizeValue', { count: option })}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
             </div>
             <Pagination className="mx-0 w-auto justify-center sm:justify-end">
               <PaginationContent>

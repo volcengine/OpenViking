@@ -192,6 +192,8 @@ const en = {
       pageSize: 'Rows per page',
       pageSizeValue: '{{count}} per page',
       previous: 'Previous',
+      scope:
+        'Showing the latest {{count}} tasks (the API returns at most {{limit}})',
     },
     table: {
       task: 'Task',
@@ -957,6 +959,14 @@ const en = {
       emptyTitle: 'No sessions yet',
       emptyDescription: 'Select the plus button to start a new conversation.',
       deleteSession: 'Delete “{{title}}”',
+      deleteConfirmTitle: 'Delete session?',
+      deleteConfirmDescription:
+        '“{{title}}” and its conversation history will be permanently deleted. This action cannot be undone.',
+      cancel: 'Cancel',
+      confirmDelete: 'Delete',
+      deleting: 'Deleting...',
+      deleteSuccess: 'Session deleted',
+      deleteFailed: 'Could not delete session: {{error}}',
       shortcut: '⌘ N to create a new session',
     },
     chat: {
@@ -1002,6 +1012,10 @@ const en = {
       addedContent: 'Added content',
       deletedContent: 'Deleted content',
       emptyContent: 'No content to display',
+      loading: 'Loading memory changes...',
+      loadFailed: 'Could not load memory changes',
+      retry: 'Retry',
+      empty: 'This session commit did not produce any memory changes.',
     },
     empty: {
       description: 'Select a session from the list or create a new one.',

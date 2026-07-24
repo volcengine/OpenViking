@@ -11,10 +11,7 @@ import {
 } from './api'
 import type { Message } from './types/message'
 import type { SessionMemoryDiff } from './memory-diff'
-import type {
-  SessionListItem,
-  SessionMeta,
-} from '@ov-server/api/v1/sessions'
+import type { SessionListItem, SessionMeta } from '@ov-server/api/v1/sessions'
 
 const SESSIONS_KEY = ['sessions'] as const
 const BOT_HEALTH_KEY = ['bot', 'health'] as const
@@ -90,7 +87,10 @@ export function useSessionMessages(sessionId: string | undefined) {
   })
 }
 
-export function useSessionMemoryDiffs(session: SessionMeta | undefined) {
+export function useSessionMemoryDiffs(
+  session: SessionMeta | undefined,
+  enabled = true,
+) {
   return useQuery<SessionMemoryDiff[]>({
     queryKey: [
       ...SESSIONS_KEY,
@@ -100,7 +100,7 @@ export function useSessionMemoryDiffs(session: SessionMeta | undefined) {
       session?.last_commit_at,
     ],
     queryFn: () => fetchSessionMemoryDiffs(session!),
-    enabled: Boolean(session && session.commit_count > 0),
+    enabled: Boolean(enabled && session && session.commit_count > 0),
     staleTime: 30_000,
   })
 }

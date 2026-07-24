@@ -1,13 +1,15 @@
 import * as React from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
-import axios from 'axios'
 
-import { createClient } from '#/gen/ov-client/client'
 import { fetchAdminAccounts } from '#/lib/admin'
-import { getHealth, isOvClientError, ovClient } from '#/lib/ov-client'
+import { isOvClientError, ovClient } from '#/lib/ov-client'
 
-import { detectServerMode, normalizeBaseUrl } from './use-server-mode'
+import {
+  detectServerMode,
+  fetchServerHealth,
+  normalizeBaseUrl,
+} from './use-server-mode'
 import type { ServerMode } from './use-server-mode'
 
 export type ConnectionRole = 'admin' | 'root' | 'unknown' | 'user'
@@ -286,6 +288,27 @@ type ConnectionIdentity = {
   userId: string
 }
 
+function createConnectionHealthHeaders(
+  connection: ConnectionDraft,
+  credential: 'control' | 'data' = 'control',
+): Record<string, string> {
+  const headers: Record<string, string> = {}
+  const apiKey =
+    credential === 'data'
+      ? connection.apiKey || connection.adminApiKey
+      : connection.adminApiKey || connection.apiKey
+  if (apiKey) {
+    headers['X-API-Key'] = apiKey
+  }
+  if (connection.accountId) {
+    headers['X-OpenViking-Account'] = connection.accountId
+  }
+  if (connection.userId) {
+    headers['X-OpenViking-User'] = connection.userId
+  }
+  return headers
+}
+
 async function canListAccounts(connection: ConnectionDraft): Promise<boolean> {
   if (!connection.adminApiKey) {
     return false
@@ -308,39 +331,14 @@ async function detectConnectionIdentity(
   connection: ConnectionDraft,
   credential: 'control' | 'data' = 'control',
 ): Promise<ConnectionIdentity> {
-  const headers: Record<string, string> = {}
-  const apiKey =
-    credential === 'data'
-      ? connection.apiKey || connection.adminApiKey
-      : connection.adminApiKey || connection.apiKey
-  if (apiKey) {
-    headers['X-API-Key'] = apiKey
-  }
-  // Identity headers are required for trusted-mode identity resolution.
-  // In api_key mode the server strips them, so they are always safe to send.
-  if (connection.accountId) {
-    headers['X-OpenViking-Account'] = connection.accountId
-  }
-  if (connection.userId) {
-    headers['X-OpenViking-User'] = connection.userId
-  }
-
-  const client = createClient({
-    axios: axios.create(),
-    baseURL: normalizeBaseUrl(connection.baseUrl),
-    headers,
-    throwOnError: true,
-  })
-  const response = await getHealth({ client })
+  const data = await fetchServerHealth(
+    connection.baseUrl,
+    createConnectionHealthHeaders(connection, credential),
+  )
 
   // /health resolves the presented key and echoes back its identity:
   // { role, account_id, user_id }. We use role to gate the admin UI and
   // account_id to pin the assumed account for an account-admin key.
-  const data = response.data as {
-    account_id?: unknown
-    role?: unknown
-    user_id?: unknown
-  }
   const healthRole = isConnectionRole(data.role) ? data.role : 'unknown'
   // In trusted mode /health resolves the asserted tenant user, even when the
   // configured Root key is the credential authorizing Admin API calls. Probe
@@ -530,7 +528,10 @@ export function AppConnectionProvider({
     let cancelled = false
 
     setServerMode('checking')
-    void detectServerMode(connection.baseUrl).then((mode) => {
+    void detectServerMode(
+      connection.baseUrl,
+      createConnectionHealthHeaders(connection),
+    ).then((mode) => {
       if (!cancelled) {
         setServerMode(mode)
       }
@@ -539,7 +540,13 @@ export function AppConnectionProvider({
     return () => {
       cancelled = true
     }
-  }, [connection.baseUrl])
+  }, [
+    connection.accountId,
+    connection.adminApiKey,
+    connection.apiKey,
+    connection.baseUrl,
+    connection.userId,
+  ])
 
   React.useEffect(() => {
     let cancelled = false

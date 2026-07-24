@@ -4,11 +4,7 @@ import { useTranslation } from 'react-i18next'
 
 import { useAppConnection } from '#/hooks/use-app-connection'
 import { useChat } from '#/lib/sessions/use-chat'
-import {
-  useSession,
-  useSessionMemoryDiffs,
-  useSessionMessages,
-} from '#/lib/sessions/use-sessions'
+import { useSession, useSessionMessages } from '#/lib/sessions/use-sessions'
 import { useSessionTitles } from '#/lib/sessions/use-session-titles'
 import { MessageList } from './message-list'
 import { MemoryImpact } from './memory-impact'
@@ -28,7 +24,6 @@ export function Thread({ sessionId }: ThreadProps) {
 
   const { data: session } = useSession(sessionId)
   const { data: historyMessages } = useSessionMessages(sessionId)
-  const { data: memoryDiffs = [] } = useSessionMemoryDiffs(session)
 
   const chat = useChat({
     identityScopeKey,
@@ -104,7 +99,7 @@ export function Thread({ sessionId }: ThreadProps) {
         <h2 className="truncate text-sm font-medium text-foreground">
           {title || sessionId}
         </h2>
-        <MemoryImpact diffs={memoryDiffs} />
+        <MemoryImpact session={session} />
       </div>
 
       <div

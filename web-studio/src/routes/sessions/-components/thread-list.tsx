@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import { Link, useNavigate } from '@tanstack/react-router'
 import {
   LoaderCircleIcon,
@@ -7,7 +7,18 @@ import {
   Trash2Icon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '#/components/ui/alert-dialog'
 import { Button } from '#/components/ui/button'
 import { useAppConnection } from '#/hooks/use-app-connection'
 import {
@@ -30,6 +41,10 @@ export function ThreadList({ activeSessionId }: ThreadListProps) {
   const { getTitle, removeTitle, setTitle } = useSessionTitles(identityScopeKey)
   const createSession = useCreateSession()
   const deleteSession = useDeleteSession()
+  const [sessionToDelete, setSessionToDelete] = useState<{
+    id: string
+    title: string
+  } | null>(null)
 
   const handleNewSession = useCallback(async () => {
     const result = await createSession.mutateAsync(undefined)
@@ -37,25 +52,40 @@ export function ThreadList({ activeSessionId }: ThreadListProps) {
     void navigate({ to: '/sessions', search: { s: result.session_id } })
   }, [createSession, navigate, setTitle, t])
 
-  const handleDeleteSession = useCallback(
-    async (event: React.MouseEvent, sessionId: string) => {
-      event.preventDefault()
-      event.stopPropagation()
-      await deleteSession.mutateAsync(sessionId)
-      removeTitle(sessionId)
+  const handleDeleteSession = useCallback(async () => {
+    if (!sessionToDelete) return
 
-      if (activeSessionId === sessionId) {
+    try {
+      await deleteSession.mutateAsync(sessionToDelete.id)
+      removeTitle(sessionToDelete.id)
+
+      if (activeSessionId === sessionToDelete.id) {
         const nextSession = sessions.find(
-          (session) => session.session_id !== sessionId,
+          (session) => session.session_id !== sessionToDelete.id,
         )
         void navigate({
           to: '/sessions',
           search: { s: nextSession?.session_id },
         })
       }
-    },
-    [activeSessionId, deleteSession, navigate, removeTitle, sessions],
-  )
+      toast.success(t('threadList.deleteSuccess'))
+      setSessionToDelete(null)
+    } catch (error) {
+      toast.error(
+        t('threadList.deleteFailed', {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      )
+    }
+  }, [
+    activeSessionId,
+    deleteSession,
+    navigate,
+    removeTitle,
+    sessionToDelete,
+    sessions,
+    t,
+  ])
 
   return (
     <aside className="flex h-full w-72 shrink-0 flex-col border-r border-border/70 bg-muted/20">
@@ -146,9 +176,14 @@ export function ThreadList({ activeSessionId }: ThreadListProps) {
                   </Link>
                   <button
                     type="button"
-                    onClick={(event) =>
-                      void handleDeleteSession(event, session.session_id)
-                    }
+                    onClick={(event) => {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      setSessionToDelete({
+                        id: session.session_id,
+                        title,
+                      })
+                    }}
                     disabled={deleteSession.isPending}
                     className="absolute right-2 top-2.5 flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-[opacity,color,background-color] hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/session:opacity-100"
                     aria-label={t('threadList.deleteSession', { title })}
@@ -162,6 +197,43 @@ export function ThreadList({ activeSessionId }: ThreadListProps) {
           </div>
         )}
       </div>
+
+      <AlertDialog
+        open={Boolean(sessionToDelete)}
+        onOpenChange={(open) => {
+          if (!open && !deleteSession.isPending) setSessionToDelete(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t('threadList.deleteConfirmTitle')}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('threadList.deleteConfirmDescription', {
+                title: sessionToDelete?.title,
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteSession.isPending}>
+              {t('threadList.cancel')}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deleteSession.isPending}
+              onClick={(event) => {
+                event.preventDefault()
+                void handleDeleteSession()
+              }}
+            >
+              {deleteSession.isPending
+                ? t('threadList.deleting')
+                : t('threadList.confirmDelete')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <div className="shrink-0 border-t border-border/70 px-4 py-3 text-[11px] text-muted-foreground">
         {t('threadList.shortcut')}

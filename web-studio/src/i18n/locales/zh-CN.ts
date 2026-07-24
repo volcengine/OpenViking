@@ -184,6 +184,7 @@ const zhCN = {
       pageSize: '每页条数',
       pageSizeValue: '每页 {{count}} 条',
       previous: '上一页',
+      scope: '当前展示最近 {{count}} 条任务（接口最多返回 {{limit}} 条）',
     },
     table: {
       task: '任务',
@@ -927,6 +928,14 @@ const zhCN = {
       emptyTitle: '还没有会话',
       emptyDescription: '点击右上角的加号开始一段新对话。',
       deleteSession: '删除“{{title}}”',
+      deleteConfirmTitle: '删除会话？',
+      deleteConfirmDescription:
+        '“{{title}}”及其对话记录将被永久删除，此操作无法撤销。',
+      cancel: '取消',
+      confirmDelete: '删除',
+      deleting: '正在删除...',
+      deleteSuccess: '会话已删除',
+      deleteFailed: '会话删除失败：{{error}}',
       shortcut: '⌘ N 新建会话',
     },
     chat: {
@@ -969,6 +978,10 @@ const zhCN = {
       addedContent: '新增内容',
       deletedContent: '删除内容',
       emptyContent: '没有可展示的内容',
+      loading: '正在加载记忆变更...',
+      loadFailed: '记忆变更加载失败',
+      retry: '重试',
+      empty: '本次会话提交没有产生记忆变更。',
     },
     empty: {
       description: '从左侧选择一个会话，或创建新会话。',

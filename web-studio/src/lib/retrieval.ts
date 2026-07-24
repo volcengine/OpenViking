@@ -237,37 +237,18 @@ export async function fetchSearch(
   }
 }
 
-export async function fetchFindAllTypes(
+/**
+ * Fetch all context types in one request.
+ *
+ * The server already groups resources, memories, and skills in its response,
+ * so issuing one request per type only duplicates work and can exceed the
+ * requested global limit.
+ */
+export function fetchFindAllTypes(
   query: string,
   options: Omit<FetchFindOptions, 'targetUri' | 'filter'> = {},
 ): Promise<GroupedFindResult> {
-  const results = await Promise.allSettled(
-    FIND_CONTEXT_TYPES.map((ct) =>
-      fetchFind(query, {
-        ...options,
-        filter: { op: 'must', field: 'context_type', conds: [ct] },
-      }),
-    ),
-  )
-
-  const merged: GroupedFindResult = {
-    memories: [],
-    resources: [],
-    skills: [],
-    total: 0,
-  }
-
-  const [resourceResult, memoryResult, skillResult] = results
-  if (resourceResult.status === 'fulfilled')
-    merged.resources = resourceResult.value.resources
-  if (memoryResult.status === 'fulfilled')
-    merged.memories = memoryResult.value.memories
-  if (skillResult.status === 'fulfilled')
-    merged.skills = skillResult.value.skills
-
-  merged.total =
-    merged.memories.length + merged.resources.length + merged.skills.length
-  return merged
+  return fetchFind(query, options)
 }
 
 function emptyPatternResult(resources: FindResultItem[]): GroupedFindResult {

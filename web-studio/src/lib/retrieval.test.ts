@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { fetchGlob, fetchGrep } from './retrieval'
+import { fetchFindAllTypes, fetchGlob, fetchGrep } from './retrieval'
 
-const { postSearchGlobMock, postSearchGrepMock } = vi.hoisted(() => ({
-  postSearchGlobMock: vi.fn(),
-  postSearchGrepMock: vi.fn(),
-}))
+const { postSearchFindMock, postSearchGlobMock, postSearchGrepMock } =
+  vi.hoisted(() => ({
+    postSearchFindMock: vi.fn(),
+    postSearchGlobMock: vi.fn(),
+    postSearchGrepMock: vi.fn(),
+  }))
 
 vi.mock('#/lib/ov-client', () => ({
   getOvResult: async (request: Promise<unknown>) => {
@@ -15,7 +17,7 @@ vi.mock('#/lib/ov-client', () => ({
     return rawResponse.data.result
   },
   normalizeOvClientError: (error: unknown) => error,
-  postSearchFind: vi.fn(),
+  postSearchFind: postSearchFindMock,
   postSearchGlob: postSearchGlobMock,
   postSearchGrep: postSearchGrepMock,
   postSearchSearch: vi.fn(),
@@ -31,8 +33,39 @@ function response(result: unknown) {
 
 describe('pattern retrieval', () => {
   beforeEach(() => {
+    postSearchFindMock.mockReset()
     postSearchGlobMock.mockReset()
     postSearchGrepMock.mockReset()
+  })
+
+  it('uses one find request for the server-grouped result types', async () => {
+    postSearchFindMock.mockReturnValue(
+      response({
+        memories: [{ uri: 'viking://user/default/memories/profile.md' }],
+        resources: [{ uri: 'viking://resources/guide.md' }],
+        skills: [{ uri: 'viking://user/default/skills/reviewer' }],
+        total: 3,
+      }),
+    )
+
+    const result = await fetchFindAllTypes('OpenViking', { limit: 10 })
+
+    expect(postSearchFindMock).toHaveBeenCalledTimes(1)
+    expect(postSearchFindMock).toHaveBeenCalledWith({
+      body: {
+        filter: undefined,
+        limit: 10,
+        query: 'OpenViking',
+        score_threshold: undefined,
+        target_uri: undefined,
+      },
+    })
+    expect(result).toMatchObject({
+      total: 3,
+      memories: [{ context_type: 'memory' }],
+      resources: [{ context_type: 'resource' }],
+      skills: [{ context_type: 'skill' }],
+    })
   })
 
   it('maps grep line matches into retrieval result rows', async () => {

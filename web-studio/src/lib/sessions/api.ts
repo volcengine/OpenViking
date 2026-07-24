@@ -123,6 +123,35 @@ function deduplicateMessages(messages: Message[]): Message[] {
   })
 }
 
+const SESSION_ARCHIVE_CONCURRENCY = 4
+
+async function mapWithConcurrency<T, TResult>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<TResult>,
+): Promise<TResult[]> {
+  const results = new Array<TResult>(items.length)
+  let nextIndex = 0
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex
+      nextIndex += 1
+      results[index] = await mapper(items[index], index)
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, () => worker()),
+  )
+  return results
+}
+
+function isMissingArchive(error: unknown): boolean {
+  const normalized = normalizeOvClientError(error)
+  return normalized.statusCode === 404 || normalized.code === 'NOT_FOUND'
+}
+
 /**
  * Fetch the complete message history.
  *
@@ -148,15 +177,24 @@ export async function fetchSessionMessages(
     // useful, so preserve the previous behavior as a fallback.
   }
 
-  const archiveRequests = Array.from({ length: commitCount }, (_, index) =>
-    fetchSessionArchive(
-      sessionId,
-      `archive_${String(index + 1).padStart(3, '0')}`,
-    ),
+  const archiveIds = Array.from(
+    { length: commitCount },
+    (_, index) => `archive_${String(index + 1).padStart(3, '0')}`,
   )
-  const archives = await Promise.allSettled(archiveRequests)
+  const archives = await mapWithConcurrency(
+    archiveIds,
+    SESSION_ARCHIVE_CONCURRENCY,
+    async (archiveId) => {
+      try {
+        return await fetchSessionArchive(sessionId, archiveId)
+      } catch (error) {
+        if (isMissingArchive(error)) return null
+        throw error
+      }
+    },
+  )
   const archivedMessages = archives.flatMap((archive) =>
-    archive.status === 'fulfilled' ? getMessages(archive.value.messages) : [],
+    archive ? getMessages(archive.messages) : [],
   )
 
   return deduplicateMessages([
@@ -174,26 +212,37 @@ export async function fetchSessionMemoryDiffs(
   const sessionUri =
     session.uri?.replace(/\/+$/, '') ||
     `viking://user/${session.user.user_id}/sessions/${session.session_id}`
-  const requests = Array.from({ length: commitCount }, async (_, index) => {
-    const archiveId = `archive_${String(index + 1).padStart(3, '0')}`
-    const result = await getOvResult<unknown>(
-      getContentRead({
-        query: {
-          limit: -1,
-          offset: 0,
-          raw: true,
-          uri: `${sessionUri}/history/${archiveId}/memory_diff.json`,
-        } as Parameters<typeof getContentRead>[0]['query'] & { raw?: boolean },
-      }),
-    )
-    return parseSessionMemoryDiff(result, archiveId)
-  })
-  const results = await Promise.allSettled(requests)
+  const archiveIds = Array.from(
+    { length: commitCount },
+    (_, index) => `archive_${String(index + 1).padStart(3, '0')}`,
+  )
+  const results = await mapWithConcurrency(
+    archiveIds,
+    SESSION_ARCHIVE_CONCURRENCY,
+    async (archiveId) => {
+      try {
+        const result = await getOvResult<unknown>(
+          getContentRead({
+            query: {
+              limit: -1,
+              offset: 0,
+              raw: true,
+              uri: `${sessionUri}/history/${archiveId}/memory_diff.json`,
+            } as Parameters<typeof getContentRead>[0]['query'] & {
+              raw?: boolean
+            },
+          }),
+        )
+        return parseSessionMemoryDiff(result, archiveId)
+      } catch (error) {
+        if (isMissingArchive(error)) return null
+        throw error
+      }
+    },
+  )
 
   return results
-    .flatMap((result) =>
-      result.status === 'fulfilled' && result.value ? [result.value] : [],
-    )
+    .flatMap((result) => (result ? [result] : []))
     .sort((left, right) => right.archiveId.localeCompare(left.archiveId))
 }
 

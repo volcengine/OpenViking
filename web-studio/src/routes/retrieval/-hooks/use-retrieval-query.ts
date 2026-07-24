@@ -1,12 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 
-import {
-  fetchFind,
-  fetchFindAllTypes,
-  fetchGlob,
-  fetchGrep,
-  fetchSearch,
-} from '#/lib/retrieval'
+import { fetchFind, fetchGlob, fetchGrep, fetchSearch } from '#/lib/retrieval'
 import type { GroupedFindResult } from '#/lib/retrieval'
 
 import type { RetrievalMode } from '../-types/retrieval'
@@ -52,9 +46,7 @@ export function useRetrievalQuery({
         })
       }
 
-      return targetUri
-        ? fetchFind(query, { limit: resultCount, targetUri })
-        : fetchFindAllTypes(query, { limit: resultCount })
+      return fetchFind(query, { limit: resultCount, targetUri })
     },
     queryKey: [
       'retrieval',
