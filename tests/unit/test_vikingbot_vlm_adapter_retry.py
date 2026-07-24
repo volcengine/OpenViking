@@ -28,6 +28,12 @@ class _FakeVLM:
         return self.result
 
 
+class _FakeVolcEngineFailoverVLM(_FakeVLM):
+    provider = "volcengine"
+    model = "primary-model"
+    thinking = False
+
+
 class _AsyncChunks:
     def __init__(self, chunks):
         self._chunks = chunks
@@ -184,6 +190,27 @@ async def test_chat_stream_retries_rate_limit_until_success(monkeypatch):
     assert events[0].content == "streamed"
     assert events[1].response.content == "streamed"
     assert events[1].response.finish_reason == "stop"
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_routes_failover_wrapper_through_completion_api():
+    fake_vlm = _FakeVolcEngineFailoverVLM([], result="fallback-safe")
+    adapter = VLMProviderAdapter(
+        fake_vlm,
+        "primary-model",
+        langfuse_client=_DisabledLangfuse(),
+    )
+
+    events = [
+        event
+        async for event in adapter.chat_stream(
+            messages=[{"role": "user", "content": "hello"}],
+        )
+    ]
+
+    assert fake_vlm.calls == 1
+    assert [event.type for event in events] == ["response"]
+    assert events[0].response.content == "fallback-safe"
 
 
 def test_rate_limit_classifier_handles_target_error():
