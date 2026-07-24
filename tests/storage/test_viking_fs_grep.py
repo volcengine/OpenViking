@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import asyncio
 import time
 
 import pytest
@@ -147,12 +148,103 @@ async def test_grep_vikingdb_remote_error_falls_back_to_fs(monkeypatch):
     ]
 
 
+class _SlowVectorStore:
+    """Vector store whose search_by_keywords never returns within the timeout."""
+
+    async def search_by_keywords(self, **kwargs):
+        await asyncio.sleep(30)
+        return []
+
+
+@pytest.mark.asyncio
+async def test_grep_vikingdb_empty_recall_falls_back_to_fs(monkeypatch):
+    """VikingDB returning zero candidates must retry via fs grep (#2850)."""
+    fs = VikingFS(agfs=_DummyAgfs())
+    # _DummyVectorStore() defaults to empty results -> empty recall.
+    vector_store = _DummyVectorStore()
+    monkeypatch.setattr(fs, "_get_vector_store", lambda: vector_store)
+    monkeypatch.setattr(fs, "_ensure_access", lambda uri, ctx=None: None)
+
+    calls = []
+
+    async def fake_grep_fs(**kwargs):
+        calls.append(kwargs)
+        return {
+            "matches": [{"uri": "viking://resources/a.md"}],
+            "count": 1,
+            "match_count": 1,
+            "files_scanned": 1,
+        }
+
+    monkeypatch.setattr(fs, "_grep_fs", fake_grep_fs)
+
+    result = await fs._grep_vikingdb_then_fs(
+        uri="viking://resources",
+        pattern="needle",
+        exclude_uri=None,
+        case_insensitive=False,
+        node_limit=10,
+        level_limit=3,
+        ctx=None,
+    )
+
+    # fs fallback was invoked and its result surfaced (not the empty VikingDB hit).
+    assert len(calls) == 1
+    assert calls[0]["pattern"] == "needle"
+    assert result["count"] == 1
+    assert result["matches"][0]["uri"] == "viking://resources/a.md"
+
+
+@pytest.mark.asyncio
+async def test_grep_vikingdb_timeout_falls_back_to_fs(monkeypatch):
+    """A VikingDB query that exceeds the timeout must fall back to fs (#2850)."""
+    fs = VikingFS(agfs=_DummyAgfs())
+    monkeypatch.setattr(fs, "_get_vector_store", lambda: _SlowVectorStore())
+    monkeypatch.setattr(fs, "_ensure_access", lambda uri, ctx=None: None)
+    # Keep the test fast: 0.1s timeout instead of the 10s default.
+    monkeypatch.setenv("OPENVIKING_GREP_VIKINGDB_TIMEOUT_SEC", "0.1")
+
+    calls = []
+
+    async def fake_grep_fs(**kwargs):
+        calls.append(kwargs)
+        return {
+            "matches": [{"uri": "viking://resources/b.md"}],
+            "count": 1,
+            "match_count": 1,
+            "files_scanned": 1,
+        }
+
+    monkeypatch.setattr(fs, "_grep_fs", fake_grep_fs)
+
+    result = await fs._grep_vikingdb_then_fs(
+        uri="viking://resources",
+        pattern="needle",
+        exclude_uri=None,
+        case_insensitive=False,
+        node_limit=10,
+        level_limit=3,
+        ctx=None,
+    )
+
+    assert len(calls) == 1
+    assert result["count"] == 1
+    assert result["matches"][0]["uri"] == "viking://resources/b.md"
+
+
 @pytest.mark.asyncio
 async def test_grep_vikingdb_pushes_exclude_uri_to_filter(monkeypatch):
     fs = VikingFS(agfs=_DummyAgfs())
     vector_store = _DummyVectorStore()
     monkeypatch.setattr(fs, "_get_vector_store", lambda: vector_store)
     monkeypatch.setattr(fs, "_ensure_access", lambda uri, ctx=None: None)
+
+    # Empty VikingDB recall now falls back to fs grep (#2850); stub fs so the
+    # exclude_uri filter assertion stays focused on the remote query path.
+    async def fake_grep_fs(**kwargs):
+        return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
+
+    monkeypatch.setattr(fs, "_grep_fs", fake_grep_fs)
 
     result = await fs._grep_vikingdb_then_fs(
         uri="viking://resources",
