@@ -154,15 +154,19 @@ class RAGQueryPipeline:
         contexts = []
         retrieved_uris = []
 
-        if search_result and "results" in search_result:
-            for item in search_result["results"]:
+        items = search_result.get("results", []) if isinstance(search_result, dict) else search_result
+        for item in items or []:
+            if isinstance(item, dict):
                 uri = item.get("uri", "")
                 content = (
                     item.get("content", "") or item.get("overview", "") or item.get("abstract", "")
                 )
-                if content:
-                    contexts.append(content)
-                    retrieved_uris.append(uri)
+            else:
+                uri = getattr(item, "uri", "")
+                content = getattr(item, "overview", None) or getattr(item, "abstract", "")
+            if content:
+                contexts.append(content)
+                retrieved_uris.append(uri)
 
         result = {
             "question": question,
