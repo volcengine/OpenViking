@@ -1004,11 +1004,21 @@ class ReindexExecutor:
             if directory_uri == "viking://":
                 continue
             counters.scanned_records += 1
+            has_reindexable_files = self._directory_has_reindexable_resource_files(
+                directory_uri,
+                deduped_files,
+            )
+            if not has_reindexable_files:
+                counters.unsupported_records += 1
+                counters.warnings.append(f"No reindexable content found for {directory_uri}")
+                continue
             abstract = await self._read_directory_abstract(directory_uri, ctx=ctx)
             overview = await self._read_directory_overview(directory_uri, ctx=ctx)
             if not overview:
                 overview = abstract
             if not abstract and not overview:
+                if self._directory_has_child_directories(directory_uri, deduped_directories):
+                    continue
                 counters.unsupported_records += 1
                 counters.warnings.append(f"No semantic source found for {directory_uri}")
                 continue
@@ -1715,6 +1725,28 @@ class ReindexExecutor:
 
     def _is_hidden_meta_file(self, uri: str) -> bool:
         return uri.endswith("/.abstract.md") or uri.endswith("/.overview.md")
+
+    def _directory_has_reindexable_resource_files(
+        self,
+        directory_uri: str,
+        files: Iterable[str],
+    ) -> bool:
+        prefix = directory_uri.rstrip("/") + "/"
+        return any(file_uri.startswith(prefix) for file_uri in files)
+
+    def _directory_has_child_directories(
+        self,
+        directory_uri: str,
+        directories: Iterable[str],
+    ) -> bool:
+        prefix = directory_uri.rstrip("/") + "/"
+        for candidate in directories:
+            if not candidate or candidate == directory_uri or not candidate.startswith(prefix):
+                continue
+            remainder = candidate[len(prefix) :]
+            if remainder and "/" not in remainder:
+                return True
+        return False
 
     def _truncate_embedding_text(self, value: str) -> str:
         max_input_chars = int(
