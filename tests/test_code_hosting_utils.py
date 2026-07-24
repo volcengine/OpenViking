@@ -51,6 +51,7 @@ parse_code_hosting_url = _module.parse_code_hosting_url
 is_github_url = _module.is_github_url
 is_gitlab_url = _module.is_gitlab_url
 is_code_hosting_url = _module.is_code_hosting_url
+is_code_hosting_blob_url = _module.is_code_hosting_blob_url
 is_git_repo_url = _module.is_git_repo_url
 validate_git_ssh_uri = _module.validate_git_ssh_uri
 
@@ -82,6 +83,10 @@ def test_parse_code_hosting_url_git_ssh_single_segment():
 
 def test_parse_code_hosting_url_https():
     assert parse_code_hosting_url("https://github.com/org/repo") == "org/repo"
+
+
+def test_parse_code_hosting_url_uppercase_https_scheme():
+    assert parse_code_hosting_url("HTTPS://github.com/org/repo") == "org/repo"
 
 
 def test_parse_code_hosting_url_https_dotgit():
@@ -190,6 +195,10 @@ def test_is_code_hosting_url_https():
     assert is_code_hosting_url("https://github.com/org/repo") is True
 
 
+def test_is_code_hosting_blob_url_uppercase_https_scheme():
+    assert is_code_hosting_blob_url("HTTPS://github.com/org/repo/blob/main/README.md") is True
+
+
 def test_is_code_hosting_url_ssh_url_with_userinfo():
     assert is_code_hosting_url("ssh://git@github.com/org/repo.git") is True
 
@@ -222,6 +231,10 @@ def test_is_git_repo_url_git_ssh():
 
 def test_is_git_repo_url_https_repo():
     assert is_git_repo_url("https://github.com/org/repo") is True
+
+
+def test_is_git_repo_url_uppercase_https_scheme():
+    assert is_git_repo_url("HTTPS://github.com/org/repo") is True
 
 
 def test_is_git_repo_url_ssh_url_with_userinfo():

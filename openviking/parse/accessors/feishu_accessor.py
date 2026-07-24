@@ -225,7 +225,7 @@ class FeishuAccessor(DataAccessor):
         source_str = str(source)
 
         # Only handle http/https URLs
-        if not source_str.startswith(("http://", "https://")):
+        if not source_str.lower().startswith(("http://", "https://")):
             return False
 
         return self._is_feishu_url(source_str)

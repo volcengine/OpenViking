@@ -12,9 +12,8 @@ from openviking.utils.network_guard import ensure_public_remote_target
 from openviking_cli.exceptions import PermissionDeniedError
 
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
-_NETWORK_SOURCE_PREFIXES = ("http://", "https://", "git@", "ssh://", "git://")
+_NETWORK_URL_PREFIXES = ("http://", "https://", "ssh://", "git://")
 _PRIVATE_SOURCE_PREFIXES = ("tos://",)
-_REMOTE_SOURCE_PREFIXES = _NETWORK_SOURCE_PREFIXES + _PRIVATE_SOURCE_PREFIXES
 
 # Shape of temp_file_ids minted by TempUploadStore. Used by MCP add_resource to
 # detect when an agent has passed a tfid as the `path` argument by mistake and
@@ -37,9 +36,17 @@ def _is_configured_connector_source(source: str) -> bool:
     return source.startswith(allowed_schemes)
 
 
+def _is_network_source(source: str) -> bool:
+    return source.startswith("git@") or source.lower().startswith(_NETWORK_URL_PREFIXES)
+
+
 def is_remote_resource_source(source: str) -> bool:
     """Return True if *source* is a remotely fetchable resource location."""
-    return source.startswith(_REMOTE_SOURCE_PREFIXES) or _is_configured_connector_source(source)
+    return (
+        _is_network_source(source)
+        or source.startswith(_PRIVATE_SOURCE_PREFIXES)
+        or _is_configured_connector_source(source)
+    )
 
 
 def looks_like_local_path(value: str) -> bool:
@@ -61,7 +68,7 @@ def require_remote_resource_source(source: str) -> str:
             "HTTP server only accepts remote resource URLs or temp-uploaded files; "
             "direct host filesystem paths are not allowed."
         )
-    if source.startswith(_NETWORK_SOURCE_PREFIXES):
+    if _is_network_source(source):
         ensure_public_remote_target(source)
     return source
 
