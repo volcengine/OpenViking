@@ -11,7 +11,7 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "AGPL-3.0",
   "type": "commonjs",
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "^0.0.37"
