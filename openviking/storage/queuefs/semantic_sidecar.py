@@ -4,11 +4,37 @@
 
 from typing import Any, Callable, Optional
 
+from openviking.core.namespace import uri_parts
 from openviking.server.identity import RequestContext
 from openviking.storage.transaction import NO_LOCK, LockLease
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def structural_directory_semantics(dir_uri: str) -> Optional[tuple[str, str]]:
+    """Return stable L1/L0 semantics for structural ownership directories."""
+    parts = uri_parts(dir_uri)
+    peer_id = None
+    if len(parts) == 4 and parts[0] == "user" and parts[2] == "peers":
+        peer_id = parts[3]
+    elif len(parts) == 3 and parts[:2] == ["user", "peers"]:
+        peer_id = parts[2]
+
+    if peer_id is None:
+        return None
+
+    abstract = (
+        f"Private knowledge and memory scoped to interaction peer {peer_id}; "
+        "this directory represents the peer, not any single child item."
+    )
+    overview = (
+        f"# Peer {peer_id}\n\n"
+        f"This directory contains private long-term context associated with interaction "
+        f"peer `{peer_id}`, including peer-scoped memories and resources. Its meaning is "
+        "defined by peer ownership rather than by the first uploaded or extracted item."
+    )
+    return overview, abstract
 
 
 async def write_semantic_sidecars(
@@ -22,6 +48,10 @@ async def write_semantic_sidecars(
     lock: LockLease = NO_LOCK,
     log_prefix: str = "[Semantic]",
 ) -> bool:
+    stable_semantics = structural_directory_semantics(dir_uri)
+    if stable_semantics is not None:
+        overview, abstract = stable_semantics
+
     if is_stale():
         logger.info("%s Skipping stale semantic write for %s", log_prefix, dir_uri)
         return False
