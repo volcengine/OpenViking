@@ -94,6 +94,16 @@ class EmbeddingModelConfig(BaseModel):
             "when the upstream gateway cannot serialize base64 responses correctly."
         ),
     )
+    extra_body: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Extra JSON body fields merged into every embeddings request. "
+            "Applies to OpenAI / Azure providers. Useful for OpenAI-compatible "
+            "gateways that accept vendor-specific fields, e.g. OpenRouter provider "
+            "routing {'provider': {'sort': 'latency'}}. Explicit "
+            "query_param/document_param keys take precedence on conflict."
+        ),
+    )
     api_version: Optional[str] = Field(
         default=None,
         description="API version for Azure OpenAI (e.g., '2025-01-01-preview').",
@@ -751,6 +761,7 @@ class EmbeddingConfig(BaseModel):
                         if cfg.encoding_format is not None
                         else {}
                     ),
+                    **({"extra_body": cfg.extra_body} if cfg.extra_body else {}),
                 },
             ),
             ("azure", "dense"): (
@@ -772,6 +783,7 @@ class EmbeddingConfig(BaseModel):
                         if cfg.encoding_format is not None
                         else {}
                     ),
+                    **({"extra_body": cfg.extra_body} if cfg.extra_body else {}),
                 },
             ),
             ("volcengine", "dense"): (
@@ -1049,6 +1061,7 @@ class EmbeddingConfig(BaseModel):
                 # Model-behavior fields are shared by all credentials of the
                 # same model and live only on the parent config.
                 encoding_format=config.encoding_format,
+                extra_body=config.extra_body,
                 model_path=config.model_path,
                 cache_dir=config.cache_dir,
                 enable_fusion=config.enable_fusion,

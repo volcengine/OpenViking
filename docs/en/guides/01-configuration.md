@@ -221,6 +221,7 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 | `input` | str | Input type: `"text"` or `"multimodal"` |
 | `batch_size` | int | Batch size for embedding requests |
 | `encoding_format` | str | (OpenAI / Azure only) Wire format for embedding values: `"float"` or `"base64"`. Leave unset to use the OpenAI Python SDK default. Set to `"float"` when the upstream gateway cannot deserialize base64 embedding payloads correctly. |
+| `extra_body` | object | (OpenAI / Azure only) Extra JSON body fields merged into every embeddings request. Useful for OpenAI-compatible gateways that accept vendor-specific fields, e.g. OpenRouter provider routing `{"provider": {"sort": "latency"}}`. Explicit `query_param`/`document_param` keys take precedence on conflict. |
 
 `embedding.max_retries` only applies to transient errors such as `429`, `5xx`, timeouts, and connection failures. Permanent errors such as `400`, `401`, `403`, and `AccountOverdue` are not retried automatically. The backoff strategy is exponential backoff with jitter, starting at `0.5s` and capped at `8s`.
 
@@ -288,6 +289,29 @@ With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), 
 ```
 
 `encoding_format` is optional and is only forwarded for `provider: "openai"` and `provider: "azure"`. Leave it unset for the OpenAI Python SDK default. Set it to `"float"` when an OpenAI-compatible upstream gateway cannot deserialize base64 embedding payloads correctly.
+
+**OpenRouter example with provider routing:**
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "openai",
+      "api_key": "your-openrouter-api-key",
+      "api_base": "https://openrouter.ai/api/v1",
+      "model": "qwen/qwen3-embedding-8b",
+      "dimension": 4096,
+      "extra_body": {
+        "provider": {
+          "sort": "latency"
+        }
+      }
+    }
+  }
+}
+```
+
+`extra_body` is merged into every embeddings request, so OpenAI-compatible gateways that accept vendor-specific fields (such as OpenRouter's provider routing preferences) can be tuned without code changes. It is only forwarded for `provider: "openai"` and `provider: "azure"`.
 
 **Azure OpenAI provider example with JSON float embeddings:**
 
