@@ -90,11 +90,27 @@ def _has_add_targets(user_config: UserConfig | None) -> bool:
     )
 
 
+def _has_user_config(user_config: UserConfig | None) -> bool:
+    return bool(
+        user_config
+        and (_has_add_targets(user_config) or user_config.workspace_kind is not None)
+    )
+
+
 def _validate_initial_user_config(
     service,
     user_ctx: RequestContext,
     user_config: UserConfig | None,
 ) -> None:
+    if user_config and user_config.workspace_kind:
+        from openviking.session.memory.workspace_kind import load_workspace_kind
+        from openviking_cli.utils.config import get_openviking_config
+
+        config = get_openviking_config()
+        load_workspace_kind(
+            user_config.workspace_kind,
+            config.memory.workspace_kinds_dir if config.memory else "",
+        )
     if not _has_add_targets(user_config):
         return
     if service.viking_fs is None:
@@ -111,7 +127,7 @@ async def _write_initial_user_config(
     user_ctx: RequestContext,
     user_config: UserConfig | None,
 ) -> None:
-    if not _has_add_targets(user_config):
+    if not _has_user_config(user_config):
         return
     await write_user_config(service.viking_fs, user_ctx, user_config)
 

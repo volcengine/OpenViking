@@ -1,0 +1,12 @@
+kind: personal
+display_name: Personal workspace
+shared_scope_label: personal workspace
+shared_scope_instruction: >
+  Store durable facts, preferences, entities, events, and profile information
+  about the individual who owns this workspace without peer_id.
+private_scope_instruction: >
+  Use peer_id for memories specific to an assistant, device, or other actor
+  interacting with the workspace.
+resource_scope_instruction: >
+  Keep canonical documents and knowledge in resources; link to them from
+  memories when useful.

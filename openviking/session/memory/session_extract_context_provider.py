@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.message.part import TextPart, ToolPart
 from openviking.server.identity import RequestContext, ToolContext
+from openviking.server.user_config import read_user_config
 from openviking.session.memory.core import ExtractContextProvider
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.memory_isolation_handler import (
@@ -25,6 +26,7 @@ from openviking.session.memory.tools import (
     add_tool_call_pair_to_messages,
     get_tool,
 )
+from openviking.session.memory.workspace_kind import load_workspace_kind
 from openviking.session.memory.utils.resource_refs import contains_resource_uri
 from openviking.session.memory.utils.uri import render_template
 from openviking.session.memory.vision_message_normalizer import (
@@ -81,8 +83,24 @@ class SessionExtractContextProvider(ExtractContextProvider):
         self._viking_fs = viking_fs
         self._transaction_handle = transaction_handle
         self._link_enabled = config.memory.link_enabled if config.memory else False
+        self._workspace_kind = load_workspace_kind(
+            config.memory.workspace_kind if config.memory else "personal",
+            config.memory.workspace_kinds_dir if config.memory else "",
+        )
         self._vision_messages_prepared = False
         self._vision_vlm = None
+
+    async def _resolve_workspace_kind(self) -> None:
+        """Apply the administrator-defined kind for the current user."""
+        if not self._ctx or not self._viking_fs:
+            return
+        user_config = await read_user_config(self._viking_fs, self._ctx)
+        if user_config.workspace_kind:
+            config = get_openviking_config()
+            self._workspace_kind = load_workspace_kind(
+                user_config.workspace_kind,
+                config.memory.workspace_kinds_dir if config.memory else "",
+            )
 
     @property
     def read_file_contents(self) -> Dict[str, MemoryFile]:
@@ -114,6 +132,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
 
     async def prepare_extraction_messages(self) -> None:
         """Prepare extraction-only messages before ranges and prompts are built."""
+        await self._resolve_workspace_kind()
         if self._vision_messages_prepared:
             return
         if isinstance(self.messages, list):
@@ -226,10 +245,11 @@ All memory content MUST be written in {output_language}.
 The system automatically generates URIs based on memory_type and fields. Just provide correct memory_type and fields.
 {resource_uri_handling}
 
+## Workspace Semantics
+Workspace kind: {self._workspace_kind.display_name}
+{self._workspace_kind.extraction_instructions()}
+
 ## Self and Peer Memory
-When a memory item describes the current user, omit peer_id.
-When a memory item describes a peer, set peer_id to one of the peer_id values allowed by
-the output schema. Do not invent peer_id values.
 For events with ranges, the system derives self/peer targets from the message range.
 Message role is authoritative: user-role content is the source for profile/preferences/entities/events,
 and assistant-role content is the source for cases/patterns/tools/skills. Do not infer ownership

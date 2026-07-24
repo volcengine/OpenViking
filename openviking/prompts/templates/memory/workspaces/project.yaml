@@ -1,0 +1,12 @@
+kind: project
+display_name: Project workspace
+shared_scope_label: shared project workspace
+shared_scope_instruction: >
+  Store durable project facts, architecture decisions, implementation
+  constraints, procedures, ownership, and project events without peer_id.
+private_scope_instruction: >
+  Use peer_id for agent-specific plans, working notes, preferences, and
+  temporary interpretations that are not project-wide knowledge.
+resource_scope_instruction: >
+  Keep canonical project documents in resources and link to them from memory
+  when useful.
