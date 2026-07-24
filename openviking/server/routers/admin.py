@@ -360,8 +360,36 @@ async def remove_user(
     user_id: str = Path(..., description="User ID"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Remove a user from an account."""
+    """Remove a user and cascade-clean its storage (AGFS + VectorDB)."""
     _check_account_access(ctx, account_id)
+
+    # Build a ROOT-level context scoped to the target user for cleanup
+    cleanup_ctx = RequestContext(
+        user=UserIdentifier(account_id, user_id),
+        role=Role.ROOT,
+    )
+
+    # Cascade: remove AGFS data for the user namespace
+    viking_fs = get_viking_fs()
+    user_uri = f"viking://user/{user_id}"
+    try:
+        await viking_fs.rm(user_uri, recursive=True, ctx=cleanup_ctx)
+    except Exception as e:
+        logger.warning(f"AGFS cleanup for {user_uri} in account {account_id}: {e}")
+
+    # Cascade: remove VectorDB records owned by the user
+    try:
+        storage = viking_fs._get_vector_store()
+        if storage:
+            deleted = await storage.delete_user_data(account_id, user_id, ctx=cleanup_ctx)
+            logger.info(
+                f"VectorDB cascade delete for account {account_id} user {user_id}: "
+                f"{deleted} records"
+            )
+    except Exception as e:
+        logger.warning(f"VectorDB cleanup for account {account_id} user {user_id}: {e}")
+
+    # Finally delete the user metadata
     manager = _get_api_key_manager(request)
     await manager.remove_user(account_id, user_id)
     return Response(status="ok", result={"deleted": True})
