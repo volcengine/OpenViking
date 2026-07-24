@@ -3,6 +3,7 @@
 """Tests for LockContext async context manager."""
 
 import uuid
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -84,6 +85,16 @@ class TestLockContextFailure:
                 pass
 
         assert len(await lm.get_active_handles_async()) == 0
+
+    async def test_mv_failure_preserves_external_handle_locks(self, lm):
+        h = lm.create_handle()
+        h.add_lock("/outer/.lock")
+        lm.acquire_tree = AsyncMock(side_effect=lambda *_a, **_kw: not h.add_lock("/src/.lock"))
+        lm.acquire_exact_path = AsyncMock(return_value=False)
+        lm.release_selected = AsyncMock()
+        with pytest.raises(LockAcquisitionError):
+            await LockContext(lm, ["/src"], "mv", "/dst", handle=h).__aenter__()
+        lm.release_selected.assert_awaited_once_with(h, ["/src/.lock"])
 
 
 class TestLockContextExternalHandle:

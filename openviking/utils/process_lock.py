@@ -10,12 +10,17 @@ import atexit
 import os
 import signal
 import sys
+import threading
 
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
 LOCK_FILENAME = ".openviking.pid"
+_LOCK_FILES: dict[str, object] = {}
+_LOCK_GUARD = threading.RLock()
+getattr(os, "register_at_fork", lambda **_: None)(after_in_child=_LOCK_GUARD._at_fork_reinit)
+getattr(os, "register_at_fork", lambda **_: None)(after_in_child=_LOCK_FILES.clear)
 
 
 class DataDirectoryLocked(RuntimeError):
@@ -69,6 +74,19 @@ def _is_pid_alive(pid: int) -> bool:
     return True
 
 
+def _lock_file(lock_file) -> None:
+    if os.name == "nt":
+        import msvcrt
+        if os.fstat(lock_file.fileno()).st_size == 0:
+            lock_file.write("0")
+            lock_file.flush()
+        lock_file.seek(0)
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
 def acquire_data_dir_lock(data_dir: str) -> str:
     """Acquire an advisory PID lock on *data_dir*.
 
@@ -78,6 +96,7 @@ def acquire_data_dir_lock(data_dir: str) -> str:
     lock, with a message that explains the situation and suggests HTTP mode.
     """
     lock_path = os.path.join(data_dir, LOCK_FILENAME)
+    lock_key = os.path.normcase(os.path.realpath(lock_path))
     my_pid = os.getpid()
 
     existing_pid = _read_pid_file(lock_path)
@@ -94,24 +113,33 @@ def acquire_data_dir_lock(data_dir: str) -> str:
             f"  3. Stop the other process (PID {existing_pid}) first"
         )
 
-    # Write our PID (overwrites stale lock from a dead process).
-    try:
-        os.makedirs(data_dir, exist_ok=True)
-        with open(lock_path, "w") as f:
-            f.write(str(my_pid))
-    except OSError as exc:
-        logger.warning("Could not write PID lock %s: %s", lock_path, exc)
-        return lock_path
+    os.makedirs(data_dir, exist_ok=True)
+    with _LOCK_GUARD:
+        if lock_key in _LOCK_FILES:
+            return lock_path
+
+        lock_file = open(lock_path, "a+")
+        try:
+            _lock_file(lock_file)
+            lock_file.seek(0)
+            lock_file.truncate()
+            lock_file.write(str(my_pid))
+            lock_file.flush()
+        except OSError as exc:
+            lock_file.close()
+            raise DataDirectoryLocked(f"Could not lock data directory: '{data_dir}'") from exc
+        _LOCK_FILES[lock_key] = lock_file
 
     # Schedule cleanup on exit.
     def _cleanup(*_args: object) -> None:
-        try:
-            if os.path.isfile(lock_path):
-                stored = _read_pid_file(lock_path)
-                if stored == my_pid:
-                    os.remove(lock_path)
-        except OSError:
-            pass
+        with _LOCK_GUARD:
+            locked = _LOCK_FILES.pop(lock_key, None)
+            if locked is not None:
+                try:
+                    locked.truncate(0)
+                except OSError:
+                    pass
+                locked.close()
 
     atexit.register(_cleanup)
     # Also try to clean up on SIGTERM (graceful shutdown).
