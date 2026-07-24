@@ -547,11 +547,13 @@ class Session:
             pass
 
         # Load .meta.json
+        meta_loaded = False
         try:
             meta_content = await self._viking_fs.read_file(
                 f"{self._session_uri}/.meta.json", ctx=self.ctx
             )
             self._meta = SessionMeta.from_dict(json.loads(meta_content))
+            meta_loaded = True
         except Exception:
             # Old session without meta — derive from existing data
             self._meta.message_count = len(self._messages)
@@ -562,6 +564,15 @@ class Session:
             self._meta.created_by_account_id = self.ctx.account_id
         if not self._meta.created_by_user_id:
             self._meta.created_by_user_id = self.ctx.user.user_id
+        # Self-heal a lost commit clear: if a commit persisted .meta.json (and the
+        # archive .done marker) but the live messages.jsonl clear never reached
+        # disk, load() would read the already-archived messages back as live and
+        # re-insert them as active context (#1487). Since add_message keeps
+        # .meta.json's message_count in lockstep with messages.jsonl, a loaded
+        # message count that exceeds the committed message_count means the clear
+        # was lost; trust the committed count and drop the stale leading prefix.
+        if meta_loaded:
+            await self._reconcile_stale_live_messages()
         # WM v2: always rebuild pending_tokens from current messages so the
         # counter stays consistent across restarts and is also backfilled for
         # legacy sessions whose .meta.json predates these fields. O(n) once,
@@ -569,6 +580,41 @@ class Session:
         self._rebuild_pending_tokens()
 
         self._loaded = True
+
+    async def _reconcile_stale_live_messages(self) -> None:
+        """Drop archived messages that a lost commit clear left in messages.jsonl.
+
+        ``commit_async`` clears the live ``messages.jsonl`` and persists the new
+        (lower) ``message_count`` to ``.meta.json``. If that clear is lost while
+        ``.meta.json`` lands, ``load()`` reads the archived tail back as live
+        messages. ``add_message`` keeps ``message_count`` equal to the
+        ``messages.jsonl`` line count, so ``len(self._messages) > message_count``
+        on load is the signature of that lost clear. Recover by keeping only the
+        most recent ``message_count`` messages (the retained tail) and rewriting
+        ``messages.jsonl`` so the heal survives the next restart.
+        """
+        committed_count = int(self._meta.message_count or 0)
+        if committed_count < 0 or len(self._messages) <= committed_count:
+            return
+
+        stale_count = len(self._messages) - committed_count
+        self._messages = self._messages[stale_count:] if committed_count else []
+        logger.warning(
+            "Session %s: dropped %d stale live message(s) from a lost commit clear "
+            "(messages.jsonl exceeded committed message_count=%d)",
+            self.session_id,
+            stale_count,
+            committed_count,
+        )
+        try:
+            await self._write_to_agfs_async(messages=self._messages)
+        except Exception as e:
+            logger.error(
+                "Session %s: failed to rewrite messages.jsonl during stale-message "
+                "reconciliation: %s",
+                self.session_id,
+                e,
+            )
 
     def _rebuild_pending_tokens(self) -> None:
         """Recompute ``pending_tokens`` from the current message list.
