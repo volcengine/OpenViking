@@ -1,9 +1,11 @@
 const en = {
   appShell: {
     footer: {
+      agentIntegrations: 'Agent Integrations',
       connection: 'Connection Settings',
       docs: 'Documentation',
       github: 'GitHub',
+      sdkApi: 'SDK & API',
       users: 'User Management',
     },
     header: {
@@ -22,6 +24,15 @@ const en = {
       requestLogs: {
         title: 'Request Logs',
       },
+      monitoring: {
+        title: 'Monitoring',
+      },
+      skills: {
+        title: 'Skills',
+      },
+      tasks: {
+        title: 'Task Center',
+      },
       retrieval: {
         title: 'Retrieval',
       },
@@ -33,9 +44,148 @@ const en = {
       },
     },
     sidebar: {
+      groups: {
+        operations: 'Activity',
+        resources: 'Resources',
+        settings: 'Settings',
+        workspace: 'Workspace',
+      },
       loadingSessions: 'Loading...',
       noSessions: 'No sessions',
       workspaceGroupLabel: 'OpenViking Studio',
+    },
+  },
+  monitoringPage: {
+    title: 'Monitoring',
+    description: 'View real-time health for OpenViking components.',
+    version: 'v{{version}}',
+    refresh: 'Refresh',
+    updatedAt: 'Updated at {{time}}',
+    loading: 'Loading monitoring data...',
+    loadFailed: 'Could not load monitoring data',
+    health: {
+      healthy: 'Healthy',
+      unhealthy: 'Unhealthy',
+    },
+    summary: {
+      healthy: 'All components are healthy',
+      unhealthy: 'Some components need attention',
+      components: '{{healthy}} of {{total}} components healthy',
+    },
+    tabs: {
+      label: 'Monitoring type',
+      overview: 'Overview',
+      queue: 'Task queue',
+      vikingdb: 'VectorDB',
+      models: 'Models',
+      filesystem: 'Filesystem',
+      lock: 'Locks',
+      retrieval: 'Retrieval',
+    },
+    detail: {
+      noData: 'No monitoring data',
+      descriptions: {
+        queue: 'Resource processing, semantic generation, and session queues.',
+        vikingdb: 'Vector storage and indexing service.',
+        models: 'VLM, embedding, and rerank model services.',
+        filesystem: 'OpenViking filesystem and mount services.',
+        lock: 'Transaction locks and concurrency control.',
+        retrieval: 'Context retrieval and recall service.',
+      },
+    },
+    offline: {
+      title: 'OpenViking is not connected',
+      description:
+        'Configure the server URL and credentials to view monitoring data.',
+      action: 'Open connection settings',
+    },
+  },
+  skillsPage: {
+    title: 'Skills',
+    description:
+      'View Agent skills available to the current user and workspace.',
+    refresh: 'Refresh',
+    loading: 'Loading skills...',
+    empty: 'No skills available',
+    emptyDescription:
+      'User and shared skills will appear here after they are added.',
+    loadFailed: 'Could not load skills',
+    networkError:
+      'Could not connect to the OpenViking service. Check the server URL and connection status.',
+    connectionSettings: 'Open connection settings',
+    detail: 'Details',
+    viewDetail: 'View {{name}} details',
+    detailLoading: 'Loading skill details...',
+    detailLoadFailed: 'Could not load skill details',
+    directory: 'Directory',
+    none: 'None',
+    metrics: {
+      files: 'Files',
+      scope: 'Scope',
+    },
+    sections: {
+      allowedTools: 'Allowed tools',
+      content: 'SKILL.md',
+      description: 'Description',
+      files: 'Files',
+      overview: 'Overview',
+      tags: 'Tags',
+    },
+    scopes: {
+      user: 'User skill',
+      agent: 'Shared skill',
+    },
+  },
+  tasksPage: {
+    title: 'Task Center',
+    description:
+      'Track background work such as resource processing, session commits, and reindexing.',
+    refresh: 'Refresh',
+    loading: 'Loading tasks...',
+    empty: 'No background tasks',
+    emptyDescription:
+      'Asynchronous work will appear here with its status and update time.',
+    emptyFiltered: 'No matching tasks',
+    emptyFilteredDescription: 'Adjust or clear the filters to see other tasks.',
+    loadFailed: 'Could not load tasks',
+    filters: {
+      label: 'Filter',
+      type: 'Task type',
+      status: 'Task status',
+      allTypes: 'All types',
+      allStatuses: 'All statuses',
+      clear: 'Clear filters',
+    },
+    pagination: {
+      next: 'Next',
+      page: 'Page {{page}}',
+      pageSize: 'Rows per page',
+      pageSizeValue: '{{count}} per page',
+      previous: 'Previous',
+    },
+    table: {
+      task: 'Task',
+      type: 'Type',
+      resource: 'Resource',
+      createdAt: 'Created',
+      status: 'Status',
+    },
+    status: {
+      completed: 'Completed',
+      failed: 'Failed',
+      pending: 'Pending',
+      running: 'Running',
+      unknown: 'Unknown',
+    },
+    types: {
+      session_commit: 'Session commit',
+      add_resource: 'Resource processing',
+      add_skill: 'Skill import',
+      connector_import: 'Connector import',
+      admin_reindex: 'Reindex',
+      snapshot_restore_reindex: 'Snapshot reindex',
+      legacy_migration: 'Legacy migration',
+      legacy_cleanup: 'Legacy cleanup',
     },
   },
   accountSwitcher: {
@@ -870,8 +1020,8 @@ const en = {
       search: 'Search context',
       refresh: 'Refresh tree',
       namespaces: {
+        agent: 'Agent capabilities, tools, and experience',
         user: 'Personalized user memories',
-        session: 'Raw sessions between the user and the Agent',
         resources: 'External resources the Agent can reference',
       },
     },

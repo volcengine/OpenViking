@@ -3,17 +3,21 @@ import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import {
   BlocksIcon,
   BookOpenIcon,
+  BracesIcon,
   ChevronRightIcon,
+  ClipboardListIcon,
   HomeIcon,
   GithubIcon,
   KeyRoundIcon,
   LoaderIcon,
   MessageSquareIcon,
   MoonIcon,
+  MonitorUpIcon,
   PlusIcon,
   PlugZapIcon,
   ScrollTextIcon,
   SearchIcon,
+  SparklesIcon,
   SunIcon,
   TrashIcon,
   UsersRoundIcon,
@@ -33,9 +37,9 @@ import { ScrollArea } from '#/components/ui/scroll-area'
 import {
   Sidebar,
   SidebarContent,
-  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
+  SidebarGroupLabel,
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
@@ -64,6 +68,7 @@ import { useSessionTitles } from '#/lib/sessions/use-session-titles'
 type NavItem = {
   icon: React.ComponentType
   id: string
+  section: 'workspace' | 'operations'
   titleKey: string
   to: string
   children?: readonly NavSubItem[]
@@ -87,32 +92,69 @@ const NAV_ITEMS: readonly NavItem[] = [
   {
     icon: HomeIcon,
     id: 'home',
+    section: 'workspace',
     titleKey: 'navigation.home.title',
     to: '/home',
   },
   {
     icon: PlugZapIcon,
     id: 'playground',
+    section: 'workspace',
     titleKey: 'navigation.playground.title',
     to: '/playground',
   },
   {
     icon: SearchIcon,
     id: 'retrieval',
+    section: 'workspace',
     titleKey: 'navigation.retrieval.title',
     to: '/retrieval',
   },
   {
-    icon: ScrollTextIcon,
-    id: 'requestLogs',
-    titleKey: 'navigation.requestLogs.title',
-    to: '/request-logs',
+    icon: SparklesIcon,
+    id: 'skills',
+    section: 'workspace',
+    titleKey: 'navigation.skills.title',
+    to: '/skills',
   },
   {
     icon: BlocksIcon,
     id: 'sessions',
+    section: 'operations',
     titleKey: 'navigation.sessions.title',
     to: '/sessions',
+  },
+  {
+    icon: ScrollTextIcon,
+    id: 'requestLogs',
+    section: 'operations',
+    titleKey: 'navigation.requestLogs.title',
+    to: '/request-logs',
+  },
+  {
+    icon: ClipboardListIcon,
+    id: 'tasks',
+    section: 'operations',
+    titleKey: 'navigation.tasks.title',
+    to: '/tasks',
+  },
+  {
+    icon: MonitorUpIcon,
+    id: 'monitoring',
+    section: 'operations',
+    titleKey: 'navigation.monitoring.title',
+    to: '/monitoring',
+  },
+] as const
+
+const NAV_SECTIONS = [
+  {
+    id: 'workspace',
+    titleKey: 'sidebar.groups.workspace',
+  },
+  {
+    id: 'operations',
+    titleKey: 'sidebar.groups.operations',
   },
 ] as const
 
@@ -257,7 +299,7 @@ function NavSessionsItem({
       <SidebarMenuItem>
         <CollapsibleTrigger
           render={
-            <SidebarMenuButton tooltip={title} className="text-base">
+            <SidebarMenuButton tooltip={title} className="h-9">
               <BlocksIcon />
               <span>{title}</span>
               <ChevronRightIcon className="ml-auto transition-transform duration-200 group-data-[open]/collapsible:rotate-90" />
@@ -347,6 +389,12 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
   const currentLanguage = resolveLanguage(
     i18n.resolvedLanguage ?? i18n.language,
   )
+  const agentIntegrationsHref = `https://docs.openviking.ai/${
+    currentLanguage === 'zh-CN' ? 'zh' : 'en'
+  }/agent-integrations/01-overview`
+  const sdkApiHref = `https://docs.openviking.ai/${
+    currentLanguage === 'zh-CN' ? 'zh' : 'en'
+  }/api/01-overview`
   const [crossDeviceVerifyOpen, setCrossDeviceVerifyOpen] =
     React.useState(false)
   const { connection, connectionRole, isConnectionRoleLoading, serverMode } =
@@ -396,135 +444,178 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
           </div>
         </SidebarHeader>
 
-        <SidebarContent>
-          <SidebarGroup>
+        <SidebarContent className="gap-0 py-1">
+          {NAV_SECTIONS.map((section) => (
+            <SidebarGroup key={section.id} className="pb-1">
+              <SidebarGroupLabel className="h-7 px-2 pt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-sidebar-foreground/45">
+                {t(section.titleKey, { ns: 'appShell' })}
+              </SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {visibleNavItems
+                    .filter((item) => item.section === section.id)
+                    .map((item) => {
+                      const isActive =
+                        pathname === item.to ||
+                        pathname.startsWith(`${item.to}/`)
+                      const title = t(item.titleKey, { ns: 'appShell' })
+
+                      if (item.id === 'sessions') {
+                        return (
+                          <NavSessionsItem
+                            key={item.id}
+                            pathname={pathname}
+                            title={title}
+                          />
+                        )
+                      }
+
+                      if (item.children) {
+                        return (
+                          <NavGroupItem
+                            key={item.id}
+                            item={
+                              item as NavItem & {
+                                children: readonly NavSubItem[]
+                              }
+                            }
+                            pathname={pathname}
+                            title={title}
+                            t={t}
+                          />
+                        )
+                      }
+
+                      const Icon = item.icon
+
+                      return (
+                        <SidebarMenuItem key={item.id}>
+                          <SidebarMenuButton
+                            render={<Link to={item.to} />}
+                            isActive={isActive}
+                            tooltip={title}
+                            className="h-9"
+                          >
+                            <Icon />
+                            <span>{title}</span>
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      )
+                    })}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          ))}
+
+          <SidebarGroup className="pb-1">
+            <SidebarGroupLabel className="h-7 px-2 pt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-sidebar-foreground/45">
+              {t('sidebar.groups.settings', { ns: 'appShell' })}
+            </SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                {visibleNavItems.map((item) => {
-                  const isActive =
-                    pathname === item.to || pathname.startsWith(`${item.to}/`)
-                  const title = t(item.titleKey, { ns: 'appShell' })
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    render={<Link to="/settings" />}
+                    isActive={settingsActive}
+                    tooltip={t('footer.connection', { ns: 'appShell' })}
+                    className="h-9"
+                  >
+                    <PlugZapIcon />
+                    <span>{t('footer.connection', { ns: 'appShell' })}</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                {canManageUsers ? (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      render={<Link to="/users" />}
+                      isActive={usersActive}
+                      tooltip={t('footer.users', { ns: 'appShell' })}
+                      className="h-9"
+                    >
+                      <UsersRoundIcon />
+                      <span>{t('footer.users', { ns: 'appShell' })}</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ) : null}
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    onClick={openCrossDeviceVerify}
+                    isActive={crossDeviceVerifyActive}
+                    tooltip={t('navigation.crossDeviceVerify.title', {
+                      ns: 'appShell',
+                    })}
+                    className="h-9"
+                  >
+                    <KeyRoundIcon />
+                    <span>
+                      {t('navigation.crossDeviceVerify.title', {
+                        ns: 'appShell',
+                      })}
+                    </span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
 
-                  if (item.id === 'sessions') {
-                    return (
-                      <NavSessionsItem
-                        key={item.id}
-                        pathname={pathname}
-                        title={title}
+          <SidebarGroup className="pb-1">
+            <SidebarGroupLabel className="h-7 px-2 pt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-sidebar-foreground/45">
+              {t('sidebar.groups.resources', { ns: 'appShell' })}
+            </SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    render={
+                      <a
+                        href="https://docs.openviking.ai/"
+                        target="_blank"
+                        rel="noreferrer"
                       />
-                    )
-                  }
-
-                  if (item.children) {
-                    return (
-                      <NavGroupItem
-                        key={item.id}
-                        item={
-                          item as NavItem & { children: readonly NavSubItem[] }
-                        }
-                        pathname={pathname}
-                        title={title}
-                        t={t}
+                    }
+                    tooltip={t('footer.docs', { ns: 'appShell' })}
+                    className="h-9"
+                  >
+                    <BookOpenIcon />
+                    <span>{t('footer.docs', { ns: 'appShell' })}</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    render={
+                      <a href={sdkApiHref} target="_blank" rel="noreferrer" />
+                    }
+                    tooltip={t('footer.sdkApi', { ns: 'appShell' })}
+                    className="h-9"
+                  >
+                    <BracesIcon />
+                    <span>{t('footer.sdkApi', { ns: 'appShell' })}</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    render={
+                      <a
+                        href={agentIntegrationsHref}
+                        target="_blank"
+                        rel="noreferrer"
                       />
-                    )
-                  }
-
-                  const Icon = item.icon
-
-                  return (
-                    <SidebarMenuItem key={item.id}>
-                      <SidebarMenuButton
-                        render={<Link to={item.to} />}
-                        isActive={isActive}
-                        tooltip={title}
-                        className="text-base"
-                      >
-                        <Icon />
-                        <span>{title}</span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  )
-                })}
+                    }
+                    tooltip={t('footer.agentIntegrations', {
+                      ns: 'appShell',
+                    })}
+                    className="h-9"
+                  >
+                    <PlugZapIcon />
+                    <span>
+                      {t('footer.agentIntegrations', { ns: 'appShell' })}
+                    </span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
         </SidebarContent>
-
-        <SidebarFooter>
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                render={<Link to="/settings" />}
-                isActive={settingsActive}
-                tooltip={t('footer.connection', { ns: 'appShell' })}
-                className="text-base"
-              >
-                <PlugZapIcon className="size-5" />
-                <span>{t('footer.connection', { ns: 'appShell' })}</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            {canManageUsers ? (
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  render={<Link to="/users" />}
-                  isActive={usersActive}
-                  tooltip={t('footer.users', { ns: 'appShell' })}
-                  className="text-base"
-                >
-                  <UsersRoundIcon className="size-5" />
-                  <span>{t('footer.users', { ns: 'appShell' })}</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            ) : null}
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                onClick={openCrossDeviceVerify}
-                isActive={crossDeviceVerifyActive}
-                tooltip={t('navigation.crossDeviceVerify.title', {
-                  ns: 'appShell',
-                })}
-                className="text-base"
-              >
-                <KeyRoundIcon className="size-5" />
-                <span>
-                  {t('navigation.crossDeviceVerify.title', { ns: 'appShell' })}
-                </span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                render={
-                  <a
-                    href="https://github.com/volcengine/OpenViking"
-                    target="_blank"
-                    rel="noreferrer"
-                  />
-                }
-                tooltip={t('footer.github', { ns: 'appShell' })}
-                className="text-base"
-              >
-                <GithubIcon className="size-5" />
-                <span>{t('footer.github', { ns: 'appShell' })}</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                render={
-                  <a
-                    href="https://docs.openviking.ai/"
-                    target="_blank"
-                    rel="noreferrer"
-                  />
-                }
-                tooltip={t('footer.docs', { ns: 'appShell' })}
-                className="text-base"
-              >
-                <BookOpenIcon className="size-5" />
-                <span>{t('footer.docs', { ns: 'appShell' })}</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
-        </SidebarFooter>
       </Sidebar>
 
       <SidebarInset className="min-h-0 flex-1 overflow-hidden rounded-none border-0 bg-background shadow-none ring-0 md:m-0 md:ml-0">

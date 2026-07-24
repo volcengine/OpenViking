@@ -49,6 +49,11 @@ import {
   TableRow,
 } from '#/components/ui/table'
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '#/components/ui/tooltip'
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -487,25 +492,60 @@ function UserManagementRoute() {
                           )}
                         </TableCell>
                         <TableCell>
-                          <div className="flex min-w-0 items-center gap-2">
+                          <div className="flex min-w-0 items-center gap-1">
                             <code className="max-w-[20rem] truncate rounded-md border bg-muted/40 px-2 py-1 font-mono text-xs">
                               {resolveKeyLabel(user)}
                             </code>
                             {user.apiKey ? (
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon-xs"
-                                aria-label={t('actions.copy')}
-                                onClick={() => void copyKey(user.apiKey)}
-                              >
-                                <CopyIcon />
-                              </Button>
+                              <Tooltip>
+                                <TooltipTrigger
+                                  render={
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon-xs"
+                                      aria-label={t('actions.copy')}
+                                      onClick={() => void copyKey(user.apiKey)}
+                                    />
+                                  }
+                                >
+                                  <CopyIcon />
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  {t('actions.copy')}
+                                </TooltipContent>
+                              </Tooltip>
                             ) : null}
+                            <div className="ml-1 flex items-center border-l border-border/70 pl-1.5">
+                              <Tooltip>
+                                <TooltipTrigger
+                                  render={
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon-xs"
+                                      aria-label={t('actions.regenerate')}
+                                      onClick={() =>
+                                        setPendingRegenerateUser(user)
+                                      }
+                                      disabled={
+                                        regenerateKey.isPending ||
+                                        Boolean(switchingIdentityKey)
+                                      }
+                                    />
+                                  }
+                                >
+                                  <RotateCwIcon />
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  {t('actions.regenerate')}
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
                           </div>
                         </TableCell>
                         <TableCell>
-                          <div className="flex justify-end gap-2">
+                          <div className="flex justify-end">
                             {user.apiKey && !isCurrentIdentity ? (
                               <Button
                                 type="button"
@@ -521,20 +561,14 @@ function UserManagementRoute() {
                                 )}
                                 {t('actions.switchIdentity')}
                               </Button>
-                            ) : null}
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              onClick={() => setPendingRegenerateUser(user)}
-                              disabled={
-                                regenerateKey.isPending ||
-                                Boolean(switchingIdentityKey)
-                              }
-                            >
-                              <RotateCwIcon />
-                              {t('actions.regenerate')}
-                            </Button>
+                            ) : (
+                              <span
+                                aria-hidden="true"
+                                className="px-3 text-muted-foreground/45"
+                              >
+                                —
+                              </span>
+                            )}
                           </div>
                         </TableCell>
                       </TableRow>

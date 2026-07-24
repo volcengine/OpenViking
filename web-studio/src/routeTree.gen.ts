@@ -10,11 +10,14 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as UsersRouteRouteImport } from './routes/users/route'
+import { Route as TasksRouteRouteImport } from './routes/tasks/route'
+import { Route as SkillsRouteRouteImport } from './routes/skills/route'
 import { Route as SettingsRouteRouteImport } from './routes/settings/route'
 import { Route as SessionsRouteRouteImport } from './routes/sessions/route'
 import { Route as RetrievalRouteRouteImport } from './routes/retrieval/route'
 import { Route as RequestLogsRouteRouteImport } from './routes/request-logs/route'
 import { Route as PlaygroundRouteRouteImport } from './routes/playground/route'
+import { Route as MonitoringRouteRouteImport } from './routes/monitoring/route'
 import { Route as HomeRouteRouteImport } from './routes/home/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SessionsIndexRouteImport } from './routes/sessions/index'
@@ -24,6 +27,16 @@ import { Route as OauthConsentRouteImport } from './routes/oauth/consent'
 const UsersRouteRoute = UsersRouteRouteImport.update({
   id: '/users',
   path: '/users',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TasksRouteRoute = TasksRouteRouteImport.update({
+  id: '/tasks',
+  path: '/tasks',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SkillsRouteRoute = SkillsRouteRouteImport.update({
+  id: '/skills',
+  path: '/skills',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SettingsRouteRoute = SettingsRouteRouteImport.update({
@@ -49,6 +62,11 @@ const RequestLogsRouteRoute = RequestLogsRouteRouteImport.update({
 const PlaygroundRouteRoute = PlaygroundRouteRouteImport.update({
   id: '/playground',
   path: '/playground',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MonitoringRouteRoute = MonitoringRouteRouteImport.update({
+  id: '/monitoring',
+  path: '/monitoring',
   getParentRoute: () => rootRouteImport,
 } as any)
 const HomeRouteRoute = HomeRouteRouteImport.update({
@@ -80,11 +98,14 @@ const OauthConsentRoute = OauthConsentRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/home': typeof HomeRouteRoute
+  '/monitoring': typeof MonitoringRouteRoute
   '/playground': typeof PlaygroundRouteRoute
   '/request-logs': typeof RequestLogsRouteRoute
   '/retrieval': typeof RetrievalRouteRoute
   '/sessions': typeof SessionsRouteRouteWithChildren
   '/settings': typeof SettingsRouteRoute
+  '/skills': typeof SkillsRouteRoute
+  '/tasks': typeof TasksRouteRoute
   '/users': typeof UsersRouteRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/verify': typeof OauthVerifyRoute
@@ -93,10 +114,13 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/home': typeof HomeRouteRoute
+  '/monitoring': typeof MonitoringRouteRoute
   '/playground': typeof PlaygroundRouteRoute
   '/request-logs': typeof RequestLogsRouteRoute
   '/retrieval': typeof RetrievalRouteRoute
   '/settings': typeof SettingsRouteRoute
+  '/skills': typeof SkillsRouteRoute
+  '/tasks': typeof TasksRouteRoute
   '/users': typeof UsersRouteRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/verify': typeof OauthVerifyRoute
@@ -106,11 +130,14 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/home': typeof HomeRouteRoute
+  '/monitoring': typeof MonitoringRouteRoute
   '/playground': typeof PlaygroundRouteRoute
   '/request-logs': typeof RequestLogsRouteRoute
   '/retrieval': typeof RetrievalRouteRoute
   '/sessions': typeof SessionsRouteRouteWithChildren
   '/settings': typeof SettingsRouteRoute
+  '/skills': typeof SkillsRouteRoute
+  '/tasks': typeof TasksRouteRoute
   '/users': typeof UsersRouteRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/verify': typeof OauthVerifyRoute
@@ -121,11 +148,14 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/home'
+    | '/monitoring'
     | '/playground'
     | '/request-logs'
     | '/retrieval'
     | '/sessions'
     | '/settings'
+    | '/skills'
+    | '/tasks'
     | '/users'
     | '/oauth/consent'
     | '/oauth/verify'
@@ -134,10 +164,13 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/home'
+    | '/monitoring'
     | '/playground'
     | '/request-logs'
     | '/retrieval'
     | '/settings'
+    | '/skills'
+    | '/tasks'
     | '/users'
     | '/oauth/consent'
     | '/oauth/verify'
@@ -146,11 +179,14 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/home'
+    | '/monitoring'
     | '/playground'
     | '/request-logs'
     | '/retrieval'
     | '/sessions'
     | '/settings'
+    | '/skills'
+    | '/tasks'
     | '/users'
     | '/oauth/consent'
     | '/oauth/verify'
@@ -160,11 +196,14 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   HomeRouteRoute: typeof HomeRouteRoute
+  MonitoringRouteRoute: typeof MonitoringRouteRoute
   PlaygroundRouteRoute: typeof PlaygroundRouteRoute
   RequestLogsRouteRoute: typeof RequestLogsRouteRoute
   RetrievalRouteRoute: typeof RetrievalRouteRoute
   SessionsRouteRoute: typeof SessionsRouteRouteWithChildren
   SettingsRouteRoute: typeof SettingsRouteRoute
+  SkillsRouteRoute: typeof SkillsRouteRoute
+  TasksRouteRoute: typeof TasksRouteRoute
   UsersRouteRoute: typeof UsersRouteRoute
   OauthConsentRoute: typeof OauthConsentRoute
   OauthVerifyRoute: typeof OauthVerifyRoute
@@ -177,6 +216,20 @@ declare module '@tanstack/react-router' {
       path: '/users'
       fullPath: '/users'
       preLoaderRoute: typeof UsersRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/tasks': {
+      id: '/tasks'
+      path: '/tasks'
+      fullPath: '/tasks'
+      preLoaderRoute: typeof TasksRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/skills': {
+      id: '/skills'
+      path: '/skills'
+      fullPath: '/skills'
+      preLoaderRoute: typeof SkillsRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/settings': {
@@ -212,6 +265,13 @@ declare module '@tanstack/react-router' {
       path: '/playground'
       fullPath: '/playground'
       preLoaderRoute: typeof PlaygroundRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/monitoring': {
+      id: '/monitoring'
+      path: '/monitoring'
+      fullPath: '/monitoring'
+      preLoaderRoute: typeof MonitoringRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/home': {
@@ -267,11 +327,14 @@ const SessionsRouteRouteWithChildren = SessionsRouteRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   HomeRouteRoute: HomeRouteRoute,
+  MonitoringRouteRoute: MonitoringRouteRoute,
   PlaygroundRouteRoute: PlaygroundRouteRoute,
   RequestLogsRouteRoute: RequestLogsRouteRoute,
   RetrievalRouteRoute: RetrievalRouteRoute,
   SessionsRouteRoute: SessionsRouteRouteWithChildren,
   SettingsRouteRoute: SettingsRouteRoute,
+  SkillsRouteRoute: SkillsRouteRoute,
+  TasksRouteRoute: TasksRouteRoute,
   UsersRouteRoute: UsersRouteRoute,
   OauthConsentRoute: OauthConsentRoute,
   OauthVerifyRoute: OauthVerifyRoute,

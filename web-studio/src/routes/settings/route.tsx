@@ -13,6 +13,7 @@ import { useTranslation } from 'react-i18next'
 
 import { Alert, AlertDescription, AlertTitle } from '#/components/ui/alert'
 import { Badge } from '#/components/ui/badge'
+import { Button } from '#/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '#/components/ui/card'
 import {
   Field,
@@ -191,7 +192,6 @@ function ConnectionSettingsRoute() {
     retry: false,
     staleTime: 15_000,
   })
-
   const isDevMode = serverMode === 'dev'
   const rootApiKey = connection.adminApiKey.trim()
   const hasControlCredential = Boolean(draft.adminApiKey.trim())
@@ -374,6 +374,7 @@ function ConnectionSettingsRoute() {
           )}
         </CardContent>
       </Card>
+
     </div>
   )
 }
