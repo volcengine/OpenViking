@@ -11,7 +11,7 @@ images themselves are stored next to the markdown file referencing them).
 import json
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, Optional, Set
+from typing import TYPE_CHECKING, Dict, Iterator, NamedTuple, Optional, Set
 
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import get_viking_fs
@@ -22,7 +22,6 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-_IMAGE_PATTERN = re.compile(r"!\[([^\]]*)\]\(((?:[^()]|\([^()]*\))+)\)")
 _REMOTE_PREFIXES = ("http://", "https://", "viking://", "data:", "ftp://")
 
 # Sidecar written by MarkdownParser._ingest_local_images at each document root,
@@ -34,6 +33,81 @@ IMAGE_MAPPINGS_FILENAME = ".image_mappings.json"
 HTML_IMG_PATTERN = re.compile(r"""(<img\s[^>]*?src=["'])([^"']+)(["'][^>]*>)""", re.IGNORECASE)
 _FENCE_PATTERN = re.compile(r"^(\s{0,3})(`{3,}|~{3,})")
 _LIST_ITEM_PATTERN = re.compile(r"^(\s{0,3})([-*+]|\d{1,9}[.)])(\s+)")
+
+
+class _MarkdownImageMatch(NamedTuple):
+    start: int
+    end: int
+    alt_text: str
+    payload: str
+
+
+def _iter_markdown_images(content: str) -> Iterator[_MarkdownImageMatch]:
+    """Yield Markdown image spans with balanced destinations in one pass."""
+    cursor = 0
+    length = len(content)
+    while cursor < length:
+        start = content.find("![", cursor)
+        if start < 0:
+            return
+
+        alt_end = start + 2
+        bracket_depth = 0
+        while alt_end < length:
+            char = content[alt_end]
+            if char == "\\" and alt_end + 1 < length:
+                alt_end += 2
+                continue
+            if char == "[":
+                bracket_depth += 1
+            elif char == "]":
+                if bracket_depth == 0:
+                    break
+                bracket_depth -= 1
+            alt_end += 1
+
+        if alt_end >= length:
+            return
+        if alt_end + 1 >= length or content[alt_end + 1] != "(":
+            cursor = alt_end + 1
+            continue
+
+        payload_start = alt_end + 2
+        index = payload_start
+        depth = 0
+        quote = ""
+        while index < length:
+            char = content[index]
+            if char == "\\" and index + 1 < length:
+                index += 2
+                continue
+            if quote:
+                if char == quote:
+                    quote = ""
+            elif (
+                char in {'"', "'"}
+                and depth == 0
+                and index > payload_start
+                and content[index - 1].isspace()
+            ):
+                quote = char
+            elif char == "(":
+                depth += 1
+            elif char == ")":
+                if depth == 0:
+                    if index > payload_start:
+                        yield _MarkdownImageMatch(
+                            start,
+                            index + 1,
+                            content[start + 2 : alt_end],
+                            content[payload_start:index],
+                        )
+                    cursor = index + 1
+                    break
+                depth -= 1
+            index += 1
+        else:
+            return
 
 
 def _split_markdown_image_target(payload: str) -> tuple[str, str]:
@@ -159,8 +233,8 @@ def build_artifact_image_mappings(root_dir: Path) -> Dict[str, Dict[str, str]]:
         protected = _protected_ranges(content)
 
         refs = [
-            (match.start(), match.end(), match.group(2), True)
-            for match in _IMAGE_PATTERN.finditer(content)
+            (match.start, match.end, match.payload, True)
+            for match in _iter_markdown_images(content)
         ]
         refs.extend(
             (match.start(), match.end(), match.group(2), False)
@@ -530,10 +604,10 @@ def _rewrite_content(
         )
         return None
 
-    def replacer(match: re.Match) -> str:
+    def replace_markdown_image(match: _MarkdownImageMatch) -> str:
         nonlocal rewrite_count
-        alt_text = match.group(1)
-        payload = match.group(2)
+        alt_text = match.alt_text
+        payload = match.payload
         path = payload
         title = ""
         # The sidecar is the provenance boundary. ``available_images`` only
@@ -545,15 +619,15 @@ def _rewrite_content(
                 title = title_suffix
 
         # Skip image references that live inside code blocks / inline code.
-        if _in_protected(*match.span()):
-            return match.group(0)
+        if _in_protected(match.start, match.end):
+            return content[match.start : match.end]
 
         if _is_remote_uri(path):
-            return match.group(0)
+            return content[match.start : match.end]
 
         uri = _mapped_uri(path)
         if uri is None:
-            return match.group(0)
+            return content[match.start : match.end]
         rewrite_count += 1
         return f"![{alt_text}]({uri}{title})"
 
@@ -573,7 +647,14 @@ def _rewrite_content(
         rewrite_count += 1
         return f"{match.group(1)}{uri}{match.group(3)}"
 
-    new_content = _IMAGE_PATTERN.sub(replacer, content)
+    parts = []
+    cursor = 0
+    for match in _iter_markdown_images(content):
+        parts.append(content[cursor : match.start])
+        parts.append(replace_markdown_image(match))
+        cursor = match.end
+    parts.append(content[cursor:])
+    new_content = "".join(parts)
     # The markdown pass may have shifted offsets; recompute protected ranges
     # against the updated text before rewriting <img> tags.
     protected = _protected_ranges(new_content)

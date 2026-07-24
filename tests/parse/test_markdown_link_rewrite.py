@@ -600,7 +600,7 @@ class TestImageLinkSplit:
         assert f'![query]({root}/index/query.png "Query title")' in page, page
         assert f"![fragment]({root}/index/fragment.png 'Fragment title')" in page, page
 
-    async def test_titled_image_examples_in_code_are_not_ingested(self, tmp_path: Path):
+    async def test_titled_image_examples_in_code_are_not_mapped(self, tmp_path: Path):
         kb = tmp_path / "kb"
         (kb / "assets").mkdir(parents=True)
         _write_valid_png(kb / "assets" / "secret.png")
@@ -616,9 +616,15 @@ class TestImageLinkSplit:
         with patch.object(BaseParser, "_get_viking_fs", return_value=fake):
             await DirectoryParser().parse(str(kb))
 
-        assert not any(uri.endswith("/secret.png") for uri in fake.files), fake.files
-        assert not any(uri.endswith("/se`cret`.png") for uri in fake.files), fake.files
+        assert any(uri.endswith("/secret.png") for uri in fake.files), fake.files
+        assert any(uri.endswith("/se`cret`.png") for uri in fake.files), fake.files
         assert not any(uri.endswith(".image_mappings.json") for uri in fake.files), fake.files
+        pages = [_decode(content) for uri, content in fake.files.items() if uri.endswith(".md")]
+        assert pages == [
+            '`![inline](./assets/secret.png "Inline example")`\n\n'
+            "```markdown\n![fenced](./assets/secret.png 'Fenced example')\n```\n\n"
+            '![crossing](./assets/se`cret`.png "Crossing example")'
+        ]
 
     async def test_invalid_image_depth_adjusted(self, tmp_path: Path):
         # In base_dir but not a decodable image -> ingest skips it -> depth-adjust.
@@ -662,6 +668,66 @@ class TestRewriteImageUris:
 
         assert count == 1
         assert rewritten == "![p](viking://resources/doc/photo.png (copy))"
+
+    def test_quoted_title_may_contain_right_parenthesis(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = '![x](image.png "right)paren")'
+        rewritten, count = _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"image.png"},
+            {"image.png": "image.png"},
+        )
+
+        assert count == 1
+        assert rewritten == '![x](viking://resources/doc/image.png "right)paren")'
+
+    def test_escaped_and_nested_alt_brackets_are_rewritten(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = r"![a \] b [nested]](image.png)"
+        rewritten, count = _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"image.png"},
+            {"image.png": "image.png"},
+        )
+
+        assert count == 1
+        assert rewritten == r"![a \] b [nested]](viking://resources/doc/image.png)"
+
+    def test_path_sanitizer_drops_ascii_separators_and_brackets(self):
+        parser = MarkdownParser()
+
+        assert parser._sanitize_for_path(r"abc\\def[ghi]") == "abcdefghi"
+
+    def test_malformed_quoted_target_is_left_unchanged(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = "![x](" * 20_000
+
+        assert _rewrite_content(content, "viking://resources/doc", set(), {}) == (content, 0)
+
+    def test_escaped_parenthesis_and_apostrophe_destinations_are_rewritten(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = r"![escaped](foo\)bar.png) ![apostrophe](it's.png)"
+        rewritten, count = _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"escaped.png", "apostrophe.png"},
+            {
+                r"foo\)bar.png": "escaped.png",
+                "it's.png": "apostrophe.png",
+            },
+        )
+
+        assert count == 2
+        assert rewritten == (
+            "![escaped](viking://resources/doc/escaped.png) "
+            "![apostrophe](viking://resources/doc/apostrophe.png)"
+        )
 
     def test_title_splitter_handles_long_non_title_payload(self):
         from openviking.parse.image_rewrite import _split_markdown_image_target

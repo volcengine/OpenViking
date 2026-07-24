@@ -895,7 +895,7 @@ class MarkdownParser(BaseParser):
 
     def _sanitize_for_path(self, text: str, max_length: int = 50) -> str:
         safe = re.sub(
-            r"[^\w^@-\u02af\u0400-\u052f\u0600-\u077f\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af\u3400-\u4dbf\U00020000-\U0002a6df\s.-]",
+            r"[^\w\u0080-\u02af\u0400-\u052f\u0600-\u077f\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af\u3400-\u4dbf\U00020000-\U0002a6df\s.-]",
             "",
             text,
         )
