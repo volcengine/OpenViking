@@ -96,4 +96,22 @@ describe('createOvClient API key selection', () => {
     expect(readRequestHeader(requests[0], 'X-API-Key')).toBe('admin-key')
     expect(readRequestHeader(requests[1], 'X-API-Key')).toBe('admin-key')
   })
+
+  it('preserves an explicit API key used to probe a candidate identity', async () => {
+    const { client, requests } = createRecordingClient()
+    client.setConnection({
+      adminApiKey: 'root-key',
+      apiKey: 'current-user-key',
+    })
+
+    await client.instance.get('/health', {
+      headers: {
+        'X-API-Key': 'candidate-user-key',
+      },
+    })
+
+    expect(readRequestHeader(requests[0], 'X-API-Key')).toBe(
+      'candidate-user-key',
+    )
+  })
 })

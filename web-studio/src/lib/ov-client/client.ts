@@ -184,10 +184,12 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
       headers.set(key, value)
     }
 
-    const apiKey = shouldUseAdminApiKey(config)
-      ? connection.adminApiKey || connection.apiKey
-      : connection.apiKey || connection.adminApiKey
-    setOptionalHeader(headers, 'X-API-Key', apiKey)
+    if (!readHeader(headers, 'X-API-Key')?.trim()) {
+      const apiKey = shouldUseAdminApiKey(config)
+        ? connection.adminApiKey || connection.apiKey
+        : connection.apiKey || connection.adminApiKey
+      setOptionalHeader(headers, 'X-API-Key', apiKey)
+    }
     if (connection.identityHeaders) {
       setOptionalHeader(headers, 'X-OpenViking-Account', connection.accountId)
       setOptionalHeader(headers, 'X-OpenViking-User', connection.userId)
