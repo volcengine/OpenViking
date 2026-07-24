@@ -14,6 +14,11 @@ class DummyQueue:
         self.items.append(msg)
 
 
+class FailingQueue:
+    async def enqueue(self, _msg):
+        raise RuntimeError("queue unavailable")
+
+
 class DummyQueueManager:
     EMBEDDING = "embedding"
 
@@ -117,6 +122,32 @@ async def test_vectorize_file_uses_summary_first(monkeypatch):
     assert len(queue.items) == 1
     assert isinstance(queue.items[0], Context)
     assert queue.items[0].get_vectorization_text() == "short summary"
+
+
+@pytest.mark.asyncio
+async def test_vectorize_file_propagates_enqueue_failure(monkeypatch):
+    monkeypatch.setattr(
+        embedding_utils, "get_queue_manager", lambda: DummyQueueManager(FailingQueue())
+    )
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("content"))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="summary_first", max_input_tokens=1000)
+        ),
+    )
+    monkeypatch.setattr(
+        embedding_utils.EmbeddingMsgConverter, "from_context", lambda context: context
+    )
+
+    with pytest.raises(RuntimeError, match="queue unavailable"):
+        await embedding_utils.vectorize_file(
+            "viking://user/default/resources/test.md",
+            {"name": "test.md", "summary": "summary"},
+            "viking://user/default/resources",
+            ctx=DummyReq(),
+        )
 
 
 @pytest.mark.asyncio
