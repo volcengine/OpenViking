@@ -453,11 +453,32 @@ class TestExtractFilenameFromDisposition:
                 "r\u00e9sum\u00e9.pdf",
             ),
             ("attachment; size=100; filename*=Shift_JIS%27%27a.txt", "a.txt"),
+            ("attachment; filename*=Shift_JIS''%93%FA%96%7B.txt", "\u65e5\u672c.txt"),
+            ("attachment; filename*=UTF-8'en'%E4%B8%AD%E6%96%87.txt", "\u4e2d\u6587.txt"),
             ("attachment;filename*=UTF-8''%E6%96%87%E4%BB%B6.txt", "\u6587\u4ef6.txt"),
             ('attachment; filename="a b.txt"', "a b.txt"),
             ("attachment; filename=", None),
             ("", None),
             ("inline", None),
+            # Unknown charset must not yield a mis-decoded name; fall back to
+            # the plain filename= parameter when one exists.
+            ("attachment; filename*=unknown''broken.txt; filename=fallback.txt", "fallback.txt"),
+            ("attachment; filename*=unknown''broken.txt", None),
+            # Bytes invalid for the declared charset must not yield a name with
+            # replacement characters; fall back to the plain parameter.
+            ("attachment; filename*=UTF-8''%FF%FE.txt; filename=fallback.txt", "fallback.txt"),
+            ("attachment; filename*=UTF-8''%FF%FE.txt", None),
+            # Empty extended values fall back to the plain parameter.
+            ("attachment; filename*=UTF-8''; filename=fallback.txt", "fallback.txt"),
+            ('attachment; filename*=""; filename=fallback.txt', "fallback.txt"),
+            # Parameter matching is anchored to a boundary: xfilename*= and
+            # myfilename= are unrelated parameters, not filename(*)=.
+            ("attachment; xfilename*=UTF-8''evil.txt; filename=good.txt", "good.txt"),
+            ("attachment; xfilename*=UTF-8''evil.txt", None),
+            ("attachment; myfilename=notme.txt", None),
+            ("attachment; myfilename=notme.txt; filename=real.txt", "real.txt"),
+            # Malformed extended value without RFC 5987 separators.
+            ("attachment; filename*=not-an-extended-value", None),
         ],
     )
     def test_extract_filename_from_disposition(self, header, expected):

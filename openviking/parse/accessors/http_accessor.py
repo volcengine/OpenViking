@@ -358,35 +358,52 @@ class URLTypeDetector:
             return None
 
         import re
-        from urllib.parse import unquote
+        from urllib.parse import unquote_to_bytes
 
         content_disposition = content_disposition.strip()
 
-        # RFC 5987 extended parameter: filename*=charset'lang'pct-encoded-value.
-        # Accept any charset (not just UTF-8); some servers percent-encode the
-        # two single quotes as %27, so tolerate that form too.
+        # RFC 5987 / RFC 8187 extended parameter: filename*=charset'lang'value.
+        # (?:^|;)\s* anchors the match to a parameter boundary so unrelated
+        # tokens such as ``xfilename*=`` are never treated as the real
+        # parameter. Some servers wrap the value in quotes, tolerate that too.
         ext_match = re.search(
-            r"filename\*\s*=\s*([\w!#$%&+\-.^_`|~]+?)(?:''|%27%27)([^;]+)",
+            r"(?:^|;)\s*filename\*\s*=\s*(\"[^\"]*\"|[^;]*)",
             content_disposition,
             re.I,
         )
         if ext_match:
-            charset = ext_match.group(1).lower()
-            raw = ext_match.group(2).strip()
-            enc = "utf-8" if charset in ("utf-8", "utf8") else charset
-            try:
-                return unquote(raw, encoding=enc, errors="replace") or None
-            except LookupError:
-                return unquote(raw, encoding="latin-1", errors="replace") or None
+            extended_value = ext_match.group(1).strip().strip('"')
+            # Accept any charset (not just UTF-8) and an optional language tag;
+            # some servers percent-encode the single-quote separators as %27,
+            # so split on either form.
+            parts = re.split(r"'|%27", extended_value, maxsplit=2)
+            if len(parts) == 3:
+                charset, _language, encoded_filename = parts
+                charset = charset.strip().lower()
+                if charset:
+                    try:
+                        # Decode strictly: an unknown charset or bytes that are
+                        # invalid for the declared charset must not produce a
+                        # mojibake filename when a plain filename= may exist.
+                        filename = unquote_to_bytes(encoded_filename).decode(charset)
+                        if filename:
+                            return filename
+                    except (LookupError, UnicodeDecodeError):
+                        pass
+            # Malformed, unknown-charset, undecodable, or empty extended values
+            # fall through to the plain filename= parameter below.
 
-        # Quoted filename (quoted-string form).
-        quoted_match = re.search(r'filename\s*=\s*"([^"]*)"', content_disposition, re.I)
+        # Quoted filename (quoted-string form), anchored to a parameter
+        # boundary so e.g. ``myfilename="..."`` is not picked up.
+        quoted_match = re.search(r'(?:^|;)\s*filename\s*=\s*"([^"]*)"', content_disposition, re.I)
         if quoted_match:
             return quoted_match.group(1) or None
 
         # Bare token filename. (?!\*) ensures we never capture the extended
         # filename*= parameter token here.
-        simple_match = re.search(r"filename\s*=\s*(?!\*)([^;]+)", content_disposition, re.I)
+        simple_match = re.search(
+            r"(?:^|;)\s*filename\s*=\s*(?!\*)([^;]+)", content_disposition, re.I
+        )
         if simple_match:
             return simple_match.group(1).strip() or None
 
