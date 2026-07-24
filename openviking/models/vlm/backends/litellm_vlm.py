@@ -217,6 +217,14 @@ class LiteLLMVLMProvider(VLMBase):
             return self._forward_api_key is True
         return not _has_litellm_prefix(model, NATIVE_AUTH_LITELLM_PREFIXES)
 
+    def _should_send_temperature(self) -> bool:
+        """Return whether ``temperature`` should be included in the request.
+
+        ``temperature=None`` (``temperature: null`` in ov.conf) is an explicit
+        opt-out for models/endpoints that reject the parameter.
+        """
+        return self.temperature is not None
+
     def _detect_image_format(self, data: bytes) -> str:
         """Detect image format from magic bytes.
 
@@ -280,9 +288,10 @@ class LiteLLMVLMProvider(VLMBase):
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "temperature": self.temperature,
             "timeout": self.timeout,
         }
+        if self._should_send_temperature():
+            kwargs["temperature"] = self.temperature
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
 

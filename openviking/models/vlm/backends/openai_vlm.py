@@ -233,7 +233,7 @@ class OpenAIVLM(VLMBase):
         }
         if is_reasoning:
             kwargs["reasoning_effort"] = self.reasoning_effort
-        else:
+        elif self.temperature is not None:
             kwargs["temperature"] = self.temperature
         self._apply_provider_specific_extra_body(kwargs, effective_thinking)
         if self.max_tokens is not None:
@@ -271,7 +271,7 @@ class OpenAIVLM(VLMBase):
         }
         if is_reasoning:
             kwargs["reasoning_effort"] = self.reasoning_effort
-        else:
+        elif self.temperature is not None:
             kwargs["temperature"] = self.temperature
         self._apply_provider_specific_extra_body(kwargs, effective_thinking)
         if self.max_tokens is not None:
