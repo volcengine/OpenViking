@@ -455,13 +455,13 @@ async def test_store_does_not_autofill_peer_id_from_ctx(service, monkeypatch):
     from openviking.session.session import Session
 
     captured: list[tuple[str, str | None]] = []
-    original = Session.add_message
+    original = Session._add_messages_async
 
-    def _spy(self, role, parts, peer_id=None, created_at=None):
-        captured.append((role, peer_id))
-        return original(self, role, parts, peer_id=peer_id, created_at=created_at)
+    async def _spy(self, specs):
+        captured.extend((spec["role"], spec.get("peer_id")) for spec in specs)
+        return await original(self, specs)
 
-    monkeypatch.setattr(Session, "add_message", _spy)
+    monkeypatch.setattr(Session, "_add_messages_async", _spy)
 
     await remember(
         messages=[
@@ -481,8 +481,8 @@ async def test_store_skips_empty_message_content(service, monkeypatch):
         def __init__(self):
             self.messages = []
 
-        def add_message(self, role, parts, peer_id=None, created_at=None):
-            self.messages.append((role, parts, peer_id, created_at))
+        async def _add_messages_async(self, specs):
+            self.messages.extend(specs)
 
     fake_session = FakeSession()
     monkeypatch.setattr(service.sessions, "get", AsyncMock(return_value=fake_session))
@@ -497,11 +497,11 @@ async def test_store_skips_empty_message_content(service, monkeypatch):
 
     assert "2 message" in result
     assert len(fake_session.messages) == 1
-    role, parts, peer_id, created_at = fake_session.messages[0]
-    assert role == "assistant"
-    assert parts[0].text == "Noted."
-    assert peer_id is None
-    assert created_at is None
+    spec = fake_session.messages[0]
+    assert spec["role"] == "assistant"
+    assert spec["parts"][0].text == "Noted."
+    assert spec.get("peer_id") is None
+    assert spec.get("created_at") is None
     service.sessions.commit_async.assert_awaited_once()
 
 
