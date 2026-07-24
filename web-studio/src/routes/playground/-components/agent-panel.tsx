@@ -19,6 +19,7 @@ import {
   DialogTitle,
 } from '#/components/ui/dialog'
 import { cn } from '#/lib/utils'
+import { useAppConnection } from '#/hooks/use-app-connection'
 import { createRandomUuid } from '#/lib/browser-crypto'
 import { useChat } from '#/lib/sessions/use-chat'
 import {
@@ -52,6 +53,7 @@ export function AgentPanel({
   onSessionChange: (sessionId: string) => void
 }) {
   const { t } = useTranslation('playground')
+  const { identityScopeKey } = useAppConnection()
   const [sessionId, setSessionId] = useState(
     initialSessionId ?? createRandomUuid(),
   )
@@ -65,7 +67,7 @@ export function AgentPanel({
     useSessionListByRecency()
   const { getTitle } = useSessionTitles()
   const [playgroundSessionIds, setPlaygroundSessionIds] = useState<string[]>(
-    () => readPlaygroundAgentSessionIds(),
+    () => readPlaygroundAgentSessionIds(identityScopeKey),
   )
   const { data: historyMessages } = useSessionMessages(sessionId)
   const chat = useChat({
@@ -92,7 +94,7 @@ export function AgentPanel({
         t('agent.createTimeout'),
       )
       setPlaygroundSessionIds(
-        registerPlaygroundAgentSessionId(result.session_id),
+        registerPlaygroundAgentSessionId(result.session_id, identityScopeKey),
       )
       setSessionTitle(result.session_id, t('agent.newSessionTitle'))
       setSessionId(result.session_id)
@@ -104,7 +106,14 @@ export function AgentPanel({
     } finally {
       setIsCreatingSession(false)
     }
-  }, [chat, createSession, isCreatingSession, onSessionChange, t])
+  }, [
+    chat,
+    createSession,
+    identityScopeKey,
+    isCreatingSession,
+    onSessionChange,
+    t,
+  ])
 
   const handleSwitchSession = useCallback(
     (nextSessionId: string) => {
@@ -112,12 +121,14 @@ export function AgentPanel({
       creationStartedRef.current = true
       setSessionError(null)
       setIsCreatingSession(false)
-      setPlaygroundSessionIds(registerPlaygroundAgentSessionId(nextSessionId))
+      setPlaygroundSessionIds(
+        registerPlaygroundAgentSessionId(nextSessionId, identityScopeKey),
+      )
       setSessionId(nextSessionId)
       onSessionChange(nextSessionId)
       setHistoryOpen(false)
     },
-    [chat, onSessionChange],
+    [chat, identityScopeKey, onSessionChange],
   )
 
   // Notify parent of the initial sessionId so the URL stays in sync.
@@ -130,9 +141,11 @@ export function AgentPanel({
 
   useEffect(() => {
     if (sessionId) {
-      setPlaygroundSessionIds(registerPlaygroundAgentSessionId(sessionId))
+      setPlaygroundSessionIds(
+        registerPlaygroundAgentSessionId(sessionId, identityScopeKey),
+      )
     }
-  }, [sessionId])
+  }, [identityScopeKey, sessionId])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -156,7 +169,7 @@ export function AgentPanel({
     // `sessions` is already sorted by recency (newest first). Filter to
     // sessions that were opened in this playground, preserving recency order.
     const sessionById = new Map(
-      (sessions ?? []).map((session) => [session.session_id, session]),
+      sessions.map((session) => [session.session_id, session]),
     )
 
     return playgroundSessionIds

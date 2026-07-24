@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  createIdentityScopeKey,
   resolveConnectionRoleProbeState,
   resolveInitialApiKey,
   shouldRedirectToLoginOnApiError,
+  synchronizeConnectionRuntime,
 } from './use-app-connection'
+import { ovClient } from '#/lib/ov-client'
 
 const acceptClientError = () => true
 
@@ -37,6 +40,73 @@ describe('resolveInitialApiKey', () => {
         storedApiKey: 'stored-selected-user-key',
       }),
     ).toBe('env-key')
+  })
+})
+
+describe('createIdentityScopeKey', () => {
+  it('changes when the active account changes', () => {
+    const connection = {
+      accountId: 'account-a',
+      adminApiKey: 'root-key',
+      apiKey: 'user-key',
+      baseUrl: 'http://localhost:1933',
+      userId: 'default',
+    }
+
+    expect(createIdentityScopeKey(connection, 'api_key')).not.toBe(
+      createIdentityScopeKey(
+        {
+          ...connection,
+          accountId: 'account-b',
+        },
+        'api_key',
+      ),
+    )
+  })
+
+  it('does not expose the raw data credential', () => {
+    const scope = createIdentityScopeKey(
+      {
+        accountId: 'default',
+        adminApiKey: 'root-key',
+        apiKey: 'secret-user-key',
+        baseUrl: 'http://localhost:1933',
+        userId: 'default',
+      },
+      'api_key',
+    )
+
+    expect(scope).not.toContain('secret-user-key')
+  })
+})
+
+describe('synchronizeConnectionRuntime', () => {
+  it('updates the imperative client before React state consumers remount', () => {
+    const next = synchronizeConnectionRuntime(
+      {
+        accountId: 'account-b',
+        adminApiKey: 'root-key',
+        apiKey: 'account-b-user-key',
+        baseUrl: 'http://localhost:1933/',
+        userId: 'bob',
+      },
+      'api_key',
+    )
+
+    expect(next).toEqual({
+      accountId: 'account-b',
+      adminApiKey: 'root-key',
+      apiKey: 'account-b-user-key',
+      baseUrl: 'http://localhost:1933/',
+      userId: 'bob',
+    })
+    expect(ovClient.getConnection()).toMatchObject({
+      accountId: 'account-b',
+      adminApiKey: 'root-key',
+      apiKey: 'account-b-user-key',
+      identityHeaders: false,
+      userId: 'bob',
+    })
   })
 })
 

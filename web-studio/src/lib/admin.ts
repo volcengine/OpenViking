@@ -8,7 +8,10 @@ import {
   postAdminAccountIdUserIdKey,
   postAdminAccountIdUsers,
   postAdminAccounts,
+  putAdminAccountIdUserIdRole,
 } from '#/lib/ov-client'
+
+export type AdminUserRole = 'admin' | 'root' | 'user'
 
 export type AdminConnection = {
   accountId: string
@@ -46,6 +49,12 @@ export type KeyResult = {
   accountId?: string
   apiKey: string
   userId?: string
+}
+
+export type UpdateUserRoleInput = {
+  accountId: string
+  role: AdminUserRole
+  userId: string
 }
 
 export type ProbeState = 'ok' | 'error' | 'skipped'
@@ -409,4 +418,22 @@ export async function regenerateAdminUserKey(
     account_id: accountId,
     user_id: userId,
   })
+}
+
+export async function updateAdminUserRole(
+  connection: AdminConnection,
+  input: UpdateUserRoleInput,
+): Promise<void> {
+  await getOvResult<unknown>(
+    putAdminAccountIdUserIdRole({
+      body: {
+        role: input.role,
+      },
+      client: createAdminClient(connection),
+      path: {
+        account_id: input.accountId,
+        user_id: input.userId,
+      },
+    }),
+  )
 }

@@ -1,9 +1,10 @@
 const zhCN = {
   appShell: {
     footer: {
-      connection: '连接与身份',
+      connection: '连接设置',
       docs: '文档站',
       github: 'GitHub',
+      users: '用户管理',
     },
     header: {
       defaultTitle: 'OpenViking Studio',
@@ -36,6 +37,43 @@ const zhCN = {
       noSessions: '暂无会话',
       workspaceGroupLabel: 'OpenViking Studio',
     },
+  },
+  accountSwitcher: {
+    create: '新建 Account',
+    dialog: {
+      accountLabel: 'Account',
+      accountPlaceholder: 'team-account',
+      adminLabel: '初始 Admin user',
+      cancel: '取消',
+      description:
+        '创建一个新的空间和首个管理员。创建完成后将自动切换到该空间。',
+      submit: '创建并切换',
+      title: '新建 Account',
+    },
+    empty: '没有匹配的 Account',
+    errors: {
+      loadAccounts: '加载 Account 失败',
+      noCreatedKey: 'Account 已创建，但服务端没有返回可用于切换的数据凭证。',
+      noUsableKey: '该 Account 没有可用于数据访问的明文 User API Key。',
+      noUsers: '该 Account 下没有可用用户。',
+    },
+    loading: '正在加载 Accounts...',
+    manualSwitch: {
+      description:
+        '服务端没有返回 {{account}} 下的明文凭证。请输入该 Account 中任意用户的 User API Key。',
+      hint: 'API Key 只用于校验并切换当前数据身份，不会修改或重新生成服务端凭证。',
+      keyLabel: 'User API Key',
+      keyPlaceholder: '粘贴目标 Account 的 User API Key',
+      submit: '验证并切换',
+      title: '输入 User API Key',
+    },
+    memberCount: '{{count}} 个用户',
+    searchPlaceholder: '搜索 Account',
+    toast: {
+      created: '已创建并切换到 {{account}}',
+      switched: '已切换到 {{account}}',
+    },
+    unset: '未选择 Account',
   },
   common: {
     action: {
@@ -106,12 +144,15 @@ const zhCN = {
       addAccount: '新增 account',
       addUser: '新增 user',
       cancel: '取消',
+      changeRole: '修改 {{user}} 的角色',
+      confirmRoleChange: '确认修改',
       copy: '复制',
+      currentIdentity: '当前身份',
       refresh: '刷新',
       regenerate: '重新生成',
       save: '保存',
+      switchIdentity: '切换身份',
       use: '使用',
-      useForData: '用作 User API Key',
     },
     connection: {
       accountListLimited:
@@ -120,11 +161,43 @@ const zhCN = {
       description:
         '租户数据 API 使用 User API Key；控制 API 可单独使用 Root 或 account-admin key。',
       devMode: '当前为开发模式 — 身份自动确定，无需 API key。',
-      noKey:
-        '填入 Root API Key 即可管理 account / user 并生成 user key。仅凭 User API Key 即可使用 Playground 和数据 API。',
+      keyGuide: {
+        control: {
+          primary:
+            '当前 User API Key 已可用于 Playground 和数据访问，普通用户无需配置控制凭证。',
+          secondary:
+            '如需切换 Account 或管理用户，请向部署管理员索取 Root Key，或向当前 Account 管理员索取 Admin Key。Root Key 位于服务端 ov.conf 的 server.root_api_key。',
+          title: '需要管理 Account 或用户？',
+        },
+        data: {
+          primary:
+            'Root/Admin API Key 主要用于管理操作，Playground 和租户数据访问需要绑定用户身份的 User API Key。',
+          secondary:
+            '请在「用户管理」中选择、创建用户或重新生成 User Key，然后将它用作 User API Key。',
+          title: '还缺少 User API Key',
+        },
+        empty: {
+          primary: '普通用户：请向当前 Account 管理员索取 User API Key。',
+          secondary:
+            '部署管理员：Root API Key 位于服务端 ov.conf 的 server.root_api_key；填入后可在「用户管理」中创建或重新生成 User Key。',
+          title: '还没有 OpenViking API Key？',
+        },
+        learnMore: '查看 API Key 获取方式',
+        trusted: {
+          primary:
+            '当前 Trusted 服务启用了 Root Key 校验，浏览器需要配置同一 Root API Key 才能访问管理和租户数据接口。',
+          secondary:
+            '请向部署管理员索取 Root Key；它位于服务端 ov.conf 的 server.root_api_key。Trusted 模式的数据身份由 Account/User 断言确定，不需要 User API Key。',
+          title: 'Trusted 服务需要 Root API Key',
+        },
+      },
       rootHint: '用于列出 account / user，以及生成或轮换 key。',
       title: '连接设置',
       userHint: '供 Playground 和租户数据 API 使用。',
+    },
+    connectionPage: {
+      description: '配置 OpenViking 服务连接、控制面凭证和当前数据访问凭证。',
+      title: '连接设置',
     },
     dialogs: {
       addAccount: {
@@ -133,9 +206,16 @@ const zhCN = {
         title: '新增 account',
       },
       addUser: {
+        currentAccountDescription:
+          '在 {{accountId}} 空间下创建用户。生成的 key 只会在创建后展示一次。',
         description:
           '在已有 account 下注册 user。生成的 key 只会在创建后展示一次。',
         title: '新增 user',
+      },
+      changeRole: {
+        description:
+          '将 {{account}} / {{user}} 的角色修改为 {{role}}。新的权限会立即生效。',
+        title: '修改用户角色？',
       },
       regenerate: {
         description:
@@ -181,8 +261,19 @@ const zhCN = {
     loading: '正在加载身份...',
     management: {
       accountFilter: 'Accounts',
+      accessDeniedDescription:
+        '只有配置并通过校验的 Root 或 Account Admin API Key 才能管理用户。',
+      accessDeniedTitle: '无用户管理权限',
+      currentAccountDescription: '管理 {{account}} 空间下的用户和访问凭证。',
       description:
         '查看选中 accounts 下的 users 和凭证，并在网页端新增 user 或轮换 key。',
+      memberListDescription:
+        '“切换身份”会将该用户设为 Playground、检索等数据页面的访问身份，不会改变当前 Root/Admin 管理凭证。',
+      memberListDescriptionRoot:
+        '可直接修改成员角色；“切换身份”只会改变 Playground、检索等数据页面的访问身份，不会改变当前 Root 管理凭证。',
+      memberListTitle: '空间成员',
+      noUsableKey: '该用户没有可用于数据访问的明文 API Key。',
+      openConnection: '打开连接设置',
       title: '用户管理',
     },
     page: {
@@ -203,6 +294,7 @@ const zhCN = {
     },
     roles: {
       admin: 'Admin',
+      root: 'Root',
       user: 'User',
     },
     serverMode: {
@@ -229,8 +321,9 @@ const zhCN = {
       connectionSaved: '连接已保存',
       copyFailed: '复制失败',
       copied: '已复制',
-      dataKeySelected: '已选择 User API key',
+      dataKeySelected: '已切换数据访问身份',
       keyRegenerated: 'API key 已重新生成',
+      roleUpdated: '{{user}} 的角色已修改为 {{role}}',
       userCreated: 'User 已创建',
     },
   },
