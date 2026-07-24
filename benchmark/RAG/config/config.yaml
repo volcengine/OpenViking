@@ -24,14 +24,14 @@ execution:
   retrieval_topk: 5
   # Limit the maximum number of queries to process, null means process all queries
   max_queries: null
-  # Whether to skip document ingestion phase (true means use existing vector index)
-  skip_ingestion: false
   # Document ingestion mode
   # - "directory": Unified directory ingestion mode, treats the entire directory as one document
   # - "per_file": Per-file ingestion mode, each file is treated as a separate document
   ingest_mode: "per_file"
   # Instruction for retrieval, empty by default
   retrieval_instruction: ""  
+  # Whether to use VikingBot for agentic RAG
+  use_vikingbot: false
 
 # ===========Path Configuration============
 # All paths support {dataset_name} placeholder, which will be automatically replaced with the current dataset name
@@ -58,3 +58,21 @@ llm:
   base_url: "https://ark.cn-beijing.volces.com/api/v3"
   # API key (keep this secure, do not commit to code repositories)
   api_key: ""
+
+# ===========VikingBot Configuration============
+# Configuration for VikingBot when use_vikingbot is true
+vikingbot:
+  # Maximum number of tool iterations for VikingBot
+  max_iterations: 50
+  
+  # Custom prompt configuration
+  # Option 1: Use a fully custom prompt with placeholders
+  # Supported placeholders: {question}
+  # prompt: |
+  #   Answer this question as concisely as possible using only the information in the database.
+  #   Do not use any external knowledge or web search.
+  #   
+  #   Question: {question}
+  
+  # Option 2: Or use a custom base instruction while keeping the default scope handling
+  # base_instruction: "Answer this question briefly. Use only database information."

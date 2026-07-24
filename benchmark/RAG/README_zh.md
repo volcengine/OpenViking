@@ -53,7 +53,7 @@ benchmark/RAG/
 
 ```bash
 cd OpenViking
-uv pip install -e ".[benchmark]"
+uv pip install -e ".[benchmark,bot]"
 source .venv/bin/activate
 ```
 
@@ -205,7 +205,10 @@ cd benchmark/RAG
 # 运行完整评估（数据摄取、答案生成、评估和数据删除）
 python run.py --config config/locomo_config.yaml
 
-# 只运行数据摄取和答案生成阶段
+# 只运行数据摄取阶段
+python run.py --config config/locomo_config.yaml --step ingest
+
+# 只运行答案生成阶段（需要前一步的数据摄取）
 python run.py --config config/locomo_config.yaml --step gen
 
 # 只运行评估阶段（需要前一步生成的答案）
@@ -213,7 +216,50 @@ python run.py --config config/locomo_config.yaml --step eval
 
 # 只运行数据删除阶段
 python run.py --config config/locomo_config.yaml --step del
+
+# 使用 VikingBot 运行（bot 配置文件在 config/bot/ 目录下）
+# 注意：使用 VikingBot 时，`retrieval_topk` 配置项不生效，因为 VikingBot 有自己的搜索机制。
+# 使用 VikingBot 运行完整评估
+python run.py --config config/bot/locomo_bot_config.yaml
+
+# 只运行 VikingBot 的数据摄取阶段
+python run.py --config config/bot/locomo_bot_config.yaml --step ingest
+
+# 只运行 VikingBot 的答案生成阶段
+python run.py --config config/bot/locomo_bot_config.yaml --step gen
+
+# 只运行 VikingBot 的评估阶段
+python run.py --config config/bot/locomo_bot_config.yaml --step eval
+
+# 只运行 VikingBot 的数据删除阶段
+python run.py --config config/bot/locomo_bot_config.yaml --step del
 ```
+
+#### 断点续传功能
+
+框架支持在生成阶段（`--step gen`）和评估阶段（`--step eval`）使用断点续传功能，适用于 bot 和非 bot 模式：
+
+```bash
+# 从上次中断的地方继续执行
+python run.py --config config/locomo_config.yaml --step gen --resume
+
+# 从上次中断的地方继续执行评估
+python run.py --config config/locomo_config.yaml --step eval --resume
+
+# 使用 VikingBot 时也支持断点续传
+python run.py --config config/bot/locomo_bot_config.yaml --step gen --resume
+
+# 使用 VikingBot 时也支持评估阶段的断点续传
+python run.py --config config/bot/locomo_bot_config.yaml --step eval --resume
+```
+
+>&gt; **注意**：断点续传功能适用于 `--step gen` 和 `--step eval` 阶段。框架会自动保存执行进度到 `output_dir` 目录下的 `benchmark_checkpoint.json` 文件中。
+&gt; 
+&gt; **Checkpoint 工作原理**：
+&gt; - 框架会计算当前配置的哈希值，并保存到 checkpoint 中
+&gt; - 当使用 `--resume` 时，会比较当前配置和 checkpoint 中保存的配置哈希
+&gt; - 如果配置不匹配，将不会加载 checkpoint，以防止覆盖错误的实验结果
+&gt; - 任何配置的变化（包括 `use_vikingbot`、`retrieval_topk`、`llm.model` 等）都会导致配置哈希变化
 
 ### 支持的数据集
 
@@ -271,7 +317,6 @@ RAG 使用 YAML 配置文件来控制评估过程。每个数据集在 `config/`
    - `ingest_workers`：文档摄取的工作线程数
    - `retrieval_topk`：要检索的文档数
    - `max_queries`：限制要处理的查询数（null = 全部）
-   - `skip_ingestion`：跳过文档摄取（使用现有索引）
    - `ingest_mode`：文档摄取模式（"directory" 或 "per\_file"）
    - `retrieval_instruction`：检索的自定义指令（默认为空）
 4. **路径配置**：
@@ -326,7 +371,7 @@ Output/
         ├── generated_answers.json       # LLM 生成的答案
         ├── qa_eval_detailed_results.json # 详细评估结果
         ├── benchmark_metrics_report.json # 聚合指标报告
-        ├── docs/                         # 处理后的文档（如果 skip_ingestion=false）
+        ├── docs/                         # 处理后的文档
         └── benchmark.log                 # 日志文件
 ```
 
@@ -465,7 +510,7 @@ datasets/{dataset_name}/viking_store_index_dir
 
 **5.** **`docs/`** **- 处理后的文档**
 
-- **包含内容**：Markdown 格式的处理文档（如果 `skip_ingestion=false`）
+- **包含内容**：Markdown 格式的处理文档
 - **如何查看**：在任何 Markdown 查看器或文本编辑器中直接打开 `.md` 文件
 
 ### 基准测试结果参考
@@ -493,6 +538,44 @@ datasets/{dataset_name}/viking_store_index_dir
 
 所有数据集使用相同的 LLM 和执行配置，特定于数据集的适配器和路径在各自的 YAML 文件中配置。
 
+#### VikingBot 小型测试结果
+
+以下是使用 VikingBot 对 Qasper 数据集进行的 10 个 QA 小型测试结果，供参考：
+
+> **测试数据来源**：使用项目提供的一键抽样脚本（`tools/sample_datasets.py`）从 Qasper 数据集中抽样得到的前 10 个 QA 对。
+
+| 指标              | 数值  |
+| --------------- | --- |
+| **数据集**         | Qasper |
+| **评估查询数**       | 10  |
+| **平均 F1 分数**     | 0.191 |
+| **平均准确率（0-4）** | 3.4 |
+| **标准化准确率**       | 0.85 |
+
+> **注意**：VikingBot 模式下不记录平均召回率指标。
+
+**测试配置详情：**
+
+- **LLM 模型：** `doubao-seed-2-0-pro-260215`
+- **API 基础地址：** `https://ark.cn-beijing.volces.com/api/v3`
+- **温度参数：** 0（确定性输出）
+- **检索 Top-K：** 5（注意：使用 VikingBot 时此配置不生效）
+- **最大工作线程数：** 8（注意：在 bot 模式下，此参数仅控制 eval 阶段的并行，在 gen 阶段是串行的）
+- **摄取工作线程数：** 8
+- **摄取模式：** directory
+- **检索指令：** （空）
+- **使用 VikingBot：** 是
+- **VikingBot 最大迭代次数：** 50
+- **评估指标：** F1 分数、Accuracy（0-4 分制）
+
+**查询效率指标：**
+
+- **平均检索时间：** 87.5 秒/查询
+- **平均输入 Token 数：** 36,796/查询
+- **平均输出 Token 数：** 1,652/查询
+
+> **注意**：此测试结果仅用于演示目的，实际性能可能因配置和硬件环境而异。VikingBot 使用其自身的搜索机制，因此 `retrieval_topk` 配置项在此测试中不生效。
+
 ### 复现实验
 
 要复现基准测试结果，请按照以下步骤操作：
@@ -501,7 +584,7 @@ datasets/{dataset_name}/viking_store_index_dir
 cd OpenViking/benchmark/RAG
 
 # 1. 安装依赖（如果尚未安装）
-uv pip install -e ".[benchmark]"
+uv pip install -e ".[benchmark,bot]"
 source .venv/bin/activate
 
 # 2. 下载所有数据集
@@ -551,6 +634,51 @@ retrieval_instruction: "Target_modality: text.\nInstruction:Locate the part of t
 - `Query:` - 标记实际查询的开始
 
 当 `retrieval_instruction` 为空时，系统将使用原始问题进行检索。
+
+#### VikingBot Prompt 配置
+
+> **重要说明**：使用 VikingBot 时，`retrieval_topk` 配置项不生效，因为 VikingBot 有自己的搜索机制。
+
+您可以在 bot 配置文件（`config/bot/*.yaml`）中自定义 VikingBot 使用的 prompt。有两种方式来自定义 prompt：
+
+**选项 1：完全自定义 Prompt**
+
+使用带有 `{question}` 占位符的完全自定义 prompt：
+
+```yaml
+# ===========VikingBot Configuration============
+vikingbot:
+  max_iterations: 50
+  
+  # 自定义 prompt，带有占位符
+  prompt: |
+    请尽可能简洁地回答以下问题，只使用数据库中的信息。
+    不要使用任何外部知识或网络搜索。
+    
+    问题：{question}
+```
+
+**选项 2：自定义基础指令**
+
+只自定义基础指令，同时保持默认结构：
+
+```yaml
+# ===========VikingBot Configuration============
+vikingbot:
+  max_iterations: 50
+  
+  # 自定义基础指令
+  base_instruction: "请简要回答问题，只使用数据库信息。"
+```
+
+**默认 Prompt（如果未自定义）：**
+
+```
+You are given a question and you need to answer it.
+Please use the tools provided to search for relevant information before answering.
+
+Question: {question}
+```
 
 #### 自定义提示
 
@@ -644,11 +772,8 @@ FinanceBench 有 3 种问题类型：
 
 ### 常见问题（FAQ）
 
-**问：如果我已经有向量索引，如何跳过数据摄取阶段？**
-答：在配置文件中设置 `skip_ingestion: true`。这将使用现有的向量索引。
-
 **问：我可以只运行评估阶段而不重新摄取文档吗？**
-答：可以！首先运行 `--step gen` 生成答案，然后运行 `--step eval` 评估生成的答案。
+答：可以！首先运行 `--step ingest` 摄取文档，然后 `--step gen` 生成答案，最后 `--step eval` 评估生成的答案。
 
 **问：如果我收到 API 密钥错误，应该怎么办？**
 答：确保您在配置文件的 `llm.api_key` 字段中设置了有效的 API 密钥。保持您的 API 密钥安全，不要将其提交到版本控制中。
