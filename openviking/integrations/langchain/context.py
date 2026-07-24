@@ -24,6 +24,7 @@ from openviking.integrations.langchain.client import (
     ensure_client,
     extract_message_text,
     get_latest_user_text,
+    is_not_found_error,
 )
 from openviking.integrations.langchain.history import (
     OpenVikingChatMessageHistory,
@@ -116,7 +117,6 @@ class OpenVikingSessionContextAssembler:
         query: str = "",
     ) -> OpenVikingAssembledContext:
         client = self._get_client()
-        self._ensure_session(client, session_id)
         session_context = self._get_session_context(client, session_id)
         recall_documents = self._get_recall_documents(
             session_id,
@@ -144,6 +144,9 @@ class OpenVikingSessionContextAssembler:
 
     def _get_session_context(self, client: Any, session_id: str) -> dict[str, Any]:
         if not self.include_session_context:
+            # Without a context read there is no NOT_FOUND signal to create from.
+            # Preserve the previous guarantee that recall receives a valid session.
+            self._ensure_session(client, session_id)
             return {}
         try:
             return call_openviking(
@@ -152,7 +155,12 @@ class OpenVikingSessionContextAssembler:
                 session_id=session_id,
                 token_budget=self.token_budget,
             )
-        except Exception:
+        except Exception as exc:
+            if is_not_found_error(exc):
+                # First use: materialize the empty session, but do not issue a second
+                # context read because the newly created session has no context yet.
+                self._ensure_session(client, session_id)
+                return {}
             logger.debug("OpenViking session context assembly failed", exc_info=True)
             return {}
 
