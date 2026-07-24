@@ -83,7 +83,6 @@ class TestSchemaModelGenerator:
         """Create a registry with real schemas."""
         return create_default_registry()
 
-
     def test_peer_enabled_false_omits_peer_id_field(self):
         memory_type = MemoryTypeSchema(
             memory_type="cases",
@@ -143,6 +142,17 @@ class TestSchemaModelGenerator:
 
         assert "First test field" in model.model_fields["field1"].description
 
+    @pytest.mark.parametrize("memory_type", ["skills", "tools"])
+    def test_usage_guidelines_require_synthesis(self, real_registry, memory_type):
+        schema = real_registry.get(memory_type)
+        model = SchemaModelGenerator([schema]).create_flat_data_model(schema)
+
+        description = model.model_fields["guidelines"].description
+        assert "Concise, synthesized" in description
+        assert "Do not copy the original" in description
+        assert "raw tool payload" in description
+        assert "complete usage guide content" not in description
+
     def test_render_description_template_conditional_branch(self):
         memory_type = MemoryTypeSchema(
             memory_type="conditional",
@@ -184,7 +194,6 @@ class TestSchemaModelGenerator:
         # Check business fields
         assert "field1" in model.model_fields
         assert "field2" in model.model_fields
-
 
     def test_page_id_field_is_emitted_before_mutable_content(self, registry_with_sample):
         """page_id should appear before mutable fields so the model anchors target page first."""
@@ -390,6 +399,7 @@ class TestWikiLink:
 
         assert link_type_schema["type"] == "string"
         assert "enum" not in link_type_schema
+
 
 class TestIntegration:
     """Integration tests for the complete schema system."""

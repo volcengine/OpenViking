@@ -219,6 +219,12 @@ class SessionExtractContextProvider(ExtractContextProvider):
 - Before editing ANY existing memory file, you MUST first read its complete content
 - ONLY read URIs that are explicitly listed in ls/search tool results, returned by previous tool calls{resource_deletion_read_source}
 
+## Distillation
+- Store only durable, retrieval-useful facts supported by the conversation.
+- Synthesize facts in concise words. Do NOT copy source documents, skill definitions, templates, transcripts, or tool input/output verbatim.
+- Preserve exact literals only when correctness requires them, such as identifiers, versions, settings, or error text; omit the surrounding raw source.
+- Keep one coherent fact or reusable lesson per item. Prefer structured schema fields over narrative dumps, and split independent facts when the schema supports multiple items.
+
 ## Target Output Language
 All memory content MUST be written in {output_language}.
 
