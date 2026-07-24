@@ -765,10 +765,11 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         partial_update=True,
                     )
                     record_id = result
-                    if record_id:
-                        logger.debug(
-                            f"Successfully wrote embedding to database: {record_id} abstract {inserted_data['abstract']} vector {inserted_data['vector'][:5]}"
-                        )
+                    if not record_id:
+                        raise RuntimeError("Vector database upsert returned an empty record ID")
+                    logger.debug(
+                        f"Successfully wrote embedding to database: {record_id} abstract {inserted_data['abstract']} vector {inserted_data['vector'][:5]}"
+                    )
                 except CollectionNotFoundError as db_err:
                     # During shutdown, queue workers may finish one dequeued item.
                     if self._vikingdb.is_closing:
