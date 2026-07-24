@@ -406,6 +406,11 @@ class SessionService:
 
         session = await self.get(session_id, ctx)
         archive_uri = f"{session.uri}/manual_extract"
+        memory_settings = await resolve_memory_settings(
+            viking_fs=self._viking_fs,
+            ctx=ctx,
+            user_config_defaults=self._user_config_defaults,
+        )
 
         memories = await self._session_compressor.extract_long_term_memories(
             messages=session.messages,
@@ -413,6 +418,7 @@ class SessionService:
             session_id=session_id,
             ctx=ctx,
             archive_uri=archive_uri,
+            agent_evolution_enabled=memory_settings.agent_evolution_enabled,
         )
         self._record_lifecycle_metric("extract", "ok")
         return memories

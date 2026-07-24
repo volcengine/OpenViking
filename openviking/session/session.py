@@ -1453,6 +1453,9 @@ class Session:
         keep_recent_turn_count: int,
         retained_message_token_budget: int,
         min_raw_tail_steps: int,
+        agent_evolution_enabled: bool = True,
+        agent_memory_skip_reason: Optional[str] = None,
+        user_config_error: Optional[str] = None,
     ) -> None:
         """Persist the Phase 1 intent before any destructive root rewrite."""
         payload = {
@@ -1469,7 +1472,17 @@ class Session:
             "retained_message_token_budget": retained_message_token_budget,
             "min_raw_tail_steps": min_raw_tail_steps,
         }
-        await self._merge_archive_meta(archive_uri, {"phase1": payload})
+        await self._merge_archive_meta(
+            archive_uri,
+            {
+                "phase1": payload,
+                "agent_evolution": {
+                    "enabled": agent_evolution_enabled,
+                    "skip_reason": agent_memory_skip_reason,
+                    "user_config_error": user_config_error,
+                },
+            },
+        )
 
     async def _write_phase1_ready_marker(self, archive_uri: str) -> None:
         phase1 = await self._read_phase1_meta(archive_uri)
@@ -1857,9 +1870,6 @@ class Session:
                 actor_peer_id=self.ctx.actor_peer_id,
                 memory_policy=effective_memory_policy,
                 usage_uris=list(dict.fromkeys(u.uri for u in usage_snapshot if u.uri)),
-                agent_evolution_enabled=agent_evolution_enabled,
-                agent_memory_skip_reason=agent_memory_skip_reason,
-                user_config_error=user_config_error,
             )
             phase1_stage = "phase1_persist"
             try:
@@ -1877,6 +1887,9 @@ class Session:
                     keep_recent_turn_count=effective_keep_turns if turn_mode else 0,
                     retained_message_token_budget=effective_token_budget if turn_mode else 0,
                     min_raw_tail_steps=effective_min_tail,
+                    agent_evolution_enabled=agent_evolution_enabled,
+                    agent_memory_skip_reason=agent_memory_skip_reason,
+                    user_config_error=user_config_error,
                 )
 
                 # Archive raw remains durable and recoverable before any live
@@ -2059,20 +2072,39 @@ class Session:
             )
             return
 
-        # Queue messages created before user-level Agent Evolution settings
-        # were introduced have no settings snapshot. Preserve their historical
-        # behavior: execution memory remained enabled unless memory_policy
-        # explicitly filtered it out.
         queued_policy = MemoryPolicy.from_dict(msg.memory_policy)
-        agent_evolution_enabled = msg.agent_evolution_enabled
-        if agent_evolution_enabled is None:
-            agent_evolution_enabled = True
-        agent_memory_skip_reason = msg.agent_memory_skip_reason
+        archive_meta = await self._read_archive_meta(msg.archive_uri)
+        agent_evolution_snapshot = archive_meta.get("agent_evolution")
+        if not isinstance(agent_evolution_snapshot, dict):
+            # Compatibility with jobs created by pre-merge development builds
+            # that temporarily stored this snapshot in the queue payload.
+            phase1 = archive_meta.get("phase1")
+            queue_snapshot = phase1.get("queue_message") if isinstance(phase1, dict) else None
+            agent_evolution_snapshot = (
+                queue_snapshot if isinstance(queue_snapshot, dict) else {}
+            )
+
+        snapshot_enabled = agent_evolution_snapshot.get("enabled")
+        if snapshot_enabled is None:
+            snapshot_enabled = agent_evolution_snapshot.get("agent_evolution_enabled")
+        # Archives created before this setting existed preserve their original
+        # behavior, where Agent memory extraction was enabled by default.
+        agent_evolution_enabled = (
+            snapshot_enabled if isinstance(snapshot_enabled, bool) else True
+        )
+        agent_memory_skip_reason = agent_evolution_snapshot.get("skip_reason")
+        if agent_memory_skip_reason is None:
+            agent_memory_skip_reason = agent_evolution_snapshot.get(
+                "agent_memory_skip_reason"
+            )
         if agent_memory_skip_reason is None:
             agent_memory_skip_reason = _agent_memory_skip_reason(
                 agent_evolution_enabled=agent_evolution_enabled,
                 effective_memory_types=_effective_memory_types(queued_policy),
             )
+        user_config_error = agent_evolution_snapshot.get("user_config_error")
+        if user_config_error is not None:
+            user_config_error = str(user_config_error)
 
         await self._run_memory_extraction(
             task_id=msg.task_id,
@@ -2084,7 +2116,7 @@ class Session:
             memory_policy=msg.memory_policy,
             agent_evolution_enabled=agent_evolution_enabled,
             agent_memory_skip_reason=agent_memory_skip_reason,
-            user_config_error=msg.user_config_error,
+            user_config_error=user_config_error,
         )
 
     async def _run_usage_reporting(

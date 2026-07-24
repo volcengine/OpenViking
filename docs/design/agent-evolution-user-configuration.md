@@ -2,7 +2,8 @@
 
 ## 1. 目标
 
-本期提供用户级 `agent_evolution_enabled` 开关，控制后续 session commit 是否生成或更新 Agent 记忆：
+本期提供用户级 `agent_evolution_enabled` 开关，控制后续 session commit
+和手动 session extract 是否生成或更新 Agent 记忆：
 
 - `cases`
 - `trajectories`
@@ -70,6 +71,9 @@ Agent 进化关闭时，以下行为保持不变：
 6. 按最终 session policy 运行记忆提取。
 7. 在 task result 中返回 `effective_memory_types`、`agent_evolution_enabled` 和 `agent_memory_skip_reason`。
 
+手动 `POST /api/v1/sessions/{session_id}/extract` 同样在提取前解析该用户开关，
+避免绕过 Agent 进化生产控制。
+
 `agent_memory_skip_reason` 可能为：
 
 - `agent_evolution_disabled`
@@ -78,7 +82,7 @@ Agent 进化关闭时，以下行为保持不变：
 
 用户配置非法时，commit 仍完成归档并保留非 Agent 记忆处理能力，但本次不生成或更新 case、trajectory 或 experience。
 
-队列消息显式保存 commit 时解析出的开关和最终 session policy，确保异步 Phase 2 不受后续用户配置变化影响。旧队列消息没有开关字段时按历史行为处理，即默认开启 Agent 记忆生产。
+队列消息保存 commit 时计算出的最终 session policy；Agent 进化开关、跳过原因和用户配置错误快照保存在对应 archive 的 `.meta.json` 中。Phase 2 从 archive 读取这份快照，因此不受后续用户配置变化影响，同时保持 SessionCommit 队列 payload 与旧 worker 兼容。旧 archive 没有开关快照时按历史行为处理，即默认开启 Agent 记忆生产。
 
 ## 5. API
 
@@ -152,6 +156,7 @@ ov user-settings set-memory --clear-agent-evolution-enabled
 
 - 配置不存在时，Agent 进化有效值为 `false`。
 - 关闭时不生成或更新 case、trajectory 或 experience，归档和其他记忆正常处理。
+- 手动 session extract 不能绕过已关闭的 Agent 进化开关。
 - 开启后，同一 session 的下一次 commit 即可恢复 Agent 记忆生产。
 - session 级 `memory_policy.memory_types` 仍能限制单次 commit。
 - PATCH Agent 进化设置不覆盖 `add_targets`。

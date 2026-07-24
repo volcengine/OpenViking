@@ -1,11 +1,15 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+from unittest.mock import AsyncMock
+
 import httpx
+import pytest
 
 from openviking.server.config import UserConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.server.user_config import read_user_config
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -104,3 +108,35 @@ async def test_delete_add_locations_preserves_memory_settings(
     stored = await read_user_config(service.viking_fs, _ctx())
     assert stored.add_targets.skill_uri is None
     assert stored.agent_evolution.enabled is True
+
+
+async def test_embedded_memory_settings_reject_non_boolean_values(service):
+    with pytest.raises(InvalidArgumentError, match="boolean or null"):
+        await service.sessions.patch_memory_settings(
+            _ctx(),
+            agent_evolution_enabled="not-a-bool",
+        )
+
+    stored = await read_user_config(service.viking_fs, _ctx())
+    assert stored.agent_evolution.enabled is None
+
+
+async def test_manual_extract_respects_disabled_agent_evolution(
+    service,
+    client: httpx.AsyncClient,
+):
+    create_response = await client.post("/api/v1/sessions", json={})
+    session_id = create_response.json()["result"]["session_id"]
+    add_response = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "请处理一次换货任务"},
+    )
+    assert add_response.status_code == 200, add_response.text
+
+    extract = AsyncMock(return_value=[])
+    service.sessions._session_compressor.extract_long_term_memories = extract
+
+    response = await client.post(f"/api/v1/sessions/{session_id}/extract")
+
+    assert response.status_code == 200, response.text
+    assert extract.await_args.kwargs["agent_evolution_enabled"] is False

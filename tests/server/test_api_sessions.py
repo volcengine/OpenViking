@@ -1035,6 +1035,12 @@ async def test_commit_failed_when_execution_extraction_fails_does_not_block_next
     retries), the whole archive is marked .failed.json and skipped — there is
     no partial state — but a failed archive must not block the next commit.
     """
+    settings_response = await client.patch(
+        "/api/v1/user-settings/memory",
+        json={"agent_evolution_enabled": True},
+    )
+    assert settings_response.status_code == 200, settings_response.text
+
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
 

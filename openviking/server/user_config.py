@@ -229,6 +229,13 @@ async def write_user_memory_settings(
     agent_evolution_enabled: Any,
     agent_evolution_enabled_set: bool,
 ) -> None:
+    if (
+        agent_evolution_enabled_set
+        and agent_evolution_enabled is not None
+        and not isinstance(agent_evolution_enabled, bool)
+    ):
+        raise InvalidArgumentError("agent_evolution_enabled must be a boolean or null")
+
     def _set(user_config: UserConfig) -> None:
         if agent_evolution_enabled_set:
             user_config.agent_evolution.enabled = agent_evolution_enabled

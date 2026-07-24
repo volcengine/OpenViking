@@ -92,7 +92,7 @@ UsageEvent 是可独立传输和消费的完整事件。`UsageContext` 只用于
 
 ## 6. UsageSink 机制
 
-OpenViking 开源包只定义 Sink 抽象：
+OpenViking 开源包定义统一的 Sink 抽象：
 
 ```python
 class UsageSink:
@@ -100,7 +100,7 @@ class UsageSink:
         ...
 ```
 
-具体 Sink 作为外部扩展，通过 `class_path` 动态加载。
+具体 Sink 可以作为外部扩展通过 `class_path` 动态加载。开源包同时提供不依赖第三方消息队列 SDK 的内置 HTTP Sink，用于需要本地持久化重试的部署。
 
 配置示例：
 
@@ -130,6 +130,8 @@ def load_class(class_path: str):
 
 每个 Sink 的 `write()` 调用最多等待 5 秒。超时或异常只记录日志，不影响其他 Sink。Reporter 在应用生命周期内只创建一次，应用退出时调用 Sink 可选的 `close()` 方法。同步和异步 `close()` 均受同一超时限制；同步 hook 在独立 daemon 线程中执行，超时后不会阻塞事件循环、后续 Sink 清理或进程退出。
 
+内置 HTTP Sink 在 `write()` 返回前把事件批次写入本地 outbox，再由后台线程发送。它只依赖 Python 标准库，不引入 Kafka 等厂商依赖。HTTP Sink 支持指数退避、`413` 拆包、不可恢复批次转入 dead-letter，以及有界磁盘容量。
+
 ## 7. 配置设计
 
 默认关闭：
@@ -151,6 +153,21 @@ server:
         class_path: example_usage.custom_sink.CustomUsageSink
         config:
           endpoint: https://usage.example.com/events
+```
+
+内置 HTTP Sink：
+
+```yaml
+server:
+  usage_reporter:
+    enabled: true
+    sinks:
+      - type: http
+        config:
+          endpoint: https://usage.example.com/events
+          resource_id_env: OV_RESOURCE_ID
+          outbox_dir: /var/lib/openviking/.usage_outbox
+          max_outbox_bytes: 268435456
 ```
 
 ## 8. 对 OpenViking 的侵入
@@ -197,7 +214,7 @@ archive session success
 Usage Reporter 采用 best-effort 投递语义：
 
 - Sink 成功：正常返回。
-- Sink 失败或超时：记录日志，不影响 session commit，也不自动重试。
+- Sink 失败或超时：记录日志，不影响 session commit。自定义 Sink 是否重试由其实现决定。
 - 多个 Sink 相互隔离，某个 Sink 失败不影响其他 Sink。
 - Sink 失败时事件可能丢失，因此本机制不保证 at-least-once。
 - 如果 Sink 已写入成功，但进程在 phase2 写入完成标记前退出，phase2 恢复执行时可能重复发送同一事件。
@@ -212,12 +229,15 @@ schema_version
 + account_id
 + user_id
 + session_id
-+ task_id
-+ evidence.archive_uri
++ evidence.message_id
 + evidence.tool_call_id
 + resource_uri
 ```
 
-`occurred_at`、`message_id` 和 `attributes` 不参与计算，避免重放时间差或附加属性变化破坏幂等性。同一 archive 中同一 tool call 对同一资源产生的事件，在 phase2 重放后仍得到相同 `event_id`。
+`occurred_at`、`task_id`、`archive_uri` 和 `attributes` 不参与计算，避免重放时间差、
+任务恢复或附加属性变化破坏幂等性。同一 session message 中同一 tool call
+对同一资源产生的事件，在 phase2 重放后仍得到相同 `event_id`。
 
-如果后续需要可靠投递，需要增加持久化 outbox、失败重试和发送确认机制。
+内置 HTTP Sink 提供持久化 outbox、失败重试和发送确认。所有 `2xx` 响应视为确认，瞬时错误进入指数退避重试，`400` / `422` 进入 dead-letter。HTTP Sink 可能重复发送同一事件，消费端仍需按 `event_id` 去重。
+
+HTTP outbox 使用 `max_outbox_bytes` 限制磁盘占用。达到上限时先淘汰最旧的 dead-letter，再淘汰最旧的 pending；inflight 不被淘汰。因此即使启用 HTTP Sink，长期下游故障和容量压力下仍可能丢失事件，整体机制保持 best-effort，不承诺端到端 at-least-once。

@@ -6,6 +6,8 @@ User settings control whether future session commits generate or update `cases`,
 
 - `agent_evolution_enabled` defaults to `false` when it is not explicitly configured.
 - Disabling Agent Evolution does not stop session archiving, Working Memory, or other memory types.
+- The setting also applies to manual session extraction through
+  `POST /api/v1/sessions/{session_id}/extract`.
 - Disabling it does not delete existing cases, trajectories, or experiences and does not affect experience retrieval or reads.
 - When enabled, session-level `memory_policy.memory_types` can still restrict memory types for one commit.
 

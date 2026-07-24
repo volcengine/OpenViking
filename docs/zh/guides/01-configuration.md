@@ -1444,6 +1444,43 @@ openviking add-resource ./docs --exclude "*.tmp"
 
 `user_config_defaults` 用于给没有个人覆盖配置的新老用户提供默认用户配置。添加操作中，显式请求目标仍然优先：`add_resource.to` / `add_resource.parent` 优先于用户默认值，`add_skill.target_uri` 优先于用户默认值。`agent_evolution.enabled` 在用户级和部署级都未设置时，有效值为 `false`。个人覆盖配置存储在 `viking://user/{user_id}/settings/user_config.json`。
 
+### Usage Reporter
+
+可选的 Usage Reporter 从已 commit session 的 tool parts 中抽取记忆使用事件。内置 HTTP Sink 会先把事件批次持久化到本地 outbox，再发送给采集服务：
+
+```json
+{
+  "server": {
+    "usage_reporter": {
+      "enabled": true,
+      "extractors": ["memory_usage"],
+      "sinks": [
+        {
+          "type": "http",
+          "config": {
+            "endpoint": "https://collector.example.com/openviking/usage",
+            "resource_id_env": "OV_RESOURCE_ID",
+            "outbox_dir": "/var/lib/openviking/.usage_outbox",
+            "request_timeout_seconds": 10,
+            "inflight_lease_seconds": 60,
+            "retry_base_seconds": 1,
+            "retry_max_seconds": 300,
+            "max_batch_bytes": 1048576,
+            "max_outbox_bytes": 268435456
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+启动服务前，需要设置 `resource_id_env` 指定的环境变量。未配置 `outbox_dir` 时，默认使用 OpenViking 运行用户的 `~/.openviking/data/.usage_outbox`。
+
+HTTP Sink 使用本地持久化队列重试，同一事件可能被重复发送，采集端需要按 `event_id` 去重。所有 `2xx` 响应都表示批次已确认；瞬时失败使用指数退避重试；`400` 和 `422` 会将批次移入 `dead_letter`；`413` 会拆分包含多条事件的批次。outbox 总量受 `max_outbox_bytes` 限制，达到上限后先删除最旧的 dead-letter 批次，再删除最旧的 pending 批次，正在发送的批次不会被淘汰。由于容量压力可能丢弃 pending 数据，整体上报仍是 best-effort，不提供端到端 at-least-once 保证。
+
+`inflight_lease_seconds` 必须大于 `request_timeout_seconds`。worker 领取批次时会刷新 lease，避免其他 worker 把正在发送的批次误判为过期任务。
+
 支持的 add target URI：
 
 - `resource_uri` 作为 `add_resource` 的默认父目录使用，等价于 `parent=<uri>, create_parent=true`。它必须是当前请求用户可写的 resource 目录 URI，支持 `viking://resources` 或 `viking://resources/...`、`viking://user/resources` 或 `viking://user/resources/...`、`viking://user/{user_id}/resources` 或 `viking://user/{user_id}/resources/...`、`viking://user/{user_id}/peers/{peer_id}/resources` 或 `viking://user/{user_id}/peers/{peer_id}/resources/...`。`viking://user/...` 短写会按请求用户解析。

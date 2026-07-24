@@ -6,6 +6,7 @@
 
 - `agent_evolution_enabled` 未显式配置时默认为 `false`。
 - 关闭后，session 归档、Working Memory 和其他记忆类型仍正常处理。
+- 该开关同样约束 `POST /api/v1/sessions/{session_id}/extract` 手动提取入口。
 - 关闭不会删除已有 case、trajectory 或 experience，也不影响已有 experience 的检索和读取。
 - 开启后，session 级 `memory_policy.memory_types` 仍可限制单次 commit 的记忆类型。
 

@@ -32,12 +32,13 @@ class HttpUsageSink:
         *,
         endpoint: str,
         resource_id_env: str = "OV_RESOURCE_ID",
-        outbox_dir: str = "/root/.openviking/data/.usage_outbox",
+        outbox_dir: str | os.PathLike[str] | None = None,
         request_timeout_seconds: float = 10.0,
         inflight_lease_seconds: float = 60.0,
         retry_base_seconds: float = 1.0,
         retry_max_seconds: float = 300.0,
         max_batch_bytes: int = 1024 * 1024,
+        max_outbox_bytes: int = 256 * 1024 * 1024,
     ) -> None:
         self._endpoint = endpoint.strip()
         self._resource_id = os.environ.get(resource_id_env, "").strip()
@@ -46,7 +47,11 @@ class HttpUsageSink:
         if not self._resource_id:
             raise ValueError(f"{resource_id_env} is required")
 
-        self._outbox_dir = Path(outbox_dir)
+        self._outbox_dir = (
+            Path(outbox_dir)
+            if outbox_dir is not None
+            else Path.home() / ".openviking" / "data" / ".usage_outbox"
+        )
         self._pending_dir = self._outbox_dir / "pending"
         self._inflight_dir = self._outbox_dir / "inflight"
         self._dead_letter_dir = self._outbox_dir / "dead_letter"
@@ -64,8 +69,24 @@ class HttpUsageSink:
         self._retry_base_seconds = float(retry_base_seconds)
         self._retry_max_seconds = float(retry_max_seconds)
         self._max_batch_bytes = int(max_batch_bytes)
+        self._max_outbox_bytes = int(max_outbox_bytes)
+        if self._request_timeout_seconds <= 0:
+            raise ValueError("request_timeout_seconds must be positive")
+        if self._inflight_lease_seconds <= 0:
+            raise ValueError("inflight_lease_seconds must be positive")
+        if self._inflight_lease_seconds <= self._request_timeout_seconds:
+            raise ValueError(
+                "inflight_lease_seconds must be greater than request_timeout_seconds"
+            )
+        if self._retry_base_seconds < 0:
+            raise ValueError("retry_base_seconds must be non-negative")
+        if self._retry_max_seconds < 0:
+            raise ValueError("retry_max_seconds must be non-negative")
         if self._max_batch_bytes <= 0:
             raise ValueError("max_batch_bytes must be positive")
+        if self._max_outbox_bytes <= 0:
+            raise ValueError("max_outbox_bytes must be positive")
+        self._outbox_lock = threading.Lock()
         self._wake_event = threading.Event()
         self._stop_event = threading.Event()
         self._worker: threading.Thread | None = None
@@ -107,23 +128,122 @@ class HttpUsageSink:
             self._persist_batch(batch)
         self._wake_event.set()
 
-    def _persist_batch(self, events: list[dict[str, Any]]) -> None:
-        payload = self._build_payload(events)
-        encoded = json.dumps(
-            payload,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        file_stem = f"{time.time_ns()}_{payload['batch_id']}"
-        temporary_path = self._pending_dir / f".{file_stem}.tmp"
-        pending_path = self._pending_dir / f"{file_stem}.json"
+    def _persist_batch(self, events: list[dict[str, Any]]) -> bool:
+        return self._persist_batches([events])
 
-        with temporary_path.open("wb") as output:
-            output.write(encoded)
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary_path, pending_path)
-        self._fsync_directory(self._pending_dir)
+    def _persist_batches(
+        self,
+        event_batches: list[list[dict[str, Any]]],
+        *,
+        replace_path: Path | None = None,
+    ) -> bool:
+        encoded_batches: list[tuple[dict[str, Any], bytes, Path, Path]] = []
+        for index, events in enumerate(event_batches):
+            payload = self._build_payload(events)
+            encoded = json.dumps(
+                payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            file_stem = f"{time.time_ns()}_{index}_{payload['batch_id']}"
+            encoded_batches.append(
+                (
+                    payload,
+                    encoded,
+                    self._pending_dir / f".{file_stem}.tmp",
+                    self._pending_dir / f"{file_stem}.json",
+                )
+            )
+
+        incoming_bytes = sum(len(encoded) for _, encoded, _, _ in encoded_batches)
+        with self._outbox_lock:
+            reclaimable_bytes = 0
+            if replace_path is not None:
+                try:
+                    reclaimable_bytes = replace_path.stat().st_size
+                except FileNotFoundError:
+                    return False
+            if not self._ensure_outbox_capacity(
+                incoming_bytes,
+                reclaimable_bytes=reclaimable_bytes,
+            ):
+                batch_ids = [payload["batch_id"] for payload, _, _, _ in encoded_batches]
+                logger.warning(
+                    "Dropping OpenViking usage batch because the outbox is full, "
+                    "batch_ids=%s size=%s max_outbox_bytes=%s",
+                    batch_ids,
+                    incoming_bytes,
+                    self._max_outbox_bytes,
+                )
+                return False
+            temporary_paths: list[Path] = []
+            try:
+                for _payload, encoded, temporary_path, pending_path in encoded_batches:
+                    temporary_paths.append(temporary_path)
+                    with temporary_path.open("wb") as output:
+                        output.write(encoded)
+                        output.flush()
+                        os.fsync(output.fileno())
+                    os.replace(temporary_path, pending_path)
+                self._fsync_directory(self._pending_dir)
+                if replace_path is not None:
+                    replace_path.unlink()
+                    self._fsync_directory(replace_path.parent)
+            finally:
+                for temporary_path in temporary_paths:
+                    try:
+                        temporary_path.unlink()
+                    except FileNotFoundError:
+                        pass
+        return True
+
+    def _ensure_outbox_capacity(
+        self,
+        incoming_bytes: int,
+        *,
+        reclaimable_bytes: int = 0,
+    ) -> bool:
+        if incoming_bytes > self._max_outbox_bytes:
+            return False
+
+        eviction_candidates: list[Path] = []
+        total_bytes = 0
+        for directory in (
+            self._dead_letter_dir,
+            self._pending_dir,
+            self._inflight_dir,
+        ):
+            for path in directory.glob("*.json"):
+                try:
+                    total_bytes += path.stat().st_size
+                except FileNotFoundError:
+                    continue
+                if directory != self._inflight_dir:
+                    eviction_candidates.append(path)
+
+        effective_total_bytes = max(0, total_bytes - reclaimable_bytes)
+        if effective_total_bytes + incoming_bytes <= self._max_outbox_bytes:
+            return True
+
+        def _eviction_order(path: Path) -> tuple[int, int, str]:
+            try:
+                modified_at = path.stat().st_mtime_ns
+            except FileNotFoundError:
+                modified_at = 0
+            directory_priority = 0 if path.parent == self._dead_letter_dir else 1
+            return directory_priority, modified_at, path.name
+
+        for path in sorted(eviction_candidates, key=_eviction_order):
+            try:
+                size = path.stat().st_size
+                path.unlink()
+            except FileNotFoundError:
+                continue
+            effective_total_bytes -= size
+            logger.warning("Evicted OpenViking usage outbox batch: %s", path)
+            if effective_total_bytes + incoming_bytes <= self._max_outbox_bytes:
+                return True
+        return effective_total_bytes + incoming_bytes <= self._max_outbox_bytes
 
     def _build_payload(self, events: list[dict[str, Any]]) -> dict[str, Any]:
         event_ids = "\n".join(str(event["event_id"]) for event in events)
@@ -153,6 +273,8 @@ class HttpUsageSink:
 
     @staticmethod
     def _fsync_directory(directory: Path) -> None:
+        if os.name == "nt":
+            return
         descriptor = os.open(directory, os.O_RDONLY)
         try:
             os.fsync(descriptor)
@@ -161,6 +283,8 @@ class HttpUsageSink:
 
     def _start_worker(self) -> None:
         self._recover_stale_inflight()
+        with self._outbox_lock:
+            self._ensure_outbox_capacity(0)
         self._worker = threading.Thread(
             target=self._worker_loop,
             name="openviking-usage-http-sink",
@@ -171,6 +295,7 @@ class HttpUsageSink:
     def _worker_loop(self) -> None:
         while not self._stop_event.is_set():
             try:
+                self._recover_stale_inflight()
                 handled_batch = self._handle_next_batch()
             except Exception:
                 logger.exception("OpenViking usage outbox worker failed")
@@ -195,6 +320,7 @@ class HttpUsageSink:
             inflight_path = self._inflight_dir / pending_path.name
             try:
                 os.replace(pending_path, inflight_path)
+                os.utime(inflight_path, None)
             except FileNotFoundError:
                 continue
 
@@ -207,7 +333,7 @@ class HttpUsageSink:
                 )
                 self._schedule_retry(inflight_path, payload)
                 return True
-            if status == 200:
+            if 200 <= status < 300:
                 try:
                     inflight_path.unlink()
                 except FileNotFoundError:
@@ -230,12 +356,11 @@ class HttpUsageSink:
             self._move_to_dead_letter(inflight_path)
             return
         midpoint = len(events) // 2
-        self._persist_batch(events[:midpoint])
-        self._persist_batch(events[midpoint:])
-        try:
-            inflight_path.unlink()
-        except FileNotFoundError:
-            pass
+        if not self._persist_batches(
+            [events[:midpoint], events[midpoint:]],
+            replace_path=inflight_path,
+        ):
+            self._move_to_dead_letter(inflight_path)
         self._wake_event.set()
 
     def _post_payload(self, payload: dict[str, Any]) -> int:
@@ -293,12 +418,18 @@ class HttpUsageSink:
             ensure_ascii=False,
             separators=(",", ":"),
         ).encode("utf-8")
-        with temporary_path.open("wb") as output:
-            output.write(encoded)
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary_path, path)
-        self._fsync_directory(path.parent)
+        try:
+            with temporary_path.open("wb") as output:
+                output.write(encoded)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary_path, path)
+            self._fsync_directory(path.parent)
+        finally:
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
 
     @staticmethod
     def _read_payload(path: Path) -> dict[str, Any]:
@@ -325,11 +456,11 @@ class HttpUsageSink:
 
     def _recover_stale_inflight(self) -> None:
         stale_before = time.time() - self._inflight_lease_seconds
-        for inflight_path in self._inflight_dir.glob("*.json"):
-            try:
-                if inflight_path.stat().st_mtime > stale_before:
+        with self._outbox_lock:
+            for inflight_path in self._inflight_dir.glob("*.json"):
+                try:
+                    if inflight_path.stat().st_mtime > stale_before:
+                        continue
+                    os.replace(inflight_path, self._pending_dir / inflight_path.name)
+                except FileNotFoundError:
                     continue
-                os.replace(inflight_path, self._pending_dir / inflight_path.name)
-            except FileNotFoundError:
-                continue
-
