@@ -11,18 +11,18 @@ from vikingbot.sandbox.base import SandboxBackend, SandboxNotStartedError
 from vikingbot.sandbox.backends import register_backend
 
 
-from vikingbot.config.schema import SandboxConfig, SessionKey
+from vikingbot.config.schema import SandboxConfig
 
 
 @register_backend("srt")
 class SrtBackend(SandboxBackend):
     """SRT backend using @anthropic-ai/sandbox-runtime."""
 
-    def __init__(self, config, session_key: SessionKey, workspace: Path):
+    def __init__(self, config: SandboxConfig, workspace_id: str, workspace: Path):
         # SRT has built-in isolation, restrict_to_workspace is not needed
         super().__init__()
         self.config = config
-        self.session_key = session_key
+        self.workspace_id = workspace_id
         self._workspace = workspace
         self._process = None
         self._settings_path = self._generate_settings()
@@ -42,9 +42,7 @@ class SrtBackend(SandboxBackend):
         srt_config = self._load_config()
 
         # Place settings file in workspace/sandboxes/ directory
-        settings_path = (
-            self._workspace / "sandboxes" / f"{self.session_key.safe_name()}-srt-settings.json"
-        )
+        settings_path = self._workspace / "sandboxes" / f"{self.workspace_id}-srt-settings.json"
         settings_path.parent.mkdir(parents=True, exist_ok=True)
 
         with open(settings_path, "w") as f:
@@ -224,6 +222,7 @@ class SrtBackend(SandboxBackend):
     def _load_config(self) -> dict[str, Any]:
         sandbox_workspace_str = str(self._workspace.resolve())
         allow_write = [sandbox_workspace_str]
+        srt_config = self.config.backends.srt
 
         tmp_dir = "/tmp"
         if tmp_dir not in allow_write:
@@ -231,14 +230,14 @@ class SrtBackend(SandboxBackend):
 
         return {
             "network": {
-                "allowedDomains": self.config.network.allowed_domains,
-                "deniedDomains": self.config.network.denied_domains,
-                "allowLocalBinding": self.config.network.allow_local_binding,
+                "allowedDomains": srt_config.network.allowed_domains,
+                "deniedDomains": srt_config.network.denied_domains,
+                "allowLocalBinding": srt_config.network.allow_local_binding,
             },
             "filesystem": {
-                "denyRead": self.config.filesystem.deny_read,
+                "denyRead": srt_config.filesystem.deny_read,
                 "allowWrite": allow_write,
-                "denyWrite": self.config.filesystem.deny_write,
+                "denyWrite": srt_config.filesystem.deny_write,
             },
         }
 

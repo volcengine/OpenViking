@@ -44,12 +44,15 @@ class SandboxManager:
         instance = self._backend_cls(self.config.sandbox, workspace_id, workspace)
         try:
             await instance.start()
-        except Exception as e:
-            import traceback
-
-            traceback.print_exc()
-        if not workspace.exists():
-            await self._copy_bootstrap_files(workspace)
+            if not workspace.exists():
+                await self._copy_bootstrap_files(workspace)
+        except Exception:
+            logger.exception(f"Failed to start sandbox for workspace {workspace_id}")
+            try:
+                await instance.stop()
+            except Exception:
+                logger.exception(f"Failed to clean up sandbox for workspace {workspace_id}")
+            raise
         return instance
 
     async def _copy_bootstrap_files(self, sandbox_workspace: Path) -> None:
