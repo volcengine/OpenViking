@@ -322,6 +322,23 @@ class SessionService:
         )
         return task.to_dict() if task else None
 
+    async def retry_archive(
+        self, session_id: str, archive_id: str, ctx: RequestContext
+    ) -> Dict[str, Any]:
+        """Retry Phase 2 memory extraction for a previously-failed archive.
+
+        Args:
+            session_id: Session ID.
+            archive_id: Archive index as string (e.g. "4" for archive_004).
+            ctx: Request context.
+
+        Returns:
+            Dict with status, task_id, archive_uri, message_count.
+        """
+        self._ensure_initialized()
+        session = await self.get(session_id, ctx)
+        return await session.retry_archive_extraction(int(archive_id))
+
     async def extract(self, session_id: str, ctx: RequestContext) -> List[Any]:
         """Extract memories from a session.
 
