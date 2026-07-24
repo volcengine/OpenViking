@@ -25,6 +25,10 @@ use crate::git::error::GitError;
 /// `VikingFS._INTERNAL_NAMES` from the design.
 const INTERNAL_FIRST_SEGMENTS: &[&str] = &["_system", "tasks", "temp", "queue", "upload"];
 
+/// Per-resource sync manifest dotfile (#3029). Tool-managed control file that
+/// must never be committed; may appear at any resource root, not just the top.
+const SYNC_MANIFEST_FILE: &str = ".viking_sync_manifest.json";
+
 /// Returns true if this account-relative path must be excluded from commits.
 ///
 /// `rel` is the path relative to the account root (no leading "/", no
@@ -50,6 +54,13 @@ pub fn prune_path(rel: &str) -> bool {
     // Rule 2: any segment equals or starts with ".path.ovlock"
     for seg in &segments {
         if seg.starts_with(".path.ovlock") {
+            return true;
+        }
+    }
+
+    // Rule 2b: the sync manifest dotfile (#3029), at any depth.
+    if let Some(last) = segments.last() {
+        if *last == SYNC_MANIFEST_FILE {
             return true;
         }
     }
@@ -393,6 +404,9 @@ mod tests {
         assert!(prune_path("resources/x.index"));
         assert!(prune_path("resources/embedding_cache/v.bin"));
         assert!(prune_path("agent/embedding_cache/something"));
+        // #3029: sync manifest dotfile pruned at any depth.
+        assert!(prune_path("resources/.viking_sync_manifest.json"));
+        assert!(prune_path("resources/doc/.viking_sync_manifest.json"));
 
         // Survivors
         assert!(!prune_path("resources/a.md"));

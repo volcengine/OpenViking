@@ -60,6 +60,10 @@ class SemanticMsg:
     changes: Optional[Dict[str, List[str]]] = (
         None  # {"added": [...], "modified": [...], "deleted": [...]}
     )
+    # #3029: single-doc source (Feishu/web) whose temp tree is NOT a complete
+    # mirror of the target dir. When True the temp->target sync must not delete
+    # user-added files (see sync_manifest / _sync_topdown_recursive).
+    ownership_tracked: bool = False
 
     def __init__(
         self,
@@ -79,6 +83,7 @@ class SemanticMsg:
         coalesce_key: str = "",
         coalesce_version: int = 0,
         changes: Optional[Dict[str, List[str]]] = None,
+        ownership_tracked: bool = False,
     ):
         self.id = str(uuid4())
         self.uri = uri
@@ -97,6 +102,7 @@ class SemanticMsg:
         self.coalesce_key = coalesce_key
         self.coalesce_version = coalesce_version
         self.changes = changes
+        self.ownership_tracked = ownership_tracked
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert object to dictionary."""
@@ -140,6 +146,7 @@ class SemanticMsg:
             coalesce_key=data.get("coalesce_key", ""),
             coalesce_version=data.get("coalesce_version", 0),
             changes=data.get("changes"),
+            ownership_tracked=data.get("ownership_tracked", False),
         )
         if "id" in data and data["id"]:
             obj.id = data["id"]
