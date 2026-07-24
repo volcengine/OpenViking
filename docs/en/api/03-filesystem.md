@@ -218,6 +218,9 @@ curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://resources/do
 openviking read viking://resources/docs/api.md
 ```
 
+Reading a directory URI returns its generated L1 overview. Use `ls` when you
+need to inspect or read individual child files.
+
 
 **Response**
 

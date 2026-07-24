@@ -9,6 +9,7 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.service.fs_service import FSService
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -135,6 +136,44 @@ def request_context():
         user=UserIdentifier("default", "ryoma"),
         role=Role.USER,
     )
+
+
+@pytest.mark.asyncio
+async def test_read_directory_returns_sliced_overview(request_context):
+    uri = "viking://resources/docs"
+    directory_error = InvalidArgumentError(
+        f"Cannot read directory as file: {uri}",
+        details={"resource": uri, "expected": "file", "actual": "directory"},
+    )
+    viking_fs = SimpleNamespace(
+        read_file=AsyncMock(side_effect=directory_error),
+        overview=AsyncMock(return_value="summary\ndetails\nfooter\n"),
+    )
+    service = FSService(viking_fs=viking_fs)
+
+    result = await service.read(uri, ctx=request_context, offset=1, limit=1)
+
+    assert result == "details\n"
+    viking_fs.read_file.assert_awaited_once_with(uri, ctx=request_context)
+    viking_fs.overview.assert_awaited_once_with(uri, ctx=request_context)
+
+
+@pytest.mark.asyncio
+async def test_read_reraises_non_directory_invalid_argument(request_context):
+    invalid_error = InvalidArgumentError(
+        "invalid read",
+        details={"expected": "file", "actual": "unsupported"},
+    )
+    viking_fs = SimpleNamespace(
+        read_file=AsyncMock(side_effect=invalid_error),
+        overview=AsyncMock(),
+    )
+    service = FSService(viking_fs=viking_fs)
+
+    with pytest.raises(InvalidArgumentError, match="invalid read"):
+        await service.read("viking://resources/docs.md", ctx=request_context)
+
+    viking_fs.overview.assert_not_awaited()
 
 
 @pytest.mark.asyncio

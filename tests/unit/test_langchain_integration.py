@@ -337,8 +337,8 @@ def test_openviking_read_tool_schema_describes_file_and_directory_contract():
     read_schema = _tool_schema(read_tool)
     content_mode_schema = read_schema["properties"]["content_mode"]
 
-    assert "Directory URIs are not readable" in read_tool.description
-    assert "file/document" in read_schema["properties"]["uris"]["description"]
+    assert "Directory URIs return their generated" in read_tool.description
+    assert "directory" in read_schema["properties"]["uris"]["description"]
     assert "viking_browse" in read_tool.description
     assert _schema_enums(content_mode_schema) == {"abstract", "overview", "read"}
     assert "List child entries" in browse_tool.description
