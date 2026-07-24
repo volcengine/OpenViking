@@ -29,6 +29,7 @@ from openviking.parse.parsers.media.constants import (
     IMAGE_EXTENSIONS,
     VIDEO_EXTENSIONS,
 )
+from openviking.parse.parsers.media.utils import is_mpeg_ts
 from openviking.utils import is_code_hosting_blob_url
 from openviking.utils.network_guard import build_httpx_request_validation_hooks
 from openviking_cli.exceptions import PermissionDeniedError
@@ -740,7 +741,7 @@ class HTTPAccessor(DataAccessor):
             return URLType.DOWNLOAD_AUDIO, ".mp3"
         if sample.startswith(b"\x0b\x77"):
             return URLType.DOWNLOAD_AUDIO, ".ac3"
-        if sample.startswith(b"\x47") and HTTPAccessor._is_mpeg_ts(content):
+        if sample.startswith(b"\x47") and is_mpeg_ts(content):
             return URLType.DOWNLOAD_VIDEO, ".ts"
         if len(sample) >= 12 and sample[4:8] == b"ftyp":
             brand = sample[8:12].lower()
@@ -765,15 +766,6 @@ class HTTPAccessor(DataAccessor):
         ):
             return URLType.DOWNLOAD_DOCUMENT, HTTPAccessor._detect_zip_based_extension(content)
         return URLType.UNKNOWN, None
-
-    @staticmethod
-    def _is_mpeg_ts(content: bytes) -> bool:
-        """Check if content is an MPEG-TS stream by verifying sync bytes."""
-        packet_size = 188
-        min_packets = 3
-        if len(content) < packet_size * min_packets:
-            return False
-        return all(content[i * packet_size] == 0x47 for i in range(min_packets))
 
     @staticmethod
     def _detect_zip_based_extension(content: bytes) -> str:

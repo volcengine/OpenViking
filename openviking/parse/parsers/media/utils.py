@@ -20,6 +20,15 @@ from .constants import AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 logger = get_logger(__name__)
 
 
+def is_mpeg_ts(content: bytes) -> bool:
+    """Check if content is an MPEG-TS stream by verifying sync bytes."""
+    packet_size = 188
+    min_packets = 3
+    if len(content) < packet_size * min_packets:
+        return False
+    return all(content[i * packet_size] == 0x47 for i in range(min_packets))
+
+
 def _is_svg(data: bytes) -> bool:
     """Check if the data is an SVG file."""
     return data[:4] == b"<svg" or (data[:5] == b"<?xml" and b"<svg" in data[:100])

@@ -22,6 +22,8 @@ from openviking.parse.parsers.html import HTMLParser
 from openviking.parse.parsers.legacy_doc import LegacyDocParser
 from openviking.parse.parsers.markdown import MarkdownParser
 from openviking.parse.parsers.media import AudioParser, ImageParser, VideoParser
+from openviking.parse.parsers.media.utils import is_mpeg_ts
+from openviking.parse.parsers.constants import TYPESCRIPT_MPEG_TS_EXTENSION
 from openviking.parse.parsers.pdf import PDFParser
 from openviking.parse.parsers.powerpoint import PowerPointParser
 from openviking.parse.parsers.text import TextParser
@@ -196,6 +198,11 @@ class ParserRegistry:
         """
         path = Path(path)
         ext = path.suffix.lower()
+        if ext == TYPESCRIPT_MPEG_TS_EXTENSION:
+            sample = path.read_bytes()[: 188 * 3]
+            if not is_mpeg_ts(sample):
+                return None
+
         parser_name = self._extension_map.get(ext)
 
         if parser_name:
