@@ -221,6 +221,7 @@ def _generate_plugin_config(
 
     # Build the mount config dict for the primary backend
     mount_config: Dict[str, Any] = dict(primary_plugin_config)
+    mount_config["validate_backend_shape"] = getattr(agfs_config, "validate_backend_shape", True)
 
     # Add multi-write fields if backups are configured
     if backups_config is not None:

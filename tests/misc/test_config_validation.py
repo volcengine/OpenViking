@@ -419,6 +419,24 @@ def test_generate_plugin_config_passes_multiwrite_encryption_flag(tmp_path):
     assert mount_config["primary_encryption_enabled"] is True
 
 
+def test_agfs_backend_shape_validation_defaults_to_enabled():
+    config = AGFSConfig(backend="local")
+
+    assert config.validate_backend_shape is True
+
+
+def test_generate_plugin_config_forwards_backend_shape_validation_opt_out(tmp_path):
+    config = AGFSConfig(
+        path=str(tmp_path),
+        backend="local",
+        validate_backend_shape=False,
+    )
+
+    plugins = _generate_plugin_config(config, tmp_path)
+
+    assert plugins["localfs"]["config"]["validate_backend_shape"] is False
+
+
 def test_generate_plugin_config_materializes_multiwrite_backups(tmp_path):
     """Plugin config generation should normalize backup params while preserving top-level multi-write fields."""
     explicit_backup_dir = tmp_path / "backup-local-no-mkdir"

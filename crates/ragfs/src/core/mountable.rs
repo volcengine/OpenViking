@@ -294,14 +294,16 @@ impl MountableFS {
                 let raw_arc: Arc<dyn FileSystem> = Arc::from(raw);
                 let is_control_plugin = matches!(config.name.as_str(), "queuefs" | "serverinfofs");
                 if !is_control_plugin {
-                    ensure_backend_shape(
-                        &raw_arc,
-                        &config.name,
-                        enc_root_key.is_some() && enc_provider_type.is_some(),
-                        enc_provider_type,
-                        enc_root_key,
-                    )
-                    .await?;
+                    if config.validate_backend_shape {
+                        ensure_backend_shape(
+                            &raw_arc,
+                            &config.name,
+                            enc_root_key.is_some() && enc_provider_type.is_some(),
+                            enc_provider_type,
+                            enc_root_key,
+                        )
+                        .await?;
+                    }
                 }
                 #[cfg(feature = "cache")]
                 let storage_fs = if is_control_plugin {
@@ -1133,6 +1135,10 @@ mod tests {
         reads: Arc<AtomicU64>,
     }
 
+    struct ShapeProbePanicPlugin;
+
+    struct ShapeProbePanicFs;
+
     impl MockPlugin {
         fn new(name: &str) -> Self {
             Self {
@@ -1171,6 +1177,91 @@ mod tests {
 
         fn config_params(&self) -> &[super::super::types::ConfigParameter] {
             &[]
+        }
+    }
+
+    #[async_trait]
+    impl ServicePlugin for ShapeProbePanicPlugin {
+        fn name(&self) -> &str {
+            "shape-probe-panic"
+        }
+
+        fn readme(&self) -> &str {
+            "Filesystem that errors if mount runs legacy shape probing"
+        }
+
+        async fn validate(&self, _config: &PluginConfig) -> Result<()> {
+            Ok(())
+        }
+
+        async fn initialize(&self, _config: PluginConfig) -> Result<Box<dyn FileSystem>> {
+            Ok(Box::new(ShapeProbePanicFs))
+        }
+
+        fn config_params(&self) -> &[super::super::types::ConfigParameter] {
+            &[]
+        }
+    }
+
+    #[async_trait]
+    impl FileSystem for ShapeProbePanicFs {
+        async fn create(&self, _path: &str) -> Result<()> {
+            Ok(())
+        }
+
+        async fn mkdir(&self, _path: &str, _mode: u32) -> Result<()> {
+            Ok(())
+        }
+
+        async fn remove(&self, _path: &str) -> Result<()> {
+            Ok(())
+        }
+
+        async fn remove_all(&self, _path: &str) -> Result<()> {
+            Ok(())
+        }
+
+        async fn read(&self, path: &str, _offset: u64, _size: u64) -> Result<Vec<u8>> {
+            if path == SHAPE_MANIFEST_PATH {
+                return Err(Error::not_found(path));
+            }
+            Ok(b"shape-probe-panic".to_vec())
+        }
+
+        async fn write(
+            &self,
+            _path: &str,
+            data: &[u8],
+            _offset: u64,
+            _flags: WriteFlag,
+        ) -> Result<u64> {
+            Ok(data.len() as u64)
+        }
+
+        async fn read_dir(&self, _path: &str) -> Result<Vec<FileInfo>> {
+            Ok(vec![])
+        }
+
+        async fn stat(&self, path: &str) -> Result<FileInfo> {
+            Ok(FileInfo::new_file(path.to_string(), 0, 0o644))
+        }
+
+        async fn rename(&self, _old_path: &str, _new_path: &str) -> Result<()> {
+            Ok(())
+        }
+
+        async fn chmod(&self, _path: &str, _mode: u32) -> Result<()> {
+            Ok(())
+        }
+
+        async fn tree_directory(
+            &self,
+            _path: &str,
+            _show_hidden: bool,
+            _node_limit: Option<usize>,
+            _level_limit: Option<usize>,
+        ) -> Result<Vec<TreeEntry>> {
+            Err(Error::config("legacy shape probe should be skipped"))
         }
     }
 
@@ -1614,6 +1705,16 @@ mod tests {
         let result = mfs.mount(config).await;
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::MountPointExists(_)));
+    }
+
+    #[tokio::test]
+    async fn mount_can_skip_backend_shape_validation() {
+        let mfs = MountableFS::new();
+        mfs.register_plugin(ShapeProbePanicPlugin).await;
+        let mut config = test_config("shape-probe-panic", "/local");
+        config.validate_backend_shape = false;
+
+        assert!(mfs.mount(config).await.is_ok());
     }
 
     #[tokio::test]

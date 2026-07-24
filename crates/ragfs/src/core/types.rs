@@ -283,6 +283,14 @@ pub struct PluginConfig {
     /// Primary redirect policies
     #[serde(default)]
     pub primary_redirects: Vec<RedirectPolicy>,
+
+    /// Validate backend storage shape during mount.
+    #[serde(default = "default_true")]
+    pub validate_backend_shape: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for PluginConfig {
@@ -296,6 +304,7 @@ impl Default for PluginConfig {
             server_encryption_enabled: false,
             primary_encryption_enabled: false,
             primary_redirects: Vec::new(),
+            validate_backend_shape: true,
         }
     }
 }
@@ -326,6 +335,8 @@ impl PluginConfig {
             Self::take_bool_with_default("server_encryption_enabled", &mut params, false)?;
         let primary_encryption_enabled =
             Self::take_bool_with_default("primary_encryption_enabled", &mut params, false)?;
+        let validate_backend_shape =
+            Self::take_bool_with_default("validate_backend_shape", &mut params, true)?;
         let primary_redirects =
             Self::take_json_with_default("primary_redirects", &mut params, Vec::new())?;
 
@@ -337,6 +348,7 @@ impl PluginConfig {
             server_encryption_enabled,
             primary_encryption_enabled,
             primary_redirects,
+            validate_backend_shape,
         })
     }
 
@@ -841,6 +853,10 @@ mod tests {
             ConfigValue::Bool(true),
         );
         valid_params.insert(
+            "validate_backend_shape".to_string(),
+            ConfigValue::Bool(false),
+        );
+        valid_params.insert(
             "primary_redirects".to_string(),
             ConfigValue::Json(serde_json::json!([
                 {
@@ -855,6 +871,7 @@ mod tests {
         assert!(config.backups.is_some());
         assert!(config.server_encryption_enabled);
         assert!(config.primary_encryption_enabled);
+        assert!(!config.validate_backend_shape);
         assert_eq!(config.primary_redirects.len(), 1);
         assert_eq!(
             config.params.get("root_path"),
@@ -863,6 +880,7 @@ mod tests {
         assert!(!config.params.contains_key("backups"));
         assert!(!config.params.contains_key("server_encryption_enabled"));
         assert!(!config.params.contains_key("primary_encryption_enabled"));
+        assert!(!config.params.contains_key("validate_backend_shape"));
         assert!(!config.params.contains_key("primary_redirects"));
 
         for (params, expected_message) in [

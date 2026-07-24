@@ -62,14 +62,16 @@ pub async fn build_multi_write_fs(
     validate_primary_encryption_flags(config, global_encryption_enabled)?;
 
     let primary_raw = init_backend_plugin(registry, &config.name, &config.params).await?;
-    ensure_backend_shape(
-        &primary_raw,
-        &config.name,
-        global_encryption_enabled,
-        build_ctx.enc_provider_type,
-        build_ctx.enc_root_key,
-    )
-    .await?;
+    if config.validate_backend_shape {
+        ensure_backend_shape(
+            &primary_raw,
+            &config.name,
+            global_encryption_enabled,
+            build_ctx.enc_provider_type,
+            build_ctx.enc_root_key,
+        )
+        .await?;
+    }
     let primary_backend: Arc<dyn FileSystem> = if global_encryption_enabled {
         if !supports_encrypted_publish(&config.name) {
             return Err(Error::config(format!(
@@ -114,22 +116,24 @@ pub async fn build_multi_write_fs(
                 .as_ref()
                 .map(|encryption| encryption.enabled)
                 .unwrap_or(true);
-        ensure_backend_shape(
-            &backup_raw,
-            &item.backend,
-            backup_encrypted,
-            if backup_encrypted {
-                build_ctx.enc_provider_type
-            } else {
-                None
-            },
-            if backup_encrypted {
-                build_ctx.enc_root_key
-            } else {
-                None
-            },
-        )
-        .await?;
+        if config.validate_backend_shape {
+            ensure_backend_shape(
+                &backup_raw,
+                &item.backend,
+                backup_encrypted,
+                if backup_encrypted {
+                    build_ctx.enc_provider_type
+                } else {
+                    None
+                },
+                if backup_encrypted {
+                    build_ctx.enc_root_key
+                } else {
+                    None
+                },
+            )
+            .await?;
+        }
 
         let backup_backend: Arc<dyn FileSystem> = if backup_encrypted {
             if !supports_encrypted_publish(&item.backend) {

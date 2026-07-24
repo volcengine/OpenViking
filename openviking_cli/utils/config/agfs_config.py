@@ -364,6 +364,14 @@ class AGFSConfig(BaseModel):
 
     timeout: int = Field(default=10, description="RAGFS request timeout (seconds)")
 
+    validate_backend_shape: bool = Field(
+        default=True,
+        description=(
+            "Validate the mounted backend storage shape on startup. Disable to skip the "
+            "legacy full-backend scan when backend_meta.json is absent."
+        ),
+    )
+
     queue_db_path: Optional[str] = Field(
         default=None,
         description="Override path of the queuefs sqlite database file. "
