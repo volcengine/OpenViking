@@ -350,6 +350,81 @@ ov session get a1b2c3d4
 
 ---
 
+### list_tool_results()
+
+List large tool results externalized from a session.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `session_id` | string | Yes | - | Session ID |
+| `tool_name` | string | No | - | Filter by tool name |
+| `limit` | integer | No | `50` | Maximum results |
+
+**HTTP API**
+
+```http
+GET /api/v1/sessions/{session_id}/tool-results
+```
+
+```bash
+curl --get http://localhost:1933/api/v1/sessions/session-id/tool-results \
+  -H "X-API-Key: your-key" \
+  --data-urlencode "tool_name=search" \
+  --data-urlencode "limit=50"
+```
+
+### read_tool_result()
+
+Read one externalized tool result by Unicode character range.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `session_id` | string | Yes | - | Session ID |
+| `tool_result_id` | string | Yes | - | Tool-result ID |
+| `offset` | integer | No | `0` | Starting character offset |
+| `limit` | integer | No | `20000` | Maximum characters; `-1` reads to the end |
+| `include_metadata` | boolean | No | `true` | Include metadata in the response |
+
+**HTTP API**
+
+```http
+GET /api/v1/sessions/{session_id}/tool-results/{tool_result_id}
+```
+
+```bash
+curl --get http://localhost:1933/api/v1/sessions/session-id/tool-results/tool-result-id \
+  -H "X-API-Key: your-key" \
+  --data-urlencode "offset=0" \
+  --data-urlencode "limit=20000"
+```
+
+### search_tool_result()
+
+Search within one externalized tool result and return context around each match.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `q` | string | Yes | - | Search text |
+| `limit` | integer | No | `20` | Maximum matches |
+| `context_chars` | integer | No | `300` | Context characters around each match |
+
+**HTTP API**
+
+```http
+GET /api/v1/sessions/{session_id}/tool-results/{tool_result_id}/search?q={query}
+```
+
+```bash
+curl --get http://localhost:1933/api/v1/sessions/session-id/tool-results/tool-result-id/search \
+  -H "X-API-Key: your-key" \
+  --data-urlencode "q=authentication" \
+  --data-urlencode "limit=20"
+```
+
+These endpoints are currently used by the Server and Web Studio. The public SDKs and CLI do not wrap them, so the sections above show only the HTTP tab.
+
+---
+
 ### get_session_context()
 
 #### 1. API Implementation Introduction
@@ -1217,228 +1292,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/extract \
 
 The endpoint returns the extracted memory write results as a JSON list. The exact item shape depends on which memories were produced for that session.
 
----
-
-### get_task()
-
-#### 1. API Implementation Introduction
-
-Query background task status for APIs that return `task_id`, such as session commit, `add_resource`, and admin reindex.
-
-**Task Statuses:**
-- `pending`: Task waiting to execute
-- `running`: Task in progress
-- `completed`: Task successfully completed
-- `failed`: Task failed
-
-**Code Entries:**
-- `openviking/server/routers/tasks.py:get_task()` - HTTP route
-
-Task records are persisted in AGFS and can be queried after server restart, subject to task retention cleanup.
-
-#### 2. Interface and Parameter Description
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| task_id | str | Yes | - | Task ID returned by a background API |
-
-#### 3. Usage Examples
-
-**HTTP API**
-
-```http
-GET /api/v1/tasks/{task_id}
-```
-
-```bash
-curl -X GET http://localhost:1933/api/v1/tasks/uuid-xxx \
-  -H "X-API-Key: your-key"
-```
-
-**Python SDK**
-
-```python
-import openviking as ov
-
-client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
-
-task = await client.get_task(task_id="uuid-xxx")
-print(f"Status: {task['status']}")
-```
-
-**TypeScript SDK**
-
-```typescript
-console.log(await client.getTask("task-id"));
-```
-
-**Go SDK**
-
-```go
-task, err := client.GetTask(ctx, "uuid-xxx")
-if err != nil {
-    return err
-}
-if task != nil {
-    fmt.Println(task["status"])
-}
-```
-
-**Response Example (resource import in progress)**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "task_id": "uuid-xxx",
-    "task_type": "add_resource",
-    "status": "running",
-    "resource_id": "viking://resources/guide",
-    "stage": "processing_queue"
-  }
-}
-```
-
-`stage` is nullable. Git repository resource import tasks may report `queued`, `fetching`, `parsing`, `finalizing`, or `processing_queue`; other task types may leave it as `null`. Live queue counters are intentionally not part of task status; use observer queue APIs for live counts, or read `result.queue_status` after completion.
-
-**Response Example (completed)**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "task_id": "uuid-xxx",
-    "task_type": "session_commit",
-    "status": "completed",
-    "result": {
-      "session_id": "a1b2c3d4",
-      "archive_uri": "viking://user/alice/sessions/a1b2c3d4/history/archive_001",
-      "memory_diff_uri": "viking://user/alice/sessions/a1b2c3d4/history/archive_001/memory_diff.json",
-      "memories_extracted": {
-        "profile": 1,
-        "preferences": 2,
-        "entities": 1,
-        "cases": 1
-      },
-      "active_count_updated": 2,
-      "token_usage": {
-        "llm": {
-          "prompt_tokens": 5200,
-          "completion_tokens": 1800,
-          "total_tokens": 7000
-        },
-        "embedding": {
-          "total_tokens": 1500
-        },
-        "total": {
-          "total_tokens": 8500
-        }
-      }
-    }
-  }
-}
-```
-
-`memories_extracted` in the completed task result reports per-category counts for this commit only. Sum its values when you want the total for this commit.
-
----
-
-### list_tasks()
-
-#### 1. API Implementation Introduction
-
-List background tasks visible to the current caller, supporting filtering by type, status, resource.
-
-**Code Entries:**
-- `openviking/server/routers/tasks.py:list_tasks()` - HTTP route
-- `openviking_cli/client/base.py:BaseClient.list_tasks()` - Python SDK
-
-#### 2. Interface and Parameter Description
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| task_type | str | No | None | Filter by task type, for example `session_commit` |
-| status | str | No | None | Filter by task status: `pending`, `running`, `completed`, `failed` |
-| resource_id | str | No | None | Filter by task resource ID, for example a session ID |
-| limit | int | No | 50 | Maximum number of task records to return |
-
-#### 3. Usage Examples
-
-**HTTP API**
-
-```http
-GET /api/v1/tasks?task_type=session_commit&status=running&limit=20
-```
-
-```bash
-curl -X GET "http://localhost:1933/api/v1/tasks?task_type=session_commit&status=running&limit=20" \
-  -H "X-API-Key: your-key"
-```
-
-**Python SDK**
-
-```python
-import openviking as ov
-
-client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
-
-tasks = await client.list_tasks(
-    task_type="session_commit",
-    status="running",
-    limit=20,
-)
-for task in tasks:
-    print(task["task_id"], task["status"])
-```
-
-**TypeScript SDK**
-
-```typescript
-console.log(await client.listTasks());
-```
-
-**Go SDK**
-
-```go
-tasks, err := client.ListTasks(ctx, &openviking.ListTasksOptions{
-    TaskType: "session_commit",
-    Status:   "running",
-    Limit:    20,
-})
-if err != nil {
-    return err
-}
-for _, task := range tasks {
-    fmt.Println(task)
-}
-```
-
-**Response Example**
-
-```json
-{
-  "status": "ok",
-  "result": [
-    {
-      "task_id": "uuid-xxx",
-      "task_type": "session_commit",
-      "status": "running",
-      "resource_id": "a1b2c3d4",
-      "created_at": 1770000000.0,
-      "updated_at": 1770000005.0,
-      "result": null,
-      "error": null,
-      "stage": null
-    }
-  ]
-}
-```
-
----
+<a id="get_task"></a><a id="list_tasks"></a>
 
 ## Session Properties
 
@@ -1529,27 +1383,7 @@ When long-term memory extraction runs successfully, the commit writes a `memory_
 
 An empty `memory_diff.json` (all counts zero) is written when long-term memory extraction runs but produces no memory operations.
 
----
-
-## Built-in Memory Types
-
-| Category | Location | Description |
-|----------|----------|-------------|
-| profile | `user/memories/profile.md` | User profile information |
-| preferences | `user/memories/preferences/` | User preferences by topic |
-| entities | `user/memories/entities/` | Important entities (people, projects) |
-| events | `user/memories/events/` | Significant events |
-| identity | `user/memories/identity.md` | Assistant identity and self-introduction |
-| soul | `user/memories/soul.md` | Assistant principles, boundaries, style, and continuity |
-| cases | `user/memories/cases/` | Trainable and evaluable task cases |
-| trajectories | `user/memories/trajectories/` | Reusable operation contracts |
-| experiences | `user/memories/experiences/` | Reusable execution insights |
-| tools | `user/memories/tools/` | Tool usage knowledge and best practices |
-| skills | `user/memories/skills/` | Skill execution knowledge and workflow strategies |
-
-These are the enabled built-in types. Deployments can extend or override them with custom memory templates.
-
----
+<a id="built-in-memory-types"></a>
 
 ## Full Example
 
@@ -1670,5 +1504,7 @@ results = await client.search(query, session_id=session_id)
 ## Related Documentation
 
 - [Context Types](../concepts/02-context-types.md) - Memory types
+- [Memory](16-memory.md) - memory types and type-quota recall
 - [Retrieval](06-retrieval.md) - Search with session
 - [Resources](02-resources.md) - Resource management
+- [Background Tasks](17-tasks.md) - track commit tasks

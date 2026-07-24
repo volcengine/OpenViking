@@ -142,6 +142,13 @@ When an operation presents all transports together, prefer this order:
 - CLI example
 - Response example
 
+Example tabs are generated from bold labels. Put each invocation label in its own
+paragraph and use one of these exact forms: `**Python SDK**`, `**TypeScript SDK**`,
+`**Go SDK**`, `**HTTP API**`, or `**CLI**`. Show only surfaces that are actually
+implemented. If an SDK or CLI does not expose the capability, omit that tab and
+briefly identify the available alternative. Do not wrap a handwritten HTTP request
+and present it as a nonexistent SDK method.
+
 For an existing operation with a workflow-specific structure, keep the local
 structure stable and place TypeScript next to the other SDK examples.
 
@@ -256,5 +263,6 @@ When adding or modifying API documentation, please check:
 - [ ] Implementation introduction is clear and code entry paths are correct
 - [ ] Parameter table is complete and accurate
 - [ ] Example code is concise and runnable
+- [ ] Invocation examples use fixed bold labels and every SDK/CLI tab maps to a real implementation
 - [ ] HTTP method and path are correct
 - [ ] Response example matches actual output

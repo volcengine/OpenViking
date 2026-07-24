@@ -577,10 +577,24 @@ _, _ = validated, updated
 **HTTP API**：
 
 ```bash
+# 校验技能数据
 curl -X POST http://localhost:1933/api/v1/skills/validate \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{"data": {"name": "search-web", "description": "..."}}'
+
+# 使用新的技能内容替换现有技能
+curl -X PUT http://localhost:1933/api/v1/skills/search-web \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "data": {
+      "name": "search-web",
+      "description": "Search the web for current information",
+      "content": "# search-web\n\nUpdated instructions."
+    },
+    "wait": true
+  }'
 ```
 
 ### 删除技能

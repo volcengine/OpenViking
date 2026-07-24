@@ -1052,49 +1052,7 @@ ov --sudo admin migrate --cleanup --output json
 
 ---
 
-### user add-location settings
-
-Per-user add defaults are stored as user config under
-`viking://user/{user_id}/settings/user_config.json`. They affect add calls that
-omit explicit targets:
-
-1. `add_resource`: explicit `to` / `parent` wins, then user
-   `add_targets.resource_uri`, then
-   `server.user_config_defaults.add_targets.resource_uri`, then legacy behavior.
-2. `add_skill`: explicit `target_uri` wins, then user
-   `add_targets.skill_uri`, then
-   `server.user_config_defaults.add_targets.skill_uri`, then legacy behavior.
-
-#### HTTP API
-
-```
-GET /api/v1/user-settings/add-locations
-PATCH /api/v1/user-settings/add-locations
-DELETE /api/v1/user-settings/add-locations
-```
-
-`PATCH` accepts the add-target fields directly. Passing `null` clears one field;
-deleting the settings clears the whole per-user override.
-
-```bash
-curl -X PATCH http://localhost:1933/api/v1/user-settings/add-locations \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: <user-key>" \
-  -d '{"resource_uri": "viking://user/resources/project-a"}'
-```
-
-`resource_uri` must be a writable resource directory URI:
-`viking://resources` or `viking://resources/...`,
-`viking://user/resources` or `viking://user/resources/...`,
-`viking://user/{user_id}/resources` or
-`viking://user/{user_id}/resources/...`, or
-`viking://user/{user_id}/peers/{peer_id}/resources` or
-`viking://user/{user_id}/peers/{peer_id}/resources/...`. `skill_uri` must be
-`viking://user/skills` or `viking://agent/skills`; explicit
-`viking://user/{user_id}/skills` is not accepted in v1. Invalid configured
-values are rejected; OpenViking does not silently fall back to another target.
-
----
+<a id="user-add-location-settings"></a>
 
 ## Full Example
 

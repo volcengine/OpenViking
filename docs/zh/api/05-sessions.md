@@ -1,4 +1,4 @@
-# 会话和记忆管理
+# 会话
 
 会话用于管理对话状态、跟踪上下文使用情况，并提取长期记忆。会话采用分层存储（L0/L1/L2）来优化 token 使用：
 - L0（abstract）: 会话概览摘要
@@ -347,6 +347,81 @@ ov session get a1b2c3d4
   }
 }
 ```
+
+---
+
+### list_tool_results()
+
+列出会话中因体积较大而外置保存的工具结果。
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `session_id` | string | 是 | - | 会话 ID |
+| `tool_name` | string | 否 | - | 按工具名过滤 |
+| `limit` | integer | 否 | `50` | 最大返回数量 |
+
+**HTTP API**
+
+```http
+GET /api/v1/sessions/{session_id}/tool-results
+```
+
+```bash
+curl --get http://localhost:1933/api/v1/sessions/session-id/tool-results \
+  -H "X-API-Key: your-key" \
+  --data-urlencode "tool_name=search" \
+  --data-urlencode "limit=50"
+```
+
+### read_tool_result()
+
+按 Unicode 字符范围读取一个外置工具结果。
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `session_id` | string | 是 | - | 会话 ID |
+| `tool_result_id` | string | 是 | - | 工具结果 ID |
+| `offset` | integer | 否 | `0` | 起始字符位置 |
+| `limit` | integer | 否 | `20000` | 最大字符数；`-1` 表示读取到结尾 |
+| `include_metadata` | boolean | 否 | `true` | 是否返回元数据 |
+
+**HTTP API**
+
+```http
+GET /api/v1/sessions/{session_id}/tool-results/{tool_result_id}
+```
+
+```bash
+curl --get http://localhost:1933/api/v1/sessions/session-id/tool-results/tool-result-id \
+  -H "X-API-Key: your-key" \
+  --data-urlencode "offset=0" \
+  --data-urlencode "limit=20000"
+```
+
+### search_tool_result()
+
+在一个外置工具结果中搜索文本，并返回命中位置附近的上下文。
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `q` | string | 是 | - | 搜索文本 |
+| `limit` | integer | 否 | `20` | 最大命中数 |
+| `context_chars` | integer | 否 | `300` | 每个命中前后的上下文字符数 |
+
+**HTTP API**
+
+```http
+GET /api/v1/sessions/{session_id}/tool-results/{tool_result_id}/search?q={query}
+```
+
+```bash
+curl --get http://localhost:1933/api/v1/sessions/session-id/tool-results/tool-result-id/search \
+  -H "X-API-Key: your-key" \
+  --data-urlencode "q=authentication" \
+  --data-urlencode "limit=20"
+```
+
+外置工具结果端点当前由 Server 和 Web Studio 使用，公共 SDK 与 CLI 暂未提供封装，因此以上小节只展示 HTTP Tab。
 
 ---
 
@@ -1191,226 +1266,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/extract \
 
 该接口会直接返回本次提取产生的记忆写入结果列表。列表项的具体结构取决于该会话实际提取出了哪些记忆。
 
----
-
-### get_task()
-
-#### 1. API 实现介绍
-
-查询返回 `task_id` 的后台任务状态，例如 session commit、`add_resource` 和 admin reindex。
-
-**任务状态**：
-- `pending`: 任务等待执行
-- `running`: 任务执行中
-- `completed`: 任务成功完成
-- `failed`: 任务失败
-
-**代码入口**：
-- `openviking/server/routers/tasks.py:get_task()` - HTTP 路由
-
-任务记录会持久化到 AGFS，服务重启后仍可查询，但仍受任务保留清理策略影响。
-
-#### 2. 接口和参数说明
-
-**参数**
-
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| task_id | str | 是 | - | 后台 API 返回的任务 ID |
-
-#### 3. 使用示例
-
-**HTTP API**
-
-```http
-GET /api/v1/tasks/{task_id}
-```
-
-```bash
-curl -X GET http://localhost:1933/api/v1/tasks/uuid-xxx \
-  -H "X-API-Key: your-key"
-```
-
-**Python SDK**
-
-```python
-import openviking as ov
-
-client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
-
-task = await client.get_task(task_id="uuid-xxx")
-print(f"Status: {task['status']}")
-```
-
-**TypeScript SDK**
-
-```typescript
-console.log(await client.getTask("task-id"));
-```
-
-**Go SDK**
-
-```go
-task, err := client.GetTask(ctx, "uuid-xxx")
-if err != nil {
-    return err
-}
-if task != nil {
-    fmt.Println(task["status"])
-}
-```
-
-**响应示例（资源导入进行中）**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "task_id": "uuid-xxx",
-    "task_type": "add_resource",
-    "status": "running",
-    "resource_id": "viking://resources/guide",
-    "stage": "processing_queue"
-  }
-}
-```
-
-`stage` 可以为 `null`。Git 仓库资源导入任务可能报告 `queued`、`fetching`、`parsing`、`finalizing`、`processing_queue`；其他任务类型可能将其留空。实时队列计数不会出现在任务状态中；需要实时数量时使用 observer queue，任务完成后可读取 `result.queue_status`。
-
-**响应示例（完成）**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "task_id": "uuid-xxx",
-    "task_type": "session_commit",
-    "status": "completed",
-    "result": {
-      "session_id": "a1b2c3d4",
-      "archive_uri": "viking://user/alice/sessions/a1b2c3d4/history/archive_001",
-      "memory_diff_uri": "viking://user/alice/sessions/a1b2c3d4/history/archive_001/memory_diff.json",
-      "memories_extracted": {
-        "profile": 1,
-        "preferences": 2,
-        "entities": 1,
-        "cases": 1
-      },
-      "active_count_updated": 2,
-      "token_usage": {
-        "llm": {
-          "prompt_tokens": 5200,
-          "completion_tokens": 1800,
-          "total_tokens": 7000
-        },
-        "embedding": {
-          "total_tokens": 1500
-        },
-        "total": {
-          "total_tokens": 8500
-        }
-      }
-    }
-  }
-}
-```
-
----
-
-### list_tasks()
-
-#### 1. API 实现介绍
-
-列出当前调用方可见的后台任务，支持按类型、状态、资源过滤。
-
-**代码入口**：
-- `openviking/server/routers/tasks.py:list_tasks()` - HTTP 路由
-- `openviking_cli/client/base.py:BaseClient.list_tasks()` - Python SDK
-
-#### 2. 接口和参数说明
-
-**参数**
-
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| task_type | str | 否 | None | 按任务类型过滤，例如 `session_commit` |
-| status | str | 否 | None | 按任务状态过滤：`pending`、`running`、`completed`、`failed` |
-| resource_id | str | 否 | None | 按资源 ID 过滤，例如会话 ID |
-| limit | int | 否 | 50 | 最多返回的任务条数 |
-
-#### 3. 使用示例
-
-**HTTP API**
-
-```http
-GET /api/v1/tasks?task_type=session_commit&status=running&limit=20
-```
-
-```bash
-curl -X GET "http://localhost:1933/api/v1/tasks?task_type=session_commit&status=running&limit=20" \
-  -H "X-API-Key: your-key"
-```
-
-**Python SDK**
-
-```python
-import openviking as ov
-
-client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
-
-tasks = await client.list_tasks(
-    task_type="session_commit",
-    status="running",
-    limit=20,
-)
-for task in tasks:
-    print(task["task_id"], task["status"])
-```
-
-**TypeScript SDK**
-
-```typescript
-console.log(await client.listTasks());
-```
-
-**Go SDK**
-
-```go
-tasks, err := client.ListTasks(ctx, &openviking.ListTasksOptions{
-    TaskType: "session_commit",
-    Status:   "running",
-    Limit:    20,
-})
-if err != nil {
-    return err
-}
-for _, task := range tasks {
-    fmt.Println(task)
-}
-```
-
-**响应示例**
-
-```json
-{
-  "status": "ok",
-  "result": [
-    {
-      "task_id": "uuid-xxx",
-      "task_type": "session_commit",
-      "status": "running",
-      "resource_id": "a1b2c3d4",
-      "created_at": 1770000000.0,
-      "updated_at": 1770000005.0,
-      "result": null,
-      "error": null,
-      "stage": null
-    }
-  ]
-}
-```
-
----
+<a id="get_task"></a><a id="list_tasks"></a>
 
 ## 会话属性
 
@@ -1501,27 +1357,7 @@ viking://user/{user_id}/sessions/{session_id}/
 
 如果长记忆抽取已运行但没有产生记忆操作，也会写入空结构的 `memory_diff.json`（所有计数为零）。
 
----
-
-## 内置记忆类型
-
-| 分类 | 位置 | 说明 |
-|------|------|------|
-| profile | `user/memories/profile.md` | 用户个人信息 |
-| preferences | `user/memories/preferences/` | 按主题分类的用户偏好 |
-| entities | `user/memories/entities/` | 重要实体（人物、项目等） |
-| events | `user/memories/events/` | 重要事件 |
-| identity | `user/memories/identity.md` | 助手身份与自我介绍 |
-| soul | `user/memories/soul.md` | 助手原则、边界、风格和连续性 |
-| cases | `user/memories/cases/` | 可训练、可评估的任务案例 |
-| trajectories | `user/memories/trajectories/` | 可复用的操作契约 |
-| experiences | `user/memories/experiences/` | 可复用的执行经验 |
-| tools | `user/memories/tools/` | 工具使用经验与最佳实践 |
-| skills | `user/memories/skills/` | 技能执行经验与工作流策略 |
-
-以上是当前启用的内置类型；部署可以通过自定义记忆模板扩展或覆盖。
-
----
+<a id="内置记忆类型"></a>
 
 ## 完整示例
 
@@ -1642,5 +1478,7 @@ results = await client.search(query, session_id=session_id)
 ## 相关文档
 
 - [上下文类型](../concepts/02-context-types.md) - 记忆类型
+- [记忆](16-memory.md) - 记忆类型与类型配额召回
 - [检索](06-retrieval.md) - 结合会话进行搜索
 - [资源管理](02-resources.md) - 资源管理
+- [后台任务](17-tasks.md) - 跟踪 commit 任务
