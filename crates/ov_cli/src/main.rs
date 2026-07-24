@@ -92,7 +92,32 @@ impl CliContext {
     }
 
     pub fn get_client_with_timeout(&self, timeout_secs: Option<f64>) -> client::HttpClient {
+        self.get_client_with_timeout_and_extra_header(timeout_secs, None)
+    }
+
+    pub(crate) fn get_client_with_extra_header(
+        &self,
+        name: &str,
+        value: &str,
+    ) -> client::HttpClient {
+        self.get_client_with_timeout_and_extra_header(
+            None,
+            Some((name.to_string(), value.to_string())),
+        )
+    }
+
+    fn get_client_with_timeout_and_extra_header(
+        &self,
+        timeout_secs: Option<f64>,
+        extra_header: Option<(String, String)>,
+    ) -> client::HttpClient {
         let auth = self.config.effective_auth(self.sudo);
+        let mut extra_headers = self.config.effective_extra_headers().unwrap_or_default();
+        if let Some((name, value)) = extra_header {
+            extra_headers.retain(|existing, _| !existing.eq_ignore_ascii_case(&name));
+            extra_headers.insert(name, value);
+        }
+        let extra_headers = (!extra_headers.is_empty()).then_some(extra_headers);
         client::HttpClient::new(
             &self.config.url,
             auth.api_key,
@@ -101,7 +126,7 @@ impl CliContext {
             self.config.effective_actor_peer_id(),
             timeout_secs.unwrap_or(self.config.timeout),
             self.profile.unwrap_or(self.config.profile),
-            self.config.effective_extra_headers(),
+            extra_headers,
         )
         .with_gateway_token(self.config.effective_gateway_token())
     }

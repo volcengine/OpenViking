@@ -220,15 +220,22 @@ When you need to perform admin commands (`admin`, `system`, `reindex`), use the 
 # List all accounts (requires root privileges)
 ov --sudo admin list-accounts
 
+# Reindex content with an ADMIN role assertion in trusted mode
+ov --sudo reindex viking://resources
+
 # System commands
 ov --sudo system status
 ```
 
 The `--sudo` flag:
-- Only works with management/system commands: `admin`, `system`
+- Only works with management/system commands: `admin`, `system`, `reindex`, and task status/list
 - Will error if used with non-admin commands
 - Will error if `root_api_key` is not configured in `ovcli.conf`
 - Uses `root_api_key` instead of `api_key` for the request
+
+For `reindex` in trusted mode, `--sudo` also asserts the `admin` role on the
+content request. The configured `account` and `user` remain the request
+identity; trusted role assertion does not grant the unrestricted ROOT role.
 
 ### Tenant Data Access
 
