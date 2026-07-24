@@ -8,20 +8,24 @@ This is the DataAccessor layer extracted from CodeRepositoryParser.
 """
 
 import asyncio
+import base64
 import os
+import re
 import shutil
 import stat
 import tempfile
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any, Optional, Tuple, Union
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import quote, unquote, urljoin, urlparse
 
 from openviking.utils import is_github_url, is_gitlab_url, parse_code_hosting_url
 from openviking.utils.code_hosting_utils import (
     _domain_matches,
     _extract_azure_devops_repo_parts,
+    _extract_gitlab_repo_parts,
     is_code_hosting_url,
     is_git_repo_url,
     validate_git_ssh_uri,
@@ -32,6 +36,37 @@ from openviking_cli.utils.logger import get_logger
 from .base import DataAccessor, LocalResource, SourceType
 
 logger = get_logger(__name__)
+
+
+def _url_origin(url: str) -> tuple[str, str, Optional[int]]:
+    parsed = urlparse(url)
+    if not parsed.scheme or parsed.hostname is None:
+        raise ValueError("URL must include a scheme and host")
+    scheme = parsed.scheme.lower()
+    port = parsed.port
+    if port is None:
+        port = {"http": 80, "https": 443}.get(scheme)
+    return scheme, parsed.hostname.lower(), port
+
+
+class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Reject redirects that would forward an authenticated request off-origin."""
+
+    def __init__(self, url: str):
+        self._allowed_origin = _url_origin(url)
+        super().__init__()
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        redirect_url = urljoin(req.full_url, newurl)
+        if _url_origin(redirect_url) != self._allowed_origin:
+            raise urllib.error.HTTPError(
+                req.full_url,
+                code,
+                "Refusing cross-origin redirect for authenticated GitLab archive request",
+                headers,
+                fp,
+            )
+        return super().redirect_request(req, fp, code, msg, headers, redirect_url)
 
 
 class GitAccessor(DataAccessor):
@@ -97,6 +132,7 @@ class GitAccessor(DataAccessor):
             LocalResource pointing to the local directory
         """
         source_str = str(source)
+        public_source = self._redact_url_credentials(source_str)
         temp_local_dir = None
         branch = kwargs.get("branch") or kwargs.get("ref")
         commit = kwargs.get("commit")
@@ -195,14 +231,17 @@ class GitAccessor(DataAccessor):
             return LocalResource(
                 path=local_dir,
                 source_type=SourceType.GIT,
-                original_source=source_str,  # Full original URL (critical for TreeBuilder!)
+                original_source=public_source,
                 meta=meta,
                 is_temporary=True,
             )
 
         except Exception as e:
+            public_error = self._redact_credentials_in_text(str(e))
             logger.error(
-                f"[GitAccessor] Failed to access git repository {source}: {e}", exc_info=True
+                f"[GitAccessor] Failed to access git repository {public_source}: {public_error}",
+                # A traceback can repeat credential-bearing exception text.
+                exc_info=public_source == source_str,
             )
             # Clean up on error
             if temp_local_dir and os.path.exists(temp_local_dir):
@@ -282,11 +321,45 @@ class GitAccessor(DataAccessor):
                 if azure_repo_parts:
                     base_parts = path_parts[: len(azure_repo_parts) + 1]
 
-            if _domain_matches(parsed, config.code.github_domains + config.code.gitlab_domains):
+            if _domain_matches(parsed, config.code.github_domains):
                 base_parts = path_parts[:2]
+            elif _domain_matches(parsed, config.code.gitlab_domains):
+                gitlab_repo_parts = _extract_gitlab_repo_parts(path_parts)
+                base_parts = gitlab_repo_parts or path_parts[:2]
             base_path = "/" + "/".join(base_parts)
             return parsed._replace(path=base_path, query="", fragment="").geturl()
         return url
+
+    @staticmethod
+    def _redact_url_credentials(url: str) -> str:
+        """Remove URL userinfo before storing or logging a repository source."""
+        if not url.startswith(("http://", "https://", "git://", "ssh://")):
+            return url
+        parsed = urlparse(url)
+        if "@" not in parsed.netloc:
+            return url
+        # ``ssh://git@host/...`` carries a transport username, not a secret.
+        # Dropping it changes which account Git uses and can break otherwise
+        # valid SSH clone URLs. Password-bearing SSH URLs are still redacted.
+        if parsed.scheme == "ssh" and parsed.password is None:
+            return url
+        return parsed._replace(netloc=parsed.netloc.rsplit("@", 1)[-1]).geturl()
+
+    @staticmethod
+    def _redact_credentials_in_text(text: str) -> str:
+        """Remove HTTP/Git/SSH URL userinfo embedded in diagnostic text."""
+        redacted = re.sub(r"(?P<scheme>(?:https?|git|ssh)://)[^/@\s]+@", r"\g<scheme>", text)
+        return re.sub(
+            r"(?i)(authorization:\s*(?:basic|bearer)\s+)\S+",
+            r"\1[REDACTED]",
+            redacted,
+        )
+
+    @staticmethod
+    def _validate_http_credential(value: str, label: str) -> None:
+        """Reject control characters before a credential reaches an HTTP header."""
+        if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+            raise ValueError(f"Invalid control character in {label}")
 
     def _get_repo_name(self, url: str) -> str:
         """Get repository name with organization for GitHub/GitLab URLs.
@@ -317,11 +390,17 @@ class GitAccessor(DataAccessor):
         name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
         return name or "repository"
 
-    async def _run_git(self, args: list[str], cwd: Optional[str] = None) -> str:
+    async def _run_git(
+        self,
+        args: list[str],
+        cwd: Optional[str] = None,
+        env: Optional[dict[str, str]] = None,
+    ) -> str:
         """Run a git command."""
         proc = await asyncio.create_subprocess_exec(
             *args,
             cwd=cwd,
+            env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -337,7 +416,8 @@ class GitAccessor(DataAccessor):
                 user_msg = (
                     "Git command failed: authentication error. Check your SSH keys or credentials."
                 )
-            logger.warning(f"[GitAccessor] {user_msg} Details: {error_msg}")
+            public_error = self._redact_credentials_in_text(error_msg)
+            logger.warning(f"[GitAccessor] {user_msg} Details: {public_error}")
             raise RuntimeError(user_msg)
         return stdout.decode().strip()
 
@@ -368,59 +448,114 @@ class GitAccessor(DataAccessor):
     ) -> str:
         """Clone a git repository into target_dir; return the repo name."""
         name = self._get_repo_name(url)
-        logger.info(f"[GitAccessor] Cloning {url} to {target_dir}...")
+        public_url = self._redact_url_credentials(url)
+        logger.info(f"[GitAccessor] Cloning {public_url} to {target_dir}...")
 
-        clone_args = [
-            "git",
-            "clone",
-            "--depth",
-            "1",
-            "--no-recurse-submodules",
-        ]
-        if branch and not commit:
-            clone_args.extend(["--branch", branch])
-        clone_args.extend([url, target_dir])
-        await self._run_git(clone_args)
+        git_env = None
+        auth_config_path = None
+        try:
+            parsed = urlparse(url)
+            if (
+                parsed.scheme in ("http", "https")
+                and parsed.username is not None
+                and parsed.password is None
+            ):
+                raise ValueError(
+                    "HTTP(S) repository URLs with a username must also include a password"
+                )
+            if parsed.username is not None and parsed.password is not None:
+                username = unquote(parsed.username)
+                password = unquote(parsed.password)
+                self._validate_http_credential(username, "repository username")
+                self._validate_http_credential(password, "repository password")
 
-        if commit:
-            try:
-                await self._run_git(["git", "-C", target_dir, "fetch", "origin", commit])
-            except RuntimeError:
+                credentials = base64.b64encode(f"{username}:{password}".encode()).decode()
+                public_parsed = urlparse(public_url)
+                auth_scope = f"{public_parsed.scheme}://{public_parsed.netloc}/"
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    prefix="ov_git_auth_",
+                    suffix=".config",
+                    delete=False,
+                ) as auth_config:
+                    auth_config_path = auth_config.name
+                    auth_config.write(
+                        f'[http "{auth_scope}"]\n'
+                        f"\textraHeader = Authorization: Basic {credentials}\n"
+                    )
+                os.chmod(auth_config_path, stat.S_IRUSR | stat.S_IWUSR)
+                git_env = os.environ.copy()
+                try:
+                    config_count = int(git_env.get("GIT_CONFIG_COUNT", "0"))
+                except ValueError as exc:
+                    raise ValueError("GIT_CONFIG_COUNT must be an integer") from exc
+                if config_count < 0:
+                    raise ValueError("GIT_CONFIG_COUNT must not be negative")
+                git_env["GIT_CONFIG_COUNT"] = str(config_count + 1)
+                git_env[f"GIT_CONFIG_KEY_{config_count}"] = "include.path"
+                git_env[f"GIT_CONFIG_VALUE_{config_count}"] = auth_config_path
+                git_env["GIT_TERMINAL_PROMPT"] = "0"
+
+            clone_args = [
+                "git",
+                "clone",
+                "--depth",
+                "1",
+                "--no-recurse-submodules",
+            ]
+            if branch and not commit:
+                clone_args.extend(["--branch", branch])
+            clone_args.extend([public_url, target_dir])
+            await self._run_git(clone_args, env=git_env)
+
+            if commit:
                 try:
                     await self._run_git(
-                        ["git", "-C", target_dir, "fetch", "--all", "--tags", "--prune"]
+                        ["git", "-C", target_dir, "fetch", "origin", commit], env=git_env
                     )
                 except RuntimeError:
-                    pass
-                ok = await self._has_commit(target_dir, commit)
-                if not ok:
                     try:
                         await self._run_git(
-                            ["git", "-C", target_dir, "fetch", "--unshallow", "origin"]
+                            ["git", "-C", target_dir, "fetch", "--all", "--tags", "--prune"],
+                            env=git_env,
                         )
                     except RuntimeError:
                         pass
-                ok = await self._has_commit(target_dir, commit)
-                if not ok:
-                    await self._run_git(
-                        [
-                            "git",
-                            "-C",
-                            target_dir,
-                            "fetch",
-                            "origin",
-                            "+refs/heads/*:refs/remotes/origin/*",
-                        ]
-                    )
                     ok = await self._has_commit(target_dir, commit)
                     if not ok:
-                        raise RuntimeError(f"Failed to fetch commit {commit} from {url}")
-            await self._run_git(["git", "-C", target_dir, "checkout", commit])
+                        try:
+                            await self._run_git(
+                                ["git", "-C", target_dir, "fetch", "--unshallow", "origin"],
+                                env=git_env,
+                            )
+                        except RuntimeError:
+                            pass
+                    ok = await self._has_commit(target_dir, commit)
+                    if not ok:
+                        await self._run_git(
+                            [
+                                "git",
+                                "-C",
+                                target_dir,
+                                "fetch",
+                                "origin",
+                                "+refs/heads/*:refs/remotes/origin/*",
+                            ],
+                            env=git_env,
+                        )
+                        ok = await self._has_commit(target_dir, commit)
+                        if not ok:
+                            raise RuntimeError(f"Failed to fetch commit {commit} from {public_url}")
+                await self._run_git(["git", "-C", target_dir, "checkout", commit], env=git_env)
+        finally:
+            if auth_config_path is not None:
+                Path(auth_config_path).unlink(missing_ok=True)
 
-        # Add .git_source_repo marker file with original URL (for consistency)
+        # Add a marker with the credential-free source URL.
         def _write_marker():
             marker_file = Path(target_dir) / ".git_source_repo"
-            marker_file.write_text(url, encoding="utf-8")
+            marker_file.write_text(public_url, encoding="utf-8")
 
         await asyncio.to_thread(_write_marker)
 
@@ -510,10 +645,10 @@ class GitAccessor(DataAccessor):
 
         content_dir = await asyncio.to_thread(_find_content_dir)
 
-        # Add .git_source_repo marker file with original URL
+        # Add a marker with the credential-free source URL.
         def _write_marker():
             marker_file = content_dir / ".git_source_repo"
-            marker_file.write_text(repo_url, encoding="utf-8")
+            marker_file.write_text(self._redact_url_credentials(repo_url), encoding="utf-8")
 
         await asyncio.to_thread(_write_marker)
 
@@ -529,20 +664,42 @@ class GitAccessor(DataAccessor):
         """Download a GitLab repo as a ZIP archive and extract it."""
         repo_name = self._get_repo_name(repo_url)
 
-        # Build archive URL from owner/repo path components.
-        # GitLab archive URL format: https://gitlab.com/{owner}/{repo}/-/archive/{ref}/{repo}-{ref}.zip
+        # Build archive URL from all namespace/repo path components.
+        # GitLab archive URL format:
+        # https://gitlab.com/{namespace}/{repo}/-/archive/{ref}/{repo}-{ref}.zip
         parsed = urlparse(repo_url)
+        if parsed.username is not None and parsed.password is None:
+            raise ValueError("HTTP(S) repository URLs with a username must also include a password")
         path_parts = [p for p in parsed.path.split("/") if p]
-        owner = path_parts[0]
-        repo_raw = path_parts[1]
+        repo_parts = _extract_gitlab_repo_parts(path_parts)
+        if repo_parts is None:
+            raise ValueError("Invalid GitLab repository URL")
+        repo_raw = repo_parts[-1]
         # Strip .git suffix for the archive URL
         repo_slug = repo_raw[:-4] if repo_raw.endswith(".git") else repo_raw
+        project_path = "/".join([*repo_parts[:-1], repo_slug])
 
-        ref = branch or "HEAD"
-        # GitLab uses the format: /{owner}/{repo}/-/archive/{ref}/{repo}-{ref}.zip
-        zip_url = f"{parsed.scheme}://{parsed.netloc}/{owner}/{repo_slug}/-/archive/{ref}/{repo_slug}-{ref}.zip"
+        ref_raw = branch or "HEAD"
+        ref = quote(ref_raw, safe="")
+        browser_zip_url = (
+            f"{parsed.scheme}://{parsed.netloc}/{project_path}/-/archive/"
+            f"{ref}/{repo_slug}-{ref}.zip"
+        )
+        public_zip_url = self._redact_url_credentials(browser_zip_url)
+        oauth_token = None
+        if parsed.username is not None and parsed.password is not None:
+            if unquote(parsed.username).lower() != "oauth2":
+                raise ValueError("GitLab archive API requires oauth2 URL credentials")
+            oauth_token = unquote(parsed.password)
+            self._validate_http_credential(oauth_token, "GitLab OAuth token")
+            public_parsed = urlparse(public_zip_url)
+            project_id = quote(project_path, safe="")
+            public_zip_url = (
+                f"{public_parsed.scheme}://{public_parsed.netloc}/api/v4/projects/"
+                f"{project_id}/repository/archive.zip?sha={ref}"
+            )
 
-        logger.info(f"[GitAccessor] Downloading GitLab ZIP: {zip_url}")
+        logger.info(f"[GitAccessor] Downloading GitLab ZIP: {public_zip_url}")
 
         zip_path = os.path.join(target_dir, "_archive.zip")
         extract_dir = os.path.join(target_dir, "_extracted")
@@ -551,15 +708,25 @@ class GitAccessor(DataAccessor):
         # Download (blocking HTTP; run in thread pool)
         def _download() -> None:
             headers = {"User-Agent": "OpenViking"}
+            if oauth_token is not None:
+                headers["Authorization"] = f"Bearer {oauth_token}"
 
-            req = urllib.request.Request(zip_url, headers=headers)
-            with urllib.request.urlopen(req, timeout=1800) as resp, open(zip_path, "wb") as f:
+            req = urllib.request.Request(public_zip_url, headers=headers)
+            if oauth_token is None:
+                response = urllib.request.urlopen(req, timeout=1800)
+            else:
+                opener = urllib.request.build_opener(_SameOriginRedirectHandler(public_zip_url))
+                response = opener.open(req, timeout=1800)
+            with response as resp, open(zip_path, "wb") as f:
                 shutil.copyfileobj(resp, f)
 
         try:
             await asyncio.to_thread(_download)
         except Exception as exc:
-            raise RuntimeError(f"Failed to download GitLab ZIP {zip_url}: {exc}")
+            public_error = self._redact_credentials_in_text(str(exc))
+            raise RuntimeError(
+                f"Failed to download GitLab ZIP {public_zip_url}: {public_error}"
+            ) from None
 
         # Safe extraction with Zip Slip validation (non-blocking)
         def _extract_zip():
@@ -603,10 +770,10 @@ class GitAccessor(DataAccessor):
 
         content_dir = await asyncio.to_thread(_find_content_dir)
 
-        # Add .git_source_repo marker file with original URL
+        # Add a marker with the credential-free source URL.
         def _write_marker():
             marker_file = content_dir / ".git_source_repo"
-            marker_file.write_text(repo_url, encoding="utf-8")
+            marker_file.write_text(self._redact_url_credentials(repo_url), encoding="utf-8")
 
         await asyncio.to_thread(_write_marker)
 
