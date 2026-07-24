@@ -29,7 +29,7 @@ class TestExtractFilenameFromUrl:
         assert HTTPAccessor._extract_filename_from_url(url) == "\u6587\u4ef6.py"
 
     def test_query_params_ignored(self):
-        url = "https://example.com/file.py?version=2&token=abc"
+        url = "https://example.com/file.py?version=2&format=raw"
         assert HTTPAccessor._extract_filename_from_url(url) == "file.py"
 
     def test_no_filename_fallback(self):
@@ -50,6 +50,45 @@ class TestExtractFilenameFromUrl:
     def test_no_extension(self):
         url = "https://example.com/path/Makefile"
         assert HTTPAccessor._extract_filename_from_url(url) == "Makefile"
+
+
+class TestExtractFilenameFromDisposition:
+    """Test RFC 6266 filename and RFC 5987 extended filename handling."""
+
+    def test_non_utf8_extended_filename(self):
+        disposition = "attachment; filename*=iso-8859-1''r%E9sum%E9.pdf"
+
+        assert URLTypeDetector._extract_filename_from_disposition(disposition) == "résumé.pdf"
+
+    def test_percent_encoded_extended_separators(self):
+        disposition = "attachment; size=100; filename*=Shift_JIS%27%27a.txt"
+
+        assert URLTypeDetector._extract_filename_from_disposition(disposition) == "a.txt"
+
+    def test_extended_filename_takes_precedence(self):
+        disposition = "attachment; filename=plain.txt; filename*=UTF-8''preferred.txt"
+
+        assert URLTypeDetector._extract_filename_from_disposition(disposition) == "preferred.txt"
+
+    def test_invalid_extended_filename_uses_plain_fallback(self):
+        disposition = "attachment; filename*=unknown''broken.txt; filename=fallback.txt"
+
+        assert URLTypeDetector._extract_filename_from_disposition(disposition) == "fallback.txt"
+
+    def test_empty_extended_filename_uses_plain_fallback(self):
+        disposition = 'attachment; filename*=""; filename=fallback.txt'
+
+        assert URLTypeDetector._extract_filename_from_disposition(disposition) == "fallback.txt"
+
+    def test_empty_decoded_extended_filename_uses_plain_fallback(self):
+        disposition = "attachment; filename*=UTF-8''; filename=fallback.txt"
+
+        assert URLTypeDetector._extract_filename_from_disposition(disposition) == "fallback.txt"
+
+    def test_extended_filename_is_not_parsed_as_plain_token(self):
+        disposition = "attachment; filename*=not-an-extended-value"
+
+        assert URLTypeDetector._extract_filename_from_disposition(disposition) is None
 
 
 class TestURLTypeDetectorCodeExtensions:

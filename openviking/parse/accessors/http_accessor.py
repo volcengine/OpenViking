@@ -360,20 +360,42 @@ class URLTypeDetector:
 
         content_disposition = content_disposition.strip()
 
-        # Try filename*=UTF-8''... format first (RFC 5987)
-        utf8_match = re.search(r"filename\*=UTF-8''([^;]+)", content_disposition, re.I)
-        if utf8_match:
-            from urllib.parse import unquote
+        # Prefer filename*=charset'language'value (RFC 5987 / RFC 8187).
+        # Decode the whole extended value first so encoded separators such as
+        # ``Shift_JIS%27%27...`` are handled as well.
+        extended_match = re.search(
+            r'(?:^|;)\s*filename\*\s*=\s*(?:"([^"]*)"|([^;]*))',
+            content_disposition,
+            re.I,
+        )
+        if extended_match:
+            from urllib.parse import unquote_to_bytes
 
-            return unquote(utf8_match.group(1))
+            extended_value = extended_match.group(1)
+            if extended_value is None:
+                extended_value = extended_match.group(2)
+            extended_value = extended_value.strip()
+            try:
+                charset, _language, encoded_filename = unquote_to_bytes(extended_value).split(
+                    b"'", 2
+                )
+                charset_name = charset.decode("ascii").strip()
+                if charset_name:
+                    filename = encoded_filename.decode(charset_name)
+                    if filename:
+                        return filename
+            except (LookupError, UnicodeDecodeError, ValueError):
+                # Invalid extended values may still provide a valid plain
+                # filename fallback below.
+                pass
 
         # Try filename="..." format (quoted-string)
-        quoted_match = re.search(r'filename="([^"]+)"', content_disposition, re.I)
+        quoted_match = re.search(r'(?:^|;)\s*filename\s*=\s*"([^"]+)"', content_disposition, re.I)
         if quoted_match:
             return quoted_match.group(1)
 
         # Try filename=... format (token)
-        simple_match = re.search(r"filename=([^;]+)", content_disposition, re.I)
+        simple_match = re.search(r"(?:^|;)\s*filename\s*=\s*([^;]+)", content_disposition, re.I)
         if simple_match:
             return simple_match.group(1).strip()
 
