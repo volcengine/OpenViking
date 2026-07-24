@@ -181,17 +181,20 @@ class SessionManager:
 
         self._cache[key] = session
 
-        if self.sandbox_manager:
+        if (
+            self.sandbox_manager
+            and self.sandbox_manager.config.sandbox.mode != "per-peer"
+        ):
             from vikingbot.utils.helpers import ensure_session_workspace
 
-            if self.sandbox_manager.config.mode == "shared":
-                workspace_path = self.sandbox_manager.workspace / "shared"
-            else:
-                workspace_path = self.sandbox_manager.workspace / key.safe_name()
+            workspace_path = self.sandbox_manager.get_workspace_path(key)
             ensure_session_workspace(workspace_path)
 
         # Initialize sandbox
-        if self.sandbox_manager:
+        if (
+            self.sandbox_manager
+            and self.sandbox_manager.config.sandbox.mode != "per-peer"
+        ):
             asyncio.create_task(self._init_sandbox(key))
 
         return session
@@ -327,8 +330,13 @@ class SessionManager:
         Returns:
             True if deleted, False if not found.
         """
-        # Clean up sandbox if enabled
-        if self.sandbox_manager is not None:
+        # A per-peer sandbox can be shared by multiple sessions. Deleting one
+        # session must not tear down the workspace used by that peer's other
+        # active sessions; shared peer sandboxes are reclaimed by cleanup_all.
+        if (
+            self.sandbox_manager is not None
+            and self.sandbox_manager.config.sandbox.mode != "per-peer"
+        ):
             asyncio.create_task(self.sandbox_manager.cleanup_session(key))
 
         # Remove from cache

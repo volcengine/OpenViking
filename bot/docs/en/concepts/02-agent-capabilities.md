@@ -86,6 +86,7 @@ ContextBuilder reads from the active Workspace selected by `sandbox.mode`:
 | `shared` | `<workspace>/shared` |
 | `per-session` | `<workspace>/<session-key>` |
 | `per-channel` | `<workspace>/<channel-key>` |
+| `per-peer` | `<workspace>/peer__<actor-peer-id>` |
 
 With the default `shared` mode, customize files under `<workspace>/shared`, not directly in the Workspace root.
 
@@ -127,6 +128,9 @@ SandboxManager selects a workspace from SessionKey and `sandbox.mode`:
 | `shared` | All sessions share `workspace/shared` |
 | `per-session` | Every session has an independent directory |
 | `per-channel` | Sessions on the same channel instance share a directory |
+| `per-peer` | Sessions authenticated as the same Peer share a directory |
+
+`per-peer` derives its directory from the channel's trusted `actor_peer_id`. Missing or path-like identities fail closed so an unidentifiable request cannot enter another Peer's workspace.
 
 The current implementation provides these execution backends:
 

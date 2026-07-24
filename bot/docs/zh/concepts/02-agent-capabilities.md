@@ -86,6 +86,7 @@ ContextBuilder 实际读取按 `sandbox.mode` 选择的活动 Workspace：
 | `shared` | `<workspace>/shared` |
 | `per-session` | `<workspace>/<session-key>` |
 | `per-channel` | `<workspace>/<channel-key>` |
+| `per-peer` | `<workspace>/peer__<actor-peer-id>` |
 
 因此，默认 `shared` 模式下，应定制 `<workspace>/shared` 中的文件，而不是直接修改 Workspace 根目录。
 
@@ -127,6 +128,9 @@ SandboxManager 根据 SessionKey 和 `sandbox.mode` 选择工作区：
 | `shared` | 所有会话共享 `workspace/shared` |
 | `per-session` | 每个会话独立目录 |
 | `per-channel` | 同一渠道实例共享目录 |
+| `per-peer` | 认证为同一 Peer 的会话共享目录 |
+
+`per-peer` 根据渠道解析出的可信 `actor_peer_id` 选择目录。身份缺失或包含路径分隔符时会拒绝创建工作区，避免无法识别的请求进入其他 Peer 的工作区。
 
 当前实现提供以下执行后端：
 

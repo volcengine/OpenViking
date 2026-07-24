@@ -40,6 +40,7 @@ class SandboxMode(str, Enum):
     PER_SESSION = "per-session"
     SHARED = "shared"
     PER_CHANNEL = "per-channel"
+    PER_PEER = "per-peer"
 
 
 class AgentMemoryMode(str, Enum):

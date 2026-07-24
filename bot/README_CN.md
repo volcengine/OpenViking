@@ -354,6 +354,7 @@ Agent 实际使用的活动目录还取决于 `bot.sandbox.mode`：
 | `shared`（默认） | `<workspace>/shared` |
 | `per-session` | `<workspace>/<session-key>` |
 | `per-channel` | `<workspace>/<channel-key>` |
+| `per-peer` | `<workspace>/peer__<actor-peer-id>` |
 
 例如，默认配置下应修改 `~/.openviking/data/bot/workspace/shared/SOUL.md`。
 
@@ -447,6 +448,9 @@ Agent 实际使用的活动目录还取决于 `bot.sandbox.mode`：
 - `shared`：所有会话共享工作区；
 - `per-session`：每个 Session 独立；
 - `per-channel`：同一渠道实例共享。
+- `per-peer`：认证为同一 Peer 的会话共享工作区，不同 Peer 相互隔离。
+
+`per-peer` 使用渠道解析出的可信 `actor_peer_id`；身份缺失或包含路径分隔符时会拒绝创建工作区，不会回退到共享目录。
 
 DirectBackend 默认 `restrict_to_workspace: false`。对不可信用户开放 Gateway 时，应选择隔离后端，并设置渠道白名单和网络/文件策略。
 

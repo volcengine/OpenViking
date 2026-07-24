@@ -57,6 +57,7 @@ class SpawnTool(Tool):
             task=task,
             label=label,
             session_key=tool_context.session_key,
+            actor_peer_id=tool_context.actor_peer_id,
             channel_metadata=tool_context.channel_metadata,
             openviking_connection=tool_context.openviking_connection,
         )

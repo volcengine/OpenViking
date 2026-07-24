@@ -37,6 +37,7 @@ from vikingbot.openviking_mount.session_state import (
 )
 from vikingbot.providers.base import LLMProvider
 from vikingbot.sandbox import SandboxManager
+from vikingbot.sandbox.manager import WORKSPACE_PEER_ID_METADATA_KEY
 from vikingbot.session.manager import Session, SessionManager
 from vikingbot.utils.helpers import cal_str_tokens, ensure_non_empty_assistant_content
 from vikingbot.utils.tracing import set_response_id, trace
@@ -350,10 +351,17 @@ class AgentLoop:
             and getattr(agents_config, "session_context_enabled", False)
         )
 
-    def _get_ov_workspace_id(self, session_key: SessionKey) -> str:
+    def _get_ov_workspace_id(
+        self, session_key: SessionKey, actor_peer_id: str | None = None
+    ) -> str:
         if self.sandbox_manager:
-            return self.sandbox_manager.to_workspace_id(session_key)
+            return self.sandbox_manager.to_workspace_id(session_key, actor_peer_id)
         return "shared"
+
+    @staticmethod
+    def _session_workspace_peer_id(session: Session) -> str | None:
+        value = session.metadata.get(WORKSPACE_PEER_ID_METADATA_KEY)
+        return str(value) if value else None
 
     async def _get_ov_client(
         self,
@@ -361,7 +369,7 @@ class AgentLoop:
         openviking_connection: dict[str, Any] | None = None,
         actor_peer_id: str | None = None,
     ):
-        workspace_id = self._get_ov_workspace_id(session_key)
+        workspace_id = self._get_ov_workspace_id(session_key, actor_peer_id)
         if openviking_connection or actor_peer_id:
             from vikingbot.openviking_mount.ov_server import VikingClient
 
@@ -774,7 +782,9 @@ class AgentLoop:
             context=HookContext(
                 event_type="message.compact",
                 session_id=get_openviking_session_id(session),
-                workspace_id=self._get_ov_workspace_id(session.key),
+                workspace_id=self._get_ov_workspace_id(
+                    session.key, self._session_workspace_peer_id(session)
+                ),
                 session_key=session.key,
                 config=self.config,
                 openviking_connection=openviking_connection,
@@ -1023,7 +1033,9 @@ class AgentLoop:
                             ]
                             _query = "\n".join(_user_msgs[-3:])
                             workspace_id = (
-                                self.sandbox_manager.to_workspace_id(session_key)
+                                self.sandbox_manager.to_workspace_id(
+                                    session_key, actor_peer_id or sender_id
+                                )
                                 if self.sandbox_manager
                                 else "shared"
                             )
@@ -1340,6 +1352,7 @@ class AgentLoop:
             msg.openviking_connection = openviking_connection
             actor_peer_id = getattr(msg, "actor_peer_id", None) or msg.sender_id
             msg.actor_peer_id = actor_peer_id
+            session.metadata[WORKSPACE_PEER_ID_METADATA_KEY] = actor_peer_id
             profile_user_list = []
             memory_peer_ids = self._metadata_memory_peer_ids(msg.metadata)
             memory_owner_user_ids = self._metadata_memory_owner_user_ids(msg.metadata)
@@ -1488,7 +1501,10 @@ class AgentLoop:
                 )
 
             if self.sandbox_manager:
-                message_workspace = self.sandbox_manager.get_workspace_path(session_key)
+                await self.sandbox_manager.get_sandbox(session_key, actor_peer_id)
+                message_workspace = self.sandbox_manager.get_workspace_path(
+                    session_key, actor_peer_id
+                )
             else:
                 message_workspace = self.workspace
 
@@ -1825,6 +1841,8 @@ class AgentLoop:
         # Build messages with the announce content
         provider_name = self.config.get_provider_name(self.model) if self.config else None
         actor_peer_id = getattr(msg, "actor_peer_id", None) or msg.sender_id
+        msg.actor_peer_id = actor_peer_id
+        session.metadata[WORKSPACE_PEER_ID_METADATA_KEY] = actor_peer_id
         history = await self._build_prompt_history(
             session,
             provider_name=provider_name,
@@ -1833,11 +1851,13 @@ class AgentLoop:
         )
         from vikingbot.agent.context import ContextBuilder
 
-        message_workspace = (
-            self.sandbox_manager.get_workspace_path(msg.session_key)
-            if self.sandbox_manager
-            else self.workspace
-        )
+        if self.sandbox_manager:
+            await self.sandbox_manager.get_sandbox(msg.session_key, actor_peer_id)
+            message_workspace = self.sandbox_manager.get_workspace_path(
+                msg.session_key, actor_peer_id
+            )
+        else:
+            message_workspace = self.workspace
         message_context = ContextBuilder(
             message_workspace,
             sandbox_manager=self.sandbox_manager,
@@ -1926,7 +1946,9 @@ class AgentLoop:
                 )
 
             if self.sandbox_manager:
-                memory_workspace = self.sandbox_manager.get_workspace_path(session.key)
+                memory_workspace = self.sandbox_manager.get_workspace_path(
+                    session.key, self._session_workspace_peer_id(session)
+                )
             else:
                 memory_workspace = self.workspace
 
@@ -2023,7 +2045,9 @@ Respond with ONLY valid JSON, no markdown fences."""
                 context=HookContext(
                     event_type="message.compact",
                     session_id=session.key.safe_name(),
-                    workspace_id=self._get_ov_workspace_id(session.key),
+                    workspace_id=self._get_ov_workspace_id(
+                        session.key, self._session_workspace_peer_id(session)
+                    ),
                     session_key=session.key,
                     config=self.config,
                     openviking_connection=openviking_connection,

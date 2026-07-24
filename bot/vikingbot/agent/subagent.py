@@ -57,6 +57,7 @@ class SubagentManager:
         label: str | None = None,
         channel_metadata: dict[str, Any] | None = None,
         openviking_connection: dict[str, Any] | None = None,
+        actor_peer_id: str | None = None,
     ) -> str:
         """
         Spawn a subagent to execute a task in the background.
@@ -76,12 +77,13 @@ class SubagentManager:
         # Create background task
         bg_task = asyncio.create_task(
             self._run_subagent(
-                task_id,
-                task,
-                display_label,
-                session_key,
-                dict(channel_metadata or {}),
-                openviking_connection,
+                task_id=task_id,
+                task=task,
+                label=display_label,
+                session_key=session_key,
+                channel_metadata=dict(channel_metadata or {}),
+                openviking_connection=openviking_connection,
+                actor_peer_id=actor_peer_id,
             )
         )
         self._running_tasks[task_id] = bg_task
@@ -100,6 +102,7 @@ class SubagentManager:
         session_key: SessionKey,
         channel_metadata: dict[str, Any] | None = None,
         openviking_connection: dict[str, Any] | None = None,
+        actor_peer_id: str | None = None,
     ) -> None:
         """Execute the subagent task and announce the result."""
         logger.info(f"Subagent [{task_id}] starting task: {label}")
@@ -123,7 +126,7 @@ class SubagentManager:
                     raise RuntimeError("OpenViking is unavailable")
                 memory_store = MemoryStore(self.workspace, config=self.config)
                 workspace_id = (
-                    self.sandbox_manager.to_workspace_id(session_key)
+                    self.sandbox_manager.to_workspace_id(session_key, actor_peer_id)
                     if self.sandbox_manager
                     else "shared"
                 )
@@ -138,7 +141,7 @@ class SubagentManager:
                 logger.warning(f"Subagent [{task_id}] failed to load experience memory: {e}")
 
             # Build messages with subagent-specific prompt
-            prompt_workspace = await self._get_session_workspace(session_key)
+            prompt_workspace = await self._get_session_workspace(session_key, actor_peer_id)
             system_prompt = self._build_subagent_prompt(task, workspace=prompt_workspace)
             messages: list[dict[str, Any]] = [
                 {"role": "system", "content": system_prompt},
@@ -192,6 +195,7 @@ class SubagentManager:
                             tool_call.arguments,
                             session_key=session_key,
                             sandbox_manager=self.sandbox_manager,
+                            actor_peer_id=actor_peer_id,
                             openviking_connection=openviking_connection,
                         )
                         messages.append(
@@ -211,28 +215,30 @@ class SubagentManager:
 
             logger.info(f"Subagent [{task_id}] completed successfully")
             await self._announce_result(
-                task_id,
-                label,
-                task,
-                final_result,
-                session_key,
-                "ok",
-                channel_metadata,
-                openviking_connection,
+                task_id=task_id,
+                label=label,
+                task=task,
+                result=final_result,
+                session_key=session_key,
+                status="ok",
+                channel_metadata=channel_metadata,
+                openviking_connection=openviking_connection,
+                actor_peer_id=actor_peer_id,
             )
 
         except Exception as e:
             error_msg = f"Error: {str(e)}"
             logger.exception(f"Subagent [{task_id}] failed: {e}")
             await self._announce_result(
-                task_id,
-                label,
-                task,
-                error_msg,
-                session_key,
-                "error",
-                channel_metadata,
-                openviking_connection,
+                task_id=task_id,
+                label=label,
+                task=task,
+                result=error_msg,
+                session_key=session_key,
+                status="error",
+                channel_metadata=channel_metadata,
+                openviking_connection=openviking_connection,
+                actor_peer_id=actor_peer_id,
             )
 
     async def _announce_result(
@@ -245,6 +251,7 @@ class SubagentManager:
         status: str,
         channel_metadata: dict[str, Any] | None = None,
         openviking_connection: dict[str, Any] | None = None,
+        actor_peer_id: str | None = None,
     ) -> None:
         """Announce the subagent result to the main agent via the message bus."""
         status_text = "completed successfully" if status == "ok" else "failed"
@@ -261,6 +268,7 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
         # Inject as system message to trigger main agent
         msg = InboundMessage(
             sender_id="subagent",
+            actor_peer_id=actor_peer_id,
             session_key=session_key,
             content=announce_content,
             metadata=dict(channel_metadata or {}),
@@ -270,13 +278,18 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
         await self.bus.publish_inbound(msg)
         logger.debug(f"Subagent [{task_id}] announced result to {session_key}")
 
-    async def _get_session_workspace(self, session_key: SessionKey) -> Path:
+    async def _get_session_workspace(
+        self, session_key: SessionKey, actor_peer_id: str | None = None
+    ) -> Path:
         """Return the workspace path used by tools for this subagent session."""
         if not self.sandbox_manager:
             return self.workspace
 
-        await self.sandbox_manager.get_sandbox(session_key)
-        return self.sandbox_manager.get_workspace_path(session_key)
+        if actor_peer_id is None:
+            await self.sandbox_manager.get_sandbox(session_key)
+            return self.sandbox_manager.get_workspace_path(session_key)
+        await self.sandbox_manager.get_sandbox(session_key, actor_peer_id)
+        return self.sandbox_manager.get_workspace_path(session_key, actor_peer_id)
 
     def _build_subagent_prompt(self, task: str, workspace: Path | None = None) -> str:
         """Build a focused system prompt for the subagent."""

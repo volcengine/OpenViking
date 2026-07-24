@@ -1,15 +1,13 @@
 """Sandbox manager for creating and managing sandbox instances."""
 
-import asyncio
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-from openviking.async_client import logger
-from vikingbot.sandbox.base import SandboxBackend, SandboxDisabledError, UnsupportedBackendError
+from vikingbot.config.schema import Config, SessionKey
 from vikingbot.sandbox.backends import get_backend
+from vikingbot.sandbox.base import SandboxBackend, UnsupportedBackendError
+from vikingbot.utils.peer_id import normalize_external_peer_id
 
-
-from vikingbot.config.schema import SandboxConfig, SessionKey, Config
+WORKSPACE_PEER_ID_METADATA_KEY = "workspace_peer_id"
 
 
 class SandboxManager:
@@ -27,12 +25,16 @@ class SandboxManager:
             raise UnsupportedBackendError(f"Unknown sandbox backend: {config.backend}")
         self._backend_cls = backend_cls
 
-    async def get_sandbox(self, session_key: SessionKey) -> SandboxBackend:
-        return await self._get_or_create_sandbox(session_key)
+    async def get_sandbox(
+        self, session_key: SessionKey, actor_peer_id: str | None = None
+    ) -> SandboxBackend:
+        return await self._get_or_create_sandbox(session_key, actor_peer_id)
 
-    async def _get_or_create_sandbox(self, session_key: SessionKey) -> SandboxBackend:
+    async def _get_or_create_sandbox(
+        self, session_key: SessionKey, actor_peer_id: str | None = None
+    ) -> SandboxBackend:
         """Get or create session-specific sandbox."""
-        workspace_id = self.to_workspace_id(session_key)
+        workspace_id = self.to_workspace_id(session_key, actor_peer_id)
         if workspace_id not in self._sandboxes:
             sandbox = await self._create_sandbox(workspace_id)
             self._sandboxes[workspace_id] = sandbox
@@ -44,7 +46,7 @@ class SandboxManager:
         instance = self._backend_cls(self.config.sandbox, workspace_id, workspace)
         try:
             await instance.start()
-        except Exception as e:
+        except Exception:
             import traceback
 
             traceback.print_exc()
@@ -54,9 +56,9 @@ class SandboxManager:
 
     async def _copy_bootstrap_files(self, sandbox_workspace: Path) -> None:
         """Copy bootstrap files from source workspace to sandbox workspace."""
-        from vikingbot.agent.context import ContextBuilder
-        from vikingbot.agent.skills import BUILTIN_SKILLS_DIR
         import shutil
+
+        from vikingbot.agent.context import ContextBuilder
 
         # Copy from source workspace init directory (if exists)
         init_dir = self.source_workspace / ContextBuilder.INIT_DIR
@@ -88,9 +90,11 @@ class SandboxManager:
                     continue
                 shutil.copytree(item, dst_skill, dirs_exist_ok=True)
 
-    async def cleanup_session(self, session_key: SessionKey) -> None:
+    async def cleanup_session(
+        self, session_key: SessionKey, actor_peer_id: str | None = None
+    ) -> None:
         """Clean up sandbox for a session."""
-        workspace_id = self.to_workspace_id(session_key)
+        workspace_id = self.to_workspace_id(session_key, actor_peer_id)
         if workspace_id in self._sandboxes:
             await self._sandboxes[workspace_id].stop()
             del self._sandboxes[workspace_id]
@@ -101,17 +105,28 @@ class SandboxManager:
             await sandbox.stop()
         self._sandboxes.clear()
 
-    def get_workspace_path(self, session_key: SessionKey) -> Path:
-        return self.workspace / self.to_workspace_id(session_key)
+    def get_workspace_path(
+        self, session_key: SessionKey, actor_peer_id: str | None = None
+    ) -> Path:
+        return self.workspace / self.to_workspace_id(session_key, actor_peer_id)
 
-    def to_workspace_id(self, session_key: SessionKey):
+    def to_workspace_id(
+        self, session_key: SessionKey, actor_peer_id: str | None = None
+    ) -> str:
         if self.config.sandbox.mode == "shared":
             return "shared"
         elif self.config.sandbox.mode == "per-channel":
             return session_key.channel_key()
+        elif self.config.sandbox.mode == "per-peer":
+            peer_id = normalize_external_peer_id(actor_peer_id)
+            if not peer_id:
+                raise ValueError("per-peer sandbox mode requires a valid actor_peer_id")
+            return f"peer__{peer_id}"
         else:  # per-session
             return session_key.safe_name()
 
-    async def get_sandbox_cwd(self, session_key: SessionKey) -> str:
-        sandbox: SandboxBackend = await self._get_or_create_sandbox(session_key)
+    async def get_sandbox_cwd(
+        self, session_key: SessionKey, actor_peer_id: str | None = None
+    ) -> str:
+        sandbox: SandboxBackend = await self._get_or_create_sandbox(session_key, actor_peer_id)
         return sandbox.sandbox_cwd

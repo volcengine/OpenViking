@@ -239,7 +239,11 @@ class ToolRegistry:
                 event_type="tool.post_call",
                 session_key=session_key,
                 workspace_id=(
-                    sandbox_manager.to_workspace_id(session_key) if sandbox_manager else "shared"
+                    sandbox_manager.to_workspace_id(
+                        session_key, actor_peer_id or sender_id
+                    )
+                    if sandbox_manager
+                    else "shared"
                 ),
                 config=self.config,
                 openviking_connection=openviking_connection,
