@@ -346,12 +346,15 @@ class OpenAIVLM(VLMBase):
         # 用 tracer.info 打印请求
         tracer.info(f"messages={json.dumps(kwargs, ensure_ascii=False, indent=2)}")
 
-        return await retry_async(
-            _call,
-            max_retries=self.max_retries,
-            logger=logger,
-            operation_name="OpenAI VLM async completion",
-        )
+        async def _request() -> Union[str, VLMResponse]:
+            return await retry_async(
+                _call,
+                max_retries=self.max_retries,
+                logger=logger,
+                operation_name="OpenAI VLM async completion",
+            )
+
+        return await self._run_with_async_concurrency(_request)
 
     def _detect_image_format(self, data: bytes) -> str:
         """Detect image format from magic bytes.
@@ -461,9 +464,12 @@ class OpenAIVLM(VLMBase):
                 return self._build_vlm_response(response, has_tools=True)
             return await self._extract_completion_content_async(response, elapsed)
 
-        return await retry_async(
-            _call,
-            max_retries=self.max_retries,
-            logger=logger,
-            operation_name="OpenAI VLM async vision completion",
-        )
+        async def _request() -> Union[str, VLMResponse]:
+            return await retry_async(
+                _call,
+                max_retries=self.max_retries,
+                logger=logger,
+                operation_name="OpenAI VLM async vision completion",
+            )
+
+        return await self._run_with_async_concurrency(_request)

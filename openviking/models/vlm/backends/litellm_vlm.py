@@ -461,12 +461,15 @@ class LiteLLMVLMProvider(VLMBase):
                 return self._build_vlm_response(response, has_tools=True)
             return self._clean_response(self._extract_content_from_response(response))
 
-        return await retry_async(
-            _call,
-            max_retries=self.max_retries,
-            logger=logger,
-            operation_name="LiteLLM VLM async completion",
-        )
+        async def _request() -> Union[str, VLMResponse]:
+            return await retry_async(
+                _call,
+                max_retries=self.max_retries,
+                logger=logger,
+                operation_name="LiteLLM VLM async completion",
+            )
+
+        return await self._run_with_async_concurrency(_request)
 
     def get_vision_completion(
         self,
@@ -517,12 +520,15 @@ class LiteLLMVLMProvider(VLMBase):
                 return self._build_vlm_response(response, has_tools=True)
             return self._clean_response(self._extract_content_from_response(response))
 
-        return await retry_async(
-            _call,
-            max_retries=self.max_retries,
-            logger=logger,
-            operation_name="LiteLLM VLM async vision completion",
-        )
+        async def _request() -> Union[str, VLMResponse]:
+            return await retry_async(
+                _call,
+                max_retries=self.max_retries,
+                logger=logger,
+                operation_name="LiteLLM VLM async vision completion",
+            )
+
+        return await self._run_with_async_concurrency(_request)
 
     def _update_token_usage_from_response(
         self,
