@@ -389,17 +389,23 @@ class DirectoryParser(BaseParser):
                     # (e.g. ../images/x.gif) that still live inside the import.
                     allowed_media_dirs=[Path(import_root)] if import_root else None,
                 )
-                if sub_result.temp_dir_path:
-                    if preserve_structure:
-                        parent = str(PurePosixPath(rel_path).parent)
-                        dest = f"{target_uri}/{parent}" if parent != "." else target_uri
+                if not sub_result.temp_dir_path:
+                    if sub_result.warnings:
+                        warnings.extend(f"{rel_path}: {warning}" for warning in sub_result.warnings)
                     else:
-                        dest = target_uri
-                    await DirectoryParser._merge_temp(
-                        viking_fs,
-                        sub_result.temp_dir_path,
-                        dest,
-                    )
+                        warnings.append(f"Failed to parse {rel_path}: parser returned no output")
+                    return False
+
+                if preserve_structure:
+                    parent = str(PurePosixPath(rel_path).parent)
+                    dest = f"{target_uri}/{parent}" if parent != "." else target_uri
+                else:
+                    dest = target_uri
+                await DirectoryParser._merge_temp(
+                    viking_fs,
+                    sub_result.temp_dir_path,
+                    dest,
+                )
                 return True
             except Exception as exc:
                 warnings.append(f"Failed to parse {rel_path}: {exc}")
