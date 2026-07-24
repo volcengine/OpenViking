@@ -496,6 +496,18 @@ class ResourceService:
         self._ensure_initialized()
         normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
         kwargs.update(normalized_args.processor_kwargs)
+        from openviking.connector.routing import CONNECTOR_CREDENTIAL_ARGS
+
+        credential_args = sorted(
+            set(kwargs).intersection(CONNECTOR_CREDENTIAL_ARGS.get("git", frozenset()))
+        )
+        if credential_args:
+            raise InvalidArgumentError(
+                "Git credential args "
+                f"{credential_args} cannot be used with the native asynchronous import "
+                "pipeline because it persists job parameters. Use a Connector-compatible "
+                "request instead."
+            )
 
         target = ContentTargetSpec.from_fields(
             ctx=ctx,
@@ -769,7 +781,6 @@ class ResourceService:
             to=to,
             parent=parent,
             wait=wait,
-            reason=reason,
             instruction=instruction,
             build_index=build_index,
             summarize=summarize,
@@ -780,7 +791,9 @@ class ResourceService:
             return await self._add_resource_via_connector(
                 path=path,
                 ctx=ctx,
-                parent=parent,
+                to=to,
+                reason=reason,
+                connector_args=args or {},
                 **kwargs,
             )
 
@@ -1198,11 +1211,6 @@ class ResourceService:
 
     # ── Connector routing ──
 
-    # Schemes only the external Connector can import; the standard pipeline
-    # has no accessor for them, so degrading to it would only fail later with
-    # a misleading parse error.
-    _CONNECTOR_ONLY_SCHEMES = ("tos://",)
-
     def _should_use_connector(
         self,
         path: str,
@@ -1211,7 +1219,6 @@ class ResourceService:
         to: Optional[str] = None,
         parent: Optional[str] = None,
         wait: bool = False,
-        reason: str = "",
         instruction: str = "",
         build_index: bool = True,
         summarize: bool = False,
@@ -1222,30 +1229,66 @@ class ResourceService:
         """Decide whether a top-level resource path belongs to Connector.
 
         Returns True to delegate to the Connector, False to route to the
-        standard pipeline. A source type only the Connector can import
-        (tos://) raises InvalidArgumentError when the Connector is disabled,
-        does not allow the type, or cannot honor the request parameters —
+        standard pipeline. Source types are detected the same way the
+        standard pipeline routes them (see connector.routing), not by raw
+        URL scheme. A source type only the Connector can import (tos)
+        raises InvalidArgumentError when the Connector is disabled, does
+        not allow the type, or cannot honor the request parameters —
         degrading such a request would only fail later with a misleading
         parse error. Source types the standard pipeline can also handle
-        degrade to it instead when parameters are unsupported.
+        degrade to it instead when parameters are unsupported, unless the
+        request carries Connector-only credentials; credentialed requests
+        fail closed so secrets never enter a durable native job.
         """
+        from openviking.connector.routing import (
+            CONNECTOR_CREDENTIAL_ARGS,
+            detect_connector_add_type,
+            is_full_commit_sha,
+        )
         from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
-        if not isinstance(path, str):
+        detected = detect_connector_add_type(path)
+        if detected is None:
             return False
-        connector_only = path.startswith(self._CONNECTOR_ONLY_SCHEMES)
+        add_type, connector_only = detected
+        connector_args = connector_args or {}
+        credential_args = sorted(
+            set(connector_args).intersection(CONNECTOR_CREDENTIAL_ARGS.get(add_type, frozenset()))
+        )
 
         config = get_openviking_config().connector
-        # Match full URL schemes, not bare prefixes: "tos" must not capture
-        # paths like "tostring://..." or a local file named "tos_notes.md".
-        allowed_schemes = tuple(f"{add_type}://" for add_type in config.allowed_add_types)
-        if not config.enable or not path.startswith(allowed_schemes):
+        if not config.enable or add_type not in config.allowed_add_types:
+            if credential_args:
+                raise InvalidArgumentError(
+                    f"Credential args {credential_args} for '{add_type}' require Connector "
+                    "import, but the Connector is disabled or does not allow this source type."
+                )
             if connector_only:
                 raise InvalidArgumentError(
                     f"'{path}' can only be imported through the Connector integration, "
                     "which is disabled or does not allow this source type."
                 )
             return False
+
+        if add_type == "git":
+            from openviking.parse.accessors.git_accessor import GitAccessor
+
+            _, _, commit = GitAccessor()._parse_repo_source(path, **connector_args)
+            if commit and not is_full_commit_sha(str(commit)):
+                # The plugin fetches pinned commits by SHA over the wire and
+                # cannot resolve abbreviated forms; the standard pipeline
+                # resolves them locally after a full clone.
+                if credential_args:
+                    raise InvalidArgumentError(
+                        f"Credential args {credential_args} for 'git' cannot fall back to the "
+                        "standard import pipeline; pass a full 40-character commit SHA."
+                    )
+                logger.info(
+                    "Connector git import degrades to the standard pipeline: "
+                    "abbreviated commit SHA %r needs a local clone to resolve.",
+                    commit,
+                )
+                return False
 
         if ctx is not None and (to or parent):
             target = ContentTargetSpec.from_fields(
@@ -1259,13 +1302,13 @@ class ResourceService:
             parent = target.parent
 
         unsupported = self._unsupported_connector_params(
+            add_type=add_type,
             wait=wait,
-            reason=reason,
             instruction=instruction,
             build_index=build_index,
             summarize=summarize,
             watch_interval=watch_interval,
-            connector_args=connector_args or {},
+            connector_args=connector_args,
             kwargs=kwargs or {},
             to=to,
             parent=parent,
@@ -1275,6 +1318,11 @@ class ResourceService:
         detail = "; ".join(unsupported)
         if connector_only:
             raise InvalidArgumentError(f"Connector import does not support: {detail}")
+        if credential_args:
+            raise InvalidArgumentError(
+                f"Credential args {credential_args} for '{add_type}' cannot fall back to the "
+                f"standard import pipeline. Connector import does not support: {detail}"
+            )
         logger.info(
             f"[ResourceService] Connector does not support {detail} for path {path}; "
             "falling back to the standard import pipeline"
@@ -1284,8 +1332,8 @@ class ResourceService:
     @staticmethod
     def _unsupported_connector_params(
         *,
+        add_type: str,
         wait: bool,
-        reason: str,
         instruction: str,
         build_index: bool,
         summarize: bool,
@@ -1299,27 +1347,22 @@ class ResourceService:
 
         Returns an empty list when the request is fully supported.
         """
+        from openviking.connector.routing import (
+            CONNECTOR_CREDENTIAL_ARGS,
+            CONNECTOR_SUPPORTED_ARGS,
+        )
+
         unsupported: List[str] = []
-        if to:
-            unsupported.append(
-                "exact 'to' targets (Connector imports require a parent destination)"
-            )
-        if (
-            parent
-            and parent != "viking://resources"
-            and not parent.startswith("viking://resources/")
-        ):
-            unsupported.append("parent outside the public resources root (viking://resources/...)")
+        if wait:
+            unsupported.append("wait=true (Connector imports run asynchronously)")
+        if parent:
+            unsupported.append("parent targets (Connector imports require an exact 'to' target)")
+        if not to:
+            unsupported.append("missing exact 'to' target")
+        elif to != "viking://resources" and not to.startswith("viking://resources/"):
+            unsupported.append("to outside the public resources root (viking://resources/...)")
         if watch_interval > 0:
             unsupported.append("watch_interval>0 (Connector imports cannot be watched yet)")
-        if wait:
-            unsupported.append(
-                "wait=true (Connector imports run asynchronously; poll the returned task_id)"
-            )
-        if reason:
-            unsupported.append(
-                "reason (Connector imports cannot preserve resource-reason semantics)"
-            )
         if instruction:
             unsupported.append("instruction")
         if not build_index:
@@ -1330,7 +1373,7 @@ class ResourceService:
             unsupported.append("strict=true (Connector imports fail per file, not all-or-nothing)")
         for field in ("ignore_dirs", "include", "exclude"):
             if kwargs.get(field):
-                unsupported.append(f"{field} (scope TOS imports with the tos:// path prefix)")
+                unsupported.append(f"{field} (Connector imports cannot filter the source tree)")
         if kwargs.get("preserve_structure") is False:
             unsupported.append(
                 "preserve_structure=false (Connector always mirrors the source directory tree)"
@@ -1339,42 +1382,32 @@ class ResourceService:
             unsupported.append("directly_upload_media=false")
         if kwargs.get("source_name"):
             unsupported.append("source_name")
-        if connector_args:
-            unsupported.append(
-                "args (Connector imports derive path_prefix from parent; "
-                "args keys are not forwarded)"
+        supported_args = CONNECTOR_SUPPORTED_ARGS.get(
+            add_type, frozenset()
+        ) | CONNECTOR_CREDENTIAL_ARGS.get(add_type, frozenset())
+        unknown_args = sorted(set(connector_args) - supported_args)
+        if unknown_args:
+            supported_hint = (
+                f"supported: {sorted(supported_args)}" if supported_args else "no args supported"
             )
+            unsupported.append(f"args keys {unknown_args} ({supported_hint} for '{add_type}')")
         return unsupported
-
-    @staticmethod
-    def _connector_path_prefix(target_uri: Optional[str]) -> Optional[List[str]]:
-        """Map the resolved parent target onto the Connector's path_prefix.
-
-        The TOS plugin composes final URIs as
-        viking://resources/<path_prefix>/<source path>/<doc name>, so only
-        parent targets under the public resources root can be honored.
-        """
-        if not target_uri:
-            return None
-        root = "viking://resources"
-        if target_uri == root:
-            return None
-        if not target_uri.startswith(root + "/"):
-            raise InvalidArgumentError(
-                "Connector imports can only target the public resources root "
-                f"(viking://resources/...), got '{target_uri}'."
-            )
-        segments = [seg for seg in target_uri[len(root) + 1 :].split("/") if seg]
-        return segments or None
 
     async def _add_resource_via_connector(
         self,
         path: str,
         ctx: RequestContext,
-        parent: Optional[str],
+        to: Optional[str],
+        reason: str = "",
+        connector_args: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Route add_resource to the external Connector service."""
+        from openviking.connector.routing import (
+            CONNECTOR_CREDENTIAL_ARGS,
+            CONNECTOR_SUPPORTED_ARGS,
+            detect_connector_add_type,
+        )
         from openviking.service.task_tracker import get_task_tracker
         from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
@@ -1382,27 +1415,81 @@ class ResourceService:
         if not ctx.api_key:
             raise InvalidArgumentError("Connector import requires an API key in the request.")
 
+        detected = detect_connector_add_type(path)
+        if detected is None:
+            raise InvalidArgumentError(f"'{path}' does not match any Connector source type.")
+        add_type, _ = detected
+
         target = ContentTargetSpec.from_fields(
             ctx=ctx,
             kind="resource",
-            parent=parent,
+            to=to,
             create_parent=bool(kwargs.get("create_parent", False)),
         )
-        task_resource_id = target.parent or None
-        path_prefix = self._connector_path_prefix(task_resource_id)
+        if not target.to:
+            raise InvalidArgumentError("Connector import requires an exact 'to' target.")
+        task_resource_id = target.to
+
+        if not kwargs.get("create_parent", False):
+            # Match the native pipeline default: unless create_parent=true is
+            # given, the parent of the exact target must pre-exist.
+            parent_uri, _, _ = task_resource_id.rpartition("/")
+            if parent_uri.startswith("viking://") and not await self._viking_fs.exists(
+                parent_uri, ctx
+            ):
+                raise InvalidArgumentError(
+                    f"Parent directory '{parent_uri}' does not exist; "
+                    "pass create_parent=true to create it."
+                )
+
+        forwarded_args = {
+            key: value
+            for key, value in (connector_args or {}).items()
+            if key in CONNECTOR_SUPPORTED_ARGS.get(add_type, frozenset()) and value
+        }
+        # Credentials travel exclusively in the dedicated auth_config field:
+        # param_config is logged verbatim by the Connector and the plugin,
+        # auth_config is redacted on every hop.
+        auth_config = {
+            key: str(value)
+            for key, value in (connector_args or {}).items()
+            if key in CONNECTOR_CREDENTIAL_ARGS.get(add_type, frozenset()) and value
+        }
+
+        tos_path: Optional[str] = None
+        param_config: Optional[Dict[str, Any]] = None
+        if add_type == "tos":
+            source_path = path[len("tos://") :].strip()
+            if not source_path:
+                raise InvalidArgumentError(
+                    "Connector TOS import requires path='tos://<bucket>/<path>'."
+                )
+            tos_path = source_path
+        elif add_type == "git":
+            from openviking.parse.accessors.git_accessor import GitAccessor
+
+            # Source-specific settings stay in param_config. The exact target
+            # is transported separately as the top-level ``to`` field.
+            repo_url, branch, commit = GitAccessor()._parse_repo_source(
+                path.strip(), **forwarded_args
+            )
+            param_config = {"repo_url": repo_url}
+            if commit:
+                # Routing already degraded abbreviated SHAs to the standard
+                # pipeline. Preserve the native accessor's historical precedence:
+                # when both commit and branch/ref are present, send only the full
+                # commit SHA so the plugin receives an unambiguous pinned request.
+                param_config["commit"] = str(commit)
+            elif branch:
+                param_config["branch"] = str(branch)
+        else:  # pragma: no cover - detection only yields tos/git today
+            raise InvalidArgumentError(f"Connector add_type '{add_type}' is not supported.")
 
         client = ConnectorClient(
             doc_add_url=config.connector,
             task_info_url=config.tracker,
             account_id=ctx.account_id,
         )
-
-        add_type, separator, source_path = path.partition("://")
-        source_path = source_path.strip()
-        if not separator or not add_type or not source_path:
-            raise InvalidArgumentError(
-                "Connector import requires path='<add_type>://<source path>'."
-            )
 
         task_tracker = get_task_tracker()
         task = await task_tracker.create(
@@ -1415,9 +1502,11 @@ class ResourceService:
             result = await client.submit_doc_add(
                 add_type=add_type,
                 api_key=ctx.api_key,
-                tos_path=source_path,
-                path_prefix=path_prefix,
+                tos_path=tos_path,
+                to=task_resource_id,
                 include_child=True,
+                param_config=param_config,
+                auth_config=auth_config or None,
                 extra_params=None,
             )
 
@@ -1443,16 +1532,18 @@ class ResourceService:
             )
             raise
 
-        background = asyncio.create_task(
-            self._monitor_connector_task(
-                client=client,
-                connector_task_key=connector_task_key,
-                ov_task_id=task.task_id,
-                poll_interval_ms=config.poll_interval_ms,
-                timeout_seconds=config.timeout_seconds,
-                ctx=ctx,
-            )
+        monitor = self._monitor_connector_task(
+            client=client,
+            connector_task_key=connector_task_key,
+            ov_task_id=task.task_id,
+            poll_interval_ms=config.poll_interval_ms,
+            timeout_seconds=config.timeout_seconds,
+            ctx=ctx,
+            reason=reason,
+            link_root_uri=task_resource_id or "viking://resources",
         )
+
+        background = asyncio.create_task(monitor)
         self._background_tasks.add(background)
         background.add_done_callback(self._background_tasks.discard)
 
@@ -1473,8 +1564,17 @@ class ResourceService:
         poll_interval_ms: int,
         timeout_seconds: int,
         ctx: RequestContext,
-    ) -> None:
-        """Poll the Connector task until terminal state, then update OV TaskRecord."""
+        reason: str = "",
+        link_root_uri: str = "",
+    ) -> Dict[str, Any]:
+        """Poll the Connector task until terminal state, then update OV TaskRecord.
+
+        Returns a terminal payload: ``{"status": "completed", ...}`` on
+        success, ``{"status": "failed", "error": ...}`` otherwise. When
+        *reason* is set, a successful import links one reason memory to
+        *link_root_uri* (the import root), matching the native add_resource
+        reason semantics of one reason entry referencing the resource root.
+        """
         from openviking.service.task_tracker import get_task_tracker
 
         task_tracker = get_task_tracker()
@@ -1519,28 +1619,47 @@ class ResourceService:
 
                 if status in terminal_statuses:
                     if status == "succeeded":
+                        completion: Dict[str, Any] = {
+                            "connector_status": status,
+                            "connector_task_key": connector_task_key,
+                        }
+                        if (reason or "").strip() and link_root_uri:
+                            link_result: Dict[str, Any] = {"root_uri": link_root_uri}
+                            await self._link_resource_reason_memory(
+                                result=link_result,
+                                ctx=ctx,
+                                reason=reason,
+                                source_name=None,
+                                timeout=None,
+                            )
+                            for key in ("memory_linking", "warnings"):
+                                if key in link_result:
+                                    completion[key] = link_result[key]
                         await task_tracker.complete(
                             ov_task_id,
-                            {"connector_status": status, "connector_task_key": connector_task_key},
+                            completion,
                             account_id=ctx.account_id,
                             user_id=ctx.user.user_id,
                         )
-                    else:
-                        error_msg = info.get("ErrorMessage") or info.get("error_message") or status
-                        await task_tracker.fail(
-                            ov_task_id,
-                            f"connector task {status}: {error_msg}",
-                            account_id=ctx.account_id,
-                            user_id=ctx.user.user_id,
-                        )
-                    return
+                        return {"status": "completed", **completion}
+                    error_msg = info.get("ErrorMessage") or info.get("error_message") or status
+                    failure = f"connector task {status}: {error_msg}"
+                    await task_tracker.fail(
+                        ov_task_id,
+                        failure,
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                    )
+                    return {"status": "failed", "error": failure}
 
+            timeout_msg = f"connector task timed out after {timeout_seconds}s"
             await task_tracker.fail(
                 ov_task_id,
-                f"connector task timed out after {timeout_seconds}s",
+                timeout_msg,
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
             )
+            return {"status": "failed", "error": timeout_msg}
         except asyncio.CancelledError:
             await task_tracker.fail(
                 ov_task_id,
@@ -1557,6 +1676,7 @@ class ResourceService:
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
             )
+            return {"status": "failed", "error": str(exc)}
 
     async def _handle_watch_task_creation(
         self,

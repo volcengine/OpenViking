@@ -15,6 +15,10 @@ from openviking.service.resource_service import ResourceService
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
+# Deterministic stand-in for the code-hosting predicate: routing tests must
+# not depend on the real hosting-domain configuration.
+_GIT_REPO_PREFIX = "https://git.example/"
+
 
 class _BackgroundTask:
     def add_done_callback(self, _callback):
@@ -38,6 +42,22 @@ def connector_config(monkeypatch):
         "get_openviking_config",
         lambda: SimpleNamespace(connector=config),
     )
+    monkeypatch.setattr(
+        "openviking.connector.routing.is_git_repo_url",
+        lambda path: (
+            isinstance(path, str) and path.startswith((_GIT_REPO_PREFIX, "https://github.com/"))
+        ),
+    )
+    monkeypatch.setattr(
+        "openviking.parse.accessors.git_accessor.get_openviking_config",
+        lambda: SimpleNamespace(
+            code=SimpleNamespace(
+                github_domains=["github.com", "git.example"],
+                gitlab_domains=[],
+                azure_devops_domains=[],
+            )
+        ),
+    )
     return config
 
 
@@ -52,9 +72,11 @@ def ctx():
 
 @pytest.fixture
 def service():
+    # Parent of the import target exists by default; the create_parent
+    # pre-check tests build their own service with a missing parent.
     return ResourceService(
         vikingdb=object(),
-        viking_fs=object(),
+        viking_fs=SimpleNamespace(exists=AsyncMock(return_value=True)),
         resource_processor=object(),
         skill_processor=object(),
     )
@@ -104,7 +126,7 @@ async def test_add_resource_routes_tos_to_connector(
     result = await service.add_resource(
         path="tos://bucket/a/b/c",
         ctx=ctx,
-        parent="viking://resources/x/y",
+        to="viking://resources/x/y",
     )
 
     assert result == {
@@ -117,8 +139,10 @@ async def test_add_resource_routes_tos_to_connector(
         add_type="tos",
         api_key="secret",
         tos_path="bucket/a/b/c",
-        path_prefix=["x", "y"],
+        to="viking://resources/x/y",
         include_child=True,
+        param_config=None,
+        auth_config=None,
         extra_params=None,
     )
     tracker.create.assert_awaited_once_with(
@@ -130,13 +154,13 @@ async def test_add_resource_routes_tos_to_connector(
 
 
 @pytest.mark.asyncio
-async def test_add_resource_uses_source_scheme_as_connector_add_type(
+async def test_add_resource_routes_git_repo_to_connector(
     monkeypatch,
     connector_config,
     ctx,
     service,
 ):
-    connector_config.allowed_add_types = ["s3", "tos"]
+    connector_config.allowed_add_types = ["tos", "git"]
     tracker = _task_tracker()
     connector_client = SimpleNamespace(
         submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"})
@@ -144,19 +168,208 @@ async def test_add_resource_uses_source_scheme_as_connector_add_type(
     _install_connector_dependencies(monkeypatch, tracker, connector_client)
 
     await service.add_resource(
-        path="s3://bucket/prefix",
+        path="https://git.example/org/repo.git",
         ctx=ctx,
-        parent="viking://resources/imports",
+        to="viking://resources/imports",
+        args={"branch": "release"},
     )
 
     connector_client.submit_doc_add.assert_awaited_once_with(
-        add_type="s3",
+        add_type="git",
         api_key="secret",
-        tos_path="bucket/prefix",
-        path_prefix=["imports"],
+        tos_path=None,
+        to="viking://resources/imports",
         include_child=True,
+        param_config={
+            "repo_url": "https://git.example/org/repo.git",
+            "branch": "release",
+        },
+        auth_config=None,
         extra_params=None,
     )
+
+
+@pytest.mark.asyncio
+async def test_git_connector_maps_ref_arg_to_branch(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+):
+    connector_config.allowed_add_types = ["git"]
+    tracker = _task_tracker()
+    connector_client = SimpleNamespace(
+        submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"})
+    )
+    _install_connector_dependencies(monkeypatch, tracker, connector_client)
+
+    await service.add_resource(
+        path="https://git.example/org/repo",
+        ctx=ctx,
+        to="viking://resources/imports",
+        args={"ref": "v1.2"},
+    )
+
+    submitted = connector_client.submit_doc_add.await_args.kwargs
+    assert submitted["add_type"] == "git"
+    assert submitted["param_config"]["branch"] == "v1.2"
+    assert submitted["param_config"]["repo_url"] == "https://git.example/org/repo"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("args", "expected_branch"),
+    [
+        (None, "release"),
+        ({"branch": "override"}, "override"),
+    ],
+    ids=["url-branch", "explicit-branch"],
+)
+async def test_git_connector_preserves_native_tree_url_semantics(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+    args,
+    expected_branch,
+):
+    connector_config.allowed_add_types = ["git"]
+    tracker = _task_tracker()
+    connector_client = SimpleNamespace(
+        submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"})
+    )
+    _install_connector_dependencies(monkeypatch, tracker, connector_client)
+
+    await service.add_resource(
+        path="https://github.com/acme/repo/tree/release",
+        ctx=ctx,
+        to="viking://resources/imports",
+        args=args,
+    )
+
+    submitted = connector_client.submit_doc_add.await_args.kwargs
+    assert submitted["param_config"] == {
+        "repo_url": "https://github.com/acme/repo",
+        "branch": expected_branch,
+    }
+
+
+def test_git_commit_tree_url_falls_back_to_native(connector_config, service):
+    connector_config.allowed_add_types = ["git"]
+
+    assert (
+        service._should_use_connector(
+            "https://github.com/acme/repo/tree/deadbee",
+            to="viking://resources/imports",
+        )
+        is False
+    )
+
+
+def test_git_commit_tree_url_with_credentials_fails_closed(connector_config, service):
+    connector_config.allowed_add_types = ["git"]
+
+    with pytest.raises(InvalidArgumentError, match="cannot fall back") as exc_info:
+        service._should_use_connector(
+            "https://github.com/acme/repo/tree/deadbee",
+            to="viking://resources/imports",
+            connector_args={"token": "ghp-secret"},
+        )
+
+    assert "ghp-secret" not in str(exc_info.value)
+
+
+_FULL_COMMIT_SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+
+
+def test_git_full_commit_arg_routes_to_connector(connector_config, service):
+    connector_config.allowed_add_types = ["git"]
+
+    assert (
+        service._should_use_connector(
+            "https://git.example/org/repo.git",
+            to="viking://resources/imports",
+            connector_args={"commit": _FULL_COMMIT_SHA},
+        )
+        is True
+    )
+
+
+def test_git_full_commit_with_credentials_routes_to_connector(connector_config, service):
+    connector_config.allowed_add_types = ["git"]
+
+    assert (
+        service._should_use_connector(
+            "https://git.example/org/repo.git",
+            to="viking://resources/imports",
+            connector_args={"commit": _FULL_COMMIT_SHA, "token": "ghp-secret"},
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize("branch_arg", ["branch", "ref"])
+def test_git_commit_with_branch_falls_back_to_native_for_wait(
+    connector_config,
+    service,
+    branch_arg,
+):
+    connector_config.allowed_add_types = ["git"]
+
+    assert (
+        service._should_use_connector(
+            "https://git.example/org/repo.git",
+            to="viking://resources/imports",
+            wait=True,
+            connector_args={"commit": _FULL_COMMIT_SHA, branch_arg: "main"},
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "args"),
+    [
+        (f"https://github.com/acme/repo/tree/{_FULL_COMMIT_SHA}", None),
+        (
+            "https://github.com/acme/repo",
+            {"commit": _FULL_COMMIT_SHA, "branch": "main"},
+        ),
+        (
+            "https://github.com/acme/repo",
+            {"commit": _FULL_COMMIT_SHA, "ref": "release"},
+        ),
+    ],
+    ids=["tree-url", "commit-over-branch", "commit-over-ref"],
+)
+async def test_git_connector_pins_full_commit_in_param_config(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+    path,
+    args,
+):
+    connector_config.allowed_add_types = ["git"]
+    tracker = _task_tracker()
+    connector_client = SimpleNamespace(
+        submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"})
+    )
+    _install_connector_dependencies(monkeypatch, tracker, connector_client)
+
+    await service.add_resource(
+        path=path,
+        ctx=ctx,
+        to="viking://resources/imports",
+        args=args,
+    )
+
+    submitted = connector_client.submit_doc_add.await_args.kwargs
+    assert submitted["param_config"] == {
+        "repo_url": "https://github.com/acme/repo",
+        "commit": _FULL_COMMIT_SHA,
+    }
 
 
 @pytest.mark.asyncio
@@ -172,16 +385,14 @@ async def test_connector_import_persists_task_before_remote_submission(
         tracker.create.assert_awaited_once()
         raise RuntimeError("submission failed")
 
-    connector_client = SimpleNamespace(
-        submit_doc_add=AsyncMock(side_effect=fail_submission)
-    )
+    connector_client = SimpleNamespace(submit_doc_add=AsyncMock(side_effect=fail_submission))
     _install_connector_dependencies(monkeypatch, tracker, connector_client)
 
     with pytest.raises(RuntimeError, match="submission failed"):
         await service.add_resource(
             path="tos://bucket/prefix",
             ctx=ctx,
-            parent="viking://resources/imports",
+            to="viking://resources/imports",
         )
 
     tracker.fail.assert_awaited_once_with(
@@ -193,17 +404,77 @@ async def test_connector_import_persists_task_before_remote_submission(
 
 
 @pytest.mark.asyncio
-async def test_connector_import_rejects_exact_to_target(
+async def test_connector_import_rejects_parent_target(
     connector_config,
     ctx,
     service,
 ):
-    with pytest.raises(InvalidArgumentError, match="exact 'to' targets"):
+    with pytest.raises(InvalidArgumentError, match="parent targets"):
+        await service.add_resource(
+            path="tos://bucket/a/b/c",
+            ctx=ctx,
+            parent="viking://resources/x/y",
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_kwargs",
+    [{}, {"create_parent": False}],
+    ids=["omitted", "explicit_false"],
+)
+async def test_connector_requires_existing_parent_unless_create_parent(
+    connector_config,
+    ctx,
+    request_kwargs,
+):
+    viking_fs = SimpleNamespace(exists=AsyncMock(return_value=False))
+    service = ResourceService(
+        vikingdb=object(),
+        viking_fs=viking_fs,
+        resource_processor=object(),
+        skill_processor=object(),
+    )
+
+    with pytest.raises(InvalidArgumentError, match="does not exist"):
         await service.add_resource(
             path="tos://bucket/a/b/c",
             ctx=ctx,
             to="viking://resources/x/y",
+            **request_kwargs,
         )
+
+    viking_fs.exists.assert_awaited_once_with("viking://resources/x", ctx)
+
+
+@pytest.mark.asyncio
+async def test_connector_create_parent_false_accepts_existing_parent(
+    monkeypatch,
+    connector_config,
+    ctx,
+):
+    viking_fs = SimpleNamespace(exists=AsyncMock(return_value=True))
+    service = ResourceService(
+        vikingdb=object(),
+        viking_fs=viking_fs,
+        resource_processor=object(),
+        skill_processor=object(),
+    )
+    tracker = _task_tracker()
+    connector_client = SimpleNamespace(
+        submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"})
+    )
+    _install_connector_dependencies(monkeypatch, tracker, connector_client)
+
+    result = await service.add_resource(
+        path="tos://bucket/a/b/c",
+        ctx=ctx,
+        to="viking://resources/x/y",
+        create_parent=False,
+    )
+
+    assert result["status"] == "accepted"
+    connector_client.submit_doc_add.assert_awaited_once()
 
 
 def test_connector_only_route_rejects_disabled_or_unsupported_requests(
@@ -212,78 +483,236 @@ def test_connector_only_route_rejects_disabled_or_unsupported_requests(
 ):
     assert service._should_use_connector("https://example.com/doc") is False
 
-    with pytest.raises(InvalidArgumentError, match="wait=true"):
-        service._should_use_connector("tos://bucket/prefix", wait=True)
-
-    with pytest.raises(InvalidArgumentError, match="reason"):
-        service._should_use_connector("tos://bucket/prefix", reason="needed for Q3 planning")
+    with pytest.raises(InvalidArgumentError, match="args keys"):
+        service._should_use_connector("tos://bucket/prefix", connector_args={"parser": "pdf"})
 
     connector_config.enable = False
     with pytest.raises(InvalidArgumentError, match="Connector integration"):
         service._should_use_connector("tos://bucket/prefix")
 
 
-@pytest.mark.parametrize(
-    ("path", "target"),
-    [
-        (
-            "https://example.com/manual.pdf",
-            {"to": "viking://resources/manual.pdf"},
-        ),
-        (
-            "http://example.com/manual.pdf",
-            {"parent": "viking://user/alice/resources/manuals"},
-        ),
-        (
-            "git://example.com/repository.git",
-            {"parent": "viking://user/alice/peers/bob/resources/manuals"},
-        ),
-    ],
-)
-def test_shared_connector_sources_fall_back_for_unsupported_targets(
+def test_git_route_degrades_when_disabled_or_type_not_allowed(connector_config, service):
+    # "git" not in allowed_add_types: standard pipeline handles the repo.
+    assert service._should_use_connector("https://git.example/org/repo.git") is False
+
+    connector_config.allowed_add_types = ["tos", "git"]
+    connector_config.enable = False
+    assert service._should_use_connector("https://git.example/org/repo.git") is False
+
+
+def test_git_source_falls_back_for_parent_target(
     connector_config,
     service,
-    path,
-    target,
 ):
-    connector_config.allowed_add_types = ["https", "http", "git"]
-
-    assert service._should_use_connector(path, **target) is False
-
-
-@pytest.mark.parametrize(
-    "parent",
-    ["viking://resources/manuals", "resources/manuals"],
-)
-def test_connector_route_accepts_public_parent(connector_config, ctx, service, parent):
-    connector_config.allowed_add_types = ["https"]
+    connector_config.allowed_add_types = ["tos", "git"]
 
     assert (
         service._should_use_connector(
-            "https://example.com/manual.pdf",
+            "https://git.example/org/repo.git",
+            parent="viking://resources/manuals",
+        )
+        is False
+    )
+
+
+def test_git_route_accepts_explicit_create_parent_false(connector_config, service):
+    connector_config.allowed_add_types = ["tos", "git"]
+
+    assert (
+        service._should_use_connector(
+            "https://git.example/org/repo.git",
+            to="viking://resources/repo",
+            kwargs={"create_parent": False},
+        )
+        is True
+    )
+
+
+def test_git_source_falls_back_for_unsupported_args(connector_config, service):
+    connector_config.allowed_add_types = ["tos", "git"]
+
+    assert (
+        service._should_use_connector(
+            "https://git.example/org/repo.git",
+            connector_args={"depth": "1"},
+        )
+        is False
+    )
+
+
+def test_git_route_accepts_credential_args(connector_config, service):
+    connector_config.allowed_add_types = ["tos", "git"]
+
+    assert (
+        service._should_use_connector(
+            "https://git.example/org/repo.git",
+            to="viking://resources/repo",
+            connector_args={"token": "ghp-secret", "username": "oauth2"},
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "routing_kwargs",
+    [
+        {"to": "viking://resources/repo", "kwargs": {"include": "docs/**"}},
+        {"to": "viking://resources/repo", "wait": True},
+        {},
+        {"parent": "viking://resources/imports"},
+    ],
+    ids=["include", "wait", "missing_to", "parent"],
+)
+def test_git_credentials_fail_closed_when_connector_request_would_fallback(
+    connector_config,
+    service,
+    routing_kwargs,
+):
+    connector_config.allowed_add_types = ["tos", "git"]
+
+    with pytest.raises(InvalidArgumentError, match="cannot fall back") as exc_info:
+        service._should_use_connector(
+            "https://git.example/org/private.git",
+            connector_args={"token": "ghp-secret", "username": "oauth2"},
+            **routing_kwargs,
+        )
+
+    assert "ghp-secret" not in str(exc_info.value)
+
+
+def test_git_credentials_require_enabled_allowed_connector(connector_config, service):
+    with pytest.raises(InvalidArgumentError, match="require Connector import") as exc_info:
+        service._should_use_connector(
+            "https://git.example/org/private.git",
+            to="viking://resources/private",
+            connector_args={"token": "ghp-secret"},
+        )
+
+    assert "ghp-secret" not in str(exc_info.value)
+
+
+def test_tos_route_rejects_credential_args(connector_config, service):
+    with pytest.raises(InvalidArgumentError, match="args keys"):
+        service._should_use_connector(
+            "tos://bucket/prefix",
+            connector_args={"token": "ghp-secret"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_git_credential_args_travel_in_auth_config_only(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+):
+    connector_config.allowed_add_types = ["tos", "git"]
+    tracker = _task_tracker()
+    connector_client = SimpleNamespace(
+        submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"})
+    )
+    _install_connector_dependencies(monkeypatch, tracker, connector_client)
+
+    await service.add_resource(
+        path="https://git.example/org/private.git",
+        ctx=ctx,
+        to="viking://resources/private",
+        args={"branch": "main", "token": "ghp-secret", "username": "oauth2"},
+    )
+
+    submitted = connector_client.submit_doc_add.await_args.kwargs
+    assert submitted["auth_config"] == {"token": "ghp-secret", "username": "oauth2"}
+    assert submitted["param_config"] == {
+        "repo_url": "https://git.example/org/private.git",
+        "branch": "main",
+    }
+
+
+@pytest.mark.asyncio
+async def test_git_credentials_with_include_never_enqueue_native_job(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+):
+    connector_config.allowed_add_types = ["tos", "git"]
+    monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: True)
+    service._add_resource_via_connector = AsyncMock()
+    service.enqueue_git_add_resource = AsyncMock()
+
+    with pytest.raises(InvalidArgumentError, match="cannot fall back") as exc_info:
+        await service.add_resource(
+            path="https://git.example/org/private.git",
             ctx=ctx,
-            parent=parent,
+            to="viking://resources/private",
+            wait=False,
+            include="docs/**",
+            args={"token": "ghp-secret", "username": "oauth2"},
+        )
+
+    assert "ghp-secret" not in str(exc_info.value)
+    service._add_resource_via_connector.assert_not_awaited()
+    service.enqueue_git_add_resource.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "credential_args",
+    [
+        {"token": "ghp-secret"},
+        {"username": "oauth2"},
+    ],
+    ids=["token", "username"],
+)
+async def test_native_git_enqueue_rejects_credentials_before_durable_job(
+    ctx,
+    service,
+    credential_args,
+):
+    service._enqueue_add_resource_job = AsyncMock()
+
+    with pytest.raises(InvalidArgumentError, match="persists job parameters") as exc_info:
+        await service.enqueue_git_add_resource(
+            path="https://git.example/org/private.git",
+            ctx=ctx,
+            to="viking://resources/private",
+            args=credential_args,
+        )
+
+    assert all(value not in str(exc_info.value) for value in credential_args.values())
+    service._enqueue_add_resource_job.assert_not_awaited()
+
+
+@pytest.mark.parametrize("to", ["viking://resources/manuals", "resources/manuals"])
+def test_connector_route_accepts_public_exact_to(connector_config, ctx, service, to):
+    connector_config.allowed_add_types = ["tos", "git"]
+
+    assert (
+        service._should_use_connector(
+            "https://git.example/org/repo.git",
+            ctx=ctx,
+            to=to,
         )
         is True
     )
 
 
 @pytest.mark.asyncio
-async def test_add_resource_falls_back_for_shared_source_with_exact_to(
+async def test_add_resource_falls_back_for_shared_source_with_parent(
     monkeypatch,
     connector_config,
     ctx,
     service,
 ):
-    connector_config.allowed_add_types = ["https"]
+    connector_config.allowed_add_types = ["tos", "git"]
     monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: True)
     service._add_resource_via_connector = AsyncMock()
     service.enqueue_git_add_resource = AsyncMock(return_value={"root_uri": "standard-pipeline"})
 
     result = await service.add_resource(
-        path="https://example.com/manual.pdf",
+        path="https://git.example/org/repo.git",
         ctx=ctx,
-        to="viking://resources/manual.pdf",
+        parent="viking://resources/repo",
     )
 
     assert result == {"root_uri": "standard-pipeline"}
@@ -292,7 +721,31 @@ async def test_add_resource_falls_back_for_shared_source_with_exact_to(
 
 
 @pytest.mark.asyncio
-async def test_connector_import_without_target_keeps_resource_id_unset(
+async def test_shared_source_create_parent_false_routes_to_connector(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+):
+    connector_config.allowed_add_types = ["tos", "git"]
+    monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: True)
+    service._add_resource_via_connector = AsyncMock(return_value={"status": "accepted"})
+    service.enqueue_git_add_resource = AsyncMock()
+
+    result = await service.add_resource(
+        path="https://git.example/org/repo.git",
+        ctx=ctx,
+        to="viking://resources/repo",
+        create_parent=False,
+    )
+
+    assert result == {"status": "accepted"}
+    service.enqueue_git_add_resource.assert_not_awaited()
+    service._add_resource_via_connector.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_connector_import_without_target_is_rejected(
     monkeypatch,
     connector_config,
     ctx,
@@ -304,14 +757,14 @@ async def test_connector_import_without_target_keeps_resource_id_unset(
     )
     _install_connector_dependencies(monkeypatch, tracker, connector_client)
 
-    result = await service._add_resource_via_connector(
-        path="tos://bucket/prefix",
-        ctx=ctx,
-        parent=None,
-    )
+    with pytest.raises(InvalidArgumentError, match="exact 'to' target"):
+        await service._add_resource_via_connector(
+            path="tos://bucket/prefix",
+            ctx=ctx,
+            to=None,
+        )
 
-    assert "resource_id" not in result
-    assert tracker.create.await_args.kwargs["resource_id"] is None
+    tracker.create.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -324,23 +777,105 @@ async def test_connector_import_rejects_target_outside_public_resources_root(
         await service.add_resource(
             path="tos://bucket/prefix",
             ctx=ctx,
-            parent="viking://user/alice/resources/spec",
+            to="viking://user/alice/resources/spec",
         )
 
 
 @pytest.mark.asyncio
-async def test_connector_import_rejects_nonempty_args(
+async def test_connector_import_rejects_unsupported_args(
     connector_config,
     ctx,
     service,
 ):
-    with pytest.raises(InvalidArgumentError, match="args"):
+    with pytest.raises(InvalidArgumentError, match="args keys"):
         await service.add_resource(
             path="tos://bucket/prefix",
             ctx=ctx,
-            parent="viking://resources/spec",
+            to="viking://resources/spec",
             args={"parser": "pdf"},
         )
+
+
+def test_git_source_falls_back_for_wait(connector_config, service):
+    connector_config.allowed_add_types = ["tos", "git"]
+
+    assert (
+        service._should_use_connector(
+            "https://git.example/org/repo.git",
+            to="viking://resources/repo",
+            wait=True,
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_tos_connector_rejects_wait(connector_config, ctx, service):
+    with pytest.raises(InvalidArgumentError, match="wait=true"):
+        await service.add_resource(
+            path="tos://bucket/prefix",
+            ctx=ctx,
+            to="viking://resources/imports",
+            wait=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_monitor_links_reason_memory_on_success(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+):
+    tracker = _task_tracker()
+    monkeypatch.setattr(
+        "openviking.service.task_tracker.get_task_tracker",
+        lambda: tracker,
+    )
+    client = SimpleNamespace(get_task_info=AsyncMock(return_value={"Status": "succeeded"}))
+    service._link_resource_reason_memory = AsyncMock()
+
+    outcome = await service._monitor_connector_task(
+        client=client,
+        connector_task_key="connector-1",
+        ov_task_id="task-1",
+        poll_interval_ms=10,
+        timeout_seconds=5,
+        ctx=ctx,
+        reason="track quarterly reports",
+        link_root_uri="viking://resources/imports",
+    )
+
+    assert outcome["status"] == "completed"
+    tracker.complete.assert_awaited_once()
+    link_kwargs = service._link_resource_reason_memory.await_args.kwargs
+    assert link_kwargs["reason"] == "track quarterly reports"
+    assert link_kwargs["result"] == {"root_uri": "viking://resources/imports"}
+
+
+@pytest.mark.asyncio
+async def test_git_reason_routes_to_connector(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+):
+    connector_config.allowed_add_types = ["tos", "git"]
+    monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: True)
+    service._add_resource_via_connector = AsyncMock(return_value={"status": "accepted"})
+    service.enqueue_git_add_resource = AsyncMock()
+
+    result = await service.add_resource(
+        path="https://git.example/org/repo.git",
+        ctx=ctx,
+        to="viking://resources/imports",
+        reason="track quarterly reports",
+    )
+
+    assert result == {"status": "accepted"}
+    service.enqueue_git_add_resource.assert_not_awaited()
+    connector_kwargs = service._add_resource_via_connector.await_args.kwargs
+    assert connector_kwargs["reason"] == "track quarterly reports"
 
 
 @pytest.mark.asyncio
@@ -375,7 +910,7 @@ async def test_monitor_connector_task_maps_terminal_status(
     monkeypatch.setattr(resource_service_module.asyncio, "sleep", no_sleep)
     client = SimpleNamespace(get_task_info=AsyncMock(return_value=task_info))
 
-    await ResourceService()._monitor_connector_task(
+    outcome = await ResourceService()._monitor_connector_task(
         client=client,
         connector_task_key="connector-1",
         ov_task_id="task-1",
@@ -386,9 +921,11 @@ async def test_monitor_connector_task_maps_terminal_status(
 
     assert tracker.update_stage.await_args.args[1] == expected_stage
     if expected_error is None:
+        assert outcome["status"] == "completed"
         tracker.complete.assert_awaited_once()
         tracker.fail.assert_not_awaited()
     else:
+        assert outcome == {"status": "failed", "error": expected_error}
         assert tracker.fail.await_args.args[1] == expected_error
         tracker.complete.assert_not_awaited()
 

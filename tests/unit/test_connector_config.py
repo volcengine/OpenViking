@@ -14,6 +14,12 @@ def test_connector_config_is_opt_in_and_tos_only_by_default():
     assert config.allowed_add_types == ["tos"]
 
 
+def test_connector_config_accepts_arbitrary_add_types():
+    config = ConnectorConfig(allowed_add_types=["tos", "git", "custom"])
+
+    assert config.allowed_add_types == ["tos", "git", "custom"]
+
+
 def test_openviking_config_parses_connector_section():
     config = OpenVikingConfig.from_dict(
         {

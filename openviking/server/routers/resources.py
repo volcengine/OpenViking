@@ -206,8 +206,12 @@ async def add_resource(
         "exclude": request.exclude,
         "directly_upload_media": request.directly_upload_media,
         "watch_interval": request.watch_interval,
-        "create_parent": request.create_parent,
     }
+    # Connector routing needs to distinguish an omitted create_parent from an
+    # explicit false.  Standard imports still observe false when the field is
+    # omitted because ResourceService reads it with kwargs.get(..., False).
+    if "create_parent" in request.model_fields_set:
+        kwargs["create_parent"] = request.create_parent
     if request.temp_file_id:
         kwargs["temp_file_id"] = request.temp_file_id
     if request.preserve_structure is not None:

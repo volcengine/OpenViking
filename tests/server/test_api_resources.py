@@ -97,6 +97,38 @@ async def test_add_resource_forwards_args_to_service(
     assert seen["args"] == {"feishu_access_token": "u-test"}
 
 
+async def test_add_resource_preserves_create_parent_field_presence(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    calls = []
+
+    async def fake_add_resource(**kwargs):
+        calls.append(kwargs)
+        return {"status": "success", "root_uri": "viking://resources/demo"}
+
+    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
+
+    omitted = await client.post(
+        "/api/v1/resources",
+        json={"path": "https://example.com/demo.md", "to": "viking://resources/demo.md"},
+    )
+    explicit_false = await client.post(
+        "/api/v1/resources",
+        json={
+            "path": "https://example.com/demo.md",
+            "to": "viking://resources/demo.md",
+            "create_parent": False,
+        },
+    )
+
+    assert omitted.status_code == 200
+    assert explicit_false.status_code == 200
+    assert "create_parent" not in calls[0]
+    assert calls[1]["create_parent"] is False
+
+
 async def test_add_resource_with_telemetry_wait(
     client: httpx.AsyncClient,
     sample_markdown_file,
