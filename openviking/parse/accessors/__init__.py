@@ -8,7 +8,14 @@ This module provides the two-layer architecture for resource processing:
 - DataParser: Parses local files/directories (existing Parser system)
 """
 
-from .base import DataAccessor, LocalResource
+from .base import (
+    AccessError,
+    AccessResult,
+    ConnectionStatus,
+    DataAccessor,
+    LocalResource,
+)
+from .email_accessor import EmailAccessor
 from .feishu_accessor import FeishuAccessor
 from .git_accessor import GitAccessor
 from .http_accessor import HTTPAccessor
@@ -24,6 +31,10 @@ __all__ = [
     # Base classes
     "DataAccessor",
     "LocalResource",
+    # Standard sync types
+    "AccessError",
+    "AccessResult",
+    "ConnectionStatus",
     # Registry
     "AccessorRegistry",
     "get_accessor_registry",
@@ -32,6 +43,7 @@ __all__ = [
     "GitAccessor",
     "HTTPAccessor",
     "FeishuAccessor",
+    "EmailAccessor",
     "LocalAccessor",
     "WebFeedAccessor",
     # Helpers
