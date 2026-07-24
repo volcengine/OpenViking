@@ -166,7 +166,7 @@ jobs:
         git fetch --force --tags
 
     - name: Set up Node.js for Studio build (Linux)
-      uses: actions/setup-node@v6
+      uses: actions/setup-node@v7
       with:
         node-version: '22'
         cache: npm
@@ -431,7 +431,7 @@ jobs:
       with:
         toolchain: stable
     - name: Set up Node.js for Studio build
-      uses: actions/setup-node@v6
+      uses: actions/setup-node@v7
       with:
         node-version: '22'
         cache: npm
