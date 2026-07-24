@@ -5,7 +5,12 @@
 import asyncio
 import json
 import os
+import secrets
+import stat
+import tempfile
 import zipfile
+from contextlib import ExitStack
+from pathlib import Path
 from typing import Any, Optional
 
 from openviking.core.namespace import context_type_for_uri, is_session_uri, relative_uri_path
@@ -67,6 +72,30 @@ from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
 
 logger = get_logger(__name__)
+
+
+def _create_export_temp(to: str) -> tuple[int, str]:
+    """Create a sibling temp file with the permissions a direct write would retain."""
+    directory = os.path.dirname(os.path.abspath(to))
+    while True:
+        temp_to = os.path.join(
+            directory, f".{os.path.basename(to)}.{secrets.token_hex(8)}.tmp"
+        )
+        try:
+            fd = os.open(temp_to, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o666)
+            break
+        except FileExistsError:
+            continue
+    try:
+        os.chmod(temp_to, stat.S_IMODE(os.stat(to).st_mode))
+    except FileNotFoundError:
+        pass
+    except BaseException:
+        os.close(fd)
+        Path(temp_to).unlink(missing_ok=True)
+        raise
+    return fd, temp_to
+
 
 OPTIONAL_SEMANTIC_SIDECARS = frozenset({".abstract.md", ".overview.md"})
 
@@ -422,7 +451,13 @@ async def _write_ovpack_archive(
         if entry.get("kind") == "file"
     }
 
-    with zipfile.ZipFile(to, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
+    with ExitStack() as cleanup:
+        fd, temp_to = _create_export_temp(to)
+        os.close(fd)
+        cleanup.callback(Path(temp_to).unlink, missing_ok=True)
+        zf = cleanup.enter_context(
+            zipfile.ZipFile(temp_to, "w", zipfile.ZIP_DEFLATED, allowZip64=True)
+        )
         zf.writestr(base_name + "/", "")
         zf.writestr(f"{base_name}/{OVPACK_FILES_DIR}/", "")
 
@@ -470,6 +505,8 @@ async def _write_ovpack_archive(
             f"{base_name}/{OVPACK_MANIFEST_ZIP_LEAF}",
             json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8"),
         )
+        zf.close()
+        os.replace(temp_to, to)
     return to
 
 
