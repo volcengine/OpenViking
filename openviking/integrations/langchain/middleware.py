@@ -41,6 +41,7 @@ from openviking.integrations.langchain.retrievers import OpenVikingRetriever
 
 logger = logging.getLogger(__name__)
 
+_BATCH_ADD_MESSAGES_LIMIT = 100
 _SESSION_ID_ERROR = (
     "OpenVikingContextMiddleware requires a LangGraph session id. Pass "
     'config={"configurable": {"thread_id": "..."}}, set state["session_id"], '
@@ -197,27 +198,41 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             start = len(previous_signatures)
 
         client = ensure_client(self._connection)
-        added = 0
-        pending_context_parts = list(self._pending_context_parts.pop(capture_key, []))
-        for message in messages[start:]:
+        batch = []
+        chunks = []
+        batch_has_context = False
+        pending_context_parts = list(self._pending_context_parts.get(capture_key, []))
+        for message_index, message in enumerate(messages[start:], start=start):
             if OPENVIKING_CONTEXT_MARKER in _message_content(message):
                 continue
             payloads = langchain_message_to_openviking(message)
+            if batch and len(batch) + len(payloads) > _BATCH_ADD_MESSAGES_LIMIT:
+                chunks.append((batch, message_index, batch_has_context))
+                batch = []
+                batch_has_context = False
             for payload in payloads:
                 if pending_context_parts and payload["role"] == "assistant":
                     payload["parts"].extend(pending_context_parts)
                     pending_context_parts = []
-                call_openviking(
-                    client,
-                    "add_message",
-                    session_id=session_id,
-                    role=payload["role"],
-                    parts=payload["parts"],
-                    peer_id=peer_id,
-                )
-                added += 1
+                    batch_has_context = True
+                if peer_id is not None:
+                    payload["peer_id"] = peer_id
+                batch.append(payload)
+        if batch:
+            chunks.append((batch, len(messages), batch_has_context))
+        for chunk, signature_end, has_context in chunks:
+            call_openviking(
+                client,
+                "batch_add_messages",
+                session_id=session_id,
+                messages=chunk,
+            )
+            self._captured_signatures[capture_key] = current_signatures[:signature_end]
+            if has_context:
+                self._pending_context_parts.pop(capture_key, None)
+        self._pending_context_parts.pop(capture_key, None)
         self._captured_signatures[capture_key] = current_signatures
-        if added:
+        if batch:
             apply_commit_policy(client, session_id, self.commit_policy)
         return None
 
