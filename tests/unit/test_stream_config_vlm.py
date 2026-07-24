@@ -90,7 +90,15 @@ class TestVLMStreamConfig:
 
         call_kwargs = mock_client.chat.completions.create.call_args[1]
         assert call_kwargs.get("stream") is True
+        assert call_kwargs.get("stream_options") == {"include_usage": True}
         assert result == "Hello world!"
+
+    def test_tool_calls_keep_non_streaming_response_contract(self):
+        vlm = OpenAIVLM({"api_key": "sk-test", "stream": True})
+        tools = [{"type": "function", "function": {"name": "lookup"}}]
+
+        assert vlm._build_text_kwargs(tools=tools)["stream"] is False
+        assert vlm._build_vision_kwargs(tools=tools)["stream"] is False
 
     @patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI")
     def test_stream_false_uses_non_streaming_path(self, mock_openai_class):
@@ -425,15 +433,13 @@ class TestStreamingResponseProcessing:
             MockChunk(content="Hello", usage=MockUsage(prompt_tokens=10, completion_tokens=5)),
         ]
 
-        with patch.object(vlm, "update_token_usage") as mock_update:
-            vlm._process_streaming_response(iter(chunks))
+        with (
+            patch.object(vlm, "_update_token_usage_from_response") as mock_update,
+            patch("openviking.models.vlm.backends.openai_vlm.time.perf_counter", return_value=2.0),
+        ):
+            vlm._process_streaming_response(iter(chunks), started_at=1.5)
 
-            mock_update.assert_called_once_with(
-                model_name="gpt-4o-mini",
-                provider="openai",
-                prompt_tokens=10,
-                completion_tokens=5,
-            )
+            mock_update.assert_called_once_with(chunks[0], 0.5)
 
     def test_process_streaming_response_empty_chunks(self):
         """_process_streaming_response should handle empty chunks."""
@@ -464,12 +470,11 @@ class TestStreamingResponseProcessing:
             yield MockChunk(content="Test")
             yield MockChunk(content="", usage=MockUsage(prompt_tokens=15, completion_tokens=8))
 
-        with patch.object(vlm, "update_token_usage") as mock_update:
-            await vlm._process_streaming_response_async(async_chunks())
+        with (
+            patch.object(vlm, "_update_token_usage_from_response") as mock_update,
+            patch("openviking.models.vlm.backends.openai_vlm.time.perf_counter", return_value=3.0),
+        ):
+            await vlm._process_streaming_response_async(async_chunks(), started_at=1.0)
 
-            mock_update.assert_called_once_with(
-                model_name="gpt-4o-mini",
-                provider="openai",
-                prompt_tokens=15,
-                completion_tokens=8,
-            )
+            assert mock_update.call_args.args[1] == 2.0
+            assert mock_update.call_args.args[0].usage.prompt_tokens == 15

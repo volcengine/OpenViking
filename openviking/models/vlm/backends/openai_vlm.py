@@ -215,6 +215,42 @@ class OpenAIVLM(VLMBase):
             )
         return message.content or ""
 
+    def _extract_from_chunk(self, chunk):
+        """Extract content and usage from a single streaming chunk."""
+        content = None
+
+        if chunk.choices and chunk.choices[0].delta:
+            content = getattr(chunk.choices[0].delta, "content", None)
+        return content, chunk if getattr(chunk, "usage", None) else None
+
+    def _process_streaming_response(self, response, started_at: Optional[float] = None):
+        """Aggregate a synchronous stream and record its final usage."""
+        content_parts = []
+        usage_response = None
+        for chunk in response:
+            content, chunk_usage = self._extract_from_chunk(chunk)
+            if content:
+                content_parts.append(content)
+            usage_response = chunk_usage or usage_response
+        if usage_response:
+            duration_seconds = time.perf_counter() - started_at if started_at is not None else 0.0
+            self._update_token_usage_from_response(usage_response, duration_seconds)
+        return "".join(content_parts)
+
+    async def _process_streaming_response_async(self, response, started_at: Optional[float] = None):
+        """Aggregate an asynchronous stream and record its final usage."""
+        content_parts = []
+        usage_response = None
+        async for chunk in response:
+            content, chunk_usage = self._extract_from_chunk(chunk)
+            if content:
+                content_parts.append(content)
+            usage_response = chunk_usage or usage_response
+        if usage_response:
+            duration_seconds = time.perf_counter() - started_at if started_at is not None else 0.0
+            self._update_token_usage_from_response(usage_response, duration_seconds)
+        return "".join(content_parts)
+
     def _build_text_kwargs(
         self,
         prompt: str = "",
@@ -227,10 +263,14 @@ class OpenAIVLM(VLMBase):
         kwargs_messages = messages or [{"role": "user", "content": prompt}]
         model = self.model or "gpt-4o-mini"
         is_reasoning = _is_reasoning_model(model)
+        effective_stream = self.stream and not tools
         kwargs: Dict[str, Any] = {
             "model": model,
             "messages": kwargs_messages,
+            "stream": effective_stream,
         }
+        if effective_stream:
+            kwargs["stream_options"] = {"include_usage": True}
         if is_reasoning:
             kwargs["reasoning_effort"] = self.reasoning_effort
         else:
@@ -265,10 +305,14 @@ class OpenAIVLM(VLMBase):
 
         model = self.model or "gpt-4o-mini"
         is_reasoning = _is_reasoning_model(model)
+        effective_stream = self.stream and not tools
         kwargs: Dict[str, Any] = {
             "model": model,
             "messages": kwargs_messages,
+            "stream": effective_stream,
         }
+        if effective_stream:
+            kwargs["stream_options"] = {"include_usage": True}
         if is_reasoning:
             kwargs["reasoning_effort"] = self.reasoning_effort
         else:
@@ -281,14 +325,22 @@ class OpenAIVLM(VLMBase):
             kwargs["tool_choice"] = tool_choice or "auto"
         return kwargs
 
-    def _extract_completion_content(self, response, elapsed: float) -> str:
-        self._update_token_usage_from_response(response, duration_seconds=elapsed)
-        content = self._extract_content_from_response(response)
+    def _extract_completion_content(self, response, started_at: float) -> str:
+        if self.stream:
+            content = self._process_streaming_response(response, started_at)
+        else:
+            elapsed = time.perf_counter() - started_at
+            self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            content = self._extract_content_from_response(response)
         return self._clean_response(content)
 
-    async def _extract_completion_content_async(self, response, elapsed: float) -> str:
-        self._update_token_usage_from_response(response, duration_seconds=elapsed)
-        content = self._extract_content_from_response(response)
+    async def _extract_completion_content_async(self, response, started_at: float) -> str:
+        if self.stream:
+            content = await self._process_streaming_response_async(response, started_at)
+        else:
+            elapsed = time.perf_counter() - started_at
+            self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            content = self._extract_content_from_response(response)
         return self._clean_response(content)
 
     def get_completion(
@@ -307,11 +359,11 @@ class OpenAIVLM(VLMBase):
         def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
             response = client.chat.completions.create(**kwargs)
-            elapsed = time.perf_counter() - t0
             if tools:
+                elapsed = time.perf_counter() - t0
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)
                 return self._build_vlm_response(response, has_tools=True)
-            return self._extract_completion_content(response, elapsed)
+            return self._extract_completion_content(response, t0)
 
         return retry_sync(
             _call,
@@ -337,11 +389,11 @@ class OpenAIVLM(VLMBase):
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
             response = await client.chat.completions.create(**kwargs)
-            elapsed = time.perf_counter() - t0
             if tools:
+                elapsed = time.perf_counter() - t0
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)
                 return self._build_vlm_response(response, has_tools=True)
-            return await self._extract_completion_content_async(response, elapsed)
+            return await self._extract_completion_content_async(response, t0)
 
         # 用 tracer.info 打印请求
         tracer.info(f"messages={json.dumps(kwargs, ensure_ascii=False, indent=2)}")
@@ -423,11 +475,11 @@ class OpenAIVLM(VLMBase):
         def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
             response = client.chat.completions.create(**kwargs)
-            elapsed = time.perf_counter() - t0
             if tools:
+                elapsed = time.perf_counter() - t0
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)
                 return self._build_vlm_response(response, has_tools=True)
-            return self._extract_completion_content(response, elapsed)
+            return self._extract_completion_content(response, t0)
 
         return retry_sync(
             _call,
@@ -455,11 +507,11 @@ class OpenAIVLM(VLMBase):
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
             response = await client.chat.completions.create(**kwargs)
-            elapsed = time.perf_counter() - t0
             if tools:
+                elapsed = time.perf_counter() - t0
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)
                 return self._build_vlm_response(response, has_tools=True)
-            return await self._extract_completion_content_async(response, elapsed)
+            return await self._extract_completion_content_async(response, t0)
 
         return await retry_async(
             _call,
