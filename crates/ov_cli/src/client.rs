@@ -1714,6 +1714,7 @@ impl HttpClient {
 mod tests {
     use super::{BaseClient, HttpClient, TimeoutConfig};
     use crate::base_client::api_error_from_envelope;
+    use crate::error::Error;
     use reqwest::StatusCode;
     use serde_json::json;
     use std::collections::HashMap;
@@ -1942,6 +1943,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn file_download_body_timeout_is_a_processing_failure() {
+        let base_url = spawn_stalled_response_body_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 0.02, false, None);
+
+        let error = client
+            .get_bytes("viking://resources/file.bin")
+            .await
+            .expect_err("stalled response body should time out");
+
+        assert!(matches!(error, Error::Timeout(_)));
+    }
+
+    #[tokio::test]
+    async fn pack_download_body_timeout_is_a_processing_failure() {
+        let base_url = spawn_stalled_response_body_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 0.02, false, None);
+        let output = tempfile::tempdir().expect("tempdir should be created");
+
+        let error = client
+            .export_ovpack(
+                "viking://resources",
+                output
+                    .path()
+                    .to_str()
+                    .expect("tempdir path should be valid"),
+                false,
+            )
+            .await
+            .expect_err("stalled response body should time out");
+
+        assert!(matches!(error, Error::Timeout(_)));
+    }
+
+    #[tokio::test]
+    async fn snapshot_blob_body_timeout_is_a_processing_failure() {
+        let base_url = spawn_stalled_response_body_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 0.02, false, None);
+
+        let error = match client
+            .snapshot_show("HEAD", Some("viking://resources/file.bin"))
+            .await
+        {
+            Ok(_) => panic!("stalled response body should time out"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(error, Error::Timeout(_)));
+    }
+
+    #[tokio::test]
     async fn snapshot_diff_sends_path_and_refs() {
         let (base_url, request_rx) = spawn_request_capture_server().await;
         let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
@@ -2111,6 +2162,26 @@ mod tests {
         });
 
         (format!("http://{addr}"), request_rx)
+    }
+
+    async fn spawn_stalled_response_body_server() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let addr = listener.local_addr().expect("test server should have addr");
+
+        tokio::spawn(async move {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let mut buffer = vec![0; 4096];
+            let _ = stream.read(&mut buffer).await;
+            let response = "HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\ncontent-length: 1024\r\nconnection: close\r\n\r\n";
+            let _ = stream.write_all(response.as_bytes()).await;
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        });
+
+        format!("http://{addr}")
     }
 
     async fn spawn_gateway_challenge_server() -> (String, oneshot::Receiver<Vec<String>>) {

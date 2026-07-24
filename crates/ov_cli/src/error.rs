@@ -85,7 +85,7 @@ impl Error {
     }
 
     pub(crate) fn from_reqwest(context: &str, error: reqwest::Error) -> Self {
-        if error.is_timeout() {
+        if is_processing_timeout(error.is_timeout(), error.is_connect()) {
             Self::Timeout(format!("{context}: request timed out: {error}"))
         } else if error.is_decode() {
             Self::Parse(format!("{context}: {error}"))
@@ -115,6 +115,10 @@ impl Error {
     }
 }
 
+fn is_processing_timeout(is_timeout: bool, is_connect: bool) -> bool {
+    is_timeout && !is_connect
+}
+
 fn code_from_http_status(status: Option<u16>) -> &'static str {
     match status {
         Some(400 | 422) => "INVALID_ARGUMENT",
@@ -131,3 +135,18 @@ fn code_from_http_status(status: Option<u16>) -> &'static str {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use super::is_processing_timeout;
+
+    #[test]
+    fn connect_stage_timeout_remains_a_connection_failure() {
+        assert!(!is_processing_timeout(true, true));
+    }
+
+    #[test]
+    fn established_connection_timeout_is_a_processing_failure() {
+        assert!(is_processing_timeout(true, false));
+    }
+}

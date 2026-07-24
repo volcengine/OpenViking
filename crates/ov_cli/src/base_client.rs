@@ -569,6 +569,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::time::Duration;
+    use tokio::io::AsyncReadExt;
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
 
@@ -780,6 +781,36 @@ mod tests {
             .expect("path should be utf-8");
 
         assert_eq!(entry, "scripts/check_bounding_boxes.py");
+    }
+
+    #[tokio::test]
+    async fn request_timeout_is_not_classified_as_connection_failure() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buffer = [0_u8; 1024];
+            let _ = stream.read(&mut buffer).await;
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        });
+
+        let client = BaseClient::new(
+            format!("http://{address}"),
+            None,
+            None,
+            None,
+            None,
+            0.02,
+            false,
+            None,
+        );
+        let error = client
+            .get::<Value>("/slow", &[])
+            .await
+            .expect_err("request should time out before the server responds");
+
+        assert!(matches!(error, Error::Timeout(_)));
+        server.abort();
     }
 }
 

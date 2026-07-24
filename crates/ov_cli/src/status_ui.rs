@@ -204,7 +204,7 @@ pub(crate) fn render_unreachable_status(
 enum StatusFailureKind {
     Authentication,
     Api,
-    Timeout,
+    Processing,
     Connection,
 }
 
@@ -215,7 +215,7 @@ impl StatusFailureKind {
                 Self::Authentication
             }
             Some(Error::Api { .. }) => Self::Api,
-            Some(Error::Timeout(_)) => Self::Timeout,
+            Some(Error::Timeout(_)) => Self::Processing,
             _ => Self::Connection,
         }
     }
@@ -224,7 +224,7 @@ impl StatusFailureKind {
         match self {
             Self::Authentication => copy(language, "Authentication failed", "认证失败"),
             Self::Api => copy(language, "Server error", "服务器错误"),
-            Self::Timeout => copy(language, "Timed out", "请求超时"),
+            Self::Processing => copy(language, "Processing timeout", "处理超时"),
             Self::Connection => copy(language, "Unreachable", "无法连接"),
         }
     }
@@ -237,10 +237,10 @@ impl StatusFailureKind {
                 "OpenViking returned an API error",
                 "OpenViking 返回 API 错误",
             ),
-            Self::Timeout => copy(
+            Self::Processing => copy(
                 language,
-                "Server did not respond before the configured timeout",
-                "服务器未在配置的超时时间内响应",
+                "OpenViking did not finish the operation in time",
+                "OpenViking 未能及时完成操作",
             ),
             Self::Connection => copy(language, "Cannot reach server", "无法连接服务器"),
         }
@@ -276,18 +276,26 @@ impl StatusFailureKind {
                     copy(language, "Run a quick health check", "快速健康检查"),
                 ),
             ],
-            Self::Timeout => vec![
+            Self::Processing => vec![
                 (
-                    "ov config",
-                    copy(language, "Increase the request timeout", "提高请求超时时间"),
+                    "ov observer queue",
+                    copy(language, "Inspect processing queues", "检查处理队列"),
                 ),
                 (
-                    "ov config show",
-                    copy(language, "Show the active config", "查看当前配置"),
+                    "ov status --verbose",
+                    copy(
+                        language,
+                        "Inspect locks and in-flight work",
+                        "检查锁和正在进行的任务",
+                    ),
                 ),
                 (
                     "ov health",
-                    copy(language, "Run a quick health check", "快速健康检查"),
+                    copy(
+                        language,
+                        "Confirm that the server is reachable",
+                        "确认服务器仍可访问",
+                    ),
                 ),
             ],
             Self::Connection => vec![
@@ -936,6 +944,19 @@ mod tests {
             rendered
                 .contains("ov config validate        Check config, auth, and server reachability")
         );
+    }
+
+    #[test]
+    fn unreachable_status_distinguishes_processing_timeouts() {
+        let error = crate::error::Error::Timeout("response body timed out".to_string());
+        let rendered =
+            super::render_unreachable_status(&sample_config(), Some("local"), 2, Some(&error));
+        let rendered = strip_ansi(&rendered);
+
+        assert!(rendered.contains("Status        Processing timeout"));
+        assert!(rendered.contains("Issue         OpenViking did not finish the operation in time"));
+        assert!(rendered.contains("ov observer queue"));
+        assert!(!rendered.contains("Issue         Cannot reach server"));
     }
 
     fn strip_ansi(input: &str) -> String {
