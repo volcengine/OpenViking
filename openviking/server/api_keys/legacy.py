@@ -2,13 +2,15 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Legacy API Key management (original implementation)."""
 
+import asyncio
 import fnmatch
 import hashlib
 import hmac
 import json
 import secrets
+import time
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
@@ -46,6 +48,14 @@ LEGACY_ARGON2_MEMORY_COST = ARGON2_MEMORY_COST
 LEGACY_ARGON2_PARALLELISM = ARGON2_PARALLELISM
 LEGACY_ARGON2_HASH_LENGTH = ARGON2_HASH_LENGTH
 
+# Multi-instance deployments share AGFS state while keeping one in-process
+# account cache per server. Known entries are refreshed periodically, and a
+# cache miss may refresh sooner so a key created by a peer becomes usable
+# promptly. The shorter interval globally bounds attacker-controlled misses:
+# distinct invalid keys cannot each trigger a full AGFS reload.
+ACCOUNTS_CACHE_TTL_SECONDS = 30.0
+CACHE_MISS_REFRESH_MIN_INTERVAL_SECONDS = 1.0
+
 
 def derive_seeded_api_key_secret(user_id: str, seed: str) -> str:
     if not isinstance(seed, str) or seed == "":
@@ -61,6 +71,7 @@ class LegacyAPIKeyManager:
         root_key: str,
         viking_fs: VikingFS,
         api_key_hashing_enabled: bool = False,
+        accounts_cache_ttl_seconds: float = ACCOUNTS_CACHE_TTL_SECONDS,
     ):
         """Initialize APIKeyManager.
 
@@ -69,14 +80,22 @@ class LegacyAPIKeyManager:
             viking_fs: VikingFS client for persistent storage of user keys.
             api_key_hashing_enabled: Whether API key Argon2id hashing is enabled.
                 Default: false - rely on file-level AES encryption for protection.
+            accounts_cache_ttl_seconds: Maximum age of the in-process account
+                cache before the next authenticated request reloads it.
         """
         self._root_key = root_key
         self._viking_fs = viking_fs
         self._async_agfs = AsyncAGFSClient(viking_fs.agfs)
         self._api_key_hashing_enabled = api_key_hashing_enabled
+        self._accounts_cache_ttl_seconds = accounts_cache_ttl_seconds
         self._accounts: Dict[str, AccountInfo] = {}
         # Prefix index: key_prefix -> list[UserKeyEntry]
         self._prefix_index: Dict[str, list[UserKeyEntry]] = {}
+        self._loaded_at: Optional[float] = None
+        self._last_miss_refresh_at: Optional[float] = None
+        # Construct lazily because managers may be created outside an event
+        # loop. All request-triggered reloads share this process-wide lock.
+        self._reload_lock: Optional[asyncio.Lock] = None
 
     def _discard_account_state(self, account_id: str) -> None:
         """Remove an account and its key index entries from in-memory state."""
@@ -113,68 +132,85 @@ class LegacyAPIKeyManager:
             logger.exception("Failed to persist rollback for account %s", account_id)
 
     async def load(self) -> None:
-        """Load accounts and user keys from VikingFS into memory."""
-        accounts_data = await self._read_json(ACCOUNTS_PATH)
-        if accounts_data is None:
-            # First run: create default account
-            now = datetime.now(timezone.utc).isoformat()
-            accounts_data = {"accounts": {"default": {"created_at": now}}}
-            await self._write_json(ACCOUNTS_PATH, accounts_data)
+        """Load accounts and user keys from VikingFS into memory.
 
-        for account_id, info in accounts_data.get("accounts", {}).items():
-            users_path = USERS_PATH_TEMPLATE.format(account_id=account_id)
-            users_data = await self._read_json(users_path)
-            users = users_data.get("users", {}) if users_data else {}
+        Repeated loads replace the cache so peer-instance deletions and key
+        rotations are reflected. If a storage read fails, the last complete
+        cache remains available instead of exposing partial state.
+        """
+        previous_accounts = self._accounts
+        previous_prefix_index = self._prefix_index
+        self._accounts = {}
+        self._prefix_index = {}
+        try:
+            accounts_data = await self._read_json(ACCOUNTS_PATH)
+            if accounts_data is None:
+                # First run: create default account
+                now = datetime.now(timezone.utc).isoformat()
+                accounts_data = {"accounts": {"default": {"created_at": now}}}
+                await self._write_json(ACCOUNTS_PATH, accounts_data)
 
-            self._accounts[account_id] = AccountInfo(
-                created_at=info.get("created_at", ""),
-                users=users,
-            )
+            for account_id, info in accounts_data.get("accounts", {}).items():
+                users_path = USERS_PATH_TEMPLATE.format(account_id=account_id)
+                users_data = await self._read_json(users_path)
+                users = users_data.get("users", {}) if users_data else {}
 
-            for user_id, user_info in users.items():
-                key_or_hash = user_info.get("key", "")
-                if key_or_hash:
-                    # Check if it's a hashed key
-                    if key_or_hash.startswith("$argon2"):
-                        # Already hashed
-                        stored_key = key_or_hash
-                        is_hashed = True
-                        key_prefix = user_info.get("key_prefix", "")
-                    else:
-                        # Plaintext key
-                        if self._api_key_hashing_enabled:
-                            # If API key hashing enabled, migrate to hashed
-                            stored_key = self._hash_api_key(key_or_hash)
-                            is_hashed = True
-                            key_prefix = self._get_key_prefix(key_or_hash)
-                            # Update storage
-                            user_info["key"] = stored_key
-                            user_info["key_prefix"] = key_prefix
-                            await self._save_users_json(account_id)
-                            logger.info(
-                                "Migrated API key for user %s in account %s", user_id, account_id
-                            )
-                        else:
-                            # If API key hashing not enabled, keep as plaintext
+                self._accounts[account_id] = AccountInfo(
+                    created_at=info.get("created_at", ""),
+                    users=users,
+                )
+
+                for user_id, user_info in users.items():
+                    key_or_hash = user_info.get("key", "")
+                    if key_or_hash:
+                        # Check if it's a hashed key
+                        if key_or_hash.startswith("$argon2"):
+                            # Already hashed
                             stored_key = key_or_hash
-                            is_hashed = False
-                            # For plaintext keys, compute prefix on the fly for indexing
-                            key_prefix = self._get_key_prefix(key_or_hash)
+                            is_hashed = True
+                            key_prefix = user_info.get("key_prefix", "")
+                        else:
+                            # Plaintext key
+                            if self._api_key_hashing_enabled:
+                                # If API key hashing enabled, migrate to hashed
+                                stored_key = self._hash_api_key(key_or_hash)
+                                is_hashed = True
+                                key_prefix = self._get_key_prefix(key_or_hash)
+                                # Update storage
+                                user_info["key"] = stored_key
+                                user_info["key_prefix"] = key_prefix
+                                await self._save_users_json(account_id)
+                                logger.info(
+                                    "Migrated API key for user %s in account %s",
+                                    user_id,
+                                    account_id,
+                                )
+                            else:
+                                # If API key hashing not enabled, keep as plaintext
+                                stored_key = key_or_hash
+                                is_hashed = False
+                                # For plaintext keys, compute prefix on the fly for indexing
+                                key_prefix = self._get_key_prefix(key_or_hash)
 
-                    entry = UserKeyEntry(
-                        account_id=account_id,
-                        user_id=user_id,
-                        role=Role(user_info.get("role", "user")),
-                        key_or_hash=stored_key,
-                        is_hashed=is_hashed,
-                    )
+                        entry = UserKeyEntry(
+                            account_id=account_id,
+                            user_id=user_id,
+                            role=Role(user_info.get("role", "user")),
+                            key_or_hash=stored_key,
+                            is_hashed=is_hashed,
+                        )
 
-                    # Add to prefix index
-                    if key_prefix:
-                        if key_prefix not in self._prefix_index:
-                            self._prefix_index[key_prefix] = []
-                        self._prefix_index[key_prefix].append(entry)
+                        # Add to prefix index
+                        if key_prefix:
+                            if key_prefix not in self._prefix_index:
+                                self._prefix_index[key_prefix] = []
+                            self._prefix_index[key_prefix].append(entry)
+        except Exception:
+            self._accounts = previous_accounts
+            self._prefix_index = previous_prefix_index
+            raise
 
+        self._loaded_at = time.monotonic()
         logger.info(
             "LegacyAPIKeyManager loaded: %d accounts, %d user keys",
             len(self._accounts),
@@ -212,6 +248,80 @@ class LegacyAPIKeyManager:
                     )
 
         raise UnauthenticatedError("Invalid API Key")
+
+    def _cache_is_stale(self) -> bool:
+        if self._loaded_at is None:
+            return True
+        return time.monotonic() - self._loaded_at >= self._accounts_cache_ttl_seconds
+
+    def _miss_refresh_is_due(self) -> bool:
+        if self._last_miss_refresh_at is None:
+            return True
+        return (
+            time.monotonic() - self._last_miss_refresh_at >= CACHE_MISS_REFRESH_MIN_INTERVAL_SECONDS
+        )
+
+    def _get_reload_lock(self) -> asyncio.Lock:
+        if self._reload_lock is None:
+            self._reload_lock = asyncio.Lock()
+        return self._reload_lock
+
+    async def _refresh_if_stale(self) -> None:
+        if not self._cache_is_stale():
+            return
+        async with self._get_reload_lock():
+            if self._cache_is_stale():
+                await self.load()
+
+    async def _refresh_on_miss(self) -> None:
+        """Reload at most once per process-wide miss interval.
+
+        The bound is intentionally independent of the presented key. A
+        per-key negative cache still lets a stream of distinct invalid keys
+        amplify unauthenticated traffic into one full AGFS reload per key.
+        """
+        reload_lock = self._get_reload_lock()
+        if not self._miss_refresh_is_due():
+            # A peer request may have reserved the global interval before its
+            # load completes. Wait for that in-flight refresh so callers do
+            # not retry against the old cache.
+            if reload_lock.locked():
+                async with reload_lock:
+                    pass
+            return
+        async with reload_lock:
+            if self._miss_refresh_is_due():
+                # Stamp before I/O so a failing storage backend is still
+                # protected from request-driven retry amplification.
+                self._last_miss_refresh_at = time.monotonic()
+                await self.load()
+
+    async def resolve_with_refresh(
+        self,
+        api_key: str,
+        *,
+        resolve_callable: Optional[Callable[[str], ResolvedIdentity]] = None,
+    ) -> ResolvedIdentity:
+        """Resolve with bounded cross-instance cache freshness.
+
+        Known keys refresh on the normal TTL. A missing key may trigger one
+        earlier reload, globally rate-limited across all key values, before
+        authentication fails. ``resolve_callable`` lets the new-format
+        manager reuse the same refresh contract without private duplication.
+        """
+        resolver = resolve_callable or self.resolve
+        # Root authentication is process-local and does not depend on the
+        # shared account cache. Keep this recovery path available even when
+        # AGFS is unavailable or the user-key cache has expired.
+        if api_key and hmac.compare_digest(api_key, self._root_key):
+            return resolver(api_key)
+
+        await self._refresh_if_stale()
+        try:
+            return resolver(api_key)
+        except UnauthenticatedError:
+            await self._refresh_on_miss()
+            return resolver(api_key)
 
     async def create_account(
         self,
@@ -383,7 +493,9 @@ class LegacyAPIKeyManager:
 
         await self._save_users_json(account_id)
 
-    async def regenerate_key(self, account_id: str, user_id: str, seed: Optional[str] = None) -> str:
+    async def regenerate_key(
+        self, account_id: str, user_id: str, seed: Optional[str] = None
+    ) -> str:
         """Regenerate a user's API key. Old key is immediately invalidated."""
         account = self._accounts.get(account_id)
         if account is None:

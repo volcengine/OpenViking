@@ -12,6 +12,7 @@ import secrets
 from typing import Optional, Tuple
 
 from openviking.server.api_keys.legacy import (
+    ACCOUNTS_CACHE_TTL_SECONDS,
     LegacyAPIKeyManager,
     derive_seeded_api_key_secret,
 )
@@ -64,9 +65,7 @@ def generate_api_key(account_id: str, user_id: str, seed: Optional[str] = None) 
     account_segment = _encode_segment(account_id)
     user_segment = _encode_segment(user_id)
     secret = (
-        derive_seeded_api_key_secret(user_id, seed)
-        if seed is not None
-        else secrets.token_hex(32)
+        derive_seeded_api_key_secret(user_id, seed) if seed is not None else secrets.token_hex(32)
     )
     secret_segment = _encode_segment(secret)
     return f"{account_segment}.{user_segment}.{secret_segment}"
@@ -86,6 +85,7 @@ class NewAPIKeyManager:
         root_key: str,
         viking_fs: VikingFS,
         api_key_hashing_enabled: bool = False,
+        accounts_cache_ttl_seconds: float = ACCOUNTS_CACHE_TTL_SECONDS,
     ):
         """Initialize NewAPIKeyManager.
 
@@ -94,10 +94,15 @@ class NewAPIKeyManager:
             viking_fs: VikingFS client for persistent storage of user keys.
             api_key_hashing_enabled: Whether API key Argon2id hashing is enabled.
                 Default: false - rely on file-level AES encryption for protection.
+            accounts_cache_ttl_seconds: Maximum age of the in-process account
+                cache before the next authenticated request reloads it.
         """
         # Delegate to legacy manager for all core functionality
         self._legacy = LegacyAPIKeyManager(
-            root_key, viking_fs, api_key_hashing_enabled=api_key_hashing_enabled
+            root_key,
+            viking_fs,
+            api_key_hashing_enabled=api_key_hashing_enabled,
+            accounts_cache_ttl_seconds=accounts_cache_ttl_seconds,
         )
 
     async def load(self) -> None:
@@ -160,6 +165,13 @@ class NewAPIKeyManager:
 
         # Fall back to legacy resolver for legacy keys
         return self._legacy.resolve(api_key)
+
+    async def resolve_with_refresh(self, api_key: str) -> ResolvedIdentity:
+        """Resolve using the legacy manager's bounded refresh contract."""
+        return await self._legacy.resolve_with_refresh(
+            api_key,
+            resolve_callable=self.resolve,
+        )
 
     async def create_account(
         self,

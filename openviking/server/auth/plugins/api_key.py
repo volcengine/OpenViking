@@ -82,7 +82,7 @@ class ApiKeyAuthPlugin(AuthPlugin):
         if oauth_identity is not None:
             return oauth_identity
 
-        identity = api_key_manager.resolve(api_key)
+        identity = await api_key_manager.resolve_with_refresh(api_key)
         identity.account_id = identity.account_id or "default"
         identity.user_id = identity.user_id or "default"
 
@@ -200,6 +200,7 @@ class ApiKeyAuthPlugin(AuthPlugin):
             root_key=config.root_api_key,
             viking_fs=service.viking_fs,
             api_key_hashing_enabled=config.api_key_hashing_enabled,
+            accounts_cache_ttl_seconds=config.api_key_cache_ttl_seconds,
         )
         await api_key_manager.load()
         app.state.api_key_manager = api_key_manager

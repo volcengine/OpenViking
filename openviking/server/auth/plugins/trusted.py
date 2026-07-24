@@ -213,6 +213,7 @@ class TrustedAuthPlugin(AuthPlugin):
                 root_key=config.root_api_key,
                 viking_fs=service.viking_fs,
                 api_key_hashing_enabled=config.api_key_hashing_enabled,
+                accounts_cache_ttl_seconds=config.api_key_cache_ttl_seconds,
             )
             await api_key_manager.load()
             app.state.api_key_manager = api_key_manager
