@@ -31,6 +31,7 @@ from .parser_config import (
     AudioConfig,
     CodeConfig,
     DirectoryConfig,
+    ExcelConfig,
     FeishuConfig,
     HTMLConfig,
     ImageConfig,
@@ -203,6 +204,10 @@ class OpenVikingConfig(BaseModel):
 
     markdown: MarkdownConfig = Field(
         default_factory=MarkdownConfig, description="Markdown parsing configuration"
+    )
+
+    excel: ExcelConfig = Field(
+        default_factory=ExcelConfig, description="Excel parsing configuration"
     )
 
     html: HTMLConfig = Field(default_factory=HTMLConfig, description="HTML parsing configuration")
@@ -379,6 +384,7 @@ class OpenVikingConfig(BaseModel):
                 "audio",
                 "video",
                 "markdown",
+                "excel",
                 "html",
                 "text",
                 "directory",

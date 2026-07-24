@@ -276,7 +276,7 @@ def get_registry() -> ParserRegistry:
                 "word": config.markdown,
                 "legacy_doc": config.markdown,
                 "powerpoint": config.markdown,
-                "excel": config.markdown,
+                "excel": config.excel,
                 "epub": config.markdown,
                 "image": config.image,
             }
