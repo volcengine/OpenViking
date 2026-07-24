@@ -66,6 +66,15 @@ class TestGeminiContextRouting:
         assert embedder.query_param == "retrieval_query"
         assert embedder.document_param is None
 
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_api_base_is_forwarded_to_gemini_embedder(self, mock_client_class):
+        cfg = EmbeddingConfig(dense=_gcfg(api_base="https://gateway.example.com", dimension=768))
+
+        cfg.get_embedder()
+
+        http_options = mock_client_class.call_args.kwargs["http_options"]
+        assert http_options.base_url == "https://gateway.example.com"
+
 
 class TestGeminiConfigValidation:
     def test_missing_api_key_raises(self):
