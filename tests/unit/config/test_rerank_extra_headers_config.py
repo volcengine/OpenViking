@@ -41,6 +41,33 @@ def test_rerank_config_without_extra_headers():
     assert config.extra_headers is None
 
 
+def test_rerank_config_max_concurrent_defaults_and_validates():
+    from openviking_cli.utils.config.rerank_config import RerankConfig
+
+    config = RerankConfig(
+        model="gpt-4",
+        api_key="test-key",
+        api_base="https://api.example.com/v1",
+    )
+    assert config.max_concurrent == 4
+
+    tuned = RerankConfig(
+        model="gpt-4",
+        api_key="test-key",
+        api_base="https://api.example.com/v1",
+        max_concurrent=8,
+    )
+    assert tuned.max_concurrent == 8
+
+    with pytest.raises(ValidationError):
+        RerankConfig(
+            model="gpt-4",
+            api_key="test-key",
+            api_base="https://api.example.com/v1",
+            max_concurrent=0,
+        )
+
+
 def test_rerank_config_extra_headers_type_validation():
     """Test that extra_headers must be a dict with string keys and values."""
     from openviking_cli.utils.config.rerank_config import RerankConfig

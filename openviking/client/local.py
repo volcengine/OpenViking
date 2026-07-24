@@ -750,7 +750,8 @@ class LocalClient(BaseClient):
 
         async def _search():
             session = None
-            if session_id:
+            # Intent off: skip session.load — SearchService will not scan session either.
+            if session_id and self._service.search.is_intent_enabled():
                 session = self._service.sessions.session(self._ctx, session_id)
                 await session.load()
             return await self._service.search.search(

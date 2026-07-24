@@ -235,7 +235,8 @@ async def search(
 
     async def _search():
         session = None
-        if request.session_id:
+        # Intent off: skip session.load — SearchService will not scan session either.
+        if request.session_id and service.search.is_intent_enabled():
             session = service.sessions.session(_ctx, request.session_id)
             await session.load()
         return await service.search.search(

@@ -56,6 +56,16 @@ class RerankConfig(BaseModel):
         ),
     )
 
+    max_concurrent: int = Field(
+        default=4,
+        ge=1,
+        description=(
+            "Maximum number of concurrent in-flight rerank requests across the process. "
+            "Hierarchical retrieval shares this budget because the client call is "
+            "synchronous and runs off the event loop."
+        ),
+    )
+
     model_config = {"extra": "forbid"}
 
     def _effective_provider(self) -> Optional[str]:

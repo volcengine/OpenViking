@@ -8,6 +8,7 @@ via api_key + api_base configuration.
 """
 
 # For logging, use Python's built-in logging
+import time
 from typing import Dict, List, Optional
 
 import requests
@@ -137,12 +138,32 @@ class OpenAIRerankClient(RerankBase):
             if self.extra_headers:
                 headers.update(self.extra_headers)
 
-            response = requests.post(
-                url=self.api_base,
-                headers=headers,
-                json=req_body,
-                timeout=self.timeout,
-            )
+            # Retry once on 429 with Retry-After-aware backoff before giving
+            # up (the caller falls back to vector scores on failure).
+            max_attempts = 2
+            response = None
+            for attempt in range(max_attempts):
+                response = requests.post(
+                    url=self.api_base,
+                    headers=headers,
+                    json=req_body,
+                    timeout=self.timeout,
+                )
+                if response.status_code != 429 or attempt == max_attempts - 1:
+                    break
+                retry_after_raw = response.headers.get("Retry-After", "")
+                try:
+                    retry_after = float(retry_after_raw)
+                except (TypeError, ValueError):
+                    retry_after = 0.0
+                delay = min(max(retry_after, 0.5 * (attempt + 1)), 5.0)
+                logger.warning(
+                    "[OpenAIRerankClient] 429 rate limited, retrying in %.1fs (attempt %d/%d)",
+                    delay,
+                    attempt + 1,
+                    max_attempts,
+                )
+                time.sleep(delay)
             response.raise_for_status()
             result = response.json()
 
