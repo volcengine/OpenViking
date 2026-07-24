@@ -847,6 +847,7 @@ class MochatChannel(BaseChannel):
         body = build_buffered_body(entries, is_group) or "[empty message]"
         await self._handle_message(
             sender_id=last.author,
+            sender_name=last.sender_name or last.sender_username or last.author,
             chat_id=target_id,
             content=body,
             metadata={

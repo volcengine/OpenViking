@@ -18,6 +18,7 @@ use termimad::MadSkin;
 use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
 
+use crate::base_client::api_error_from_body;
 use crate::config::Config;
 use crate::i18n::{Language, copy};
 use crate::theme;
@@ -164,7 +165,7 @@ impl ChatCommand {
         let client = Client::builder()
             .timeout(Duration::from_secs(300))
             .build()
-            .map_err(|e| Error::Network(format!("Failed to create HTTP client: {}", e)))?;
+            .map_err(|e| Error::from_reqwest("Failed to create HTTP client", e))?;
 
         let config = Config::load()?;
         let endpoint = self.resolve_endpoint_from_config(&config);
@@ -425,18 +426,21 @@ impl ChatCommand {
         let response = req_builder
             .send()
             .await
-            .map_err(|e| Error::Network(format!("Failed to send request: {}", e)))?;
+            .map_err(|e| Error::from_reqwest("Failed to send request", e))?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            return Err(Error::api(format!("Request failed ({}): {}", status, text)));
+            let body = response
+                .bytes()
+                .await
+                .map_err(|e| Error::from_reqwest("Failed to read error response", e))?;
+            return Err(api_error_from_body(&body, status));
         }
 
         let chat_response: ChatResponse = response
             .json()
             .await
-            .map_err(|e| Error::Parse(format!("Failed to parse response: {}", e)))?;
+            .map_err(|e| Error::from_reqwest("Failed to parse response", e))?;
 
         // Print events if any
         self.print_events(&chat_response.events);
@@ -470,12 +474,15 @@ impl ChatCommand {
         let response = req_builder
             .send()
             .await
-            .map_err(|e| Error::Network(format!("Failed to send request: {}", e)))?;
+            .map_err(|e| Error::from_reqwest("Failed to send request", e))?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            return Err(Error::api(format!("Request failed ({}): {}", status, text)));
+            let body = response
+                .bytes()
+                .await
+                .map_err(|e| Error::from_reqwest("Failed to read error response", e))?;
+            return Err(api_error_from_body(&body, status));
         }
 
         // Process the SSE stream
@@ -487,7 +494,7 @@ impl ChatCommand {
         while let Some(chunk) = response
             .chunk()
             .await
-            .map_err(|e| Error::Network(format!("Stream error: {}", e)))?
+            .map_err(|e| Error::from_reqwest("Stream error", e))?
         {
             let chunk_str = String::from_utf8_lossy(&chunk);
             buffer.push_str(&chunk_str);
@@ -688,18 +695,21 @@ impl ChatCommand {
         let response = req_builder
             .send()
             .await
-            .map_err(|e| Error::Network(format!("Failed to send request: {}", e)))?;
+            .map_err(|e| Error::from_reqwest("Failed to send request", e))?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            return Err(Error::api(format!("Request failed ({}): {}", status, text)));
+            let body = response
+                .bytes()
+                .await
+                .map_err(|e| Error::from_reqwest("Failed to read error response", e))?;
+            return Err(api_error_from_body(&body, status));
         }
 
         let chat_response: ChatResponse = response
             .json()
             .await
-            .map_err(|e| Error::Parse(format!("Failed to parse response: {}", e)))?;
+            .map_err(|e| Error::from_reqwest("Failed to parse response", e))?;
 
         // Save session ID
         if session_id.is_none() {
@@ -745,12 +755,15 @@ impl ChatCommand {
         let response = req_builder
             .send()
             .await
-            .map_err(|e| Error::Network(format!("Failed to send request: {}", e)))?;
+            .map_err(|e| Error::from_reqwest("Failed to send request", e))?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            return Err(Error::api(format!("Request failed ({}): {}", status, text)));
+            let body = response
+                .bytes()
+                .await
+                .map_err(|e| Error::from_reqwest("Failed to read error response", e))?;
+            return Err(api_error_from_body(&body, status));
         }
 
         let response_session_id = response
@@ -771,7 +784,7 @@ impl ChatCommand {
         while let Some(chunk) = response
             .chunk()
             .await
-            .map_err(|e| Error::Network(format!("Stream error: {}", e)))?
+            .map_err(|e| Error::from_reqwest("Stream error", e))?
         {
             let chunk_str = String::from_utf8_lossy(&chunk);
             buffer.push_str(&chunk_str);

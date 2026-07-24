@@ -14,6 +14,16 @@ def test_agents_config_defaults_thinking_enabled():
     assert AgentsConfig(thinking=False).thinking is False
 
 
+def test_agents_openviking_retention_defaults_to_turn_budget_values():
+    config = AgentsConfig()
+
+    assert config.commit_keep_recent_count == 10
+    assert AgentsConfig(commit_keep_recent_count=7).commit_keep_recent_count == 7
+    assert config.commit_keep_recent_turn_count == 3
+    assert config.commit_retained_message_token_budget == 6_000
+    assert config.commit_min_raw_tail_steps == 1
+
+
 def test_make_provider_passes_default_thinking_to_vlm_adapter(monkeypatch):
     monkeypatch.setitem(
         sys.modules,
@@ -23,7 +33,7 @@ def test_make_provider_passes_default_thinking_to_vlm_adapter(monkeypatch):
     monkeypatch.setitem(
         sys.modules,
         "prompt_toolkit.formatted_text",
-        SimpleNamespace(HTML=lambda value: value),
+        SimpleNamespace(HTML=lambda value: value, FormattedText=lambda value: value),
     )
     monkeypatch.setitem(
         sys.modules,
@@ -34,6 +44,13 @@ def test_make_provider_passes_default_thinking_to_vlm_adapter(monkeypatch):
         sys.modules,
         "prompt_toolkit.patch_stdout",
         SimpleNamespace(patch_stdout=lambda: contextlib.nullcontext()),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "prompt_toolkit.styles",
+        SimpleNamespace(
+            Style=SimpleNamespace(from_dict=lambda value: value),
+        ),
     )
 
     from vikingbot.cli.commands import _make_provider

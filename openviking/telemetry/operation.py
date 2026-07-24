@@ -21,6 +21,7 @@ _CUVS_TIMING_FIELDS = (
     "build_ms",
     "filter_prepare_ms",
     "gpu_search_ms",
+    "batch_wait_ms",
     "native_search_ms",
 )
 _CUVS_ROUTE_BUCKETS = {
@@ -325,6 +326,26 @@ class TelemetrySummaryBuilder:
                     "memory": cuvs_memory,
                     "timings_ms": cls._cuvs_timing_summary(counters, gauges),
                 }
+                micro_batching_searches = cls._i(
+                    counters.get("vector.cuvs.micro_batching_searches"), 0
+                )
+                if micro_batching_searches:
+                    summary["vector"]["cuvs"].update(
+                        {
+                            "micro_batching_searches": micro_batching_searches,
+                            "micro_batched_searches": cls._i(
+                                counters.get("vector.cuvs.micro_batched_searches"), 0
+                            ),
+                            "micro_batching_warm_fast_path_searches": cls._i(
+                                counters.get("vector.cuvs.micro_batching_warm_fast_path_searches"),
+                                0,
+                            ),
+                            "batch_size_max": cls._i(gauges.get("vector.cuvs.batch_size.max"), 1),
+                            "searches_by_batch_size": cls._counter_breakdown(
+                                "vector.cuvs.searches_by_batch_size", counters
+                            ),
+                        }
+                    )
 
         if cls._has_metric_prefix("semantic_nodes", counters, gauges):
             summary["semantic_nodes"] = {
@@ -504,6 +525,21 @@ class OperationTelemetry:
             self._counters[f"vector.cuvs.dtypes.{dtype}"] += 1
             if TelemetrySummaryBuilder._bool(metrics.get("auto_mode"), False):
                 self._counters["vector.cuvs.auto_mode_searches"] += 1
+            if TelemetrySummaryBuilder._bool(metrics.get("micro_batching_enabled"), False):
+                batch_size = min(
+                    max(TelemetrySummaryBuilder._i(metrics.get("batch_size"), 1), 1),
+                    8,
+                )
+                self._counters["vector.cuvs.micro_batching_searches"] += 1
+                self._counters[f"vector.cuvs.searches_by_batch_size.{batch_size}"] += 1
+                if batch_size > 1:
+                    self._counters["vector.cuvs.micro_batched_searches"] += 1
+                self._gauges["vector.cuvs.batch_size.max"] = max(
+                    TelemetrySummaryBuilder._i(self._gauges.get("vector.cuvs.batch_size.max"), 1),
+                    batch_size,
+                )
+            if TelemetrySummaryBuilder._bool(metrics.get("micro_batching_warm_fast_path"), False):
+                self._counters["vector.cuvs.micro_batching_warm_fast_path_searches"] += 1
             if TelemetrySummaryBuilder._bool(metrics.get("filter_cache_hit"), False):
                 self._counters["vector.cuvs.filter_cache_hits"] += 1
             if TelemetrySummaryBuilder._bool(metrics.get("filter_cache_eviction_fallback"), False):

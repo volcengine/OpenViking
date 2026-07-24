@@ -336,6 +336,9 @@ URI/path 使用更低阈值，是因为宽路径需要 native Trie traversal 和
 | `algorithm` | `brute_force` | `brute_force` exact 或 `cagra` ANN |
 | `dtype` | `float32` | GPU dataset/query dtype；可显式设为 `float16`，不改变 native CPU dtype |
 | `max_concurrent_gpu_searches` | `1` | 单 index 同时进入 GPU search 的上限；host preflight/filter 仍可并行 |
+| `micro_batching_enabled` | `false` | 可选地合并兼容的并发单 query 请求；仅支持 `brute_force`，且要求 `max_concurrent_gpu_searches=1` |
+| `micro_batching_max_batch_size` | `8` | 单次 matrix-query 的最大行数，范围 1 到 8 |
+| `micro_batching_max_wait_ms` | `1.0` | 等待兼容请求的 collection window，范围 0 到 100 ms；0 表示不主动等待、仅 opportunistic batching |
 | `build_params` | `{}` | 传给 CAGRA `IndexParams` |
 | `search_params` | `{}` | 传给 CAGRA `SearchParams` |
 | `fallback_to_native` | `true` | sparse/hybrid 等非 cuVS dense top-k 能力使用 native |
@@ -358,7 +361,11 @@ URI/path 使用更低阈值，是因为宽路径需要 native Trie traversal 和
 - native mutation 与 cuVS shadow mutation 由跨后端读写锁协调；filter layout 和 bitmap
   preflight 由 native engine 读写锁及 cuVS generation 校验保证一致性；
 - GPU index、dataset ownership、label mapping 和 generation 组成 immutable snapshot；
-- warmed GPU search 使用不同的 cuVS resources/CUDA stream 并发执行，只短暂串行访问 host cache；
+- 默认非 micro-batch 路径可使用复用的 cuVS resources/CUDA stream；启用 micro-batching 后，
+  compatible warm query 可在不获取 caller 侧 device gate 的情况下入队，micro-batch worker
+  是唯一在持有 device-search gate 时执行 matrix search 的组件；
+- dirty/cold snapshot、device filter cache miss 和 rebuild 仍在同一 gate 内完成 GPU preparation，
+  caller 入队后立即释放 gate，不会持 gate 等待 worker；
 - mutation 不会破坏已被查询持有的 snapshot；同步 rebuild 仍由写锁合并为一次；
 - 同一 GPU 上不同 collection 的 admission/build 由进程级 coordinator 串行，避免并发超卖显存；
 - native fallback 不持有 GPU 锁，可以继续并发读取；
@@ -390,7 +397,7 @@ URI/path 使用更低阈值，是因为宽路径需要 native Trie traversal 和
 | --- | --- | --- |
 | 每次 mutation 后整体重建 | 写后首查和 build 为 O(N) | base + delta、阈值重建、后台 build、原子切换 |
 | host shadow 保存完整 dense vectors | Store/native/GPU 之外增加 host memory | 连续 buffer、共享内存、减少 Python object |
-| 高并发小 query | 单 query 无法充分占用 GPU | 动态 batching 或显式 query batching |
+| 高并发小 query | 已有 opt-in micro-batching，但仍有每次 dispatch 的 device allocation、host sync 和单 worker 上限 | persistent buffers、allocator reuse、CAGRA batching 或多个并行 batch dispatch |
 | Python/CuPy 数据面 | 对象构造、复制和同步有固定开销 | 先 profiling，再决定是否下沉 C++ cuVS C API |
 | 重启后 lazy rebuild | 大 collection 的首次查询延迟高 | 后台预热、版本化派生 cache |
 | native dense 与 GPU shadow 并存 | CPU 内存和写放大 | 覆盖率和回退策略稳定后再评估裁剪 |
@@ -429,7 +436,9 @@ URI/path 使用更低阈值，是因为宽路径需要 native Trie traversal 和
 2. 已保证 in-flight query 在 rebuild 期间安全持有旧 snapshot；后台 build 期间的新请求路由仍待实现；
 3. 已实现完成后原子交换，并延迟到最后一个持有者退出再回收旧资源；
 4. 已实现可选的连续 mutation 合并与后台 rebuild；默认关闭以保留现有 auto 行为；
-5. 已实现每线程 cuVS resources/CUDA stream；persistent query buffers 和 micro-batching 待评估；
+5. 已实现可复用 cuVS resources/CUDA stream，以及默认关闭的 brute-force request
+   micro-batching 和 warm admission fast path；persistent query/result buffers、allocator reuse、
+   CAGRA batching 和多个并行 batch dispatch 待评估；
 6. 已补充 build queue、fallback reason、eligible count 和分阶段 latency telemetry；VRAM 指标待统一管理器。
 
 ### Phase 3：容量与低精度

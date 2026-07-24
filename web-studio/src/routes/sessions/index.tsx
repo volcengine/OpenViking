@@ -3,8 +3,9 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { CompassIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { useAppConnection } from '#/hooks/use-app-connection'
 import { useCreateSession } from '#/lib/sessions/use-sessions'
-import { setSessionTitle } from '#/lib/sessions/use-session-titles'
+import { useSessionTitles } from '#/lib/sessions/use-session-titles'
 import { Thread } from './-components/thread'
 
 const COMMAND_KEY_LABEL = '⌘'
@@ -21,14 +22,16 @@ export const Route = createFileRoute('/sessions/')({
 function SessionsPage() {
   const { t } = useTranslation('sessions')
   const { s: activeSessionId } = Route.useSearch()
+  const { identityScopeKey } = useAppConnection()
   const navigate = useNavigate()
   const createSession = useCreateSession()
+  const { setTitle } = useSessionTitles(identityScopeKey)
 
   const handleNewSession = useCallback(async () => {
     const result = await createSession.mutateAsync(undefined)
-    setSessionTitle(result.session_id, t('threadList.newSession'))
+    setTitle(result.session_id, t('threadList.newSession'))
     void navigate({ to: '/sessions', search: { s: result.session_id } })
-  }, [createSession, navigate, t])
+  }, [createSession, navigate, setTitle, t])
 
   // Cmd+N to create new session
   useEffect(() => {

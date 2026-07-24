@@ -890,15 +890,29 @@ class LocalClient(BaseClient):
         telemetry: TelemetryRequest = False,
         *,
         keep_recent_count: int = 0,
+        retention_mode: Optional[str] = None,
+        keep_recent_turn_count: Optional[int] = None,
+        retained_message_token_budget: Optional[int] = None,
+        min_raw_tail_steps: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
+        commit_kwargs: Dict[str, Any] = {"keep_recent_count": keep_recent_count}
+        optional_retention = {
+            "retention_mode": retention_mode,
+            "keep_recent_turn_count": keep_recent_turn_count,
+            "retained_message_token_budget": retained_message_token_budget,
+            "min_raw_tail_steps": min_raw_tail_steps,
+        }
+        commit_kwargs.update(
+            {key: value for key, value in optional_retention.items() if value is not None}
+        )
         execution = await run_with_telemetry(
             operation="session.commit",
             telemetry=telemetry,
             fn=lambda: self._service.sessions.commit(
                 session_id,
                 self._ctx,
-                keep_recent_count=keep_recent_count,
+                **commit_kwargs,
             ),
         )
         return attach_telemetry_payload(
@@ -937,6 +951,9 @@ class LocalClient(BaseClient):
         created_at: Optional[str] = None,
         peer_id: Optional[str] = None,
         telemetry: TelemetryRequest = False,
+        turn_id: Optional[str] = None,
+        message_kind: Optional[str] = None,
+        source_message_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -960,6 +977,9 @@ class LocalClient(BaseClient):
                 parts,
                 created_at,
                 peer_id,
+                turn_id,
+                message_kind,
+                source_message_ids,
             ),
         )
         return attach_telemetry_payload(
@@ -975,6 +995,9 @@ class LocalClient(BaseClient):
         parts: Optional[List[Dict[str, Any]]],
         created_at: Optional[str],
         peer_id: Optional[str],
+        turn_id: Optional[str],
+        message_kind: Optional[str],
+        source_message_ids: Optional[List[str]],
     ) -> Dict[str, Any]:
         from openviking.message.part import Part, TextPart, part_from_dict
 
@@ -988,12 +1011,25 @@ class LocalClient(BaseClient):
         else:
             raise ValueError("Either content or parts must be provided")
 
-        session.add_message(
-            role,
-            message_parts,
-            peer_id=self._resolve_message_peer_id(role, peer_id),
-            created_at=created_at,
-        )
+        semantic_kwargs = {
+            key: value
+            for key, value in {
+                "turn_id": turn_id,
+                "message_kind": message_kind,
+                "source_message_ids": source_message_ids,
+            }.items()
+            if value is not None
+        }
+        add_async = getattr(session, "add_message_async", None)
+        add_kwargs = {
+            "peer_id": self._resolve_message_peer_id(role, peer_id),
+            "created_at": created_at,
+            **semantic_kwargs,
+        }
+        if callable(add_async):
+            await add_async(role, message_parts, **add_kwargs)
+        else:
+            session.add_message(role, message_parts, **add_kwargs)
         return {
             "session_id": session_id,
             "message_count": len(session.messages),
@@ -1045,10 +1081,17 @@ class LocalClient(BaseClient):
                     "parts": message_parts,
                     "peer_id": self._resolve_message_peer_id(role, message.get("peer_id")),
                     "created_at": message.get("created_at"),
+                    "turn_id": message.get("turn_id"),
+                    "message_kind": message.get("message_kind"),
+                    "source_message_ids": message.get("source_message_ids"),
                 }
             )
 
-        added = session.add_messages(specs)
+        add_many_async = getattr(session, "add_messages_async", None)
+        if callable(add_many_async):
+            added = await add_many_async(specs)
+        else:
+            added = session.add_messages(specs)
         return {
             "session_id": session_id,
             "message_count": len(session.messages),
@@ -1184,6 +1227,21 @@ class LocalClient(BaseClient):
     ) -> List[Dict[str, Any]]:
         """Walk back along parents[0] up to limit commits."""
         return await self._service.fs.log(branch=branch, limit=limit, paths=paths, ctx=self._ctx)
+
+    async def git_diff(
+        self,
+        path: str,
+        *,
+        to_ref: str,
+        from_ref: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Compare one file between two snapshot refs."""
+        return await self._service.fs.diff(
+            path=path,
+            from_ref=from_ref,
+            to_ref=to_ref,
+            ctx=self._ctx,
+        )
 
     async def git_get_ignore(self) -> str:
         """Return the account .ovgitignore content (empty string if absent)."""

@@ -16,6 +16,7 @@ import {
   SearchIcon,
   SunIcon,
   TrashIcon,
+  UsersRoundIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useTheme } from 'next-themes'
@@ -26,6 +27,8 @@ import {
   CollapsibleTrigger,
 } from '#/components/ui/collapsible'
 import { CrossDeviceVerifyDialog } from '#/components/cross-device-verify-dialog'
+import { AccountSwitcher } from '#/components/account-switcher'
+import { GeneratedCredentialDialog } from '#/components/generated-credential-dialog'
 import { ScrollArea } from '#/components/ui/scroll-area'
 import {
   Sidebar,
@@ -50,16 +53,13 @@ import {
   useAppConnection,
 } from '#/hooks/use-app-connection'
 import { cn } from '#/lib/utils'
+import { resolveStudioManagementCapabilities } from '#/lib/studio-permissions'
 import {
   useSessionListByRecency,
   useCreateSession,
   useDeleteSession,
 } from '#/lib/sessions/use-sessions'
-import {
-  useSessionTitles,
-  setSessionTitle,
-  removeSessionTitle,
-} from '#/lib/sessions/use-session-titles'
+import { useSessionTitles } from '#/lib/sessions/use-session-titles'
 
 type NavItem = {
   icon: React.ComponentType
@@ -205,12 +205,13 @@ function NavSessionsItem({
   title: string
 }) {
   const { t } = useTranslation(['appShell', 'sessions'])
+  const { identityScopeKey } = useAppConnection()
   const navigate = useNavigate()
   const isActive = pathname === '/sessions' || pathname.startsWith('/sessions/')
   const [open, setOpen] = React.useState(isActive)
 
   const { data: sessions, isLoading } = useSessionListByRecency()
-  const { getTitle } = useSessionTitles()
+  const { getTitle, removeTitle, setTitle } = useSessionTitles(identityScopeKey)
   const createSession = useCreateSession()
   const deleteSession = useDeleteSession()
 
@@ -227,19 +228,16 @@ function NavSessionsItem({
 
   const handleNewSession = React.useCallback(async () => {
     const result = await createSession.mutateAsync(undefined)
-    setSessionTitle(
-      result.session_id,
-      t('threadList.newSession', { ns: 'sessions' }),
-    )
+    setTitle(result.session_id, t('threadList.newSession', { ns: 'sessions' }))
     void navigate({ to: '/sessions', search: { s: result.session_id } })
-  }, [createSession, navigate, t])
+  }, [createSession, navigate, setTitle, t])
 
   const handleDeleteSession = React.useCallback(
     async (e: React.MouseEvent, id: string) => {
       e.stopPropagation()
       e.preventDefault()
       await deleteSession.mutateAsync(id)
-      removeSessionTitle(id)
+      removeTitle(id)
       if (activeSessionId === id) {
         void navigate({
           to: '/sessions',
@@ -247,7 +245,7 @@ function NavSessionsItem({
         })
       }
     },
-    [deleteSession, activeSessionId, navigate],
+    [activeSessionId, deleteSession, navigate, removeTitle],
   )
 
   return (
@@ -329,9 +327,14 @@ function NavSessionsItem({
 export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <AppConnectionProvider>
-      <AppShellInner>{children}</AppShellInner>
+      <IdentityScopedAppShell>{children}</IdentityScopedAppShell>
     </AppConnectionProvider>
   )
+}
+
+function IdentityScopedAppShell({ children }: { children: React.ReactNode }) {
+  const { identityScopeKey } = useAppConnection()
+  return <AppShellInner key={identityScopeKey}>{children}</AppShellInner>
 }
 
 function AppShellInner({ children }: { children: React.ReactNode }) {
@@ -346,7 +349,16 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
   )
   const [crossDeviceVerifyOpen, setCrossDeviceVerifyOpen] =
     React.useState(false)
+  const { connection, connectionRole, isConnectionRoleLoading, serverMode } =
+    useAppConnection()
   const settingsActive = pathname === '/settings'
+  const usersActive = pathname === '/users'
+  const { canManageUsers } = resolveStudioManagementCapabilities({
+    hasControlCredential: Boolean(connection.adminApiKey.trim()),
+    isRoleLoading: isConnectionRoleLoading,
+    role: connectionRole,
+    serverMode,
+  })
   const crossDeviceVerifyActive =
     pathname === '/oauth/verify' || pathname.startsWith('/oauth/verify/')
   const visibleNavItems = NAV_ITEMS
@@ -377,9 +389,9 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
       <Sidebar variant="sidebar" collapsible="icon" className="!border-r-0">
         <SidebarHeader className="h-12 border-b border-sidebar-border/70 px-2 py-0">
           <div className="flex h-full items-center justify-between gap-2 group-data-[collapsible=icon]:justify-center">
-            <span className="flex h-8 min-w-0 items-center truncate px-2 text-base font-semibold leading-none group-data-[collapsible=icon]:hidden">
-              {t('sidebar.workspaceGroupLabel', { ns: 'appShell' })}
-            </span>
+            <div className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
+              <AccountSwitcher />
+            </div>
             <SidebarTrigger className="hidden shrink-0 md:inline-flex" />
           </div>
         </SidebarHeader>
@@ -451,6 +463,19 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
                 <span>{t('footer.connection', { ns: 'appShell' })}</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
+            {canManageUsers ? (
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  render={<Link to="/users" />}
+                  isActive={usersActive}
+                  tooltip={t('footer.users', { ns: 'appShell' })}
+                  className="text-base"
+                >
+                  <UsersRoundIcon className="size-5" />
+                  <span>{t('footer.users', { ns: 'appShell' })}</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ) : null}
             <SidebarMenuItem>
               <SidebarMenuButton
                 onClick={openCrossDeviceVerify}
@@ -576,6 +601,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
         open={crossDeviceVerifyOpen}
         onOpenChange={setCrossDeviceVerifyOpen}
       />
+      <GeneratedCredentialDialog />
     </SidebarProvider>
   )
 }

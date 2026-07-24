@@ -268,6 +268,11 @@ class SessionService:
         session_id: str,
         ctx: RequestContext,
         keep_recent_count: int = 0,
+        *,
+        retention_mode: Optional[str] = None,
+        keep_recent_turn_count: Optional[int] = None,
+        retained_message_token_budget: Optional[int] = None,
+        min_raw_tail_steps: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive messages and extract memories).
 
@@ -284,6 +289,10 @@ class SessionService:
             session_id,
             ctx,
             keep_recent_count=keep_recent_count,
+            retention_mode=retention_mode,
+            keep_recent_turn_count=keep_recent_turn_count,
+            retained_message_token_budget=retained_message_token_budget,
+            min_raw_tail_steps=min_raw_tail_steps,
         )
 
     async def commit_async(
@@ -291,6 +300,11 @@ class SessionService:
         session_id: str,
         ctx: RequestContext,
         keep_recent_count: int = 0,
+        *,
+        retention_mode: Optional[str] = None,
+        keep_recent_turn_count: Optional[int] = None,
+        retained_message_token_budget: Optional[int] = None,
+        min_raw_tail_steps: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Async commit a session.
 
@@ -308,7 +322,17 @@ class SessionService:
         """
         self._ensure_initialized()
         session = await self.get(session_id, ctx)
-        result = await session.commit_async(keep_recent_count=keep_recent_count)
+        commit_kwargs: Dict[str, Any] = {"keep_recent_count": keep_recent_count}
+        optional_retention = {
+            "retention_mode": retention_mode,
+            "keep_recent_turn_count": keep_recent_turn_count,
+            "retained_message_token_budget": retained_message_token_budget,
+            "min_raw_tail_steps": min_raw_tail_steps,
+        }
+        commit_kwargs.update(
+            {key: value for key, value in optional_retention.items() if value is not None}
+        )
+        result = await session.commit_async(**commit_kwargs)
         self._record_lifecycle_metric("commit", "ok" if result.get("status") else "error")
         self._record_archive_metric("ok" if result.get("archived") else "skip")
         return result

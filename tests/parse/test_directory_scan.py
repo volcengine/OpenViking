@@ -117,6 +117,16 @@ class TestScanDirectoryTraversal:
 class TestScanDirectoryClassification:
     """Test processable / unsupported classification."""
 
+    def test_processable_includes_extensionless_readme(
+        self, tmp_path: Path, registry: ParserRegistry
+    ) -> None:
+        (tmp_path / "README").write_text("# Project", encoding="utf-8")
+
+        result = scan_directory(tmp_path, registry=registry, strict=True)
+
+        assert [file.rel_path for file in result.processable] == ["README"]
+        assert result.unsupported == []
+
     def test_processable_includes_parser_files(
         self, tmp_tree: Path, registry: ParserRegistry
     ) -> None:

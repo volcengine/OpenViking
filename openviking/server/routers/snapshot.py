@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """HTTP routes for git-style version control (snapshots).
 
-Mirrors VikingFS.commit / VikingFS.restore / VikingFS.show / VikingFS.log,
+Mirrors VikingFS.commit / VikingFS.restore / VikingFS.show / VikingFS.diff / VikingFS.log,
 which already implement the underlying semantics.
 """
 
@@ -185,6 +185,34 @@ async def show(
             "X-Snapshot-Size": str(blob["size"]),
         },
     )
+
+
+@router.get("/diff")
+async def diff(
+    path: str = Query(..., description="Viking URI of the file to compare"),
+    from_ref: Optional[str] = Query(
+        None,
+        alias="from",
+        description="Base commit oid, branch, or tag; omit to compare against an empty file",
+    ),
+    to_ref: str = Query(..., alias="to", description="Target commit oid, branch, or tag"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Return a unified text diff for one path between two snapshots."""
+    service = get_service()
+    try:
+        result = await service.fs.diff(
+            path=path,
+            from_ref=from_ref,
+            to_ref=to_ref,
+            ctx=_ctx,
+        )
+    except (AGFSClientError, ValueError) as exc:
+        mapped = map_exception(exc)
+        if mapped is not None:
+            raise mapped from exc
+        raise
+    return Response(status="ok", result=result)
 
 
 @router.get("/ignore")

@@ -131,6 +131,11 @@ class QQChannel(BaseChannel):
 
             await self._handle_message(
                 sender_id=user_id,
+                sender_name=str(
+                    getattr(author, "username", None)
+                    or getattr(author, "name", None)
+                    or user_id
+                ),
                 chat_id=user_id,
                 content=content,
                 metadata={"message_id": data.id},

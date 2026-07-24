@@ -7,6 +7,33 @@ from openviking_sdk import AsyncHTTPClient, SyncHTTPClient
 from openviking_sdk.client import Session, SyncSession
 from openviking_sdk.errors import NotFoundError
 
+@pytest.mark.asyncio
+async def test_async_http_client_initialize_forwards_event_hooks():
+    async def request_hook(_request):
+        return None
+
+    async def later_hook(_request):
+        return None
+
+    event_hooks = {"request": [request_hook]}
+    fake_http = SimpleNamespace(aclose=AsyncMock())
+
+    with patch(
+        "openviking_sdk.client.httpx.AsyncClient",
+        return_value=fake_http,
+    ) as mock_async_client:
+        client = AsyncHTTPClient(
+            url="http://localhost:1933",
+            event_hooks=event_hooks,
+        )
+        await client.initialize()
+    event_hooks["request"].append(later_hook)
+
+    assert mock_async_client.call_args.kwargs["event_hooks"] == {
+        "request": [request_hook]
+    }
+    await client.close()
+
 
 @pytest.mark.asyncio
 async def test_async_http_client_batch_add_messages_posts_batch_payload():
@@ -59,6 +86,46 @@ async def test_async_http_client_batch_add_messages_url_encodes_session_id():
         "/messages/batch",
         json={"messages": [{"role": "user", "content": "hello"}]},
     )
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_sends_message_semantics_and_turn_retention():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {"result": {"status": "ok"}}
+
+    await client.add_message(
+        "demo-session",
+        "assistant",
+        parts=[{"type": "text", "text": "checking"}],
+        turn_id="turn-1",
+        message_kind="assistant_step",
+        source_message_ids=["u1"],
+    )
+    await client.commit_session(
+        "demo-session",
+        retention_mode="turn_budget",
+        keep_recent_turn_count=3,
+        retained_message_token_budget=12_000,
+        min_raw_tail_steps=1,
+    )
+
+    assert fake_http.post.await_args_list[0].kwargs["json"] == {
+        "role": "assistant",
+        "parts": [{"type": "text", "text": "checking"}],
+        "turn_id": "turn-1",
+        "message_kind": "assistant_step",
+        "source_message_ids": ["u1"],
+    }
+    assert fake_http.post.await_args_list[1].kwargs["json"] == {
+        "keep_recent_count": 0,
+        "telemetry": False,
+        "retention_mode": "turn_budget",
+        "keep_recent_turn_count": 3,
+        "retained_message_token_budget": 12_000,
+        "min_raw_tail_steps": 1,
+    }
 
 
 @pytest.mark.asyncio
@@ -737,16 +804,12 @@ async def test_export_and_backup_ovpack_append_default_suffixes(tmp_path):
 async def test_backup_ovpack_preserves_existing_file_when_replace_fails(tmp_path):
     client = AsyncHTTPClient(url="http://localhost:1933")
     client._http = SimpleNamespace(
-        post=AsyncMock(
-            return_value=SimpleNamespace(is_success=True, content=b"new-backup")
-        )
+        post=AsyncMock(return_value=SimpleNamespace(is_success=True, content=b"new-backup"))
     )
     output = tmp_path / "backup.ovpack"
     output.write_bytes(b"known-good-backup")
 
-    with patch(
-        "openviking_sdk.client.os.replace", side_effect=OSError("replace failed")
-    ):
+    with patch("openviking_sdk.client.os.replace", side_effect=OSError("replace failed")):
         with pytest.raises(OSError, match="replace failed"):
             await client.backup_ovpack(str(output))
 

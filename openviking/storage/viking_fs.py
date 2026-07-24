@@ -40,7 +40,10 @@ from openviking.pyagfs.exceptions import (
     AGFSDirectoryNotEmptyError,
     AGFSHTTPError,
     AGFSInvalidOperationError,
+    AGFSNotFoundError,
     AGFSNotSupportedError,
+    AGFSPathNotFoundError,
+    AGFSResourceExhaustedError,
 )
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
@@ -58,6 +61,7 @@ from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
     PermissionDeniedError,
+    ResourceExhaustedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.grep_config import GrepEngine
@@ -79,7 +83,64 @@ logger = get_logger(__name__)
 # materializes its first 1000 subdirectories. Pass this explicitly at those
 # call sites.
 LS_ALL_NODES = 2**31 - 1
+SNAPSHOT_DIFF_MAX_FILE_BYTES = 10 * 1024 * 1024
+SNAPSHOT_DIFF_MAX_OUTPUT_BYTES = 20 * 1024 * 1024
+SNAPSHOT_DIFF_MAX_LINES = 100_000
+SNAPSHOT_DIFF_TIMEOUT_MS = 500
 _T = TypeVar("_T")
+
+
+def _snapshot_line_count(text: str) -> int:
+    if not text:
+        return 0
+    line_breaks = (
+        "\n",
+        "\r",
+        "\v",
+        "\f",
+        "\x1c",
+        "\x1d",
+        "\x1e",
+        "\x85",
+        "\u2028",
+        "\u2029",
+    )
+    count = sum(text.count(separator) for separator in line_breaks)
+    count -= text.count("\r\n")
+    return count if text.endswith(line_breaks) else count + 1
+
+
+def _prepare_snapshot_diff(
+    *,
+    path: str,
+    before_bytes: Optional[bytes],
+    after_bytes: Optional[bytes],
+    max_lines: int,
+) -> tuple[str, str, str]:
+    try:
+        before = before_bytes.decode("utf-8") if before_bytes is not None else ""
+        after = after_bytes.decode("utf-8") if after_bytes is not None else ""
+    except UnicodeDecodeError as exc:
+        raise InvalidArgumentError("snapshot diff only supports UTF-8 text files") from exc
+
+    for text in (before, after):
+        line_count = _snapshot_line_count(text)
+        if line_count > max_lines:
+            raise ResourceExhaustedError(
+                f"snapshot diff line count limit exceeded ({max_lines} lines per file)",
+                details={"limit_lines": max_lines, "path": path},
+            )
+
+    if before_bytes is None:
+        change_type = "added"
+    elif after_bytes is None:
+        change_type = "deleted"
+    elif before_bytes == after_bytes:
+        change_type = "unchanged"
+    else:
+        change_type = "modified"
+
+    return change_type, before, after
 
 
 def _ensure_non_empty_search_query(query: str, image_url: Optional[str] = None) -> None:
@@ -382,6 +443,14 @@ class VikingFS:
             get_lock_manager(),
             self._encrypted_write_lock_paths(path),
             lock_mode="exact",
+            # Encrypted writes lock both the final path and the deterministic
+            # staging path under `.encrypt_stage`. Keeping the global default
+            # timeout at 0 is still desirable for ordinary path locks, but
+            # this specific dual-path write is much more exposed to short-lived
+            # contention between concurrent writers. A small 1-second wait here
+            # lets us ride out transient conflicts without broadening lock
+            # behavior for unrelated call sites.
+            timeout=1.0,
             handle=lock_handle,
         ):
             return await operation()
@@ -3988,6 +4057,7 @@ class VikingFS:
         target_ref: str,
         *,
         path: Optional[str] = None,
+        max_blob_bytes: Optional[int] = None,
         ctx: Optional[RequestContext] = None,
     ) -> Union[Dict[str, Any], bytes]:
         """Read a commit's metadata or a single blob.
@@ -3999,12 +4069,14 @@ class VikingFS:
         real_ctx = self._ctx_or_default(ctx)
         account = real_ctx.account_id
         tree_path = self._uri_to_tree_path(path, ctx=real_ctx) if path else None
-        resp = await self._async_agfs.run(
-            "git_show",
-            account=account,
-            target_ref=target_ref,
-            path=tree_path,
-        )
+        kwargs: Dict[str, Any] = {
+            "account": account,
+            "target_ref": target_ref,
+            "path": tree_path,
+        }
+        if max_blob_bytes is not None:
+            kwargs["max_blob_bytes"] = max_blob_bytes
+        resp = await self._async_agfs.run("git_show", **kwargs)
         if path is not None and isinstance(resp, dict) and "bytes" in resp:
             return resp["bytes"]
         return resp
@@ -4037,6 +4109,96 @@ class VikingFS:
             )
         return resp
 
+    async def diff(
+        self,
+        *,
+        path: str,
+        from_ref: Optional[str],
+        to_ref: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> Dict[str, Any]:
+        """Return a unified text diff for one path between two snapshots."""
+        real_ctx = self._ctx_or_default(ctx)
+        path = canonicalize_uri(path, ctx=real_ctx)
+        self._ensure_access(path, real_ctx)
+
+        from_meta: Optional[Dict[str, Any]] = None
+        if from_ref:
+            try:
+                from_meta = await self.show(from_ref, ctx=real_ctx)
+            except AGFSNotFoundError as exc:
+                raise NotFoundError(from_ref, "git_ref") from exc
+        try:
+            to_meta = await self.show(to_ref, ctx=real_ctx)
+        except AGFSNotFoundError as exc:
+            raise NotFoundError(to_ref, "git_ref") from exc
+
+        from_oid = str(from_meta.get("oid", from_ref)) if isinstance(from_meta, dict) else ""
+        to_oid = str(to_meta.get("oid", to_ref)) if isinstance(to_meta, dict) else to_ref
+
+        async def read_optional(ref: str) -> Optional[bytes]:
+            try:
+                value = await self.show(
+                    ref,
+                    path=path,
+                    max_blob_bytes=SNAPSHOT_DIFF_MAX_FILE_BYTES,
+                    ctx=real_ctx,
+                )
+            except AGFSPathNotFoundError:
+                return None
+            except AGFSResourceExhaustedError as exc:
+                raise ResourceExhaustedError(
+                    f"snapshot diff file size limit exceeded "
+                    f"({SNAPSHOT_DIFF_MAX_FILE_BYTES} bytes)",
+                    details={"limit_bytes": SNAPSHOT_DIFF_MAX_FILE_BYTES, "path": path},
+                ) from exc
+            if not isinstance(value, bytes):
+                raise TypeError(f"git_show returned unexpected blob type: {type(value).__name__}")
+            return value
+
+        before_bytes = await read_optional(from_oid) if from_ref else None
+        after_bytes = await read_optional(to_oid)
+        if before_bytes is None and after_bytes is None:
+            raise NotFoundError(path, "git_blob")
+
+        for value in (before_bytes, after_bytes):
+            if value is not None and len(value) > SNAPSHOT_DIFF_MAX_FILE_BYTES:
+                raise ResourceExhaustedError(
+                    f"snapshot diff file size limit exceeded ({SNAPSHOT_DIFF_MAX_FILE_BYTES} bytes)",
+                    details={"limit_bytes": SNAPSHOT_DIFF_MAX_FILE_BYTES, "path": path},
+                )
+
+        change_type, before, after = await asyncio.to_thread(
+            _prepare_snapshot_diff,
+            path=path,
+            before_bytes=before_bytes,
+            after_bytes=after_bytes,
+            max_lines=SNAPSHOT_DIFF_MAX_LINES,
+        )
+        try:
+            diff_text = await self._async_agfs.run(
+                "git_diff_text",
+                before=before,
+                after=after,
+                fromfile=f"{path}@{from_oid}",
+                tofile=f"{path}@{to_oid}",
+                timeout_ms=SNAPSHOT_DIFF_TIMEOUT_MS,
+                max_output_bytes=SNAPSHOT_DIFF_MAX_OUTPUT_BYTES,
+            )
+        except AGFSResourceExhaustedError as exc:
+            raise ResourceExhaustedError(
+                f"snapshot diff output size limit exceeded "
+                f"({SNAPSHOT_DIFF_MAX_OUTPUT_BYTES} bytes)",
+                details={"limit_bytes": SNAPSHOT_DIFF_MAX_OUTPUT_BYTES, "path": path},
+            ) from exc
+        return {
+            "path": path,
+            "from_commit": from_oid,
+            "to_commit": to_oid,
+            "change_type": change_type,
+            "diff_text": diff_text,
+        }
+
     async def log(
         self,
         *,
@@ -4054,9 +4216,7 @@ class VikingFS:
         real_ctx = self._ctx_or_default(ctx)
         account = real_ctx.account_id
         tree_paths = (
-            None
-            if not paths
-            else [self._uri_to_tree_path(path, ctx=real_ctx) for path in paths]
+            None if not paths else [self._uri_to_tree_path(path, ctx=real_ctx) for path in paths]
         )
         return await self._async_agfs.run(
             "git_log",

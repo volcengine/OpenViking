@@ -9,7 +9,7 @@ import uuid
 import zipfile
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 from urllib.parse import quote
 
 import httpx
@@ -138,7 +138,19 @@ class Session:
         parts: list[dict] | None = None,
         created_at: str | None = None,
         peer_id: str | None = None,
+        turn_id: str | None = None,
+        message_kind: str | None = None,
+        source_message_ids: list[str] | None = None,
     ) -> Dict[str, Any]:
+        semantic_kwargs = {
+            key: value
+            for key, value in {
+                "turn_id": turn_id,
+                "message_kind": message_kind,
+                "source_message_ids": source_message_ids,
+            }.items()
+            if value is not None
+        }
         return await self._client.add_message(
             self.session_id,
             role=role,
@@ -146,14 +158,35 @@ class Session:
             parts=parts,
             created_at=created_at,
             peer_id=peer_id,
+            **semantic_kwargs,
         )
 
     async def batch_add_messages(self, messages: list[dict]) -> Dict[str, Any]:
         return await self._client.batch_add_messages(self.session_id, messages)
 
-    async def commit(self, keep_recent_count: int = 0) -> Dict[str, Any]:
+    async def commit(
+        self,
+        keep_recent_count: int = 0,
+        *,
+        retention_mode: str | None = None,
+        keep_recent_turn_count: int | None = None,
+        retained_message_token_budget: int | None = None,
+        min_raw_tail_steps: int | None = None,
+    ) -> Dict[str, Any]:
+        optional_retention = {
+            key: value
+            for key, value in {
+                "retention_mode": retention_mode,
+                "keep_recent_turn_count": keep_recent_turn_count,
+                "retained_message_token_budget": retained_message_token_budget,
+                "min_raw_tail_steps": min_raw_tail_steps,
+            }.items()
+            if value is not None
+        }
         return await self._client.commit_session(
-            self.session_id, keep_recent_count=keep_recent_count
+            self.session_id,
+            keep_recent_count=keep_recent_count,
+            **optional_retention,
         )
 
     async def delete(self) -> None:
@@ -181,7 +214,19 @@ class SyncSession:
         parts: list[dict] | None = None,
         created_at: str | None = None,
         peer_id: str | None = None,
+        turn_id: str | None = None,
+        message_kind: str | None = None,
+        source_message_ids: list[str] | None = None,
     ) -> Dict[str, Any]:
+        semantic_kwargs = {
+            key: value
+            for key, value in {
+                "turn_id": turn_id,
+                "message_kind": message_kind,
+                "source_message_ids": source_message_ids,
+            }.items()
+            if value is not None
+        }
         return self._client.add_message(
             self.session_id,
             role=role,
@@ -189,6 +234,7 @@ class SyncSession:
             parts=parts,
             created_at=created_at,
             peer_id=peer_id,
+            **semantic_kwargs,
         )
 
     def batch_add_messages(self, messages: list[dict]) -> Dict[str, Any]:
@@ -199,11 +245,26 @@ class SyncSession:
         telemetry: Any = False,
         *,
         keep_recent_count: int = 0,
+        retention_mode: str | None = None,
+        keep_recent_turn_count: int | None = None,
+        retained_message_token_budget: int | None = None,
+        min_raw_tail_steps: int | None = None,
     ) -> Dict[str, Any]:
+        optional_retention = {
+            key: value
+            for key, value in {
+                "retention_mode": retention_mode,
+                "keep_recent_turn_count": keep_recent_turn_count,
+                "retained_message_token_budget": retained_message_token_budget,
+                "min_raw_tail_steps": min_raw_tail_steps,
+            }.items()
+            if value is not None
+        }
         return self._client.commit_session(
             self.session_id,
             telemetry=telemetry,
             keep_recent_count=keep_recent_count,
+            **optional_retention,
         )
 
     def commit_async(
@@ -211,8 +272,26 @@ class SyncSession:
         telemetry: Any = False,
         *,
         keep_recent_count: int = 0,
+        retention_mode: str | None = None,
+        keep_recent_turn_count: int | None = None,
+        retained_message_token_budget: int | None = None,
+        min_raw_tail_steps: int | None = None,
     ) -> Dict[str, Any]:
-        return self.commit(telemetry=telemetry, keep_recent_count=keep_recent_count)
+        optional_retention = {
+            key: value
+            for key, value in {
+                "retention_mode": retention_mode,
+                "keep_recent_turn_count": keep_recent_turn_count,
+                "retained_message_token_budget": retained_message_token_budget,
+                "min_raw_tail_steps": min_raw_tail_steps,
+            }.items()
+            if value is not None
+        }
+        return self.commit(
+            telemetry=telemetry,
+            keep_recent_count=keep_recent_count,
+            **optional_retention,
+        )
 
     def delete(self) -> None:
         self._client.delete_session(self.session_id)
@@ -268,6 +347,7 @@ class AsyncHTTPClient:
         extra_headers: Optional[Dict[str, str]] = None,
         profile_enabled: Optional[bool] = None,
         upload_mode: Optional[str] = None,
+        event_hooks: Optional[Dict[str, List[Callable[..., Any]]]] = None,
     ):
         if actor_peer_id and agent_id:
             raise ValueError("actor_peer_id cannot be used with agent_id")
@@ -294,6 +374,9 @@ class AsyncHTTPClient:
         self._extra_headers = config.extra_headers
         self._profile_enabled = config.profile_enabled
         self._upload_mode = config.upload_mode
+        self._event_hooks = {
+            event: list(hooks) for event, hooks in (event_hooks or {}).items()
+        }
         self._http: Optional[httpx.AsyncClient] = None
         self._observer: Optional[_HTTPObserver] = None
         self._snapshot: Optional["AsyncHTTPSnapshotNamespace"] = None
@@ -313,6 +396,7 @@ class AsyncHTTPClient:
             base_url=self._url,
             headers=headers,
             timeout=self._timeout,
+            event_hooks=self._event_hooks,
             params={"profile": "1"} if self._profile_enabled else None,
         )
         self._observer = _HTTPObserver(self)
@@ -1239,12 +1323,27 @@ class AsyncHTTPClient:
         telemetry: Any = False,
         *,
         keep_recent_count: int = 0,
+        retention_mode: str | None = None,
+        keep_recent_turn_count: int | None = None,
+        retained_message_token_budget: int | None = None,
+        min_raw_tail_steps: int | None = None,
     ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "keep_recent_count": keep_recent_count,
+            "telemetry": telemetry,
+        }
+        optional = {
+            "retention_mode": retention_mode,
+            "keep_recent_turn_count": keep_recent_turn_count,
+            "retained_message_token_budget": retained_message_token_budget,
+            "min_raw_tail_steps": min_raw_tail_steps,
+        }
+        payload.update({key: value for key, value in optional.items() if value is not None})
         session_path = self._path_segment(session_id)
         response = await self._request(
             "POST",
             f"/api/v1/sessions/{session_path}/commit",
-            json={"keep_recent_count": keep_recent_count, "telemetry": telemetry},
+            json=payload,
         )
         return self._handle_response_data(response).get("result", {})
 
@@ -1257,6 +1356,9 @@ class AsyncHTTPClient:
         created_at: str | None = None,
         peer_id: str | None = None,
         telemetry: Any = False,
+        turn_id: str | None = None,
+        message_kind: str | None = None,
+        source_message_ids: list[str] | None = None,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {"role": role}
         if parts is not None:
@@ -1265,10 +1367,14 @@ class AsyncHTTPClient:
             payload["content"] = content
         else:
             raise ValueError("Either content or parts must be provided")
-        if created_at is not None:
-            payload["created_at"] = created_at
-        if peer_id is not None:
-            payload["peer_id"] = peer_id
+        optional = {
+            "created_at": created_at,
+            "peer_id": peer_id,
+            "turn_id": turn_id,
+            "message_kind": message_kind,
+            "source_message_ids": source_message_ids,
+        }
+        payload.update({key: value for key, value in optional.items() if value is not None})
         if telemetry is not False:
             payload["telemetry"] = telemetry
         session_path = self._path_segment(session_id)
@@ -1589,6 +1695,24 @@ class AsyncHTTPClient:
         response = await self._request(
             "GET",
             "/api/v1/snapshot/log",
+            params=params,
+        )
+        return self._handle_response(response)
+
+    async def git_diff(
+        self,
+        path: str,
+        *,
+        to_ref: str,
+        from_ref: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Compare one file between two snapshot refs."""
+        params: Dict[str, Any] = {"path": path, "to": to_ref}
+        if from_ref is not None:
+            params["from"] = from_ref
+        response = await self._request(
+            "GET",
+            "/api/v1/snapshot/diff",
             params=params,
         )
         return self._handle_response(response)
@@ -2124,19 +2248,36 @@ class SyncHTTPClient:
         telemetry: Any = False,
         *,
         keep_recent_count: int = 0,
+        retention_mode: str | None = None,
+        keep_recent_turn_count: int | None = None,
+        retained_message_token_budget: int | None = None,
+        min_raw_tail_steps: int | None = None,
     ) -> Dict[str, Any]:
+        kwargs = {"keep_recent_count": keep_recent_count}
+        kwargs.update(
+            {
+                key: value
+                for key, value in {
+                    "retention_mode": retention_mode,
+                    "keep_recent_turn_count": keep_recent_turn_count,
+                    "retained_message_token_budget": retained_message_token_budget,
+                    "min_raw_tail_steps": min_raw_tail_steps,
+                }.items()
+                if value is not None
+            }
+        )
         if telemetry is False:
             return run_async(
                 self._async_client.commit_session(
                     session_id,
-                    keep_recent_count=keep_recent_count,
+                    **kwargs,
                 )
             )
         return run_async(
             self._async_client.commit_session(
                 session_id,
                 telemetry=telemetry,
-                keep_recent_count=keep_recent_count,
+                **kwargs,
             )
         )
 
@@ -2149,6 +2290,9 @@ class SyncHTTPClient:
         created_at: str | None = None,
         peer_id: str | None = None,
         telemetry: Any = False,
+        turn_id: str | None = None,
+        message_kind: str | None = None,
+        source_message_ids: list[str] | None = None,
     ) -> Dict[str, Any]:
         kwargs = {
             "role": role,
@@ -2157,6 +2301,17 @@ class SyncHTTPClient:
             "created_at": created_at,
             "peer_id": peer_id,
         }
+        kwargs.update(
+            {
+                key: value
+                for key, value in {
+                    "turn_id": turn_id,
+                    "message_kind": message_kind,
+                    "source_message_ids": source_message_ids,
+                }.items()
+                if value is not None
+            }
+        )
         if telemetry is not False:
             kwargs["telemetry"] = telemetry
         return run_async(
@@ -2368,6 +2523,20 @@ class AsyncHTTPSnapshotNamespace:
     ) -> List[Dict[str, Any]]:
         return await self._client.git_log(branch=branch, limit=limit, paths=paths)
 
+    async def diff(
+        self,
+        path: str,
+        *,
+        to_ref: str,
+        from_ref: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Compare one file between two snapshot refs."""
+        return await self._client.git_diff(
+            path,
+            from_ref=from_ref,
+            to_ref=to_ref,
+        )
+
     async def get_gitignore(self) -> str:
         return await self._client.git_get_ignore()
 
@@ -2445,6 +2614,18 @@ class SyncHTTPSnapshotNamespace:
         paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         return run_async(self._ns().log(branch=branch, limit=limit, paths=paths))
+
+    def diff(
+        self,
+        path: str,
+        *,
+        to_ref: str,
+        from_ref: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Compare one file between two snapshot refs."""
+        return run_async(
+            self._ns().diff(path, from_ref=from_ref, to_ref=to_ref)
+        )
 
     def get_gitignore(self) -> str:
         return run_async(self._ns().get_gitignore())

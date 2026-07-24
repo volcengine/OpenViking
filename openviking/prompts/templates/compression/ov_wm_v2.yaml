@@ -2,7 +2,7 @@ metadata:
   id: "compression.ov_wm_v2"
   name: "Working Memory v2 - Creation"
   description: "Produce a structured Working Memory document for a session archive (no prior WM)."
-  version: "2.2.0"
+  version: "2.3.0"
   language: "en"
   category: "compression"
 
@@ -14,6 +14,11 @@ variables:
   - name: "latest_archive_overview"
     type: "string"
     description: "Optional prior Working Memory. When provided, still-valid info should be carried forward."
+    required: false
+    default: ""
+  - name: "checkpoint_instructions"
+    type: "string"
+    description: "Optional instructions for checkpoint summaries produced by the same call."
     required: false
     default: ""
 
@@ -34,6 +39,10 @@ template: |
   <session_content>
   {{ messages }}
   </session_content>
+
+  {% if checkpoint_instructions %}
+  {{ checkpoint_instructions }}
+  {% endif %}
 
   Output a complete Working Memory using the 7-section structure below.
 
@@ -82,6 +91,12 @@ template: |
 
   ## Open Issues
   _Unresolved questions, blockers, follow-ups, risks, or topics to revisit._
+
+  {% if checkpoint_instructions %}
+  Put the complete document above in the `working_memory` field, satisfy the
+  checkpoint instructions in `checkpoint_summaries`, and call
+  `create_working_memory` exactly once. Do not emit freeform text.
+  {% endif %}
 
 llm_config:
   temperature: 0.0

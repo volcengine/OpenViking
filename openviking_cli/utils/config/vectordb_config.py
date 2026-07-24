@@ -162,6 +162,29 @@ class CuVSConfig(BaseModel):
             "snapshot work remains concurrent; increase only after hardware-specific tuning."
         ),
     )
+    micro_batching_enabled: bool = Field(
+        default=False,
+        description=(
+            "Coalesce compatible concurrent cuVS dense queries into one matrix-search call. "
+            "This OpenViking scheduler is opt-in and distinct from cuVS Dynamic Batching."
+        ),
+    )
+    micro_batching_max_batch_size: int = Field(
+        default=8,
+        ge=1,
+        le=8,
+        description="Maximum compatible queries submitted in one cuVS search call.",
+    )
+    micro_batching_max_wait_ms: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=100.0,
+        allow_inf_nan=False,
+        description=(
+            "Maximum collection window for a compatible cuVS micro-batch, in milliseconds. "
+            "Zero performs opportunistic batching without an intentional wait."
+        ),
+    )
     auto_background_rebuild: bool = Field(
         default=False,
         description=(
@@ -179,6 +202,16 @@ class CuVSConfig(BaseModel):
     )
 
     model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def validate_micro_batching(self):
+        if not self.micro_batching_enabled:
+            return self
+        if self.algorithm != "brute_force":
+            raise ValueError("cuVS micro-batching currently supports algorithm='brute_force' only")
+        if self.max_concurrent_gpu_searches != 1:
+            raise ValueError("cuVS micro-batching currently requires max_concurrent_gpu_searches=1")
+        return self
 
 
 _OPENGAUSS_MODES = {"standalone", "distributed"}
