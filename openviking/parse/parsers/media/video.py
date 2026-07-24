@@ -30,6 +30,7 @@ from typing import List, Optional, Union
 from openviking.parse.base import NodeType, ParseResult, ResourceNode
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.media.constants import VIDEO_EXTENSIONS
+from openviking.parse.parsers.media.detection import matches_ambiguous_media_bytes
 from openviking.parse.parsers.media.naming import resolve_media_names
 from openviking_cli.utils.config.parser_config import VideoConfig
 
@@ -118,6 +119,9 @@ class VideoParser(BaseParser):
             if len(video_bytes) >= len(magic) and video_bytes.startswith(magic):
                 valid = True
                 break
+        ambiguous_media_match = matches_ambiguous_media_bytes(file_path, video_bytes)
+        if ambiguous_media_match is not None:
+            valid = ambiguous_media_match
 
         if not valid:
             raise ValueError(

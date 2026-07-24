@@ -59,6 +59,14 @@ class ParserRouter:
                 pass
 
         ext = self._extract_extension(source_path)
+        from openviking.parse.parsers.media.detection import (
+            matches_ambiguous_media_file,
+        )
+
+        local_path = Path(source_path)
+        ambiguous_media_match = matches_ambiguous_media_file(local_path)
+        if local_path.is_file() and ambiguous_media_match is False:
+            return False
         return ext in parser_api.extensions
 
     def _extract_extension(self, source_path: Union[str, Path]) -> str:

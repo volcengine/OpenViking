@@ -34,6 +34,7 @@ def _convert_svg_to_png(svg_data: bytes) -> Optional[bytes]:
     """
     try:
         import cairosvg
+
         return cairosvg.svg2png(bytestring=svg_data)
     except ImportError:
         pass
@@ -42,8 +43,9 @@ def _convert_svg_to_png(svg_data: bytes) -> Optional[bytes]:
 
     try:
         from wand.image import Image as WandImage
-        with WandImage(blob=svg_data, format='svg') as img:
-            img.format = 'png'
+
+        with WandImage(blob=svg_data, format="svg") as img:
+            img.format = "png"
             return img.make_blob()
     except ImportError:
         pass
@@ -65,6 +67,16 @@ def get_media_type(source_path: Optional[str], source_format: Optional[str]) -> 
     if source_format:
         if source_format in ["image", "audio", "video"]:
             return source_format
+        if source_format in {
+            "code",
+            "directory",
+            "documentation",
+            "markdown",
+            "repository",
+            "text",
+            "typescript",
+        }:
+            return None
 
     if source_path:
         ext = Path(source_path).suffix.lower()
