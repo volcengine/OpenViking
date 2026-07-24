@@ -17,6 +17,9 @@ from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
 from openviking.service.debug_service import DebugService
 from openviking.service.fs_service import FSService
+from openviking.service.memory_consolidation import (
+    build_exact_duplicate_dry_run_plan_from_fs,
+)
 from openviking.service.pack_service import PackService
 from openviking.service.relation_service import RelationService
 from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
@@ -584,3 +587,23 @@ class OpenVikingService:
         if not self._directory_initializer:
             return 0
         return await self._directory_initializer.initialize_user_directories(ctx)
+
+    async def plan_exact_memory_duplicates(
+        self,
+        *,
+        scope_uri: str,
+        memory_type: str,
+        ctx: RequestContext,
+        node_limit: int = 5000,
+    ) -> dict[str, Any]:
+        """Build a read-only exact-duplicate manifest for one memory-type scope."""
+
+        self._ensure_initialized()
+        plan = await build_exact_duplicate_dry_run_plan_from_fs(
+            fs_service=self._fs_service,
+            ctx=ctx,
+            scope_uri=scope_uri,
+            memory_type=memory_type,
+            node_limit=node_limit,
+        )
+        return plan.model_dump(mode="json")
