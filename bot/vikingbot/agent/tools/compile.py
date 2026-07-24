@@ -5,15 +5,19 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Mapping
 
+import yaml
 from pydantic import ValidationError
 
 from openviking.core.namespace import context_type_for_uri, relative_uri_path
+from openviking.core.skill_loader import SkillLoader, validate_skill_format
 from openviking.session.memory.utils.link_renderer import LinkRenderer
 from openviking.utils.path_safety import (
     safe_join_viking_uri,
     sanitize_relative_viking_path,
     validate_safe_viking_uri_path,
 )
+from openviking.utils.skill_processor import validate_skill_name
+from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils import VikingURI
 from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.compile.models import CompileLimits, WikiBundleDraft
@@ -144,6 +148,11 @@ class SubmitWikiBundleTool(Tool):
         self.require_workspace_pages = require_workspace_pages
         self.bundle: WikiBundleDraft | None = None
         self.file_payloads: list[bytes | None] = []
+        self.skill_name: str | None = None
+
+    @property
+    def _is_skill_target(self) -> bool:
+        return context_type_for_uri(self.target_uri) == "skill"
 
     @property
     def name(self) -> str:
@@ -151,6 +160,11 @@ class SubmitWikiBundleTool(Tool):
 
     @property
     def description(self) -> str:
+        if self._is_skill_target:
+            return (
+                "Submit one complete OpenViking Skill package. Include every file under "
+                "<skill-name>/ and include <skill-name>/SKILL.md."
+            )
         return (
             "Submit the final output only after every path and format explicitly required "
             "by the Skill is represented. Treat only actual Wiki content as Wiki pages and "
@@ -168,6 +182,20 @@ class SubmitWikiBundleTool(Tool):
         required = schema.setdefault("required", [])
         if "files" not in required:
             required.append("files")
+        if self._is_skill_target:
+            schema["properties"].pop("pages", None)
+            schema["properties"].pop("links", None)
+            required[:] = [field for field in required if field not in {"pages", "links"}]
+            definitions = schema.get("$defs", {})
+            definitions.pop("WikiPageDraft", None)
+            definitions.pop("WikiLink", None)
+            file_schema = definitions.get("CompileFileDraft", {})
+            file_schema.get("properties", {}).pop("update_uri", None)
+            file_required = file_schema.setdefault("required", [])
+            if "path" not in file_required:
+                file_required.append("path")
+            schema.pop("title", None)
+            return schema
         if self.require_workspace_pages:
             page_def = schema.get("$defs", {}).get("WikiPageDraft", {})
             page_properties = page_def.get("properties", {})
@@ -191,7 +219,7 @@ class SubmitWikiBundleTool(Tool):
     async def execute(
         self,
         tool_context: ToolContext,
-        pages: list[dict[str, Any]],
+        pages: list[dict[str, Any]] | None = None,
         files: list[dict[str, Any]] | None = None,
         links: list[dict[str, Any]] | None = None,
         **kwargs: Any,
@@ -199,22 +227,28 @@ class SubmitWikiBundleTool(Tool):
         del kwargs
         self.bundle = None
         self.file_payloads = []
+        self.skill_name = None
         raw_links = links or []
         for index, link in enumerate(raw_links):
             if not isinstance(link, Mapping) or set(link) - _LINK_FIELDS:
                 return f"Error: links[{index}] contains unknown fields."
         try:
             bundle = WikiBundleDraft.model_validate(
-                {"pages": pages, "files": files or [], "links": raw_links}
+                {"pages": pages or [], "files": files or [], "links": raw_links}
             )
             bundle = await self._materialize_page_bodies(
                 bundle, tool_context=tool_context
             )
             payloads = await self._validate_bundle(bundle, tool_context=tool_context)
         except (ValidationError, ValueError) as exc:
-            return f"Error: Invalid Wiki bundle: {exc}"
+            kind = "Skill" if self._is_skill_target else "Wiki"
+            return f"Error: Invalid {kind} bundle: {exc}"
         self.bundle = bundle
         self.file_payloads = payloads
+        if self._is_skill_target:
+            return (
+                f"Skill bundle accepted for '{self.skill_name}' with {len(bundle.files)} file(s)."
+            )
         return (
             f"Wiki bundle accepted with {len(bundle.pages)} page(s) and "
             f"{len(bundle.files)} file(s)."
@@ -290,16 +324,19 @@ class SubmitWikiBundleTool(Tool):
     async def _validate_bundle(
         self, bundle: WikiBundleDraft, *, tool_context: ToolContext
     ) -> list[bytes | None]:
+        target_type = context_type_for_uri(self.target_uri)
         if len(bundle.pages) > self.limits.output_pages:
             raise ValueError("page limit exceeded")
         if len(bundle.files) > self.limits.output_files:
             raise ValueError("file limit exceeded")
         if not bundle.pages and bundle.links:
             raise ValueError("empty bundle must not contain links")
-        if bundle.files and context_type_for_uri(self.target_uri) != "resource":
+        if target_type == "skill" and (bundle.pages or bundle.links):
+            raise ValueError("Skill targets only accept artifact files")
+        if bundle.files and target_type not in {"resource", "skill"}:
             raise ValueError(
-                "raw artifact files are only supported for Resource targets; "
-                "re-run ov compile with a viking://resources/... target"
+                "raw artifact files are only supported for Resource targets or exact "
+                "Skill namespace targets; re-run ov compile with a supported target"
             )
         if (
             self.require_workspace_files
@@ -350,7 +387,12 @@ class SubmitWikiBundleTool(Tool):
 
         file_payloads: list[bytes | None] = []
         for index, file in enumerate(bundle.files):
-            if file.update_uri:
+            if target_type == "skill":
+                if file.update_uri:
+                    raise ValueError("Skill bundles require relative path entries, not update_uri")
+                relative = validate_relative_file_path(file.path or "")
+                final_uri = safe_join_viking_uri(self.target_uri, relative).rstrip("/")
+            elif file.update_uri:
                 final_uri = validate_safe_viking_uri_path(file.update_uri).rstrip("/")
                 if is_reserved_wiki_page_uri(final_uri):
                     raise ValueError(f"file {index} cannot update a reserved file")
@@ -380,6 +422,8 @@ class SubmitWikiBundleTool(Tool):
 
         if total_bytes > self.limits.output_total_bytes:
             raise ValueError("draft content size limit exceeded")
+        if target_type == "skill":
+            self.skill_name = self._validate_skill_bundle(bundle, file_payloads)
         page_by_id = {page.page_id: page for page in bundle.pages}
         link_errors: list[str] = []
         for index, link in enumerate(bundle.links):
@@ -413,6 +457,55 @@ class SubmitWikiBundleTool(Tool):
         if link_errors:
             raise ValueError(f"{len(link_errors)} invalid link(s): " + "; ".join(link_errors))
         return file_payloads
+
+    @staticmethod
+    def _validate_skill_bundle(bundle: WikiBundleDraft, file_payloads: list[bytes | None]) -> str:
+        if not bundle.files:
+            raise ValueError("Skill bundle must contain files")
+
+        skill_names: set[str] = set()
+        contents: dict[str, bytes] = {}
+        for index, file in enumerate(bundle.files):
+            relative = validate_relative_file_path(file.path or "")
+            parts = relative.split("/")
+            if len(parts) < 2:
+                raise ValueError(f"file {index} must be under <skill-name>/, got: {relative}")
+            skill_names.add(parts[0])
+            payload = (
+                file.content.encode("utf-8") if file.content is not None else file_payloads[index]
+            )
+            if payload is None:
+                raise ValueError(f"file {index} has no materialized content")
+            contents[relative] = payload
+
+        if len(skill_names) != 1:
+            raise ValueError("Skill bundle must contain exactly one top-level Skill directory")
+        skill_name = next(iter(skill_names))
+        skill_md_path = f"{skill_name}/SKILL.md"
+        skill_md = contents.get(skill_md_path)
+        if skill_md is None:
+            raise ValueError(f"Skill bundle must include {skill_md_path}")
+        try:
+            skill_md_text = skill_md.decode("utf-8")
+            parsed = SkillLoader.parse(skill_md_text, source_path=skill_md_path)
+            parsed_name = validate_skill_name(parsed.get("name"))
+        except (UnicodeDecodeError, ValueError, OpenVikingError, yaml.YAMLError) as exc:
+            raise ValueError(str(exc)) from exc
+        if parsed_name != skill_name:
+            raise ValueError(f"Skill name '{parsed_name}' does not match directory '{skill_name}'")
+        validation = validate_skill_format(
+            skill_md_text,
+            strict=True,
+            skill_dir_name=skill_name,
+            source_path=skill_md_path,
+        )
+        if not validation["valid"]:
+            messages = [
+                str(issue.get("message") or issue.get("rule") or "invalid Skill")
+                for issue in validation["errors"]
+            ]
+            raise ValueError("; ".join(messages))
+        return skill_name
 
 
 __all__ = ["CompileScopedTool", "SubmitWikiBundleTool"]

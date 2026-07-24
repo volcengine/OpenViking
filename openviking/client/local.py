@@ -8,6 +8,7 @@ Implements BaseClient interface using direct service calls (embedded mode).
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.core.peer_id import normalize_peer_id
+from openviking.core.skill_loader import validate_skill_format
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers.skills import (
     _list_skill_files,
@@ -15,7 +16,6 @@ from openviking.server.routers.skills import (
     _require_skill,
     _restore_skill_privacy,
     _skill_summary_from_hit,
-    _validate_skill_format,
 )
 from openviking.service import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
@@ -493,8 +493,7 @@ class LocalClient(BaseClient):
         target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Validate skill data."""
-        result = _validate_skill_format(
-            self._service,
+        result = validate_skill_format(
             data,
             strict=strict,
             skill_dir_name=skill_dir_name,

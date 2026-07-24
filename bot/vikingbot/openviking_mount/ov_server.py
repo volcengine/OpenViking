@@ -630,6 +630,38 @@ class VikingClient:
             target_uri=target_uri,
         )
 
+    async def add_skill(
+        self,
+        path: str,
+        *,
+        target_uri: str,
+        wait: bool = True,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        return await self.client.add_skill(
+            path,
+            target_uri=target_uri,
+            wait=wait,
+            timeout=timeout,
+        )
+
+    async def update_skill(
+        self,
+        skill_name: str,
+        path: str,
+        *,
+        target_uri: str,
+        wait: bool = True,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        return await self.client.update_skill(
+            skill_name,
+            path,
+            target_uri=target_uri,
+            wait=wait,
+            timeout=timeout,
+        )
+
     async def batch_write(
         self,
         *,

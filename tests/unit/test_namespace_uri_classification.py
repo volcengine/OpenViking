@@ -38,6 +38,8 @@ def test_context_type_for_uri_uses_path_segments():
     assert context_type_for_uri("viking://agent/code-agent/memories/profile.md") == "memory"
     assert context_type_for_uri("viking://agent/code-agent/resources/faq.md") == "resource"
     assert context_type_for_uri("viking://agent/code-agent/skills/demo") == "skill"
+    assert context_type_for_uri("viking://agent/skills") == "skill"
+    assert context_type_for_uri("viking://agent/skills/demo") == "skill"
     assert context_type_for_uri("viking://resources/memories-report.md") == "resource"
     assert context_type_for_uri("viking://user/alice/resources/skills-report.md") == "resource"
 
@@ -79,6 +81,8 @@ def test_exact_memory_and_skill_root_detection():
     assert classify_uri("viking://user/alice/skills/demo/SKILL.md").is_skill
     assert classify_uri("viking://user/alice/skills/demo").is_skill_root
     assert classify_uri("viking://user/skills/demo").is_skill_root
+    assert classify_uri("viking://agent/skills").is_skill_namespace
+    assert classify_uri("viking://agent/skills/demo").is_skill_root
     assert not classify_uri("viking://user/alice/skills").is_skill_root
     assert not classify_uri("viking://user/alice/skills/demo/assets").is_skill_root
 

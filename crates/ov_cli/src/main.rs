@@ -941,7 +941,7 @@ enum Commands {
         #[arg(long, help_heading = "Advanced options")]
         no_history: bool,
     },
-    /// [Interactive] Organize source materials into a Wiki with VikingBot
+    /// [Interactive] Compile source materials with a VikingBot Skill
     Compile {
         /// Source directory; repeat the flag or separate directories with commas
         #[arg(
@@ -951,7 +951,7 @@ enum Commands {
             value_name = "uri"
         )]
         from_uris: Vec<String>,
-        /// Target Wiki directory
+        /// Target Wiki directory or skills namespace
         #[arg(long, value_name = "uri")]
         to: String,
         /// Skill directory or SKILL.md Viking URI

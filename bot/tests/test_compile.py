@@ -10,6 +10,7 @@ from vikingbot.agent.tools.compile import CompileScopedTool, SubmitWikiBundleToo
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.compile.models import (
     DEFAULT_COMPILE_REASON,
+    CompileFailure,
     CompileLimits,
     CompileRequest,
     CompileTask,
@@ -143,6 +144,102 @@ def test_submit_tool_schema_requires_workspace_page_bodies_when_available():
     page_schema = tool.parameters["$defs"]["WikiPageDraft"]
     assert "body_markdown" not in page_schema["properties"]
     assert "body_workspace_path" in page_schema["required"]
+
+
+@pytest.mark.asyncio
+async def test_submit_tool_accepts_only_one_complete_skill_package():
+    tool = SubmitWikiBundleTool(
+        source_ids={"src_1"},
+        catalog_uris=set(),
+        target_uri="viking://agent/skills",
+        limits=CompileLimits(),
+    )
+
+    schema = tool.parameters
+    assert set(schema["properties"]) == {"files"}
+    assert schema["required"] == ["files"]
+    assert set(schema["$defs"]) == {"CompileFileDraft"}
+    assert "update_uri" not in schema["$defs"]["CompileFileDraft"]["properties"]
+    assert "path" in schema["$defs"]["CompileFileDraft"]["required"]
+
+    accepted = await tool.execute(
+        ToolContext(),
+        files=[
+            {
+                "path": "weekly-report/SKILL.md",
+                "content": (
+                    "---\n"
+                    "name: weekly-report\n"
+                    "description: Generate a concise weekly report.\n"
+                    "---\n\n"
+                    "Follow the source material and produce the report."
+                ),
+            },
+            {
+                "path": "weekly-report/references/format.md",
+                "content": "# Weekly report format\n",
+            },
+        ],
+    )
+
+    assert accepted == "Skill bundle accepted for 'weekly-report' with 2 file(s)."
+    assert tool.skill_name == "weekly-report"
+    assert tool.bundle is not None and tool.bundle.pages == []
+
+    missing_skill_md = await tool.execute(
+        ToolContext(),
+        files=[{"path": "weekly-report/references/format.md", "content": "# Format"}],
+    )
+    assert "must include weekly-report/SKILL.md" in missing_skill_md
+
+    multiple_skills = await tool.execute(
+        ToolContext(),
+        files=[
+            {
+                "path": "one/SKILL.md",
+                "content": "---\nname: one\ndescription: One\n---\nOne",
+            },
+            {"path": "two/guide.md", "content": "Two"},
+        ],
+    )
+    assert "exactly one top-level Skill directory" in multiple_skills
+
+    derived_file = await tool.execute(
+        ToolContext(),
+        files=[
+            {
+                "path": "weekly-report/SKILL.md",
+                "content": ("---\nname: weekly-report\ndescription: Weekly report\n---\nWrite it"),
+            },
+            {"path": "weekly-report/.overview.md", "content": "Generated"},
+        ],
+    )
+    assert "invalid output file path" in derived_file
+    assert tool.bundle is None
+
+    invalid_yaml = await tool.execute(
+        ToolContext(),
+        files=[
+            {
+                "path": "weekly-report/SKILL.md",
+                "content": "---\nname: [\ndescription: Weekly report\n---\nWrite it",
+            }
+        ],
+    )
+    assert invalid_yaml.startswith("Error: Invalid Skill bundle:")
+
+    long_description = await tool.execute(
+        ToolContext(),
+        files=[
+            {
+                "path": "weekly-report/SKILL.md",
+                "content": (
+                    "---\nname: weekly-report\ndescription: " + "x" * 1025 + "\n---\nWrite it"
+                ),
+            }
+        ],
+    )
+    assert "description must not exceed 1024 characters" in long_description
 
 
 def test_renderer_creates_okf_pages_links_and_citations():
@@ -681,18 +778,14 @@ async def test_scoped_tool_requires_and_bounds_openviking_uri():
     )
     context = ToolContext()
     assert (await wrapped.execute(context)).startswith("Error:")
-    assert (
-        await wrapped.execute(context, uri="viking://resources/other")
-    ).startswith("Error:")
+    assert (await wrapped.execute(context, uri="viking://resources/other")).startswith("Error:")
     assert (
         await wrapped.execute(
             context,
             uri="viking://resources/source/../../other",
         )
     ).startswith("Error:")
-    accepted = await wrapped.execute(
-        context, uri="viking://resources/source/child", recursive=True
-    )
+    accepted = await wrapped.execute(context, uri="viking://resources/source/child", recursive=True)
     assert '"node_limit": 2000' in accepted
 
 
@@ -804,6 +897,322 @@ async def test_request_normalization_uses_default_reason_and_canonical_skill(mon
     assert normalized.to == "viking://resources/wiki"
     assert normalized.skill == "viking://agent/skills/wiki"
     assert normalized.reason == DEFAULT_COMPILE_REASON
+
+
+def test_compile_target_accepts_only_exact_skill_namespaces():
+    directory = {"isDir": True}
+
+    BotCompileService._validate_target_directory("viking://agent/skills", directory)
+    BotCompileService._validate_target_directory("viking://user/alice/skills", directory)
+    BotCompileService._validate_target_directory("viking://user/skills", directory)
+
+    with pytest.raises(CompileFailure, match="supported skills namespace"):
+        BotCompileService._validate_target_directory(
+            "viking://agent/skills/existing-skill", directory
+        )
+    with pytest.raises(CompileFailure, match="supported skills namespace"):
+        BotCompileService._validate_target_directory(
+            "viking://agent/legacy-agent/skills", directory
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.parametrize(
+    "target_uri",
+    ["viking://agent/skills", "viking://user/alice/skills"],
+)
+async def test_write_skill_bundle_reuses_add_and_update_skill(existing, target_uri):
+    class Client:
+        def __init__(self):
+            self.called = ""
+
+        async def stat(self, uri):
+            assert uri == f"{target_uri}/weekly-report"
+            if not existing:
+                raise OpenVikingError("missing", code="NOT_FOUND")
+            return {"uri": uri, "isDir": True}
+
+        async def get_skill(self, skill_name, *, target_uri: str):
+            assert existing
+            assert skill_name == "weekly-report"
+            return {
+                "content": "---\nname: weekly-report\ndescription: Old\n---\nOld",
+                "files": [
+                    {
+                        "path": "assets/keep.bin",
+                        "uri": f"{target_uri}/weekly-report/assets/keep.bin",
+                        "is_dir": False,
+                    },
+                    {
+                        "path": ".overview.md",
+                        "uri": f"{target_uri}/weekly-report/.overview.md",
+                        "is_dir": False,
+                    },
+                ],
+            }
+
+        async def download_bytes(self, uri):
+            assert uri == f"{target_uri}/weekly-report/assets/keep.bin"
+            return b"keep"
+
+        async def add_skill(self, path, *, target_uri, wait, timeout):
+            self.called = "add"
+            self._assert_package(path, target_uri, wait, timeout)
+            return {"root_uri": f"{target_uri}/weekly-report"}
+
+        async def update_skill(self, skill_name, path, *, target_uri, wait, timeout):
+            assert skill_name == "weekly-report"
+            self.called = "update"
+            self._assert_package(path, target_uri, wait, timeout)
+            return {"root_uri": f"{target_uri}/weekly-report"}
+
+        @staticmethod
+        def _assert_package(path, target_uri, wait, timeout):
+            skill_dir = Path(path)
+            assert skill_dir.name == "weekly-report"
+            assert wait is True
+            assert timeout == 30
+            assert "name: weekly-report" in (skill_dir / "SKILL.md").read_text()
+            assert (skill_dir / "assets" / "logo.bin").read_bytes() == b"\x00\x01"
+            if existing:
+                assert (skill_dir / "assets" / "keep.bin").read_bytes() == b"keep"
+                assert not (skill_dir / ".overview.md").exists()
+
+    bundle = WikiBundleDraft.model_validate(
+        {
+            "pages": [],
+            "files": [
+                {
+                    "path": "weekly-report/SKILL.md",
+                    "content": (
+                        "---\nname: weekly-report\ndescription: Weekly report\n---\nWrite it"
+                    ),
+                },
+                {
+                    "path": "weekly-report/assets/logo.bin",
+                    "workspace_path": "generated/logo.bin",
+                },
+            ],
+        }
+    )
+    client = Client()
+    service = object.__new__(BotCompileService)
+    service.limits = CompileLimits()
+
+    action, root_uri = await service._write_skill_bundle(
+        client=client,
+        target_uri=target_uri,
+        bundle=bundle,
+        file_payloads=[None, b"\x00\x01"],
+        skill_name="weekly-report",
+        timeout=30,
+    )
+
+    assert action == ("update" if existing else "create")
+    assert client.called == ("update" if existing else "add")
+    assert root_uri == f"{target_uri}/weekly-report"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "target_uri",
+    ["viking://agent/skills", "viking://user/alice/skills"],
+)
+async def test_execute_skill_target_skips_recursive_catalog_and_completes(
+    monkeypatch, tmp_path: Path, target_uri: str
+):
+    class TaskConfig:
+        def __init__(self):
+            self.bot_data_path = tmp_path
+            self.workspace_path = tmp_path / "host-workspace"
+            self.skills = []
+            self.sandbox = SimpleNamespace(mode=None)
+
+        def model_copy(self, *, deep):
+            assert deep is True
+            return TaskConfig()
+
+    class FakeSandboxManager:
+        def __init__(self, config, workspace_parent, workspace_path):
+            del config, workspace_path
+            self.workspace = workspace_parent / "workspace"
+            self.workspace.mkdir(parents=True)
+
+        def get_workspace_path(self, session_key):
+            del session_key
+            return self.workspace
+
+        async def cleanup_session(self, session_key):
+            del session_key
+
+    class FakeSkillsLoader:
+        def __init__(self, workspace, *, builtin_skills_dir):
+            del workspace, builtin_skills_dir
+
+        def load_skills_for_context(self, names):
+            assert names == ["skill-creator"]
+            return "Create a standards-compliant Skill."
+
+        def _get_skill_meta(self, name):
+            assert name == "skill-creator"
+            return {}
+
+    class FakeRequestLoop:
+        def __init__(self, **kwargs):
+            del kwargs
+
+        async def run_structured_task(self, **kwargs):
+            tool = kwargs["tool_registry"].get("submit_wiki_bundle")
+            accepted = await tool.execute(
+                ToolContext(),
+                files=[
+                    {
+                        "path": "weekly-report/SKILL.md",
+                        "content": (
+                            "---\nname: weekly-report\ndescription: Weekly report\n---\nWrite it"
+                        ),
+                    }
+                ],
+            )
+            assert accepted.startswith("Skill bundle accepted")
+            return tool.bundle, [], {}, 1
+
+        async def close_mcp(self):
+            return None
+
+    class Client:
+        added = ""
+
+        async def get_skill(self, skill_name, *, target_uri):
+            assert skill_name == "skill-creator"
+            assert target_uri == "viking://agent/skills"
+            return {
+                "root_uri": "viking://agent/skills/skill-creator",
+                "content": (
+                    "---\nname: skill-creator\ndescription: Create Skills\n---\nCreate one."
+                ),
+                "files": [],
+            }
+
+        async def stat(self, uri):
+            assert uri == f"{target_uri}/weekly-report"
+            raise OpenVikingError("missing", code="NOT_FOUND")
+
+        async def add_skill(self, path, *, target_uri, wait, timeout):
+            assert wait is True
+            assert timeout == 300
+            assert "name: weekly-report" in (Path(path) / "SKILL.md").read_text()
+            self.added = f"{target_uri}/weekly-report"
+            return {"root_uri": self.added}
+
+        async def tree(self, uri, *, node_limit):
+            raise AssertionError(
+                f"Skill target must not preload recursive catalog: {uri}, {node_limit}"
+            )
+
+        async def close(self):
+            return None
+
+    class Store:
+        def __init__(self, task):
+            self.task = task
+
+        async def update(self, task_id, mutate):
+            assert task_id == self.task.task_id
+            mutate(self.task)
+            return self.task
+
+    async def create_client(**kwargs):
+        del kwargs
+        return client
+
+    async def no_op(*args, **kwargs):
+        del args, kwargs
+
+    async def build_sources(client, roots):
+        del client, roots
+        return []
+
+    def build_registry(
+        request_loop,
+        *,
+        parsed_skill,
+        roots,
+        target_uri,
+        source_ids,
+        catalog_uris,
+        file_catalog_uris,
+    ):
+        del request_loop, parsed_skill, roots, source_ids
+        assert catalog_uris == set()
+        assert file_catalog_uris == set()
+        registry = ToolRegistry()
+        registry.register(
+            SubmitWikiBundleTool(
+                source_ids=set(),
+                catalog_uris=set(),
+                file_catalog_uris=set(),
+                target_uri=target_uri,
+                limits=CompileLimits(),
+            )
+        )
+        return registry, set(), []
+
+    monkeypatch.setattr("vikingbot.compile.service.SandboxManager", FakeSandboxManager)
+    monkeypatch.setattr("vikingbot.compile.service.SkillsLoader", FakeSkillsLoader)
+    monkeypatch.setattr("vikingbot.compile.service.AgentLoop", FakeRequestLoop)
+    monkeypatch.setattr("vikingbot.compile.service.VikingClient.create", create_client)
+
+    host_loop = SimpleNamespace(
+        config=TaskConfig(),
+        bus=None,
+        provider=None,
+        workspace=tmp_path,
+        model=None,
+        temperature=0,
+        max_iterations=1,
+        memory_window=1,
+        brave_api_key=None,
+        exa_api_key=None,
+        gen_image_model=None,
+        exec_config=None,
+        _mcp_servers={},
+    )
+    service = BotCompileService(agent_loop=host_loop)
+    request = SanitizedCompileRequest.model_validate(
+        {
+            "from": ["viking://resources/weekly"],
+            "to": target_uri,
+            "skill": "viking://agent/skills/skill-creator",
+            "reason": "Create a weekly report Skill",
+        }
+    )
+    task = CompileTask(
+        task_id="cmp_skill",
+        principal_scope="owner",
+        sanitized_request=request,
+        status="accepted",
+        stage="queued",
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    client = Client()
+    service.store = Store(task)
+    monkeypatch.setattr(service, "_materialize_skill", no_op)
+    monkeypatch.setattr(service, "_check_requirements", no_op)
+    monkeypatch.setattr(service, "_connect_mcp_if_needed", no_op)
+    monkeypatch.setattr(service, "_build_sources", build_sources)
+    monkeypatch.setattr(service, "_build_request_registry", build_registry)
+
+    await service._execute_task(task.task_id, request, {"api_key": "secret"})
+
+    assert task.status == "completed"
+    assert task.result is not None
+    assert task.result.created == [f"{target_uri}/weekly-report"]
+    assert task.result.updated == []
+    assert task.result.page_count == 0
+    assert client.added == f"{target_uri}/weekly-report"
 
 
 @pytest.mark.asyncio
@@ -1085,6 +1494,34 @@ def test_compile_prompt_explains_unavailable_tools_to_agent_only():
         "workspace_path",
     ):
         assert implementation_name not in user
+
+
+def test_compile_prompt_requires_one_complete_skill_package_for_skill_target():
+    request = SanitizedCompileRequest.model_validate(
+        {
+            "from": ["viking://resources/weekly"],
+            "to": "viking://agent/skills",
+            "skill": "viking://agent/skills/skill-creator",
+            "reason": "Create a weekly report Skill",
+        }
+    )
+
+    system, user = BotCompileService._build_prompts(
+        request=request,
+        skill_content="Create a standards-compliant Skill.",
+        sources=[],
+        catalog=[],
+        available_tools=["write_file", "submit_wiki_bundle"],
+        unavailable_tools=[],
+    )
+
+    assert "exactly one complete Skill package as artifact files" in system
+    assert "<skill-name>/SKILL.md" in system
+    assert "Do not produce Wiki pages, links" in system
+    assert "one complete Skill package" in user
+    assert "on demand" in user
+    assert "existing auxiliary files not included in the submission are preserved" in user
+    assert "Existing target files" not in user
 
 
 @pytest.mark.asyncio
