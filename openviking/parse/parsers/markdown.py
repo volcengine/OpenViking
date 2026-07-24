@@ -346,8 +346,9 @@ class MarkdownParser(BaseParser):
                 logger.debug(f"[MarkdownParser] Extracted frontmatter: {list(frontmatter.keys())}")
 
         explicit_name = kwargs.get("resource_name")
-        if not explicit_name and kwargs.get("source_name"):
-            explicit_name = _smart_stem(kwargs["source_name"])
+        source_name = kwargs.get("source_name")
+        if not explicit_name and source_name:
+            explicit_name = _smart_stem(source_name)
 
         # Preserve the original uploaded filename when available instead of the temp
         # upload name (e.g. upload_<uuid>.txt).
@@ -359,15 +360,19 @@ class MarkdownParser(BaseParser):
             if source_path
             else "Document",
         )
-        doc_name = self._sanitize_for_path(doc_title)
-        # Preserve code source filenames as the temp document directory.
-        # This yields foo.py/foo.md, allowing AST language detection to recover
-        # ".py" from the parent directory while keeping the markdown body name tidy.
-        source_name = kwargs.get("source_name")
-        root_name = (
-            source_name if source_name and get_extractor().supports(source_name) else doc_name
-        )
-        root_dir = f"{temp_uri}/{self._sanitize_for_path(root_name)}"
+        if explicit_name:
+            resource_name_is_safe = bool(kwargs.get("resource_name_is_safe"))
+            doc_name = explicit_name if resource_name_is_safe else self._sanitize_for_path(explicit_name)
+            root_name = doc_name
+            if source_name and get_extractor().supports(source_name):
+                root_name = self._sanitize_for_path(source_name)
+            root_dir = f"{temp_uri}/{root_name}"
+        else:
+            doc_name = self._sanitize_for_path(doc_title)
+            root_name = (
+                source_name if source_name and get_extractor().supports(source_name) else doc_name
+            )
+            root_dir = f"{temp_uri}/{self._sanitize_for_path(root_name)}"
 
         # Find all headings
         headings = self._find_headings(content)

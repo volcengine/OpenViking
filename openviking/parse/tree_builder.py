@@ -30,6 +30,7 @@ from openviking.parse.parsers.media.utils import get_media_base_uri, get_media_t
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.utils import parse_code_hosting_url
+from openviking.utils.feishu_naming import feishu_title_to_resource_segment, is_feishu_url
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.uri import VikingURI
 
@@ -96,11 +97,13 @@ class TreeBuilder:
     ) -> tuple[str, Optional[str]]:
         """Resolve the final target URI and optional unique-name candidate."""
 
-        final_doc_name = VikingURI.sanitize_segment(doc_name)
-        if source_path and source_format == "repository":
+        if source_path and is_feishu_url(source_path):
+            final_doc_name = feishu_title_to_resource_segment(doc_name)
+        elif source_path and source_format == "repository":
             parsed_org_repo = parse_code_hosting_url(source_path)
-            if parsed_org_repo:
-                final_doc_name = parsed_org_repo
+            final_doc_name = parsed_org_repo or VikingURI.sanitize_segment(doc_name)
+        else:
+            final_doc_name = VikingURI.sanitize_segment(doc_name)
 
         auto_base_uri = self._get_base_uri(scope, source_path, source_format)
         base_uri = parent_uri or auto_base_uri

@@ -50,6 +50,7 @@ from openviking.telemetry.resource_summary import (
     unregister_wait_telemetry,
 )
 from openviking.utils import is_git_repo_url, parse_code_hosting_url
+from openviking.utils.feishu_naming import feishu_title_to_resource_segment, is_feishu_url
 from openviking.utils.media_processor import _smart_stem
 from openviking.utils.network_guard import ensure_public_remote_target
 from openviking.utils.resource_processor import ResourceProcessor
@@ -635,6 +636,11 @@ class ResourceService:
         source_name: Optional[str],
         source_info: _ResourceSourceInfo,
     ) -> str:
+        if is_feishu_url(path):
+            if source_name:
+                return feishu_title_to_resource_segment(source_name)
+            if source_info.source_name:
+                return feishu_title_to_resource_segment(source_info.source_name)
         if source_name:
             return _smart_stem(source_name)
         if source_info.source_name:

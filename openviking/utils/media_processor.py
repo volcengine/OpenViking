@@ -18,6 +18,7 @@ from openviking.server.local_input_guard import (
     is_remote_resource_source,
     looks_like_local_path,
 )
+from openviking.utils.feishu_naming import feishu_title_to_resource_segment
 from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.utils.logger import get_logger
 
@@ -179,7 +180,20 @@ class UnifiedResourceProcessor:
 
             # Set resource_name from source_name or path
             source_name = kwargs.get("source_name")
-            if source_name:
+            if local_resource.source_type == SourceType.FEISHU:
+                # Feishu titles are semantic display names, not filesystem
+                # paths: derive the resource segment from the title (via
+                # source_name when provided, otherwise the meta["feishu_title"]
+                # recorded by FeishuAccessor) so the default import path does
+                # not fall back to the temp-file stem.
+                feishu_title = source_name or local_resource.meta.get("feishu_title")
+                if feishu_title:
+                    parse_kwargs["resource_name"] = feishu_title_to_resource_segment(feishu_title)
+                    parse_kwargs["resource_name_is_safe"] = True
+                    parse_kwargs.setdefault("source_name", feishu_title.strip())
+                else:
+                    parse_kwargs.setdefault("resource_name", _smart_stem(local_resource.path))
+            elif source_name:
                 parse_kwargs["resource_name"] = _smart_stem(source_name)
                 parse_kwargs.setdefault("source_name", source_name)
             else:
@@ -213,7 +227,10 @@ class UnifiedResourceProcessor:
 
             # For files, use ParserRouter to decide which parser to use
             parser_router = self._get_parser_router()
-            return await parser_router.parse(local_resource, **parse_kwargs)
+            result = await parser_router.parse(local_resource, **parse_kwargs)
+            if local_resource.source_type == SourceType.FEISHU:
+                result.source_path = local_resource.original_source
+            return result
         finally:
             # Clean up temporary resources unless they need to be preserved
             local_resource.cleanup()
