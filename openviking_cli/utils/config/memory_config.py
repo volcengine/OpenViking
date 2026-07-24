@@ -69,6 +69,15 @@ class MemoryConfig(BaseModel):
             "stateless deployments."
         ),
     )
+    extraction_request_max_tokens: int = Field(
+        default=32768,
+        ge=1,
+        description=(
+            "Maximum estimated tokens allowed in one memory extraction VLM request, "
+            "including messages and tool schemas. Oversized requests fail before the "
+            "provider call so the archived source remains available for diagnosis."
+        ),
+    )
     session_skill_extraction_enabled: bool = Field(
         default=False,
         description=(

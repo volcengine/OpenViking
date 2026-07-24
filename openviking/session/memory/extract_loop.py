@@ -34,10 +34,15 @@ from openviking.session.memory.utils import (
 from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
 from openviking.telemetry import bind_telemetry_stage, tracer
+from openviking.utils.token_estimation import estimate_serialized_tokens
+from openviking_cli.exceptions import ResourceExhaustedError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
+
+
+_DEFAULT_EXTRACTION_REQUEST_MAX_TOKENS = 32768
 
 
 _CANNED_REFUSAL_RE = re.compile(
@@ -324,9 +329,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
             if self._format_retry_count == 0:
                 self._format_retry_count += 1
                 max_iterations += 1
-                retry_reason = (
-                    "refusal_text" if failure_kind == "refusal_text" else "format_retry"
-                )
+                retry_reason = "refusal_text" if failure_kind == "refusal_text" else "format_retry"
                 tracer.info(f"Extended max_iterations to {max_iterations} for {retry_reason}")
                 self._add_format_error_message(messages)
 
@@ -485,7 +488,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     break
 
         return resolved, raw_links
-
 
     def _normalize_delete_ids(self, raw_delete_ids: List[Any]) -> List[DeleteId]:
         delete_ids: List[DeleteId] = []
@@ -713,6 +715,30 @@ The final output of the model must strictly follow the JSON Schema format shown 
         if not self._disable_tools_for_iteration and self._tool_schemas:
             tools = self._tool_schemas
             tool_choice = "auto"
+
+        config = get_openviking_config()
+        max_request_tokens = int(
+            getattr(
+                getattr(config, "memory", None),
+                "extraction_request_max_tokens",
+                _DEFAULT_EXTRACTION_REQUEST_MAX_TOKENS,
+            )
+        )
+        estimated_request_tokens = estimate_serialized_tokens(
+            {"messages": messages, "tools": tools or []}
+        )
+        if estimated_request_tokens > max_request_tokens:
+            raise ResourceExhaustedError(
+                "Memory extraction request exceeds the configured pre-VLM token budget: "
+                f"estimated={estimated_request_tokens}, limit={max_request_tokens} "
+                "(memory.extraction_request_max_tokens). The provider was not called.",
+                details={
+                    "estimated_tokens": estimated_request_tokens,
+                    "max_tokens": max_request_tokens,
+                    "config_key": "memory.extraction_request_max_tokens",
+                },
+            )
+
         with bind_telemetry_stage("memory_extract"):
             response = await self.vlm.get_completion_async(
                 messages=messages,
