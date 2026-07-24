@@ -214,6 +214,60 @@ class CuVSConfig(BaseModel):
         return self
 
 
+class MilvusConfig(BaseModel):
+    """Configuration for Milvus backend."""
+
+    uri: str = Field(
+        default="./milvus.db",
+        description=(
+            "Milvus URI. Use a local .db path for Milvus Lite, "
+            "'http://localhost:19530' for self-hosted Milvus, or a Zilliz Cloud endpoint."
+        ),
+    )
+    token: Optional[str] = Field(
+        default=None,
+        description="Optional token for authenticated Milvus or Zilliz Cloud deployments.",
+    )
+    db_name: Optional[str] = Field(
+        default=None,
+        description="Optional Milvus database name for server or cloud deployments.",
+    )
+    consistency_level: Optional[str] = Field(
+        default=None,
+        description="Optional Milvus consistency level: Strong, Session, Bounded, or Eventually.",
+    )
+    timeout_seconds: int = Field(default=30, description="Milvus client timeout in seconds")
+    dense_vector_name: str = Field(default="vector", description="Dense vector field name")
+    sparse_vector_name: str = Field(
+        default="sparse_vector", description="Sparse vector JSON field name"
+    )
+
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def validate_milvus(self):
+        self.uri = (self.uri or "./milvus.db").strip()
+        if not self.uri:
+            raise ValueError("Milvus uri must not be empty")
+        if self.uri.startswith(("http://", "https://")):
+            self.uri = self.uri.rstrip("/")
+        if self.consistency_level:
+            allowed = {"Strong", "Session", "Bounded", "Eventually"}
+            normalized = self.consistency_level.strip()
+            title_value = normalized[:1].upper() + normalized[1:].lower()
+            if title_value not in allowed:
+                raise ValueError(
+                    "Milvus consistency_level must be one of: "
+                    f"{sorted(allowed)}; got {self.consistency_level!r}"
+                )
+            self.consistency_level = title_value
+        self.dense_vector_name = (self.dense_vector_name or "vector").strip()
+        self.sparse_vector_name = (self.sparse_vector_name or "sparse_vector").strip()
+        if self.timeout_seconds <= 0:
+            raise ValueError("Milvus timeout_seconds must be positive")
+        return self
+
+
 _OPENGAUSS_MODES = {"standalone", "distributed"}
 
 
@@ -277,7 +331,7 @@ class VectorDBBackendConfig(BaseModel):
         description=(
             "VectorDB backend type: 'local', 'cuvs', 'http', "
             "'volcengine' (AK/SK signed or API key data-plane only), "
-            "'vikingdb' (private deployment), 'qdrant', or 'opengauss'"
+            "'vikingdb' (private deployment), 'qdrant', 'milvus', or 'opengauss'"
         ),
     )
 
@@ -341,6 +395,11 @@ class VectorDBBackendConfig(BaseModel):
         description="NVIDIA cuVS dense-vector search configuration for the 'cuvs' backend",
     )
 
+    milvus: Optional[MilvusConfig] = Field(
+        default_factory=MilvusConfig,
+        description="Milvus configuration for 'milvus' type",
+    )
+
     opengauss: Optional[OpenGaussConfig] = Field(
         default_factory=OpenGaussConfig,
         description="openGauss configuration for 'opengauss' type",
@@ -363,6 +422,7 @@ class VectorDBBackendConfig(BaseModel):
             "volcengine",
             "vikingdb",
             "qdrant",
+            "milvus",
             "opengauss",
         ]
 
@@ -424,6 +484,21 @@ class VectorDBBackendConfig(BaseModel):
             if self.qdrant is None:
                 self.qdrant = QdrantConfig()
             self.qdrant.url = str(qdrant_url).strip().rstrip("/")
+            if self.url:
+                self.url = self.url.strip().rstrip("/")
+
+        elif self.backend == "milvus":
+            milvus_uri = (
+                (self.milvus.uri if self.milvus else None)
+                or self.url
+                or self.custom_params.get("uri")
+                or "./milvus.db"
+            )
+            if self.milvus is None:
+                self.milvus = MilvusConfig()
+            self.milvus.uri = str(milvus_uri).strip()
+            if self.milvus.uri.startswith(("http://", "https://")):
+                self.milvus.uri = self.milvus.uri.rstrip("/")
             if self.url:
                 self.url = self.url.strip().rstrip("/")
 

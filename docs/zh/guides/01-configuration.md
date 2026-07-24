@@ -1196,7 +1196,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `backend` | str | VectorDB 后端类型: 'local'（基于文件）, 'http'（远程服务）, 'volcengine'（云上 VikingDB）, 'vikingdb'（私有部署）, 'cuvs'（本地存储 + GPU dense search）, 'qdrant' 或 'opengauss' | "local" |
+| `backend` | str | VectorDB 后端类型: 'local'（基于文件）, 'http'（远程服务）, 'volcengine'（云上 VikingDB）, 'vikingdb'（私有部署）, 'cuvs'（本地存储 + GPU dense search）, 'qdrant'、'milvus' 或 'opengauss' | "local" |
 | `name` | str | VectorDB 的集合名称 | "context" |
 | `url` | str | 'http' 类型的远程服务 URL（例如 'http://localhost:5000'） | null |
 | `project_name` | str | 项目名称（别名 project） | "default" |
@@ -1207,6 +1207,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 | `vikingdb` | object | 'vikingdb' 类型的私有部署配置 | - |
 | `cuvs` | object | NVIDIA cuVS 配置，也用于在 'local' 下显式开启显存感知自动模式，参见 [cuVS 使用指南](./16-cuvs.md) | - |
 | `qdrant` | object | 'qdrant' 类型的 Qdrant 配置 | - |
+| `milvus` | object | 'milvus' 类型的 Milvus 或 Zilliz Cloud 配置 | - |
 | `opengauss` | object | 'opengauss' 原生向量后端配置 | - |
 
 默认使用本地模式
@@ -1239,6 +1240,37 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
   }
 }
 ```
+</details>
+
+<details>
+<summary><b>Milvus</b></summary>
+
+使用该后端前需要安装 `milvus` 可选依赖。默认 `uri` 使用 Milvus Lite，
+并把数据写入本地 `milvus.db` 文件。自托管 Milvus 使用 HTTP URI；
+Zilliz Cloud 使用云端 endpoint 并配置 `token`。
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "name": "context",
+      "backend": "milvus",
+      "project": "default",
+      "distance_metric": "cosine",
+      "dimension": 1024,
+      "milvus": {
+        "uri": "./milvus.db",
+        "token": null,
+        "db_name": null,
+        "consistency_level": "Session"
+      }
+    }
+  }
+}
+```
+
+如果连接自托管服务，可设置 `"uri": "http://localhost:19530"`。如果使用
+Zilliz Cloud，把 `"uri"` 设置为云端 endpoint，并填写 `"token"`。
 </details>
 
 <details>
