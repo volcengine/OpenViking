@@ -820,6 +820,7 @@ class ResourceService:
         telemetry_id = register_wait_telemetry(wait)
         request_wait_tracker = get_request_wait_tracker()
         job_enqueued = False
+        monitor_started = False
         deferred_lock: LockLease = NO_LOCK
         if telemetry_id:
             request_wait_tracker.register_request(telemetry_id)
@@ -1039,7 +1040,17 @@ class ResourceService:
                         "DEADLINE_EXCEEDED",
                         str(exc),
                     )
-                    raise DeadlineExceededError("queue processing", timeout) from exc
+                    task_id = await self._start_resource_queue_monitor(
+                        result=result,
+                        telemetry_id=telemetry_id,
+                        ctx=ctx,
+                        reason=reason,
+                        source_name=kwargs.get("source_name"),
+                    )
+                    monitor_started = True
+                    raise DeadlineExceededError(
+                        "queue processing", timeout, task_id=task_id
+                    ) from exc
                 queue_wait_duration_ms = round((time.perf_counter() - wait_start) * 1000, 3)
                 try:
                     from openviking.metrics.datasources.resource import (
@@ -1138,11 +1149,49 @@ class ResourceService:
                 "resource.request.duration_ms",
                 round((time.perf_counter() - request_start) * 1000, 3),
             )
-            if wait or not telemetry_id or not job_enqueued:
+            if (
+                not telemetry_id
+                or (wait and not monitor_started)
+                or (not wait and not job_enqueued)
+            ):
                 get_request_wait_tracker().cleanup(telemetry_id)
                 unregister_wait_telemetry(telemetry_id)
             if deferred_lock.active:
                 await deferred_lock.close()
+
+    async def _start_resource_queue_monitor(
+        self,
+        *,
+        result: Dict[str, Any],
+        telemetry_id: Optional[str],
+        ctx: RequestContext,
+        reason: str,
+        source_name: Optional[str],
+    ) -> str:
+        """Expose queued resource work through the shared task lifecycle."""
+        from openviking.service.task_tracker import get_task_tracker
+
+        root_uri = str(result.get("root_uri") or "")
+        task = await get_task_tracker().create(
+            "add_resource",
+            resource_id=root_uri,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        )
+        result["task_id"] = task.task_id
+        background = asyncio.create_task(
+            self._monitor_resource_queue_then_link_memory(
+                task.task_id,
+                telemetry_id,
+                ctx,
+                root_uri=root_uri,
+                reason=reason,
+                source_name=source_name,
+            )
+        )
+        self._background_tasks.add(background)
+        background.add_done_callback(self._background_tasks.discard)
+        return task.task_id
 
     async def _link_resource_reason_memory(
         self,
@@ -1172,6 +1221,63 @@ class ResourceService:
         except Exception as exc:
             logger.warning("[ResourceService] Failed to link resource reason memory: %s", exc)
             result.setdefault("warnings", []).append(f"Memory linking failed: {exc}")
+
+    async def _monitor_resource_queue_then_link_memory(
+        self,
+        task_id: str,
+        telemetry_id: Optional[str],
+        ctx: RequestContext,
+        *,
+        root_uri: str,
+        reason: str,
+        source_name: Optional[str],
+    ) -> None:
+        """Finish a timed-out wait without inheriting the caller's deadline."""
+        from openviking.service.task_tracker import get_task_tracker
+
+        task_tracker = get_task_tracker()
+        request_wait_tracker = get_request_wait_tracker()
+        await task_tracker.start(task_id, account_id=ctx.account_id, user_id=ctx.user.user_id)
+        try:
+            if telemetry_id:
+                await request_wait_tracker.wait_for_request(telemetry_id)
+                status = request_wait_tracker.build_queue_status(telemetry_id)
+            else:
+                status = build_queue_status_payload(await get_queue_manager().wait_complete())
+            errors = sum(int(group.get("error_count", 0) or 0) for group in status.values())
+            if errors:
+                await task_tracker.fail(
+                    task_id,
+                    f"queue processing failed: {status}",
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                return
+
+            result: Dict[str, Any] = {"root_uri": root_uri, "queue_status": status}
+            await self._link_resource_reason_memory(
+                result=result,
+                ctx=ctx,
+                reason=reason,
+                source_name=source_name,
+            )
+            await task_tracker.complete(
+                task_id,
+                result,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
+        except Exception as exc:
+            await task_tracker.fail(
+                task_id,
+                str(exc),
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
+        finally:
+            if telemetry_id:
+                request_wait_tracker.cleanup(telemetry_id)
+                unregister_wait_telemetry(telemetry_id)
 
     async def _monitor_queue_processing(
         self,
