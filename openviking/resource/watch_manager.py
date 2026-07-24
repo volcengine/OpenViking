@@ -70,6 +70,14 @@ class WatchTask(BaseModel):
     processor_kwargs: Dict[str, Any] = Field(
         default_factory=dict, description="Extra kwargs forwarded to processor"
     )
+    sync_state: Dict[str, Any] = Field(
+        default_factory=dict, description="Private source synchronization state"
+    )
+    revision: int = Field(
+        default=0,
+        ge=0,
+        description="Private revision used to reject stale scheduler commits",
+    )
     auth_state: Optional[Dict[str, Any]] = Field(
         default=None, description="Private authentication state for scheduled re-processing"
     )
@@ -114,6 +122,9 @@ class WatchTask(BaseModel):
     def to_storage_dict(self) -> Dict[str, Any]:
         """Convert task to dictionary for watch-task persistence."""
         data = self.to_dict()
+        data["revision"] = self.revision
+        if self.sync_state:
+            data["sync_state"] = self.sync_state
         if self.auth_state is not None:
             data["auth_state"] = self.auth_state
         return data
@@ -130,6 +141,8 @@ class WatchTask(BaseModel):
             data["next_execution_time"] = datetime.fromisoformat(data["next_execution_time"])
         if data.get("processor_kwargs") is None:
             data["processor_kwargs"] = {}
+        if not isinstance(data.get("sync_state"), dict):
+            data["sync_state"] = {}
         if data.get("auth_state") is not None and not isinstance(data.get("auth_state"), dict):
             data["auth_state"] = None
         return cls(**data)
@@ -553,6 +566,7 @@ class WatchManager:
                 if to_uri:
                     self._uri_to_task[to_uri] = task_id
 
+            task.revision += 1
             await self._save_tasks()
 
             logger.info(f"[WatchManager] Updated task {task_id} by user {account_id}/{user_id}")
@@ -562,14 +576,62 @@ class WatchManager:
         self,
         task_id: str,
         auth_state: Optional[Dict[str, Any]],
-    ) -> None:
-        """Update private auth state for an existing watch task."""
+        *,
+        expected_revision: Optional[int] = None,
+    ) -> Optional[int]:
+        """Update private auth state when the watched task is still current.
+
+        Returns the new revision after a successful write. When an execution
+        raced with a task update, the stale credentials are rejected and the
+        current active task is left immediately due.
+        """
         async with self._lock:
             task = self._tasks.get(task_id)
             if not task:
-                return
+                return None
+
+            if expected_revision is not None and task.revision != expected_revision:
+                if task.is_active and task.watch_interval > 0:
+                    task.next_execution_time = datetime.now()
+                    await self._save_tasks()
+                return None
+
             task.auth_state = auth_state
+            task.revision += 1
             await self._save_tasks()
+            return task.revision
+
+    async def deactivate_task_if_revision(
+        self,
+        task_id: str,
+        *,
+        expected_revision: int,
+        account_id: str,
+        user_id: str,
+        role: str,
+    ) -> bool:
+        """Deactivate a task only when the executing revision is still current."""
+        async with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return False
+
+            if not self._check_permission(task, account_id, user_id, role):
+                raise PermissionDeniedError(
+                    f"User {account_id}/{user_id} does not have permission to update task {task_id}"
+                )
+
+            if task.revision != expected_revision:
+                if task.is_active and task.watch_interval > 0:
+                    task.next_execution_time = datetime.now()
+                    await self._save_tasks()
+                return False
+
+            task.is_active = False
+            task.next_execution_time = None
+            task.revision += 1
+            await self._save_tasks()
+            return True
 
     def _plan_move_tasks_under_uri_unlocked(
         self,
@@ -659,9 +721,7 @@ class WatchManager:
         """Deactivate watch tasks whose target URI is deleted."""
         async with self._lock:
             matched = [
-                task
-                for task in self._tasks.values()
-                if _uri_matches_prefix(task.to_uri, uri)
+                task for task in self._tasks.values() if _uri_matches_prefix(task.to_uri, uri)
             ]
             if not matched:
                 return []
@@ -802,27 +862,52 @@ class WatchManager:
 
             return task
 
-    async def update_execution_time(self, task_id: str) -> None:
+    async def update_execution_time(
+        self,
+        task_id: str,
+        *,
+        expected_revision: Optional[int] = None,
+        sync_state_updates: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         """Update task execution time after execution.
 
         Args:
             task_id: Task ID to update
+            expected_revision: Revision captured by the execution. When the
+                stored task has changed, leave it due and reject the stale
+                timestamp/fingerprint commit.
+            sync_state_updates: Private source state to persist atomically with
+                the successful execution timestamp.
+
+        Returns:
+            True when the execution state was committed, False when the task
+            no longer exists or its revision changed.
         """
         async with self._lock:
             task = self._tasks.get(task_id)
             if not task:
-                return
+                return False
+
+            if expected_revision is not None and task.revision != expected_revision:
+                if task.is_active and task.watch_interval > 0:
+                    task.next_execution_time = datetime.now()
+                    await self._save_tasks()
+                return False
+
+            if sync_state_updates:
+                task.sync_state.update(sync_state_updates)
 
             if not task.is_active or task.watch_interval <= 0:
                 task.is_active = False
                 task.next_execution_time = None
                 await self._save_tasks()
-                return
+                return True
 
             task.last_execution_time = datetime.now()
             task.next_execution_time = task.calculate_next_execution_time()
 
             await self._save_tasks()
+            return True
 
     async def get_due_tasks(self, account_id: Optional[str] = None) -> List[WatchTask]:
         """Get all tasks that are due for execution.

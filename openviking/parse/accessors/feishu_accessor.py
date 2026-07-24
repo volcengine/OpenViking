@@ -303,6 +303,74 @@ class FeishuAccessor(DataAccessor):
             logger.error(f"[FeishuAccessor] Failed to access {source}: {e}", exc_info=True)
             raise
 
+    async def fetch_latest_modify_time(
+        self,
+        source: Union[str, Path],
+        *,
+        feishu_access_token: Optional[str] = None,
+    ) -> Optional[int]:
+        """Fetch a cheap source-version marker for a Feishu docx/wiki URL.
+
+        This helper is deliberately fail-open for watch scheduling: unsupported
+        URLs, missing credentials, API failures, and malformed responses all
+        return ``None`` so callers continue with a full synchronization.
+        """
+        source_str = str(source)
+        try:
+            if not self.can_handle(source_str):
+                return None
+            doc_type, token = self._parse_feishu_url(source_str)
+            if doc_type not in {"docx", "wiki"}:
+                return None
+            if doc_type == "wiki":
+                doc_type, token, _ = await asyncio.to_thread(
+                    self._resolve_wiki_node,
+                    token,
+                    feishu_access_token,
+                )
+            if doc_type != "docx":
+                return None
+            return await asyncio.to_thread(
+                self._fetch_latest_modify_time_sync,
+                token,
+                doc_type,
+                feishu_access_token,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[FeishuAccessor] Failed to query latest modify time for %s: %s",
+                source_str,
+                exc,
+            )
+            return None
+
+    def _fetch_latest_modify_time_sync(
+        self,
+        token: str,
+        doc_type: str,
+        feishu_access_token: Optional[str] = None,
+    ) -> Optional[int]:
+        from lark_oapi.api.drive.v1.model.batch_query_meta_request import (
+            BatchQueryMetaRequest,
+        )
+        from lark_oapi.api.drive.v1.model.meta_request import MetaRequest
+        from lark_oapi.api.drive.v1.model.request_doc import RequestDoc
+
+        request_doc = RequestDoc.builder().doc_token(token).doc_type(doc_type).build()
+        request_body = MetaRequest.builder().request_docs([request_doc]).with_url(False).build()
+        request = BatchQueryMetaRequest.builder().request_body(request_body).build()
+        client = self._get_client(use_user_token=bool(feishu_access_token))
+        option = self._user_request_option(feishu_access_token)
+        response = client.drive.v1.meta.batch_query(request, option)
+
+        if not response.success() or response.data is None:
+            return None
+        metas = response.data.metas or []
+        if not metas:
+            return None
+        value = getattr(metas[0], "latest_modify_time", None)
+        return int(value) if value is not None else None
+
     async def _fetch_document(
         self,
         url: str,
