@@ -1489,6 +1489,17 @@ class Session:
                             extraction_labels.append("archive_summary")
 
                         if long_term_has_work:
+                            # Use ROOT context for internal extract operations.
+                            # The session's self.ctx may have USER role (from auth
+                            # middleware in trusted mode), which triggers peer-isolation
+                            # checks that block tool calls on peers/<id>/memories/ paths.
+                            # Extract is the session's own internal operation — it needs
+                            # full access to read/write the owner's peer memories.
+                            extract_ctx = RequestContext(
+                                user=self.ctx.user,
+                                role=Role.ROOT,
+                                actor_peer_id=self.ctx.actor_peer_id,
+                            )
 
                             async def _run_long_term_memory_extraction() -> Any:
                                 # strict_extract_errors=True lets transient failures
@@ -1499,7 +1510,7 @@ class Session:
                                     messages=extraction_messages,
                                     user=self.user,
                                     session_id=self.session_id,
-                                    ctx=self.ctx,
+                                    ctx=extract_ctx,
                                     strict_extract_errors=True,
                                     latest_archive_overview=latest_archive_overview,
                                     archive_uri=archive_uri,
@@ -1523,7 +1534,7 @@ class Session:
                                 # so retries can engage and final failures are visible.
                                 return await self._session_compressor.extract_execution_memories(
                                     messages=extraction_messages,
-                                    ctx=self.ctx,
+                                    ctx=extract_ctx,
                                     strict_extract_errors=True,
                                     latest_archive_overview=latest_archive_overview,
                                     archive_uri=archive_uri,
@@ -2163,11 +2174,17 @@ class Session:
         if not summary:
             return ""
 
-        match = re.search(r"^\*\*[^*]+\*\*:\s*(.+)$", summary, re.MULTILINE)
-        if match:
-            return match.group(1).strip()
+        # Skip markdown headings, separators, and blank lines;
+        # return the first meaningful content line.
+        for line in summary.split("\n"):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or stripped.startswith("---"):
+                continue
+            if len(stripped) > 3:
+                return stripped[:200]
 
-        first_line = summary.split("\n")[0].strip()
+        # Fallback: strip heading markers from the first line
+        first_line = summary.split("\n")[0].strip().lstrip("#").strip()
         return first_line if first_line else ""
 
     @staticmethod
