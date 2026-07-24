@@ -3,11 +3,13 @@
 """Semantic DAG executor with event-driven lazy dispatch."""
 
 import asyncio
+import re
 import threading
 from dataclasses import dataclass, field
 from typing import ClassVar, Dict, List, Optional, Set
 from weakref import WeakKeyDictionary
 
+from openviking.parse.parsers.media import get_media_type
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
 from openviking.storage.transaction import NO_LOCK, LockLease
@@ -743,6 +745,39 @@ class SemanticDagExecutor:
                 summaries.append(item)
         return summaries
 
+    def _select_direct_media_overview(
+        self,
+        node: DirNode,
+        file_summaries: List[Dict[str, str]],
+    ) -> Optional[str]:
+        if len(node.file_paths) != 1 or node.children_dirs or len(file_summaries) != 1:
+            return None
+
+        file_path = node.file_paths[0]
+        filename = file_path.rsplit("/", 1)[-1]
+        if get_media_type(file_path, None) not in {"audio", "video"}:
+            return None
+
+        summary = str(file_summaries[0].get("summary") or "").strip()
+        if not summary.startswith("# "):
+            return None
+
+        lines = summary.splitlines()
+        brief_start = next((idx for idx in range(1, len(lines)) if lines[idx].strip()), None)
+        if brief_start is None or lines[brief_start].lstrip().startswith("#"):
+            return None
+
+        brief_end = brief_start
+        while brief_end < len(lines) and lines[brief_end].strip():
+            if lines[brief_end].lstrip().startswith("#"):
+                return None
+            brief_end += 1
+
+        filename_heading = re.compile(rf"^###\s+{re.escape(filename)}\s*$", re.MULTILINE)
+        if not any(filename_heading.fullmatch(line) for line in lines[brief_end:]):
+            return None
+        return summary
+
     @property
     def stale(self) -> bool:
         return self._stale
@@ -808,10 +843,12 @@ class SemanticDagExecutor:
                 async with node.lock:
                     file_summaries = self._finalize_file_summaries(node)
                     children_abstracts = await self._finalize_children_abstracts(node)
-                async with self._llm_sem:
-                    overview = await self._processor._generate_overview(
-                        dir_uri, file_summaries, children_abstracts
-                    )
+                overview = self._select_direct_media_overview(node, file_summaries)
+                if overview is None:
+                    async with self._llm_sem:
+                        overview = await self._processor._generate_overview(
+                            dir_uri, file_summaries, children_abstracts
+                        )
                 overview, abstract = self._processor._normalize_overview_generation(overview)
 
             # Write directly, protected by the outer semantic lock.

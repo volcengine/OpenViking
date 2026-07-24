@@ -51,9 +51,14 @@ from .consts import (
     SYSTEM_CONFIG_DIR,
 )
 from .embedding_config import EmbeddingConfig
-from .grep_config import GrepConfig, GrepEngine
 from .git_config import GitConfig, GitLocalConfig, GitS3Config
+from .grep_config import GrepConfig, GrepEngine
 from .log_config import LogConfig
+from .media_understanding_config import (
+    MediaModelConfig,
+    MediaUnderstandingConfig,
+    VideoMediaModelConfig,
+)
 from .open_viking_config import (
     OpenVikingConfig,
     OpenVikingConfigSingleton,
@@ -92,6 +97,9 @@ __all__ = [
     "DEFAULT_OVCLI_CONF",
     "EmbeddingConfig",
     "LogConfig",
+    "MediaModelConfig",
+    "MediaUnderstandingConfig",
+    "VideoMediaModelConfig",
     "OPENVIKING_CLI_CONFIG_ENV",
     "OPENVIKING_CONFIG_ENV",
     "OPENVIKING_PROMPT_TEMPLATES_DIR_ENV",

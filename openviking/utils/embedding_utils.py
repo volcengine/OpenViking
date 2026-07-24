@@ -8,12 +8,17 @@ Common logic for creating Context objects and enqueuing them to EmbeddingQueue.
 
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from charset_normalizer import from_bytes
 
 from openviking.core.context import Context, ContextLevel, ResourceContentType, Vectorize
 from openviking.core.namespace import context_type_for_uri, is_session_uri, owner_space_for_uri
+from openviking.parse.parsers.media.constants import (
+    MPEG_TS_SNIFF_BYTES,
+    is_mpeg_ts,
+)
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
@@ -233,6 +238,29 @@ async def _build_image_data_uri(
     except Exception as e:
         logger.warning(f"Failed to read image for multimodal vectorization {file_path}: {e}")
         return None
+
+
+async def _resolve_resource_content_type(
+    file_path: str,
+    file_name: str,
+    viking_fs: Any,
+    ctx: Optional[RequestContext],
+) -> Optional[ResourceContentType]:
+    content_type = get_resource_content_type(file_name)
+    if Path(file_name).suffix.lower() != ".ts":
+        return content_type
+    try:
+        prefix = await viking_fs.read(
+            file_path,
+            offset=0,
+            size=MPEG_TS_SNIFF_BYTES,
+            ctx=ctx,
+        )
+    except Exception:
+        return content_type
+    if is_mpeg_ts(prefix):
+        return ResourceContentType.VIDEO
+    return content_type
 
 
 def _coerce_text_file_content(raw: Any) -> str:
@@ -469,12 +497,18 @@ async def vectorize_file(
             owner_space=owner_space_for_uri(file_path, ctx),
         )
 
-        content_type = get_resource_content_type(file_name)
+        content_type = await _resolve_resource_content_type(
+            file_path, file_name, viking_fs, ctx
+        )
         embedding_cfg = get_openviking_config().embedding
         configured_text_source = getattr(embedding_cfg, "text_source", "content_only")
         effective_text_source = "summary_only" if use_summary else configured_text_source
 
-        if content_type is None:
+        if content_type in (ResourceContentType.AUDIO, ResourceContentType.VIDEO):
+            effective_text = summary or file_name
+            context.abstract = effective_text
+            context.set_vectorize(Vectorize(text=effective_text, full_text=effective_text))
+        elif content_type is None:
             # Unsupported file type: fall back to summary if available
             if summary:
                 logger.warning(

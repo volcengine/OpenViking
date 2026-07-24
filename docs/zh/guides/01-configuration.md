@@ -669,6 +669,61 @@ LiteLLM 的 Bedrock bearer-token API-key 鉴权，请设置 `forward_api_key=tru
 
 > **注意**: OpenAI SDK 需要 `stream=true` 才能正确解析 SSE 响应。使用强制返回 SSE 格式的 provider 时，必须将此选项设置为 `true`。
 
+### media_understanding
+
+用于音频和视频理解的可选火山方舟模型。音频与视频配置彼此独立，因此可以使用不同的 API Key、模型 endpoint ID、超时、重试次数和并发限制；也可以只启用其中一种。省略 `media_understanding` 时媒体理解保持关闭，已有配置仍可正常加载。
+
+```json
+{
+  "media_understanding": {
+    "audio": {
+      "provider": "volcengine",
+      "api_key": "${VOLCENGINE_AUDIO_API_KEY}",
+      "model": "${VOLCENGINE_AUDIO_MODEL}",
+      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+      "timeout": 600,
+      "file_processing_timeout": 1800,
+      "file_poll_interval": 3,
+      "max_retries": 3,
+      "max_concurrent": 4,
+      "max_output_tokens": 4096
+    },
+    "video": {
+      "provider": "volcengine",
+      "api_key": "${VOLCENGINE_VIDEO_API_KEY}",
+      "model": "${VOLCENGINE_VIDEO_MODEL}",
+      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+      "timeout": 1200,
+      "file_processing_timeout": 1800,
+      "file_poll_interval": 3,
+      "max_retries": 3,
+      "max_concurrent": 2,
+      "max_output_tokens": 4096,
+      "fps": 1.0
+    }
+  }
+}
+```
+
+只要出现音频或视频子配置，其中的 `provider`、`api_key` 和 `model` 就是必填项。`model` 填写对应的方舟模型 endpoint ID。`fps` 仅用于视频，控制发送给方舟的视频采样帧率，取值范围为 `0.2` 到 `5.0`。
+
+**可接入格式与可理解格式**
+
+| 类型 | 现有 Parser 可接入并保存 | 本版本可由方舟理解 |
+|------|--------------------------|--------------------|
+| 音频 | MP3、WAV、OGG、FLAC、AAC、M4A、OPUS、AC3 | MP3、WAV、AAC、M4A |
+| 视频 | MP4、AVI、MOV、MKV、WEBM、FLV、WMV、TS | MP4、AVI、MOV |
+
+不在“可理解”列中的格式继续沿用现有 Parser 和存储行为；OpenViking 不会对这些文件转码，也不会把它们发送给理解模型。当文件被识别为音频或视频叶子节点时，空媒体摘要会使用文件名入库。
+
+对于支持的文件，OpenViking 先为媒体设置防御性过期时间并上传到方舟 Files API，等待处理后通过禁用响应存储的 Responses API 请求引用其 `file_id`，最后在较短的清理超时内尝试删除方舟文件。远端删除属于 best-effort；如果删除失败或超时，不会覆盖已经成功的理解结果，此时由 Files 的防御性过期时间兜底。本地临时文件独立清理，即使远端清理失败或请求被取消也会删除。
+
+- 目录中只有一个音频或视频文件且理解成功时，该摘要直接成为目录 L1，并通过现有语义链路派生 L0，不再调用通用 VLM 做第二次总结。
+- 媒体位于混合目录时，其摘要仍参与现有通用 VLM 聚合。
+- 未配置、理解格式不支持或模型最终失败时，媒体摘要为空；目录 L0/L1 生成保持原有通用行为，被识别为音频或视频的叶子节点则使用文件名作为 DETAIL 向量和 BM25 内容。Provider 错误和媒体理解状态文字不会写入媒体摘要或叶子索引。
+
+媒体处理会把文件内容发送给所配置的外部 provider。防御性过期、best-effort 删除和禁用响应存储可以降低非预期留存风险，但不能替代 provider 自身的隐私与留存控制。方舟 Files 的存储/处理以及 Responses 的模型 token 可能产生费用；启用前请确认 provider 的隐私、留存和计费条款。详见火山方舟官方[音频理解文档](https://docs.volcengine.com/docs/82379/2377589?lang=zh)和[视频理解文档](https://docs.volcengine.com/docs/82379/1895586?lang=zh)。
+
 ### query_planner
 
 可选的轻量模型配置，用于检索前的意图分析和 query 规划/改写。配置结构与 `vlm` 相同，但只影响 `search()` 的意图分析和 query expansion。未配置或配置为空时，OpenViking 会回退到 `vlm`，保持向后兼容。

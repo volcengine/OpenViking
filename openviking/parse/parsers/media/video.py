@@ -29,7 +29,7 @@ from typing import List, Optional, Union
 
 from openviking.parse.base import NodeType, ParseResult, ResourceNode
 from openviking.parse.parsers.base_parser import BaseParser
-from openviking.parse.parsers.media.constants import VIDEO_EXTENSIONS
+from openviking.parse.parsers.media.constants import VIDEO_EXTENSIONS, is_mpeg_ts
 from openviking.parse.parsers.media.naming import resolve_media_names
 from openviking_cli.utils.config.parser_config import VideoConfig
 
@@ -113,11 +113,14 @@ class VideoParser(BaseParser):
         # Check magic bytes
         valid = False
         ext_lower = ext.lower()
-        magic_list = video_magic_bytes.get(ext_lower, [])
-        for magic in magic_list:
-            if len(video_bytes) >= len(magic) and video_bytes.startswith(magic):
-                valid = True
-                break
+        if ext_lower == ".ts":
+            valid = is_mpeg_ts(video_bytes)
+        else:
+            magic_list = video_magic_bytes.get(ext_lower, [])
+            for magic in magic_list:
+                if len(video_bytes) >= len(magic) and video_bytes.startswith(magic):
+                    valid = True
+                    break
 
         if not valid:
             raise ValueError(

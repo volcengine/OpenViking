@@ -25,6 +25,7 @@ from .git_config import GitConfig
 from .grep_config import GrepConfig
 from .ingest_config import IngestConfig
 from .log_config import LogConfig
+from .media_understanding_config import MediaUnderstandingConfig
 from .memory_config import MemoryConfig
 from .oauth_config import OAuthConfig
 from .parser_config import (
@@ -154,6 +155,11 @@ class OpenVikingConfig(BaseModel):
     )
 
     vlm: VLMConfig = Field(default_factory=VLMConfig, description="VLM configuration")
+
+    media_understanding: MediaUnderstandingConfig = Field(
+        default_factory=MediaUnderstandingConfig,
+        description="Independent audio and video understanding model configuration",
+    )
 
     query_planner: Optional[VLMConfig] = Field(
         default=None,

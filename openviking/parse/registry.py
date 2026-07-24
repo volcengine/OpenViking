@@ -22,6 +22,10 @@ from openviking.parse.parsers.html import HTMLParser
 from openviking.parse.parsers.legacy_doc import LegacyDocParser
 from openviking.parse.parsers.markdown import MarkdownParser
 from openviking.parse.parsers.media import AudioParser, ImageParser, VideoParser
+from openviking.parse.parsers.media.constants import (
+    MPEG_TS_SNIFF_BYTES,
+    is_mpeg_ts,
+)
 from openviking.parse.parsers.pdf import PDFParser
 from openviking.parse.parsers.powerpoint import PowerPointParser
 from openviking.parse.parsers.text import TextParser
@@ -196,6 +200,16 @@ class ParserRegistry:
         """
         path = Path(path)
         ext = path.suffix.lower()
+        if ext == ".ts":
+            content = None
+            if path.is_file():
+                try:
+                    with path.open("rb") as source_file:
+                        content = source_file.read(MPEG_TS_SNIFF_BYTES)
+                except OSError:
+                    content = None
+            if not is_mpeg_ts(content):
+                return None
         parser_name = self._extension_map.get(ext)
 
         if parser_name:

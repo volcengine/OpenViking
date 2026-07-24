@@ -701,6 +701,61 @@ For OpenAI-compatible providers that return SSE (Server-Sent Events) format resp
 
 > **Note**: The OpenAI SDK requires `stream=true` to properly parse SSE responses. When using providers that force SSE format, you must set this option to `true`.
 
+### media_understanding
+
+Optional Volcengine Ark models for audio and video understanding. Audio and video are configured independently, so they can use different API keys, model endpoint IDs, timeouts, retry limits, and concurrency limits. You can configure either one without enabling the other. Omitting `media_understanding` keeps media understanding disabled and preserves compatibility with existing configurations.
+
+```json
+{
+  "media_understanding": {
+    "audio": {
+      "provider": "volcengine",
+      "api_key": "${VOLCENGINE_AUDIO_API_KEY}",
+      "model": "${VOLCENGINE_AUDIO_MODEL}",
+      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+      "timeout": 600,
+      "file_processing_timeout": 1800,
+      "file_poll_interval": 3,
+      "max_retries": 3,
+      "max_concurrent": 4,
+      "max_output_tokens": 4096
+    },
+    "video": {
+      "provider": "volcengine",
+      "api_key": "${VOLCENGINE_VIDEO_API_KEY}",
+      "model": "${VOLCENGINE_VIDEO_MODEL}",
+      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+      "timeout": 1200,
+      "file_processing_timeout": 1800,
+      "file_poll_interval": 3,
+      "max_retries": 3,
+      "max_concurrent": 2,
+      "max_output_tokens": 4096,
+      "fps": 1.0
+    }
+  }
+}
+```
+
+`provider`, `api_key`, and `model` are required whenever an audio or video block is present. The `model` value is the corresponding Ark model endpoint ID. `fps` applies only to video and controls the frame sampling rate sent to Ark; its supported range is `0.2` through `5.0`.
+
+**Ingestible and understandable formats**
+
+| Type | Stored by the existing parser | Understood by Ark in this release |
+|------|-------------------------------|-----------------------------------|
+| Audio | MP3, WAV, OGG, FLAC, AAC, M4A, OPUS, AC3 | MP3, WAV, AAC, M4A |
+| Video | MP4, AVI, MOV, MKV, WEBM, FLV, WMV, TS | MP4, AVI, MOV |
+
+Formats outside the understanding column continue to follow the existing parser and storage behavior; OpenViking does not transcode them or send them to the understanding model. When such a file is recognized as an audio or video leaf, an empty media summary is indexed using its filename.
+
+For a supported file, OpenViking uploads the media to the Ark Files API with a defensive expiration time, waits for processing, and references its `file_id` from the Responses API with response storage disabled. It then attempts to delete the Ark file under a short cleanup deadline. Remote deletion is best-effort and does not replace an otherwise successful result if cleanup fails; a failed or timed-out delete therefore relies on the defensive Files expiration. Local temporary files are removed independently even when remote cleanup fails or is cancelled.
+
+- A successful summary for a directory containing exactly one audio or video file becomes that directory's L1 directly, with L0 derived through the existing semantic path. No second generic VLM summarization is performed.
+- Media in a mixed directory contributes its summary to the existing generic VLM aggregation.
+- Missing configuration, an unsupported understanding format, or a final model failure yields an empty media summary. Generic directory L0/L1 generation keeps its existing behavior, while a recognized audio or video leaf uses its filename for the DETAIL vector and BM25 content. Provider errors and media-understanding status text are not written to the media summary or leaf index.
+
+Media processing sends file content to the configured external provider. The defensive expiration, best-effort deletion, and disabled response storage reduce unintended retention but do not replace the provider's own privacy and retention controls. Ark Files storage/processing and Responses model tokens can incur provider charges, so review your provider's privacy, retention, and billing terms before enabling this feature. See the official Volcengine Ark documentation for [audio understanding](https://docs.volcengine.com/docs/82379/2377589?lang=zh) and [video understanding](https://docs.volcengine.com/docs/82379/1895586?lang=zh).
+
 ### query_planner
 
 Optional lightweight model for retrieval intent analysis and query planning. It uses the same configuration shape as `vlm`, but only affects `search()` intent analysis and query expansion. If `query_planner` is omitted or empty, OpenViking falls back to `vlm` for backward compatibility.

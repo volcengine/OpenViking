@@ -50,7 +50,7 @@ class _FakeVikingFS:
     async def read_file(self, path, ctx=None):
         return self._file_contents.get(self._norm(path), "")
 
-    async def write_file(self, path, content, ctx=None):
+    async def write_file(self, path, content, ctx=None, lock_handle=None):
         norm_path = self._norm(path)
         self._file_contents[norm_path] = content
         self.writes.append((norm_path, content))
