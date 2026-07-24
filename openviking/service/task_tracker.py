@@ -145,11 +145,17 @@ class TaskTracker:
     MAX_TASKS = 10_000
     TTL_COMPLETED = 86_400  # 24 hours
     TTL_FAILED = 604_800  # 7 days
+    # PENDING/RUNNING tasks whose updated_at heartbeat has not moved for this
+    # long are considered stale: their background asyncio coroutine either died
+    # with the previous process or silently wedged (issue #3396). They are
+    # failed by reap_stale_active() instead of blocking retries forever.
+    TTL_STALE_ACTIVE = 21_600  # 6 hours
     CLEANUP_INTERVAL = 300  # 5 minutes
 
     def __init__(self, store: TaskStore) -> None:
         self._store = store
         self._tasks: Dict[str, TaskRecord] = {}
+        self._live_tasks: Dict[str, asyncio.Task] = {}
         self._lock = threading.Lock()
         self._async_lock = asyncio.Lock()
         self._cleanup_task: Optional[asyncio.Task] = None
@@ -177,6 +183,79 @@ class TaskTracker:
         if self._cleanup_task is not None and not self._cleanup_task.done():
             self._cleanup_task.cancel()
             logger.debug("[TaskTracker] Cleanup loop stopped")
+
+    def register_live_task(self, task_id: str, task: asyncio.Task) -> None:
+        """Hold a strong reference to the asyncio task driving a tracked task.
+
+        ``asyncio.create_task`` only keeps a weak reference to the task, so a
+        fire-and-forget background coroutine without an external strong
+        reference can be garbage-collected mid-execution and silently aborted
+        (https://docs.python.org/3/library/asyncio-task.html#asyncio.create_task).
+        Callers that spawn ``asyncio.create_task`` for a tracked task must
+        register it here; the reference is dropped automatically on completion.
+        """
+        with self._lock:
+            self._live_tasks[task_id] = task
+        task.add_done_callback(lambda _done, tid=task_id: self._drop_live_task(tid))
+
+    def _drop_live_task(self, task_id: str) -> None:
+        with self._lock:
+            self._live_tasks.pop(task_id, None)
+
+    def has_live_task(self, task_id: str) -> bool:
+        """Return True when a live asyncio task is registered for ``task_id``."""
+        with self._lock:
+            return task_id in self._live_tasks
+
+    async def reap_stale_active(
+        self,
+        stale_after: Optional[float] = None,
+    ) -> int:
+        """Fail PENDING/RUNNING tasks that have no live driver and a stale heartbeat.
+
+        Background executors (reindex, legacy migration, ...) run as in-process
+        asyncio coroutines. After a restart their persisted records still read
+        ``running`` but no live asyncio task exists, so they would stay RUNNING
+        forever, block ``create_if_no_running`` for the same resource, and
+        require hand-editing task JSON to recover (issue #3396). This sweep
+        marks such zombie tasks FAILED so operators and retries can move on.
+
+        Tasks with a registered live asyncio task are never touched, and only
+        tasks whose ``updated_at`` heartbeat is older than ``stale_after``
+        (default ``TTL_STALE_ACTIVE``) are reaped, so a freshly restored but
+        not-yet-resumed task is not failed spuriously.
+
+        Returns the number of reaped tasks.
+        """
+        threshold = stale_after if stale_after is not None else self.TTL_STALE_ACTIVE
+        now = time.time()
+        async with self._async_lock:
+            await self._hydrate_from_store()
+            with self._lock:
+                candidates = [
+                    task
+                    for task in self._tasks.values()
+                    if task.status in (TaskStatus.PENDING, TaskStatus.RUNNING)
+                    and task.task_id not in self._live_tasks
+                    and (now - task.updated_at) > threshold
+                ]
+            reaped = 0
+            for task in candidates:
+                task.status = TaskStatus.FAILED
+                task.stage = "interrupted"
+                task.error = _sanitize_error(
+                    "Task interrupted: no live worker and heartbeat stale for "
+                    f"{int(now - task.updated_at)}s (likely process restart); "
+                    "marked failed by startup reconciliation"
+                )
+                task.updated_at = now
+                await self._store.update(task)
+                with self._lock:
+                    self._tasks[task.task_id] = task
+                reaped += 1
+        if reaped:
+            logger.warning("[TaskTracker] Reaped %d stale active task(s) as failed", reaped)
+        return reaped
 
     async def _cleanup_loop(self) -> None:
         while True:
@@ -484,6 +563,21 @@ class TaskTracker:
                 and t.status in (TaskStatus.PENDING, TaskStatus.RUNNING)
                 for t in tasks
             )
+
+    async def _hydrate_from_store(self) -> None:
+        """Load persisted tasks across all owners into the local cache.
+
+        Best-effort: stores that cannot enumerate every owner (no
+        ``list_all``) simply leave the cache as-is, in which case reaping
+        covers only tasks already loaded into this process.
+        """
+        list_all = getattr(self._store, "list_all", None)
+        if not callable(list_all):
+            return
+        records = [self._record_from_payload(payload) for payload in await list_all()]
+        with self._lock:
+            for record in records:
+                self._tasks[record.task_id] = record
 
     async def _load_for_update(
         self,

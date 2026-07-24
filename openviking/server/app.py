@@ -275,6 +275,17 @@ def create_app(
         task_tracker = get_task_tracker()
         task_tracker.start_cleanup_loop()
 
+        # Reconcile zombie tasks: PENDING/RUNNING records persisted by a
+        # previous process whose in-memory asyncio drivers are gone (issue
+        # #3396). Done before traffic so stuck reindex tasks stop blocking
+        # same-URI retries without hand-editing task JSON.
+        try:
+            reaped = await task_tracker.reap_stale_active()
+            if reaped:
+                logger.warning("Reaped %d stale background task(s) at startup", reaped)
+        except Exception:
+            logger.exception("Startup task reconciliation failed; continuing")
+
         # Initialize tracing and OTLP log export from server.observability.
         from openviking.telemetry import tracer_module
 

@@ -240,7 +240,7 @@ async def migrate_legacy_data(
         account_id=SYSTEM_TASK_ACCOUNT_ID,
         user_id=SYSTEM_TASK_USER_ID,
     )
-    asyncio.create_task(
+    migration_task = asyncio.create_task(
         _run_legacy_migration_task(
             task.task_id,
             migration,
@@ -249,6 +249,7 @@ async def migrate_legacy_data(
             user_id=SYSTEM_TASK_USER_ID,
         )
     )
+    tracker.register_live_task(task.task_id, migration_task)
     return Response(status="ok", result={"task_id": task.task_id})
 
 
