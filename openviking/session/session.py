@@ -3487,7 +3487,20 @@ class Session:
         return messages
 
     def _extract_abstract_from_summary(self, summary: str) -> str:
-        """Extract one-sentence overview from structured summary."""
+        """Extract a one-sentence abstract from a structured summary.
+
+        Prefer an explicit ``**Key**: value`` overview line (the legacy /
+        ``structured_summary`` format). Otherwise return the first meaningful
+        content line, skipping markdown headings (``#``), horizontal rules
+        (``---``), blank lines, and italic-only section descriptions
+        (``_..._``) that are template placeholders rather than real content.
+
+        Working Memory documents (``compression.ov_wm_v2``) open with a
+        ``# Working Memory`` heading and contain no ``**Key**: value`` line, so
+        the previous "first line" fallback collapsed every archive abstract to
+        the identical ``# Working Memory`` heading, polluting recall and the
+        directory-level semantic abstract tree.
+        """
         if not summary:
             return ""
 
@@ -3495,8 +3508,17 @@ class Session:
         if match:
             return match.group(1).strip()
 
-        first_line = summary.split("\n")[0].strip()
-        return first_line if first_line else ""
+        for line in summary.split("\n"):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or stripped.startswith("---"):
+                continue
+            if stripped.startswith("_") and stripped.endswith("_"):
+                continue
+            if len(stripped) > 3:
+                return stripped[:200]
+
+        # Fallback: strip leading heading markers from the first line.
+        return summary.split("\n")[0].strip().lstrip("#").strip()
 
     @staticmethod
     def _format_message_for_wm(m: Message) -> str:
