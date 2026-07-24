@@ -16,7 +16,12 @@ from openviking.core.context import Context
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
-from openviking.session.memory.constants import EXECUTION_MEMORY_TYPES
+from openviking.session.memory.constants import (
+    DIRECT_EXECUTION_MEMORY_TYPES,
+    EXECUTION_MEMORY_TYPES,
+    EXPERIENCE_MEMORY_TYPE,
+    TRAJECTORY_MEMORY_TYPE,
+)
 from openviking.session.memory.dataclass import MemoryFile, ResolvedOperations, StoredLink
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_updater import (
@@ -504,21 +509,22 @@ class SessionCompressorV2:
         allowed_memory_types: Optional[set[str]] = None,
         include_session_skills: Optional[bool] = None,
     ) -> Dict[str, List[Any]]:
-        """Extract trajectory, experience, and session-skill memories from execution context."""
+        """Extract memories that are grounded in execution context."""
         config = get_openviking_config()
         allowed_execution_types = (
             set(EXECUTION_MEMORY_TYPES)
             if allowed_memory_types is None
             else set(allowed_memory_types) & EXECUTION_MEMORY_TYPES
         )
-        include_trajectories = "trajectories" in allowed_execution_types
-        include_experiences = "experiences" in allowed_execution_types
+        direct_execution_types = allowed_execution_types & DIRECT_EXECUTION_MEMORY_TYPES
+        include_trajectories = TRAJECTORY_MEMORY_TYPE in direct_execution_types
+        include_experiences = EXPERIENCE_MEMORY_TYPE in allowed_execution_types
         if include_session_skills is None:
             include_session_skills = bool(
                 getattr(config.memory, "session_skill_extraction_enabled", False)
             )
         empty_result: Dict[str, List[Any]] = {"contexts": [], "session_skills": []}
-        if not include_trajectories:
+        if not direct_execution_types:
             return empty_result
         if not messages or not ctx:
             return empty_result
@@ -539,6 +545,7 @@ class SessionCompressorV2:
             latest_archive_overview=latest_archive_overview,
             include_trajectories=include_trajectories,
             include_session_skills=include_session_skills,
+            allowed_memory_types=direct_execution_types,
         )
         traj_result = await self._run_extract_phase(
             provider=traj_provider,
@@ -546,13 +553,13 @@ class SessionCompressorV2:
             ctx=ctx,
             strict_extract_errors=strict_extract_errors,
             phase_label="trajectory",
-            allowed_memory_types=allowed_execution_types,
+            allowed_memory_types=direct_execution_types,
             thinking=True,
         )
         if traj_result is None:
             return empty_result
 
-        written_trajectory_uris, _, traj_contexts, _, traj_skill_results = traj_result
+        written_phase_uris, _, traj_contexts, _, traj_skill_results = traj_result
         contexts.extend(traj_contexts)
         if archive_uri:
             for item in traj_skill_results:
@@ -562,11 +569,17 @@ class SessionCompressorV2:
         # Deduplicate: LLM may output the same trajectory_name twice in one call,
         # producing identical URIs. Without this, experience extraction would run
         # once per duplicate and generate near-identical experiences.
-        written_trajectory_uris = list(dict.fromkeys(written_trajectory_uris))
+        written_trajectory_uris = list(
+            dict.fromkeys(uri for uri in written_phase_uris if "/memories/trajectories/" in uri)
+        )
 
-        if not include_trajectories or not include_experiences or not written_trajectory_uris:
-            if not written_trajectory_uris:
-                tracer.info("No trajectories extracted; skipping experience phase")
+        if not include_trajectories or not include_experiences:
+            return {
+                "contexts": contexts,
+                "session_skills": session_skill_results,
+            }
+        if not written_trajectory_uris:
+            tracer.info("No trajectories extracted; skipping experience phase")
             return {
                 "contexts": contexts,
                 "session_skills": session_skill_results,
@@ -622,7 +635,7 @@ class SessionCompressorV2:
                 strict_extract_errors=strict_extract_errors,
                 phase_label=f"experience({traj_uri})",
                 post_apply=_append_sources_before_unlock,
-                allowed_memory_types=allowed_execution_types,
+                allowed_memory_types={EXPERIENCE_MEMORY_TYPE},
                 thinking=True,
             )
             if exp_result is None:
