@@ -230,7 +230,7 @@ jobs:
       source_ref: ${{ steps.package_source.outputs.ref }}
       package_ref: ${{ steps.package_source.outputs.package_ref }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.package_ref || 'main' }}
 
@@ -337,7 +337,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare-package-source.outputs.package_ref }}
 

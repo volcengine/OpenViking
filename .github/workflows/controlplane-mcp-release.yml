@@ -40,7 +40,7 @@ jobs:
       pkg_version: ${{ steps.version.outputs.pkg_version }}
     steps:
       - name: Checkout source repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: ${{ inputs.source_repo }}
           ref: ${{ inputs.source_ref }}
