@@ -434,6 +434,7 @@ describe("plugin module seams", () => {
     const rememberSessionAgentId = vi.fn();
     const verboseRoutingInfo = vi.fn();
     const commitOVSession = vi.fn().mockResolvedValue(true);
+    const recordSessionTransition = vi.fn().mockResolvedValue(undefined);
     const logger = { info: vi.fn(), warn: vi.fn() };
 
     registerOpenVikingLifecycleHooks({
@@ -442,6 +443,7 @@ describe("plugin module seams", () => {
       isBypassedSession: (ctx) => ctx?.sessionKey === "bypass",
       verboseRoutingInfo,
       getContextEngine: () => ({ commitOVSession }),
+      recordSessionTransition,
       logger,
     });
 
@@ -453,9 +455,28 @@ describe("plugin module seams", () => {
     ]);
 
     await handlers.get("session_start")?.({}, { sessionId: "session-1", agentId: "agent-main" });
-    await handlers.get("session_end")?.({}, { sessionId: "session-2", agentId: "agent-main" });
+    await handlers.get("session_end")?.({
+      sessionId: "session-2",
+      sessionKey: "session-key",
+      nextSessionId: "session-3",
+      nextSessionKey: "session-key",
+      reason: "daily",
+      transcriptArchived: true,
+    }, { sessionId: "session-2", sessionKey: "session-key", agentId: "agent-main" });
     expect(rememberSessionAgentId).toHaveBeenCalledWith({ sessionId: "session-1", agentId: "agent-main" });
-    expect(rememberSessionAgentId).toHaveBeenCalledWith({ sessionId: "session-2", agentId: "agent-main" });
+    expect(rememberSessionAgentId).toHaveBeenCalledWith({
+      sessionId: "session-2",
+      sessionKey: "session-key",
+      agentId: "agent-main",
+    });
+    expect(recordSessionTransition).toHaveBeenCalledWith({
+      sessionId: "session-2",
+      sessionKey: "session-key",
+      nextSessionId: "session-3",
+      nextSessionKey: "session-key",
+      reason: "daily",
+      transcriptArchived: true,
+    });
 
     await handlers.get("before_reset")?.({}, { sessionId: "session-3", sessionKey: "key-3" });
     expect(commitOVSession).toHaveBeenCalledWith({ sessionId: "session-3", sessionKey: "key-3" });
@@ -613,6 +634,7 @@ describe("plugin module seams", () => {
       traceRecallPreviewChars: 20,
       createTraceId: () => "trace-archive-search",
       logger: { info: vi.fn(), warn: vi.fn() },
+      getPredecessorSessionIds: vi.fn().mockResolvedValue([]),
     };
 
     registerOpenVikingArchiveTools(deps);
@@ -632,6 +654,7 @@ describe("plugin module seams", () => {
     expect(searchResult.content[0].text).toContain("Found 1 match(es)");
     expect(searchResult.content[0].text).toContain("important command output");
     expect(searchResult.details).toMatchObject({ query: "command", matchCount: 1 });
+    expect(deps.getPredecessorSessionIds).not.toHaveBeenCalled();
     expect(recordAndFlush).toHaveBeenCalledWith(expect.objectContaining({
       traceId: "trace-archive-search",
       source: "ov_archive_search",
@@ -652,6 +675,112 @@ describe("plugin module seams", () => {
       sessionId: "session-1",
       ovSessionId: "ov-session-1",
     });
+  });
+
+  it("searches a recent predecessor archive after the current session has no archive", async () => {
+    const registerTool = vi.fn();
+    const grepSessionArchives = vi.fn()
+      .mockRejectedValueOnce(new Error("OpenViking request failed [NOT_FOUND]: File not found"))
+      .mockResolvedValueOnce({
+        count: 1,
+        matches: [{
+          uri: "viking://session/session-before-reset/history/archive_002#L8",
+          line: 8,
+          content: "the original story",
+        }],
+      });
+    const getPredecessorSessionIds = vi.fn().mockResolvedValue(["session-before-reset"]);
+
+    registerOpenVikingArchiveTools({
+      registerTool,
+      getClient: async () => ({
+        grepSessionArchives,
+        getSessionArchive: vi.fn(),
+      }),
+      rememberSessionAgentId: vi.fn(),
+      toOvSessionId: (sessionId) => sessionId ?? "",
+      resolveAgentId: () => "agent-main",
+      resolvePluginSessionRouting: () => ({
+        agentId: "agent-main",
+        sessionId: "session-after-reset",
+        ovSessionId: "session-after-reset",
+      }),
+      isBypassedSession: () => false,
+      makeBypassedToolResult: vi.fn(),
+      formatMessage: vi.fn(),
+      traceRecallMaxResultsPerSearch: 10,
+      traceRecallPreviewChars: 20,
+      createTraceId: () => "trace-predecessor-search",
+      getPredecessorSessionIds,
+    });
+
+    const searchFactory = registerTool.mock.calls[0]?.[0];
+    const searchTool = searchFactory({
+      sessionId: "session-after-reset",
+      sessionKey: "agent:main:dashboard:one",
+    });
+    const result = await searchTool.execute("call-1", { query: "story" });
+
+    expect(getPredecessorSessionIds).toHaveBeenCalledWith(
+      "agent:main:dashboard:one",
+      "session-after-reset",
+    );
+    expect(grepSessionArchives.mock.calls.map(([sessionId]) => sessionId)).toEqual([
+      "session-after-reset",
+      "session-before-reset",
+    ]);
+    expect(result.content[0].text).toContain("the original story");
+    expect(result.details).toMatchObject({
+      matchedSessionId: "session-before-reset",
+      predecessorFallback: true,
+    });
+  });
+
+  it("searches a recent predecessor after the current archive has no match", async () => {
+    const registerTool = vi.fn();
+    const grepSessionArchives = vi.fn()
+      .mockResolvedValueOnce({ count: 0, matches: [] })
+      .mockResolvedValueOnce({
+        count: 1,
+        matches: [{
+          uri: "viking://session/session-before-reset/history/archive_002#L8",
+          line: 8,
+          content: "the original story",
+        }],
+      });
+
+    registerOpenVikingArchiveTools({
+      registerTool,
+      getClient: async () => ({
+        grepSessionArchives,
+        getSessionArchive: vi.fn(),
+      }),
+      rememberSessionAgentId: vi.fn(),
+      toOvSessionId: (sessionId) => sessionId ?? "",
+      resolveAgentId: () => "agent-main",
+      resolvePluginSessionRouting: () => ({
+        agentId: "agent-main",
+        sessionId: "session-after-reset",
+        ovSessionId: "session-after-reset",
+      }),
+      isBypassedSession: () => false,
+      makeBypassedToolResult: vi.fn(),
+      formatMessage: vi.fn(),
+      traceRecallMaxResultsPerSearch: 10,
+      traceRecallPreviewChars: 20,
+      createTraceId: () => "trace-predecessor-search",
+      getPredecessorSessionIds: vi.fn().mockResolvedValue(["session-before-reset"]),
+    });
+
+    const searchFactory = registerTool.mock.calls[0]?.[0];
+    const searchTool = searchFactory({
+      sessionId: "session-after-reset",
+      sessionKey: "agent:main:dashboard:one",
+    });
+    const result = await searchTool.execute("call-1", { query: "story" });
+
+    expect(grepSessionArchives).toHaveBeenCalledTimes(2);
+    expect(result.content[0].text).toContain("the original story");
   });
 
   it("registers import tools through a dedicated plugin module", async () => {

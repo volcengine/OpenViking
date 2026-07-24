@@ -23,6 +23,14 @@ export type OpenVikingLifecycleHooksDeps = {
   isBypassedSession: (ctx?: OpenVikingHookContext) => boolean;
   verboseRoutingInfo: (message: string) => void;
   getContextEngine: () => ContextEngineCommitPort | null;
+  recordSessionTransition: (event: {
+    sessionId?: string;
+    sessionKey?: string;
+    nextSessionId?: string;
+    nextSessionKey?: string;
+    reason?: string;
+    transcriptArchived?: boolean;
+  }) => Promise<void>;
   logger: {
     info: (message: string) => void;
     warn: (message: string) => void;
@@ -33,8 +41,11 @@ export function registerOpenVikingLifecycleHooks(deps: OpenVikingLifecycleHooksD
   deps.api.on("session_start", async (_event: unknown, ctx?: OpenVikingHookContext) => {
     deps.rememberSessionAgentId(ctx ?? {});
   });
-  deps.api.on("session_end", async (_event: unknown, ctx?: OpenVikingHookContext) => {
+  deps.api.on("session_end", async (event: unknown, ctx?: OpenVikingHookContext) => {
     deps.rememberSessionAgentId(ctx ?? {});
+    if (event && typeof event === "object") {
+      await deps.recordSessionTransition(event);
+    }
   });
   deps.api.on("before_reset", async (_event: unknown, ctx?: OpenVikingHookContext) => {
     if (deps.isBypassedSession(ctx)) {

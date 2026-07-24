@@ -22,6 +22,7 @@ import { registerOpenVikingArchiveTools } from "./plugin/openviking-archive-tool
 import { createOpenVikingImportRuntime } from "./plugin/openviking-import-runtime.js";
 import { registerOpenVikingImportTools } from "./plugin/openviking-import-tools.js";
 import { registerOpenVikingLifecycleHooks } from "./plugin/openviking-lifecycle-hooks.js";
+import { OpenVikingSessionLineageStore } from "./plugin/openviking-session-lineage.js";
 import { registerOpenVikingMemoryRecallTools } from "./plugin/openviking-memory-recall-tools.js";
 import { registerOpenVikingMemoryTools } from "./plugin/openviking-memory-tools.js";
 import { registerOpenVikingQueryTools } from "./plugin/openviking-query-tools.js";
@@ -205,6 +206,7 @@ const contextEnginePlugin = {
       cfg,
       logger: api.logger,
     });
+    const sessionLineageStore = new OpenVikingSessionLineageStore();
 
     const {
       rememberSessionAgentId,
@@ -354,6 +356,8 @@ const contextEnginePlugin = {
       traceRecallMaxResultsPerSearch: cfg.traceRecallMaxResultsPerSearch,
       traceRecallPreviewChars: cfg.traceRecallPreviewChars,
       createTraceId,
+      getPredecessorSessionIds: (sessionKey, currentSessionId) =>
+        sessionLineageStore.getPredecessorSessionIds(sessionKey, currentSessionId),
       logger: api.logger,
     });
 
@@ -374,6 +378,7 @@ const contextEnginePlugin = {
       isBypassedSession,
       verboseRoutingInfo,
       getContextEngine,
+      recordSessionTransition: (event) => sessionLineageStore.record(event),
       logger: api.logger,
     });
 

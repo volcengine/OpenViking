@@ -313,7 +313,10 @@ OpenViking 在插件侧暴露两个独立的 archive 回查工具。
   - 默认遍历所有 archive（新到旧）
   - 默认永远不返回完整 archive 原文
   - case-insensitive；正则元字符自动转义为字面量匹配
-- **工具 description 文本**：`"Keyword-grep across all archived original conversation messages of the current session. Use this whenever the [Session History Summary] does not contain the specific detail the user is asking about. Extract 2-3 concrete entity words from the question (names, places, objects, dates) and search each separately. Only conclude information is unavailable after trying at least 2 different keyword variations."`
+  - 当前 session 无 archive 或无命中时，可回退到同一 `sessionKey` 的最近两个
+    `daily` / `idle` / `reset` 前序 session；只保留 48 小时内的进程内 lineage，
+    不接受跨 key 或用户指定的全局 scope
+- **工具 description 文本**：`"Keyword-grep across archived original conversation messages of the current session and recent reset predecessors. Use this whenever the [Session History Summary] does not contain the specific detail the user is asking about. Extract 2-3 concrete entity words from the question (names, places, objects, dates) and search each separately. Only conclude information is unavailable after trying at least 2 different keyword variations."`
 
 ---
 

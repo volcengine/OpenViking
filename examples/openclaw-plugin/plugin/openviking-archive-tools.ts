@@ -55,6 +55,10 @@ export type OpenVikingArchiveToolsDeps = {
   traceRecallMaxResultsPerSearch: number;
   traceRecallPreviewChars: number;
   createTraceId: (source: string) => string;
+  getPredecessorSessionIds: (
+    sessionKey: string,
+    currentSessionId: string,
+  ) => Promise<string[]>;
   logger?: {
     info?: (message: string) => void;
     warn?: (message: string) => void;
@@ -76,7 +80,8 @@ export function registerOpenVikingArchiveTools(deps: OpenVikingArchiveToolsDeps)
       name: "ov_archive_search",
       label: "Archive Search (OpenViking)",
       description:
-        "Keyword-grep across all archived original conversation messages of the current session. " +
+        "Keyword-grep across archived original conversation messages of the current session " +
+        "and recent reset predecessors. " +
         "Use this whenever the [Session History Summary] does not contain the specific detail " +
         "the user is asking about. Extract 2-3 concrete entity words from the question " +
         "(names, places, objects, dates) and search each separately. " +
@@ -124,10 +129,46 @@ export function registerOpenVikingArchiveTools(deps: OpenVikingArchiveToolsDeps)
           const client = await deps.getClient();
           const agentId = deps.resolveAgentId(ctx.sessionId, ctx.sessionKey);
           const started = Date.now();
-          const result = await client.grepSessionArchives(ovSessionId, escapedQuery, {
-            archiveId,
-            caseInsensitive: true,
-          });
+          const searchedSessionIds = [ovSessionId];
+          let matchedSessionId = ovSessionId;
+          let result: Awaited<ReturnType<OpenVikingArchiveClient["grepSessionArchives"]>>;
+          try {
+            result = await client.grepSessionArchives(ovSessionId, escapedQuery, {
+              archiveId,
+              caseInsensitive: true,
+            });
+          } catch (err) {
+            if (!(err instanceof Error) || !err.message.includes("[NOT_FOUND]")) throw err;
+            result = { count: 0, matches: [] };
+          }
+
+          if ((!result.matches || result.matches.length === 0) && sessionKey) {
+            const predecessorSessionIds = await deps.getPredecessorSessionIds(
+              sessionKey,
+              sessionId || ovSessionId,
+            );
+            for (const predecessorSessionId of predecessorSessionIds) {
+              const predecessorOvSessionId = deps.toOvSessionId(
+                predecessorSessionId,
+                sessionKey,
+              );
+              searchedSessionIds.push(predecessorOvSessionId);
+              try {
+                const predecessorResult = await client.grepSessionArchives(
+                  predecessorOvSessionId,
+                  escapedQuery,
+                  { archiveId, caseInsensitive: true },
+                );
+                if (predecessorResult.matches?.length) {
+                  result = predecessorResult;
+                  matchedSessionId = predecessorOvSessionId;
+                  break;
+                }
+              } catch (err) {
+                if (!(err instanceof Error) || !err.message.includes("[NOT_FOUND]")) throw err;
+              }
+            }
+          }
           const traceResults: RecallTraceResult[] = (result.matches ?? []).slice(0, deps.traceRecallMaxResultsPerSearch).map((match) => ({
             uri: match.uri,
             resourceType: "archive",
@@ -142,7 +183,7 @@ export function registerOpenVikingArchiveTools(deps: OpenVikingArchiveToolsDeps)
               ts: Date.now(),
               sessionId: ctx.sessionId,
               sessionKey: ctx.sessionKey,
-              ovSessionId,
+              ovSessionId: matchedSessionId,
               agentId,
               source: "ov_archive_search",
               operationType: "archive_grep",
@@ -150,7 +191,7 @@ export function registerOpenVikingArchiveTools(deps: OpenVikingArchiveToolsDeps)
               trigger: { query, derivedKeywords: [query] },
               searches: [{
                 resourceType: "archive",
-                targetUriResolved: archiveId ? `viking://session/${ovSessionId}/history/${archiveId}` : `viking://session/${ovSessionId}/history`,
+                targetUriResolved: archiveId ? `viking://session/${matchedSessionId}/history/${archiveId}` : `viking://session/${matchedSessionId}/history`,
                 limit: deps.traceRecallMaxResultsPerSearch,
                 durationMs: Date.now() - started,
                 total: result.matches?.length ?? result.count ?? 0,
@@ -182,7 +223,7 @@ export function registerOpenVikingArchiveTools(deps: OpenVikingArchiveToolsDeps)
                   "the original conversation may use different wording than the question. " +
                   "Try synonyms, related terms, or shorter fragments.",
               }],
-              details: { query, matchCount: 0 },
+              details: { query, matchCount: 0, searchedSessionIds },
             };
           }
 
@@ -203,7 +244,13 @@ export function registerOpenVikingArchiveTools(deps: OpenVikingArchiveToolsDeps)
 
           return {
             content: [{ type: "text", text: header + "\n\n" + blocks.join("\n\n") }],
-            details: { query, matchCount: result.matches.length },
+            details: {
+              query,
+              matchCount: result.matches.length,
+              matchedSessionId,
+              predecessorFallback: matchedSessionId !== ovSessionId,
+              searchedSessionIds,
+            },
           };
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
