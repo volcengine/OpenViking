@@ -77,6 +77,14 @@ async fn handle_tree_key(app: &mut App, key: KeyEvent) {
             app.tree.move_cursor_up();
             app.load_content_for_selected().await;
         }
+        KeyCode::Char('g') => {
+            app.tree.move_cursor_top();
+            app.load_content_for_selected().await;
+        }
+        KeyCode::Char('G') => {
+            app.tree.move_cursor_bottom();
+            app.load_content_for_selected().await;
+        }
         KeyCode::Char('.') => {
             // First try to load pending image if any
             if !app.load_pending_image().await {
@@ -154,5 +162,65 @@ fn handle_content_key(app: &mut App, key: KeyEvent) {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crossterm::event::KeyModifiers;
+
+    use super::*;
+    use crate::{client::HttpClient, tui::tree::VisibleRow};
+
+    fn app_with_tree_rows() -> App {
+        let client = HttpClient::new(
+            "http://127.0.0.1:9",
+            None,
+            None,
+            None,
+            None,
+            0.1,
+            false,
+            None,
+        );
+        let mut app = App::new(client);
+        app.tree.visible = (0..3)
+            .map(|index| VisibleRow {
+                depth: 0,
+                name: format!("file-{index}.md"),
+                uri: format!("viking://resources/file-{index}.md"),
+                is_dir: false,
+                expanded: false,
+                node_index: vec![index],
+            })
+            .collect();
+        app
+    }
+
+    #[tokio::test]
+    async fn tree_g_moves_cursor_to_first_row() {
+        let mut app = app_with_tree_rows();
+        app.tree.cursor = 2;
+
+        handle_tree_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
+        )
+        .await;
+
+        assert_eq!(app.tree.cursor, 0);
+    }
+
+    #[tokio::test]
+    async fn tree_capital_g_moves_cursor_to_last_row() {
+        let mut app = app_with_tree_rows();
+
+        handle_tree_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT),
+        )
+        .await;
+
+        assert_eq!(app.tree.cursor, 2);
     }
 }
