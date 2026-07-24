@@ -577,10 +577,24 @@ _, _ = validated, updated
 **HTTP API**：
 
 ```bash
+# 校验技能数据
 curl -X POST http://localhost:1933/api/v1/skills/validate \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{"data": {"name": "search-web", "description": "..."}}'
+
+# 使用新的技能内容替换现有技能
+curl -X PUT http://localhost:1933/api/v1/skills/search-web \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "data": {
+      "name": "search-web",
+      "description": "Search the web for current information",
+      "content": "# search-web\n\nUpdated instructions."
+    },
+    "wait": true
+  }'
 ```
 
 ### 删除技能
@@ -610,6 +624,82 @@ _ = deleted
 curl -X DELETE "http://localhost:1933/api/v1/skills/old-skill" \
   -H "X-API-Key: your-key"
 ```
+
+### 技能管理响应
+
+列出和搜索都返回 `skills` 数组与 `total`。未指定 `target_uri` 时使用 `root_uris` 表示用户私有与 Agent 共享两个检索根；指定后返回单个 `root_uri`。
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "root_uris": [
+      "viking://user/default/skills",
+      "viking://agent/skills"
+    ],
+    "skills": [
+      {
+        "type": "skill",
+        "name": "search-web",
+        "uri": "viking://user/default/skills/search-web",
+        "root_uri": "viking://user/default/skills/search-web",
+        "skill_md_uri": "viking://user/default/skills/search-web/SKILL.md",
+        "description": "Search the web for current information",
+        "tags": [],
+        "allowed_tools": [],
+        "score": 0.87,
+        "match_reason": "semantic",
+        "level": 0
+      }
+    ],
+    "total": 1
+  }
+}
+```
+
+读取单个技能时，`result` 返回上述技能元数据，并按 `level` 与 `include_*` 参数补充 `abstract`、`overview`、`content`、`files` 和 `source`。
+
+校验返回 `valid`、`strict`、规范化后的元数据、`body_lines`、`errors` 和 `warnings`。校验不通过时仍返回成功响应包，但 `valid=false`：
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "valid": false,
+    "strict": false,
+    "name": "search-web",
+    "description": "",
+    "tags": [],
+    "allowed_tools": [],
+    "body_lines": 0,
+    "errors": [
+      {
+        "rule": "description_required",
+        "message": "description is required",
+        "field": "description"
+      }
+    ],
+    "warnings": []
+  }
+}
+```
+
+更新成功时返回与 `add_skill` 相同的处理结果，并额外包含 `"action": "update"`。删除成功返回：
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "name": "old-skill",
+    "uri": "viking://user/default/skills/old-skill",
+    "root_uri": "viking://user/default/skills/old-skill",
+    "estimated_deleted_count": 4,
+    "privacy_deleted": false
+  }
+}
+```
+
+`estimated_deleted_count` 仅在底层文件系统提供删除数量估算时出现。
 
 ## 最佳实践
 

@@ -347,7 +347,22 @@ ov snapshot diff viking://resources/my_project/guide.md \
   --to 9a0b1c2d
 ```
 
-响应包含 `path`、解析后的 `from_commit` 和 `to_commit`、`change_type`（`added`、`deleted`、`modified` 或 `unchanged`）以及 `diff_text`。参与对比的单侧文件上限为 10 MiB 和 100,000 行，生成的 diff 上限为 20 MiB；超限时返回 `RESOURCE_EXHAUSTED`，不会返回被截断的 diff。
+**响应**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "path": "viking://resources/my_project/guide.md",
+    "from_commit": "3f2a1b9c...",
+    "to_commit": "9a0b1c2d...",
+    "change_type": "modified",
+    "diff_text": "--- a/guide.md\n+++ b/guide.md\n@@ -1 +1 @@\n-old line\n+new line\n"
+  }
+}
+```
+
+`change_type` 为 `added`、`deleted`、`modified` 或 `unchanged`。参与对比的单侧文件上限为 10 MiB 和 100,000 行，生成的 diff 上限为 20 MiB；超限时返回 `RESOURCE_EXHAUSTED`，不会返回被截断的 diff。
 
 ---
 

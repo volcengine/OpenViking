@@ -391,221 +391,185 @@ JSON 输出 - 错误：
 
 ## API 端点总览
 
-以下是 OpenViking 提供的所有 HTTP API 端点，按功能模块分组：
+以下目录以服务端实际挂载路由为准。每组标题会跳转到详细文档；详细页只为真实存在的 HTTP、Python SDK、TypeScript SDK、Go SDK 或 CLI 能力显示对应 Tab，不会用等价的裸 HTTP 调用冒充 SDK。
 
-### 系统端点
-
-| 方法 | 路径 | 说明 | 认证 |
-|------|------|------|------|
-| GET | `/health` | 健康检查 | 无需认证 |
-| GET | `/ready` | 就绪探针（检查 AGFS、VectorDB、APIKeyManager） | 无需认证 |
-| GET | `/metrics` | Prometheus 指标导出 | 可选 |
-| GET | `/api/v1/system/status` | 系统状态 | 需要 |
-| POST | `/api/v1/system/wait` | 等待处理完成 | 需要 |
-| POST | `/api/v1/system/consistency` | 文件系统和向量索引一致性检查 | 需要 |
-
-### 资源端点
+### [系统状态](07-system.md)
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/v1/resources/temp_upload` | 临时文件上传（用于后续资源导入） |
-| POST | `/api/v1/resources` | 添加资源（支持 URL 或 temp_file_id） |
+| GET | `/health` | 基础健康检查（无需认证） |
+| GET | `/ready` | AGFS、VectorDB 和 API Key 管理器就绪检查（无需认证） |
+| GET | `/api/v1/system/status` | 系统状态 |
+| POST | `/api/v1/system/wait` | 等待后台处理完成 |
+| POST | `/api/v1/system/consistency` | 文件系统与向量索引一致性检查 |
+| POST | `/api/v1/system/backend/sync-status` | 查询后端同步状态 |
+| POST | `/api/v1/system/backend/sync-retry` | 重试后端同步 |
+| GET | `/api/v1/system/sync/{sync_path}` | 路径形式的同步状态兼容接口 |
+| POST | `/api/v1/system/sync/{sync_path}/retry` | 路径形式的同步重试兼容接口 |
 
-### 技能端点
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/v1/skills` | 列出已安装技能 |
-| POST | `/api/v1/skills` | 添加技能 |
-| POST | `/api/v1/skills/find` | 搜索已安装技能 |
-| POST | `/api/v1/skills/validate` | 校验技能 payload |
-| GET | `/api/v1/skills/{skill_name}` | 获取技能 |
-| PUT | `/api/v1/skills/{skill_name}` | 更新技能 |
-| DELETE | `/api/v1/skills/{skill_name}` | 删除技能 |
-
-### Watch 端点
+### [资源](02-resources.md)与[文件系统](03-filesystem.md)
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/v1/watches` | 列出 watch，或按 `to_uri` 查询单个 watch |
-| GET | `/api/v1/watches/{task_id}` | 获取 watch |
-| PATCH | `/api/v1/watches` | 按 `to_uri` 更新 watch |
-| PATCH | `/api/v1/watches/{task_id}` | 按 task ID 更新 watch |
-| DELETE | `/api/v1/watches` | 按 `to_uri` 删除 watch |
-| DELETE | `/api/v1/watches/{task_id}` | 按 task ID 删除 watch |
-| POST | `/api/v1/watches/trigger` | 按 `to_uri` 触发 watch |
-| POST | `/api/v1/watches/{task_id}/trigger` | 按 task ID 触发 watch |
-
-### Pack 端点
-
-| 方法 | 路径 | 说明 | 权限 |
-|------|------|------|------|
-| POST | `/api/v1/pack/export` | 导出 .ovpack 文件 | ROOT/ADMIN/USER，受正常 URI ACL 限制 |
-| POST | `/api/v1/pack/import` | 导入 .ovpack 文件 | ROOT/ADMIN/USER，受正常 URI ACL 限制 |
-| POST | `/api/v1/pack/backup` | 备份公开 scope | ROOT/ADMIN |
-| POST | `/api/v1/pack/restore` | 恢复备份包 | ROOT/ADMIN |
-
-### 文件系统端点
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/v1/fs/ls` | 列出目录内容 |
-| GET | `/api/v1/fs/tree` | 获取目录树结构 |
+| POST | `/api/v1/resources/temp_upload` | 上传后续导入所需的临时文件 |
+| POST | `/api/v1/resources` | 从 URL 或临时文件添加资源 |
+| GET | `/api/v1/fs/ls` | 列出目录 |
+| GET | `/api/v1/fs/tree` | 获取目录树 |
 | GET | `/api/v1/fs/stat` | 获取资源状态 |
 | GET | `/api/v1/fs/attrs` | 获取逻辑扩展属性 |
-| POST | `/api/v1/fs/attrs/set_tags` | 设置检索标签 |
+| POST | `/api/v1/fs/attrs/set_tags` | 设置检索标签（兼容别名） |
 | POST | `/api/v1/fs/mkdir` | 创建目录 |
 | DELETE | `/api/v1/fs` | 删除资源 |
-| POST | `/api/v1/fs/mv` | 移动/重命名资源 |
+| POST | `/api/v1/fs/mv` | 移动或重命名资源 |
 
-### 快照端点（多版本管理）
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/v1/snapshot/commit` | 把当前工作区状态保存成新快照 |
-| GET | `/api/v1/snapshot/log` | 从最新提交开始回溯历史 |
-| GET | `/api/v1/snapshot/show` | 查看提交元数据，或读取提交中某个文件 |
-| GET | `/api/v1/snapshot/diff` | 对比某个文件在两个快照中的内容 |
-| POST | `/api/v1/snapshot/restore` | 恢复目录或整棵账号树到某个历史快照（正向提交） |
-
-### 内容端点
+### [内容](12-content.md)
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/v1/content/read` | 读取完整内容（L2） |
 | GET | `/api/v1/content/abstract` | 读取摘要（L0） |
 | GET | `/api/v1/content/overview` | 读取概览（L1） |
-| GET | `/api/v1/content/download` | 下载原始文件字节流 |
-| POST | `/api/v1/content/write` | 修改已有文件并自动刷新语义与向量 |
-| POST | `/api/v1/content/reindex` | 重新构建已有内容的语义/向量索引 |
+| GET | `/api/v1/content/download` | 下载原始文件字节 |
+| POST | `/api/v1/content/write` | 写入内容并刷新语义索引 |
+| POST | `/api/v1/content/set_tags` | 设置检索标签 |
+| POST | `/api/v1/content/reindex` | 重建语义或向量索引 |
 
-### 搜索端点
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/v1/search/find` | 语义搜索（无会话上下文） |
-| POST | `/api/v1/search/search` | 上下文感知搜索（支持会话） |
-| POST | `/api/v1/search/grep` | 内容模式搜索 |
-| POST | `/api/v1/search/glob` | 文件模式匹配 |
-
-### 关系端点（实验特性，可能在后续版本中改变）
+### [技能](04-skills.md)
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/v1/relations` | 获取资源关联 |
-| POST | `/api/v1/relations/link` | 创建资源链接 |
-| DELETE | `/api/v1/relations/link` | 删除资源链接 |
+| GET | `/api/v1/skills` | 列出技能 |
+| POST | `/api/v1/skills` | 添加技能 |
+| POST | `/api/v1/skills/find` | 搜索技能 |
+| POST | `/api/v1/skills/validate` | 校验技能数据 |
+| GET | `/api/v1/skills/{skill_name}` | 获取技能 |
+| PUT | `/api/v1/skills/{skill_name}` | 更新技能 |
+| DELETE | `/api/v1/skills/{skill_name}` | 删除技能 |
 
-### 会话端点
+### [会话](05-sessions.md)与[记忆](16-memory.md)
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | `/api/v1/sessions` | 创建会话 |
 | GET | `/api/v1/sessions` | 列出会话 |
 | GET | `/api/v1/sessions/{session_id}` | 获取会话 |
-| GET | `/api/v1/sessions/{session_id}/context` | 获取组装后的会话上下文 |
-| GET | `/api/v1/sessions/{session_id}/archives/{archive_id}` | 获取特定会话归档 |
+| GET | `/api/v1/sessions/{session_id}/tool-results` | 列出工具结果 |
+| GET | `/api/v1/sessions/{session_id}/tool-results/{tool_result_id}` | 读取工具结果 |
+| GET | `/api/v1/sessions/{session_id}/tool-results/{tool_result_id}/search` | 在工具结果内搜索 |
+| GET | `/api/v1/sessions/{session_id}/context` | 获取组装后的上下文 |
+| GET | `/api/v1/sessions/{session_id}/archives/{archive_id}` | 获取会话归档 |
 | DELETE | `/api/v1/sessions/{session_id}` | 删除会话 |
-| POST | `/api/v1/sessions/{session_id}/commit` | 提交会话（归档并提取记忆） |
-| POST | `/api/v1/sessions/{session_id}/extract` | 从会话提取记忆 |
-| POST | `/api/v1/sessions/{session_id}/messages` | 添加消息 |
-| POST | `/api/v1/sessions/{session_id}/used` | 记录实际使用的上下文 / 技能 |
+| POST | `/api/v1/sessions/{session_id}/commit` | 归档会话并提取记忆 |
+| POST | `/api/v1/sessions/{session_id}/extract` | 提取记忆 |
+| POST | `/api/v1/sessions/{session_id}/messages` | 添加单条消息 |
+| POST | `/api/v1/sessions/{session_id}/messages/batch` | 批量添加消息 |
+| POST | `/api/v1/sessions/{session_id}/used` | 记录实际使用的上下文或技能 |
+| POST | `/api/v1/search/recall` | 召回记忆并返回可直接注入的上下文 |
 
-### 隐私配置
+### [检索](06-retrieval.md)、[代码检索](21-code.md)与[关系](13-relations.md)
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| POST | `/api/v1/search/find` | 语义搜索 |
+| POST | `/api/v1/search/search` | 上下文感知搜索 |
+| POST | `/api/v1/search/grep` | 内容模式搜索 |
+| POST | `/api/v1/search/glob` | 文件模式匹配 |
+| POST | `/api/v1/code/outline` | 提取代码结构 |
+| POST | `/api/v1/code/search` | 代码搜索 |
+| POST | `/api/v1/code/expand` | 展开代码上下文 |
+| GET | `/api/v1/relations` | 获取资源关系 |
+| POST | `/api/v1/relations/link` | 创建资源链接 |
+| DELETE | `/api/v1/relations/link` | 删除资源链接 |
+| POST | `/api/v1/relations/build_graph` | 构建关系图 |
+
+### [Watch](15-watches.md)、[快照](11-snapshot.md)与 [OVPack](14-ovpack.md)
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/watches` | 列出 watch，或按 `to_uri` 查询 |
+| GET | `/api/v1/watches/{task_id}` | 按任务 ID 获取 watch |
+| PATCH | `/api/v1/watches` | 按 `to_uri` 更新 watch |
+| PATCH | `/api/v1/watches/{task_id}` | 按任务 ID 更新 watch |
+| DELETE | `/api/v1/watches` | 按 `to_uri` 删除 watch |
+| DELETE | `/api/v1/watches/{task_id}` | 按任务 ID 删除 watch |
+| POST | `/api/v1/watches/trigger` | 按 `to_uri` 触发 watch |
+| POST | `/api/v1/watches/{task_id}/trigger` | 按任务 ID 触发 watch |
+| POST | `/api/v1/snapshot/commit` | 创建快照 |
+| GET | `/api/v1/snapshot/log` | 查看快照历史 |
+| POST | `/api/v1/snapshot/restore` | 恢复历史快照 |
+| GET | `/api/v1/snapshot/show` | 查看快照或其中的文件 |
+| GET | `/api/v1/snapshot/diff` | 对比快照 |
+| GET | `/api/v1/snapshot/ignore` | 读取快照忽略规则 |
+| PUT | `/api/v1/snapshot/ignore` | 替换快照忽略规则 |
+| DELETE | `/api/v1/snapshot/ignore` | 清空快照忽略规则 |
+| POST | `/api/v1/pack/export` | 导出 `.ovpack` |
+| POST | `/api/v1/pack/import` | 导入 `.ovpack` |
+| POST | `/api/v1/pack/backup` | 备份公开作用域 |
+| POST | `/api/v1/pack/restore` | 恢复备份包 |
+
+### [后台任务](17-tasks.md)、[运行观测](18-observer.md)与 [Metrics](09-metrics.md)
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/tasks/{task_id}` | 获取后台任务 |
+| GET | `/api/v1/tasks` | 列出后台任务 |
+| GET | `/api/v1/observer/queue` | 队列状态 |
+| GET | `/api/v1/observer/vikingdb` | VikingDB 状态 |
+| GET | `/api/v1/observer/models` | 模型状态 |
+| GET | `/api/v1/observer/lock` | 锁状态 |
+| GET | `/api/v1/observer/retrieval` | 检索状态 |
+| GET | `/api/v1/observer/filesystem` | 文件系统状态 |
+| GET | `/api/v1/observer/system` | 聚合运行状态 |
+| GET | `/metrics` | Prometheus 指标 |
+
+### [管理员](08-admin.md)与[隐私配置](10-privacy.md)
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/admin/accounts` | 创建账号及首个管理员 |
+| GET | `/api/v1/admin/accounts` | 列出账号 |
+| POST | `/api/v1/admin/migrate` | 迁移旧版身份数据 |
+| DELETE | `/api/v1/admin/accounts/{account_id}` | 删除账号 |
+| POST | `/api/v1/admin/accounts/{account_id}/users` | 注册用户 |
+| GET | `/api/v1/admin/accounts/{account_id}/users` | 列出用户 |
+| DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | 移除用户 |
+| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | 修改用户角色 |
+| POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | 重新生成用户 Key |
 | GET | `/api/v1/privacy-configs` | 列出隐私配置分类 |
-| GET | `/api/v1/privacy-configs/{category}` | 列出分类下目标 |
-| GET | `/api/v1/privacy-configs/{category}/{target_key}` | 获取当前生效配置（meta + current） |
-| POST | `/api/v1/privacy-configs/{category}/{target_key}` | 写入新版本并激活 |
-| GET | `/api/v1/privacy-configs/{category}/{target_key}/versions` | 列出版本号 |
-| GET | `/api/v1/privacy-configs/{category}/{target_key}/versions/{version}` | 获取指定版本详情 |
+| GET | `/api/v1/privacy-configs/{category}` | 列出分类目标 |
+| GET | `/api/v1/privacy-configs/{category}/{target_key}` | 获取生效配置 |
+| GET | `/api/v1/privacy-configs/{category}/{target_key}/versions` | 列出配置版本 |
+| GET | `/api/v1/privacy-configs/{category}/{target_key}/versions/{version}` | 获取指定版本 |
+| POST | `/api/v1/privacy-configs/{category}/{target_key}` | 写入并激活新版本 |
 | POST | `/api/v1/privacy-configs/{category}/{target_key}/activate` | 激活指定版本 |
 
-### 任务端点
+### [WebDAV](20-webdav.md) 与 [VikingBot API](24-vikingbot.md)
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/v1/tasks/{task_id}` | 获取单个后台任务状态 |
-| GET | `/api/v1/tasks` | 列出后台任务（支持按类型、状态、资源过滤） |
-
-### 观测端点
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/v1/observer/queue` | 队列系统状态 |
-| GET | `/api/v1/observer/vikingdb` | VikingDB 状态 |
-| GET | `/api/v1/observer/models` | 模型状态（VLM / embedding / rerank） |
-| GET | `/api/v1/observer/lock` | 锁子系统状态 |
-| GET | `/api/v1/observer/retrieval` | 检索子系统状态 |
-| GET | `/api/v1/observer/system` | 系统整体状态 |
-
-### 调试端点
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/v1/debug/health` | 快速健康检查 |
-| GET | `/api/v1/debug/vector/scroll` | 分页查看向量记录 |
-| GET | `/api/v1/debug/vector/count` | 统计向量记录数量 |
-
-### 统计端点
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/v1/stats/memories` | 获取记忆健康统计（支持按类别过滤） |
-| GET | `/api/v1/stats/sessions/{session_id}` | 获取会话提取统计 |
-
-### 管理员端点（多租户）
-
-| 方法 | 路径 | 说明 | 权限 |
-|------|------|------|------|
-| POST | `/api/v1/admin/accounts` | 创建工作区 + 首个 admin | ROOT |
-| GET | `/api/v1/admin/accounts` | 列出所有工作区 | ROOT |
-| DELETE | `/api/v1/admin/accounts/{account_id}` | 删除工作区（级联清理数据） | ROOT |
-| POST | `/api/v1/admin/accounts/{account_id}/users` | 注册用户 | ROOT/ADMIN |
-| GET | `/api/v1/admin/accounts/{account_id}/users` | 列出用户 | ROOT/ADMIN |
-| DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | 移除用户 | ROOT/ADMIN |
-| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | 修改用户角色 | ROOT |
-| POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | 重新生成 User Key | ROOT/ADMIN |
-
-### VikingBot 交互端点（可选）
-
-VikingBot API 需要服务器启动时指定 `--with-bot` 选项：
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/health` | Bot 健康检查（与系统 /health 复用） |
-| POST | `/chat` | 发送消息给 Bot |
-| POST | `/chat/stream` | Bot 流式响应 |
-
-### WebDAV 端点
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| OPTIONS | `/webdav/resources`, `/webdav/resources/{path}` | WebDAV 选项查询 |
-| PROPFIND | `/webdav/resources`, `/webdav/resources/{path}` | WebDAV 属性查询 |
-| GET/HEAD | `/webdav/resources/{path}` | 读取文件 |
-| PUT | `/webdav/resources/{path}` | 上传/创建文件（仅 UTF-8 文本） |
-| DELETE | `/webdav/resources/{path}` | 删除文件/目录 |
-| MKCOL | `/webdav/resources/{path}` | 创建目录 |
-| MOVE | `/webdav/resources/{path}` | 移动/重命名资源 |
+| OPTIONS | `/webdav/resources`、`/webdav/resources/{resource_path}` | 查询 WebDAV 能力 |
+| PROPFIND | `/webdav/resources`、`/webdav/resources/{resource_path}` | 查询资源属性 |
+| GET / HEAD | `/webdav/resources`、`/webdav/resources/{resource_path}` | 读取文件或目录 |
+| PUT | `/webdav/resources`、`/webdav/resources/{resource_path}` | 写入 UTF-8 文本文件 |
+| DELETE | `/webdav/resources`、`/webdav/resources/{resource_path}` | 删除文件或目录 |
+| MKCOL | `/webdav/resources`、`/webdav/resources/{resource_path}` | 创建目录 |
+| MOVE | `/webdav/resources`、`/webdav/resources/{resource_path}` | 移动或重命名资源 |
+| GET | `/bot/v1/health` | VikingBot 健康检查 |
+| POST | `/bot/v1/chat` | VikingBot 非流式对话 |
+| POST | `/bot/v1/chat/stream` | VikingBot 流式对话 |
+| POST | `/bot/v1/feedback` | 提交 VikingBot 回答反馈 |
 
 ---
 
 ## 文档阅读计划
 
-后续 API 文档按功能模块组织如下：
+左侧导航按职责而不是按历史文件体积组织：
 
-| 文档 | 内容 |
-|------|------|
-| [资源管理](02-resources.md) | 资源和技能的添加、导入、导出 |
-| [文件系统](03-filesystem.md) | 目录操作、内容读写 |
-| [多版本管理](11-snapshot.md) | 快照提交、历史回溯、单文件差异、版本恢复 |
-| [技能](04-skills.md) | 技能管理 API |
-| [会话管理](05-sessions.md) | 会话创建、消息管理、记忆提取 |
-| [检索](06-retrieval.md) | 搜索、关联、上下文获取 |
-| [系统](07-system.md) | 系统状态、监控、调试 API |
-| [隐私配置](10-privacy.md) | 隐私配置版本管理与切换 |
-| [指标与 Metrics](09-metrics.md) | Prometheus 指标导出与抓取说明 |
-| [管理员](08-admin.md) | 多租户账号和用户管理 |
+| 分组 | 适合查找的内容 |
+|------|----------------|
+| 核心数据 | 资源、内容、文件系统、技能、会话、记忆 |
+| 检索与关系 | 语义检索、代码检索、资源关系 |
+| 数据生命周期 | Watch、快照、OVPack |
+| 运维与观测 | 系统、任务、Observer、Metrics |
+| 身份与治理 | 管理员、隐私配置 |
+| 协议与扩展 | WebDAV、VikingBot API |
