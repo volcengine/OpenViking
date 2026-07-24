@@ -179,7 +179,7 @@ class StreamingBatcher(Generic[T, R]):
             try:
                 await asyncio.sleep(self.config.timer_check_interval_seconds)
                 if await self._should_flush_by_time_or_count():
-                    await self.flush("time")
+                    await asyncio.shield(self.flush("time"))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
