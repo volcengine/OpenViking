@@ -162,6 +162,10 @@ logs/
 ov.conf
 ovcli.conf
 result/
+!benchmark/openmontage/data/
+!benchmark/openmontage/data/fixture.json
+!benchmark/openmontage/result/
+!benchmark/openmontage/result/.gitkeep
 
 # Jupyter Notebook
 .ipynb_checkpoints
