@@ -187,3 +187,50 @@ async def test_process_skill_preserves_hyphenated_allowed_tools_in_meta(monkeypa
     embedding_msg = vikingdb.enqueue_embedding_msg.await_args.args[0]
     assert embedding_msg.context_data["meta"]["allowed_tools"] == ["Read"]
     assert embedding_msg.context_data["meta"]["tags"] == ["dict"]
+
+
+@pytest.mark.asyncio
+async def test_process_skill_indexes_both_l0_abstract_and_l1_skill_content(monkeypatch):
+    from openviking.core.context import ContextLevel
+
+    config = MagicMock()
+    config.vlm.get_completion_async = AsyncMock(return_value="VLM-generated overview")
+    monkeypatch.setattr(
+        "openviking.utils.skill_processor.get_openviking_config",
+        lambda: config,
+    )
+
+    vikingdb = MagicMock()
+    vikingdb.enqueue_embedding_msg = AsyncMock(return_value=True)
+    viking_fs = MagicMock()
+    viking_fs.write_context = AsyncMock()
+
+    processor = SkillProcessor(vikingdb=vikingdb)
+    await processor.process_skill(
+        data={
+            "name": "dual-level-skill",
+            "description": "Skill with L0+L1 indexing",
+            "content": "# Dual Level Skill\n\nBody content for L1.",
+        },
+        viking_fs=viking_fs,
+        ctx=RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT),
+        allow_local_path_resolution=False,
+    )
+
+    assert vikingdb.enqueue_embedding_msg.await_count == 2
+    calls = vikingdb.enqueue_embedding_msg.await_args_list
+    levels = [call.args[0].context_data["level"] for call in calls]
+    contents = [call.args[0].context_data["content"] for call in calls]
+
+    assert int(ContextLevel.ABSTRACT.value) in levels
+    assert int(ContextLevel.OVERVIEW.value) in levels
+
+    l0_idx = levels.index(int(ContextLevel.ABSTRACT.value))
+    l1_idx = levels.index(int(ContextLevel.OVERVIEW.value))
+    # L0 content is the frontmatter abstract (name/description).
+    assert "dual-level-skill" in contents[l0_idx]
+    # L1 content is the SKILL.md body.
+    assert "Body content for L1." in contents[l1_idx]
+    assert "VLM-generated overview" not in contents[l1_idx]
+
+
