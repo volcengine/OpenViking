@@ -1958,7 +1958,7 @@ describe("Tool: ov_recall_trace", () => {
         return okResponse({
           matches: [{
             line: 12,
-            uri: "viking://session/test-session/history/archive_001#L12",
+            uri: "viking://session/test-session/history/archive_001/messages.jsonl#L12",
             content: "discussion about recall traces",
           }],
           count: 1,
@@ -1982,7 +1982,10 @@ describe("Tool: ov_recall_trace", () => {
     const entry = (result.details.entries as any[])[0];
     expect(entry.operationType).toBe("archive_grep");
     expect(entry.selected).toEqual(expect.arrayContaining([
-      expect.objectContaining({ uri: "viking://session/test-session/history/archive_001#L12", displayed: true }),
+      expect.objectContaining({
+        uri: "viking://session/test-session/history/archive_001/messages.jsonl#L12",
+        displayed: true,
+      }),
     ]));
   });
 });

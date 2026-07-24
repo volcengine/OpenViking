@@ -22,17 +22,20 @@ from openviking.storage.errors import EmbeddingRebuildRequiredError
 from openviking.storage.expr import Eq
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.vectordb import engine as vectordb_engine
+from openviking.storage.vectordb.collection.result import UpsertDataResult
+from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
 from openviking.storage.vectordb.collection.volcengine_api_key_collection import (
     VolcengineApiKeyCollection,
 )
-from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
 from openviking.storage.vectordb.collection.volcengine_collection import VolcengineCollection
-from openviking.storage.vectordb.collection.result import UpsertDataResult
 from openviking.storage.vectordb_adapters.base import (
     VIKINGDB_TEXT_FIELD_BYTE_LIMIT,
     _truncate_text_field,
 )
 from openviking.storage.vectordb_adapters.local_adapter import LocalCollectionAdapter
+from openviking.storage.vectordb_adapters.volcengine_adapter import (
+    VolcengineCollectionAdapter,
+)
 from openviking.storage.viking_vector_index_backend import (
     VIKINGDB_CONTENT_MAX_SIZE,
     VikingVectorIndexBackend,
@@ -174,6 +177,49 @@ async def test_init_context_collection_writes_embedding_metadata(monkeypatch):
     assert "[openviking.embedding]" in description
     assert '"provider": "local"' in description
     assert '"model": "bge-small-zh-v1.5-f16"' in description
+    fields = {field["FieldName"]: field for field in captured["schema"]["Fields"]}
+    assert fields["embedding_text"]["FieldType"] == "string"
+
+
+@pytest.mark.asyncio
+async def test_init_context_collection_warns_when_existing_schema_lacks_embedding_text(
+    monkeypatch,
+):
+    captured = {}
+    warnings = []
+
+    class _FakeStorage:
+        async def create_collection(self, name, schema):
+            del name
+            captured["schema"] = schema
+            return False
+
+        async def get_collection_meta(self):
+            schema = dict(captured["schema"])
+            schema["Fields"] = [
+                field
+                for field in schema["Fields"]
+                if field["FieldName"] != "embedding_text"
+            ]
+            return schema
+
+    config = _DummyConfig(_DummyEmbedder())
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "openviking.storage.collection_schemas.logger.warning",
+        lambda message, *args: warnings.append(message % args if args else message),
+    )
+
+    created = await init_context_collection(_FakeStorage())
+
+    assert created is False
+    assert any("embedding_text" in warning for warning in warnings)
+    assert any("Recreate" in warning for warning in warnings)
+    assert any("re-ingest" in warning for warning in warnings)
+    assert all("reindex" not in warning.lower() for warning in warnings)
 
 
 @pytest.mark.asyncio
@@ -898,6 +944,8 @@ async def test_init_context_collection_excludes_parent_uri_for_local_backend(mon
 async def test_init_context_collection_skips_bootstrap_for_api_key_auth_mode_on_volcengine(
     monkeypatch,
 ):
+    warnings = []
+
     class _Storage:
         async def create_collection(self, name, schema):  # pragma: no cover
             del name, schema
@@ -921,10 +969,40 @@ async def test_init_context_collection_skips_bootstrap_for_api_key_auth_mode_on_
             volcengine_data_api_key="vk-test-token",
         ),
     )
+    monkeypatch.setattr(
+        "openviking.storage.collection_schemas.logger.warning",
+        lambda message, *args: warnings.append(message % args if args else message),
+    )
 
     created = await init_context_collection(_Storage())
 
     assert created is False
+    assert any("embedding_text" in warning for warning in warnings)
+    assert any("pre-created" in warning for warning in warnings)
+
+
+@pytest.mark.asyncio
+async def test_tenant_searches_request_embedding_text_from_storage():
+    captured_output_fields = []
+    backend = object.__new__(VikingVectorIndexBackend)
+    backend._build_scope_filter = lambda **kwargs: None
+
+    async def _search(**kwargs):
+        captured_output_fields.append(kwargs["output_fields"])
+        return []
+
+    backend.search = _search
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
+
+    await backend.search_in_tenant(ctx=ctx, query_vector=[0.1])
+    await backend.search_children_in_tenant(
+        ctx=ctx,
+        parent_uri="viking://user/user1/memories",
+        query_vector=[0.1],
+    )
+
+    assert len(captured_output_fields) == 2
+    assert all("embedding_text" in fields for fields in captured_output_fields)
 
 
 def test_single_account_backend_filters_parent_uri_against_current_schema():
@@ -1143,6 +1221,18 @@ def test_vikingdb_text_field_byte_limit_is_one_mb_and_utf8_safe():
     assert VIKINGDB_TEXT_FIELD_BYTE_LIMIT == 1024 * 1024
     assert len(truncated.encode("utf-8")) == VIKINGDB_TEXT_FIELD_BYTE_LIMIT
     assert truncated == "a" * VIKINGDB_TEXT_FIELD_BYTE_LIMIT
+
+
+def test_vikingdb_adapter_truncates_embedding_text_at_utf8_boundary():
+    adapter = object.__new__(VolcengineCollectionAdapter)
+    text = "a" * (VIKINGDB_TEXT_FIELD_BYTE_LIMIT - 1) + "😀"
+
+    normalized = adapter._normalize_record_for_write({"embedding_text": text})
+
+    assert len(normalized["embedding_text"].encode("utf-8")) <= (
+        VIKINGDB_TEXT_FIELD_BYTE_LIMIT
+    )
+    assert normalized["embedding_text"] == "a" * (VIKINGDB_TEXT_FIELD_BYTE_LIMIT - 1)
 
 
 @pytest.mark.asyncio

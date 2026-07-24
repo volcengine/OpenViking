@@ -184,6 +184,8 @@ class Context:
             "owner_user_id": self.owner_user_id,
             "owner_space": self.owner_space,
         }
+        if isinstance(self.meta, dict) and self.meta.get("embedding_text"):
+            data["embedding_text"] = self.meta["embedding_text"]
         if self.level is not None:
             data["level"] = int(self.level)
 
@@ -211,6 +213,12 @@ class Context:
         """Create a context object from dictionary."""
         user_data = data.get("user")
         user_obj = UserIdentifier.from_dict(user_data) if isinstance(user_data, dict) else user_data
+        meta = data.get("meta", {})
+        if not isinstance(meta, dict):
+            meta = {}
+        if data.get("embedding_text") and not meta.get("embedding_text"):
+            meta = dict(meta)
+            meta["embedding_text"] = data["embedding_text"]
         obj = cls(
             uri=data["uri"],
             parent_uri=data.get("parent_uri") or cls._derive_parent_uri(data["uri"]),
@@ -231,7 +239,7 @@ class Context:
             ),
             active_count=data.get("active_count", 0),
             related_uri=data.get("related_uri", []),
-            meta=data.get("meta", {}),
+            meta=meta,
             level=(
                 data.get("level")
                 if data.get("level") is not None

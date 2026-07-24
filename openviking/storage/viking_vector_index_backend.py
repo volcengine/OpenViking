@@ -26,6 +26,7 @@ RETRIEVAL_OUTPUT_FIELDS = [
     "level",
     "context_type",
     "abstract",
+    "embedding_text",
     "active_count",
     "updated_at",
     "search_tags",

@@ -93,7 +93,11 @@ class CollectionAdapter(ABC):
     _URI_FIELD_NAMES = {"uri", "parent_uri"}
 
     # Text fields subject to byte-limit truncation before upsert.
-    _TRUNCATABLE_TEXT_FIELDS: tuple[str, ...] = ("content", "abstract")
+    _TRUNCATABLE_TEXT_FIELDS: tuple[str, ...] = (
+        "content",
+        "abstract",
+        "embedding_text",
+    )
 
     # Per-backend byte limit for text fields.  ``None`` means no truncation.
     # Subclasses backed by VikingDB should set this to ``VIKINGDB_TEXT_FIELD_BYTE_LIMIT``.
