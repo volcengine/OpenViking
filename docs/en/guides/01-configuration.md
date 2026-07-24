@@ -246,6 +246,28 @@ When the embedding provider experiences consecutive transient failures (e.g. `42
 | `circuit_breaker.reset_timeout` | float | Base reset timeout in seconds (default: `60`) |
 | `circuit_breaker.max_reset_timeout` | float | Maximum reset timeout in seconds when backing off (default: `600`) |
 
+#### Embedding Auto Rebuild
+
+When the embedding dimension in the configuration changes (e.g., switching from a 1024-dimension model to a 1536-dimension model), the existing vector collection becomes incompatible. OpenViking can automatically rebuild the collection by dropping and recreating it with the new dimension.
+
+```json
+{
+  "embedding": {
+    "auto_rebuild": true
+  }
+}
+```
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `auto_rebuild` | bool | When `true`, automatically drop and recreate the collection when embedding dimension mismatch is detected. When `false`, raise `EmbeddingRebuildRequiredError` and require manual intervention. | `false` |
+
+> **Note:** When `auto_rebuild` is enabled, the existing **vector index** will be dropped and recreated with the new dimension. The original source files (stored in RAGFS) are **not affected** — they remain intact. After rebuild, OpenViking will re-embed the files to regenerate vectors with the new model/dimension.
+
+If `auto_rebuild` is `false` (default) and a dimension mismatch is detected, OpenViking raises `EmbeddingRebuildRequiredError` with instructions to either:
+- Set `embedding.auto_rebuild=true` to automatically rebuild the vector index
+- Manually drop and recreate the vector collection
+
 **Available Models**
 
 | Model | Dimension | Input Type | Notes |

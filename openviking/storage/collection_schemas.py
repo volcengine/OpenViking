@@ -254,7 +254,51 @@ def _decode_collection_description(
     return base.strip(), payload if isinstance(payload, dict) else None
 
 
-async def init_context_collection(storage) -> bool:
+async def _auto_rebuild_collection(
+    storage,
+    config: "OpenVikingConfig",
+    existing_dim: int,
+    current_dim: int,
+    allow_recurse: bool = True,
+) -> bool:
+    """Drop and recreate the collection when embedding dimensions mismatch.
+
+    Raises ``EmbeddingRebuildRequiredError`` when auto-rebuild is disabled,
+    the backend cannot drop collections, the drop fails, or a recursive
+    rebuild is detected.
+    """
+    auto_rebuild = bool(getattr(config.embedding, "auto_rebuild", False))
+    if not auto_rebuild:
+        raise EmbeddingRebuildRequiredError(
+            f"Existing collection embedding dimension ({existing_dim}) does not match "
+            f"current configuration ({current_dim}). Vectors are incompatible; "
+            f"rebuild is required. Set embedding.auto_rebuild=true in ov.conf to "
+            f"automatically rebuild."
+        )
+    if not hasattr(storage, "drop_collection"):
+        raise EmbeddingRebuildRequiredError(
+            "Storage backend does not support drop_collection. Manual rebuild required."
+        )
+    if not allow_recurse:
+        raise EmbeddingRebuildRequiredError(
+            "Auto-rebuild recursion detected. Manual rebuild required."
+        )
+    logger.warning(
+        "Dimension mismatch detected (existing=%d, config=%d). "
+        "Auto-rebuilding collection as embedding.auto_rebuild=true...",
+        existing_dim,
+        current_dim,
+    )
+    dropped = await storage.drop_collection()
+    if not dropped:
+        raise EmbeddingRebuildRequiredError(
+            "Failed to drop existing collection for auto-rebuild. "
+            "Manual rebuild required."
+        )
+    return await init_context_collection(storage, _allow_recurse=False)
+
+
+async def init_context_collection(storage, _allow_recurse: bool = True) -> bool:
     """
     Initialize the context collection with proper schema.
 
@@ -334,6 +378,15 @@ async def init_context_collection(storage) -> bool:
             return False
 
     if existing_embedding_meta is None:
+        # Old collection without embedding metadata - check actual index dimension
+        actual_dimension = existing_meta.get("Dimension")
+        current_dimension = embedding_meta.get("dimension")
+        
+        if actual_dimension is not None and current_dimension is not None and actual_dimension != current_dimension:
+            return await _auto_rebuild_collection(
+                storage, config, actual_dimension, current_dimension, _allow_recurse,
+            )
+        
         logger.warning(
             "Existing collection has %d vector(s) but no embedding metadata "
             "(created by an older version). Backfilling with current config and continuing.",
@@ -393,16 +446,15 @@ async def init_context_collection(storage) -> bool:
         return False
 
     if dimension_changed:
-        raise EmbeddingRebuildRequiredError(
-            "Existing collection embedding dimension "
-            f"({existing_dimension}) does not match current configuration "
-            f"({current_dimension}). Vectors are incompatible; rebuild is required."
+        return await _auto_rebuild_collection(
+            storage, config, existing_dimension, current_dimension, _allow_recurse,
         )
 
     raise EmbeddingRebuildRequiredError(
         "Existing collection embedding metadata does not match current configuration. "
-        "Rebuild is required before using the current embedding model, or set "
-        "embedding.allow_metadata_override=true to keep existing vectors when "
+        "Rebuild is required before using the current embedding model. "
+        "Set embedding.auto_rebuild=true in ov.conf to automatically rebuild, "
+        "or set embedding.allow_metadata_override=true to keep existing vectors when "
         "only provider/model changed (dimension must remain the same)."
     )
 

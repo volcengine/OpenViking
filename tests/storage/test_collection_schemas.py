@@ -2521,3 +2521,150 @@ async def test_single_account_backend_query_runs_adapter_in_threadpool(monkeypat
     assert isinstance(query_filter, Eq)
     assert query_filter.field == "account_id"
     assert query_filter.value == "acc1"
+
+
+@pytest.mark.asyncio
+async def test_auto_rebuild_drops_and_recreates_on_dimension_mismatch(monkeypatch):
+    create_calls = []
+    drop_calls = []
+
+    class _FakeStorage:
+        async def create_collection(self, name, schema):
+            create_calls.append((name, schema))
+            if len(create_calls) == 1:
+                return False
+            return True
+
+        async def get_collection_meta(self):
+            return {
+                "Description": (
+                    "Unified context collection\n\n[openviking.embedding]\n"
+                    '{"dimension": 1024, "model": "text-embedding-3-small", '
+                    '"model_identity": "text-embedding-3-small", "provider": "openai"}'
+                )
+            }
+
+        async def count(self):
+            return 3
+
+        async def drop_collection(self):
+            drop_calls.append(True)
+            return True
+
+        async def update_collection_description(self, description):
+            del description
+            raise AssertionError("should not update mismatched non-empty collection")
+
+    config = _DummyConfig(_DummyEmbedder())
+    config.embedding.auto_rebuild = True
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+
+    created = await init_context_collection(_FakeStorage())
+
+    assert created is True
+    assert len(drop_calls) == 1
+    assert len(create_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_auto_rebuild_disabled_raises_error_on_dimension_mismatch(monkeypatch):
+    class _FakeStorage:
+        async def create_collection(self, name, schema):
+            del name, schema
+            return False
+
+        async def get_collection_meta(self):
+            return {
+                "Description": (
+                    "Unified context collection\n\n[openviking.embedding]\n"
+                    '{"dimension": 1024, "model": "text-embedding-3-small", '
+                    '"model_identity": "text-embedding-3-small", "provider": "openai"}'
+                )
+            }
+
+        async def count(self):
+            return 3
+
+        async def drop_collection(self):
+            raise AssertionError("drop_collection should not be called")
+
+    config = _DummyConfig(_DummyEmbedder())
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+
+    with pytest.raises(EmbeddingRebuildRequiredError, match="auto_rebuild=true"):
+        await init_context_collection(_FakeStorage())
+
+
+@pytest.mark.asyncio
+async def test_auto_rebuild_raises_error_when_drop_fails(monkeypatch):
+    class _FakeStorage:
+        async def create_collection(self, name, schema):
+            del name, schema
+            return False
+
+        async def get_collection_meta(self):
+            return {
+                "Description": (
+                    "Unified context collection\n\n[openviking.embedding]\n"
+                    '{"dimension": 1024, "model": "text-embedding-3-small", '
+                    '"model_identity": "text-embedding-3-small", "provider": "openai"}'
+                )
+            }
+
+        async def count(self):
+            return 3
+
+        async def drop_collection(self):
+            return False
+
+    config = _DummyConfig(_DummyEmbedder())
+    config.embedding.auto_rebuild = True
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+
+    with pytest.raises(EmbeddingRebuildRequiredError, match="Failed to drop"):
+        await init_context_collection(_FakeStorage())
+
+
+@pytest.mark.asyncio
+async def test_auto_rebuild_old_collection_without_embedding_metadata(monkeypatch):
+    create_calls = []
+    drop_calls = []
+
+    class _FakeStorage:
+        async def create_collection(self, name, schema):
+            create_calls.append((name, schema))
+            if len(create_calls) == 1:
+                return False
+            return True
+
+        async def get_collection_meta(self):
+            return {"Description": "Unified context collection", "Dimension": 1024}
+
+        async def count(self):
+            return 0
+
+        async def drop_collection(self):
+            drop_calls.append(True)
+            return True
+
+    config = _DummyConfig(_DummyEmbedder())
+    config.embedding.auto_rebuild = True
+    config.embedding.dimension = 2
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+
+    created = await init_context_collection(_FakeStorage())
+
+    assert created is True
+    assert len(drop_calls) == 1

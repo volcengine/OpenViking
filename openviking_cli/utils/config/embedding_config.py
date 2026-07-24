@@ -651,6 +651,19 @@ class EmbeddingConfig(BaseModel):
             "actually changed; only enable when you understand the implication."
         ),
     )
+    auto_rebuild: bool = Field(
+        default=False,
+        description=(
+            "When true, automatically rebuild the vector index when a dimension "
+            "mismatch is detected between the existing collection and current config. "
+            "This will drop the existing collection and recreate it with the new "
+            "dimension, triggering a full reindex of all documents. "
+            "WARNING: This will delete all existing vectors and require re-embedding "
+            "all documents, which may consume significant API credits and time. "
+            "When false (default), startup will fail with an error message instructing "
+            "the user to manually rebuild or enable this option."
+        ),
+    )
 
     model_config = {"extra": "forbid"}
 
