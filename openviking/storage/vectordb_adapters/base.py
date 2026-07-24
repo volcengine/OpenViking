@@ -106,6 +106,11 @@ class CollectionAdapter(ABC):
     # See ``viking_fs._resolve_grep_engine`` which must stay consistent with this flag.
     USE_CONTENT_FIELD: bool = False
 
+    # Whether this adapter persists records through the embedded local store.
+    # Local-derived modes such as cuVS inherit this capability even though their
+    # search engine has a distinct mode name.
+    LOCAL_STORAGE_BACKED: bool = False
+
     def __init__(self, collection_name: str, index_name: str = DEFAULT_INDEX_NAME):
         self._collection_name = collection_name
         self._index_name = index_name

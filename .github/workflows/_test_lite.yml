@@ -86,7 +86,8 @@ jobs:
         uv run pytest -q -o addopts='' \
           tests/vectordb/test_cuvs_config.py \
           tests/vectordb/test_cuvs_index.py \
-          tests/vectordb/test_cuvs_collection.py
+          tests/vectordb/test_cuvs_collection.py \
+          tests/vectordb/test_legacy_corrupt_uri_delete.py
 
     - name: Run Lite Integration Test (Quick Start)
       shell: bash
