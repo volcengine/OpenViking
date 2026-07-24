@@ -1343,6 +1343,22 @@ class VikingVectorIndexBackend:
             backend = self._get_backend_for_context(ctx)
             await backend.delete_by_filter(And(conds))
 
+    async def delete_uri_scope(self, ctx: RequestContext, uri: str, depth: int = -1) -> int:
+        canonical_uri = canonicalize_uri(uri, ctx)
+        conds: List[FilterExpr] = [
+            Eq("account_id", ctx.account_id),
+            Or(
+                [
+                    Eq("uri", canonical_uri),
+                    In("uri", [f"{canonical_uri}/"]),
+                    PathScope("uri", canonical_uri, depth=depth),
+                ]
+            ),
+        ]
+
+        backend = self._get_backend_for_context(ctx)
+        return await backend.delete_by_filter(And(conds))
+
     async def update_uri_mapping(
         self,
         ctx: RequestContext,
