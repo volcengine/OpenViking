@@ -558,6 +558,74 @@ class TestImageLinkSplit:
         assert f"![p]({root}/guides/page/photo.png)" in page, page
         assert f'<img src="{root}/guides/page/photo.png" width="80%">' in page, page
 
+    async def test_image_titles_preserved_through_ingest_and_rewrite(self, tmp_path: Path):
+        from openviking.parse.image_rewrite import rewrite_image_uris
+
+        kb = tmp_path / "kb"
+        (kb / "assets").mkdir(parents=True)
+        _write_valid_png(kb / "assets" / "system.png")
+        _write_valid_png(kb / "assets" / "diagram (draft).png")
+        _write_valid_png(kb / "assets" / "query.png")
+        _write_valid_png(kb / "assets" / "fragment.png")
+        (kb / "index.md").write_text(
+            '![plain](./assets/system.png "System architecture")\n\n'
+            "![paren](./assets/diagram (draft).png 'Draft diagram')\n\n"
+            '![query](./assets/query.png?rev=1 "Query title")\n\n'
+            "![fragment](./assets/fragment.png#preview 'Fragment title')",
+            encoding="utf-8",
+        )
+
+        fake = FakeVikingFS()
+        with patch.object(BaseParser, "_get_viking_fs", return_value=fake):
+            result = await DirectoryParser().parse(str(kb))
+
+            temp = result.temp_dir_path
+            entries = await fake.ls(temp)
+            doc_dirs = [entry for entry in entries if entry["isDir"]]
+            root = f"viking://resources/{doc_dirs[0]['name']}"
+            src_prefix = doc_dirs[0]["uri"].rstrip("/") + "/"
+            for uri in list(fake.files):
+                if uri.startswith(src_prefix):
+                    fake.files[f"{root}/{uri[len(src_prefix) :]}"] = fake.files[uri]
+
+            import openviking.parse.image_rewrite as image_rewrite_mod
+
+            with patch.object(image_rewrite_mod, "get_viking_fs", return_value=fake):
+                stats = await rewrite_image_uris(root, lock_handle=None)
+
+        assert stats["references_rewritten"] == 4, stats
+        page = _decode(fake.files[f"{root}/index/index.md"])
+        assert f'![plain]({root}/index/system.png "System architecture")' in page, page
+        assert f"![paren]({root}/index/diagram (draft).png 'Draft diagram')" in page, page
+        assert f'![query]({root}/index/query.png "Query title")' in page, page
+        assert f"![fragment]({root}/index/fragment.png 'Fragment title')" in page, page
+
+    async def test_titled_image_examples_in_code_are_not_mapped(self, tmp_path: Path):
+        kb = tmp_path / "kb"
+        (kb / "assets").mkdir(parents=True)
+        _write_valid_png(kb / "assets" / "secret.png")
+        _write_valid_png(kb / "assets" / "se`cret`.png")
+        (kb / "index.md").write_text(
+            '`![inline](./assets/secret.png "Inline example")`\n\n'
+            "```markdown\n![fenced](./assets/secret.png 'Fenced example')\n```\n\n"
+            '![crossing](./assets/se`cret`.png "Crossing example")',
+            encoding="utf-8",
+        )
+
+        fake = FakeVikingFS()
+        with patch.object(BaseParser, "_get_viking_fs", return_value=fake):
+            await DirectoryParser().parse(str(kb))
+
+        assert any(uri.endswith("/secret.png") for uri in fake.files), fake.files
+        assert any(uri.endswith("/se`cret`.png") for uri in fake.files), fake.files
+        assert not any(uri.endswith(".image_mappings.json") for uri in fake.files), fake.files
+        pages = [_decode(content) for uri, content in fake.files.items() if uri.endswith(".md")]
+        assert pages == [
+            '`![inline](./assets/secret.png "Inline example")`\n\n'
+            "```markdown\n![fenced](./assets/secret.png 'Fenced example')\n```\n\n"
+            '![crossing](./assets/se`cret`.png "Crossing example")'
+        ]
+
     async def test_invalid_image_depth_adjusted(self, tmp_path: Path):
         # In base_dir but not a decodable image -> ingest skips it -> depth-adjust.
         kb = tmp_path / "kb"
@@ -586,6 +654,161 @@ class TestRewriteImageUris:
         import openviking.parse.image_rewrite as image_rewrite_mod
 
         return patch.object(image_rewrite_mod, "get_viking_fs", return_value=fake)
+
+    def test_terminal_parenthesized_filename_mapping_wins(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = "![p](photo.png (copy))"
+        rewritten, count = _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"photo.png (copy)"},
+            {"photo.png (copy)": "photo.png (copy)"},
+        )
+
+        assert count == 1
+        assert rewritten == "![p](viking://resources/doc/photo.png (copy))"
+
+    def test_quoted_title_may_contain_right_parenthesis(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = '![x](image.png "right)paren")'
+        rewritten, count = _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"image.png"},
+            {"image.png": "image.png"},
+        )
+
+        assert count == 1
+        assert rewritten == '![x](viking://resources/doc/image.png "right)paren")'
+
+    def test_escaped_and_nested_alt_brackets_are_rewritten(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = r"![a \] b [nested]](image.png)"
+        rewritten, count = _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"image.png"},
+            {"image.png": "image.png"},
+        )
+
+        assert count == 1
+        assert rewritten == r"![a \] b [nested]](viking://resources/doc/image.png)"
+
+    def test_path_sanitizer_drops_ascii_separators_and_brackets(self):
+        parser = MarkdownParser()
+
+        assert parser._sanitize_for_path(r"abc\\def[ghi]") == "abcdefghi"
+
+    def test_malformed_quoted_target_is_left_unchanged(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = "![x](" * 20_000
+
+        assert _rewrite_content(content, "viking://resources/doc", set(), {}) == (content, 0)
+
+    def test_escaped_parenthesis_and_apostrophe_destinations_are_rewritten(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = r"![escaped](foo\)bar.png) ![apostrophe](it's.png)"
+        rewritten, count = _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"escaped.png", "apostrophe.png"},
+            {
+                r"foo\)bar.png": "escaped.png",
+                "it's.png": "apostrophe.png",
+            },
+        )
+
+        assert count == 2
+        assert rewritten == (
+            "![escaped](viking://resources/doc/escaped.png) "
+            "![apostrophe](viking://resources/doc/apostrophe.png)"
+        )
+
+    def test_title_splitter_handles_long_non_title_payload(self):
+        from openviking.parse.image_rewrite import _split_markdown_image_target
+
+        cases = {
+            'assets/image.png "Double title"': ("assets/image.png", ' "Double title"'),
+            "assets/image.png 'Single title'": ("assets/image.png", " 'Single title'"),
+            "assets/image.png (Parenthesized title)": (
+                "assets/image.png",
+                " (Parenthesized title)",
+            ),
+            r'assets/image.png "Escaped \" quote"': (
+                "assets/image.png",
+                r' "Escaped \" quote"',
+            ),
+            r'assets/image.png "unterminated\"': (
+                r'assets/image.png "unterminated\"',
+                "",
+            ),
+        }
+        for payload, expected in cases.items():
+            assert _split_markdown_image_target(payload) == expected
+
+        payload = "assets/" + (" " * 100_000) + "image.png"
+        assert _split_markdown_image_target(payload) == (payload, "")
+
+    def test_artifact_query_and_fragment_titles_survive_rewrite(self, tmp_path: Path):
+        from openviking.parse.image_rewrite import (
+            _rewrite_content,
+            build_artifact_image_mappings,
+        )
+
+        (tmp_path / "image.png").write_bytes(b"image")
+        content = (
+            '![query](image.png?rev=1 "Query title")\n'
+            "![fragment](image.png#preview 'Fragment title')"
+        )
+        (tmp_path / "doc.md").write_text(content, encoding="utf-8")
+
+        mappings = build_artifact_image_mappings(tmp_path)["doc.md"]
+        assert mappings == {
+            "image.png?rev=1": "image.png",
+            "image.png#preview": "image.png",
+        }
+        rewritten, count = _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"image.png"},
+            mappings,
+        )
+
+        assert count == 2
+        assert '![query](viking://resources/doc/image.png "Query title")' in rewritten
+        assert "![fragment](viking://resources/doc/image.png 'Fragment title')" in rewritten
+
+    def test_protected_span_overlap_is_detected(self):
+        from openviking.parse.image_rewrite import (
+            _protected_ranges,
+            _rewrite_content,
+            _span_intersects_protected_ranges,
+        )
+
+        protected = [(10, 20), (30, 40)]
+        assert _span_intersects_protected_ranges(5, 15, protected)
+        assert _span_intersects_protected_ranges(15, 25, protected)
+        assert not _span_intersects_protected_ranges(5, 10, protected)
+        assert not _span_intersects_protected_ranges(20, 30, protected)
+
+        content = '![ok](image.png)\n![example](image.png "`code`")'
+        ranges = _protected_ranges(content)
+        assert all(left[1] < right[0] for left, right in zip(ranges, ranges[1:], strict=False))
+        rewritten, count = _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"image.png"},
+            {"image.png": "image.png"},
+        )
+        assert count == 1
+        assert rewritten == (
+            '![ok](viking://resources/doc/image.png)\n![example](image.png "`code`")'
+        )
 
     async def test_nested_mapping_consumed(self):
         from openviking.parse.image_rewrite import rewrite_image_uris

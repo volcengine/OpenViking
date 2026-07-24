@@ -11,7 +11,7 @@ images themselves are stored next to the markdown file referencing them).
 import json
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, Optional, Set
+from typing import TYPE_CHECKING, Dict, Iterator, NamedTuple, Optional, Set
 
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import get_viking_fs
@@ -22,7 +22,6 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-_IMAGE_PATTERN = re.compile(r"!\[([^\]]*)\]\(((?:[^()]|\([^()]*\))+)\)")
 _REMOTE_PREFIXES = ("http://", "https://", "viking://", "data:", "ftp://")
 
 # Sidecar written by MarkdownParser._ingest_local_images at each document root,
@@ -34,6 +33,181 @@ IMAGE_MAPPINGS_FILENAME = ".image_mappings.json"
 HTML_IMG_PATTERN = re.compile(r"""(<img\s[^>]*?src=["'])([^"']+)(["'][^>]*>)""", re.IGNORECASE)
 _FENCE_PATTERN = re.compile(r"^(\s{0,3})(`{3,}|~{3,})")
 _LIST_ITEM_PATTERN = re.compile(r"^(\s{0,3})([-*+]|\d{1,9}[.)])(\s+)")
+
+
+class _MarkdownImageMatch(NamedTuple):
+    start: int
+    end: int
+    alt_text: str
+    payload: str
+
+
+def _iter_markdown_images(content: str) -> Iterator[_MarkdownImageMatch]:
+    """Yield Markdown image spans with balanced destinations in one pass."""
+    cursor = 0
+    length = len(content)
+    while cursor < length:
+        start = content.find("![", cursor)
+        if start < 0:
+            return
+
+        alt_end = start + 2
+        bracket_depth = 0
+        while alt_end < length:
+            char = content[alt_end]
+            if char == "\\" and alt_end + 1 < length:
+                alt_end += 2
+                continue
+            if char == "[":
+                bracket_depth += 1
+            elif char == "]":
+                if bracket_depth == 0:
+                    break
+                bracket_depth -= 1
+            alt_end += 1
+
+        if alt_end >= length:
+            return
+        if alt_end + 1 >= length or content[alt_end + 1] != "(":
+            cursor = alt_end + 1
+            continue
+
+        payload_start = alt_end + 2
+        index = payload_start
+        depth = 0
+        quote = ""
+        while index < length:
+            char = content[index]
+            if char == "\\" and index + 1 < length:
+                index += 2
+                continue
+            if quote:
+                if char == quote:
+                    quote = ""
+            elif (
+                char in {'"', "'"}
+                and depth == 0
+                and index > payload_start
+                and content[index - 1].isspace()
+            ):
+                quote = char
+            elif char == "(":
+                depth += 1
+            elif char == ")":
+                if depth == 0:
+                    if index > payload_start:
+                        yield _MarkdownImageMatch(
+                            start,
+                            index + 1,
+                            content[start + 2 : alt_end],
+                            content[payload_start:index],
+                        )
+                    cursor = index + 1
+                    break
+                depth -= 1
+            index += 1
+        else:
+            return
+
+
+def _split_markdown_image_target(payload: str) -> tuple[str, str]:
+    """Return ``(destination, exact_title_suffix)`` for one image payload.
+
+    This scans once from the end instead of making the image regex choose an
+    ambiguous whitespace boundary. Callers can still prefer the full payload
+    when it names an existing file or sidecar key.
+    """
+    content_end = len(payload)
+    while content_end > 0 and payload[content_end - 1].isspace():
+        content_end -= 1
+    if content_end == 0:
+        return payload, ""
+
+    closing = payload[content_end - 1]
+    if closing not in {'"', "'", ")"}:
+        return payload, ""
+
+    slash = content_end - 2
+    while slash >= 0 and payload[slash] == "\\":
+        slash -= 1
+    if (content_end - slash - 2) % 2:
+        return payload, ""
+
+    opening = -1
+    if closing in {'"', "'"}:
+        index = content_end - 2
+        while index >= 0:
+            if payload[index] != closing:
+                index -= 1
+                continue
+            slash = index - 1
+            while slash >= 0 and payload[slash] == "\\":
+                slash -= 1
+            if (index - slash - 1) % 2 == 0:
+                opening = index
+                break
+            index = slash
+    else:
+        depth = 1
+        index = content_end - 2
+        while index >= 0:
+            char = payload[index]
+            if char not in "()":
+                index -= 1
+                continue
+            slash = index - 1
+            while slash >= 0 and payload[slash] == "\\":
+                slash -= 1
+            if (index - slash - 1) % 2:
+                index = slash
+                continue
+            if char == ")":
+                depth += 1
+            else:
+                depth -= 1
+                if depth == 0:
+                    opening = index
+                    break
+            index = slash
+
+    if opening <= 0:
+        return payload, ""
+
+    separator_start = opening
+    while separator_start > 0 and payload[separator_start - 1].isspace():
+        separator_start -= 1
+    if separator_start == opening or not payload[:separator_start].strip():
+        return payload, ""
+
+    return payload[:separator_start], payload[separator_start:]
+
+
+def _artifact_image_candidate(
+    image_ref: str,
+    md_dir: Path,
+    root: Path,
+    *,
+    strip_suffix: bool = True,
+) -> Optional[Path]:
+    # Query/fragment suffixes are reference syntax, not literal filenames. The
+    # title-ambiguity caller opts out for its compatibility-first exact probe.
+    ref = image_ref.strip()
+    if not ref or _is_remote_uri(ref):
+        return None
+
+    path_part = re.split(r"[?#]", ref, maxsplit=1)[0] if strip_suffix else ref
+    ref_path = Path(path_part)
+    if not path_part or ref_path.is_absolute():
+        return None
+
+    try:
+        candidate = (md_dir / ref_path).resolve()
+        candidate.relative_to(root)
+    except (OSError, ValueError):
+        return None
+    if candidate.parent != md_dir or not candidate.is_file():
+        return None
+    return candidate
 
 
 def build_artifact_image_mappings(root_dir: Path) -> Dict[str, Dict[str, str]]:
@@ -58,38 +232,44 @@ def build_artifact_image_mappings(root_dir: Path) -> Dict[str, Dict[str, str]]:
 
         protected = _protected_ranges(content)
 
-        refs = [(match.start(), match.group(2)) for match in _IMAGE_PATTERN.finditer(content)]
-        refs.extend((match.start(), match.group(2)) for match in HTML_IMG_PATTERN.finditer(content))
+        refs = [
+            (match.start, match.end, match.payload, True)
+            for match in _iter_markdown_images(content)
+        ]
+        refs.extend(
+            (match.start(), match.end(), match.group(2), False)
+            for match in HTML_IMG_PATTERN.finditer(content)
+        )
 
         file_mappings: Dict[str, str] = {}
         md_dir = md_path.parent.resolve()
-        for pos, original_ref in refs:
-            if any(start <= pos < end for start, end in protected):
+
+        for start, end, original_ref, is_markdown in refs:
+            if _span_intersects_protected_ranges(start, end, protected):
                 continue
 
-            ref = original_ref.strip()
-            if not ref or _is_remote_uri(ref):
-                continue
-
-            # Queries/fragments are not part of the local filesystem path, but
-            # the exact original reference remains the mapping key used later.
-            path_part = re.split(r"[?#]", ref, maxsplit=1)[0]
-            ref_path = Path(path_part)
-            if not path_part or ref_path.is_absolute():
-                continue
-
-            try:
-                candidate = (md_dir / ref_path).resolve()
-                candidate.relative_to(root)
-            except (OSError, ValueError):
+            destination, title = (
+                _split_markdown_image_target(original_ref) if is_markdown else (original_ref, "")
+            )
+            mapping_ref = original_ref
+            if title:
+                # Compatibility first: an existing literal filename such as
+                # ``photo.png (copy)`` remains a path, not a title-bearing ref.
+                candidate = _artifact_image_candidate(
+                    original_ref, md_dir, root, strip_suffix=False
+                )
+                if candidate is None:
+                    candidate = _artifact_image_candidate(destination, md_dir, root)
+                    if candidate is not None:
+                        mapping_ref = destination
+            else:
+                candidate = _artifact_image_candidate(original_ref, md_dir, root)
+            if candidate is None:
                 continue
 
             # The existing sidecar contract stores only the final filename and
             # rewrite_image_uris resolves it beside the markdown file.
-            if candidate.parent != md_dir or not candidate.is_file():
-                continue
-
-            file_mappings[original_ref] = candidate.name
+            file_mappings[mapping_ref] = candidate.name
 
         if file_mappings:
             mappings[md_path.relative_to(root).as_posix()] = file_mappings
@@ -217,7 +397,33 @@ def _protected_ranges(content: str):
 
         prev_blank = is_blank
 
-    return ranges
+    if not ranges:
+        return []
+
+    merged = []
+    for start, end in sorted(ranges):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _span_intersects_protected_ranges(
+    start: int,
+    end: int,
+    ranges: list[tuple[int, int]],
+) -> bool:
+    """Return whether ``[start, end)`` overlaps sorted, disjoint ``ranges``."""
+    low = 0
+    high = len(ranges)
+    while low < high:
+        middle = (low + high) // 2
+        if ranges[middle][1] <= start:
+            low = middle + 1
+        else:
+            high = middle
+    return low < len(ranges) and ranges[low][0] < end
 
 
 async def _discover_mappings(
@@ -384,11 +590,8 @@ def _rewrite_content(
 
     protected = _protected_ranges(content)
 
-    def _in_protected(pos: int) -> bool:
-        for s, e in protected:
-            if s <= pos < e:
-                return True
-        return False
+    def _in_protected(start: int, end: int) -> bool:
+        return _span_intersects_protected_ranges(start, end, protected)
 
     def _mapped_uri(path: str) -> Optional[str]:
         """viking:// URI for *path* if the mapping covers it, else None."""
@@ -401,29 +604,38 @@ def _rewrite_content(
         )
         return None
 
-    def replacer(match: re.Match) -> str:
+    def replace_markdown_image(match: _MarkdownImageMatch) -> str:
         nonlocal rewrite_count
-        alt_text = match.group(1)
-        path = match.group(2)
+        alt_text = match.alt_text
+        payload = match.payload
+        path = payload
+        title = ""
+        # The sidecar is the provenance boundary. ``available_images`` only
+        # validates mapped targets; it cannot safely infer an original ref.
+        if payload not in mappings:
+            destination, title_suffix = _split_markdown_image_target(payload)
+            if title_suffix:
+                path = destination
+                title = title_suffix
 
         # Skip image references that live inside code blocks / inline code.
-        if _in_protected(match.start()):
-            return match.group(0)
+        if _in_protected(match.start, match.end):
+            return content[match.start : match.end]
 
         if _is_remote_uri(path):
-            return match.group(0)
+            return content[match.start : match.end]
 
         uri = _mapped_uri(path)
         if uri is None:
-            return match.group(0)
+            return content[match.start : match.end]
         rewrite_count += 1
-        return f"![{alt_text}]({uri})"
+        return f"![{alt_text}]({uri}{title})"
 
     def img_tag_replacer(match: re.Match) -> str:
         nonlocal rewrite_count
         path = match.group(2)
 
-        if _in_protected(match.start()):
+        if _in_protected(*match.span()):
             return match.group(0)
 
         if _is_remote_uri(path):
@@ -435,7 +647,14 @@ def _rewrite_content(
         rewrite_count += 1
         return f"{match.group(1)}{uri}{match.group(3)}"
 
-    new_content = _IMAGE_PATTERN.sub(replacer, content)
+    parts = []
+    cursor = 0
+    for match in _iter_markdown_images(content):
+        parts.append(content[cursor : match.start])
+        parts.append(replace_markdown_image(match))
+        cursor = match.end
+    parts.append(content[cursor:])
+    new_content = "".join(parts)
     # The markdown pass may have shifted offsets; recompute protected ranges
     # against the updated text before rewriting <img> tags.
     protected = _protected_ranges(new_content)
