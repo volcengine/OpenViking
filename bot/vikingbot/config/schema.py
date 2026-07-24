@@ -961,7 +961,12 @@ class SessionKey(BaseModel):
 
     @staticmethod
     def from_safe_name(safe_name: str):
-        file_name_split = safe_name.split("__")
+        file_name_split = safe_name.split("__", maxsplit=2)
+        if len(file_name_split) != 3:
+            raise ValueError(
+                f"Invalid safe_name {safe_name!r}: expected exactly 3 parts "
+                f"(type, channel_id, chat_id) separated by '__'"
+            )
         return SessionKey(
             type=file_name_split[0], channel_id=file_name_split[1], chat_id=file_name_split[2]
         )
