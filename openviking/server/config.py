@@ -185,7 +185,7 @@ class UsageAuditConfig(BaseModel):
 class UsageReporterSinkConfig(BaseModel):
     """Usage reporter sink configuration."""
 
-    type: Literal["custom"] = "custom"
+    type: Literal["custom", "http"] = "custom"
     class_path: Optional[str] = None
     config: Dict[str, object] = Field(default_factory=dict)
 
