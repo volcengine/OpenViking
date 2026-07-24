@@ -205,6 +205,40 @@ def test_cron_service_accepts_missing_channel_metadata(tmp_path):
     assert job.payload.channel_metadata == {}
 
 
+@pytest.mark.parametrize(
+    "schedule",
+    [
+        CronSchedule(kind="every", every_ms=0),
+        CronSchedule(kind="at", at_ms=1),
+        CronSchedule(kind="cron", expr="not a cron expression"),
+    ],
+)
+def test_cron_service_rejects_unschedulable_jobs(tmp_path, schedule):
+    path = tmp_path / "jobs.json"
+    key = SessionKey(type="cli", channel_id="default", chat_id="default")
+    with pytest.raises(ValueError, match="future run time"):
+        CronService(path).add_job("invalid", schedule, "hello", key)
+    assert not path.exists()
+
+
+@pytest.mark.asyncio
+async def test_cron_service_without_callback_preserves_one_shot(tmp_path):
+    path = tmp_path / "jobs.json"
+    service = CronService(path)
+    job = service.add_job(
+        "one-shot",
+        CronSchedule(kind="at", at_ms=9999999999999),
+        "hello",
+        SessionKey(type="cli", channel_id="default", chat_id="default"),
+        delete_after_run=True,
+    )
+    original = path.read_bytes()
+
+    with pytest.raises(RuntimeError, match="no job execution callback"):
+        await service.run_job(job.id)
+    assert path.read_bytes() == original
+
+
 def test_feishu_uses_thread_root_for_scheduled_delivery():
     assert (
         FeishuChannel._reply_to_message_id_from_metadata(
