@@ -14,6 +14,7 @@ import openai
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
     EmbedResult,
+    EmbeddingInput,
     truncate_and_normalize,
 )
 from openviking.telemetry import get_current_telemetry
@@ -147,6 +148,34 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
     # Multimodal helpers
     # ------------------------------------------------------------------
 
+    @property
+    def supports_multimodal(self) -> bool:
+        return self._input_type == "multimodal" and self.model_name.startswith(
+            ("qwen3-vl-embedding", "qwen2.5-vl-embedding")
+        )
+
+    @staticmethod
+    def _to_dashscope_contents(content: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+        contents = []
+        for part in content:
+            if part.get("type") == "text":
+                contents.append({"text": str(part.get("text", ""))})
+            elif part.get("type") == "image_url":
+                image_url = part.get("image_url")
+                url = image_url.get("url") if isinstance(image_url, dict) else image_url
+                if url:
+                    contents.append({"image": str(url)})
+        return contents
+
+    def _standard_input_fusion(self, contents: List[Dict[str, str]]) -> Optional[bool]:
+        if len(contents) <= 1:
+            return None
+        if self.model_name.startswith("qwen3-vl-embedding"):
+            return True
+        if self.model_name.startswith("qwen2.5-vl-embedding"):
+            return None
+        raise ValueError(f"{self.model_name} cannot fuse multiple multimodal input parts")
+
     def _multimodal_params(self) -> Dict[str, Any]:
         """Build parameters dict for multimodal requests, excluding None values."""
         return {
@@ -194,7 +223,11 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
     # embed
     # ------------------------------------------------------------------
 
-    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
+    def embed(self, text: EmbeddingInput, is_query: bool = False) -> EmbedResult:
+        if isinstance(text, list):
+            contents = self._to_dashscope_contents(text)
+            return self.embed_content(contents, enable_fusion=self._standard_input_fusion(contents))
+
         def _call() -> EmbedResult:
             if self._input_type == "text":
                 response = self._openai_client.embeddings.create(
@@ -221,7 +254,13 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
     # embed_async
     # ------------------------------------------------------------------
 
-    async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+    async def embed_async(self, text: EmbeddingInput, is_query: bool = False) -> EmbedResult:
+        if isinstance(text, list):
+            contents = self._to_dashscope_contents(text)
+            return await self.embed_content_async(
+                contents, enable_fusion=self._standard_input_fusion(contents)
+            )
+
         async def _call() -> EmbedResult:
             if self._input_type == "text":
                 client = self._get_async_openai_client()
@@ -250,7 +289,9 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
     # embed_content — multimodal content (text + image URLs)
     # ------------------------------------------------------------------
 
-    def embed_content(self, contents: List[Dict[str, str]]) -> EmbedResult:
+    def embed_content(
+        self, contents: List[Dict[str, str]], *, enable_fusion: Optional[bool] = None
+    ) -> EmbedResult:
         """Embed multimodal content (text + image URLs) via native DashScope API.
 
         Args:
@@ -266,6 +307,8 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
                 "input": {"contents": contents},
             }
             params = self._multimodal_params()
+            if enable_fusion is not None:
+                params["enable_fusion"] = enable_fusion
             if params:
                 body["parameters"] = params
             resp = self._httpx_client.post(self._multimodal_url, json=body)
@@ -281,7 +324,9 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"DashScope content embedding failed: {e}") from e
 
-    async def embed_content_async(self, contents: List[Dict[str, str]]) -> EmbedResult:
+    async def embed_content_async(
+        self, contents: List[Dict[str, str]], *, enable_fusion: Optional[bool] = None
+    ) -> EmbedResult:
         """Async version of embed_content."""
 
         client = self._get_async_httpx_client()
@@ -292,6 +337,8 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
                 "input": {"contents": contents},
             }
             params = self._multimodal_params()
+            if enable_fusion is not None:
+                params["enable_fusion"] = enable_fusion
             if params:
                 body["parameters"] = params
             resp = await client.post(self._multimodal_url, json=body)
