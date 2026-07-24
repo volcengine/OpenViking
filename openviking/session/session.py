@@ -3495,7 +3495,17 @@ class Session:
         if match:
             return match.group(1).strip()
 
-        first_line = summary.split("\n")[0].strip()
+        # Skip markdown headings, separators, and blank lines;
+        # return the first meaningful content line.
+        for line in summary.split("\n"):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or stripped.startswith("---"):
+                continue
+            if len(stripped) > 3:
+                return stripped[:200]
+
+        # Fallback: strip heading markers from the first line
+        first_line = summary.split("\n")[0].strip().lstrip("#").strip()
         return first_line if first_line else ""
 
     @staticmethod
