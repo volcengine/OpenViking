@@ -19,6 +19,7 @@ STORAGE_INTERNAL_ENTRY_NAMES = frozenset(
     {
         "_system",
         "tasks",
+        ".relations",
         *MULTIWRITE_INTERNAL_FILE_NAMES,
     }
 )
@@ -28,6 +29,7 @@ WEBDAV_RESERVED_FILENAMES = frozenset(
         ".abstract.md",
         ".overview.md",
         ".relations.json",
+        ".relations",
         *MULTIWRITE_INTERNAL_FILE_NAMES,
     }
 )

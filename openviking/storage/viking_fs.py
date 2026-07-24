@@ -674,6 +674,7 @@ class VikingFS:
             estimated_count = await _estimate_deleted_count(path, real_ctx)
             await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
             logger.info(f"[VikingFS] rm target not found, cleaned orphan index: {uri}")
+            await self._remove_file_relation_sidecar(path, ctx=ctx)
             return {"estimated_deleted_count": estimated_count}
 
         if is_dir:
@@ -718,6 +719,8 @@ class VikingFS:
                     result["estimated_deleted_count"] = estimated_count
                 else:
                     result = {"estimated_deleted_count": estimated_count}
+                if not is_dir:
+                    await self._remove_file_relation_sidecar(path, ctx=ctx)
                 return result
         except LockAcquisitionError:
             raise ResourceBusyError(f"Resource is being processed: {uri}", uri=uri)
@@ -849,8 +852,19 @@ class VikingFS:
                     pass
                 raise
 
+            # Migrate a file source's relation sidecar (a dir source carries its table
+            # inside the moved subtree; a file's sidecar is a sibling the body copy
+            # misses). Read while the source body still exists, write to the new sidecar,
+            # then drop the old one after the source body is removed. refs #3067
+            if not is_dir:
+                moved_relations = await self._read_relation_table(old_path, ctx=ctx)
+                if moved_relations:
+                    await self._write_relation_table(new_path, moved_relations, ctx=ctx)
+
             # Delete source
             await self._async_agfs.rm(old_path, recursive=is_dir)
+            if not is_dir:
+                await self._remove_file_relation_sidecar(old_path, ctx=ctx)
             return {}
 
     async def system_sync_status(
@@ -3060,28 +3074,42 @@ class VikingFS:
 
     # ========== Relation Table Internal Methods ==========
 
+    async def _relation_table_path(
+        self, source_path: str, ctx: Optional[RequestContext] = None
+    ) -> str:
+        """Return the correct .relations.json location for dir or file source.
+
+        Dir sources: <dir>/.relations.json (byte-identical, zero migration).
+        File sources: <parent>/.relations/<name>/.relations.json (sidecar).
+        """
+        try:
+            info = await self._async_agfs.stat(source_path)
+            is_dir = info.get("isDir", info.get("is_dir", True))
+        except Exception:
+            is_dir = True  # fallback to legacy child path
+        if is_dir:
+            return f"{source_path}/.relations.json"
+        parent, _, name = source_path.rpartition("/")
+        return f"{parent}/.relations/{name}/.relations.json"
+
     async def _read_relation_table(
         self, dir_path: str, ctx: Optional[RequestContext] = None
     ) -> List[RelationEntry]:
-        """Read .relations.json."""
-        table_path = f"{dir_path}/.relations.json"
+        """Read .relations.json (routed through _relation_table_path)."""
+        table_path = await self._relation_table_path(dir_path, ctx=ctx)
         try:
             content = self._handle_agfs_read(await self._async_agfs.read(table_path))
             data = json.loads(content.decode("utf-8"))
         except FileNotFoundError:
             return []
         except Exception:
-            # logger.warning(f"[VikingFS] Failed to read relation table {table_path}: {e}")
             return []
 
         entries = []
-        # Compatible with old format (nested) and new format (flat)
         if isinstance(data, list):
-            # New format: flat list
             for entry_data in data:
                 entries.append(RelationEntry.from_dict(entry_data))
         elif isinstance(data, dict):
-            # Old format: nested {namespace: {user: [entries]}}
             for _namespace, user_dict in data.items():
                 for _user, entry_list in user_dict.items():
                     for entry_data in entry_list:
@@ -3091,16 +3119,41 @@ class VikingFS:
     async def _write_relation_table(
         self, dir_path: str, entries: List[RelationEntry], ctx: Optional[RequestContext] = None
     ) -> None:
-        """Write .relations.json."""
-        # Use flat list format
+        """Write .relations.json (routed through _relation_table_path + ensure parents for sidecars)."""
+        table_path = await self._relation_table_path(dir_path, ctx=ctx)
         data = [entry.to_dict() for entry in entries]
-
         content = json.dumps(data, ensure_ascii=False, indent=2)
-        table_path = f"{dir_path}/.relations.json"
         if isinstance(content, str):
             content = content.encode("utf-8")
-
+        # File sources route to a sidecar (<parent>/.relations/<name>/.relations.json)
+        # whose intermediate dirs don't exist yet. Detect that by comparing to the
+        # legacy dir-source form rather than substring-matching an assumed-rooted
+        # path — correct even if source_path were ever relative. refs #3067
+        if table_path != f"{dir_path}/.relations.json":
+            await self._ensure_parent_dirs(table_path, ctx=ctx)
         await self._async_agfs.write(table_path, content)
+
+    async def _remove_file_relation_sidecar(
+        self, source_path: str, ctx: Optional[RequestContext] = None
+    ) -> None:
+        """Best-effort removal of a file source's relation sidecar dir.
+
+        Directory sources keep their table inside the body subtree, so rm/mv of the
+        directory carries it. A file source's table lives in a sibling sidecar
+        (<parent>/.relations/<name>/.relations.json) the body rm/mv never touches —
+        remove it explicitly so a rebuilt/moved file does not inherit stale
+        relations. refs #3067
+        """
+        parent, _, name = source_path.rpartition("/")
+        if not name:
+            return
+        sidecar_dir = f"{parent}/.relations/{name}"
+        try:
+            await self._async_agfs.rm(sidecar_dir, recursive=True)
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            logger.warning(f"[VikingFS] failed to remove relation sidecar {sidecar_dir}: {e}")
 
     # ========== Batch Read (backward compatible) ==========
 
