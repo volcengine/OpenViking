@@ -7,6 +7,8 @@ import sys
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 from openviking.parse.accessors.feishu_accessor import FeishuAccessor, _title_as_filename
 
 
@@ -395,6 +397,62 @@ def test_fetch_document_dispatches_all_supported_types(monkeypatch):
     handlers["_parse_docx"].assert_called_once_with("doc_token", "u-test")
     handlers["_parse_sheets"].assert_called_once_with("sht_token", None)
     assert handlers["_parse_bitable"].call_args_list[-1].args == ("wiki_app_token", None)
+
+
+def test_fetch_document_honors_bitable_table_and_view(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    list_tables = MagicMock()
+    list_fields = MagicMock(
+        return_value=_SuccessResponse(
+            SimpleNamespace(
+                items=[SimpleNamespace(field_name="Status")],
+                has_more=False,
+                page_token=None,
+            )
+        )
+    )
+    list_records = MagicMock(
+        return_value=_SuccessResponse(
+            SimpleNamespace(
+                items=[SimpleNamespace(fields={"Status": "Published"})],
+                has_more=False,
+                page_token=None,
+            )
+        )
+    )
+    accessor = FeishuAccessor()
+    accessor._config = SimpleNamespace(max_records_per_table=10)
+    accessor._client = SimpleNamespace(
+        bitable=SimpleNamespace(
+            v1=SimpleNamespace(
+                app_table=SimpleNamespace(list=list_tables),
+                app_table_field=SimpleNamespace(list=list_fields),
+                app_table_record=SimpleNamespace(list=list_records),
+            )
+        )
+    )
+
+    document = asyncio.run(
+        accessor._fetch_document(
+            "https://example.feishu.cn/base/app_token?table=tblSales&view=vewPublic"
+        )
+    )
+
+    list_tables.assert_not_called()
+    request = list_records.call_args.args[0]
+    assert (request.table_id, request.view_id) == ("tblSales", "vewPublic")
+    assert document.title == "tblSales (vewPublic)"
+    assert document.meta["feishu_table_id"] == "tblSales"
+    assert document.meta["feishu_view_id"] == "vewPublic"
+
+
+def test_fetch_document_rejects_bitable_view_without_table():
+    accessor = FeishuAccessor()
+
+    with pytest.raises(ValueError, match="'view'.*'table'"):
+        asyncio.run(
+            accessor._fetch_document("https://example.feishu.cn/base/app_token?view=vewPublic")
+        )
 
 
 def test_parse_sheets_handles_grid_and_embedded_bitable(monkeypatch):

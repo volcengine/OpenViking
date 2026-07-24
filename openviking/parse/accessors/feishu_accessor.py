@@ -18,7 +18,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, NoReturn, Optional, Tuple, Union
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from openviking.parse.base import format_table_to_markdown
 from openviking.utils.exceptions import error_code_from_http_status
@@ -85,8 +85,7 @@ def _raise_from_lark_response(
     if code == _FEISHU_BITABLE_PERMISSION_REQUIRED:
         public_code = "FAILED_PRECONDITION"
         message = (
-            "Feishu application is missing required Bitable permissions: "
-            f"code={code}, msg={msg}"
+            f"Feishu application is missing required Bitable permissions: code={code}, msg={msg}"
         )
     else:
         public_code = (
@@ -327,6 +326,9 @@ class FeishuAccessor(DataAccessor):
         The fetched document is materialized as Markdown for the standard parser chain.
         """
         doc_type, token = self._parse_feishu_url(url)
+        query = parse_qs(urlparse(url).query)
+        table_id = (query.get("table") or [None])[0]
+        view_id = (query.get("view") or [None])[0]
         title = None
         meta = {}
 
@@ -340,6 +342,9 @@ class FeishuAccessor(DataAccessor):
             doc_type, token = real_type, real_token
             meta["wiki_resolved"] = True
 
+        if doc_type != "base":
+            table_id = view_id = None
+
         handler_name = self._DOC_TYPE_HANDLERS.get(doc_type)
         if handler_name is None:
             raise ValueError(
@@ -347,17 +352,27 @@ class FeishuAccessor(DataAccessor):
                 f"Supported: {list(self._DOC_TYPE_HANDLERS)}"
             )
 
+        handler_kwargs = {}
+        if doc_type == "base":
+            handler_kwargs = {"table_id": table_id, "view_id": view_id}
+
         # Feishu's SDK is synchronous; keep it off the event loop.
         markdown, doc_title = await asyncio.to_thread(
             getattr(self, handler_name),
             token,
             feishu_access_token,
+            **handler_kwargs,
         )
 
         if title:
-            doc_title = title
+            scope = "/".join(value for value in (table_id, view_id) if value)
+            doc_title = f"{title} ({scope})" if scope else title
 
         meta["original_url"] = url
+        if table_id:
+            meta["feishu_table_id"] = table_id
+        if view_id:
+            meta["feishu_view_id"] = view_id
 
         return FeishuDocument(
             doc_type=doc_type,
@@ -1192,8 +1207,12 @@ class FeishuAccessor(DataAccessor):
         *,
         table_id: Optional[str] = None,
         table_name: Optional[str] = None,
+        view_id: Optional[str] = None,
     ) -> Tuple[str, str]:
         """Fetch a Feishu bitable app and convert it to Markdown."""
+        if view_id and not table_id:
+            raise ValueError("Feishu Base URL with 'view' must also include 'table'")
+
         from lark_oapi.api.bitable.v1 import (
             ListAppTableFieldRequest,
             ListAppTableRecordRequest,
@@ -1205,6 +1224,8 @@ class FeishuAccessor(DataAccessor):
         if table_id:
             tables = [(table_id, table_name or table_id)]
             title = table_name or table_id
+            if view_id:
+                title = f"{title} ({view_id})"
             markdown_parts = []
             heading = "###"
         else:
@@ -1282,6 +1303,8 @@ class FeishuAccessor(DataAccessor):
                     .table_id(current_table_id)
                     .page_size(min(remaining, 500))
                 )
+                if view_id:
+                    builder = builder.view_id(view_id)
                 if page_token:
                     builder = builder.page_token(page_token)
                 records_response = self._call_api(

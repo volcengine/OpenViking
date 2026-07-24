@@ -151,7 +151,7 @@ ParserRouter --> MarkdownParser --> ParseResult --> TreeBuilder
 |---|---|---|
 | `docx/{token}` | 拉取文档 block，转换标题、列表、代码、表格、图片和内嵌 sheet | 图片下载受 `download_images` 控制；内嵌 sheet 最多读取 100 行、A-Z 列 |
 | `sheets/{token}` | 枚举所有 sheet；普通网格读取单元格，内嵌多维表格根据 `blockInfo` 转走 Bitable API，统一输出 Markdown 表格 | 普通网格最多读取 `max_rows_per_sheet` 行、A-Z 列；内嵌多维表格继承 Base 的记录和图片处理能力 |
-| `base/{app_token}` | 枚举数据表、字段和记录，把每张表转换成 Markdown 表格 | 表和字段完整翻页；每张表最多读取 `max_records_per_table` 条记录；附件字段中的图片会下载，其他附件保留文件名 |
+| `base/{app_token}` | 无查询参数时枚举全部数据表；`table` 限定数据表，`table` + `view` 限定视图 | 表和字段完整翻页；每张表最多读取 `max_records_per_table` 条记录；附件字段中的图片会下载，其他附件保留文件名 |
 | `wiki/{token}` | 先解析 wiki 节点的实际类型和 token，再进入上述 `docx`、`sheets` 或 `base` 处理器 | wiki 指向其他飞书对象类型时明确报不支持 |
 
 四类入口都支持应用凭证获取的 tenant token；显式传入 `args.feishu_access_token` 时，同一 user token 会用于本次选中的飞书链路。Accessor 路径中，它用于 wiki 解析、正文、sheet/base 和图片请求；Understanding 直达路径中，它作为 `lark_file.user_access_token` 提交，随后从后台队列参数中删除。
