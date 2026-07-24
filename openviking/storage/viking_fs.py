@@ -4307,8 +4307,8 @@ class VikingFS:
 
         Runs all classified ``(op, uri, level)`` rebuild tasks concurrently and
         drives the task through start → complete/fail. Per-task failures are
-        swallowed (and logged) inside :py:meth:`_run_vector_rebuild`, preserving
-        the "failures do not block" semantics.
+        logged inside :py:meth:`_run_vector_rebuild` and make the tracked task
+        fail without blocking the restore response.
         """
         from openviking.service.task_tracker import get_task_tracker
 
@@ -4323,12 +4323,21 @@ class VikingFS:
             from openviking.service.reindex_executor import get_reindex_executor
 
             executor = get_reindex_executor()
-            await asyncio.gather(
+            results = await asyncio.gather(
                 *[
                     self._run_vector_rebuild(executor, op, uri, level, ctx)
                     for (op, uri, level) in tasks
                 ]
             )
+            failed_count = sum(not result for result in results)
+            if failed_count:
+                await tracker.fail(
+                    task_id,
+                    f"{failed_count} of {len(tasks)} vector rebuild tasks failed",
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                return
             await tracker.complete(
                 task_id,
                 {"status": "completed", "task_count": len(tasks)},
@@ -4350,8 +4359,8 @@ class VikingFS:
         uri: str,
         level: ContextLevel,
         ctx: RequestContext,
-    ) -> None:
-        """Wrapper coroutine: dispatch one vector task and swallow errors."""
+    ) -> bool:
+        """Dispatch one vector task and return whether it completed successfully."""
         try:
             if op == "reindex_marker":
                 await executor.reindex_directory_marker(dir_uri=uri, level=level, ctx=ctx)
@@ -4361,5 +4370,8 @@ class VikingFS:
                 await executor.delete_uri_level(uri=uri, level=level, ctx=ctx)
             else:  # pragma: no cover - defensive
                 logger.warning("[VikingFS] unknown vector rebuild op %r for %s", op, uri)
+                return False
+            return True
         except Exception:
             logger.exception("[VikingFS] git restore vector task %s failed for %s", op, uri)
+            return False
