@@ -77,6 +77,7 @@ MKT_DIR_ARCHIVE="$OV_HOME/memory-plugin-marketplace"
 # mis-derive installLocation and fail `marketplace update` with EISDIR.
 CC_REMOTE_MKT_DIR="$OV_HOME/marketplaces/openviking-claude"
 CC_REMOTE_MANIFEST="$CC_REMOTE_MKT_DIR/.claude-plugin/marketplace.json"
+CC_HOOK_ONLY_MKT_DIR="$OV_HOME/marketplaces/openviking-claude-hooks"
 
 REQUESTED_HARNESSES=""
 CLAUDE_BINS_ARG="${OPENVIKING_CLAUDE_BINS:-${OPENVIKING_CLAUDE_BIN:-}}"
@@ -89,6 +90,7 @@ API_KEY_ARG="__OPENVIKING_UNSET__"
 ACCOUNT_ARG="__OPENVIKING_UNSET__"
 USER_ARG="__OPENVIKING_UNSET__"
 STATUSLINE_ARG=""   # "", yes, no
+CLAUDE_HOOK_ONLY="${OPENVIKING_CLAUDE_HOOK_ONLY:-0}"
 YES=0
 UNINSTALL=0
 NODE_BIN=""
@@ -155,6 +157,7 @@ Options:
   --user ID          Optional OpenViking user.
   --statusline       Register the Claude Code statusline without asking.
   --no-statusline    Skip the statusline prompt.
+  --claude-hook-only Install Claude Code lifecycle hooks without the bundled MCP server.
   --uninstall        Remove Cursor/TRAE OpenViking integration files and config.
   --yes, -y          Use defaults for prompts when possible.
 EOF
@@ -174,12 +177,19 @@ while [ "$#" -gt 0 ]; do
     --user) USER_ARG="${2-}"; shift 2 ;;
     --statusline) STATUSLINE_ARG="yes"; shift ;;
     --no-statusline) STATUSLINE_ARG="no"; shift ;;
+    --claude-hook-only) CLAUDE_HOOK_ONLY=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     --yes|-y) YES=1; shift ;;
     --help|-h) usage; exit 0 ;;
     *) err "Unknown argument: $1"; usage; exit 2 ;;
   esac
 done
+
+case "$CLAUDE_HOOK_ONLY" in
+  1|true|TRUE|yes|YES|on|ON) CLAUDE_HOOK_ONLY=1 ;;
+  0|false|FALSE|no|NO|off|OFF|'') CLAUDE_HOOK_ONLY=0 ;;
+  *) err "Invalid OPENVIKING_CLAUDE_HOOK_ONLY/--claude-hook-only value: $CLAUDE_HOOK_ONLY"; exit 2 ;;
+esac
 
 # Interactive prompts read from /dev/tty (fd 3) so `bash <(curl ...)` and even
 # `curl | bash` keep their prompts. No tty -> non-interactive defaults.
@@ -1335,6 +1345,44 @@ fs.writeFileSync(file, JSON.stringify(manifest, null, 2) + "\n");
 NODE
 }
 
+prepare_claude_hook_only_marketplace() {
+  local plugin_dir plugin_dest tmp
+  plugin_dir="$(plugin_dir_on_disk claude-code-memory-plugin)" || {
+    err 'Claude hook-only mode needs the plugin sources on disk and none could be fetched'
+    return 1
+  }
+  tmp="$CC_HOOK_ONLY_MKT_DIR.tmp"
+  plugin_dest="$tmp/claude-code-memory-plugin"
+  rm -rf "$tmp"
+  mkdir -p "$plugin_dest"
+  (cd "$plugin_dir" && tar --exclude node_modules --exclude .git -cf - .) | (cd "$plugin_dest" && tar -xf -)
+  rm -f "$plugin_dest/.mcp.json"
+  node - "$plugin_dest/.claude-plugin/plugin.json" "$tmp/.claude-plugin/marketplace.json" "$MARKETPLACE_NAME" <<'NODE'
+const fs = require("node:fs");
+const [pluginManifestPath, marketplacePath, marketplaceName] = process.argv.slice(2);
+const manifest = JSON.parse(fs.readFileSync(pluginManifestPath, "utf8"));
+delete manifest.mcpServers;
+fs.writeFileSync(pluginManifestPath, JSON.stringify(manifest, null, 2) + "\n");
+const marketplace = {
+  name: marketplaceName,
+  description: "OpenViking Claude Code hook-only plugin.",
+  owner: { name: "OpenViking" },
+  plugins: [
+    {
+      name: manifest.name,
+      description: "Long-term semantic memory hooks for Claude Code, powered by OpenViking",
+      source: "./claude-code-memory-plugin",
+      category: "productivity",
+    },
+  ],
+};
+fs.mkdirSync(require("node:path").dirname(marketplacePath), { recursive: true });
+fs.writeFileSync(marketplacePath, JSON.stringify(marketplace, null, 2) + "\n");
+NODE
+  rm -rf "$CC_HOOK_ONLY_MKT_DIR"
+  mv "$tmp" "$CC_HOOK_ONLY_MKT_DIR"
+}
+
 claude_marketplace_sync() { # claude_marketplace_sync <add-target> <expected-source>
   local target="$1" needle="$2" current
   current="$(claude_marketplace_current_source)"
@@ -1360,15 +1408,21 @@ claude_marketplace_sync() { # claude_marketplace_sync <add-target> <expected-sou
 }
 
 install_claude_modern() {
-  case "$SOURCE_MODE" in
-    remote)
-      write_claude_remote_manifest
-      claude_marketplace_sync "$CC_REMOTE_MKT_DIR" "$CC_REMOTE_MKT_DIR" || return 1
-      ;;
-    archive|dev)
-      claude_marketplace_sync "$MKT_DIR" "$MKT_DIR" || return 1
-      ;;
-  esac
+  if [ "$CLAUDE_HOOK_ONLY" -eq 1 ]; then
+    claude_cmd mcp remove openviking -s user >/dev/null 2>&1 || true
+    prepare_claude_hook_only_marketplace || return 1
+    claude_marketplace_sync "$CC_HOOK_ONLY_MKT_DIR" "$CC_HOOK_ONLY_MKT_DIR" || return 1
+  else
+    case "$SOURCE_MODE" in
+      remote)
+        write_claude_remote_manifest
+        claude_marketplace_sync "$CC_REMOTE_MKT_DIR" "$CC_REMOTE_MKT_DIR" || return 1
+        ;;
+      archive|dev)
+        claude_marketplace_sync "$MKT_DIR" "$MKT_DIR" || return 1
+        ;;
+    esac
+  fi
   if str_contains "$(claude_cmd plugin list 2>/dev/null || true)" "$PLUGIN_ID"; then
     info "$CLAUDE_BIN plugin update ($PLUGIN_ID)"
     claude_cmd plugin update "$PLUGIN_ID" || warn "$CLAUDE_BIN plugin update returned non-zero"
@@ -1389,12 +1443,16 @@ install_claude_legacy() {
   hooks_src="$plugin_dir/hooks/hooks.json"
   ts=$(date +%Y%m%d-%H%M%S)
 
-  info "Legacy mode: $CLAUDE_BIN mcp add (stdio proxy) + merging hooks into $CC_SETTINGS"
   claude_cmd mcp remove openviking -s user >/dev/null 2>&1 || true
-  claude_cmd mcp add --scope user openviking -- node "$plugin_dir/servers/mcp-proxy.mjs" || {
-    err "$CLAUDE_BIN mcp add failed"
-    return 1
-  }
+  if [ "$CLAUDE_HOOK_ONLY" -eq 1 ]; then
+    info "Legacy mode: merging hooks into $CC_SETTINGS without registering the bundled MCP server"
+  else
+    info "Legacy mode: $CLAUDE_BIN mcp add (stdio proxy) + merging hooks into $CC_SETTINGS"
+    claude_cmd mcp add --scope user openviking -- node "$plugin_dir/servers/mcp-proxy.mjs" || {
+      err "$CLAUDE_BIN mcp add failed"
+      return 1
+    }
+  fi
 
   [ -f "$hooks_src" ] || { err "hooks source not found: $hooks_src"; return 1; }
   mkdir -p "$HOME/.claude"
