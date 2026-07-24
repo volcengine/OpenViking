@@ -1,7 +1,7 @@
 export const RESULT_COUNT_OPTIONS = [5, 10, 20, 50] as const
 export const DEFAULT_RESULT_COUNT = 10
 
-export const RETRIEVAL_MODES = ['find', 'search'] as const
+export const RETRIEVAL_MODES = ['find', 'search', 'grep', 'glob'] as const
 export const DEFAULT_RETRIEVAL_MODE = 'find'
 
 export const RETRIEVAL_SCOPES = ['all', 'resources', 'custom'] as const

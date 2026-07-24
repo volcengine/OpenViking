@@ -9,17 +9,13 @@ import {
   HomeIcon,
   GithubIcon,
   KeyRoundIcon,
-  LoaderIcon,
-  MessageSquareIcon,
   MoonIcon,
   MonitorUpIcon,
-  PlusIcon,
   PlugZapIcon,
   ScrollTextIcon,
   SearchIcon,
   SparklesIcon,
   SunIcon,
-  TrashIcon,
   UsersRoundIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -43,7 +39,6 @@ import {
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
-  SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSub,
@@ -58,12 +53,6 @@ import {
 } from '#/hooks/use-app-connection'
 import { cn } from '#/lib/utils'
 import { resolveStudioManagementCapabilities } from '#/lib/studio-permissions'
-import {
-  useSessionListByRecency,
-  useCreateSession,
-  useDeleteSession,
-} from '#/lib/sessions/use-sessions'
-import { useSessionTitles } from '#/lib/sessions/use-session-titles'
 
 type NavItem = {
   icon: React.ComponentType
@@ -239,133 +228,6 @@ function NavGroupItem({ item, pathname, title, t }: NavGroupItemProps) {
   )
 }
 
-function NavSessionsItem({
-  pathname,
-  title,
-}: {
-  pathname: string
-  title: string
-}) {
-  const { t } = useTranslation(['appShell', 'sessions'])
-  const { identityScopeKey } = useAppConnection()
-  const navigate = useNavigate()
-  const isActive = pathname === '/sessions' || pathname.startsWith('/sessions/')
-  const [open, setOpen] = React.useState(isActive)
-
-  const { data: sessions, isLoading } = useSessionListByRecency()
-  const { getTitle, removeTitle, setTitle } = useSessionTitles(identityScopeKey)
-  const createSession = useCreateSession()
-  const deleteSession = useDeleteSession()
-
-  const activeSessionId = useRouterState({
-    select: (s) => {
-      const search = s.location.search as { s?: string }
-      return search.s ?? null
-    },
-  })
-
-  React.useEffect(() => {
-    if (isActive) setOpen(true)
-  }, [isActive])
-
-  const handleNewSession = React.useCallback(async () => {
-    const result = await createSession.mutateAsync(undefined)
-    setTitle(result.session_id, t('threadList.newSession', { ns: 'sessions' }))
-    void navigate({ to: '/sessions', search: { s: result.session_id } })
-  }, [createSession, navigate, setTitle, t])
-
-  const handleDeleteSession = React.useCallback(
-    async (e: React.MouseEvent, id: string) => {
-      e.stopPropagation()
-      e.preventDefault()
-      await deleteSession.mutateAsync(id)
-      removeTitle(id)
-      if (activeSessionId === id) {
-        void navigate({
-          to: '/sessions',
-          search: { s: undefined } as { s?: string },
-        })
-      }
-    },
-    [activeSessionId, deleteSession, navigate, removeTitle],
-  )
-
-  return (
-    <Collapsible
-      open={open}
-      onOpenChange={setOpen}
-      className="group/collapsible"
-    >
-      <SidebarMenuItem>
-        <CollapsibleTrigger
-          render={
-            <SidebarMenuButton tooltip={title} className="h-9">
-              <BlocksIcon />
-              <span>{title}</span>
-              <ChevronRightIcon className="ml-auto transition-transform duration-200 group-data-[open]/collapsible:rotate-90" />
-            </SidebarMenuButton>
-          }
-        />
-        <SidebarMenuAction
-          onClick={handleNewSession}
-          title={t('threadList.newSession', { ns: 'sessions' })}
-        >
-          <PlusIcon className="size-4" />
-        </SidebarMenuAction>
-        <CollapsibleContent>
-          <SidebarMenuSub>
-            {isLoading ? (
-              <SidebarMenuSubItem>
-                <div className="flex items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground">
-                  <LoaderIcon className="size-3 animate-spin" />
-                  <span>
-                    {t('sidebar.loadingSessions', { ns: 'appShell' })}
-                  </span>
-                </div>
-              </SidebarMenuSubItem>
-            ) : sessions.length === 0 ? (
-              <SidebarMenuSubItem>
-                <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                  {t('sidebar.noSessions', { ns: 'appShell' })}
-                </div>
-              </SidebarMenuSubItem>
-            ) : (
-              sessions.map((s) => {
-                const sessionTitle = getTitle(s.session_id)
-                const isSessionActive = activeSessionId === s.session_id
-
-                return (
-                  <SidebarMenuSubItem
-                    key={s.session_id}
-                    className="group/session"
-                  >
-                    <SidebarMenuSubButton
-                      render={
-                        <Link to="/sessions" search={{ s: s.session_id }} />
-                      }
-                      isActive={isSessionActive}
-                    >
-                      <MessageSquareIcon className="size-3.5 shrink-0 opacity-60" />
-                      <span className="truncate">{sessionTitle}</span>
-                    </SidebarMenuSubButton>
-                    <button
-                      type="button"
-                      onClick={(e) => handleDeleteSession(e, s.session_id)}
-                      className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover/session:opacity-100"
-                    >
-                      <TrashIcon className="size-3" />
-                    </button>
-                  </SidebarMenuSubItem>
-                )
-              })
-            )}
-          </SidebarMenuSub>
-        </CollapsibleContent>
-      </SidebarMenuItem>
-    </Collapsible>
-  )
-}
-
 export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <AppConnectionProvider>
@@ -459,16 +321,6 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
                         pathname === item.to ||
                         pathname.startsWith(`${item.to}/`)
                       const title = t(item.titleKey, { ns: 'appShell' })
-
-                      if (item.id === 'sessions') {
-                        return (
-                          <NavSessionsItem
-                            key={item.id}
-                            pathname={pathname}
-                            title={title}
-                          />
-                        )
-                      }
 
                       if (item.children) {
                         return (

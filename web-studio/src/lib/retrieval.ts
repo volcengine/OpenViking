@@ -2,6 +2,8 @@ import {
   getOvResult,
   normalizeOvClientError,
   postSearchFind,
+  postSearchGlob,
+  postSearchGrep,
   postSearchSearch,
 } from '#/lib/ov-client'
 import type { FindContextType, SearchResult } from '@ov-server/api/v1/search'
@@ -18,6 +20,8 @@ export interface FindResultItem {
   category: string
   match_reason: string
   relations: Array<{ uri: string; abstract: string }>
+  result_kind?: 'semantic' | 'grep' | 'glob'
+  line?: number
 }
 
 export interface FindQueryPlanItem {
@@ -57,6 +61,17 @@ export interface FetchFindOptions {
 
 export interface FetchSearchOptions extends FetchFindOptions {
   sessionId?: string
+}
+
+export interface FetchGrepOptions {
+  caseInsensitive?: boolean
+  limit?: number
+  uri: string
+}
+
+export interface FetchGlobOptions {
+  limit?: number
+  uri?: string
 }
 
 const FIND_CONTEXT_TYPES = ['resource', 'memory', 'skill'] as const
@@ -253,4 +268,103 @@ export async function fetchFindAllTypes(
   merged.total =
     merged.memories.length + merged.resources.length + merged.skills.length
   return merged
+}
+
+function emptyPatternResult(resources: FindResultItem[]): GroupedFindResult {
+  return {
+    memories: [],
+    resources,
+    skills: [],
+    total: resources.length,
+  }
+}
+
+function patternResultItem(
+  uri: string,
+  kind: 'grep' | 'glob',
+  options: { content?: string; line?: number } = {},
+): FindResultItem {
+  return {
+    abstract: options.content ?? '',
+    category: '',
+    context_type: 'resource',
+    level: 2,
+    line: options.line,
+    match_reason: '',
+    relations: [],
+    result_kind: kind,
+    score: 0,
+    uri,
+  }
+}
+
+export async function fetchGrep(
+  pattern: string,
+  options: FetchGrepOptions,
+): Promise<GroupedFindResult> {
+  try {
+    const result = await getOvResult<unknown>(
+      postSearchGrep({
+        body: {
+          case_insensitive: options.caseInsensitive,
+          node_limit: options.limit ?? 10,
+          pattern,
+          uri: options.uri,
+        },
+      }),
+    )
+    const matches =
+      result && typeof result === 'object' && 'matches' in result
+        ? (result as { matches?: unknown }).matches
+        : undefined
+    const resources = Array.isArray(matches)
+      ? matches
+          .filter(
+            (match): match is Record<string, unknown> =>
+              match !== null &&
+              typeof match === 'object' &&
+              !Array.isArray(match) &&
+              typeof match.uri === 'string',
+          )
+          .map((match) =>
+            patternResultItem(match.uri as string, 'grep', {
+              content:
+                typeof match.content === 'string' ? match.content : undefined,
+              line: typeof match.line === 'number' ? match.line : undefined,
+            }),
+          )
+      : []
+    return emptyPatternResult(resources)
+  } catch (error) {
+    throw toVikingApiError(error)
+  }
+}
+
+export async function fetchGlob(
+  pattern: string,
+  options: FetchGlobOptions = {},
+): Promise<GroupedFindResult> {
+  try {
+    const result = await getOvResult<unknown>(
+      postSearchGlob({
+        body: {
+          node_limit: options.limit ?? 10,
+          pattern,
+          uri: options.uri ?? 'viking://',
+        },
+      }),
+    )
+    const matches =
+      result && typeof result === 'object' && 'matches' in result
+        ? (result as { matches?: unknown }).matches
+        : undefined
+    const resources = Array.isArray(matches)
+      ? matches
+          .filter((uri): uri is string => typeof uri === 'string')
+          .map((uri) => patternResultItem(uri, 'glob'))
+      : []
+    return emptyPatternResult(resources)
+  } catch (error) {
+    throw toVikingApiError(error)
+  }
 }

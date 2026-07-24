@@ -1,12 +1,19 @@
 import { useQuery } from '@tanstack/react-query'
 
-import { fetchFind, fetchFindAllTypes, fetchSearch } from '#/lib/retrieval'
+import {
+  fetchFind,
+  fetchFindAllTypes,
+  fetchGlob,
+  fetchGrep,
+  fetchSearch,
+} from '#/lib/retrieval'
 import type { GroupedFindResult } from '#/lib/retrieval'
 
 import type { RetrievalMode } from '../-types/retrieval'
 
 export function useRetrievalQuery({
   enabled,
+  ignoreCase,
   mode,
   query,
   resultCount,
@@ -14,6 +21,7 @@ export function useRetrievalQuery({
   targetUri,
 }: {
   enabled: boolean
+  ignoreCase: boolean
   mode: RetrievalMode
   query: string
   resultCount: number
@@ -29,11 +37,34 @@ export function useRetrievalQuery({
         return fetchSearch(query, { limit: resultCount, sessionId, targetUri })
       }
 
+      if (mode === 'grep') {
+        return fetchGrep(query, {
+          caseInsensitive: ignoreCase,
+          limit: resultCount,
+          uri: targetUri ?? 'viking://',
+        })
+      }
+
+      if (mode === 'glob') {
+        return fetchGlob(query, {
+          limit: resultCount,
+          uri: targetUri ?? 'viking://',
+        })
+      }
+
       return targetUri
         ? fetchFind(query, { limit: resultCount, targetUri })
         : fetchFindAllTypes(query, { limit: resultCount })
     },
-    queryKey: ['retrieval', mode, query, targetUri, resultCount, sessionId],
+    queryKey: [
+      'retrieval',
+      mode,
+      query,
+      targetUri,
+      resultCount,
+      sessionId,
+      ignoreCase,
+    ],
     staleTime: 60_000,
   })
 }

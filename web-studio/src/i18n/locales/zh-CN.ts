@@ -294,11 +294,13 @@ const zhCN = {
       addUser: '新增 user',
       cancel: '取消',
       changeRole: '修改 {{user}} 的角色',
+      confirmRemoveUser: '删除用户',
       confirmRoleChange: '确认修改',
       copy: '复制',
       currentIdentity: '当前身份',
       refresh: '刷新',
       regenerate: '重新生成',
+      removeUser: '删除 {{user}}',
       save: '保存',
       switchIdentity: '切换身份',
       use: '使用',
@@ -371,6 +373,11 @@ const zhCN = {
           '要重新生成 {{account}} / {{user}} 的 API key 吗？当前 key 会立即失效。',
         title: '重新生成 API key？',
       },
+      removeUser: {
+        description:
+          '确定从 {{account}} 空间移除 {{user}} 吗？该用户的 API Key 会立即失效，此操作不可撤销。',
+        title: '删除用户？',
+      },
     },
     empty: {
       adminDescription:
@@ -421,6 +428,8 @@ const zhCN = {
       memberListDescriptionRoot:
         '可直接修改成员角色；“切换身份”只会改变 Playground、检索等数据页面的访问身份，不会改变当前 Root 管理凭证。',
       memberListTitle: '空间成员',
+      cannotRemoveCurrentIdentity: '不能删除当前正在使用的身份。',
+      cannotRemoveLastManager: '不能删除空间内最后一个管理员。',
       noUsableKey: '该用户没有可用于数据访问的明文 API Key。',
       openConnection: '打开连接设置',
       title: '用户管理',
@@ -474,6 +483,7 @@ const zhCN = {
       keyRegenerated: 'API key 已重新生成',
       roleUpdated: '{{user}} 的角色已修改为 {{role}}',
       userCreated: 'User 已创建',
+      userRemoved: '{{user}} 已删除',
     },
   },
   home: {
@@ -805,13 +815,22 @@ const zhCN = {
   retrieval: {
     title: '检索',
     searchPlaceholder: '输入检索内容',
+    placeholders: {
+      find: '输入语义检索内容',
+      search: '输入需要结合会话理解的问题',
+      grep: '输入正则表达式或精确文本',
+      glob: '输入文件模式，例如 **/*.md',
+    },
     send: '检索',
     controls: {
       function: '检索函数',
       modes: {
         find: 'find',
         search: 'search',
+        grep: 'grep',
+        glob: 'glob',
       },
+      ignoreCase: '忽略大小写',
       resultCount: '返回数量',
       path: '路径',
       pathPlaceholder: '/',
@@ -837,6 +856,7 @@ const zhCN = {
     results: {
       title: '检索结果',
       topN: '检索结果（Top{{count}}）',
+      line: '第 {{line}} 行',
     },
     types: {
       resource: 'Resources',
@@ -874,6 +894,12 @@ const zhCN = {
     threadList: {
       title: '会话',
       newSession: '新建会话',
+      count: '{{count}} 个会话',
+      loading: '正在加载会话...',
+      emptyTitle: '还没有会话',
+      emptyDescription: '点击右上角的加号开始一段新对话。',
+      deleteSession: '删除“{{title}}”',
+      shortcut: '⌘ N 新建会话',
     },
     chat: {
       copy: '复制',
@@ -901,8 +927,23 @@ const zhCN = {
       send: '发送',
       cancel: '停止',
     },
+    impact: {
+      title: '记忆影响',
+      open: '查看本次会话造成的记忆影响',
+      description: '由 {{commits}} 次提交产生 {{changes}} 项记忆变更',
+      kinds: {
+        add: '新增',
+        update: '更新',
+        delete: '删除',
+      },
+      before: '变更前',
+      after: '变更后',
+      addedContent: '新增内容',
+      deletedContent: '删除内容',
+      emptyContent: '没有可展示的内容',
+    },
     empty: {
-      description: '从侧边栏选择一个会话，或创建新会话。',
+      description: '从左侧选择一个会话，或创建新会话。',
       title: '未选择会话',
     },
   },

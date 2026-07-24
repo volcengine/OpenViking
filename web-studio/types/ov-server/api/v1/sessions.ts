@@ -29,12 +29,21 @@ export type SessionDetail = {
   message_count: number
   pending_tokens: number
   session_id: string
+  total_message_count?: number
   updated_at: string
+  uri?: string
   user: UserIdentifier
 }
 
 export type SessionContextResult = {
   messages?: unknown[]
+}
+
+export type SessionArchiveResult = {
+  abstract?: string
+  archive_id: string
+  messages?: unknown[]
+  overview?: string
 }
 
 export type SessionCreatedResult = {

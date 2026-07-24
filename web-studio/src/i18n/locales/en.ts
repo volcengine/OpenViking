@@ -302,11 +302,13 @@ const en = {
       addUser: 'Add user',
       cancel: 'Cancel',
       changeRole: 'Change the role for {{user}}',
+      confirmRemoveUser: 'Delete user',
       confirmRoleChange: 'Confirm change',
       copy: 'Copy',
       currentIdentity: 'Current identity',
       refresh: 'Refresh',
       regenerate: 'Regenerate',
+      removeUser: 'Delete {{user}}',
       save: 'Save',
       switchIdentity: 'Switch identity',
       use: 'Use',
@@ -382,6 +384,11 @@ const en = {
           'Regenerate the API key for {{account}} / {{user}}. The current key stops working immediately.',
         title: 'Regenerate API key?',
       },
+      removeUser: {
+        description:
+          'Remove {{user}} from {{account}}? Their API key stops working immediately. This action cannot be undone.',
+        title: 'Delete user?',
+      },
     },
     empty: {
       adminDescription:
@@ -433,6 +440,9 @@ const en = {
       memberListDescriptionRoot:
         'You can change member roles here. "Switch identity" only changes the user used by data pages such as Playground and Retrieval; it does not change the active Root management credential.',
       memberListTitle: 'Workspace members',
+      cannotRemoveCurrentIdentity: 'The active identity cannot be deleted.',
+      cannotRemoveLastManager:
+        'The last workspace administrator cannot be deleted.',
       noUsableKey:
         'This user has no plaintext API key available for data access.',
       openConnection: 'Open connection settings',
@@ -487,6 +497,7 @@ const en = {
       keyRegenerated: 'API key regenerated',
       roleUpdated: "{{user}}'s role changed to {{role}}",
       userCreated: 'User created',
+      userRemoved: '{{user}} deleted',
     },
   },
   home: {
@@ -831,13 +842,22 @@ const en = {
   retrieval: {
     title: 'Retrieval',
     searchPlaceholder: 'Search context',
+    placeholders: {
+      find: 'Enter a semantic query',
+      search: 'Enter a question to interpret with session context',
+      grep: 'Enter a regular expression or exact text',
+      glob: 'Enter a file pattern, for example **/*.md',
+    },
     send: 'Search',
     controls: {
       function: 'Retrieval Function',
       modes: {
         find: 'find',
         search: 'search',
+        grep: 'grep',
+        glob: 'glob',
       },
+      ignoreCase: 'Ignore case',
       resultCount: 'Results',
       path: 'Path',
       pathPlaceholder: '/',
@@ -863,6 +883,7 @@ const en = {
     results: {
       title: 'Search Results',
       topN: 'Search Results (Top{{count}})',
+      line: 'Line {{line}}',
     },
     types: {
       resource: 'Resources',
@@ -900,6 +921,13 @@ const en = {
     threadList: {
       title: 'Sessions',
       newSession: 'New Session',
+      count: '{{count}} session',
+      count_other: '{{count}} sessions',
+      loading: 'Loading sessions...',
+      emptyTitle: 'No sessions yet',
+      emptyDescription: 'Select the plus button to start a new conversation.',
+      deleteSession: 'Delete “{{title}}”',
+      shortcut: '⌘ N to create a new session',
     },
     chat: {
       copy: 'Copy',
@@ -930,8 +958,23 @@ const en = {
       send: 'Send',
       cancel: 'Stop',
     },
+    impact: {
+      title: 'Memory impact',
+      open: 'View memory changes caused by this session',
+      description: '{{changes}} memory changes across {{commits}} commits',
+      kinds: {
+        add: 'Added',
+        update: 'Updated',
+        delete: 'Deleted',
+      },
+      before: 'Before',
+      after: 'After',
+      addedContent: 'Added content',
+      deletedContent: 'Deleted content',
+      emptyContent: 'No content to display',
+    },
     empty: {
-      description: 'Select a session from the sidebar or create a new one.',
+      description: 'Select a session from the list or create a new one.',
       title: 'No session selected',
     },
   },

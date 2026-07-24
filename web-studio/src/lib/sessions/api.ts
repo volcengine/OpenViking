@@ -1,5 +1,6 @@
 import {
   deleteSessionBySessionId,
+  getContentRead,
   getSessionIdArchiveByArchiveId,
   getSessions,
   getSessionBySessionId,
@@ -18,13 +19,16 @@ import {
   ovClient,
 } from '#/lib/ov-client'
 
+import { parseSessionMemoryDiff } from './memory-diff'
 import type { BotChatRequest, BotChatResponse } from '@ov-server/bot/v1/chat'
+import type { SessionMemoryDiff } from './memory-diff'
 import type { Message, MessagePart } from './types/message'
 import type {
   AddMessageResult,
   CommitSessionResult,
   CreateSessionResult,
   DeleteSessionResult,
+  SessionArchiveResult,
   SessionContextResult,
   SessionListItem,
   SessionMeta,
@@ -74,8 +78,8 @@ export async function fetchSessionContext(
 export async function fetchSessionArchive(
   sessionId: string,
   archiveId: string,
-): Promise<unknown> {
-  return getOvResult<unknown>(
+): Promise<SessionArchiveResult> {
+  return getOvResult<SessionArchiveResult>(
     getSessionIdArchiveByArchiveId({
       path: { archive_id: archiveId, session_id: sessionId },
     }),
@@ -96,26 +100,101 @@ export async function deleteSession(
 // Session Messages
 // ---------------------------------------------------------------------------
 
-/** Fetch message history for a session via the /context endpoint. */
+function isMessage(value: unknown): value is Message {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'id' in value &&
+    'role' in value &&
+    'parts' in value
+  )
+}
+
+function getMessages(value: unknown): Message[] {
+  return Array.isArray(value) ? value.filter(isMessage) : []
+}
+
+function deduplicateMessages(messages: Message[]): Message[] {
+  const seen = new Set<string>()
+  return messages.filter((message) => {
+    if (seen.has(message.id)) return false
+    seen.add(message.id)
+    return true
+  })
+}
+
+/**
+ * Fetch the complete message history.
+ *
+ * `/context` only contains messages after the latest completed archive, so
+ * archived messages must be loaded separately and prepended in archive order.
+ */
 export async function fetchSessionMessages(
   sessionId: string,
+  sessionMeta?: SessionMeta,
 ): Promise<Message[]> {
-  const result = await getOvResult<SessionContextResult>(
+  const context = await getOvResult<SessionContextResult>(
     getSessionIdContext({
       path: { session_id: sessionId },
     }),
   )
-  const raw = result.messages
-  if (!Array.isArray(raw)) return []
-  // Each item is Message.to_dict() — { id, role, parts, created_at }
-  return raw.filter(
-    (m): m is Message =>
-      typeof m === 'object' &&
-      m !== null &&
-      'id' in m &&
-      'role' in m &&
-      'parts' in m,
+
+  let commitCount = 0
+  try {
+    const session = sessionMeta ?? (await fetchSession(sessionId))
+    commitCount = Math.max(0, Math.floor(session.commit_count || 0))
+  } catch {
+    // Older servers may not expose session details. Current context is still
+    // useful, so preserve the previous behavior as a fallback.
+  }
+
+  const archiveRequests = Array.from({ length: commitCount }, (_, index) =>
+    fetchSessionArchive(
+      sessionId,
+      `archive_${String(index + 1).padStart(3, '0')}`,
+    ),
   )
+  const archives = await Promise.allSettled(archiveRequests)
+  const archivedMessages = archives.flatMap((archive) =>
+    archive.status === 'fulfilled' ? getMessages(archive.value.messages) : [],
+  )
+
+  return deduplicateMessages([
+    ...archivedMessages,
+    ...getMessages(context.messages),
+  ])
+}
+
+export async function fetchSessionMemoryDiffs(
+  session: SessionMeta,
+): Promise<SessionMemoryDiff[]> {
+  const commitCount = Math.max(0, Math.floor(session.commit_count || 0))
+  if (commitCount === 0) return []
+
+  const sessionUri =
+    session.uri?.replace(/\/+$/, '') ||
+    `viking://user/${session.user.user_id}/sessions/${session.session_id}`
+  const requests = Array.from({ length: commitCount }, async (_, index) => {
+    const archiveId = `archive_${String(index + 1).padStart(3, '0')}`
+    const result = await getOvResult<unknown>(
+      getContentRead({
+        query: {
+          limit: -1,
+          offset: 0,
+          raw: true,
+          uri: `${sessionUri}/history/${archiveId}/memory_diff.json`,
+        } as Parameters<typeof getContentRead>[0]['query'] & { raw?: boolean },
+      }),
+    )
+    return parseSessionMemoryDiff(result, archiveId)
+  })
+  const results = await Promise.allSettled(requests)
+
+  return results
+    .flatMap((result) =>
+      result.status === 'fulfilled' && result.value ? [result.value] : [],
+    )
+    .sort((left, right) => right.archiveId.localeCompare(left.archiveId))
 }
 
 export async function addMessage(

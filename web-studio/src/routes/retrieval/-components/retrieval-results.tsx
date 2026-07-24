@@ -252,9 +252,15 @@ function ResultRow({
           </p>
         )}
       </div>
-      <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-muted-foreground">
-        {item.item.score.toFixed(3)}
-      </span>
+      {item.item.result_kind === 'grep' && item.item.line !== undefined ? (
+        <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+          {t('results.line', { line: item.item.line })}
+        </span>
+      ) : item.item.result_kind !== 'glob' ? (
+        <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-muted-foreground">
+          {item.item.score.toFixed(3)}
+        </span>
+      ) : null}
     </Link>
   )
 }

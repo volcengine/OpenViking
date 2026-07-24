@@ -175,6 +175,20 @@ export function createIdentityScopeKey(
   ].join('\u0000')
 }
 
+export function createConnectionRoleProbeKey(
+  connection: ConnectionDraft,
+  serverMode: ServerMode,
+): string {
+  return [
+    normalizeBaseUrl(connection.baseUrl),
+    serverMode,
+    connection.accountId,
+    connection.userId,
+    connection.adminApiKey ? hashSecret(connection.adminApiKey) : 'none',
+    connection.apiKey ? hashSecret(connection.apiKey) : 'none',
+  ].join('\u0000')
+}
+
 function resolveIdentityField(
   envValue: string,
   storedValue: string | undefined,
@@ -475,6 +489,10 @@ export function AppConnectionProvider({
     select: (state) => state.location.pathname,
   })
   const initialConnectionRef = React.useRef<ConnectionDraft | null>(null)
+  const synchronizedRoleProbeRef = React.useRef<{
+    key: string
+    role: ConnectionRole
+  } | null>(null)
   if (initialConnectionRef.current === null) {
     initialConnectionRef.current = readInitialConnection()
     applyConnection(initialConnectionRef.current, 'checking')
@@ -532,6 +550,17 @@ export function AppConnectionProvider({
       baseUrl: connection.baseUrl,
       serverMode,
     })
+    const probeKey = createConnectionRoleProbeKey(connection, serverMode)
+    const synchronizedProbe = synchronizedRoleProbeRef.current
+
+    if (synchronizedProbe?.key === probeKey) {
+      synchronizedRoleProbeRef.current = null
+      setConnectionRole(synchronizedProbe.role)
+      setConnectionRoleLoading(false)
+      return () => {
+        cancelled = true
+      }
+    }
 
     setConnectionRole(roleProbe.role)
     setConnectionRoleLoading(roleProbe.isLoading)
@@ -560,13 +589,15 @@ export function AppConnectionProvider({
         }
 
         const { accountId, role } = controlIdentity
-        setConnectionRole(role)
-        setConnectionRoleLoading(false)
         const dataConnection = dataIdentity
           ? synchronizeResolvedDataIdentity(connection, dataIdentity)
           : null
         if (dataConnection) {
           const next = synchronizeConnectionRuntime(dataConnection, serverMode)
+          synchronizedRoleProbeRef.current = {
+            key: createConnectionRoleProbeKey(next, serverMode),
+            role,
+          }
           queryClient.clear()
           setConnection(next)
           return
@@ -585,10 +616,16 @@ export function AppConnectionProvider({
             { ...connection, accountId },
             serverMode,
           )
+          synchronizedRoleProbeRef.current = {
+            key: createConnectionRoleProbeKey(next, serverMode),
+            role,
+          }
           queryClient.clear()
           setConnection(next)
           return
         }
+        setConnectionRole(role)
+        setConnectionRoleLoading(false)
       })
       .catch(() => {
         if (!cancelled) {
