@@ -15,8 +15,9 @@ from fastapi.testclient import TestClient
 from vikingbot.bus.events import OutboundEventType, OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.openapi import OpenAPIChannel, OpenAPIChannelConfig, PendingResponse
-from vikingbot.channels.openapi_models import ChatResponse
+from vikingbot.channels.openapi_models import ChatRequest, ChatResponse
 from vikingbot.config.schema import BotChannelConfig, SessionKey
+from vikingbot.session.manager import Session
 
 
 @pytest.fixture
@@ -50,6 +51,41 @@ class _AsyncBytesStream(httpx.AsyncByteStream):
 
 
 class TestOpenAPIAuth:
+    def test_chat_request_rejects_unsupported_context(self):
+        with pytest.raises(ValueError, match="context is not supported"):
+            ChatRequest(message="hello", context=[{"role": "user", "content": "prior"}])
+        assert ChatRequest(message="hello", context=[]).context == []
+
+    def test_chat_rejects_second_in_flight_request(self, message_bus, temp_workspace):
+        channel = OpenAPIChannel(OpenAPIChannelConfig(), message_bus, temp_workspace)
+        scope = channel._principal_scope("standalone")
+        storage_key = channel._scoped_session_id(scope, "same-session")
+        channel._pending[storage_key] = PendingResponse()
+
+        response = _make_client(channel).post(
+            "/bot/v1/chat", json={"message": "hello", "session_id": "same-session"}
+        )
+
+        assert response.status_code == 409
+        assert message_bus.inbound_size == 0
+
+    def test_delete_removes_history_and_rotates_storage_key(
+        self, message_bus, temp_workspace
+    ):
+        channel = OpenAPIChannel(OpenAPIChannelConfig(), message_bus, temp_workspace)
+        client = _make_client(channel)
+        session_id = client.post("/bot/v1/sessions", json={}).json()["session_id"]
+        scope = channel._principal_scope("standalone")
+        storage_key = channel._scoped_session_id(scope, session_id)
+        key = SessionKey(type="cli", channel_id="default", chat_id=storage_key)
+        channel._session_manager._save_unlocked(Session(key=key))
+
+        response = client.delete(f"/bot/v1/sessions/{session_id}")
+
+        assert response.status_code == 200
+        assert not channel._session_manager.has_persisted(key)
+        assert channel._scoped_session_id(scope, session_id) != storage_key
+
     def test_health_remains_available_without_api_key(self, message_bus, temp_workspace):
         channel = OpenAPIChannel(
             OpenAPIChannelConfig(),

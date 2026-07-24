@@ -89,6 +89,12 @@ class ChatRequest(BaseModel):
         description="Authenticated OpenViking connection forwarded by the server proxy",
     )
 
+    @model_validator(mode="after")
+    def reject_unsupported_context(self) -> "ChatRequest":
+        if self.context:
+            raise ValueError("context is not supported")
+        return self
+
 
 class ChatResponse(BaseModel):
     """Response from chat endpoint (non-streaming)."""
