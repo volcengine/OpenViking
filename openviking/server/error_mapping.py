@@ -21,8 +21,10 @@ from openviking.pyagfs.exceptions import (
     AGFSNetworkError,
     AGFSNotADirectoryError,
     AGFSNotFoundError,
+    AGFSNotSupportedError,
     AGFSPermissionDeniedError,
     AGFSPluginError,
+    AGFSResourceExhaustedError,
     AGFSSerializationError,
     AGFSTimeoutError,
     GitConcurrentCommitError,
@@ -37,7 +39,9 @@ from openviking_cli.exceptions import (
     NotFoundError,
     OpenVikingError,
     PermissionDeniedError,
+    ResourceExhaustedError,
     UnavailableError,
+    UnimplementedError,
 )
 
 _KNOWN_HTTP_STATUS_CODES = frozenset(HTTP_STATUS_TO_ERROR_CODE)
@@ -502,6 +506,8 @@ def map_exception(
         return PermissionDeniedError(str(exc), resource=resource)
     if isinstance(exc, AGFSAlreadyExistsError):
         return ConflictError(str(exc), resource=resource)
+    if isinstance(exc, AGFSNotSupportedError):
+        return UnimplementedError(str(exc), details=_resource_details(resource))
     if isinstance(exc, AGFSInvalidPathError):
         message = str(exc)
         return InvalidURIError(resource or message, message)
@@ -511,6 +517,8 @@ def map_exception(
         return InvalidArgumentError(str(exc), details=_file_directory_details(resource))
     if isinstance(exc, AGFSDirectoryNotEmptyError):
         return FailedPreconditionError(str(exc), details=_resource_details(resource))
+    if isinstance(exc, AGFSResourceExhaustedError):
+        return ResourceExhaustedError(str(exc), details=_resource_details(resource))
     if isinstance(exc, AGFSInvalidOperationError):
         return InvalidArgumentError(str(exc), details=_resource_details(resource))
     if isinstance(

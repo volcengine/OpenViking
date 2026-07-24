@@ -683,6 +683,19 @@ class FSService:
         path = validate_viking_uri(path, field_name="path")
         return await viking_fs.show_blob_raw(target_ref, path=path, ctx=ctx)
 
+    async def diff(
+        self,
+        *,
+        path: str,
+        from_ref: Optional[str],
+        to_ref: str,
+        ctx: RequestContext,
+    ) -> Dict[str, Any]:
+        """Return a unified text diff for one path between two snapshots."""
+        viking_fs = self._ensure_initialized()
+        path = validate_viking_uri(path, field_name="path")
+        return await viking_fs.diff(path=path, from_ref=from_ref, to_ref=to_ref, ctx=ctx)
+
     async def log(
         self,
         ctx: RequestContext,

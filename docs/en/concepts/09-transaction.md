@@ -361,7 +361,7 @@ for conflicts first:
 
 ### Lock Expiry Cleanup
 
-**Stale lock detection**: PathLockEngine checks the fencing token timestamp. Locks older than `lock_expire` (default 300s) are considered stale and are removed automatically during acquisition.
+**Stale lock detection**: PathLockEngine checks the fencing token timestamp. Locks older than `lock_expire` (default 1800s / 30 minutes) are considered stale and are removed automatically during acquisition.
 
 **In-process cleanup**: LockManager checks active LockHandles every 60 seconds. Handles that still own lock files but have been inactive for longer than `lock_expire` are force-released.
 
@@ -374,7 +374,7 @@ for conflicts first:
 | Scenario | Recovery action |
 |----------|----------------|
 | session_memory extraction crash | Redo memory extraction + write + enqueue from archive |
-| Crash while holding lock | Lock file remains in AGFS; stale detection auto-cleans on next acquisition (default 300s expiry) |
+| Crash while holding lock | Lock file remains in AGFS; stale detection auto-cleans on next acquisition (default 1800s / 30-minute expiry) |
 | Crash after enqueue, before worker processes | QueueFS SQLite persistence; worker auto-pulls after restart |
 | Orphan index | Cleaned on L2 on-demand load |
 
@@ -397,7 +397,7 @@ Path locks are enabled by default with no extra configuration needed. **The defa
   "storage": {
     "transaction": {
       "lock_timeout": 5.0,
-      "lock_expire": 300.0
+      "lock_expire": 1800.0
     }
   }
 }
@@ -406,7 +406,7 @@ Path locks are enabled by default with no extra configuration needed. **The defa
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `lock_timeout` | float | Lock acquisition timeout (seconds). `0` = fail immediately if locked (default). `> 0` = wait/retry up to this many seconds. | `0.0` |
-| `lock_expire` | float | Lock inactivity threshold (seconds). Locks not refreshed within this window are treated as stale and reclaimed. | `300.0` |
+| `lock_expire` | float | Lock inactivity threshold (seconds). Locks not refreshed within this window are treated as stale and reclaimed. | `1800.0` |
 
 ### QueueFS Persistence
 

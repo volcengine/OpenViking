@@ -196,6 +196,9 @@ class AsyncOpenViking:
         created_at: str | None = None,
         peer_id: str | None = None,
         telemetry: TelemetryRequest = False,
+        turn_id: str | None = None,
+        message_kind: str | None = None,
+        source_message_ids: list[str] | None = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -210,6 +213,15 @@ class AsyncOpenViking:
         If both content and parts are provided, parts takes precedence.
         """
         await self._ensure_initialized()
+        semantic_kwargs = {
+            key: value
+            for key, value in {
+                "turn_id": turn_id,
+                "message_kind": message_kind,
+                "source_message_ids": source_message_ids,
+            }.items()
+            if value is not None
+        }
         return await self._client.add_message(
             session_id=session_id,
             role=role,
@@ -218,6 +230,7 @@ class AsyncOpenViking:
             created_at=created_at,
             peer_id=peer_id,
             telemetry=telemetry,
+            **semantic_kwargs,
         )
 
     async def batch_add_messages(
@@ -240,13 +253,28 @@ class AsyncOpenViking:
         telemetry: TelemetryRequest = False,
         *,
         keep_recent_count: int = 0,
+        retention_mode: str | None = None,
+        keep_recent_turn_count: int | None = None,
+        retained_message_token_budget: int | None = None,
+        min_raw_tail_steps: int | None = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
         await self._ensure_initialized()
+        optional_retention = {
+            key: value
+            for key, value in {
+                "retention_mode": retention_mode,
+                "keep_recent_turn_count": keep_recent_turn_count,
+                "retained_message_token_budget": retained_message_token_budget,
+                "min_raw_tail_steps": min_raw_tail_steps,
+            }.items()
+            if value is not None
+        }
         return await self._client.commit_session(
             session_id,
             telemetry=telemetry,
             keep_recent_count=keep_recent_count,
+            **optional_retention,
         )
 
     async def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:

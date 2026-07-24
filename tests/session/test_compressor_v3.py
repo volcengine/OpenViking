@@ -131,6 +131,51 @@ def test_case_experience_links_require_policy_root_uri():
         )
 
 
+def test_case_experience_links_exclude_experiences_that_failed_to_persist():
+    traj_uri = "viking://user/u/memories/trajectories/t.md"
+    exp_uri = "viking://user/u/memories/experiences/exp.md"
+    plan = PolicyUpdatePlan(
+        items=[
+            PolicyPlanItem(
+                kind="upsert",
+                memory_type="experiences",
+                target_name="exp",
+                target_uri=exp_uri,
+                before_content=None,
+                after_content="exp",
+                links=[
+                    StoredLink(
+                        from_uri=exp_uri,
+                        to_uri=traj_uri,
+                        link_type="derived_from",
+                        weight=1.0,
+                    )
+                ],
+            )
+        ]
+    )
+    apply_result = PolicyApplyResult(
+        updated_policy_set=ExperienceSet(
+            root_uri="viking://user/u/memories/experiences",
+            policies=[],
+        ),
+        written_uris=[],
+        errors=[f"{exp_uri}: failed to acquire encrypted write lock"],
+    )
+
+    from openviking.session.compressor_v3 import _case_experience_links_via_trajectories
+
+    assert (
+        _case_experience_links_via_trajectories(
+            case_uri="viking://user/u/memories/cases/case.md",
+            trajectory_uris={traj_uri},
+            plan=plan,
+            apply_result=apply_result,
+        )
+        == []
+    )
+
+
 @pytest.mark.asyncio
 async def test_train_from_extracted_cases_submits_streaming_rollout(monkeypatch):
     submitted_gradients = []

@@ -69,13 +69,13 @@ fn zip_entry_name(relative_path: &Path) -> Result<String> {
     Ok(normalize_zip_entry_name(name))
 }
 
-pub fn api_error_from_envelope(json: &Value, status: StatusCode) -> String {
+pub fn api_error_from_envelope(json: &Value, status: StatusCode) -> Error {
     let error_code = json
         .get("error")
         .and_then(|e| e.get("code"))
         .and_then(|c| c.as_str());
-    let error_msg = json
-        .get("error")
+    let error = json.get("error");
+    let error_msg = error
         .and_then(|e| e.get("message"))
         .and_then(|m| m.as_str())
         .map(|s| s.to_string())
@@ -84,11 +84,34 @@ pub fn api_error_from_envelope(json: &Value, status: StatusCode) -> String {
                 .and_then(|d| d.as_str())
                 .map(|s| s.to_string())
         })
-        .unwrap_or_else(|| format!("HTTP error {}", status));
+        .unwrap_or_else(|| {
+            if json.is_null() {
+                format!("HTTP error {}", status)
+            } else {
+                json.to_string()
+            }
+        });
+    let details = error.and_then(|e| e.get("details")).cloned();
 
-    match error_code {
-        Some(code) => format!("[{}] {}", code, error_msg),
-        None => error_msg,
+    Error::api_response(
+        error_code.map(str::to_string),
+        error_msg,
+        details,
+        status.as_u16(),
+    )
+}
+
+pub(crate) fn api_error_from_body(body: &[u8], status: StatusCode) -> Error {
+    match serde_json::from_slice(body) {
+        Ok(json) => api_error_from_envelope(&json, status),
+        Err(_) => Error::api_with_status(
+            format!(
+                "HTTP error {}\n\nRaw response body:\n{}",
+                status,
+                String::from_utf8_lossy(body)
+            ),
+            status.as_u16(),
+        ),
     }
 }
 
@@ -280,7 +303,7 @@ impl BaseClient {
         let response = request
             .send()
             .await
-            .map_err(|e| Error::Network(format!("{}: {}", error_context, e)))?;
+            .map_err(|e| Error::from_reqwest(error_context, e))?;
         if !Self::is_gateway_token_challenge(&response) {
             return Ok(response);
         }
@@ -295,7 +318,7 @@ impl BaseClient {
             .header(GATEWAY_TOKEN_HEADER, gateway_token)
             .send()
             .await
-            .map_err(|e| Error::Network(format!("{}: {}", error_context, e)))
+            .map_err(|e| Error::from_reqwest(error_context, e))
     }
 
     async fn headers_for_uncloneable_request(&self) -> Result<reqwest::header::HeaderMap> {
@@ -310,7 +333,7 @@ impl BaseClient {
             .headers(headers.clone())
             .send()
             .await
-            .map_err(|e| Error::Network(format!("Gateway detection request failed: {}", e)))?;
+            .map_err(|e| Error::from_reqwest("Gateway detection request failed", e))?;
         if Self::is_gateway_token_challenge(&response) {
             if let Ok(value) = reqwest::header::HeaderValue::from_str(gateway_token) {
                 headers.insert(GATEWAY_TOKEN_HEADER, value);
@@ -333,40 +356,26 @@ impl BaseClient {
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| Error::Network(format!("Failed to read response body: {}", e)))?;
+            .map_err(|e| Error::from_reqwest("Failed to read response body", e))?;
+
+        if !status.is_success() {
+            return Err(api_error_from_body(&bytes, status));
+        }
 
         let json: Value = match serde_json::from_slice(&bytes) {
             Ok(json) => json,
             Err(e) => {
                 let body_str = String::from_utf8_lossy(&bytes);
-                return Err(Error::Network(format!(
+                return Err(Error::Parse(format!(
                     "Failed to parse JSON response: {}\n\nRaw response body:\n{}",
                     e, body_str
                 )));
             }
         };
 
-        if !status.is_success() {
-            return Err(Error::api_with_status(
-                api_error_from_envelope(&json, status),
-                status.as_u16(),
-            ));
-        }
-
         if let Some(error) = json.get("error") {
             if !error.is_null() {
-                let code = error
-                    .get("code")
-                    .and_then(|c| c.as_str())
-                    .unwrap_or("UNKNOWN");
-                let message = error
-                    .get("message")
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("Unknown error");
-                return Err(Error::api_with_status(
-                    format!("[{}] {}", code, message),
-                    status.as_u16(),
-                ));
+                return Err(api_error_from_envelope(&json, status));
             }
         }
 
@@ -388,7 +397,7 @@ impl BaseClient {
         ReqwestClient::builder()
             .timeout(timeout)
             .build()
-            .map_err(|e| Error::Network(format!("Failed to build HTTP client: {}", e)))
+            .map_err(|e| Error::from_reqwest("Failed to build HTTP client", e))
     }
 
     pub(crate) fn create_client_with_connect_timeout(
@@ -400,7 +409,7 @@ impl BaseClient {
             .connect_timeout(connect_timeout)
             .timeout(timeout)
             .build()
-            .map_err(|e| Error::Network(format!("Failed to build HTTP client: {}", e)))
+            .map_err(|e| Error::from_reqwest("Failed to build HTTP client", e))
     }
 
     pub async fn get<T: DeserializeOwned + 'static>(
@@ -559,6 +568,9 @@ impl BaseClient {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::time::Duration;
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpListener;
 
     #[test]
     fn unwrap_success_envelope_preserves_profile_for_value_results() {
@@ -587,6 +599,70 @@ mod tests {
                 ]
             })
         );
+    }
+
+    #[tokio::test]
+    async fn request_timeout_is_not_reported_as_network_failure() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _connection = listener.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        });
+
+        let client = BaseClient::new(
+            format!("http://{address}"),
+            None,
+            None,
+            None,
+            None,
+            0.02,
+            false,
+            None,
+        );
+        let error = client
+            .get::<Value>("/slow", &[])
+            .await
+            .expect_err("slow response should time out");
+
+        assert!(matches!(error, Error::Timeout(_)));
+    }
+
+    #[tokio::test]
+    async fn plain_text_http_error_preserves_status() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut connection, _) = listener.accept().await.unwrap();
+            connection
+                .write_all(
+                    b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 20\r\n\r\nupstream unavailable",
+                )
+                .await
+                .unwrap();
+        });
+
+        let client = BaseClient::new(
+            format!("http://{address}"),
+            None,
+            None,
+            None,
+            None,
+            1.0,
+            false,
+            None,
+        );
+        let error = client.get::<Value>("/", &[]).await.unwrap_err();
+
+        assert_eq!(error.code(), "UNAVAILABLE");
+        assert!(matches!(
+            error,
+            Error::Api {
+                status: Some(503),
+                message,
+                ..
+            } if message.contains("upstream unavailable")
+        ));
     }
 
     #[test]
@@ -734,7 +810,7 @@ impl<'a> FileUploader<'a> {
         ignore_dirs: Option<&str>,
     ) -> Result<NamedTempFile> {
         if !dir_path.is_dir() {
-            return Err(Error::Network(format!(
+            return Err(Error::InvalidPath(format!(
                 "Path {} is not a directory",
                 dir_path.display()
             )));
@@ -774,7 +850,7 @@ impl<'a> FileUploader<'a> {
         ignore_dirs: Option<&str>,
     ) -> Result<NamedTempFile> {
         if !dir_path.is_dir() {
-            return Err(Error::Network(format!(
+            return Err(Error::InvalidPath(format!(
                 "Path {} is not a directory",
                 dir_path.display()
             )));
@@ -882,7 +958,7 @@ impl<'a> FileUploader<'a> {
 
         let part = part
             .mime_str("application/octet-stream")
-            .map_err(|e| Error::Network(format!("Failed to set mime type: {}", e)))?;
+            .map_err(|e| Error::from_reqwest("Failed to set mime type", e))?;
 
         let mut form = reqwest::multipart::Form::new().part("file", part);
         if let Some(upload_mode) = &self.upload_mode {
@@ -904,7 +980,7 @@ impl<'a> FileUploader<'a> {
             .multipart(form)
             .send()
             .await
-            .map_err(|e| Error::Network(format!("File upload failed: {}", e)))?;
+            .map_err(|e| Error::from_reqwest("File upload failed", e))?;
 
         let result: Value = self.client.handle_response(response).await?;
         result
@@ -950,7 +1026,7 @@ impl<'a> FileUploader<'a> {
 
         let part = part
             .mime_str("application/octet-stream")
-            .map_err(|e| Error::Network(format!("Failed to set mime type: {}", e)))?;
+            .map_err(|e| Error::from_reqwest("Failed to set mime type", e))?;
 
         let mut form = reqwest::multipart::Form::new().part("file", part);
         if let Some(upload_mode) = &self.upload_mode {
@@ -972,7 +1048,7 @@ impl<'a> FileUploader<'a> {
             .multipart(form)
             .send()
             .await
-            .map_err(|e| Error::Network(format!("File upload failed: {}", e)))?;
+            .map_err(|e| Error::from_reqwest("File upload failed", e))?;
 
         pb.finish_with_message("Upload complete");
 

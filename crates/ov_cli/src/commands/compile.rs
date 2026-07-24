@@ -53,7 +53,12 @@ pub async fn run(
                     code: "UNKNOWN".into(),
                     message: "Compile task failed".into(),
                 });
-                return Err(Error::api(format!("[{}] {}", error.code, error.message)));
+                return Err(Error::api_response(
+                    Some(error.code),
+                    error.message,
+                    None,
+                    500,
+                ));
             }
             _ => {}
         }

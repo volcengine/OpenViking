@@ -229,6 +229,9 @@ class TestCommit:
         archive_uri = task_result["result"]["archive_uri"]
         assert not await _marker_exists(session_with_messages, archive_uri, ".overview.md")
         assert not await _marker_exists(session_with_messages, archive_uri, ".abstract.md")
+        context = await session_with_messages.get_session_context()
+        assert context["latest_archive_overview"] == ""
+        assert context["messages"] == []
         session_with_messages._session_compressor.extract_long_term_memories.assert_awaited_once()
 
     async def test_commit_routes_peer_memory_with_single_full_context_pass(
@@ -499,19 +502,22 @@ class TestCommit:
         )
         seen: dict[str, str] = {}
 
-        original_generate = session._generate_archive_summary_async
+        session_type = type(session)
+        original_generate = session_type._generate_archive_summary_async
 
-        async def capture_generate(messages, latest_archive_overview=""):
+        async def capture_generate(self, messages, latest_archive_overview=""):
             seen["summary"] = latest_archive_overview
             return await original_generate(
-                messages, latest_archive_overview=latest_archive_overview
+                self,
+                messages,
+                latest_archive_overview=latest_archive_overview,
             )
 
         async def capture_extract(*args, **kwargs):
             seen["extract"] = kwargs.get("latest_archive_overview", "")
             return []
 
-        session._generate_archive_summary_async = capture_generate
+        monkeypatch.setattr(session_type, "_generate_archive_summary_async", capture_generate)
         session._session_compressor.extract_long_term_memories = capture_extract
 
         session.add_message("user", [TextPart("Second round message")])

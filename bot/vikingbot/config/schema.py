@@ -459,7 +459,28 @@ class AgentsConfig(BaseModel):
     session_context_enabled: bool = True
     session_context_token_budget: int = 3000
     commit_token_threshold: int = 200000
-    commit_keep_recent_count: int = 10
+    commit_keep_recent_count: int = Field(
+        default=10,
+        description=(
+            "Deprecated physical-message retention setting. VikingBot session context "
+            "commits now use logical Turn retention."
+        ),
+    )
+    commit_keep_recent_turn_count: int = Field(
+        default=3,
+        ge=0,
+        description="Number of newest logical user Turns retained after an OpenViking commit.",
+    )
+    commit_retained_message_token_budget: int = Field(
+        default=6_000,
+        gt=0,
+        description="Token budget for retained raw OpenViking session messages and checkpoints.",
+    )
+    commit_min_raw_tail_steps: int = Field(
+        default=1,
+        ge=0,
+        description="Minimum number of latest assistant Steps retained without compaction.",
+    )
     gen_image_model: str = "openai/doubao-seedream-4-5-251128"
     thinking: bool = Field(
         default=True,

@@ -471,34 +471,16 @@ impl HttpClient {
             let bytes = response
                 .bytes()
                 .await
-                .map_err(|e| Error::Network(format!("Failed to read error response: {}", e)))?;
+                .map_err(|e| Error::from_reqwest("Failed to read error response", e))?;
 
-            let error_msg = match serde_json::from_slice::<serde_json::Value>(&bytes) {
-                Ok(json) => json
-                    .get("error")
-                    .and_then(|e| e.get("message"))
-                    .and_then(|m| m.as_str())
-                    .map(|s| s.to_string())
-                    .or_else(|| {
-                        json.get("detail")
-                            .and_then(|d| d.as_str())
-                            .map(|s| s.to_string())
-                    })
-                    .unwrap_or_else(|| format!("HTTP error {}", status)),
-                Err(_) => {
-                    let body_str = String::from_utf8_lossy(&bytes);
-                    format!("HTTP error {}\n\nRaw response body:\n{}", status, body_str)
-                }
-            };
-
-            return Err(Error::api(error_msg));
+            return Err(crate::base_client::api_error_from_body(&bytes, status));
         }
 
         response
             .bytes()
             .await
             .map(|b| b.to_vec())
-            .map_err(|e| Error::Network(format!("Failed to read response bytes: {}", e)))
+            .map_err(|e| Error::from_reqwest("Failed to read response bytes", e))
     }
 
     // ============ Filesystem Methods ============
@@ -1239,33 +1221,15 @@ impl HttpClient {
             let bytes = response
                 .bytes()
                 .await
-                .map_err(|e| Error::Network(format!("Failed to read error response: {}", e)))?;
+                .map_err(|e| Error::from_reqwest("Failed to read error response", e))?;
 
-            let error_msg = match serde_json::from_slice::<serde_json::Value>(&bytes) {
-                Ok(json) => json
-                    .get("error")
-                    .and_then(|e| e.get("message"))
-                    .and_then(|m| m.as_str())
-                    .map(|s| s.to_string())
-                    .or_else(|| {
-                        json.get("detail")
-                            .and_then(|d| d.as_str())
-                            .map(|s| s.to_string())
-                    })
-                    .unwrap_or_else(|| format!("HTTP error {}", status)),
-                Err(_) => {
-                    let body_str = String::from_utf8_lossy(&bytes);
-                    format!("HTTP error {}\n\nRaw response body:\n{}", status, body_str)
-                }
-            };
-
-            return Err(Error::api(error_msg));
+            return Err(crate::base_client::api_error_from_body(&bytes, status));
         }
 
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| Error::Network(format!("Failed to read response bytes: {}", e)))?;
+            .map_err(|e| Error::from_reqwest("Failed to read response bytes", e))?;
 
         let to_path = Path::new(to);
         let final_path = if to_path.is_dir() {
@@ -1703,6 +1667,22 @@ impl HttpClient {
         self.get("/api/v1/snapshot/log", &params).await
     }
 
+    pub async fn snapshot_diff(
+        &self,
+        path: &str,
+        from_ref: Option<&str>,
+        to_ref: &str,
+    ) -> Result<Value> {
+        let mut params = vec![
+            ("path".to_string(), path.to_string()),
+            ("to".to_string(), to_ref.to_string()),
+        ];
+        if let Some(from_ref) = from_ref {
+            params.push(("from".to_string(), from_ref.to_string()));
+        }
+        self.get("/api/v1/snapshot/diff", &params).await
+    }
+
     pub async fn snapshot_ignore_get(&self) -> Result<Value> {
         self.get("/api/v1/snapshot/ignore", &[]).await
     }
@@ -1769,7 +1749,7 @@ impl HttpClient {
             let bytes = response
                 .bytes()
                 .await
-                .map_err(|e| Error::Network(format!("Failed to read blob bytes: {}", e)))?
+                .map_err(|e| Error::from_reqwest("Failed to read blob bytes", e))?
                 .to_vec();
             return Ok(SnapshotShowResult::Blob { oid, size, bytes });
         }
@@ -1777,30 +1757,26 @@ impl HttpClient {
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| Error::Network(format!("Failed to read response body: {}", e)))?;
+            .map_err(|e| Error::from_reqwest("Failed to read response body", e))?;
+
+        if !status.is_success() {
+            return Err(crate::base_client::api_error_from_body(&bytes, status));
+        }
+
         let json: Value = match serde_json::from_slice(&bytes) {
             Ok(v) => v,
             Err(e) => {
                 let body_str = String::from_utf8_lossy(&bytes);
-                return Err(Error::Network(format!(
+                return Err(Error::Parse(format!(
                     "Failed to parse JSON response: {}\n\nRaw response body:\n{}",
                     e, body_str
                 )));
             }
         };
 
-        if !status.is_success() {
-            return Err(Error::api_with_status(
-                crate::base_client::api_error_from_envelope(&json, status),
-                status.as_u16(),
-            ));
-        }
         if let Some(error) = json.get("error") {
             if !error.is_null() {
-                return Err(Error::api_with_status(
-                    crate::base_client::api_error_from_envelope(&json, status),
-                    status.as_u16(),
-                ));
+                return Err(crate::base_client::api_error_from_envelope(&json, status));
             }
         }
 
@@ -2040,6 +2016,23 @@ mod tests {
         assert_gateway_token_retry(&requests);
     }
 
+    #[tokio::test]
+    async fn snapshot_diff_sends_path_and_refs() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+
+        client
+            .snapshot_diff("viking://resources/a.md", Some("old"), "new")
+            .await
+            .expect("snapshot diff should succeed");
+
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.starts_with("GET /api/v1/snapshot/diff?"));
+        assert!(request.contains("path=viking%3A%2F%2Fresources%2Fa.md"));
+        assert!(request.contains("from=old"));
+        assert!(request.contains("to=new"));
+    }
+
     fn assert_gateway_token_retry(requests: &[String]) {
         assert_eq!(requests.len(), 2);
         assert!(!requests[0].to_ascii_lowercase().contains("x-gateway-token"));
@@ -2152,10 +2145,16 @@ mod tests {
             }
         });
 
-        assert_eq!(
-            api_error_from_envelope(&body, StatusCode::INTERNAL_SERVER_ERROR),
-            "[PROCESSING_ERROR] Parse error: boom"
-        );
+        let error = api_error_from_envelope(&body, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(matches!(
+            error,
+            crate::error::Error::Api {
+                code: Some(code),
+                message,
+                status: Some(500),
+                ..
+            } if code == "PROCESSING_ERROR" && message == "Parse error: boom"
+        ));
     }
 
     #[test]

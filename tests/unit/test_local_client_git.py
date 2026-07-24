@@ -1,7 +1,6 @@
 """Tests for LocalClient git version control methods.
 
-Verifies that LocalClient.{git_commit, git_restore, git_show, git_log}
-forward the right kwargs to FSService.{commit, restore, show, log}.
+Verifies that LocalClient git methods forward the right kwargs to FSService.
 """
 from unittest.mock import AsyncMock, MagicMock
 
@@ -19,6 +18,7 @@ def mock_fs():
     m.restore = AsyncMock(return_value={"result": "applied", "commit_oid": "b" * 40})
     m.show = AsyncMock(return_value={"oid": "c" * 40, "message": "m", "parents": []})
     m.log = AsyncMock(return_value=[{"oid": "c" * 40, "message": "m"}])
+    m.diff = AsyncMock(return_value={"change_type": "modified"})
     return m
 
 
@@ -142,3 +142,19 @@ async def test_log_overrides(local_client, mock_fs):
         paths=["viking://resources/a.md", "viking://resources/docs"],
         ctx=local_client._ctx,
     )
+
+
+@pytest.mark.asyncio
+async def test_diff_forwards_kwargs(local_client, mock_fs):
+    out = await local_client.git_diff(
+        "viking://resources/a.md",
+        from_ref="old",
+        to_ref="new",
+    )
+    mock_fs.diff.assert_awaited_once_with(
+        path="viking://resources/a.md",
+        from_ref="old",
+        to_ref="new",
+        ctx=local_client._ctx,
+    )
+    assert out["change_type"] == "modified"
