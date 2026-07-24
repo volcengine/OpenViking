@@ -47,6 +47,53 @@ def _calc_pending_tokens(tokens: list, keep_recent_count: int) -> int:
 
 
 # =======================================================================
+# _extract_abstract_from_summary
+# =======================================================================
+
+
+class TestExtractAbstractFromSummary:
+    @staticmethod
+    def _extract(summary: str) -> str:
+        session = Session.__new__(Session)
+        return session._extract_abstract_from_summary(summary)
+
+    def test_structured_working_memory_uses_session_title(self):
+        summary = _make_wm(
+            session_title="Archive abstract regression",
+            current_state="Investigating the incorrect archive abstract.",
+        )
+
+        assert self._extract(summary) == "Archive abstract regression"
+
+    def test_structured_title_skips_nested_markdown_heading(self):
+        summary = "# Working Memory\n\n## Session Title\n### Topic\nMeaningful title"
+
+        assert self._extract(summary) == "Meaningful title"
+
+    def test_structured_title_skips_template_placeholder(self):
+        summary = (
+            "# Working Memory\n\n"
+            "## Session Title\n"
+            "_A short and distinctive 5-10 word descriptive title._\n"
+            "Meaningful title"
+        )
+
+        assert self._extract(summary) == "Meaningful title"
+
+    def test_structured_title_is_bounded(self):
+        summary = _make_wm(session_title="x" * 250)
+
+        assert self._extract(summary) == "x" * 200
+
+    def test_legacy_bold_key_format_is_preserved(self):
+        assert self._extract("**Overview**: Legacy abstract\nBody") == "Legacy abstract"
+
+    def test_empty_or_structure_only_summary_has_no_abstract(self):
+        assert self._extract("") == ""
+        assert self._extract("# Working Memory\n\n---\n\n## Session Title") == ""
+
+
+# =======================================================================
 # _parse_wm_sections
 # =======================================================================
 

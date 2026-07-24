@@ -2163,12 +2163,29 @@ class Session:
         if not summary:
             return ""
 
+        def first_meaningful_line(text: str) -> str:
+            for line in text.splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                if re.fullmatch(r"[-*_]{3,}", stripped):
+                    continue
+                if re.fullmatch(r"_[^_]+_", stripped):
+                    continue
+                return stripped[:200]
+            return ""
+
+        session_title = first_meaningful_line(
+            self._parse_wm_sections(summary).get("## Session Title", "")
+        )
+        if session_title:
+            return session_title
+
         match = re.search(r"^\*\*[^*]+\*\*:\s*(.+)$", summary, re.MULTILINE)
         if match:
             return match.group(1).strip()
 
-        first_line = summary.split("\n")[0].strip()
-        return first_line if first_line else ""
+        return first_meaningful_line(summary)
 
     @staticmethod
     def _format_message_for_wm(m: Message) -> str:
