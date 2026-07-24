@@ -1406,6 +1406,12 @@ class SemanticProcessor(DequeueHandlerBase):
         vlm = config.vlm
 
         try:
+            from openviking.resource.resource_loop import run_resource_tool_loop
+            from openviking.resource.tools import get_resource_tool_schemas
+
+            tool_schemas = get_resource_tool_schemas()
+            available_tools = bool(tool_schemas)
+
             prompt = render_prompt(
                 "semantic.overview_generation",
                 {
@@ -1413,11 +1419,15 @@ class SemanticProcessor(DequeueHandlerBase):
                     "file_summaries": file_summaries_str,
                     "children_abstracts": children_abstracts_str,
                     "output_language": output_language,
+                    "available_tools": available_tools,
                 },
             )
 
             with bind_telemetry_stage("resource_summarize"):
-                overview = await vlm.get_completion_async(prompt)
+                if available_tools:
+                    overview = await run_resource_tool_loop(vlm=vlm, prompt=prompt)
+                else:
+                    overview = await vlm.get_completion_async(prompt)
 
             overview = self._replace_index_references(overview, file_index_map)
 

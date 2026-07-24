@@ -27,6 +27,11 @@ variables:
     description: "Language code for output (e.g., 'en', 'zh-CN', 'ja', 'ko', 'ru', 'ar')"
     required: true
 
+  - name: "available_tools"
+    type: "boolean"
+    description: "Whether resource tools are exposed for the LLM to call during overview generation"
+    default: false
+
 template: |
   Output Language: {{ output_language }}
 
@@ -70,6 +75,28 @@ template: |
      - Use the file summaries or subdirectory summaries provided above as description content
 
   Total length: 400-800 words
+
+  {% if available_tools %}
+  ## Optional Tools
+
+  You have access to the following tools to enrich the overview when the file
+  summaries alone are insufficient. Use them sparingly — only when you need a
+  fact that is clearly missing from the provided summaries.
+
+  Tool usage guidelines:
+  - Call a tool only when a specific fact (e.g., a table schema, a config
+    value, a function signature) would materially improve the overview.
+  - Do NOT call tools for information already present in the file summaries
+    or children abstracts above.
+  - After receiving a tool result, integrate the relevant facts into the
+    overview prose; do not dump raw tool output.
+  - If a tool call fails or returns an error, proceed with the available
+    summaries and note the gap if critical.
+
+  When you have gathered enough context (or decide no tool call is needed),
+  produce the final overview following the structure above. The final
+  response must be the Markdown overview only, with no further tool calls.
+  {% endif %}
 
 llm_config:
   temperature: 0.0
