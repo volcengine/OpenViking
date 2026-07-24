@@ -17,6 +17,8 @@ from openviking.telemetry import TelemetryRequest
 from openviking.utils.search_filters import SearchContextTypeInput
 from openviking_cli.utils import run_async
 
+_UNSET = object()
+
 
 class SyncOpenViking:
     """
@@ -50,6 +52,24 @@ class SyncOpenViking:
     def session_exists(self, session_id: str) -> bool:
         """Check whether a session exists in storage."""
         return run_async(self._async_client.session_exists(session_id))
+
+    def get_memory_settings(self) -> Dict[str, Any]:
+        """Return current-user memory setting overrides and effective values."""
+        return run_async(self._async_client.get_memory_settings())
+
+    def patch_memory_settings(
+        self,
+        *,
+        agent_evolution_enabled: Any = _UNSET,
+    ) -> Dict[str, Any]:
+        """Partially update current-user memory settings."""
+        if agent_evolution_enabled is _UNSET:
+            return run_async(self._async_client.patch_memory_settings())
+        return run_async(
+            self._async_client.patch_memory_settings(
+                agent_evolution_enabled=agent_evolution_enabled
+            )
+        )
 
     def create_session(
         self,

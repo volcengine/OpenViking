@@ -13,6 +13,8 @@ import pytest
 from openviking import AsyncOpenViking
 from openviking.client.session import Session as ClientSession
 from openviking.message import TextPart
+from openviking.server.config import UserConfig
+from openviking.server.user_config import write_user_memory_settings
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
 from openviking.storage.transaction import get_lock_manager
@@ -79,6 +81,60 @@ class TestCommit:
         # Wait for semantic/embedding queues
         await client.wait_processed(timeout=60.0)
 
+    async def test_commit_default_disables_agent_memory_but_keeps_archive(
+        self, session_with_messages: Session
+    ):
+        session_with_messages._user_config_defaults = UserConfig()
+        session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            return_value=[]
+        )
+
+        result = await session_with_messages.commit_async()
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert result["archived"] is True
+        assert task_result["status"] == "completed"
+        assert task_result["result"]["agent_evolution_enabled"] is False
+        assert "cases" not in task_result["result"]["effective_memory_types"]
+        assert "trajectories" not in task_result["result"]["effective_memory_types"]
+        assert "experiences" not in task_result["result"]["effective_memory_types"]
+        assert task_result["result"]["agent_memory_skip_reason"] == ("agent_evolution_disabled")
+        call_kwargs = (
+            session_with_messages._session_compressor.extract_long_term_memories.call_args.kwargs
+        )
+        assert call_kwargs["agent_evolution_enabled"] is False
+        assert "cases" not in call_kwargs["allowed_memory_types"]
+        assert "trajectories" not in call_kwargs["allowed_memory_types"]
+        assert "experiences" not in call_kwargs["allowed_memory_types"]
+
+    async def test_commit_reloads_user_setting_and_enables_agent_memory(
+        self, session_with_messages: Session
+    ):
+        session_with_messages._user_config_defaults = UserConfig()
+        session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            return_value=[]
+        )
+        await write_user_memory_settings(
+            session_with_messages._viking_fs,
+            session_with_messages.ctx,
+            agent_evolution_enabled=True,
+            agent_evolution_enabled_set=True,
+        )
+
+        result = await session_with_messages.commit_async()
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert task_result["status"] == "completed"
+        assert task_result["result"]["agent_evolution_enabled"] is True
+        assert "cases" in task_result["result"]["effective_memory_types"]
+        assert "trajectories" in task_result["result"]["effective_memory_types"]
+        assert "experiences" in task_result["result"]["effective_memory_types"]
+        call_kwargs = (
+            session_with_messages._session_compressor.extract_long_term_memories.call_args.kwargs
+        )
+        assert call_kwargs["agent_evolution_enabled"] is True
+        assert call_kwargs["allowed_memory_types"] is None
+
     async def test_commit_reports_session_skills_separately(
         self, session_with_messages: Session, monkeypatch
     ):
@@ -120,9 +176,7 @@ class TestCommit:
         session_with_messages._session_compressor.extract_long_term_memories.assert_not_awaited()
         if hasattr(session_with_messages._session_compressor, "extract_execution_memories"):
             session_with_messages._session_compressor.extract_execution_memories.assert_awaited_once()
-            call_kwargs = (
-                session_with_messages._session_compressor.extract_execution_memories.call_args.kwargs
-            )
+            call_kwargs = session_with_messages._session_compressor.extract_execution_memories.call_args.kwargs
             assert call_kwargs["allowed_memory_types"] == {"trajectories"}
             assert call_kwargs["include_session_skills"] is True
 
@@ -184,9 +238,7 @@ class TestCommit:
         session_with_messages._session_compressor.extract_long_term_memories.assert_awaited_once()
         if hasattr(session_with_messages._session_compressor, "extract_execution_memories"):
             session_with_messages._session_compressor.extract_execution_memories.assert_awaited_once()
-            call_kwargs = (
-                session_with_messages._session_compressor.extract_execution_memories.call_args.kwargs
-            )
+            call_kwargs = session_with_messages._session_compressor.extract_execution_memories.call_args.kwargs
             assert call_kwargs["include_session_skills"] is False
 
     async def test_commit_can_skip_working_memory_summary(

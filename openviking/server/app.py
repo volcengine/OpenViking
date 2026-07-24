@@ -223,6 +223,10 @@ def create_app(
         if callable(usage_reporter_setter):
             usage_reporter_setter(_get_usage_reporter())
 
+        user_config_defaults_setter = getattr(sessions, "set_user_config_defaults", None)
+        if callable(user_config_defaults_setter):
+            user_config_defaults_setter(config.user_config_defaults)
+
     if service is not None:
         _configure_session_runtime(service)
 

@@ -1436,6 +1436,9 @@ openviking add-resource ./docs --exclude "*.tmp"
       "add_targets": {
         "resource_uri": "viking://user/resources",
         "skill_uri": "viking://user/skills"
+      },
+      "agent_evolution": {
+        "enabled": false
       }
     }
   }
@@ -1457,12 +1460,50 @@ openviking add-resource ./docs --exclude "*.tmp"
 | `temp_upload.shared_prefix` | str | 分配 shared `temp_file_id` 对象时使用的 URI 前缀。 | `"viking://upload"` |
 | `user_config_defaults.add_targets.resource_uri` | str | `add_resource` 未传 `to` 和 `parent` 时使用的部署级默认资源添加目录。`viking://user/...` 会按请求用户解析。 | `null` |
 | `user_config_defaults.add_targets.skill_uri` | str | `add_skill` 未传 `target_uri` 时使用的部署级默认技能添加根目录。仅允许 `viking://user/skills` 和 `viking://agent/skills`。 | `null` |
+| `user_config_defaults.agent_evolution.enabled` | bool | 用户未显式覆盖时，控制 session commit 是否生成或更新 cases、trajectories 和 experiences 的部署级默认值。 | `null`（有效值为 `false`） |
 
 `api_key` 模式使用 API Key 认证，也是默认模式；`trusted` 模式信任上游网关或受信调用方注入的 `X-OpenViking-Account` / `X-OpenViking-User` 请求头。
 
 在 `api_key` 模式下配置 `root_api_key` 后，服务端启用正式多租户认证，并通过 Admin API 创建工作区和用户 key。在 `trusted` 模式下，普通请求不需要先注册 user key；每个请求都会根据注入的身份头解析成 `USER`。只有在 `auth_mode = "api_key"` 且未配置 `root_api_key` 时，服务端才会进入开发模式。
 
-`user_config_defaults` 用于给没有个人覆盖配置的新老用户提供默认用户配置。添加操作中，显式请求目标仍然优先：`add_resource.to` / `add_resource.parent` 优先于用户默认值，`add_skill.target_uri` 优先于用户默认值。个人覆盖配置存储在 `viking://user/{user_id}/settings/user_config.json`。
+`user_config_defaults` 用于给没有个人覆盖配置的新老用户提供默认用户配置。添加操作中，显式请求目标仍然优先：`add_resource.to` / `add_resource.parent` 优先于用户默认值，`add_skill.target_uri` 优先于用户默认值。`agent_evolution.enabled` 在用户级和部署级都未设置时，有效值为 `false`。个人覆盖配置存储在 `viking://user/{user_id}/settings/user_config.json`。
+
+### Usage Reporter
+
+可选的 Usage Reporter 从已 commit session 的 tool parts 中抽取记忆使用事件。内置 HTTP Sink 会先把事件批次持久化到本地 outbox，再发送给采集服务：
+
+```json
+{
+  "server": {
+    "usage_reporter": {
+      "enabled": true,
+      "extractors": ["memory_usage"],
+      "sinks": [
+        {
+          "type": "http",
+          "config": {
+            "endpoint": "https://collector.example.com/openviking/usage",
+            "resource_id_env": "OV_RESOURCE_ID",
+            "outbox_dir": "/var/lib/openviking/.usage_outbox",
+            "request_timeout_seconds": 10,
+            "inflight_lease_seconds": 60,
+            "retry_base_seconds": 1,
+            "retry_max_seconds": 300,
+            "max_batch_bytes": 1048576,
+            "max_outbox_bytes": 268435456
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+启动服务前，需要设置 `resource_id_env` 指定的环境变量。未配置 `outbox_dir` 时，默认使用 OpenViking 运行用户的 `~/.openviking/data/.usage_outbox`。
+
+HTTP Sink 使用本地持久化队列重试，同一事件可能被重复发送，采集端需要按 `event_id` 去重。所有 `2xx` 响应都表示批次已确认；瞬时失败使用指数退避重试；`400` 和 `422` 会将批次移入 `dead_letter`；`413` 会拆分包含多条事件的批次。outbox 总量受 `max_outbox_bytes` 限制，达到上限后先删除最旧的 dead-letter 批次，再删除最旧的 pending 批次，正在发送的批次不会被淘汰。由于容量压力可能丢弃 pending 数据，整体上报仍是 best-effort，不提供端到端 at-least-once 保证。
+
+`inflight_lease_seconds` 必须大于 `request_timeout_seconds`。worker 领取批次时会刷新 lease，避免其他 worker 把正在发送的批次误判为过期任务。
 
 支持的 add target URI：
 

@@ -81,6 +81,72 @@ async def test_resume_queued_commit_continues_phase2(monkeypatch):
 
     session._run_memory_extraction.assert_awaited_once()
     assert session._run_memory_extraction.await_args.kwargs["task_id"] == "task-1"
+    assert session._run_memory_extraction.await_args.kwargs["agent_evolution_enabled"] is True
     assert [
         item.id for item in session._run_memory_extraction.await_args.kwargs["messages"]
     ] == ["archived"]
+
+
+@pytest.mark.asyncio
+async def test_resume_queued_commit_uses_agent_evolution_archive_snapshot(monkeypatch):
+    session_uri = "viking://user/sessions/session-1"
+    archive_uri = f"{session_uri}/history/archive_001"
+    archived = Message(id="archived", role="user", parts=[TextPart("old")])
+    files = {
+        f"{session_uri}/messages.jsonl": "",
+        f"{session_uri}/.meta.json": json.dumps(
+            {"session_id": "session-1", "message_count": 0, "commit_count": 1}
+        ),
+        f"{archive_uri}/messages.jsonl": f"{archived.to_jsonl()}\n",
+        f"{archive_uri}/.meta.json": json.dumps(
+            {
+                "agent_evolution": {
+                    "enabled": False,
+                    "skip_reason": "agent_evolution_disabled",
+                    "user_config_error": None,
+                }
+            }
+        ),
+    }
+    session = Session(
+        viking_fs=_MemoryVikingFS(files),
+        session_id="session-1",
+        session_uri=session_uri,
+    )
+    tracker = TaskTracker(_TaskStore())
+    set_task_tracker(tracker)
+    monkeypatch.setattr(session, "_run_memory_extraction", AsyncMock())
+    message = SessionCommitMsg(
+        task_id="task-1",
+        session_id="session-1",
+        session_uri=session_uri,
+        archive_uri=archive_uri,
+        user={"account_id": "default", "user_id": "default"},
+        memory_policy={"memory_types": ["profile"]},
+    )
+
+    try:
+        await session.resume_queued_commit(message)
+    finally:
+        set_task_tracker(None)
+
+    kwargs = session._run_memory_extraction.await_args.kwargs
+    assert kwargs["agent_evolution_enabled"] is False
+    assert kwargs["agent_memory_skip_reason"] == "agent_evolution_disabled"
+    assert kwargs["user_config_error"] is None
+
+
+def test_session_commit_message_ignores_unknown_fields():
+    message = SessionCommitMsg.from_dict(
+        {
+            "task_id": "task-1",
+            "session_id": "session-1",
+            "session_uri": "viking://user/sessions/session-1",
+            "archive_uri": "viking://user/sessions/session-1/history/archive_001",
+            "user": {"account_id": "default", "user_id": "default"},
+            "future_field": "ignored",
+        }
+    )
+
+    assert message.task_id == "task-1"
+    assert "future_field" not in message.to_dict()

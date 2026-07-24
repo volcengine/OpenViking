@@ -609,3 +609,4 @@ VikingBot API 需要服务器启动时指定 `--with-bot` 选项：
 | [隐私配置](10-privacy.md) | 隐私配置版本管理与切换 |
 | [指标与 Metrics](09-metrics.md) | Prometheus 指标导出与抓取说明 |
 | [管理员](08-admin.md) | 多租户账号和用户管理 |
+| [用户记忆设置](12-user-settings.md) | 用户级记忆类型和 Agent 进化开关 |

@@ -11,6 +11,7 @@ from openviking.server.app import create_app
 from openviking.server.config import ServerConfig, UsageReporterConfig
 from openviking.usage_reporter import UsageContext, UsageEvent
 from openviking.usage_reporter.config import build_usage_reporter
+from openviking.usage_reporter.http_sink import HttpUsageSink
 
 
 @pytest.mark.asyncio
@@ -77,6 +78,31 @@ class CustomUsageSink:
     assert payload["resource_type"] == "experience"
     assert "memory_uri" not in payload
     assert "source" not in payload
+
+
+def test_builtin_http_sink_is_built_from_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("OV_RESOURCE_ID", "ov-test")
+
+    reporter = build_usage_reporter(
+        UsageReporterConfig(
+            enabled=True,
+            extractors=["memory_usage"],
+            sinks=[
+                {
+                    "type": "http",
+                    "config": {
+                        "endpoint": "http://127.0.0.1:1/usage",
+                        "outbox_dir": str(tmp_path / ".usage_outbox"),
+                    },
+                }
+            ],
+        )
+    )
+
+    assert reporter is not None
+    assert len(reporter.sinks) == 1
+    assert isinstance(reporter.sinks[0], HttpUsageSink)
+    reporter.sinks[0].close()
 
 
 async def test_app_reuses_and_closes_usage_reporter(monkeypatch):

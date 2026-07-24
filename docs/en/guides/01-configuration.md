@@ -1469,6 +1469,9 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
       "add_targets": {
         "resource_uri": "viking://user/resources",
         "skill_uri": "viking://user/skills"
+      },
+      "agent_evolution": {
+        "enabled": false
       }
     }
   }
@@ -1490,12 +1493,50 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 | `temp_upload.shared_prefix` | str | URI prefix used when allocating shared `temp_file_id` objects. | `"viking://upload"` |
 | `user_config_defaults.add_targets.resource_uri` | str | Deployment default resource add directory used when `add_resource` omits both `to` and `parent`. `viking://user/...` resolves per request user. | `null` |
 | `user_config_defaults.add_targets.skill_uri` | str | Deployment default skill add root used when `add_skill` omits `target_uri`. Only `viking://user/skills` and `viking://agent/skills` are accepted. | `null` |
+| `user_config_defaults.agent_evolution.enabled` | bool | Deployment default controlling whether session commits generate or update cases, trajectories, and experiences when the user has no explicit override. | `null` (effective value is `false`) |
 
 `api_key` mode uses API keys and is the default. `trusted` mode trusts `X-OpenViking-Account` / `X-OpenViking-User` headers from a trusted gateway or internal caller.
 
 When `root_api_key` is configured in `api_key` mode, the server enables multi-tenant authentication. Use the Admin API to create accounts and user keys. In `trusted` mode, ordinary requests do not require user registration first; each request is resolved as `USER` from the injected identity headers. However, skipping `root_api_key` in `trusted` mode is allowed only on localhost. Development mode only applies when `auth_mode = "api_key"` and `root_api_key` is not set.
 
-`user_config_defaults` sets defaults for new and existing users when they have no per-user override. For add operations, explicit request targets still win: `add_resource.to` / `add_resource.parent` take precedence over user defaults, and `add_skill.target_uri` takes precedence over user defaults. Per-user overrides are stored in `viking://user/{user_id}/settings/user_config.json`.
+`user_config_defaults` sets defaults for new and existing users when they have no per-user override. For add operations, explicit request targets still win: `add_resource.to` / `add_resource.parent` take precedence over user defaults, and `add_skill.target_uri` takes precedence over user defaults. When `agent_evolution.enabled` is unset at both levels, its effective value is `false`. Per-user overrides are stored in `viking://user/{user_id}/settings/user_config.json`.
+
+### Usage Reporter
+
+The optional Usage Reporter extracts memory usage events from committed session tool parts. The built-in HTTP sink persists batches to a local outbox before delivering them to a collector:
+
+```json
+{
+  "server": {
+    "usage_reporter": {
+      "enabled": true,
+      "extractors": ["memory_usage"],
+      "sinks": [
+        {
+          "type": "http",
+          "config": {
+            "endpoint": "https://collector.example.com/openviking/usage",
+            "resource_id_env": "OV_RESOURCE_ID",
+            "outbox_dir": "/var/lib/openviking/.usage_outbox",
+            "request_timeout_seconds": 10,
+            "inflight_lease_seconds": 60,
+            "retry_base_seconds": 1,
+            "retry_max_seconds": 300,
+            "max_batch_bytes": 1048576,
+            "max_outbox_bytes": 268435456
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+Set the environment variable named by `resource_id_env` before starting the server. If `outbox_dir` is omitted, it defaults to `~/.openviking/data/.usage_outbox` for the operating-system user running OpenViking.
+
+HTTP delivery uses a durable local retry queue and may deliver the same event more than once. Collectors should deduplicate events by `event_id`. Every `2xx` response acknowledges a batch; transient failures are retried with exponential backoff. `400` and `422` responses move a batch to `dead_letter`, while `413` splits multi-event batches. The outbox is bounded by `max_outbox_bytes`; when the limit is reached, the oldest dead-letter batches are removed first, followed by the oldest pending batches. In-flight batches are not evicted. Because capacity pressure can discard pending data, reporting remains best-effort and does not provide an end-to-end at-least-once guarantee.
+
+`inflight_lease_seconds` must be greater than `request_timeout_seconds`. The lease is refreshed whenever a worker claims a batch, preventing another worker from recovering an active delivery.
 
 Supported add target URIs:
 

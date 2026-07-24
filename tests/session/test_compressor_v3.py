@@ -88,6 +88,129 @@ def test_factory_ignores_deprecated_memory_version():
     )
 
 
+@pytest.mark.asyncio
+async def test_v3_skips_agent_training_when_agent_evolution_is_disabled(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.get_viking_fs",
+        lambda: SimpleNamespace(),
+    )
+    compressor = SessionCompressorV3(vikingdb=None)
+    compressor._extract_user_memories = AsyncMock(
+        return_value=SimpleNamespace(
+            contexts=[],
+            cases=[_training_case()],
+            memory_diff={"operations": {}},
+            case_uri_by_name={},
+        )
+    )
+    compressor.train_from_extracted_cases = AsyncMock()
+    compressor._write_final_memory_diff = AsyncMock()
+
+    await compressor.extract_long_term_memories(
+        messages=_messages(),
+        ctx=_ctx(),
+        allowed_memory_types={"cases", "profile"},
+        agent_evolution_enabled=False,
+    )
+
+    compressor.train_from_extracted_cases.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_v3_skips_agent_training_when_execution_memory_types_are_filtered(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.get_viking_fs",
+        lambda: SimpleNamespace(),
+    )
+    compressor = SessionCompressorV3(vikingdb=None)
+    compressor._extract_user_memories = AsyncMock(
+        return_value=SimpleNamespace(
+            contexts=[],
+            cases=[_training_case()],
+            memory_diff={"operations": {}},
+            case_uri_by_name={},
+        )
+    )
+    compressor.train_from_extracted_cases = AsyncMock()
+    compressor._write_final_memory_diff = AsyncMock()
+
+    await compressor.extract_long_term_memories(
+        messages=_messages(),
+        ctx=_ctx(),
+        allowed_memory_types={"cases", "profile"},
+        agent_evolution_enabled=True,
+    )
+
+    compressor.train_from_extracted_cases.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_v3_passes_allowed_execution_types_to_agent_training(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.get_viking_fs",
+        lambda: SimpleNamespace(),
+    )
+    compressor = SessionCompressorV3(vikingdb=None)
+    compressor._extract_user_memories = AsyncMock(
+        return_value=SimpleNamespace(
+            contexts=[],
+            cases=[_training_case()],
+            memory_diff={"operations": {}},
+            case_uri_by_name={},
+        )
+    )
+    compressor.train_from_extracted_cases = AsyncMock(
+        return_value={"case_count": 1, "submitted": 1}
+    )
+    compressor._write_final_memory_diff = AsyncMock()
+
+    await compressor.extract_long_term_memories(
+        messages=_messages(),
+        ctx=_ctx(),
+        allowed_memory_types={"cases", "trajectories"},
+        agent_evolution_enabled=True,
+    )
+
+    assert compressor.train_from_extracted_cases.await_args.kwargs["allowed_memory_types"] == {
+        "trajectories"
+    }
+
+
+@pytest.mark.asyncio
+async def test_v3_initializes_only_allowed_memory_files(monkeypatch):
+    initialized_with = []
+
+    class DummyRegistry:
+        async def initialize_memory_files(self, ctx, allowed_memory_types=None):
+            del ctx
+            initialized_with.append(allowed_memory_types)
+
+    class DummyOrchestrator:
+        async def run(self):
+            return None, []
+
+    compressor = SessionCompressorV3(vikingdb=None)
+    compressor._get_or_create_react = lambda **kwargs: DummyOrchestrator()
+    compressor._write_final_memory_diff = AsyncMock()
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.get_viking_fs",
+        lambda: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.create_default_registry",
+        lambda: DummyRegistry(),
+    )
+
+    await compressor.extract_long_term_memories(
+        messages=_messages(),
+        ctx=_ctx(),
+        allowed_memory_types={"profile"},
+        agent_evolution_enabled=False,
+    )
+
+    assert initialized_with == [{"profile"}]
+
+
 def test_experience_root_uri_requires_request_user():
     with pytest.raises(ValueError, match="RequestContext.user.user_id is required"):
         _experience_root_uri(SimpleNamespace(user=None))
@@ -285,6 +408,67 @@ async def test_train_from_extracted_cases_submits_streaming_rollout(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_train_from_extracted_cases_skips_experience_updates_when_not_allowed(monkeypatch):
+    analyzed = []
+
+    class FakeTrainer:
+        policy_set = ExperienceSet(
+            root_uri="viking://user/u/memories/experiences",
+            policies=[],
+        )
+
+    class FakeAnalyzer:
+        async def analyze(self, rollout, context):
+            del context
+            analyzed.append(rollout)
+            return RolloutAnalysis(
+                evaluation=RubricEvaluation(
+                    passed=True,
+                    score=1.0,
+                    criterion_results=[],
+                    feedback=[],
+                ),
+                trajectories=[
+                    Trajectory(
+                        name="duplicate_booking",
+                        uri="viking://user/u/memories/trajectories/t1.md",
+                        content="trajectory content",
+                        outcome="success",
+                        retrieval_anchor="",
+                    )
+                ],
+                gradients=[],
+            )
+
+    estimate = AsyncMock(side_effect=AssertionError("experience estimation must be skipped"))
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.get_viking_fs",
+        lambda: SimpleNamespace(ls=AsyncMock(return_value=[])),
+    )
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.get_streaming_policy_trainer",
+        AsyncMock(return_value=FakeTrainer()),
+    )
+    monkeypatch.setattr(
+        "openviking.session.train.components.gradient_estimator.ExperienceGradientEstimator.estimate",
+        estimate,
+    )
+
+    compressor = SessionCompressorV3(vikingdb=None, rollout_analyzer=FakeAnalyzer())
+    result = await compressor.train_from_extracted_cases(
+        cases=[_training_case()],
+        messages=_messages(),
+        ctx=_ctx(),
+        session_id="s1",
+        allowed_memory_types={"trajectories"},
+    )
+
+    assert len(analyzed) == 1
+    assert result["submitted"] == 1
+    estimate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_train_from_extracted_multiple_case_memories_analyzes_bound_rollouts(monkeypatch):
     seen_rollouts = []
     rollout_messages = _messages()
@@ -368,7 +552,8 @@ async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch):
     trained_cases = []
 
     class DummyRegistry:
-        async def initialize_memory_files(self, ctx):
+        async def initialize_memory_files(self, ctx, allowed_memory_types=None):
+            del ctx, allowed_memory_types
             return None
 
     class DummyOrchestrator:
@@ -414,7 +599,7 @@ async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch):
     contexts = await compressor.extract_long_term_memories(
         messages=_messages(),
         ctx=_ctx(),
-        allowed_memory_types={"cases", "profile"},
+        allowed_memory_types={"cases", "profile", "trajectories", "experiences"},
     )
 
     assert len(applied_operations) == 1
@@ -451,7 +636,8 @@ async def test_v3_extract_trains_only_canonical_case_after_patch_merge(monkeypat
         )
 
     class DummyRegistry:
-        async def initialize_memory_files(self, ctx):
+        async def initialize_memory_files(self, ctx, allowed_memory_types=None):
+            del ctx, allowed_memory_types
             return None
 
     class DummyOrchestrator:
@@ -521,7 +707,7 @@ async def test_v3_extract_trains_only_canonical_case_after_patch_merge(monkeypat
     contexts = await compressor.extract_long_term_memories(
         messages=_messages(),
         ctx=_ctx(),
-        allowed_memory_types={"cases", "profile"},
+        allowed_memory_types={"cases", "profile", "trajectories", "experiences"},
     )
 
     assert [context.uri for context in contexts] == [canonical_uri]
@@ -591,6 +777,7 @@ async def test_v3_training_case_spec_fast_path_skips_user_memory_extraction_and_
     compressor._extract_user_memories = fail_extract_user_memories
     compressor._write_training_case_memory = fake_write_training_case_memory
     compressor.train_from_extracted_cases = fake_train_from_extracted_cases
+    compressor._write_final_memory_diff = AsyncMock()
 
     contexts = await compressor.extract_long_term_memories(
         messages=[case_spec, *rollout_messages],
@@ -604,6 +791,36 @@ async def test_v3_training_case_spec_fast_path_skips_user_memory_extraction_and_
     assert [case.name for case in trained[0]["cases"]] == ["duplicate_booking"]
     assert trained[0]["messages"] == rollout_messages
     assert contexts[0].uri == "viking://user/u/memories/cases/duplicate_booking.md"
+
+
+@pytest.mark.asyncio
+async def test_v3_training_case_spec_does_not_write_case_when_evolution_disabled():
+    compressor = SessionCompressorV3(vikingdb=None, rollout_analyzer=SimpleNamespace())
+    compressor._extract_user_memories = AsyncMock(
+        return_value=SimpleNamespace(
+            contexts=[],
+            cases=[],
+            memory_diff=None,
+            case_uri_by_name={},
+        )
+    )
+    compressor._write_training_case_memory = AsyncMock()
+    compressor.train_from_extracted_cases = AsyncMock()
+    compressor._write_final_memory_diff = AsyncMock()
+
+    contexts = await compressor.extract_long_term_memories(
+        messages=[_case_spec_message(), *_messages()],
+        ctx=_ctx(),
+        session_id="s1",
+        archive_uri="viking://user/u/sessions/s1/history/archive_001",
+        allowed_memory_types={"cases", "trajectories", "experiences"},
+        agent_evolution_enabled=False,
+    )
+
+    assert contexts == []
+    compressor._write_training_case_memory.assert_not_awaited()
+    compressor.train_from_extracted_cases.assert_not_awaited()
+    assert compressor._extract_user_memories.await_args.kwargs["allowed_memory_types"] == set()
 
 
 @pytest.mark.asyncio
@@ -633,7 +850,7 @@ async def test_v3_training_case_spec_fast_path_not_used_with_user_memory_policy(
 
     assert contexts == []
     assert extracted is True
-    assert trained and trained[0]["messages"][0].id == "case-spec"
+    assert trained == []
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+CASE_MEMORY_TYPE = "cases"
 TRAJECTORY_MEMORY_TYPE = "trajectories"
 EXPERIENCE_MEMORY_TYPE = "experiences"
 EXECUTION_MEMORY_TYPES = frozenset({TRAJECTORY_MEMORY_TYPE, EXPERIENCE_MEMORY_TYPE})
+AGENT_EVOLUTION_MEMORY_TYPES = frozenset({CASE_MEMORY_TYPE, *EXECUTION_MEMORY_TYPES})

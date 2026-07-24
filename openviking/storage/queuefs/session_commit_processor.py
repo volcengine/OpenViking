@@ -62,7 +62,7 @@ class SessionCommitProcessor(DequeueHandlerBase):
             payload = data.get("data", data)
             if isinstance(payload, str):
                 payload = json.loads(payload)
-            msg = SessionCommitMsg(**payload)
+            msg = SessionCommitMsg.from_dict(payload)
             ctx = RequestContext(
                 user=UserIdentifier.from_dict(msg.user),
                 role=Role.USER,

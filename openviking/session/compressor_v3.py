@@ -23,6 +23,13 @@ from openviking.core.context import Context
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater, StreamingMemoryUpdaterConfig
+from openviking.session.memory.constants import (
+    AGENT_EVOLUTION_MEMORY_TYPES,
+    CASE_MEMORY_TYPE,
+    EXECUTION_MEMORY_TYPES,
+    EXPERIENCE_MEMORY_TYPE,
+    TRAJECTORY_MEMORY_TYPE,
+)
 from openviking.session.memory.dataclass import (
     MemoryFile,
     MemoryOperationSource,
@@ -77,7 +84,10 @@ from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
-_CASES_MEMORY_TYPE = "cases"
+_CASES_MEMORY_TYPE = CASE_MEMORY_TYPE
+_TRAJECTORIES_MEMORY_TYPE = TRAJECTORY_MEMORY_TYPE
+_EXPERIENCES_MEMORY_TYPE = EXPERIENCE_MEMORY_TYPE
+_AGENT_MEMORY_TYPES = EXECUTION_MEMORY_TYPES
 _TRAINING_CASE_SPEC_PROTOCOL = "openviking.batch_train.case_spec.v1"
 _TRAINING_CASE_SPEC_HEADER = "# OpenViking Batch Training CaseSpec v1"
 _TRAINING_FAST_PATH_MEMORY_TYPES = frozenset({"cases", "trajectories", "experiences"})
@@ -289,9 +299,18 @@ class SessionCompressorV3:
         latest_archive_overview: str = "",
         archive_uri: Optional[str] = None,
         allowed_memory_types: Optional[set[str]] = None,
+        agent_evolution_enabled: bool = True,
         allow_self_memory: bool = True,
         allowed_peer_ids: Optional[set[str]] = None,
     ):
+        if not agent_evolution_enabled:
+            effective_types = (
+                set(create_default_registry().list_names(include_disabled=False))
+                if allowed_memory_types is None
+                else set(allowed_memory_types)
+            )
+            allowed_memory_types = effective_types - AGENT_EVOLUTION_MEMORY_TYPES
+
         message_list = list(messages)
         fast_path_case = _training_case_from_first_message(message_list, allowed_memory_types)
         if fast_path_case is not None:
@@ -302,6 +321,8 @@ class SessionCompressorV3:
                 session_id=session_id,
                 archive_uri=archive_uri or "",
                 strict_extract_errors=strict_extract_errors,
+                agent_evolution_enabled=agent_evolution_enabled,
+                allowed_memory_types=allowed_memory_types,
             )
 
         result = await self._extract_user_memories(
@@ -316,16 +337,34 @@ class SessionCompressorV3:
             allow_self_memory=allow_self_memory,
             allowed_peer_ids=allowed_peer_ids,
         )
-        train_result = await self.train_from_extracted_cases(
-            cases=result.cases,
-            messages=message_list,
-            ctx=ctx,
-            case_uri_by_name=getattr(result, "case_uri_by_name", {}),
-            session_id=session_id,
-            archive_uri=archive_uri or "",
-            strict_extract_errors=strict_extract_errors,
-            collect_memory_diff=True,
-        )
+        agent_memory_types = _allowed_agent_memory_types(allowed_memory_types)
+        cases_allowed = allowed_memory_types is None or _CASES_MEMORY_TYPE in allowed_memory_types
+        if (
+            agent_evolution_enabled
+            and cases_allowed
+            and _TRAJECTORIES_MEMORY_TYPE in agent_memory_types
+        ):
+            train_result = await self.train_from_extracted_cases(
+                cases=result.cases,
+                messages=message_list,
+                ctx=ctx,
+                case_uri_by_name=getattr(result, "case_uri_by_name", {}),
+                session_id=session_id,
+                archive_uri=archive_uri or "",
+                strict_extract_errors=strict_extract_errors,
+                collect_memory_diff=True,
+                allowed_memory_types=agent_memory_types,
+            )
+        else:
+            train_result = {
+                "case_count": len(result.cases),
+                "submitted": 0,
+                "reason": (
+                    "agent_evolution_disabled"
+                    if not agent_evolution_enabled
+                    else "memory_types_filtered"
+                ),
+            }
         await self._write_final_memory_diff(
             archive_uri=archive_uri or "",
             ctx=ctx,
@@ -349,6 +388,8 @@ class SessionCompressorV3:
         session_id: Optional[str],
         archive_uri: str,
         strict_extract_errors: bool,
+        agent_evolution_enabled: bool,
+        allowed_memory_types: Optional[set[str]],
     ) -> dict[str, Any]:
         if ctx is None:
             logger.warning("No RequestContext provided, skipping training case fast path")
@@ -360,16 +401,25 @@ class SessionCompressorV3:
         )
         case_result = _applied_memory_result(case_write)
         contexts = _contexts_from_update_result(case_result)
-        train_result = await self.train_from_extracted_cases(
-            cases=[case],
-            messages=_training_messages_after_case_spec(messages),
-            ctx=ctx,
-            case_uri_by_name={case.name: _first_context_uri(contexts)},
-            session_id=session_id,
-            archive_uri=archive_uri,
-            strict_extract_errors=strict_extract_errors,
-            collect_memory_diff=True,
-        )
+        agent_memory_types = _allowed_agent_memory_types(allowed_memory_types)
+        if agent_evolution_enabled and _TRAJECTORIES_MEMORY_TYPE in agent_memory_types:
+            train_result = await self.train_from_extracted_cases(
+                cases=[case],
+                messages=_training_messages_after_case_spec(messages),
+                ctx=ctx,
+                case_uri_by_name={case.name: _first_context_uri(contexts)},
+                session_id=session_id,
+                archive_uri=archive_uri,
+                strict_extract_errors=strict_extract_errors,
+                collect_memory_diff=True,
+                allowed_memory_types=agent_memory_types,
+            )
+        else:
+            train_result = {
+                "case_count": 1,
+                "submitted": 0,
+                "reason": "agent_evolution_disabled",
+            }
         await self._write_final_memory_diff(
             archive_uri=archive_uri,
             ctx=ctx,
@@ -487,7 +537,10 @@ class SessionCompressorV3:
 
         registry = create_default_registry()
         if allow_self_memory:
-            await registry.initialize_memory_files(ctx)
+            await registry.initialize_memory_files(
+                ctx,
+                allowed_memory_types=allowed_memory_types,
+            )
 
         extract_context = ExtractContext(messages)
         isolation_handler = MemoryIsolationHandler(
@@ -580,12 +633,22 @@ class SessionCompressorV3:
         archive_uri: str = "",
         strict_extract_errors: bool = False,
         collect_memory_diff: bool = False,
+        allowed_memory_types: Optional[set[str]] = None,
     ) -> dict[str, Any]:
         if not messages or ctx is None:
             return {"case_count": 0, "submitted": 0, "reason": "missing_messages_or_ctx"}
         if not cases:
             tracer.info("No commit training case memories extracted; skipping streaming train")
             return {"case_count": 0, "submitted": 0}
+
+        agent_memory_types = _allowed_agent_memory_types(allowed_memory_types)
+        if _TRAJECTORIES_MEMORY_TYPE not in agent_memory_types:
+            return {
+                "case_count": len(cases),
+                "submitted": 0,
+                "reason": "memory_types_filtered",
+            }
+        experiences_allowed = _EXPERIENCES_MEMORY_TYPE in agent_memory_types
 
         config = get_openviking_config()
         skill_enabled = (
@@ -692,9 +755,11 @@ class SessionCompressorV3:
                 analysis = await self.rollout_analyzer.analyze(rollout, analysis_context)
 
                 # Experience path: estimate gradients, then submit to exp trainer
-                exp_gradients = await ExperienceGradientEstimator(
-                    viking_fs=viking_fs,
-                ).estimate(analysis, exp_trainer.policy_set, gradient_context)
+                exp_gradients = []
+                if experiences_allowed:
+                    exp_gradients = await ExperienceGradientEstimator(
+                        viking_fs=viking_fs,
+                    ).estimate(analysis, exp_trainer.policy_set, gradient_context)
                 exp_training_result = _trajectory_only_training_result(
                     analysis=analysis,
                     rollout=rollout,
@@ -969,6 +1034,8 @@ def _training_case_from_first_message(
     """
     if not messages or allowed_memory_types is None:
         return None
+    if not {_CASES_MEMORY_TYPE, _TRAJECTORIES_MEMORY_TYPE}.issubset(allowed_memory_types):
+        return None
     if not set(allowed_memory_types).issubset(_TRAINING_FAST_PATH_MEMORY_TYPES):
         return None
 
@@ -976,6 +1043,12 @@ def _training_case_from_first_message(
     if payload is None:
         return None
     return _case_from_payload(payload)
+
+
+def _allowed_agent_memory_types(allowed_memory_types: Optional[set[str]]) -> set[str]:
+    if allowed_memory_types is None:
+        return set(_AGENT_MEMORY_TYPES)
+    return set(allowed_memory_types) & _AGENT_MEMORY_TYPES
 
 
 def _training_case_spec_payload_from_message(message: Message) -> dict[str, Any] | None:
@@ -1125,7 +1198,6 @@ def _case_evidence(case: Case) -> str:
     if raw_evidence:
         return str(raw_evidence)
     return "Structured batch training CaseSpec supplied by the training pipeline."
-
 
 
 async def _canonical_cases_from_update_result(

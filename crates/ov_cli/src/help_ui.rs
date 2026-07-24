@@ -83,7 +83,14 @@ const CONFIG_STATUS: &[HelpCommand] = help_commands![
 ];
 
 const IMPORT_EXPORT_SESSIONS: &[HelpCommand] = help_commands![
-    "import", "export", "backup", "restore", "snapshot", "session", "privacy"
+    "import",
+    "export",
+    "backup",
+    "restore",
+    "snapshot",
+    "session",
+    "user-settings",
+    "privacy"
 ];
 
 const INTERACTIVE_ADMIN: &[HelpCommand] = help_commands![
@@ -523,6 +530,24 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         next_steps: &[HelpItem {
             label: "ov session <subcommand> --help",
             description: "Show exact arguments for a session operation.",
+        }],
+    },
+    CommandHelpSpec {
+        path: &["user-settings"],
+        purpose: "Manage current-user memory extraction and Agent Evolution settings.",
+        examples: &[
+            HelpItem {
+                label: "ov user-settings memory",
+                description: "Show user overrides and effective memory settings.",
+            },
+            HelpItem {
+                label: "ov user-settings set-memory --agent-evolution-enabled true",
+                description: "Enable future case, trajectory, and experience production.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov user-settings set-memory --help",
+            description: "Show Agent Evolution override options.",
         }],
     },
     CommandHelpSpec {
@@ -2351,6 +2376,7 @@ fn localized_command_description<'a>(
         "task" => "查看异步任务",
         "observer" => "观察服务器组件",
         "session" => "管理会话",
+        "user-settings" => "管理当前用户记忆配置",
         "import" => "导入 .ovpack",
         "export" => "导出为 .ovpack",
         "backup" => "创建仅恢复备份",
@@ -2572,7 +2598,15 @@ fn version() -> String {
 fn is_bare_group_help_command(command: &str) -> bool {
     matches!(
         command,
-        "task" | "skills" | "session" | "snapshot" | "privacy" | "admin" | "system" | "observer"
+        "task"
+            | "skills"
+            | "session"
+            | "user-settings"
+            | "snapshot"
+            | "privacy"
+            | "admin"
+            | "system"
+            | "observer"
     )
 }
 
@@ -3111,6 +3145,13 @@ mod tests {
         assert!(session.contains("get-session-archive <session-id> <archive-id>"));
         assert!(session.contains("add-message <session-id>"));
         assert!(session.contains("add-messages <session-id> <messages-json>"));
+
+        let user_settings = strip_ansi(
+            &render_command_help_request(&os_args(&["ov", "user-settings", "--help"]))
+                .expect("user settings help should render"),
+        );
+        assert!(user_settings.contains("memory"));
+        assert!(user_settings.contains("set-memory"));
 
         let watch = strip_ansi(
             &render_command_help_request(&os_args(&["ov", "task", "watch", "--help"]))

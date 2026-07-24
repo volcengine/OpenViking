@@ -17,9 +17,12 @@ from openviking.core.namespace import canonical_session_uri
 from openviking.core.peer_id import normalize_peer_id, safe_peer_id
 from openviking.message import Message, Part
 from openviking.message.part import ContextPart, TextPart, ToolPart
-from openviking.server.config import ToolOutputExternalizationConfig
+from openviking.server.config import ToolOutputExternalizationConfig, UserConfig
 from openviking.server.identity import RequestContext, Role
-from openviking.session.memory.constants import EXECUTION_MEMORY_TYPES
+from openviking.session.memory.constants import (
+    AGENT_EVOLUTION_MEMORY_TYPES,
+    EXECUTION_MEMORY_TYPES,
+)
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.session.retention import (
     RETENTION_MODE_TURN_BUDGET,
@@ -45,7 +48,7 @@ from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.model_retry import is_retryable_api_error, retry_async
 from openviking.utils.time_utils import get_current_timestamp
 from openviking.utils.token_estimation import estimate_text_tokens, truncate_text_to_token_budget
-from openviking_cli.exceptions import FailedPreconditionError
+from openviking_cli.exceptions import FailedPreconditionError, InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger, run_async
 from openviking_cli.utils.config import get_openviking_config
@@ -64,6 +67,7 @@ _PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS = 1800.0
 _MEMORY_EXTRACTION_MAX_RETRIES = 3
 _MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS = 1.0
 _MEMORY_EXTRACTION_RETRY_MAX_DELAY_SECONDS = 8.0
+_AGENT_TRAINING_REQUIRED_MEMORY_TYPES = frozenset({"cases", "trajectories"})
 _SESSION_PHASE1_LOCK_TIMEOUT_SECONDS = 30.0
 _MEMORY_STEP_NAMES = ("long_term", "execution")
 
@@ -84,6 +88,46 @@ def _validate_memory_policy_types(policy: MemoryPolicy) -> None:
     if policy.memory_types is None:
         return
     policy.validate_memory_types(_enabled_memory_types())
+
+
+def _apply_agent_evolution_setting(
+    policy: MemoryPolicy,
+    *,
+    agent_evolution_enabled: bool,
+) -> MemoryPolicy:
+    if agent_evolution_enabled:
+        return policy
+    effective_types = (
+        _enabled_memory_types() if policy.memory_types is None else set(policy.memory_types)
+    )
+    effective_types -= AGENT_EVOLUTION_MEMORY_TYPES
+    return MemoryPolicy(
+        self_enabled=policy.self_enabled,
+        peer_enabled=policy.peer_enabled,
+        memory_types=effective_types,
+        working_memory_enabled=policy.working_memory_enabled,
+    )
+
+
+def _effective_memory_types(policy: MemoryPolicy) -> set[str]:
+    if policy.memory_types is None:
+        return _enabled_memory_types()
+    return set(policy.memory_types)
+
+
+def _agent_memory_skip_reason(
+    *,
+    agent_evolution_enabled: bool,
+    effective_memory_types: set[str],
+    user_config_error: Optional[str] = None,
+) -> Optional[str]:
+    if user_config_error:
+        return "invalid_user_config"
+    if not agent_evolution_enabled:
+        return "agent_evolution_disabled"
+    if not _AGENT_TRAINING_REQUIRED_MEMORY_TYPES.issubset(effective_memory_types):
+        return "memory_types_filtered"
+    return None
 
 
 def _split_policy_memory_types(
@@ -479,6 +523,7 @@ class Session:
         session_uri: Optional[str] = None,
         auto_commit_threshold: int = 8000,
         tool_output_externalization_config: Optional[ToolOutputExternalizationConfig] = None,
+        user_config_defaults: Optional[UserConfig] = None,
         usage_reporter: Optional["UsageReporter"] = None,
     ):
         self._viking_fs = viking_fs
@@ -509,6 +554,11 @@ class Session:
             tool_output_externalization_config.model_copy(deep=True)
             if tool_output_externalization_config is not None
             else ToolOutputExternalizationConfig()
+        )
+        self._user_config_defaults = (
+            user_config_defaults.model_copy(deep=True)
+            if user_config_defaults is not None
+            else UserConfig()
         )
         self._usage_reporter = usage_reporter
 
@@ -1403,6 +1453,9 @@ class Session:
         keep_recent_turn_count: int,
         retained_message_token_budget: int,
         min_raw_tail_steps: int,
+        agent_evolution_enabled: bool = True,
+        agent_memory_skip_reason: Optional[str] = None,
+        user_config_error: Optional[str] = None,
     ) -> None:
         """Persist the Phase 1 intent before any destructive root rewrite."""
         payload = {
@@ -1419,7 +1472,17 @@ class Session:
             "retained_message_token_budget": retained_message_token_budget,
             "min_raw_tail_steps": min_raw_tail_steps,
         }
-        await self._merge_archive_meta(archive_uri, {"phase1": payload})
+        await self._merge_archive_meta(
+            archive_uri,
+            {
+                "phase1": payload,
+                "agent_evolution": {
+                    "enabled": agent_evolution_enabled,
+                    "skip_reason": agent_memory_skip_reason,
+                    "user_config_error": user_config_error,
+                },
+            },
+        )
 
     async def _write_phase1_ready_marker(self, archive_uri: str) -> None:
         phase1 = await self._read_phase1_meta(archive_uri)
@@ -1627,7 +1690,34 @@ class Session:
             memory_policy if memory_policy is not None else self._meta.memory_policy
         )
         _validate_memory_policy_types(effective_policy)
+        agent_evolution_enabled = False
+        user_config_error: Optional[str] = None
+        try:
+            from openviking.server.user_config import resolve_memory_settings
+
+            user_settings = await resolve_memory_settings(
+                viking_fs=self._viking_fs,
+                ctx=self.ctx,
+                user_config_defaults=self._user_config_defaults,
+            )
+            agent_evolution_enabled = user_settings.agent_evolution_enabled
+            effective_policy = _apply_agent_evolution_setting(
+                effective_policy,
+                agent_evolution_enabled=agent_evolution_enabled,
+            )
+        except InvalidArgumentError as exc:
+            user_config_error = str(exc)
+            effective_policy = _apply_agent_evolution_setting(
+                effective_policy,
+                agent_evolution_enabled=False,
+            )
         effective_memory_policy = effective_policy.to_dict()
+        effective_memory_types = sorted(_effective_memory_types(effective_policy))
+        agent_memory_skip_reason = _agent_memory_skip_reason(
+            agent_evolution_enabled=agent_evolution_enabled,
+            effective_memory_types=set(effective_memory_types),
+            user_config_error=user_config_error,
+        )
         logger.info(
             f"[TRACER] session_commit started, trace_id={trace_id}, "
             f"keep_recent_count={keep_recent_count}, retention_mode={retention_mode}, "
@@ -1672,7 +1762,17 @@ class Session:
             if memory_policy is None:
                 effective_policy = MemoryPolicy.from_dict(self._meta.memory_policy)
                 _validate_memory_policy_types(effective_policy)
+                effective_policy = _apply_agent_evolution_setting(
+                    effective_policy,
+                    agent_evolution_enabled=agent_evolution_enabled,
+                )
                 effective_memory_policy = effective_policy.to_dict()
+                effective_memory_types = sorted(_effective_memory_types(effective_policy))
+                agent_memory_skip_reason = _agent_memory_skip_reason(
+                    agent_evolution_enabled=agent_evolution_enabled,
+                    effective_memory_types=set(effective_memory_types),
+                    user_config_error=user_config_error,
+                )
 
             archive_refs = await self._list_archive_refs()
             self._compression.compression_index = max(
@@ -1787,6 +1887,9 @@ class Session:
                     keep_recent_turn_count=effective_keep_turns if turn_mode else 0,
                     retained_message_token_budget=effective_token_budget if turn_mode else 0,
                     min_raw_tail_steps=effective_min_tail,
+                    agent_evolution_enabled=agent_evolution_enabled,
+                    agent_memory_skip_reason=agent_memory_skip_reason,
+                    user_config_error=user_config_error,
                 )
 
                 # Archive raw remains durable and recoverable before any live
@@ -1969,6 +2072,40 @@ class Session:
             )
             return
 
+        queued_policy = MemoryPolicy.from_dict(msg.memory_policy)
+        archive_meta = await self._read_archive_meta(msg.archive_uri)
+        agent_evolution_snapshot = archive_meta.get("agent_evolution")
+        if not isinstance(agent_evolution_snapshot, dict):
+            # Compatibility with jobs created by pre-merge development builds
+            # that temporarily stored this snapshot in the queue payload.
+            phase1 = archive_meta.get("phase1")
+            queue_snapshot = phase1.get("queue_message") if isinstance(phase1, dict) else None
+            agent_evolution_snapshot = (
+                queue_snapshot if isinstance(queue_snapshot, dict) else {}
+            )
+
+        snapshot_enabled = agent_evolution_snapshot.get("enabled")
+        if snapshot_enabled is None:
+            snapshot_enabled = agent_evolution_snapshot.get("agent_evolution_enabled")
+        # Archives created before this setting existed preserve their original
+        # behavior, where Agent memory extraction was enabled by default.
+        agent_evolution_enabled = (
+            snapshot_enabled if isinstance(snapshot_enabled, bool) else True
+        )
+        agent_memory_skip_reason = agent_evolution_snapshot.get("skip_reason")
+        if agent_memory_skip_reason is None:
+            agent_memory_skip_reason = agent_evolution_snapshot.get(
+                "agent_memory_skip_reason"
+            )
+        if agent_memory_skip_reason is None:
+            agent_memory_skip_reason = _agent_memory_skip_reason(
+                agent_evolution_enabled=agent_evolution_enabled,
+                effective_memory_types=_effective_memory_types(queued_policy),
+            )
+        user_config_error = agent_evolution_snapshot.get("user_config_error")
+        if user_config_error is not None:
+            user_config_error = str(user_config_error)
+
         await self._run_memory_extraction(
             task_id=msg.task_id,
             archive_uri=msg.archive_uri,
@@ -1977,6 +2114,9 @@ class Session:
             first_message_id=archive_messages[0].id,
             last_message_id=archive_messages[-1].id,
             memory_policy=msg.memory_policy,
+            agent_evolution_enabled=agent_evolution_enabled,
+            agent_memory_skip_reason=agent_memory_skip_reason,
+            user_config_error=user_config_error,
         )
 
     async def _run_usage_reporting(
@@ -2011,6 +2151,9 @@ class Session:
         first_message_id: str,
         last_message_id: str,
         memory_policy: Optional[Dict[str, Any]],
+        agent_evolution_enabled: bool = True,
+        agent_memory_skip_reason: Optional[str] = None,
+        user_config_error: Optional[str] = None,
     ) -> None:
         """Phase 2: Extract memories, write relations, enqueue — runs in background."""
         from openviking.service.task_tracker import get_task_tracker
@@ -2191,9 +2334,16 @@ class Session:
                     allowed_peer_ids = extraction_scope.allowed_peer_ids
                     session_skill_extraction_enabled = extraction_scope.include_session_skills
                     memory_type_filter = extraction_scope.memory_types
-                    long_term_memory_types, execution_memory_types = _split_policy_memory_types(
-                        memory_type_filter
+                    has_execution_memory = hasattr(
+                        self._session_compressor, "extract_execution_memories"
                     )
+                    if has_execution_memory:
+                        long_term_memory_types, execution_memory_types = _split_policy_memory_types(
+                            memory_type_filter
+                        )
+                    else:
+                        long_term_memory_types = memory_type_filter
+                        execution_memory_types = set()
 
                     long_term_messages = [
                         message
@@ -2228,10 +2378,6 @@ class Session:
                             len(messages),
                         )
 
-                        has_execution_memory = hasattr(
-                            self._session_compressor, "extract_execution_memories"
-                        )
-
                         extraction_tasks: List[Any] = []
                         extraction_labels: List[str] = []
                         if working_memory_enabled:
@@ -2256,6 +2402,7 @@ class Session:
                                     latest_archive_overview=latest_archive_overview,
                                     archive_uri=archive_uri,
                                     allowed_memory_types=long_term_memory_types,
+                                    agent_evolution_enabled=agent_evolution_enabled,
                                     allow_self_memory=self_memory_enabled,
                                     allowed_peer_ids=allowed_peer_ids,
                                 )
@@ -2449,6 +2596,11 @@ class Session:
                 ],
                 "usage_events_extracted": usage_events_extracted,
                 "active_count_updated": active_count_updated,
+                "effective_memory_types": sorted(
+                    _effective_memory_types(MemoryPolicy.from_dict(memory_policy))
+                ),
+                "agent_evolution_enabled": agent_evolution_enabled,
+                "agent_memory_skip_reason": agent_memory_skip_reason,
                 "token_usage": {
                     "llm": dict(self._meta.llm_token_usage),
                     "embedding": dict(self._meta.embedding_token_usage),
@@ -2462,6 +2614,8 @@ class Session:
             }
             if memory_diff_uri:
                 result_payload["memory_diff_uri"] = memory_diff_uri
+            if user_config_error:
+                result_payload["user_config_error"] = user_config_error
 
             await tracker.complete(
                 task_id,

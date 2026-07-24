@@ -5,17 +5,20 @@
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional, TypeVar
 
 from openviking.core.namespace import canonical_user_root
 from openviking.core.uri_validation import validate_content_target_uri
 from openviking.server.config import AddTargetsConfig, UserConfig
+from openviking.storage.transaction import LockContext, get_lock_manager
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
 if TYPE_CHECKING:
     from openviking.server.config import ServerConfig
     from openviking.server.identity import RequestContext
+    from openviking.storage.transaction import LockHandle
     from openviking.storage.viking_fs import VikingFS
 
 
@@ -25,8 +28,31 @@ class ResolvedAddTargets:
     skill_uri: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class ResolvedMemorySettings:
+    agent_evolution_enabled: bool
+
+
+_UpdateResult = TypeVar("_UpdateResult")
+
+
 def user_config_uri(ctx: RequestContext) -> str:
     return f"{canonical_user_root(ctx)}/settings/user_config.json"
+
+
+@asynccontextmanager
+async def _user_config_lock(
+    viking_fs: VikingFS,
+    uri: str,
+    ctx: RequestContext,
+) -> AsyncIterator[Optional[LockHandle]]:
+    uri_to_path = getattr(viking_fs, "_uri_to_path", None)
+    if not callable(uri_to_path):
+        yield None
+        return
+    path = uri_to_path(uri, ctx=ctx)
+    async with LockContext(get_lock_manager(), [path], lock_mode="exact") as handle:
+        yield handle
 
 
 def _user_config_from_payload(payload: Any) -> UserConfig:
@@ -114,6 +140,32 @@ async def read_user_config(
     return _user_config_from_payload(payload)
 
 
+async def update_user_config(
+    viking_fs: VikingFS,
+    ctx: RequestContext,
+    updater: Callable[[UserConfig], _UpdateResult],
+) -> _UpdateResult:
+    """Apply a locked read-modify-write update to the current user's config."""
+    uri = user_config_uri(ctx)
+    async with _user_config_lock(viking_fs, uri, ctx) as handle:
+        current = await read_user_config(viking_fs, ctx)
+        before = current.model_dump()
+        result = updater(current)
+        validate_add_targets(current.add_targets, ctx=ctx, viking_fs=viking_fs)
+        if current.model_dump() != before:
+            await viking_fs.write_file(
+                uri,
+                json.dumps(
+                    current.model_dump(exclude_none=True),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                ctx=ctx,
+                lock_handle=handle,
+            )
+        return result
+
+
 async def write_user_config(
     viking_fs: VikingFS,
     ctx: RequestContext,
@@ -121,11 +173,17 @@ async def write_user_config(
 ) -> ResolvedAddTargets:
     runtime = validate_add_targets(user_config.add_targets, ctx=ctx, viking_fs=viking_fs)
     uri = user_config_uri(ctx)
-    await viking_fs.write_file(
-        uri,
-        json.dumps(user_config.model_dump(exclude_none=True), ensure_ascii=False, sort_keys=True),
-        ctx=ctx,
-    )
+    async with _user_config_lock(viking_fs, uri, ctx) as handle:
+        await viking_fs.write_file(
+            uri,
+            json.dumps(
+                user_config.model_dump(exclude_none=True),
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            ctx=ctx,
+            lock_handle=handle,
+        )
     return runtime
 
 
@@ -148,13 +206,63 @@ async def write_user_add_targets(
     ctx: RequestContext,
     settings: AddTargetsConfig,
 ) -> ResolvedAddTargets:
-    user_config = await read_user_config(viking_fs, ctx)
-    user_config.add_targets = settings
-    return await write_user_config(viking_fs, ctx, user_config)
+    runtime = validate_add_targets(settings, ctx=ctx, viking_fs=viking_fs)
+
+    def _set(user_config: UserConfig) -> None:
+        user_config.add_targets = settings
+
+    await update_user_config(viking_fs, ctx, _set)
+    return runtime
 
 
 async def delete_user_add_targets(viking_fs: VikingFS, ctx: RequestContext) -> None:
-    await delete_user_config(viking_fs, ctx)
+    def _clear(user_config: UserConfig) -> None:
+        user_config.add_targets = AddTargetsConfig()
+
+    await update_user_config(viking_fs, ctx, _clear)
+
+
+async def write_user_memory_settings(
+    viking_fs: VikingFS,
+    ctx: RequestContext,
+    *,
+    agent_evolution_enabled: Any,
+    agent_evolution_enabled_set: bool,
+) -> None:
+    if (
+        agent_evolution_enabled_set
+        and agent_evolution_enabled is not None
+        and not isinstance(agent_evolution_enabled, bool)
+    ):
+        raise InvalidArgumentError("agent_evolution_enabled must be a boolean or null")
+
+    def _set(user_config: UserConfig) -> None:
+        if agent_evolution_enabled_set:
+            user_config.agent_evolution.enabled = agent_evolution_enabled
+
+    await update_user_config(viking_fs, ctx, _set)
+
+
+async def resolve_memory_settings(
+    *,
+    viking_fs: VikingFS,
+    ctx: RequestContext,
+    user_config_defaults: Optional[UserConfig] = None,
+    user_config: Optional[UserConfig] = None,
+) -> ResolvedMemorySettings:
+    current = user_config or await read_user_config(viking_fs, ctx)
+    defaults = user_config_defaults or UserConfig()
+    enabled = current.agent_evolution.enabled
+    if enabled is None:
+        enabled = defaults.agent_evolution.enabled
+    effective_agent_evolution_enabled = bool(enabled) if enabled is not None else False
+    return ResolvedMemorySettings(
+        agent_evolution_enabled=effective_agent_evolution_enabled,
+    )
+
+
+def public_memory_settings(user_config: UserConfig) -> dict[str, Any]:
+    return {"agent_evolution_enabled": user_config.agent_evolution.enabled}
 
 
 async def effective_resource_add_target(

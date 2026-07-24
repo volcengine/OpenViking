@@ -32,6 +32,8 @@ from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
 
+_UNSET = object()
+
 
 def _to_jsonable(value: Any) -> Any:
     """Convert internal objects into JSON-serializable values."""
@@ -121,6 +123,23 @@ class LocalClient(BaseClient):
     async def close(self) -> None:
         """Close the local client."""
         await self._service.close()
+
+    async def get_memory_settings(self) -> Dict[str, Any]:
+        """Return current-user memory setting overrides and effective values."""
+        return await self._service.sessions.get_memory_settings(self._ctx)
+
+    async def patch_memory_settings(
+        self,
+        *,
+        agent_evolution_enabled: Any = _UNSET,
+    ) -> Dict[str, Any]:
+        """Partially update current-user memory settings."""
+        if agent_evolution_enabled is _UNSET:
+            return await self.get_memory_settings()
+        return await self._service.sessions.patch_memory_settings(
+            self._ctx,
+            agent_evolution_enabled=agent_evolution_enabled,
+        )
 
     # ============= Resource Management =============
 

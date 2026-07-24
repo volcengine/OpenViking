@@ -30,6 +30,18 @@ class BaseClient(ABC):
         """Close the client and release resources."""
         ...
 
+    async def get_memory_settings(self) -> Dict[str, Any]:
+        """Return current-user memory setting overrides and effective values."""
+        raise NotImplementedError("memory settings are not supported by this client")
+
+    async def patch_memory_settings(
+        self,
+        *,
+        agent_evolution_enabled: Any,
+    ) -> Dict[str, Any]:
+        """Update the current user's Agent Evolution override."""
+        raise NotImplementedError("memory settings are not supported by this client")
+
     # ============= Resource Management =============
 
     @abstractmethod

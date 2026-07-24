@@ -81,10 +81,19 @@ class AddTargetsConfig(BaseModel):
         raise ValueError("skill_uri must be viking://user/skills or viking://agent/skills")
 
 
+class AgentEvolutionConfig(BaseModel):
+    """Per-user Agent Evolution production switch."""
+
+    enabled: Optional[bool] = None
+
+    model_config = {"extra": "forbid"}
+
+
 class UserConfig(BaseModel):
     """User configuration values that can be defaulted or initialized."""
 
     add_targets: AddTargetsConfig = Field(default_factory=AddTargetsConfig)
+    agent_evolution: AgentEvolutionConfig = Field(default_factory=AgentEvolutionConfig)
 
     model_config = {"extra": "forbid"}
 
@@ -176,7 +185,7 @@ class UsageAuditConfig(BaseModel):
 class UsageReporterSinkConfig(BaseModel):
     """Usage reporter sink configuration."""
 
-    type: Literal["custom"] = "custom"
+    type: Literal["custom", "http"] = "custom"
     class_path: Optional[str] = None
     config: Dict[str, object] = Field(default_factory=dict)
 

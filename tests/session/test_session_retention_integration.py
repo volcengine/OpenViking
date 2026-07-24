@@ -12,6 +12,7 @@ from openviking import AsyncOpenViking
 from openviking.message import Message, TextPart, ToolPart
 from openviking.models.vlm.base import ToolCall, VLMResponse
 from openviking.service.task_tracker import get_task_tracker
+from openviking.session.memory.constants import AGENT_EVOLUTION_MEMORY_TYPES
 from openviking.session.session import Session, _ArchiveSummaryResult, _CheckpointRequest
 
 
@@ -1620,4 +1621,16 @@ async def test_stale_worker_uses_lock_snapshot_memory_policy_for_queue_message(
     result = await stale_session.commit_async()
 
     assert result["archived"] is True
-    assert queued[0]["memory_policy"] == updater.meta.memory_policy
+    queued_policy = queued[0]["memory_policy"]
+    assert {
+        key: queued_policy[key] for key in updater.meta.memory_policy
+    } == updater.meta.memory_policy
+    assert set(queued_policy["memory_types"]).isdisjoint(AGENT_EVOLUTION_MEMORY_TYPES)
+    assert "agent_evolution_enabled" not in queued[0]
+    archive_meta = json.loads(
+        await stale_session._viking_fs.read_file(
+            f"{result['archive_uri']}/.meta.json",
+            ctx=stale_session.ctx,
+        )
+    )
+    assert archive_meta["agent_evolution"]["enabled"] is False

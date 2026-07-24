@@ -24,6 +24,8 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+_UNSET = object()
+
 
 if TYPE_CHECKING:
     from openviking.snapshot_namespace import AsyncSnapshotNamespace
@@ -140,6 +142,24 @@ class AsyncOpenViking:
         """
         await self._ensure_initialized()
         return await self._client.session_exists(session_id)
+
+    async def get_memory_settings(self) -> Dict[str, Any]:
+        """Return current-user memory setting overrides and effective values."""
+        await self._ensure_initialized()
+        return await self._client.get_memory_settings()
+
+    async def patch_memory_settings(
+        self,
+        *,
+        agent_evolution_enabled: Any = _UNSET,
+    ) -> Dict[str, Any]:
+        """Partially update current-user memory settings."""
+        await self._ensure_initialized()
+        if agent_evolution_enabled is _UNSET:
+            return await self._client.patch_memory_settings()
+        return await self._client.patch_memory_settings(
+            agent_evolution_enabled=agent_evolution_enabled
+        )
 
     async def create_session(
         self,

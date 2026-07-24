@@ -789,6 +789,11 @@ enum Commands {
         #[command(subcommand)]
         action: SessionCommands,
     },
+    /// [Data] Manage current-user memory and Agent Evolution settings
+    UserSettings {
+        #[command(subcommand)]
+        action: UserSettingsCommands,
+    },
     /// [Experimental][Data] Add memory in one shot (creates session, adds messages, commits)
     AddMemory {
         /// Content to memorize. Plain string (treated as user message),
@@ -1573,6 +1578,21 @@ enum PrivacyCommands {
 }
 
 #[derive(Subcommand)]
+enum UserSettingsCommands {
+    /// Show current-user memory setting overrides and effective values
+    Memory,
+    /// Partially update current-user memory settings
+    SetMemory {
+        /// Enable or disable Agent Evolution memory production
+        #[arg(long, conflicts_with = "clear_agent_evolution_enabled")]
+        agent_evolution_enabled: Option<bool>,
+        /// Clear the user Agent Evolution override
+        #[arg(long, conflicts_with = "agent_evolution_enabled")]
+        clear_agent_evolution_enabled: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum AdminCommands {
     /// Create a new account with its first admin user
     CreateAccount {
@@ -2041,7 +2061,15 @@ fn allows_plain_help_as_user_input(command: &str) -> bool {
 fn is_plain_help_group(command: &str) -> bool {
     matches!(
         command,
-        "config" | "task" | "admin" | "system" | "session" | "privacy" | "observer" | "skills"
+        "config"
+            | "task"
+            | "admin"
+            | "system"
+            | "session"
+            | "user-settings"
+            | "privacy"
+            | "observer"
+            | "skills"
     )
 }
 
@@ -2218,6 +2246,7 @@ fn is_top_level_server_command(command: &str) -> bool {
             | "grep"
             | "glob"
             | "add-memory"
+            | "user-settings"
             | "relations"
             | "link"
             | "unlink"
@@ -3040,6 +3069,28 @@ async fn main() {
         Commands::System { action } => handlers::handle_system(action, ctx).await,
         Commands::Observer { action } => handlers::handle_observer(action, ctx).await,
         Commands::Session { action } => handlers::handle_session(action, ctx).await,
+        Commands::UserSettings { action } => {
+            let client = ctx.get_client();
+            match action {
+                UserSettingsCommands::Memory => {
+                    commands::user_settings::get_memory(&client, ctx.output_format, ctx.compact)
+                        .await
+                }
+                UserSettingsCommands::SetMemory {
+                    agent_evolution_enabled,
+                    clear_agent_evolution_enabled,
+                } => {
+                    commands::user_settings::patch_memory(
+                        &client,
+                        agent_evolution_enabled,
+                        clear_agent_evolution_enabled,
+                        ctx.output_format,
+                        ctx.compact,
+                    )
+                    .await
+                }
+            }
+        }
         Commands::Admin { action } => handlers::handle_admin(action, ctx).await,
         Commands::Privacy { action } => handlers::handle_privacy(action, ctx).await,
         Commands::Ls {
@@ -3272,11 +3323,11 @@ async fn main() {
 mod tests {
     use super::{
         Cli, CliContext, Commands, ConfigAddTarget, ConfigCommands, LanguageGateAction,
-        PrivacyCommands, SkillCommands, SnapshotCmd, UploadCliOptions, find_command_index,
-        first_command_token, is_language_command_request, language_command_can_run_picker,
-        language_gate_action, language_required_message, legacy_upload_option_error,
-        plain_help_misuse, pre_parse_output_options, pre_parse_requires_cli_config_file,
-        preprocess_cli_args, preprocess_privacy_args,
+        PrivacyCommands, SkillCommands, SnapshotCmd, UploadCliOptions, UserSettingsCommands,
+        find_command_index, first_command_token, is_language_command_request,
+        language_command_can_run_picker, language_gate_action, language_required_message,
+        legacy_upload_option_error, plain_help_misuse, pre_parse_requires_cli_config_file,
+        pre_parse_output_options, preprocess_cli_args, preprocess_privacy_args,
     };
     use crate::config::{Config, DEFAULT_CUSTOM_URL};
     use crate::output::OutputFormat;
@@ -3403,6 +3454,55 @@ mod tests {
             },
             _ => panic!("expected admin command"),
         }
+    }
+
+    #[test]
+    fn cli_parses_user_memory_settings_commands() {
+        assert!(pre_parse_requires_cli_config_file(&os_args(&[
+            "ov",
+            "user-settings",
+            "memory",
+        ])));
+        let get = Cli::try_parse_from(["ov", "user-settings", "memory"])
+            .expect("user memory settings get should parse");
+        assert!(matches!(
+            get.command,
+            Commands::UserSettings {
+                action: UserSettingsCommands::Memory
+            }
+        ));
+
+        let set = Cli::try_parse_from([
+            "ov",
+            "user-settings",
+            "set-memory",
+            "--agent-evolution-enabled",
+            "true",
+        ])
+        .expect("user memory settings patch should parse");
+        match set.command {
+            Commands::UserSettings {
+                action:
+                    UserSettingsCommands::SetMemory {
+                        agent_evolution_enabled,
+                        ..
+                    },
+            } => {
+                assert_eq!(agent_evolution_enabled, Some(true));
+            }
+            _ => panic!("expected user-settings set-memory command"),
+        }
+
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "user-settings",
+                "set-memory",
+                "--memory-types",
+                "profile,events",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

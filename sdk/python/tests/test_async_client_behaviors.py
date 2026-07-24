@@ -1,11 +1,12 @@
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
 
 import pytest
 from openviking_sdk import AsyncHTTPClient, SyncHTTPClient
 from openviking_sdk.client import Session, SyncSession
 from openviking_sdk.errors import NotFoundError
+
 
 @pytest.mark.asyncio
 async def test_async_http_client_initialize_forwards_event_hooks():
@@ -840,3 +841,43 @@ async def test_import_ovpack_fails_fast_when_path_is_directory(tmp_path):
 
     with pytest.raises(ValueError, match="is not a file"):
         await client.import_ovpack(str(pack_dir), parent="viking://resources/")
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_gets_and_partially_patches_memory_settings():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=object())
+    client._handle_response = lambda _response: {"effective": {}}
+
+    assert await client.get_memory_settings() == {"effective": {}}
+    await client.patch_memory_settings(agent_evolution_enabled=True)
+
+    assert client._request.await_args_list == [
+        call("GET", "/api/v1/user-settings/memory"),
+        call(
+            "PATCH",
+            "/api/v1/user-settings/memory",
+            json={"agent_evolution_enabled": True},
+        ),
+    ]
+
+    with pytest.raises(TypeError):
+        await client.patch_memory_settings(memory_types=["profile"])
+
+
+def test_sync_http_client_forwards_memory_settings_calls():
+    client = SyncHTTPClient(url="http://localhost:1933")
+    mock_patch = MagicMock(return_value=object())
+    with patch.object(
+        client._async_client,
+        "patch_memory_settings",
+        mock_patch,
+    ):
+        with patch(
+            "openviking_sdk.client.run_async",
+            return_value={"effective": {"agent_evolution_enabled": True}},
+        ):
+            result = client.patch_memory_settings(agent_evolution_enabled=True)
+
+    assert result == {"effective": {"agent_evolution_enabled": True}}
+    mock_patch.assert_called_once_with(agent_evolution_enabled=True)
