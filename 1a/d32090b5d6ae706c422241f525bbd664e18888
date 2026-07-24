@@ -1,0 +1,55 @@
+bot/tests/test_compile.py
+  s_62079ba5e91098::t_278cc168dd8529 13,149-244,781,788,902-1217,1499-1526
+bot/vikingbot/agent/tools/compile.py
+  s_62079ba5e91098::t_b2950f4c1424c3 8,12,19-20,151-155,163-167,185-198,222,230,237,244-245,248-251,327,334-336,338-339,390-395,425-426,461-509
+bot/vikingbot/compile/service.py
+  s_62079ba5e91098::t_e6bc85631a73fa 12,36,253-262,265,376-377,456-504,599-612,617,622,636,639,642,646-732,986-1011
+bot/vikingbot/openviking_mount/ov_server.py
+  s_62079ba5e91098::t_909c9a13fa0a73 633-664
+crates/ov_cli/src/help_ui.rs
+  s_62079ba5e91098::t_0e8e464a6c39d7 847-857,860
+crates/ov_cli/src/main.rs
+  s_62079ba5e91098::t_ad794f487630f0 944,954
+examples/compile-skill-demo/README.md
+  s_62079ba5e91098::t_9bffc4b1b46e13 1-142
+examples/compile-skill-demo/memories/01-evidence-first.md
+  s_62079ba5e91098::t_63119f296c9bb6 1-29
+examples/compile-skill-demo/memories/02-review-feedback.md
+  s_62079ba5e91098::t_c24b2baa67e0da 1-29
+examples/compile-skill-demo/memories/03-final-quality-gate.md
+  s_62079ba5e91098::t_ded255ac51eb9b 1-29
+examples/compile-skill-demo/resources/architecture-biweekly-2026-07-10.md
+  s_62079ba5e91098::t_e4999488fb8ae3 1-57
+examples/compile-skill-demo/resources/architecture-biweekly-2026-07-24.md
+  s_62079ba5e91098::t_0bcccfc0d28920 1-59
+examples/compile-skill-demo/skills/build-weekly-report-skill/SKILL.md
+  s_62079ba5e91098::t_04f1c21481d30d 1-54
+openviking/client/local.py
+  s_62079ba5e91098::t_b233ca4a61ab40 11,496
+openviking/core/namespace.py
+  s_62079ba5e91098::t_74f41bc42e7530 117-119
+openviking/core/skill_loader.py
+  s_62079ba5e91098::t_d2908d9373efaa 128-262
+openviking/server/routers/skills.py
+  s_62079ba5e91098::t_d60e3d27fd12f2 18,482
+tests/unit/test_namespace_uri_classification.py
+  s_62079ba5e91098::t_fac251dba0bed6 41-42,84-85
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "1ad32090b5d6ae706c422241f525bbd664e18888",
+  "prompts": {},
+  "sessions": {
+    "s_62079ba5e91098": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f8e84-f226-7861-bf8b-2663aafa5f02",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
