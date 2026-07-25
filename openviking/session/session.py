@@ -395,6 +395,11 @@ class SessionMeta:
     retained_message_token_budget: int = 0
     min_raw_tail_steps: int = 1
     memory_policy: Optional[Dict[str, Any]] = None
+    # Free-form, project-level personalization (architectural style, tech-stack
+    # preferences, project name, etc.). Injected into the memory extractor's
+    # system prompt so a single agent can keep distinct memory layers across
+    # projects without having to allocate a different agent_id per project.
+    metadata: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data = {
@@ -416,6 +421,7 @@ class SessionMeta:
             "retained_message_token_budget": self.retained_message_token_budget,
             "min_raw_tail_steps": self.min_raw_tail_steps,
             "memory_policy": dict(self.memory_policy) if self.memory_policy is not None else None,
+            "metadata": dict(self.metadata) if self.metadata is not None else None,
         }
         if self.total_message_count is not None:
             data["total_message_count"] = self.total_message_count
@@ -465,6 +471,7 @@ class SessionMeta:
             ),
             min_raw_tail_steps=max(0, int(data.get("min_raw_tail_steps", 1) or 0)),
             memory_policy=data.get("memory_policy"),
+            metadata=data.get("metadata"),
         )
 
 
@@ -2292,6 +2299,7 @@ class Session:
                                     allowed_memory_types=long_term_memory_types,
                                     allow_self_memory=self_memory_enabled,
                                     allowed_peer_ids=allowed_peer_ids,
+                                    session_metadata=self._meta.metadata,
                                 )
 
                             extraction_tasks.append(
