@@ -10,7 +10,14 @@ from google.genai import types
 from google.genai.errors import APIError, ClientError
 
 try:
-    from google.genai.types import HttpOptions, HttpRetryOptions
+    from google.genai.types import HttpOptions
+
+    _HTTP_OPTIONS_AVAILABLE = True
+except ImportError:
+    _HTTP_OPTIONS_AVAILABLE = False
+
+try:
+    from google.genai.types import HttpRetryOptions
 
     _HTTP_RETRY_AVAILABLE = True
 except ImportError:
@@ -138,18 +145,18 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
             )
         if dimension is not None and not (1 <= dimension <= 3072):
             raise ValueError(f"dimension must be between 1 and 3072, got {dimension}")
-        if _HTTP_RETRY_AVAILABLE:
+        if _HTTP_OPTIONS_AVAILABLE:
+            http_options_kwargs: Dict[str, Any] = {"base_url": api_base}
+            if _HTTP_RETRY_AVAILABLE:
+                http_options_kwargs["retry_options"] = HttpRetryOptions(
+                    attempts=max(self.max_retries + 1, 1),
+                    initial_delay=0.5,
+                    max_delay=8.0,
+                    exp_base=2.0,
+                )
             self.client = genai.Client(
                 api_key=api_key,
-                http_options=HttpOptions(
-                    base_url=api_base,
-                    retry_options=HttpRetryOptions(
-                        attempts=max(self.max_retries + 1, 1),
-                        initial_delay=0.5,
-                        max_delay=8.0,
-                        exp_base=2.0,
-                    ),
-                ),
+                http_options=HttpOptions(**http_options_kwargs),
             )
         else:
             self.client = genai.Client(api_key=api_key)
