@@ -317,7 +317,7 @@ class EmbeddingModelConfig(BaseModel):
             ]:
                 if value and value.upper() not in _GEMINI_TASK_TYPES:
                     raise ValueError(
-                        f"{label}: invalid {field_name} '{value}' for Gemini. "
+                        f"{label}: Invalid {field_name} '{value}' for Gemini. "
                         f"Valid task_types: {', '.join(sorted(_GEMINI_TASK_TYPES))}"
                     )
 

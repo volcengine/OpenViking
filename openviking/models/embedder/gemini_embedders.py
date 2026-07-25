@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Gemini Embedding 2 provider using the official google-genai SDK."""
 
+import json
 from typing import Any, Dict, Optional
 
 from google import genai
@@ -72,7 +73,7 @@ def _raise_api_error(e: APIError, model: str) -> None:
 class GeminiDenseEmbedder(DenseEmbedderBase):
     """Dense embedder backed by Google's Gemini Embedding models.
 
-    REST endpoint: /v1beta/models/{model}:embedContent (SDK handles Parts format internally).
+    Custom api_base endpoint: /v1beta/models/{model}:embedContent.
     Input token limit: per-model (8192 for gemini-embedding-2-preview, 2048 for gemini-embedding-001).
     Output dimension: 1–3072 (MRL; recommended 768, 1536, 3072; default 3072).
     Task types: RETRIEVAL_QUERY, RETRIEVAL_DOCUMENT, SEMANTIC_SIMILARITY, CLASSIFICATION,
@@ -159,6 +160,11 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         self._dimension = dimension or self._default_dimension(model_name)
         self._token_limit = _MODEL_TOKEN_LIMITS.get(model_name, _DEFAULT_TOKEN_LIMIT)
 
+    def _model_path(self) -> str:
+        if self.model_name.startswith("models/"):
+            return self.model_name
+        return f"models/{self.model_name}"
+
     def _build_config(
         self,
         *,
@@ -173,6 +179,73 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         if title:
             kwargs["title"] = title
         return types.EmbedContentConfig(**kwargs)
+
+    def _build_embed_content_request(
+        self,
+        *,
+        text: str,
+        task_type: Optional[str] = None,
+        title: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        config = self._build_config(task_type=task_type, title=title)
+        request_dict: Dict[str, Any] = {
+            "content": {
+                "parts": [
+                    {
+                        "text": text,
+                    }
+                ]
+            }
+        }
+        request_dict.update(config.model_dump(by_alias=True, exclude_none=True))
+        request_dict.pop("httpOptions", None)
+        return request_dict
+
+    @staticmethod
+    def _embedding_values_from_body(body: Optional[str]) -> list[float]:
+        response_dict = {} if not body else json.loads(body)
+        embedding = response_dict.get("embedding")
+        if embedding is None:
+            embeddings = response_dict.get("embeddings") or []
+            embedding = embeddings[0] if embeddings else None
+        values = embedding.get("values") if isinstance(embedding, dict) else None
+        if values is None:
+            raise RuntimeError("Gemini embedding response missing embedding values")
+        return list(values)
+
+    def _embed_content_with_custom_base(
+        self,
+        *,
+        text: str,
+        task_type: Optional[str] = None,
+        title: Optional[str] = None,
+    ) -> EmbedResult:
+        response = self.client._api_client.request(
+            "post",
+            f"{self._model_path()}:embedContent",
+            self._build_embed_content_request(text=text, task_type=task_type, title=title),
+        )
+        vector = truncate_and_normalize(
+            self._embedding_values_from_body(response.body), self._dimension
+        )
+        return EmbedResult(dense_vector=vector)
+
+    async def _embed_content_with_custom_base_async(
+        self,
+        *,
+        text: str,
+        task_type: Optional[str] = None,
+        title: Optional[str] = None,
+    ) -> EmbedResult:
+        response = await self.client._api_client.async_request(
+            "post",
+            f"{self._model_path()}:embedContent",
+            self._build_embed_content_request(text=text, task_type=task_type, title=title),
+        )
+        vector = truncate_and_normalize(
+            self._embedding_values_from_body(response.body), self._dimension
+        )
+        return EmbedResult(dense_vector=vector)
 
     def _resolve_task_type(
         self,
@@ -210,6 +283,12 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
 
         # SDK accepts plain str; converts to REST Parts format internally.
         def _call() -> EmbedResult:
+            if self.api_base:
+                return self._embed_content_with_custom_base(
+                    text=text,
+                    task_type=task_type,
+                    title=title,
+                )
             result = self.client.models.embed_content(
                 model=self.model_name,
                 contents=text,
@@ -255,6 +334,12 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         task_type = self._resolve_task_type(is_query=is_query, task_type=task_type)
 
         async def _call() -> EmbedResult:
+            if self.api_base:
+                return await self._embed_content_with_custom_base_async(
+                    text=text,
+                    task_type=task_type,
+                    title=title,
+                )
             result = await self.client.aio.models.embed_content(
                 model=self.model_name,
                 contents=text,
