@@ -63,6 +63,25 @@ class TestGeminiDenseEmbedderInit:
         http_options = mock_client_class.call_args.kwargs["http_options"]
         assert http_options.base_url == "https://gateway.example.com"
 
+    def test_api_base_preserved_without_http_retry_options(self, monkeypatch):
+        import openviking.models.embedder.gemini_embedders as gemini_embedders
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        monkeypatch.setattr(gemini_embedders, "_HTTP_RETRY_AVAILABLE", False)
+        embedder = GeminiDenseEmbedder(
+            "gemini-embedding-2-preview",
+            api_key="test-key",
+            api_base="https://gateway.example.com",
+        )
+
+        request = embedder.client._api_client._build_request(
+            "post",
+            "models/demo:embedContent",
+            {"content": {"parts": [{"text": "cat"}]}},
+        )
+
+        assert request.url == "https://gateway.example.com/v1beta/models/demo:embedContent"
+
     @patch("openviking.models.embedder.gemini_embedders.genai.Client")
     def test_default_dimension_3072(self, mock_client_class):
         from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
