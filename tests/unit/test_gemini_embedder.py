@@ -143,6 +143,39 @@ class TestGeminiDenseEmbedderEmbed:
         assert kwargs["config"].task_type == "RETRIEVAL_QUERY"
 
     @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_api_base_uses_single_embed_content_request_path(self, mock_client_class):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        mock_client = mock_client_class.return_value
+        mock_client._api_client.request.return_value.body = (
+            '{"embedding": {"values": [0.1, 0.2, 0.3]}}'
+        )
+        embedder = GeminiDenseEmbedder(
+            "gemini-embedding-2-preview",
+            api_key="key",
+            api_base="https://gateway.example.com",
+            dimension=3,
+        )
+
+        result = embedder.embed(
+            "cat",
+            task_type="RETRIEVAL_QUERY",
+            title="Animal document",
+        )
+
+        assert len(result.dense_vector) == 3
+        mock_client.models.embed_content.assert_not_called()
+        mock_client._api_client.request.assert_called_once()
+        method, path, request_dict = mock_client._api_client.request.call_args.args
+        assert method == "post"
+        assert path == "models/gemini-embedding-2-preview:embedContent"
+        assert "batchEmbedContents" not in path
+        assert request_dict["content"]["parts"] == [{"text": "cat"}]
+        assert request_dict["taskType"] == "RETRIEVAL_QUERY"
+        assert request_dict["title"] == "Animal document"
+        assert request_dict["outputDimensionality"] == 3
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
     def test_embed_raises_runtime_error_on_api_error(self, mock_client_class):
         from google.genai.errors import APIError
 
