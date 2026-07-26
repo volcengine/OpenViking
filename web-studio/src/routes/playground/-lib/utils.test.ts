@@ -1,6 +1,16 @@
-import { describe, expect, it } from 'vitest'
+// @vitest-environment jsdom
 
-import { createIdentityStorageKey } from './utils'
+import { beforeEach, describe, expect, it } from 'vitest'
+
+import {
+  createIdentityStorageKey,
+  readPlaygroundExpandedUris,
+  writePlaygroundExpandedUris,
+} from './utils'
+
+beforeEach(() => {
+  localStorage.clear()
+})
 
 describe('createIdentityStorageKey', () => {
   it('isolates persisted Playground state by identity scope', () => {
@@ -18,5 +28,20 @@ describe('createIdentityStorageKey', () => {
     )
 
     expect(key).not.toContain('\u0000')
+  })
+})
+
+describe('Playground expanded directory persistence', () => {
+  it('restores normalized expanded URIs for the same identity', () => {
+    writePlaygroundExpandedUris('account-a\u0000alice', [
+      'viking://user/default',
+      'viking://resources/',
+    ])
+
+    expect(readPlaygroundExpandedUris('account-a\u0000alice')).toEqual([
+      'viking://user/default/',
+      'viking://resources/',
+    ])
+    expect(readPlaygroundExpandedUris('account-a\u0000bob')).toEqual([])
   })
 })

@@ -11,6 +11,7 @@ import {
 import { toast } from 'sonner'
 
 import { Button } from '#/components/ui/button'
+import { useAppConnection } from '#/hooks/use-app-connection'
 import {
   Dialog,
   DialogContent,
@@ -70,8 +71,10 @@ import {
   isDirectoryLevelFile,
   mergeExpanded,
   normalizePlaygroundResourceUri,
+  readPlaygroundExpandedUris,
   readStoredNumber,
   visibleContextEntries,
+  writePlaygroundExpandedUris,
 } from './-lib/utils'
 
 export const Route = createFileRoute('/playground')({
@@ -98,6 +101,7 @@ function PlaygroundRoute() {
 
 function PlaygroundWorkbench() {
   const { t } = useTranslation(['playground', 'resources'])
+  const { identityScopeKey } = useAppConnection()
   const search = Route.useSearch()
   const navigate = useNavigate({ from: Route.fullPath })
   const initialCurrentUri = useMemo(
@@ -115,7 +119,11 @@ function PlaygroundWorkbench() {
       : createEntryFromUri(initialCurrentUri, true),
   )
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(
-    () => new Set(getAncestorUris(initialCurrentUri)),
+    () =>
+      mergeExpanded(
+        new Set(readPlaygroundExpandedUris(identityScopeKey)),
+        getAncestorUris(initialCurrentUri),
+      ),
   )
   const [activePanel, setActivePanel] = useState<PlaygroundPanel>(
     search.panel ?? 'agent',
@@ -191,6 +199,15 @@ function PlaygroundWorkbench() {
   )
 
   useEffect(() => {
+    setExpandedKeys(
+      mergeExpanded(
+        new Set(readPlaygroundExpandedUris(identityScopeKey)),
+        getAncestorUris(initialCurrentUri),
+      ),
+    )
+  }, [identityScopeKey, initialCurrentUri])
+
+  useEffect(() => {
     const normalized = search.file
       ? normalizeDirUri(parentUri(search.file))
       : normalizeDirUri(search.uri || ROOT_URI)
@@ -202,6 +219,14 @@ function PlaygroundWorkbench() {
     )
     setExpandedKeys((prev) => mergeExpanded(prev, getAncestorUris(normalized)))
   }, [search.file, search.uri])
+
+  const handleExpandedKeysChange = useCallback(
+    (next: Set<string>) => {
+      setExpandedKeys(next)
+      writePlaygroundExpandedUris(identityScopeKey, next)
+    },
+    [identityScopeKey],
+  )
 
   useEffect(() => {
     if (search.panel === 'agent' || search.panel === 'terminal') {
@@ -505,7 +530,7 @@ function PlaygroundWorkbench() {
                 selectedFile && !selectedFile.isDir ? selectedFile.uri : null
               }
               expandedKeys={expandedKeys}
-              onExpandedKeysChange={setExpandedKeys}
+              onExpandedKeysChange={handleExpandedKeysChange}
               onSelectDirectory={handleSelectDirectory}
               onSelectFile={handleSelectFile}
             />
