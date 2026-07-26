@@ -349,7 +349,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           controller.signal,
         )
 
-        for await (const event of parseSseStream(response)) {
+        stream: for await (const event of parseSseStream(response)) {
           if (controller.signal.aborted) break
 
           switch (event.event) {
@@ -497,7 +497,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
               accContent = streamEventDataToText(event.data)
               setStreamingContent(accContent)
               setFinalText(accContent)
-              break
+              break stream
             }
           }
         }

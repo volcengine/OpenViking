@@ -160,4 +160,40 @@ describe('useChat event timeline', () => {
       await sendPromise
     })
   })
+
+  it('finalizes when the response event arrives before the stream closes', async () => {
+    let streamReleased = false
+    async function* stream() {
+      try {
+        yield {
+          data: JSON.stringify({ event: 'response', data: 'final response' }),
+          event: '',
+          id: '',
+        }
+        await new Promise(() => {})
+      } finally {
+        streamReleased = true
+      }
+    }
+    sendChatStreamMock.mockResolvedValue(stream())
+
+    const { result } = renderHook(() =>
+      useChat({
+        identityScopeKey: 'identity',
+        persistMessages: false,
+        sessionId: 'session-1',
+      }),
+    )
+
+    await act(async () => {
+      await result.current.send('hello')
+    })
+
+    expect(result.current.status).toBe('idle')
+    expect(result.current.messages[1]?.parts).toContainEqual({
+      text: 'final response',
+      type: 'text',
+    })
+    expect(streamReleased).toBe(true)
+  })
 })
