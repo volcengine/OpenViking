@@ -297,7 +297,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
       defaultOpen
       className="flex h-svh overflow-hidden bg-sidebar"
     >
-      <Sidebar variant="sidebar" collapsible="icon" className="!border-r-0">
+      <Sidebar variant="sidebar" collapsible="icon">
         <SidebarHeader className="h-12 border-b border-sidebar-border/70 px-2 py-0">
           <div className="flex h-full items-center justify-between gap-2 group-data-[collapsible=icon]:justify-center">
             <div className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
