@@ -27,6 +27,8 @@ interface MemoryImpactProps {
   session?: SessionMeta
 }
 
+const ALL_MEMORY_TYPES = 'all'
+
 const KIND_STYLES: Record<
   MemoryDiffKind,
   { icon: typeof FilePlus2Icon; text: string }
@@ -48,6 +50,7 @@ const KIND_STYLES: Record<
 export function MemoryImpact({ session }: MemoryImpactProps) {
   const { i18n, t } = useTranslation('sessions')
   const [open, setOpen] = useState(false)
+  const [memoryType, setMemoryType] = useState(ALL_MEMORY_TYPES)
   const diffsQuery = useSessionMemoryDiffs(session, open)
   const diffs = diffsQuery.data ?? []
   const totals = useMemo(
@@ -63,6 +66,33 @@ export function MemoryImpact({ session }: MemoryImpactProps) {
     [diffs],
   )
   const totalChanges = totals.adds + totals.updates + totals.deletes
+  const memoryTypes = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          diffs.flatMap((diff) =>
+            diff.operations.map((operation) => operation.memoryType),
+          ),
+        ),
+      ).sort(),
+    [diffs],
+  )
+  const activeMemoryType = memoryTypes.includes(memoryType)
+    ? memoryType
+    : ALL_MEMORY_TYPES
+  const visibleDiffs = useMemo(
+    () =>
+      diffs.flatMap((diff) => {
+        const operations =
+          activeMemoryType === ALL_MEMORY_TYPES
+            ? diff.operations
+            : diff.operations.filter(
+                (operation) => operation.memoryType === activeMemoryType,
+              )
+        return operations.length > 0 ? [{ ...diff, operations }] : []
+      }),
+    [activeMemoryType, diffs],
+  )
 
   if (!session || session.commit_count <= 0) return null
 
@@ -81,7 +111,7 @@ export function MemoryImpact({ session }: MemoryImpactProps) {
       </Button>
 
       <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent className="gap-0 sm:max-w-2xl">
+        <SheetContent className="gap-0 sm:max-w-3xl">
           <SheetHeader className="border-b px-6 py-5">
             <div className="flex items-center gap-3 pr-10">
               <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15">
@@ -140,9 +170,30 @@ export function MemoryImpact({ session }: MemoryImpactProps) {
                 />
               </div>
 
+              <div
+                aria-label={t('impact.filterByType')}
+                className="flex gap-1 overflow-x-auto border-b px-6 py-3"
+                role="tablist"
+              >
+                {[ALL_MEMORY_TYPES, ...memoryTypes].map((type) => (
+                  <Button
+                    aria-selected={activeMemoryType === type}
+                    key={type}
+                    onClick={() => setMemoryType(type)}
+                    role="tab"
+                    size="xs"
+                    variant={
+                      activeMemoryType === type ? 'secondary' : 'ghost'
+                    }
+                  >
+                    {type === ALL_MEMORY_TYPES ? t('impact.allTypes') : type}
+                  </Button>
+                ))}
+              </div>
+
               <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
                 <div className="space-y-6">
-                  {diffs.map((diff) => (
+                  {visibleDiffs.map((diff) => (
                     <section key={diff.archiveId} className="space-y-2.5">
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex min-w-0 items-center gap-2">

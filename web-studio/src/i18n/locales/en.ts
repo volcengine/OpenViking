@@ -1007,6 +1007,8 @@ const en = {
         update: 'Updated',
         delete: 'Deleted',
       },
+      allTypes: 'All',
+      filterByType: 'Filter by memory type',
       before: 'Before',
       after: 'After',
       addedContent: 'Added content',

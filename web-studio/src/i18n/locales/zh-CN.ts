@@ -973,6 +973,8 @@ const zhCN = {
         update: '更新',
         delete: '删除',
       },
+      allTypes: '全部',
+      filterByType: '按记忆分类筛选',
       before: '变更前',
       after: '变更后',
       addedContent: '新增内容',
