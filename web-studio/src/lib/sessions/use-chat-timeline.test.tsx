@@ -3,6 +3,7 @@
 import { act, renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { fetchSse } from '#/lib/sse'
 import { useChat } from './use-chat'
 
 const { sendChatStreamMock } = vi.hoisted(() => ({
@@ -34,6 +35,12 @@ function streamResponse(
   })
 }
 
+function streamMessages(events: Array<{ event: string; data: unknown }>) {
+  return fetchSse('/stream', {
+    fetch: vi.fn().mockResolvedValue(streamResponse(events)),
+  })
+}
+
 describe('useChat event timeline', () => {
   beforeEach(() => {
     sendChatStreamMock.mockReset()
@@ -46,7 +53,7 @@ describe('useChat event timeline', () => {
 
   it('keeps grouped event blocks in SSE arrival order', async () => {
     sendChatStreamMock.mockResolvedValue(
-      streamResponse([
+      streamMessages([
         { event: 'iteration', data: 'Iteration 1/10' },
         { event: 'reasoning_delta', data: 'first reasoning' },
         { event: 'content_delta', data: 'checking' },
@@ -102,14 +109,18 @@ describe('useChat event timeline', () => {
     let controller!: ReadableStreamDefaultController<Uint8Array>
     const encoder = new TextEncoder()
     sendChatStreamMock.mockResolvedValue(
-      new Response(
-        new ReadableStream<Uint8Array>({
-          start(streamController) {
-            controller = streamController
-          },
-        }),
-        { headers: { 'Content-Type': 'text/event-stream' } },
-      ),
+      fetchSse('/stream', {
+        fetch: vi.fn().mockResolvedValue(
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(streamController) {
+                controller = streamController
+              },
+            }),
+            { headers: { 'Content-Type': 'text/event-stream' } },
+          ),
+        ),
+      }),
     )
 
     const { result } = renderHook(() =>

@@ -18,6 +18,7 @@ import {
   OvClientError,
   ovClient,
 } from '#/lib/ov-client'
+import { fetchSse } from '#/lib/sse'
 
 import { parseSessionMemoryDiff } from './memory-diff'
 import type { BotChatRequest, BotChatResponse } from '@ov-server/bot/v1/chat'
@@ -416,18 +417,20 @@ export async function fetchBotHealth(): Promise<unknown> {
 }
 
 /**
- * Send a streaming chat request. Returns the raw Response for SSE parsing.
- * Use parseSseStream() from ./sse.ts to iterate over events.
+ * Send a streaming chat request and return standards-compliant SSE messages.
  */
 export async function sendChatStream(
   request: BotChatRequest,
   signal?: AbortSignal,
-): Promise<Response> {
+): Promise<ReturnType<typeof fetchSse>> {
   const baseUrl = ovClient.getOptions().baseUrl
   const conn = ovClient.getConnection()
-  const response = await fetch(`${baseUrl}/bot/v1/chat/stream`, {
+  return fetchSse(`${baseUrl}/bot/v1/chat/stream`, {
     method: 'POST',
-    headers: buildFetchHeaders(),
+    headers: {
+      ...buildFetchHeaders(),
+      Accept: 'text/event-stream',
+    },
     body: JSON.stringify({
       ...request,
       user_id: request.user_id || conn.userId || undefined,
@@ -435,15 +438,6 @@ export async function sendChatStream(
     }),
     signal,
   })
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => '')
-    throw normalizeOvClientError(
-      new Error(`Chat stream request failed (${response.status}): ${text}`),
-    )
-  }
-
-  return response
 }
 
 /** Send a non-streaming chat request. */

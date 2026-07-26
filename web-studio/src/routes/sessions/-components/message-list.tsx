@@ -4,7 +4,12 @@ import { CheckIcon, CopyIcon, UserIcon } from 'lucide-react'
 import type { TFunction } from 'i18next'
 
 import { resolvePublicAsset } from '#/lib/public-path'
-import type { Message, MessagePart, ToolPart } from '#/lib/sessions/types/message'
+import type {
+  Message,
+  MessagePart,
+  ToolPart,
+  ToolResultPart,
+} from '#/lib/sessions/types/message'
 import {
   IterationDivider,
   MarkdownContent,
@@ -51,6 +56,14 @@ function getTextFromParts(message: Message): string {
     .filter((p) => p.type === 'text')
     .map((p) => (p as { text: string }).text)
     .join('\n')
+}
+
+function getToolResultsById(parts: MessagePart[]): Map<string, ToolResultPart> {
+  return new Map(
+    parts
+      .filter((part): part is ToolResultPart => part.type === 'tool_result')
+      .map((part) => [part.tool_id, part]),
+  )
 }
 
 function stripPlaygroundContextSuffix(text: string): string {
@@ -218,11 +231,7 @@ const AssistantMessage = memo(function AssistantMessage({
 }) {
   const { t } = useTranslation('sessions')
   const textContent = getTextFromParts(message)
-  const separateToolResultIds = new Set(
-    message.parts
-      .filter((part) => part.type === 'tool_result')
-      .map((part) => part.tool_id),
-  )
+  const toolResultsById = getToolResultsById(message.parts)
 
   return (
     <div
@@ -244,33 +253,22 @@ const AssistantMessage = memo(function AssistantMessage({
               )
             case 'iteration':
               return <IterationDivider key={i} iteration={part.iteration} />
-            case 'tool':
+            case 'tool': {
+              const toolResult = toolResultsById.get(part.tool_id)
               return (
                 <ToolCallBlock
                   key={i}
                   toolName={part.tool_name}
                   args={part.tool_input}
-                  result={
-                    separateToolResultIds.has(part.tool_id)
-                      ? undefined
-                      : part.tool_output
-                  }
-                  isError={part.tool_status === 'error'}
+                  result={toolResult?.tool_output ?? part.tool_output}
+                  isError={toolResult?.is_error ?? part.tool_status === 'error'}
                   isRunning={false}
                   onResourceClick={onResourceClick}
                 />
               )
+            }
             case 'tool_result':
-              return (
-                <ToolCallBlock
-                  key={i}
-                  toolName={part.tool_name}
-                  result={part.tool_output}
-                  isError={part.is_error}
-                  isRunning={false}
-                  onResourceClick={onResourceClick}
-                />
-              )
+              return null
             case 'context':
               return null
           }
@@ -301,18 +299,14 @@ function StreamingAssistantMessage({
 }) {
   const safeParts = Array.isArray(parts) ? parts : []
   const hasContent = safeParts.length > 0
-  const separateToolResultIds = new Set(
-    safeParts
-      .filter((part) => part.type === 'tool_result')
-      .map((part) => part.tool_id),
-  )
+  const toolResultsById = getToolResultsById(safeParts)
 
   return (
     <div className={`${expanded ? 'w-full' : 'w-full max-w-3xl'} mb-5 flex gap-2 items-start`}>
       <BotAvatar compact={expanded} />
       <div className="max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-background/95 px-4 py-3 text-sm shadow-sm ring-1 ring-border/30">
         {safeParts.map((part, i) =>
-          renderStreamingPart(part, i, separateToolResultIds, onResourceClick),
+          renderStreamingPart(part, i, toolResultsById, onResourceClick),
         )}
 
         {!hasContent ? (
@@ -326,7 +320,7 @@ function StreamingAssistantMessage({
 function renderStreamingPart(
   part: MessagePart,
   index: number,
-  separateToolResultIds: Set<string>,
+  toolResultsById: Map<string, ToolResultPart>,
   onResourceClick?: (uri: string) => void,
 ) {
   switch (part.type) {
@@ -345,21 +339,12 @@ function renderStreamingPart(
         <StreamingToolPart
           key={index}
           part={part}
-          showResult={!separateToolResultIds.has(part.tool_id)}
+          result={toolResultsById.get(part.tool_id)}
           onResourceClick={onResourceClick}
         />
       )
     case 'tool_result':
-      return (
-        <ToolCallBlock
-          key={index}
-          toolName={part.tool_name}
-          result={part.tool_output}
-          isError={part.is_error}
-          isRunning={false}
-          onResourceClick={onResourceClick}
-        />
-      )
+      return null
     case 'text':
       return <MarkdownContent key={index} content={part.text} isStreaming />
     case 'context':
@@ -369,19 +354,19 @@ function renderStreamingPart(
 
 function StreamingToolPart({
   part,
-  showResult,
+  result,
   onResourceClick,
 }: {
   part: ToolPart
-  showResult: boolean
+  result?: ToolResultPart
   onResourceClick?: (uri: string) => void
 }) {
   return (
     <ToolCallBlock
       toolName={part.tool_name}
       args={part.tool_input}
-      result={showResult ? part.tool_output : undefined}
-      isError={part.tool_status === 'error'}
+      result={result?.tool_output ?? part.tool_output}
+      isError={result?.is_error ?? part.tool_status === 'error'}
       isRunning={part.tool_status === 'running' || part.tool_status === 'pending'}
       onResourceClick={onResourceClick}
     />
