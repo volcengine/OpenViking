@@ -1113,7 +1113,6 @@ const en = {
       },
     },
     agent: {
-      autoRetrieve: 'The Agent retrieves on its own from messages and tools',
       history: 'Session history',
       newSession: 'New session',
       creating: 'Creating Playground session...',

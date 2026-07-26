@@ -164,6 +164,9 @@ export function AgentPanel({
 
   const isStreaming = chat.status === 'streaming'
   const botModeError = botHealth.isError ? getErrorMessage(botHealth.error) : ''
+  const sessionTitle = getTitle(sessionId)
+  const displayedSessionTitle =
+    sessionTitle === sessionId ? t('agent.newSessionTitle') : sessionTitle
   const reversedSessions = useMemo(() => {
     // `sessions` is already sorted by recency (newest first). Filter to
     // sessions that were opened in this playground, preserving recency order.
@@ -182,10 +185,10 @@ export function AgentPanel({
     <>
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="flex h-14 shrink-0 items-center border-b bg-background/70 px-4">
-          <div className="flex min-w-0 flex-1 items-center gap-2 text-xs text-muted-foreground">
-            <BotIcon className="size-3.5 shrink-0" />
-            <span className="min-w-0 flex-1 truncate">
-              {t('agent.autoRetrieve')}
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <BotIcon className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+              {displayedSessionTitle}
             </span>
             <Button
               type="button"

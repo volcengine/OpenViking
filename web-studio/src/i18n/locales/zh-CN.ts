@@ -1072,7 +1072,6 @@ const zhCN = {
       },
     },
     agent: {
-      autoRetrieve: 'Agent 会根据消息和工具自主检索',
       history: '历史会话',
       newSession: '新建会话',
       creating: '正在创建 Playground 会话...',
