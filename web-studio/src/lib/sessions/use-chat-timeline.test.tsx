@@ -161,6 +161,58 @@ describe('useChat event timeline', () => {
     })
   })
 
+  it('renders a complete reasoning event as completed', async () => {
+    let controller!: ReadableStreamDefaultController<Uint8Array>
+    const encoder = new TextEncoder()
+    sendChatStreamMock.mockResolvedValue(
+      fetchSse('/stream', {
+        fetch: vi.fn().mockResolvedValue(
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(streamController) {
+                controller = streamController
+              },
+            }),
+            { headers: { 'Content-Type': 'text/event-stream' } },
+          ),
+        ),
+      }),
+    )
+
+    const { result } = renderHook(() =>
+      useChat({
+        identityScopeKey: 'identity',
+        persistMessages: false,
+        sessionId: 'session-1',
+      }),
+    )
+
+    let sendPromise!: Promise<void>
+    await act(async () => {
+      sendPromise = result.current.send('hello')
+      controller.enqueue(
+        encoder.encode(
+          `data: ${JSON.stringify({
+            event: 'reasoning',
+            data: 'complete reasoning',
+          })}\n\n`,
+        ),
+      )
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(result.current.streamingParts).toContainEqual({
+      type: 'reasoning',
+      reasoning: 'complete reasoning',
+      is_running: false,
+    })
+
+    await act(async () => {
+      controller.close()
+      await sendPromise
+    })
+  })
+
   it('finalizes when the response event arrives before the stream closes', async () => {
     let streamReleased = false
     async function* stream() {

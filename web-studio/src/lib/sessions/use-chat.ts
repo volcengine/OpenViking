@@ -404,6 +404,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                 setStreamingReasoning(accReasoning)
                 appendReasoning(reasoning)
                 finishCurrentReasoning()
+                publishStreamingPartsNow()
                 await yieldToRenderer()
               }
               break
