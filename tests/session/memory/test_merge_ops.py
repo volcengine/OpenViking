@@ -303,7 +303,10 @@ class TestApplyStrPatch:
             blocks=[SearchReplaceBlock(search="status: pending", replace="status: done")]
         )
 
-        with pytest.raises(PatchParseError, match="matched 2 locations"):
+        with pytest.raises(
+            PatchParseError,
+            match="additional lines to make sure it is unique",
+        ):
             apply_str_patch(original, patch)
 
     def test_duplicate_search_after_prior_block_is_rejected(self):

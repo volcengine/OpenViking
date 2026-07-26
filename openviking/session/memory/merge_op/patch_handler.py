@@ -884,7 +884,8 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
         if match_count > 1:
             raise PatchParseError(
                 f"SEARCH content matched {match_count} locations; "
-                "unable to determine which occurrence to replace"
+                "The re-generated SEARCH string may contain additional lines "
+                "to make sure it is unique."
             )
 
         result_content = result_content.replace(search_content, replace_content, 1)
