@@ -179,7 +179,12 @@ class MemoryIsolationHandler:
                 target_id = self._message_target_id(msg)
                 if target_id:
                     target_ids.append(target_id)
-        return list(dict.fromkeys(target_ids))
+        target_ids = list(dict.fromkeys(target_ids))
+        if target_ids:
+            return target_ids
+
+        peer_id = self._unique_peer_target_id_in_messages()
+        return [peer_id] if peer_id else []
 
     def _resolve_operation_target_id(self, raw_peer_id: Any) -> Optional[str]:
         peer_id = safe_peer_id(raw_peer_id)
