@@ -189,7 +189,7 @@ const UserMessage = memo(function UserMessage({
 
   return (
     <div
-      className={`${expanded ? 'w-full' : 'w-full max-w-3xl'} group/msg flex gap-2 justify-end ${compact ? 'mb-1.5' : 'mb-5'}`}
+      className={`${expanded ? 'w-full' : 'w-full max-w-[clamp(48rem,68vw,72rem)]'} group/msg flex gap-2 justify-end ${compact ? 'mb-1.5' : 'mb-5'}`}
     >
       <div className="flex items-end gap-1.5 self-end opacity-0 transition-opacity group-hover/msg:opacity-100">
         <span className="text-[10px] text-muted-foreground/40 opacity-0 transition-opacity group-hover/msg:opacity-100 select-none">
@@ -235,7 +235,7 @@ const AssistantMessage = memo(function AssistantMessage({
 
   return (
     <div
-      className={`${expanded ? 'w-full' : 'w-full max-w-3xl'} group/msg flex gap-2 items-start ${compact ? 'mb-1.5' : 'mb-5'}`}
+      className={`${expanded ? 'w-full' : 'w-full max-w-[clamp(48rem,68vw,72rem)]'} group/msg flex gap-2 items-start ${compact ? 'mb-1.5' : 'mb-5'}`}
     >
       {!compact ? <BotAvatar compact={expanded} /> : <div className="w-6 shrink-0" />}
       <div className="relative max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm border border-border bg-muted/30 px-4 py-3 text-sm shadow-md shadow-black/5 dark:border-white/10 dark:bg-card/95 dark:shadow-black/30">
@@ -302,7 +302,7 @@ function StreamingAssistantMessage({
   const toolResultsById = getToolResultsById(safeParts)
 
   return (
-    <div className={`${expanded ? 'w-full' : 'w-full max-w-3xl'} mb-5 flex gap-2 items-start`}>
+    <div className={`${expanded ? 'w-full' : 'w-full max-w-[clamp(48rem,68vw,72rem)]'} mb-5 flex gap-2 items-start`}>
       <BotAvatar compact={expanded} />
       <div className="max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm border border-border bg-muted/30 px-4 py-3 text-sm shadow-md shadow-black/5 dark:border-white/10 dark:bg-card/95 dark:shadow-black/30">
         {safeParts.map((part, i) =>

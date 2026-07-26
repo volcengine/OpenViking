@@ -88,7 +88,7 @@ export function ThreadList({ activeSessionId }: ThreadListProps) {
   ])
 
   return (
-    <aside className="flex h-full w-[clamp(16rem,20vw,22rem)] shrink-0 flex-col border-r border-border/70 bg-muted/20">
+    <aside className="flex h-full w-72 shrink-0 flex-col border-r border-border/70 bg-muted/20">
       <div className="flex h-16 shrink-0 items-center justify-between border-b border-border/70 px-4">
         <div className="min-w-0">
           <h1 className="text-sm font-semibold text-foreground">
