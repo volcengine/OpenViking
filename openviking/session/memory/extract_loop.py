@@ -158,6 +158,10 @@ class ExtractLoop:
         self._format_retry_count = 0
         patch_repair_count = 0
 
+        # Providers may need request-scoped configuration from AGFS before
+        # their synchronous prompt is rendered.
+        await self.context_provider.prepare_extraction_messages()
+
         # 从 provider 获取 schemas（内部自动加载 registry）
         schemas = self.context_provider.get_memory_schemas(self.ctx)
 

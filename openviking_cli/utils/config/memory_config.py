@@ -20,6 +20,20 @@ class MemoryConfig(BaseModel):
         default="",
         description="Custom memory templates directory. If set, templates from this directory will be loaded in addition to built-in templates",
     )
+    workspace_kind: str = Field(
+        default="personal",
+        description=(
+            "Semantic meaning of the user namespace for memory extraction. "
+            "Built-in kinds are personal, team, project, and organization."
+        ),
+    )
+    workspace_kinds_dir: str = Field(
+        default="",
+        description=(
+            "Optional directory containing custom workspace-kind YAML definitions. "
+            "Built-in definitions are used when this is empty."
+        ),
+    )
     v2_lock_retry_interval_seconds: float = Field(
         default=0.2,
         ge=0.0,
@@ -115,6 +129,14 @@ class MemoryConfig(BaseModel):
                 "memory.version is deprecated and ignored; memory extraction always uses v3"
             )
         return "v3"
+
+    @field_validator("workspace_kind")
+    @classmethod
+    def validate_workspace_kind(cls, value: str) -> str:
+        value = value.strip().lower()
+        if not value:
+            raise ValueError("memory.workspace_kind must not be empty")
+        return value
 
     @classmethod
     def from_dict(cls, config: Dict[str, Any]) -> "MemoryConfig":

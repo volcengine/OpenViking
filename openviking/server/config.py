@@ -82,9 +82,27 @@ class AddTargetsConfig(BaseModel):
 
 
 class UserConfig(BaseModel):
-    """User configuration values that can be defaulted or initialized."""
+    """User configuration values that can be defaulted or initialized.
+
+    ``workspace_kind`` is administrator-owned semantic metadata. It tells
+    memory extraction what the account's ``user`` namespace represents; it
+    does not alter authentication or URI isolation.
+    """
 
     add_targets: AddTargetsConfig = Field(default_factory=AddTargetsConfig)
+    workspace_kind: Optional[str] = None
+
+    @field_validator("workspace_kind")
+    @classmethod
+    def validate_workspace_kind(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if not normalized:
+            raise ValueError("workspace_kind must not be empty")
+        if not normalized.replace("_", "").isalnum():
+            raise ValueError("workspace_kind must contain only letters, numbers, or underscores")
+        return normalized
 
     model_config = {"extra": "forbid"}
 

@@ -22,7 +22,7 @@ from openviking.server.config import ServerConfig
 from openviking.server.dependencies import set_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
-from openviking.server.user_config import read_user_add_targets
+from openviking.server.user_config import read_user_add_targets, read_user_config
 from openviking.service.core import OpenVikingService
 from openviking.service.task_store import (
     SYSTEM_TASK_ACCOUNT_ID,
@@ -318,7 +318,10 @@ async def test_create_user_paths_accept_initial_user_config(
         json={
             "user_id": "bob",
             "role": "user",
-            "user_config": {"add_targets": {"resource_uri": "viking://user/resources/bob"}},
+            "user_config": {
+                "workspace_kind": "project",
+                "add_targets": {"resource_uri": "viking://user/resources/bob"},
+            },
         },
         headers=root_headers(),
     )
@@ -329,6 +332,11 @@ async def test_create_user_paths_accept_initial_user_config(
         RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER),
     )
     assert bob_settings.resource_uri == "viking://user/resources/bob"
+    bob_config = await read_user_config(
+        viking_fs,
+        RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER),
+    )
+    assert bob_config.workspace_kind == "project"
 
 
 async def test_list_accounts(admin_client: httpx.AsyncClient):

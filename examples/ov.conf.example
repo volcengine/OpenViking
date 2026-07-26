@@ -159,6 +159,8 @@
     "memory_decay_check_interval": 3600,
     "memory": {
         "version": "v2",
+        "workspace_kind": "personal",
+        "workspace_kinds_dir": "",
         "extraction_enabled": true,
         "session_skill_extraction_enabled": false,
     },

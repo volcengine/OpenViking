@@ -1,0 +1,12 @@
+kind: organization
+display_name: Organization workspace
+shared_scope_label: shared organization workspace
+shared_scope_instruction: >
+  Store durable organization-wide facts, policies, ownership, procedures, and
+  operational constraints without peer_id.
+private_scope_instruction: >
+  Use peer_id for agent-specific execution knowledge, private working notes,
+  preferences, and temporary context.
+resource_scope_instruction: >
+  Keep canonical organization-wide documents in resources; use memory for
+  durable facts and decisions derived from them or from conversations.
