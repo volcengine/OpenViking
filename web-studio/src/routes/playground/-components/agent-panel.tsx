@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import {
-  BotIcon,
   CheckCircle2Icon,
   CircleAlertIcon,
   HistoryIcon,
@@ -44,10 +44,12 @@ export function AgentPanel({
   initialSessionId,
   onOpenResource,
   onSessionChange,
+  toolbarContainer,
 }: {
   initialSessionId?: string
   onOpenResource: ResourceOpenHandler
   onSessionChange: (sessionId: string) => void
+  toolbarContainer: HTMLDivElement | null
 }) {
   const { t } = useTranslation('playground')
   const { identityScopeKey } = useAppConnection()
@@ -164,9 +166,6 @@ export function AgentPanel({
 
   const isStreaming = chat.status === 'streaming'
   const botModeError = botHealth.isError ? getErrorMessage(botHealth.error) : ''
-  const sessionTitle = getTitle(sessionId)
-  const displayedSessionTitle =
-    sessionTitle === sessionId ? t('agent.newSessionTitle') : sessionTitle
   const reversedSessions = useMemo(() => {
     // `sessions` is already sorted by recency (newest first). Filter to
     // sessions that were opened in this playground, preserving recency order.
@@ -183,41 +182,39 @@ export function AgentPanel({
 
   return (
     <>
+      {toolbarContainer
+        ? createPortal(
+            <>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className="size-7 shrink-0"
+                title={t('agent.history')}
+                onClick={() => setHistoryOpen(true)}
+              >
+                <HistoryIcon className="size-3.5" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className="size-7 shrink-0"
+                title={t('agent.newSession')}
+                disabled={isCreatingSession}
+                onClick={() => void handleNewSession()}
+              >
+                {isCreatingSession ? (
+                  <Loader2Icon className="size-3.5 animate-spin" />
+                ) : (
+                  <SquarePenIcon className="size-3.5" />
+                )}
+              </Button>
+            </>,
+            toolbarContainer,
+          )
+        : null}
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex h-14 shrink-0 items-center border-b bg-background/70 px-4">
-          <div className="flex min-w-0 flex-1 items-center gap-2">
-            <BotIcon className="size-3.5 shrink-0 text-muted-foreground" />
-            <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-              {displayedSessionTitle}
-            </span>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              className="size-7 shrink-0"
-              title={t('agent.history')}
-              onClick={() => setHistoryOpen(true)}
-            >
-              <HistoryIcon className="size-3.5" />
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              className="size-7 shrink-0"
-              title={t('agent.newSession')}
-              disabled={isCreatingSession}
-              onClick={() => void handleNewSession()}
-            >
-              {isCreatingSession ? (
-                <Loader2Icon className="size-3.5 animate-spin" />
-              ) : (
-                <SquarePenIcon className="size-3.5" />
-              )}
-            </Button>
-          </div>
-        </div>
-
         <div
           ref={scrollRef}
           className="min-h-0 flex-1 overflow-y-auto px-4 py-4"

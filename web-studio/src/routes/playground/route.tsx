@@ -700,13 +700,19 @@ function PlaygroundActionPanel({
   sessionId?: string
 }) {
   const { t } = useTranslation('playground')
+  const [toolbarContainer, setToolbarContainer] =
+    useState<HTMLDivElement | null>(null)
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-14 shrink-0 items-center border-b px-3">
+      <div className="flex h-14 shrink-0 items-center gap-2 border-b px-3">
         <PlaygroundActionTabs
           activePanel={activePanel}
           onPanelChange={onPanelChange}
+        />
+        <div
+          ref={setToolbarContainer}
+          className="ml-auto flex min-w-0 items-center gap-1"
         />
       </div>
 
@@ -719,6 +725,7 @@ function PlaygroundActionPanel({
         onSessionChange={onSessionChange}
         openingUri={openingUri}
         sessionId={sessionId}
+        toolbarContainer={toolbarContainer}
       />
     </div>
   )
@@ -750,6 +757,8 @@ function PlaygroundMobileActionScreen({
   sessionId?: string
 }) {
   const { t } = useTranslation(['playground', 'resources'])
+  const [toolbarContainer, setToolbarContainer] =
+    useState<HTMLDivElement | null>(null)
 
   if (!open) {
     return null
@@ -772,6 +781,10 @@ function PlaygroundMobileActionScreen({
           activePanel={activePanel}
           onPanelChange={onPanelChange}
         />
+        <div
+          ref={setToolbarContainer}
+          className="ml-auto flex min-w-0 items-center gap-1"
+        />
       </div>
       <div className="min-h-0 flex-1">
         <PlaygroundActionContent
@@ -783,6 +796,7 @@ function PlaygroundMobileActionScreen({
           onSessionChange={onSessionChange}
           openingUri={openingUri}
           sessionId={sessionId}
+          toolbarContainer={toolbarContainer}
         />
       </div>
     </div>
@@ -825,6 +839,7 @@ function PlaygroundActionContent({
   onSessionChange,
   openingUri,
   sessionId,
+  toolbarContainer,
 }: {
   activePanel: PlaygroundPanel
   currentUri: string
@@ -834,6 +849,7 @@ function PlaygroundActionContent({
   onSessionChange: (sessionId: string) => void
   openingUri: string | null
   sessionId?: string
+  toolbarContainer: HTMLDivElement | null
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -846,12 +862,14 @@ function PlaygroundActionContent({
           onSessionChange={onSessionChange}
           openingUri={openingUri}
           sessionId={sessionId}
+          toolbarContainer={toolbarContainer}
         />
       ) : (
         <AgentPanel
           initialSessionId={sessionId}
           onOpenResource={onOpenResource}
           onSessionChange={onSessionChange}
+          toolbarContainer={toolbarContainer}
         />
       )}
     </div>
