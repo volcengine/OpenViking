@@ -18,6 +18,19 @@ def parse_iso_datetime(value: str) -> datetime:
     return datetime.fromisoformat(normalized)
 
 
+def to_utc(dt: datetime) -> datetime:
+    """Return a timezone-aware UTC datetime.
+
+    Historical OpenViking data may contain naive local timestamps. Interpret
+    those timestamps in the host's local timezone before converting them to
+    UTC; never compare naive and aware datetimes directly.
+    """
+    if dt.tzinfo is None or dt.utcoffset() is None:
+        local_tz = datetime.now().astimezone().tzinfo or timezone.utc
+        dt = dt.replace(tzinfo=local_tz)
+    return dt.astimezone(timezone.utc)
+
+
 def format_iso8601(dt: datetime) -> str:
     """
     Format datetime object to ISO 8601 format compatible with VikingDB.
