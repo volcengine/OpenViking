@@ -166,6 +166,9 @@ export function AgentPanel({
 
   const isStreaming = chat.status === 'streaming'
   const botModeError = botHealth.isError ? getErrorMessage(botHealth.error) : ''
+  const sessionTitle = getTitle(sessionId)
+  const displayedSessionTitle =
+    sessionTitle === sessionId ? t('agent.newSessionTitle') : sessionTitle
   const reversedSessions = useMemo(() => {
     // `sessions` is already sorted by recency (newest first). Filter to
     // sessions that were opened in this playground, preserving recency order.
@@ -182,38 +185,15 @@ export function AgentPanel({
 
   return (
     <>
-      {toolbarContainer
-        ? createPortal(
-            <>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                className="size-7 shrink-0"
-                title={t('agent.history')}
-                onClick={() => setHistoryOpen(true)}
-              >
-                <HistoryIcon className="size-3.5" />
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                className="size-7 shrink-0"
-                title={t('agent.newSession')}
-                disabled={isCreatingSession}
-                onClick={() => void handleNewSession()}
-              >
-                {isCreatingSession ? (
-                  <Loader2Icon className="size-3.5 animate-spin" />
-                ) : (
-                  <SquarePenIcon className="size-3.5" />
-                )}
-              </Button>
-            </>,
-            toolbarContainer,
-          )
-        : null}
+      <AgentToolbar
+        container={toolbarContainer}
+        historyLabel={t('agent.history')}
+        isCreatingSession={isCreatingSession}
+        newSessionLabel={t('agent.newSession')}
+        onNewSession={() => void handleNewSession()}
+        onOpenHistory={() => setHistoryOpen(true)}
+        sessionTitle={displayedSessionTitle}
+      />
       <div className="flex min-h-0 flex-1 flex-col">
         <div
           ref={scrollRef}
@@ -351,6 +331,63 @@ export function AgentPanel({
         </DialogContent>
       </Dialog>
     </>
+  )
+}
+
+export function AgentToolbar({
+  container,
+  historyLabel,
+  isCreatingSession,
+  newSessionLabel,
+  onNewSession,
+  onOpenHistory,
+  sessionTitle,
+}: {
+  container: HTMLDivElement | null
+  historyLabel: string
+  isCreatingSession: boolean
+  newSessionLabel: string
+  onNewSession: () => void
+  onOpenHistory: () => void
+  sessionTitle: string
+}) {
+  if (!container) return null
+
+  return createPortal(
+    <>
+      <span
+        className="min-w-0 max-w-48 truncate px-1 text-sm font-medium text-foreground"
+        title={sessionTitle}
+      >
+        {sessionTitle}
+      </span>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        className="size-7 shrink-0"
+        title={historyLabel}
+        onClick={onOpenHistory}
+      >
+        <HistoryIcon className="size-3.5" />
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        className="size-7 shrink-0"
+        title={newSessionLabel}
+        disabled={isCreatingSession}
+        onClick={onNewSession}
+      >
+        {isCreatingSession ? (
+          <Loader2Icon className="size-3.5 animate-spin" />
+        ) : (
+          <SquarePenIcon className="size-3.5" />
+        )}
+      </Button>
+    </>,
+    container,
   )
 }
 

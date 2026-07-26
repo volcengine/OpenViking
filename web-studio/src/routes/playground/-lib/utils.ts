@@ -150,9 +150,7 @@ export function registerPlaygroundAgentSessionId(
   return next
 }
 
-export function readPlaygroundExpandedUris(
-  identityScopeKey: string,
-): string[] {
+export function readPlaygroundExpandedUris(identityScopeKey: string): string[] {
   return readStoredJsonArray(
     createIdentityStorageKey(
       PLAYGROUND_EXPANDED_URIS_STORAGE_KEY,

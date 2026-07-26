@@ -42,6 +42,13 @@ export async function* fetchSse(
   input: RequestInfo,
   { signal, ...options }: FetchSseOptions = {},
 ): AsyncGenerator<SseMessage> {
+  if (signal?.aborted) {
+    throw (
+      signal.reason ??
+      new DOMException('The operation was aborted', 'AbortError')
+    )
+  }
+
   const controller = new AbortController()
   const messages: Array<SseMessage> = []
   const state: { completed: boolean; failure?: unknown } = { completed: false }
@@ -58,11 +65,7 @@ export async function* fetchSse(
     controller.abort(state.failure)
   }
 
-  if (signal?.aborted) {
-    abort()
-  } else {
-    signal?.addEventListener('abort', abort, { once: true })
-  }
+  signal?.addEventListener('abort', abort, { once: true })
 
   const request = fetchEventSource(input, {
     ...options,

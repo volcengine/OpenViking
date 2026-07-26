@@ -118,12 +118,11 @@ function PlaygroundWorkbench() {
       ? createEntryFromUri(search.file, false)
       : createEntryFromUri(initialCurrentUri, true),
   )
-  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(
-    () =>
-      mergeExpanded(
-        new Set(readPlaygroundExpandedUris(identityScopeKey)),
-        getAncestorUris(initialCurrentUri),
-      ),
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(() =>
+    mergeExpanded(
+      new Set(readPlaygroundExpandedUris(identityScopeKey)),
+      getAncestorUris(initialCurrentUri),
+    ),
   )
   const [activePanel, setActivePanel] = useState<PlaygroundPanel>(
     search.panel ?? 'agent',

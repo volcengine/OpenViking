@@ -248,4 +248,65 @@ describe('useChat event timeline', () => {
     })
     expect(streamReleased).toBe(true)
   })
+
+  it('keeps reasoning and tool timeline when aborted before content arrives', async () => {
+    let controller!: ReadableStreamDefaultController<Uint8Array>
+    const encoder = new TextEncoder()
+    sendChatStreamMock.mockImplementation((_request, signal: AbortSignal) =>
+      fetchSse('/stream', {
+        signal,
+        fetch: vi.fn().mockResolvedValue(
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(streamController) {
+                controller = streamController
+              },
+            }),
+            { headers: { 'Content-Type': 'text/event-stream' } },
+          ),
+        ),
+      }),
+    )
+
+    const { result } = renderHook(() =>
+      useChat({
+        identityScopeKey: 'identity',
+        persistMessages: false,
+        sessionId: 'session-1',
+      }),
+    )
+
+    let sendPromise!: Promise<void>
+    await act(async () => {
+      sendPromise = result.current.send('hello')
+      controller.enqueue(
+        encoder.encode(
+          [
+            { event: 'reasoning_delta', data: 'checking' },
+            { event: 'tool_call', data: 'search({})' },
+          ]
+            .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+            .join(''),
+        ),
+      )
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      result.current.abort()
+      await sendPromise
+    })
+
+    expect(result.current.status).toBe('idle')
+    expect(result.current.streamingParts).toEqual([])
+    expect(result.current.messages[1]?.parts).toMatchObject([
+      {
+        is_running: false,
+        reasoning: 'checking',
+        type: 'reasoning',
+      },
+      {
+        tool_name: 'search',
+        tool_status: 'running',
+        type: 'tool',
+      },
+    ])
+  })
 })

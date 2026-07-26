@@ -545,7 +545,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       } catch (err) {
         if (controller.signal.aborted) {
           // Aborted intentionally — still finalize any partial content
-          if (accContent) {
+          if (accContent || accParts.length > 0) {
             finishCurrentReasoning()
             const partialMsg = buildAssistantMessage(
               accContent,
@@ -557,6 +557,11 @@ export function useChat(options: UseChatOptions): UseChatReturn {
             setStreamingReasoning('')
             setStreamingParts([])
             setMessages((prev) => [...prev, partialMsg])
+          } else {
+            setStreamingContent('')
+            setStreamingToolCalls([])
+            setStreamingReasoning('')
+            setStreamingParts([])
           }
           setStatus('idle')
         } else {

@@ -110,7 +110,9 @@ function TypingIndicator() {
 function BotAvatar({ compact }: { compact?: boolean }) {
   const sizeClass = compact ? 'size-6' : 'size-7'
   return (
-    <div className={`flex ${sizeClass} shrink-0 items-center justify-center rounded-full ring-1 ring-border/20 overflow-hidden`}>
+    <div
+      className={`flex ${sizeClass} shrink-0 items-center justify-center rounded-full ring-1 ring-border/20 overflow-hidden`}
+    >
       <img src={OPENVIKING_ICON_SRC} alt="OpenViking" className={sizeClass} />
     </div>
   )
@@ -197,7 +199,11 @@ const UserMessage = memo(function UserMessage({
         </span>
         <CopyButton text={text} />
       </div>
-      <div className={expanded ? 'max-w-[88%] space-y-1.5' : 'max-w-[75%] space-y-1.5'}>
+      <div
+        className={
+          expanded ? 'max-w-[88%] space-y-1.5' : 'max-w-[75%] space-y-1.5'
+        }
+      >
         {text && (
           <div className="whitespace-pre-wrap rounded-2xl rounded-tr-sm border border-border/70 bg-muted/70 px-4 py-2.5 text-sm leading-6 text-foreground shadow-sm">
             {text}
@@ -237,7 +243,11 @@ const AssistantMessage = memo(function AssistantMessage({
     <div
       className={`${expanded ? 'w-full' : 'w-full max-w-[clamp(48rem,68vw,72rem)]'} group/msg flex gap-2 items-start ${compact ? 'mb-1.5' : 'mb-5'}`}
     >
-      {!compact ? <BotAvatar compact={expanded} /> : <div className="w-6 shrink-0" />}
+      {!compact ? (
+        <BotAvatar compact={expanded} />
+      ) : (
+        <div className="w-6 shrink-0" />
+      )}
       <div className="relative max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm border border-border bg-muted/30 px-4 py-3 text-sm shadow-md shadow-black/5 dark:border-white/10 dark:bg-card/95 dark:shadow-black/30">
         {(Array.isArray(message.parts) ? message.parts : []).map((part, i) => {
           switch (part.type) {
@@ -302,16 +312,16 @@ function StreamingAssistantMessage({
   const toolResultsById = getToolResultsById(safeParts)
 
   return (
-    <div className={`${expanded ? 'w-full' : 'w-full max-w-[clamp(48rem,68vw,72rem)]'} mb-5 flex gap-2 items-start`}>
+    <div
+      className={`${expanded ? 'w-full' : 'w-full max-w-[clamp(48rem,68vw,72rem)]'} mb-5 flex gap-2 items-start`}
+    >
       <BotAvatar compact={expanded} />
       <div className="max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm border border-border bg-muted/30 px-4 py-3 text-sm shadow-md shadow-black/5 dark:border-white/10 dark:bg-card/95 dark:shadow-black/30">
         {safeParts.map((part, i) =>
           renderStreamingPart(part, i, toolResultsById, onResourceClick),
         )}
 
-        {!hasContent ? (
-          <TypingIndicator />
-        ) : null}
+        {!hasContent ? <TypingIndicator /> : null}
       </div>
     </div>
   )
@@ -367,7 +377,9 @@ function StreamingToolPart({
       args={part.tool_input}
       result={result?.tool_output ?? part.tool_output}
       isError={result?.is_error ?? part.tool_status === 'error'}
-      isRunning={part.tool_status === 'running' || part.tool_status === 'pending'}
+      isRunning={
+        part.tool_status === 'running' || part.tool_status === 'pending'
+      }
       onResourceClick={onResourceClick}
     />
   )

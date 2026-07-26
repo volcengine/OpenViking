@@ -101,4 +101,23 @@ describe('fetchSse', () => {
     await expect(consuming).rejects.toMatchObject({ name: 'AbortError' })
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
+
+  it('does not start a POST when the signal is already aborted', async () => {
+    const controller = new AbortController()
+    const fetchMock = vi.fn()
+    controller.abort()
+
+    const consume = async () => {
+      for await (const _message of fetchSse('/stream', {
+        method: 'POST',
+        fetch: fetchMock,
+        signal: controller.signal,
+      })) {
+        // No messages expected.
+      }
+    }
+
+    await expect(consume()).rejects.toMatchObject({ name: 'AbortError' })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
 })

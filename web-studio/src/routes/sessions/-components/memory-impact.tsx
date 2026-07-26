@@ -89,7 +89,15 @@ export function MemoryImpact({ session }: MemoryImpactProps) {
             : diff.operations.filter(
                 (operation) => operation.memoryType === activeMemoryType,
               )
-        return operations.length > 0 ? [{ ...diff, operations }] : []
+        return operations.length > 0
+          ? [
+              {
+                ...diff,
+                operations,
+                summary: summarizeOperations(operations),
+              },
+            ]
+          : []
       }),
     [activeMemoryType, diffs],
   )
@@ -182,9 +190,7 @@ export function MemoryImpact({ session }: MemoryImpactProps) {
                     onClick={() => setMemoryType(type)}
                     role="tab"
                     size="xs"
-                    variant={
-                      activeMemoryType === type ? 'secondary' : 'ghost'
-                    }
+                    variant={activeMemoryType === type ? 'secondary' : 'ghost'}
                   >
                     {type === ALL_MEMORY_TYPES ? t('impact.allTypes') : type}
                   </Button>
@@ -229,6 +235,18 @@ export function MemoryImpact({ session }: MemoryImpactProps) {
         </SheetContent>
       </Sheet>
     </>
+  )
+}
+
+function summarizeOperations(operations: SessionMemoryDiffOperation[]) {
+  return operations.reduce(
+    (summary, operation) => {
+      if (operation.kind === 'add') summary.adds += 1
+      if (operation.kind === 'update') summary.updates += 1
+      if (operation.kind === 'delete') summary.deletes += 1
+      return summary
+    },
+    { adds: 0, deletes: 0, updates: 0 },
   )
 }
 
