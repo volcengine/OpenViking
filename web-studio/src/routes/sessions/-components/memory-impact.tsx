@@ -111,7 +111,7 @@ export function MemoryImpact({ session }: MemoryImpactProps) {
       </Button>
 
       <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent className="gap-0 sm:max-w-3xl">
+        <SheetContent className="gap-0 data-[side=right]:sm:max-w-3xl">
           <SheetHeader className="border-b px-6 py-5">
             <div className="flex items-center gap-3 pr-10">
               <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15">
