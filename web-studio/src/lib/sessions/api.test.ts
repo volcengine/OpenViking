@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { OvClientError } from '#/lib/ov-client'
 
-import { fetchSessionMessages } from './api'
+import { fetchSessionMessages, serializeParts } from './api'
 
 const {
   getSessionBySessionIdMock,
@@ -119,5 +119,40 @@ describe('fetchSessionMessages', () => {
     await expect(fetchSessionMessages('session-1')).rejects.toThrow(
       'connection reset',
     )
+  })
+})
+
+describe('serializeParts', () => {
+  it('keeps persisted content order while filtering timeline-only events', () => {
+    expect(
+      serializeParts([
+        { type: 'iteration', iteration: 1 },
+        { type: 'reasoning', reasoning: 'thinking' },
+        {
+          type: 'tool',
+          tool_id: 'tool-1',
+          tool_name: 'search',
+          tool_uri: '',
+          skill_uri: '',
+          tool_status: 'completed',
+          tool_output: 'result',
+        },
+        {
+          type: 'tool_result',
+          tool_id: 'tool-1',
+          tool_name: 'search',
+          tool_output: 'result',
+          is_error: false,
+        },
+        { type: 'text', text: 'done' },
+      ]),
+    ).toEqual([
+      expect.objectContaining({
+        type: 'tool',
+        tool_id: 'tool-1',
+        tool_output: 'result',
+      }),
+      { type: 'text', text: 'done' },
+    ])
   })
 })

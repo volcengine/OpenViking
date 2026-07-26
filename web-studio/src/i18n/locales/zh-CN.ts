@@ -1105,6 +1105,12 @@ const zhCN = {
       },
     },
     terminal: {
+      header: '终端',
+      history: '命令历史',
+      historyTitle: '命令历史',
+      historyDescription: '查看当前浏览器中执行过的命令。',
+      clearHistory: '清空命令历史',
+      noHistory: '暂无命令历史',
       welcomeTitle: 'Terminal 已连接上下文目录',
       welcomeBody:
         '可执行 /status、/ls、/search、/read、/add-resource。/search 默认全局检索，可通过 --scope . 使用当前目录，或通过 --scope viking://resources/... 指定目录。',

@@ -469,18 +469,27 @@ export async function sendChat(
 export function serializeParts(
   parts: MessagePart[],
 ): Array<Record<string, unknown>> {
-  return parts.map((part) => {
+  return parts.flatMap((part) => {
     if (part.type === 'text') {
-      return { type: 'text', text: part.text }
+      return [{ type: 'text', text: part.text }]
     }
     if (part.type === 'context') {
-      return {
-        type: 'context',
-        uri: part.uri,
-        context_type: part.context_type,
-        abstract: part.abstract,
-      }
+      return [
+        {
+          type: 'context',
+          uri: part.uri,
+          context_type: part.context_type,
+          abstract: part.abstract,
+        },
+      ]
     }
+    if (
+      part.type === 'reasoning' ||
+      part.type === 'iteration' ||
+      part.type === 'tool_result'
+    )
+      return []
+
     // tool
     const d: Record<string, unknown> = {
       type: 'tool',
@@ -496,6 +505,6 @@ export function serializeParts(
     if (part.prompt_tokens != null) d.prompt_tokens = part.prompt_tokens
     if (part.completion_tokens != null)
       d.completion_tokens = part.completion_tokens
-    return d
+    return [d]
   })
 }

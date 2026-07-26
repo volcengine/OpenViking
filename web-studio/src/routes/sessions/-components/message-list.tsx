@@ -5,7 +5,12 @@ import type { TFunction } from 'i18next'
 
 import { resolvePublicAsset } from '#/lib/public-path'
 import type { Message, MessagePart, ToolPart } from '#/lib/sessions/types/message'
-import { MarkdownContent, ReasoningBlock, ToolCallBlock } from './message-parts'
+import {
+  IterationDivider,
+  MarkdownContent,
+  ReasoningBlock,
+  ToolCallBlock,
+} from './message-parts'
 
 const OPENVIKING_ICON_SRC = resolvePublicAsset('favicon-32.png')
 
@@ -213,6 +218,11 @@ const AssistantMessage = memo(function AssistantMessage({
 }) {
   const { t } = useTranslation('sessions')
   const textContent = getTextFromParts(message)
+  const separateToolResultIds = new Set(
+    message.parts
+      .filter((part) => part.type === 'tool_result')
+      .map((part) => part.tool_id),
+  )
 
   return (
     <div
@@ -232,14 +242,31 @@ const AssistantMessage = memo(function AssistantMessage({
                   isRunning={false}
                 />
               )
+            case 'iteration':
+              return <IterationDivider key={i} iteration={part.iteration} />
             case 'tool':
               return (
                 <ToolCallBlock
                   key={i}
                   toolName={part.tool_name}
                   args={part.tool_input}
-                  result={part.tool_output}
+                  result={
+                    separateToolResultIds.has(part.tool_id)
+                      ? undefined
+                      : part.tool_output
+                  }
                   isError={part.tool_status === 'error'}
+                  isRunning={false}
+                  onResourceClick={onResourceClick}
+                />
+              )
+            case 'tool_result':
+              return (
+                <ToolCallBlock
+                  key={i}
+                  toolName={part.tool_name}
+                  result={part.tool_output}
+                  isError={part.is_error}
                   isRunning={false}
                   onResourceClick={onResourceClick}
                 />
@@ -266,31 +293,27 @@ const AssistantMessage = memo(function AssistantMessage({
 function StreamingAssistantMessage({
   expanded,
   parts = [],
-  iteration,
   onResourceClick,
 }: {
   expanded?: boolean
   parts?: MessagePart[]
-  iteration: number
   onResourceClick?: (uri: string) => void
 }) {
-  const { t } = useTranslation('sessions')
   const safeParts = Array.isArray(parts) ? parts : []
   const hasContent = safeParts.length > 0
+  const separateToolResultIds = new Set(
+    safeParts
+      .filter((part) => part.type === 'tool_result')
+      .map((part) => part.tool_id),
+  )
 
   return (
     <div className={`${expanded ? 'w-full' : 'w-full max-w-3xl'} mb-5 flex gap-2 items-start`}>
       <BotAvatar compact={expanded} />
       <div className="max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-background/95 px-4 py-3 text-sm shadow-sm ring-1 ring-border/30">
-        {iteration > 1 && (
-          <div className="mb-2">
-            <span className="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-0.5 text-[11px] font-medium text-primary">
-              {t('chat.iteration', { count: iteration })}
-            </span>
-          </div>
+        {safeParts.map((part, i) =>
+          renderStreamingPart(part, i, separateToolResultIds, onResourceClick),
         )}
-
-        {safeParts.map((part, i) => renderStreamingPart(part, i, onResourceClick))}
 
         {!hasContent ? (
           <TypingIndicator />
@@ -303,6 +326,7 @@ function StreamingAssistantMessage({
 function renderStreamingPart(
   part: MessagePart,
   index: number,
+  separateToolResultIds: Set<string>,
   onResourceClick?: (uri: string) => void,
 ) {
   switch (part.type) {
@@ -314,11 +338,25 @@ function renderStreamingPart(
           isRunning={part.is_running ?? true}
         />
       )
+    case 'iteration':
+      return <IterationDivider key={index} iteration={part.iteration} />
     case 'tool':
       return (
         <StreamingToolPart
           key={index}
           part={part}
+          showResult={!separateToolResultIds.has(part.tool_id)}
+          onResourceClick={onResourceClick}
+        />
+      )
+    case 'tool_result':
+      return (
+        <ToolCallBlock
+          key={index}
+          toolName={part.tool_name}
+          result={part.tool_output}
+          isError={part.is_error}
+          isRunning={false}
           onResourceClick={onResourceClick}
         />
       )
@@ -331,16 +369,18 @@ function renderStreamingPart(
 
 function StreamingToolPart({
   part,
+  showResult,
   onResourceClick,
 }: {
   part: ToolPart
+  showResult: boolean
   onResourceClick?: (uri: string) => void
 }) {
   return (
     <ToolCallBlock
       toolName={part.tool_name}
       args={part.tool_input}
-      result={part.tool_output}
+      result={showResult ? part.tool_output : undefined}
       isError={part.tool_status === 'error'}
       isRunning={part.tool_status === 'running' || part.tool_status === 'pending'}
       onResourceClick={onResourceClick}

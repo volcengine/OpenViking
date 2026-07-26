@@ -181,7 +181,7 @@ export function ContextTree({
         </div>
       ) : rootQuery.isError ? (
         <div className="px-1.5 text-xs leading-7 text-destructive">
-          {t('dirBrowser.error')}
+          {t('dirBrowser.error', { ns: 'resources' })}
         </div>
       ) : namespaces.length === 0 ? (
         <div className="px-1.5 text-xs leading-7 text-muted-foreground/60">

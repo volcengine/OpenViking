@@ -99,6 +99,20 @@ export function ReasoningBlock({ reasoning, isRunning }: ReasoningBlockProps) {
   )
 }
 
+export function IterationDivider({ iteration }: { iteration: number }) {
+  const { t } = useTranslation('sessions')
+
+  return (
+    <div className="my-3 flex items-center gap-2 text-[11px] text-muted-foreground/70">
+      <span className="h-px flex-1 bg-border/40" />
+      <span className="rounded-full bg-muted/50 px-2 py-0.5 font-medium">
+        {t('chat.iteration', { count: iteration })}
+      </span>
+      <span className="h-px flex-1 bg-border/40" />
+    </div>
+  )
+}
+
 // ---------------------------------------------------------------------------
 // ToolCallBlock
 // ---------------------------------------------------------------------------
