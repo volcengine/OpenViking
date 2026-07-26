@@ -238,7 +238,7 @@ const AssistantMessage = memo(function AssistantMessage({
       className={`${expanded ? 'w-full' : 'w-full max-w-3xl'} group/msg flex gap-2 items-start ${compact ? 'mb-1.5' : 'mb-5'}`}
     >
       {!compact ? <BotAvatar compact={expanded} /> : <div className="w-6 shrink-0" />}
-      <div className="relative max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-background/95 px-4 py-3 text-sm shadow-sm ring-1 ring-border/30">
+      <div className="relative max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm border border-border bg-muted/30 px-4 py-3 text-sm shadow-md shadow-black/5 dark:border-white/10 dark:bg-card/95 dark:shadow-black/30">
         {(Array.isArray(message.parts) ? message.parts : []).map((part, i) => {
           switch (part.type) {
             case 'text':
@@ -304,7 +304,7 @@ function StreamingAssistantMessage({
   return (
     <div className={`${expanded ? 'w-full' : 'w-full max-w-3xl'} mb-5 flex gap-2 items-start`}>
       <BotAvatar compact={expanded} />
-      <div className="max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-background/95 px-4 py-3 text-sm shadow-sm ring-1 ring-border/30">
+      <div className="max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm border border-border bg-muted/30 px-4 py-3 text-sm shadow-md shadow-black/5 dark:border-white/10 dark:bg-card/95 dark:shadow-black/30">
         {safeParts.map((part, i) =>
           renderStreamingPart(part, i, toolResultsById, onResourceClick),
         )}
