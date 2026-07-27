@@ -36,7 +36,7 @@ def test_tags_query_wins_without_calling_process(monkeypatch):
     process.assert_not_called()
 
 
-def test_low_quality_tags_fall_through_to_process(monkeypatch):
+def test_low_quality_tags_request_llm_fallback_without_calling_process(monkeypatch):
     process = Mock()
     process.return_value = "# sample.cpp [C/C++]\n\nclass Widget"
     monkeypatch.setattr(
@@ -54,8 +54,11 @@ def test_low_quality_tags_fall_through_to_process(monkeypatch):
 
     result = extract_skeleton_result("sample.cpp", "class Widget {};")
 
-    assert result.provider == "process"
-    assert not result.should_fallback_to_llm
+    assert result.text is None
+    assert result.provider == "llm"
+    assert result.should_fallback_to_llm
+    assert result.reason == "tags query produced no useful skeleton"
+    process.assert_not_called()
 
 
 def test_no_tags_uses_process(monkeypatch):
