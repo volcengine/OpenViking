@@ -129,7 +129,13 @@ class VLMProviderAdapter(LLMProvider):
         temperature: float = 0.7,
         session_id: str | None = None,
     ) -> AsyncIterator[LLMStreamEvent]:
-        if getattr(self._vlm, "provider", None) != "volcengine":
+        # Failover wrappers expose the primary provider name but intentionally
+        # do not expose a single provider client. Route them through chat() so
+        # get_completion_async() can select the active credential safely.
+        supports_native_volcengine_stream = getattr(
+            self._vlm, "provider", None
+        ) == "volcengine" and callable(getattr(self._vlm, "get_async_client", None))
+        if not supports_native_volcengine_stream:
             async for event in super().chat_stream(
                 messages=messages,
                 tools=tools,

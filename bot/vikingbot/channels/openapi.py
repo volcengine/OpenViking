@@ -264,6 +264,8 @@ class OpenAPIChannel(BaseChannel):
                 await pending.add_event("tool_call", msg.content)
             elif msg.event_type == OutboundEventType.TOOL_RESULT:
                 await pending.add_event("tool_result", msg.content)
+            elif msg.event_type == OutboundEventType.ITERATION:
+                await pending.add_event("iteration", msg.content)
             return
 
         # Handle as normal OpenAPIChannel message
@@ -295,6 +297,8 @@ class OpenAPIChannel(BaseChannel):
             await pending.add_event("tool_call", msg.content)
         elif msg.event_type == OutboundEventType.TOOL_RESULT:
             await pending.add_event("tool_result", msg.content)
+        elif msg.event_type == OutboundEventType.ITERATION:
+            await pending.add_event("iteration", msg.content)
 
     def get_router(self) -> APIRouter:
         """Get or create the FastAPI router."""

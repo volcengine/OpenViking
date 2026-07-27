@@ -264,7 +264,6 @@ def _init_prompt_session() -> None:
     )
 
 
-
 def _is_exit_command(command: str) -> bool:
     """Return True when input should end interactive chat."""
     return command.lower() in EXIT_COMMANDS
@@ -304,12 +303,12 @@ def main(
     pass
 
 
-def _make_provider(config, langfuse_client: None = None):
+def _make_provider(config, langfuse_client: Any = None):
     """Create LLM provider from configuration.
 
-    When bot.agents.provider is explicitly set, uses openviking's VLMFactory
-    to create the appropriate VLM backend and wraps it in VLMProviderAdapter.
-    Otherwise falls back to the legacy LiteLLMProvider.
+    An explicit bot.agents.model or non-empty bot.agents.credentials uses the
+    Bot's own VLM configuration. Otherwise the complete root VLM configuration
+    is inherited, including its ordered credentials and failover behavior.
     """
     from vikingbot.providers.litellm_provider import LiteLLMProvider
 
@@ -322,9 +321,85 @@ def _make_provider(config, langfuse_client: None = None):
     provider_name = p.provider if p else None
     extra_headers = p.extra_headers if p else {}
     timeout = p.timeout if p else None
+    credentials = list(getattr(p, "credentials", None) or [])
 
-    if not model:
+    if not model and not credentials:
         raise RuntimeError("No LLM model configured. Please set it in ~/.openviking/ov.conf")
+
+    inherits_root_vlm = False
+    inherits_root_vlm_getter = getattr(config, "inherits_root_vlm", None)
+    if callable(inherits_root_vlm_getter):
+        inherits_root_vlm = bool(inherits_root_vlm_getter())
+
+    if inherits_root_vlm:
+        from openviking_cli.utils.config.vlm_config import VLMConfig
+        from vikingbot.providers.vlm_adapter import VLMProviderAdapter
+
+        root_vlm_getter = getattr(config, "get_root_vlm_config", None)
+        root_vlm = root_vlm_getter() if callable(root_vlm_getter) else None
+        if root_vlm is None:
+            raise RuntimeError("Root VLM configuration is unavailable")
+
+        # Re-validate a fresh copy so the Bot keeps its existing generation
+        # settings without sharing a cached VLM instance with another runtime.
+        root_vlm_data = root_vlm.model_dump()
+        root_vlm_data["temperature"] = temperature
+        root_vlm_data["thinking"] = thinking
+        if timeout is not None:
+            root_vlm_data["timeout"] = timeout
+        if extra_headers:
+            root_vlm_data["extra_headers"] = extra_headers
+        effective_vlm = VLMConfig.model_validate(root_vlm_data)
+        return VLMProviderAdapter(
+            vlm_instance=effective_vlm.get_vlm_instance(),
+            default_model=effective_vlm.model or model,
+            langfuse_client=langfuse_client,
+        )
+
+    if credentials:
+        from openviking_cli.utils.config.vlm_config import VLMConfig
+        from vikingbot.providers.vlm_adapter import VLMProviderAdapter
+
+        if not model:
+            missing_model_ids = [
+                credential.id or f"index-{index}"
+                for index, credential in enumerate(credentials)
+                if not credential.model
+            ]
+            if missing_model_ids:
+                raise RuntimeError(
+                    "bot.agents.model is omitted, so every bot.agents.credentials "
+                    "entry must define model; missing for: " + ", ".join(missing_model_ids)
+                )
+
+        bot_vlm_data: dict[str, Any] = {
+            # VLMConfig currently requires a parent model even when every
+            # credential has its own. Use the primary credential internally
+            # without persisting an outer bot.agents.model.
+            "model": model or credentials[0].model,
+            "temperature": temperature,
+            "thinking": thinking,
+            "credentials": credentials,
+            "failback_timeout_seconds": p.failback_timeout_seconds,
+            "failback_request_count": p.failback_request_count,
+        }
+        if provider_name:
+            bot_vlm_data["provider"] = provider_name
+        if timeout is not None:
+            bot_vlm_data["timeout"] = timeout
+        if api_key:
+            bot_vlm_data["api_key"] = api_key
+        if api_base:
+            bot_vlm_data["api_base"] = api_base
+        if extra_headers:
+            bot_vlm_data["extra_headers"] = extra_headers
+
+        effective_vlm = VLMConfig.model_validate(bot_vlm_data)
+        return VLMProviderAdapter(
+            vlm_instance=effective_vlm.get_vlm_instance(),
+            default_model=effective_vlm.model or credentials[0].model or "",
+            langfuse_client=langfuse_client,
+        )
 
     # When provider is explicitly set, use VLMFactory to get the correct
     # backend (e.g. VolcEngineVLM for volcengine, OpenAIVLM for openai).
@@ -643,13 +718,13 @@ def prepare_heartbeat(config, agent_loop, session_manager) -> HeartbeatService:
     return heartbeat
 
 
-
 # ============================================================================
 # Agent Commands
 # ============================================================================
 
 
 # Helper for thinking spinner context
+
 
 def prepare_agent_channel(
     config,

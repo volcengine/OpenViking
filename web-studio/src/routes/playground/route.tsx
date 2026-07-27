@@ -11,6 +11,7 @@ import {
 import { toast } from 'sonner'
 
 import { Button } from '#/components/ui/button'
+import { useAppConnection } from '#/hooks/use-app-connection'
 import {
   Dialog,
   DialogContent,
@@ -70,8 +71,10 @@ import {
   isDirectoryLevelFile,
   mergeExpanded,
   normalizePlaygroundResourceUri,
+  readPlaygroundExpandedUris,
   readStoredNumber,
   visibleContextEntries,
+  writePlaygroundExpandedUris,
 } from './-lib/utils'
 
 export const Route = createFileRoute('/playground')({
@@ -98,6 +101,7 @@ function PlaygroundRoute() {
 
 function PlaygroundWorkbench() {
   const { t } = useTranslation(['playground', 'resources'])
+  const { identityScopeKey } = useAppConnection()
   const search = Route.useSearch()
   const navigate = useNavigate({ from: Route.fullPath })
   const initialCurrentUri = useMemo(
@@ -114,8 +118,11 @@ function PlaygroundWorkbench() {
       ? createEntryFromUri(search.file, false)
       : createEntryFromUri(initialCurrentUri, true),
   )
-  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(
-    () => new Set(getAncestorUris(initialCurrentUri)),
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(() =>
+    mergeExpanded(
+      new Set(readPlaygroundExpandedUris(identityScopeKey)),
+      getAncestorUris(initialCurrentUri),
+    ),
   )
   const [activePanel, setActivePanel] = useState<PlaygroundPanel>(
     search.panel ?? 'agent',
@@ -191,6 +198,15 @@ function PlaygroundWorkbench() {
   )
 
   useEffect(() => {
+    setExpandedKeys(
+      mergeExpanded(
+        new Set(readPlaygroundExpandedUris(identityScopeKey)),
+        getAncestorUris(initialCurrentUri),
+      ),
+    )
+  }, [identityScopeKey, initialCurrentUri])
+
+  useEffect(() => {
     const normalized = search.file
       ? normalizeDirUri(parentUri(search.file))
       : normalizeDirUri(search.uri || ROOT_URI)
@@ -202,6 +218,14 @@ function PlaygroundWorkbench() {
     )
     setExpandedKeys((prev) => mergeExpanded(prev, getAncestorUris(normalized)))
   }, [search.file, search.uri])
+
+  const handleExpandedKeysChange = useCallback(
+    (next: Set<string>) => {
+      setExpandedKeys(next)
+      writePlaygroundExpandedUris(identityScopeKey, next)
+    },
+    [identityScopeKey],
+  )
 
   useEffect(() => {
     if (search.panel === 'agent' || search.panel === 'terminal') {
@@ -505,7 +529,7 @@ function PlaygroundWorkbench() {
                 selectedFile && !selectedFile.isDir ? selectedFile.uri : null
               }
               expandedKeys={expandedKeys}
-              onExpandedKeysChange={setExpandedKeys}
+              onExpandedKeysChange={handleExpandedKeysChange}
               onSelectDirectory={handleSelectDirectory}
               onSelectFile={handleSelectFile}
             />
@@ -700,13 +724,19 @@ function PlaygroundActionPanel({
   sessionId?: string
 }) {
   const { t } = useTranslation('playground')
+  const [toolbarContainer, setToolbarContainer] =
+    useState<HTMLDivElement | null>(null)
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-14 shrink-0 items-center border-b px-3">
+      <div className="flex h-14 shrink-0 items-center gap-2 border-b px-3">
         <PlaygroundActionTabs
           activePanel={activePanel}
           onPanelChange={onPanelChange}
+        />
+        <div
+          ref={setToolbarContainer}
+          className="ml-auto flex min-w-0 items-center gap-1"
         />
       </div>
 
@@ -719,6 +749,7 @@ function PlaygroundActionPanel({
         onSessionChange={onSessionChange}
         openingUri={openingUri}
         sessionId={sessionId}
+        toolbarContainer={toolbarContainer}
       />
     </div>
   )
@@ -750,6 +781,8 @@ function PlaygroundMobileActionScreen({
   sessionId?: string
 }) {
   const { t } = useTranslation(['playground', 'resources'])
+  const [toolbarContainer, setToolbarContainer] =
+    useState<HTMLDivElement | null>(null)
 
   if (!open) {
     return null
@@ -772,6 +805,10 @@ function PlaygroundMobileActionScreen({
           activePanel={activePanel}
           onPanelChange={onPanelChange}
         />
+        <div
+          ref={setToolbarContainer}
+          className="ml-auto flex min-w-0 items-center gap-1"
+        />
       </div>
       <div className="min-h-0 flex-1">
         <PlaygroundActionContent
@@ -783,6 +820,7 @@ function PlaygroundMobileActionScreen({
           onSessionChange={onSessionChange}
           openingUri={openingUri}
           sessionId={sessionId}
+          toolbarContainer={toolbarContainer}
         />
       </div>
     </div>
@@ -825,6 +863,7 @@ function PlaygroundActionContent({
   onSessionChange,
   openingUri,
   sessionId,
+  toolbarContainer,
 }: {
   activePanel: PlaygroundPanel
   currentUri: string
@@ -834,6 +873,7 @@ function PlaygroundActionContent({
   onSessionChange: (sessionId: string) => void
   openingUri: string | null
   sessionId?: string
+  toolbarContainer: HTMLDivElement | null
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -846,12 +886,14 @@ function PlaygroundActionContent({
           onSessionChange={onSessionChange}
           openingUri={openingUri}
           sessionId={sessionId}
+          toolbarContainer={toolbarContainer}
         />
       ) : (
         <AgentPanel
           initialSessionId={sessionId}
           onOpenResource={onOpenResource}
           onSessionChange={onSessionChange}
+          toolbarContainer={toolbarContainer}
         />
       )}
     </div>

@@ -17,7 +17,7 @@ use ignore::WalkBuilder;
 use serde::Deserialize;
 
 use crate::core::errors::{Error, Result};
-use crate::core::filesystem::FileSystem;
+use crate::core::filesystem::{validate_virtual_path, FileSystem};
 use crate::core::glob::{decode_offset_token, encode_offset_token, PreparedGlob};
 use crate::core::plugin::ServicePlugin;
 use crate::core::types::{ConfigParameter, FileInfo, GlobEntry, GlobPage, GrepResult, PluginConfig, WriteFlag};
@@ -76,15 +76,20 @@ impl LocalFileSystem {
     }
 
     /// Resolve a virtual path to actual local path
-    fn resolve_path(&self, path: &str) -> PathBuf {
+    fn resolve_path(&self, path: &str) -> Result<PathBuf> {
+        validate_virtual_path(path)?;
+
         // Remove leading slash to make it relative
         let relative = path.strip_prefix('/').unwrap_or(path);
+        if Path::new(relative).is_absolute() {
+            return Err(Error::invalid_path(path));
+        }
 
         // Join with base path
         if relative.is_empty() {
-            self.base_path.clone()
+            Ok(self.base_path.clone())
         } else {
-            self.base_path.join(relative)
+            Ok(self.base_path.join(relative))
         }
     }
 
@@ -675,7 +680,7 @@ impl LocalFileSystem {
 #[async_trait]
 impl FileSystem for LocalFileSystem {
     async fn create(&self, path: &str) -> Result<()> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
 
         // Check if file already exists
         if local_path.exists() {
@@ -697,7 +702,7 @@ impl FileSystem for LocalFileSystem {
     }
 
     async fn mkdir(&self, path: &str, _mode: u32) -> Result<()> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
 
         // Check if directory already exists
         if local_path.exists() {
@@ -719,7 +724,7 @@ impl FileSystem for LocalFileSystem {
     }
 
     async fn remove(&self, path: &str) -> Result<()> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
 
         // Check if exists
         if !local_path.exists() {
@@ -745,7 +750,7 @@ impl FileSystem for LocalFileSystem {
     }
 
     async fn remove_all(&self, path: &str) -> Result<()> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
 
         // Check if exists
         if !local_path.exists() {
@@ -760,7 +765,7 @@ impl FileSystem for LocalFileSystem {
     }
 
     async fn read(&self, path: &str, offset: u64, size: u64) -> Result<Vec<u8>> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
 
         // Check if exists and is not a directory
         let metadata = fs::metadata(&local_path).map_err(|_| Error::NotFound(path.to_string()))?;
@@ -790,7 +795,7 @@ impl FileSystem for LocalFileSystem {
     }
 
     async fn write(&self, path: &str, data: &[u8], offset: u64, flags: WriteFlag) -> Result<u64> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
 
         // Check if it's a directory
         if local_path.exists() && local_path.is_dir() {
@@ -804,34 +809,41 @@ impl FileSystem for LocalFileSystem {
             }
         }
 
-        // Determine if we should truncate based on flags
-        let should_truncate = matches!(flags, WriteFlag::Create | WriteFlag::Truncate);
+        let mut options = fs::OpenOptions::new();
+        match flags {
+            WriteFlag::Create => {
+                options.write(true).create(true).truncate(true);
+            }
+            WriteFlag::Append => {
+                options.append(true);
+            }
+            WriteFlag::Truncate => {
+                options.write(true).truncate(true);
+            }
+            WriteFlag::None => {
+                options.write(true);
+            }
+        }
+        let mut file = options.open(&local_path).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                Error::NotFound(path.to_string())
+            } else {
+                Error::plugin(format!("failed to open file: {}", e))
+            }
+        })?;
 
-        // Open or create file with truncate support
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(should_truncate)
-            .open(&local_path)
-            .map_err(|e| Error::plugin(format!("failed to open file: {}", e)))?;
-
-        // Write data
         use std::io::{Seek, SeekFrom, Write};
-
-        if offset > 0 {
+        if matches!(flags, WriteFlag::None) && offset > 0 {
             file.seek(SeekFrom::Start(offset))
                 .map_err(|e| Error::plugin(format!("failed to seek: {}", e)))?;
         }
-
-        let written = file
-            .write(data)
+        file.write_all(data)
             .map_err(|e| Error::plugin(format!("failed to write: {}", e)))?;
-
-        Ok(written as u64)
+        Ok(data.len() as u64)
     }
 
     async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
         let path = path.to_string();
 
         Self::run_blocking_fs(move || {
@@ -877,7 +889,7 @@ impl FileSystem for LocalFileSystem {
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
         let path = path.to_string();
 
         Self::run_blocking_fs(move || {
@@ -906,8 +918,8 @@ impl FileSystem for LocalFileSystem {
     }
 
     async fn rename(&self, old_path: &str, new_path: &str) -> Result<()> {
-        let old_local = self.resolve_path(old_path);
-        let new_local = self.resolve_path(new_path);
+        let old_local = self.resolve_path(old_path)?;
+        let new_local = self.resolve_path(new_path)?;
 
         // Check if old path exists
         if !old_local.exists() {
@@ -929,8 +941,8 @@ impl FileSystem for LocalFileSystem {
     }
 
     async fn replace(&self, src_path: &str, dst_path: &str) -> Result<()> {
-        let src_local = self.resolve_path(src_path);
-        let dst_local = self.resolve_path(dst_path);
+        let src_local = self.resolve_path(src_path)?;
+        let dst_local = self.resolve_path(dst_path)?;
 
         if !src_local.exists() {
             return Err(Error::NotFound(src_path.to_string()));
@@ -1009,7 +1021,7 @@ impl FileSystem for LocalFileSystem {
     }
 
     async fn chmod(&self, path: &str, _mode: u32) -> Result<()> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
 
         // Check if exists
         if !local_path.exists() {
@@ -1022,7 +1034,7 @@ impl FileSystem for LocalFileSystem {
     }
 
     async fn ensure_parent_dirs(&self, path: &str, _mode: u32) -> Result<()> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
 
         // Get parent directory
         if let Some(parent) = local_path.parent() {
@@ -1050,7 +1062,7 @@ impl FileSystem for LocalFileSystem {
             return Ok(GrepResult::new());
         }
 
-        let local = self.resolve_path(path);
+        let local = self.resolve_path(path)?;
         if !local.exists() {
             return Err(Error::NotFound(path.to_string()));
         }
@@ -1120,6 +1132,11 @@ impl FileSystem for LocalFileSystem {
         level_limit: Option<usize>,
         continuation_token: Option<String>,
     ) -> Result<GlobPage> {
+        // Use the same guard as every other op: `validate_virtual_path` alone lets an
+        // absolute remainder (e.g. `//etc` from a `//`-double-slash mount path) through,
+        // and `glob_via_walk`'s `resolve_virtual_path` would then join it over the base.
+        // `resolve_path` adds the is_absolute check; discard the PathBuf, keep the guard.
+        self.resolve_path(path)?;
         let base_path = self.base_path.clone();
         let path_owned = path.to_string();
         let pattern_owned = pattern.to_string();
@@ -1142,7 +1159,8 @@ impl FileSystem for LocalFileSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::FileSystem;
+    use crate::core::{ConfigValue, FileSystem, MountableFS};
+    use std::collections::HashMap;
     use std::path::Path;
     use tempfile::TempDir;
 
@@ -1184,6 +1202,84 @@ mod tests {
             std::fs::create_dir_all(parent).unwrap();
         }
         std::fs::write(path, content).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_localfs_rejects_parent_path_components() {
+        let dir = TempDir::new().unwrap();
+        let mount = dir.path().join("mount");
+        std::fs::create_dir(&mount).unwrap();
+        write_file(dir.path(), "secret.txt", "secret");
+        let fs = LocalFileSystem::new(mount.to_str().unwrap()).unwrap();
+
+        let err = fs.read("/../secret.txt", 0, 0).await.unwrap_err();
+        assert!(matches!(err, Error::InvalidPath(_)));
+    }
+
+    #[tokio::test]
+    async fn test_localfs_mount_rejects_absolute_remainder() {
+        let dir = TempDir::new().unwrap();
+        let mount = dir.path().join("mount");
+        std::fs::create_dir(&mount).unwrap();
+        write_file(dir.path(), "secret.txt", "secret");
+
+        let fs = MountableFS::new();
+        fs.register_plugin(LocalFSPlugin::new()).await;
+        let params = HashMap::from([(
+            "local_dir".to_string(),
+            ConfigValue::String(mount.to_string_lossy().into_owned()),
+        )]);
+        fs.mount(PluginConfig::single_backend("localfs", "/local", params))
+            .await
+            .unwrap();
+
+        let escape_path = format!("/local/{}", dir.path().join("secret.txt").display());
+        let err = fs.read(&escape_path, 0, 0).await.unwrap_err();
+        assert!(matches!(err, Error::InvalidPath(_)));
+    }
+
+    #[tokio::test]
+    async fn test_localfs_glob_mount_rejects_absolute_remainder() {
+        let dir = TempDir::new().unwrap();
+        let mount = dir.path().join("mount");
+        std::fs::create_dir(&mount).unwrap();
+        write_file(dir.path(), "secret.txt", "secret");
+
+        let fs = MountableFS::new();
+        fs.register_plugin(LocalFSPlugin::new()).await;
+        let params = HashMap::from([(
+            "local_dir".to_string(),
+            ConfigValue::String(mount.to_string_lossy().into_owned()),
+        )]);
+        fs.mount(PluginConfig::single_backend("localfs", "/local", params))
+            .await
+            .unwrap();
+
+        // `/local/<abs dir>` -> remainder `//<abs dir>` would otherwise join over the mount
+        // base and let glob list a host directory outside the mount.
+        let escape_path = format!("/local/{}", dir.path().display());
+        let err = fs
+            .glob_directory(&escape_path, "**/*", false, None, None, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidPath(_)));
+    }
+
+    #[tokio::test]
+    async fn test_localfs_write_honors_flags() {
+        let (_dir, fs) = fallback_localfs();
+        fs.write("/file", b"old", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+        fs.write("/file", b"new", 0, WriteFlag::Append)
+            .await
+            .unwrap();
+        assert_eq!(fs.read("/file", 0, 0).await.unwrap(), b"oldnew");
+
+        for flag in [WriteFlag::Append, WriteFlag::Truncate, WriteFlag::None] {
+            let err = fs.write("/missing", b"data", 0, flag).await.unwrap_err();
+            assert!(matches!(err, Error::NotFound(_)));
+        }
     }
 
     /// Install a fake rg executable and prepend it to PATH for the current test.

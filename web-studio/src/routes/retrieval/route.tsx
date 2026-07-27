@@ -46,6 +46,7 @@ function RetrievalPage() {
   const initialScope = activeSearch.scope ?? DEFAULT_RETRIEVAL_SCOPE
   const initialCustomPath = activeSearch.path ?? DEFAULT_CUSTOM_PATH_INPUT
   const initialSessionId = activeSearch.session ?? ''
+  const initialIgnoreCase = activeSearch.ignoreCase ?? false
 
   const [retrievalMode, setRetrievalMode] = useState<RetrievalMode>(initialMode)
   const [query, setQuery] = useState(initialQuery)
@@ -55,6 +56,7 @@ function RetrievalPage() {
     useState<RetrievalScope>(initialScope)
   const [customPathInput, setCustomPathInput] = useState(initialCustomPath)
   const [sessionIdInput, setSessionIdInput] = useState(initialSessionId)
+  const [ignoreCase, setIgnoreCase] = useState(initialIgnoreCase)
   const inputRef = useRef<HTMLInputElement>(null)
 
   const targetUri = useMemo(() => {
@@ -65,6 +67,7 @@ function RetrievalPage() {
   const sessionId = sessionIdInput.trim() || undefined
   const retrievalQuery = useRetrievalQuery({
     enabled: hasSubmitted,
+    ignoreCase,
     mode: retrievalMode,
     query: submittedQuery,
     resultCount,
@@ -87,6 +90,7 @@ function RetrievalPage() {
 
     const nextSearch = buildSubmittedSearch({
       count: resultCount,
+      ignoreCase,
       mode: retrievalMode,
       path: customPathInput,
       q: trimmed,
@@ -102,6 +106,7 @@ function RetrievalPage() {
     })
   }, [
     customPathInput,
+    ignoreCase,
     navigate,
     query,
     resultCount,
@@ -128,6 +133,7 @@ function RetrievalPage() {
     const nextScope = activeSearch.scope ?? DEFAULT_RETRIEVAL_SCOPE
     const nextCustomPath = activeSearch.path ?? DEFAULT_CUSTOM_PATH_INPUT
     const nextSessionId = activeSearch.session ?? ''
+    const nextIgnoreCase = activeSearch.ignoreCase ?? false
 
     setRetrievalMode(nextMode)
     setQuery(activeSearch.q)
@@ -136,9 +142,11 @@ function RetrievalPage() {
     setRetrievalScope(nextScope)
     setCustomPathInput(nextCustomPath)
     setSessionIdInput(nextSessionId)
+    setIgnoreCase(nextIgnoreCase)
 
     const nextSearch = buildSubmittedSearch({
       count: nextResultCount,
+      ignoreCase: nextIgnoreCase,
       mode: nextMode,
       path: nextCustomPath,
       q: activeSearch.q,
@@ -156,6 +164,7 @@ function RetrievalPage() {
     }
   }, [
     activeSearch.count,
+    activeSearch.ignoreCase,
     activeSearch.mode,
     activeSearch.path,
     activeSearch.q,
@@ -171,14 +180,16 @@ function RetrievalPage() {
         inputRef={inputRef}
         onChange={setQuery}
         onSubmit={handleSubmit}
-        placeholder={t('searchPlaceholder')}
+        placeholder={t(`placeholders.${retrievalMode}`)}
         query={query}
       />
 
       <RetrievalControls
         customPathInput={customPathInput}
+        ignoreCase={ignoreCase}
         mode={retrievalMode}
         onCustomPathInputChange={setCustomPathInput}
+        onIgnoreCaseChange={setIgnoreCase}
         onModeChange={setRetrievalMode}
         onResultCountChange={setResultCount}
         onScopeChange={setRetrievalScope}

@@ -1116,6 +1116,56 @@ class TestOpenAPIAuth:
         assert pending.events[0]["type"] == "response"
         assert pending.events[0]["data"] == {"content": "hello", "response_id": "resp-123"}
 
+    @pytest.mark.asyncio
+    async def test_send_forwards_iteration_to_bot_stream(self, message_bus, temp_workspace):
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+        )
+        pending = PendingResponse()
+        channel._bot_pending["default"] = {"session-1": pending}
+
+        await channel.send(
+            OutboundMessage(
+                session_key=SessionKey(
+                    type="bot_api",
+                    channel_id="default",
+                    chat_id="session-1",
+                ),
+                content="Iteration 2/10",
+                event_type=OutboundEventType.ITERATION,
+            )
+        )
+
+        assert pending.events[0]["type"] == "iteration"
+        assert pending.events[0]["data"] == "Iteration 2/10"
+
+    @pytest.mark.asyncio
+    async def test_send_forwards_iteration_to_openapi_stream(self, message_bus, temp_workspace):
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+        )
+        pending = PendingResponse()
+        channel._pending["session-1"] = pending
+
+        await channel.send(
+            OutboundMessage(
+                session_key=SessionKey(
+                    type="cli",
+                    channel_id="default",
+                    chat_id="session-1",
+                ),
+                content="Iteration 2/10",
+                event_type=OutboundEventType.ITERATION,
+            )
+        )
+
+        assert pending.events[0]["type"] == "iteration"
+        assert pending.events[0]["data"] == "Iteration 2/10"
+
     def test_feedback_requires_existing_response(self, message_bus, temp_workspace):
         channel = OpenAPIChannel(
             OpenAPIChannelConfig(),

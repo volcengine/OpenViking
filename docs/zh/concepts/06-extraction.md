@@ -160,10 +160,13 @@ SemanticMsg(
 |------|------|
 | Python | 完整支持 |
 | JavaScript / TypeScript | 完整支持 |
-| Rust | 完整支持 |
-| Go | 完整支持 |
 | Java | 完整支持 |
 | C / C++ | 完整支持 |
+| Rust | 完整支持 |
+| Go | 完整支持 |
+| C# | 完整支持 |
+| PHP | 完整支持 |
+| Lua | 完整支持 |
 
 其他语言不在支持列表内，自动 fallback 到 LLM。
 

@@ -53,4 +53,4 @@ Behavior knobs (recall limits, commit thresholds) live in `~/.config/opencode/op
 ## Reference docs
 
 - [Plugin README](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin) - full tool list, configuration fields, and runtime details
-- [Deployment Guide](https://www.openviking.ai/en/guides/03-deployment) - setting up OpenViking server and CLI config
+- [Deployment Guide](https://docs.openviking.ai/en/guides/03-deployment) - setting up OpenViking server and CLI config

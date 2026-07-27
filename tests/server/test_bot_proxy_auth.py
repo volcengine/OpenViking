@@ -219,3 +219,55 @@ async def test_chat_proxy_forwards_trusted_request_without_root_api_key(monkeypa
     }
     assert "X-Gateway-Token" not in forwarded["headers"]
     assert forwarded["timeout"] == 300.0
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_proxy_preserves_sse_event_boundaries(monkeypatch):
+    payload = (
+        'data: {"event":"reasoning_delta","data":"thinking"}\n\n'
+        'data: {"event":"response","data":{"content":"done"}}\n\n'
+    )
+
+    class FakeResponse:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        def raise_for_status(self):
+            return None
+
+        async def aiter_text(self):
+            yield payload[:30]
+            yield payload[30:]
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        def stream(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(bot_router_module, "BOT_API_URL", "http://127.0.0.1:18790")
+    monkeypatch.setattr(bot_router_module, "_create_bot_proxy_client", lambda: FakeClient())
+
+    app = FastAPI()
+    app.state.config = SimpleNamespace(get_effective_auth_mode=lambda: AuthMode.DEV)
+    app.state.auth_plugin = DevAuthPlugin()
+    app.include_router(bot_router_module.router, prefix="/bot/v1")
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/bot/v1/chat/stream",
+            json={"message": "hello"},
+        )
+
+    assert response.status_code == 200
+    assert response.text == payload

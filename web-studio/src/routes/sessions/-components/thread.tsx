@@ -4,9 +4,10 @@ import { useTranslation } from 'react-i18next'
 
 import { useAppConnection } from '#/hooks/use-app-connection'
 import { useChat } from '#/lib/sessions/use-chat'
-import { useSessionMessages } from '#/lib/sessions/use-sessions'
+import { useSession, useSessionMessages } from '#/lib/sessions/use-sessions'
 import { useSessionTitles } from '#/lib/sessions/use-session-titles'
 import { MessageList } from './message-list'
+import { MemoryImpact } from './memory-impact'
 import { Composer } from './composer'
 
 const PixelBlast = lazy(() => import('#/components/ui/pixel-blast'))
@@ -21,6 +22,7 @@ export function Thread({ sessionId }: ThreadProps) {
   const { getTitle } = useSessionTitles(identityScopeKey)
   const title = getTitle(sessionId)
 
+  const { data: session } = useSession(sessionId)
   const { data: historyMessages } = useSessionMessages(sessionId)
 
   const chat = useChat({
@@ -93,13 +95,12 @@ export function Thread({ sessionId }: ThreadProps) {
         </div>
       )}
 
-      {title && (
-        <div className="relative z-10 flex h-12 items-center border-b border-border/50 bg-background/95 px-6">
-          <h2 className="text-sm font-medium truncate text-foreground">
-            {title}
-          </h2>
-        </div>
-      )}
+      <div className="relative z-10 flex h-12 items-center justify-between gap-4 border-b border-border/50 bg-background/95 px-6">
+        <h2 className="truncate text-sm font-medium text-foreground">
+          {title || sessionId}
+        </h2>
+        <MemoryImpact session={session} />
+      </div>
 
       <div
         ref={scrollRef}

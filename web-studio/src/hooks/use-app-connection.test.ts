@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   createManagementAccountConnection,
   createIdentityScopeKey,
+  createConnectionRoleProbeKey,
   resolveSwitchedIdentity,
   resolveConnectionRoleProbeState,
   resolveInitialApiKey,
@@ -13,6 +14,56 @@ import {
 import { ovClient } from '#/lib/ov-client'
 
 const acceptClientError = () => true
+
+describe('createConnectionRoleProbeKey', () => {
+  it('matches the connection produced by an internal identity synchronization', () => {
+    const connection = {
+      accountId: 'default',
+      adminApiKey: 'root-key',
+      apiKey: 'selected-user-key',
+      baseUrl: 'http://localhost:1933/',
+      userId: 'default',
+    }
+    const synchronized = {
+      ...connection,
+      accountId: 'workspace-a',
+      userId: 'alice',
+    }
+
+    expect(createConnectionRoleProbeKey(synchronized, 'api_key')).toBe(
+      createConnectionRoleProbeKey(
+        {
+          ...connection,
+          accountId: 'workspace-a',
+          baseUrl: 'http://localhost:1933',
+          userId: 'alice',
+        },
+        'api_key',
+      ),
+    )
+  })
+
+  it('changes when a credential or asserted identity changes', () => {
+    const connection = {
+      accountId: 'workspace-a',
+      adminApiKey: 'root-key',
+      apiKey: 'selected-user-key',
+      baseUrl: 'http://localhost:1933',
+      userId: 'alice',
+    }
+    const key = createConnectionRoleProbeKey(connection, 'api_key')
+
+    expect(
+      createConnectionRoleProbeKey(
+        { ...connection, apiKey: 'another-user-key' },
+        'api_key',
+      ),
+    ).not.toBe(key)
+    expect(
+      createConnectionRoleProbeKey({ ...connection, userId: 'bob' }, 'api_key'),
+    ).not.toBe(key)
+  })
+})
 
 describe('resolveInitialApiKey', () => {
   it('keeps the stored connection key paired with the stored account and user', () => {

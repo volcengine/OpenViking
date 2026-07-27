@@ -1049,44 +1049,7 @@ ov --sudo admin migrate --cleanup --output json
 
 ---
 
-### 用户添加位置设置
-
-个人添加默认值作为用户配置存储在
-`viking://user/{user_id}/settings/user_config.json`。它只影响没有显式传目标的添加请求：
-
-1. `add_resource`：显式 `to` / `parent` 优先，然后是用户
-   `add_targets.resource_uri`，再是
-   `server.user_config_defaults.add_targets.resource_uri`，最后保持旧行为。
-2. `add_skill`：显式 `target_uri` 优先，然后是用户
-   `add_targets.skill_uri`，再是
-   `server.user_config_defaults.add_targets.skill_uri`，最后保持旧行为。
-
-#### HTTP API
-
-```
-GET /api/v1/user-settings/add-locations
-PATCH /api/v1/user-settings/add-locations
-DELETE /api/v1/user-settings/add-locations
-```
-
-`PATCH` 直接接收 add-target 字段。传 `null` 会清除单个字段；删除设置会清除整个个人覆盖配置。
-
-```bash
-curl -X PATCH http://localhost:1933/api/v1/user-settings/add-locations \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: <user-key>" \
-  -d '{"resource_uri": "viking://user/resources/project-a"}'
-```
-
-`resource_uri` 必须是可写资源目录 URI：`viking://resources` 或
-`viking://resources/...`、`viking://user/resources` 或
-`viking://user/resources/...`、`viking://user/{user_id}/resources` 或
-`viking://user/{user_id}/resources/...`、`viking://user/{user_id}/peers/{peer_id}/resources`
-或 `viking://user/{user_id}/peers/{peer_id}/resources/...`。`skill_uri` 只能是
-`viking://user/skills` 或 `viking://agent/skills`；v1 不支持显式写成
-`viking://user/{user_id}/skills`。配置值非法时会直接报错，不会静默回退到其它目标。
-
----
+<a id="用户添加位置设置"></a>
 
 ## 完整示例
 

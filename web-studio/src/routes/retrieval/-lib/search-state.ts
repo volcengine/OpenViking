@@ -48,6 +48,8 @@ export function validateRetrievalSearch(
   const path = typeof search.path === 'string' ? search.path.trim() : undefined
   const session =
     typeof search.session === 'string' ? search.session.trim() : undefined
+  const ignoreCase =
+    search.ignoreCase === true || search.ignoreCase === 'true' || undefined
 
   return {
     ...(q && { q }),
@@ -56,6 +58,7 @@ export function validateRetrievalSearch(
     ...(isRetrievalScope(search.scope) && { scope: search.scope }),
     ...(path && { path }),
     ...(session && { session }),
+    ...(ignoreCase && { ignoreCase }),
   }
 }
 
@@ -66,7 +69,8 @@ export function hasRetrievalSearch(search: RetrievalSearch): boolean {
     search.count ||
     search.scope ||
     search.path ||
-    search.session,
+    search.session ||
+    search.ignoreCase,
   )
 }
 
@@ -115,6 +119,7 @@ export function buildSubmittedSearch(params: {
   scope: RetrievalScope
   path: string
   session: string
+  ignoreCase: boolean
 }): RetrievalSearch {
   const q = params.q.trim()
   const path = params.path.trim()
@@ -127,5 +132,6 @@ export function buildSubmittedSearch(params: {
     ...(params.scope !== DEFAULT_RETRIEVAL_SCOPE && { scope: params.scope }),
     ...(params.scope === 'custom' && path && { path }),
     ...(params.mode === 'search' && session && { session }),
+    ...(params.mode === 'grep' && params.ignoreCase && { ignoreCase: true }),
   }
 }

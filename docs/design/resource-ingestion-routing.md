@@ -113,16 +113,16 @@ Understanding 不受 `wait=false` 限制。`wait=true` 在当前请求内完成 
 
 | 输入或场景 | 获取数据 | 解析者 | 是否走标准 `ParseResult -> TreeBuilder` | 返回时机 |
 |---|---|---|---|---|
-| Connector 配置允许的 scheme，且参数受支持 | Connector 服务 | Connector 服务 | 否 | 提交成功立即返回 `task_id`，后台轮询状态 |
+| Connector 配置允许的 TOS 或 Git，提供精确 `to` 且参数受支持 | Connector 服务 | Connector 服务 | 否 | 提交成功立即返回 `task_id`，后台轮询状态 |
 | `tos://` 但 Connector 不可用或参数不支持 | 不降级 | 不执行 | 否 | 直接报清晰的参数或配置错误 |
-| Git，`wait=false` | GitAccessor 在后台 clone | 内置目录/代码仓库 Parser | 是 | 预检仓库并预占 URI 后返回 |
+| Git 未命中 Connector 或无凭证回退，`wait=false` | GitAccessor 在后台 clone | 内置目录/代码仓库 Parser | 是 | 预检仓库并预占 URI 后返回 |
 | Git，`wait=true` | GitAccessor | 内置目录/代码仓库 Parser | 是 | 解析、落盘及语义队列完成后返回 |
 | 飞书 URL，`parser_api.enable_feishu_url=true` 且有 user/app 凭证 | Understanding 直接读取飞书 | Understanding | 是 | `wait=false` 时提交并入队；`wait=true` 时同步解析 |
 | 飞书 URL，直达配置关闭或无可用凭证 | FeishuAccessor | 内置 Markdown Parser | 是 | Accessor 拉取、归一化后走标准链 |
 | HTTP 服务请求，`wait=false`，命中 Understanding | HTTPAccessor 识别类型并上传同一份本地文件 | Understanding | 是 | 类型识别、Understanding 提交、URI 预占和入队后返回 |
 | 其他 URL、文件、目录、原始文本 | 对应 Accessor；原始文本无需 Accessor | 内置 Parser 或同步 Understanding | 是 | 至少完成解析和落盘后返回 |
 
-Connector 可处理的普通来源若带有它不支持的参数，会回退到标准链；`tos://` 没有标准 Accessor，不能回退，否则只会在更深处得到误导性的解析错误。
+Git 是 Connector 与标准链共享的来源：未命中 Connector 或参数不受支持时可回退到标准链；一旦请求带有 Connector 专用凭证则禁止回退，避免凭证进入持久化队列。`tos://` 没有标准 Accessor，不能回退，否则只会在更深处得到误导性的解析错误。
 
 ## Accessor：先把“数据在哪”变成“本地是什么”
 
@@ -260,7 +260,7 @@ ResourceService
 
 Connector 不返回本地 `ParseResult`，也不调用当前进程的 `TreeBuilder`。OpenViking 只负责校验这次请求能否无损委派、提交任务、返回 OpenViking `task_id`，再把 Connector 的终态同步到任务记录。
 
-目前 Connector 不支持的语义包括精确 `to`、`wait=true`、watch、reason/instruction、关闭建索引、摘要、strict、include/exclude 等。普通来源会回退到标准链；Connector-only 来源会立即报错。
+Connector 当前要求提供精确 `to`，不接受 `parent`；也不支持 `wait=true`、watch、instruction、关闭建索引、摘要、strict、include/exclude 等。无凭证的 Git 请求可回退到标准链；带 Connector 专用凭证的 Git 和 Connector-only 来源会立即报错，避免凭证落入本地持久化任务。
 
 ## `wait` 的准确含义
 

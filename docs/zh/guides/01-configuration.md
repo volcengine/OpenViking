@@ -595,6 +595,9 @@ provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的�
 | `thinking` | bool | 启用思考模式（仅对部分火山模型生效，默认：`false`） |
 | `max_concurrent` | int | 语义处理阶段 LLM 最大并发调用数（默认：`64`） |
 | `max_retries` | int | VLM provider 瞬时错误的最大重试次数（默认：`3`；`0` 表示禁用重试） |
+| `credentials` | array | 有序 VLM 凭据/模型列表，索引 0 优先级最高。每项可单独覆盖 `provider`、`model`、`api_key`、`api_base`、`api_version`、`extra_headers`、`extra_request_body` 和 `stream` |
+| `failback_timeout_seconds` | float | 切换到低优先级 credential 后，尝试逐级切回的时间阈值（默认：`600`） |
+| `failback_request_count` | int | 低优先级 credential 成功处理多少次请求后尝试逐级切回（默认：`50`） |
 | `backup` | object | 可选的备用 VLM 配置（结构与 `vlm` 相同），当主 VLM 遇到限流、`5xx`、超时或连接失败等可重试错误时自动切换。仅支持 1 层备用 &mdash; 备用 VLM 本身不能再嵌套 `backup` |
 | `timeout` | float | 单次 VLM API 请求的 HTTP 超时时间（秒），传递给底层 OpenAI/LiteLLM 客户端。慢端点（如 DashScope、本地推理）可调大。必须 `> 0`（默认：`600.0`） |
 | `extra_headers` | object | 兼容 HTTP provider 的自定义请求头。`kimi` 默认已注入所需订阅请求头，也支持在这里覆盖或扩展 |
@@ -787,7 +790,8 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 | `"llm"` | 全部走 LLM 生成摘要（成本较高） | |
 | `"ast_llm"` | 先提取 AST 骨架（含完整注释），再将骨架作为上下文辅助 LLM 生成摘要（质量最高，成本居中） | |
 
-AST 提取支持：Python、JavaScript/TypeScript、Rust、Go、Java、C/C++。其他语言、提取失败或骨架为空时自动 fallback 到 LLM。
+AST 提取支持：Python、JavaScript/TypeScript、Java、C/C++、Rust、Go、C#、PHP 和 Lua。
+其他语言、提取失败或骨架为空时自动 fallback 到 LLM。
 
 详见 [代码骨架提取](../concepts/06-extraction.md#代码骨架提取ast-模式)。
 

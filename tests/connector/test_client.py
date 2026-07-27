@@ -48,7 +48,7 @@ async def test_submit_doc_add_sends_controlled_payload_and_auth_headers():
         add_type="tos",
         api_key="secret",
         tos_path="bucket/prefix",
-        path_prefix=["docs"],
+        to="viking://resources/docs/report.pdf",
         include_child=False,
         extra_params={"parser": "pdf", "api_key": "must-not-leak"},
     )
@@ -62,7 +62,7 @@ async def test_submit_doc_add_sends_controlled_payload_and_auth_headers():
                 "backend": "ov",
                 "include_child": False,
                 "tos_path": "bucket/prefix",
-                "path_prefix": ["docs"],
+                "to": "viking://resources/docs/report.pdf",
                 "parser": "pdf",
             },
             "headers": {
@@ -72,6 +72,53 @@ async def test_submit_doc_add_sends_controlled_payload_and_auth_headers():
             "timeout": 30.0,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_submit_doc_add_carries_non_tos_source_in_param_config():
+    _FakeAsyncClient.response_payload = {"code": 0, "data": {"task_key": "connector-1"}}
+    client = ConnectorClient("https://connector/doc/add", "https://tracker/task/info", "acct")
+
+    await client.submit_doc_add(
+        add_type="git",
+        api_key="secret",
+        to="viking://resources/imports/repo",
+        param_config={
+            "repo_url": "https://git.example/org/repo.git",
+            "branch": "release",
+        },
+    )
+
+    payload = _FakeAsyncClient.calls[0]["json"]
+    assert payload == {
+        "add_type": "git",
+        "backend": "ov",
+        "include_child": True,
+        "to": "viking://resources/imports/repo",
+        "param_config": {
+            "repo_url": "https://git.example/org/repo.git",
+            "branch": "release",
+        },
+    }
+    assert "tos_path" not in payload
+
+
+@pytest.mark.asyncio
+async def test_submit_doc_add_keeps_credentials_out_of_param_config():
+    _FakeAsyncClient.response_payload = {"code": 0, "data": {"task_key": "connector-1"}}
+    client = ConnectorClient("https://connector/doc/add", "https://tracker/task/info", "acct")
+
+    await client.submit_doc_add(
+        add_type="git",
+        api_key="secret",
+        to="viking://resources/imports/repo",
+        param_config={"repo_url": "https://git.example/org/private.git"},
+        auth_config={"token": "ghp-secret", "username": "oauth2"},
+    )
+
+    payload = _FakeAsyncClient.calls[0]["json"]
+    assert payload["auth_config"] == {"token": "ghp-secret", "username": "oauth2"}
+    assert payload["param_config"] == {"repo_url": "https://git.example/org/private.git"}
 
 
 @pytest.mark.asyncio

@@ -4,8 +4,18 @@ import { CheckIcon, CopyIcon, UserIcon } from 'lucide-react'
 import type { TFunction } from 'i18next'
 
 import { resolvePublicAsset } from '#/lib/public-path'
-import type { Message, MessagePart, ToolPart } from '#/lib/sessions/types/message'
-import { MarkdownContent, ReasoningBlock, ToolCallBlock } from './message-parts'
+import type {
+  Message,
+  MessagePart,
+  ToolPart,
+  ToolResultPart,
+} from '#/lib/sessions/types/message'
+import {
+  IterationDivider,
+  MarkdownContent,
+  ReasoningBlock,
+  ToolCallBlock,
+} from './message-parts'
 
 const OPENVIKING_ICON_SRC = resolvePublicAsset('favicon-32.png')
 
@@ -46,6 +56,14 @@ function getTextFromParts(message: Message): string {
     .filter((p) => p.type === 'text')
     .map((p) => (p as { text: string }).text)
     .join('\n')
+}
+
+function getToolResultsById(parts: MessagePart[]): Map<string, ToolResultPart> {
+  return new Map(
+    parts
+      .filter((part): part is ToolResultPart => part.type === 'tool_result')
+      .map((part) => [part.tool_id, part]),
+  )
 }
 
 function stripPlaygroundContextSuffix(text: string): string {
@@ -92,7 +110,9 @@ function TypingIndicator() {
 function BotAvatar({ compact }: { compact?: boolean }) {
   const sizeClass = compact ? 'size-6' : 'size-7'
   return (
-    <div className={`flex ${sizeClass} shrink-0 items-center justify-center rounded-full ring-1 ring-border/20 overflow-hidden`}>
+    <div
+      className={`flex ${sizeClass} shrink-0 items-center justify-center rounded-full ring-1 ring-border/20 overflow-hidden`}
+    >
       <img src={OPENVIKING_ICON_SRC} alt="OpenViking" className={sizeClass} />
     </div>
   )
@@ -171,7 +191,7 @@ const UserMessage = memo(function UserMessage({
 
   return (
     <div
-      className={`${expanded ? 'w-full' : 'w-full max-w-3xl'} group/msg flex gap-2 justify-end ${compact ? 'mb-1.5' : 'mb-5'}`}
+      className={`${expanded ? 'w-full' : 'w-full max-w-[clamp(48rem,68vw,72rem)]'} group/msg flex gap-2 justify-end ${compact ? 'mb-1.5' : 'mb-5'}`}
     >
       <div className="flex items-end gap-1.5 self-end opacity-0 transition-opacity group-hover/msg:opacity-100">
         <span className="text-[10px] text-muted-foreground/40 opacity-0 transition-opacity group-hover/msg:opacity-100 select-none">
@@ -179,7 +199,11 @@ const UserMessage = memo(function UserMessage({
         </span>
         <CopyButton text={text} />
       </div>
-      <div className={expanded ? 'max-w-[88%] space-y-1.5' : 'max-w-[75%] space-y-1.5'}>
+      <div
+        className={
+          expanded ? 'max-w-[88%] space-y-1.5' : 'max-w-[75%] space-y-1.5'
+        }
+      >
         {text && (
           <div className="whitespace-pre-wrap rounded-2xl rounded-tr-sm border border-border/70 bg-muted/70 px-4 py-2.5 text-sm leading-6 text-foreground shadow-sm">
             {text}
@@ -213,13 +237,18 @@ const AssistantMessage = memo(function AssistantMessage({
 }) {
   const { t } = useTranslation('sessions')
   const textContent = getTextFromParts(message)
+  const toolResultsById = getToolResultsById(message.parts)
 
   return (
     <div
-      className={`${expanded ? 'w-full' : 'w-full max-w-3xl'} group/msg flex gap-2 items-start ${compact ? 'mb-1.5' : 'mb-5'}`}
+      className={`${expanded ? 'w-full' : 'w-full max-w-[clamp(48rem,68vw,72rem)]'} group/msg flex gap-2 items-start ${compact ? 'mb-1.5' : 'mb-5'}`}
     >
-      {!compact ? <BotAvatar compact={expanded} /> : <div className="w-6 shrink-0" />}
-      <div className="relative max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-background/95 px-4 py-3 text-sm shadow-sm ring-1 ring-border/30">
+      {!compact ? (
+        <BotAvatar compact={expanded} />
+      ) : (
+        <div className="w-6 shrink-0" />
+      )}
+      <div className="relative max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm border border-border bg-muted/30 px-4 py-3 text-sm shadow-md shadow-black/5 dark:border-white/10 dark:bg-card/95 dark:shadow-black/30">
         {(Array.isArray(message.parts) ? message.parts : []).map((part, i) => {
           switch (part.type) {
             case 'text':
@@ -232,18 +261,24 @@ const AssistantMessage = memo(function AssistantMessage({
                   isRunning={false}
                 />
               )
-            case 'tool':
+            case 'iteration':
+              return <IterationDivider key={i} iteration={part.iteration} />
+            case 'tool': {
+              const toolResult = toolResultsById.get(part.tool_id)
               return (
                 <ToolCallBlock
                   key={i}
                   toolName={part.tool_name}
                   args={part.tool_input}
-                  result={part.tool_output}
-                  isError={part.tool_status === 'error'}
+                  result={toolResult?.tool_output ?? part.tool_output}
+                  isError={toolResult?.is_error ?? part.tool_status === 'error'}
                   isRunning={false}
                   onResourceClick={onResourceClick}
                 />
               )
+            }
+            case 'tool_result':
+              return null
             case 'context':
               return null
           }
@@ -266,35 +301,27 @@ const AssistantMessage = memo(function AssistantMessage({
 function StreamingAssistantMessage({
   expanded,
   parts = [],
-  iteration,
   onResourceClick,
 }: {
   expanded?: boolean
   parts?: MessagePart[]
-  iteration: number
   onResourceClick?: (uri: string) => void
 }) {
-  const { t } = useTranslation('sessions')
   const safeParts = Array.isArray(parts) ? parts : []
   const hasContent = safeParts.length > 0
+  const toolResultsById = getToolResultsById(safeParts)
 
   return (
-    <div className={`${expanded ? 'w-full' : 'w-full max-w-3xl'} mb-5 flex gap-2 items-start`}>
+    <div
+      className={`${expanded ? 'w-full' : 'w-full max-w-[clamp(48rem,68vw,72rem)]'} mb-5 flex gap-2 items-start`}
+    >
       <BotAvatar compact={expanded} />
-      <div className="max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-background/95 px-4 py-3 text-sm shadow-sm ring-1 ring-border/30">
-        {iteration > 1 && (
-          <div className="mb-2">
-            <span className="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-0.5 text-[11px] font-medium text-primary">
-              {t('chat.iteration', { count: iteration })}
-            </span>
-          </div>
+      <div className="max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm border border-border bg-muted/30 px-4 py-3 text-sm shadow-md shadow-black/5 dark:border-white/10 dark:bg-card/95 dark:shadow-black/30">
+        {safeParts.map((part, i) =>
+          renderStreamingPart(part, i, toolResultsById, onResourceClick),
         )}
 
-        {safeParts.map((part, i) => renderStreamingPart(part, i, onResourceClick))}
-
-        {!hasContent ? (
-          <TypingIndicator />
-        ) : null}
+        {!hasContent ? <TypingIndicator /> : null}
       </div>
     </div>
   )
@@ -303,6 +330,7 @@ function StreamingAssistantMessage({
 function renderStreamingPart(
   part: MessagePart,
   index: number,
+  toolResultsById: Map<string, ToolResultPart>,
   onResourceClick?: (uri: string) => void,
 ) {
   switch (part.type) {
@@ -314,14 +342,19 @@ function renderStreamingPart(
           isRunning={part.is_running ?? true}
         />
       )
+    case 'iteration':
+      return <IterationDivider key={index} iteration={part.iteration} />
     case 'tool':
       return (
         <StreamingToolPart
           key={index}
           part={part}
+          result={toolResultsById.get(part.tool_id)}
           onResourceClick={onResourceClick}
         />
       )
+    case 'tool_result':
+      return null
     case 'text':
       return <MarkdownContent key={index} content={part.text} isStreaming />
     case 'context':
@@ -331,18 +364,22 @@ function renderStreamingPart(
 
 function StreamingToolPart({
   part,
+  result,
   onResourceClick,
 }: {
   part: ToolPart
+  result?: ToolResultPart
   onResourceClick?: (uri: string) => void
 }) {
   return (
     <ToolCallBlock
       toolName={part.tool_name}
       args={part.tool_input}
-      result={part.tool_output}
-      isError={part.tool_status === 'error'}
-      isRunning={part.tool_status === 'running' || part.tool_status === 'pending'}
+      result={result?.tool_output ?? part.tool_output}
+      isError={result?.is_error ?? part.tool_status === 'error'}
+      isRunning={
+        part.tool_status === 'running' || part.tool_status === 'pending'
+      }
       onResourceClick={onResourceClick}
     />
   )

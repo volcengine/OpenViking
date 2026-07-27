@@ -2,7 +2,7 @@
 
 OpenViking exposes a `/metrics` endpoint for Prometheus, Grafana Agent, and other monitoring systems that scrape Prometheus exposition text.
 
-Unlike `/api/v1/observer/*` and `/api/v1/stats/*`, `/metrics` is intended for:
+Unlike `/api/v1/observer/*`, `/metrics` is intended for:
 
 - machine scraping rather than human-oriented inspection
 - Prometheus exposition text rather than the standard JSON API wrapper
@@ -78,7 +78,6 @@ If your deployment protects `/metrics` at the gateway layer, configure the scrap
 
 - `/metrics` is meant for frequent scraping, so the exported metrics should remain low-cardinality and low-cost.
 - `/metrics` returns Prometheus text, not the standard OpenViking `{status, result, time}` JSON response format.
-- Analytics-oriented statistics such as memory health, staleness, or session extraction should remain under `/api/v1/stats/*`, not `/metrics`.
 - For human-readable component snapshots, prefer `/api/v1/observer/*`.
 - `/metrics` also includes VikingBot feedback observability metrics derived from scrape-time aggregation of persisted session data; see the Metrics concept documentation for the feedback metric families and examples.
 

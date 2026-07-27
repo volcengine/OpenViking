@@ -9,7 +9,11 @@ import type { FindResultItem, GroupedFindResult } from '#/lib/retrieval'
 
 import { cleanVikingUri } from '#/lib/viking-uri'
 
-import { ROOT_URI, PLAYGROUND_AGENT_SESSIONS_STORAGE_KEY } from './constants'
+import {
+  ROOT_URI,
+  PLAYGROUND_AGENT_SESSIONS_STORAGE_KEY,
+  PLAYGROUND_EXPANDED_URIS_STORAGE_KEY,
+} from './constants'
 import type { ResourceRef } from './types'
 
 export { cleanVikingUri }
@@ -144,6 +148,33 @@ export function registerPlaygroundAgentSessionId(
   )
 
   return next
+}
+
+export function readPlaygroundExpandedUris(identityScopeKey: string): string[] {
+  return readStoredJsonArray(
+    createIdentityStorageKey(
+      PLAYGROUND_EXPANDED_URIS_STORAGE_KEY,
+      identityScopeKey,
+    ),
+    (uri) =>
+      typeof uri === 'string' && uri.startsWith(ROOT_URI)
+        ? normalizeDirUri(uri)
+        : undefined,
+    500,
+  )
+}
+
+export function writePlaygroundExpandedUris(
+  identityScopeKey: string,
+  uris: Iterable<string>,
+): void {
+  writeStoredJson(
+    createIdentityStorageKey(
+      PLAYGROUND_EXPANDED_URIS_STORAGE_KEY,
+      identityScopeKey,
+    ),
+    [...uris],
+  )
 }
 
 export function createEntryFromUri(uri: string, isDir: boolean): VikingFsEntry {

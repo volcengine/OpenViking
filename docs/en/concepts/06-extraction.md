@@ -161,10 +161,13 @@ The following languages have dedicated extractors built on tree-sitter:
 |----------|--------|
 | Python | Supported |
 | JavaScript / TypeScript | Supported |
-| Rust | Supported |
-| Go | Supported |
 | Java | Supported |
 | C / C++ | Supported |
+| Rust | Supported |
+| Go | Supported |
+| C# | Supported |
+| PHP | Supported |
+| Lua | Supported |
 
 Other languages automatically fall back to LLM.
 

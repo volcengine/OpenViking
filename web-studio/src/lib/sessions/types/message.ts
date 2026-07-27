@@ -11,6 +11,12 @@ export interface ReasoningPart {
   is_running?: boolean
 }
 
+/** Agent-loop iteration marker used by the event timeline UI. */
+export interface IterationPart {
+  type: 'iteration'
+  iteration: number
+}
+
 /** Context reference part (memory / resource / skill). */
 export interface ContextPart {
   type: 'context'
@@ -34,7 +40,22 @@ export interface ToolPart {
   completion_tokens?: number
 }
 
-export type MessagePart = TextPart | ReasoningPart | ContextPart | ToolPart
+/** Tool result event kept separately to preserve SSE arrival order in the UI. */
+export interface ToolResultPart {
+  type: 'tool_result'
+  tool_id: string
+  tool_name: string
+  tool_output: string
+  is_error: boolean
+}
+
+export type MessagePart =
+  | TextPart
+  | ReasoningPart
+  | IterationPart
+  | ContextPart
+  | ToolPart
+  | ToolResultPart
 
 /** A single message in a session (matches backend Message.to_dict()). */
 export interface Message {

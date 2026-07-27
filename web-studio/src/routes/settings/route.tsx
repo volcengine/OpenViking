@@ -191,7 +191,6 @@ function ConnectionSettingsRoute() {
     retry: false,
     staleTime: 15_000,
   })
-
   const isDevMode = serverMode === 'dev'
   const rootApiKey = connection.adminApiKey.trim()
   const hasControlCredential = Boolean(draft.adminApiKey.trim())

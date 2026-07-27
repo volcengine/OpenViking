@@ -10,6 +10,7 @@ import {
   RefreshCwIcon,
   RotateCwIcon,
   ShieldAlertIcon,
+  Trash2Icon,
   UsersRoundIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -49,6 +50,11 @@ import {
   TableRow,
 } from '#/components/ui/table'
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '#/components/ui/tooltip'
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -63,6 +69,7 @@ import {
   createAdminUser,
   fetchAdminUsers,
   regenerateAdminUserKey,
+  removeAdminUser,
   updateAdminUserRole,
 } from '#/lib/admin'
 import type {
@@ -118,6 +125,8 @@ function UserManagementRoute() {
   } = useAppConnection()
   const [addUserOpen, setAddUserOpen] = React.useState(false)
   const [pendingRegenerateUser, setPendingRegenerateUser] =
+    React.useState<AdminUser | null>(null)
+  const [pendingRemoveUser, setPendingRemoveUser] =
     React.useState<AdminUser | null>(null)
   const [pendingRoleChange, setPendingRoleChange] =
     React.useState<UpdateUserRoleInput | null>(null)
@@ -223,6 +232,18 @@ function UserManagementRoute() {
     },
   })
 
+  const removeUser = useMutation({
+    mutationFn: (user: AdminUser) =>
+      removeAdminUser(adminConnection, user.accountId, user.userId),
+    onError: (error) => toast.error(getErrorMessage(error)),
+    onSuccess: async (_, user) => {
+      setPendingRemoveUser(null)
+      toast.success(t('toast.userRemoved', { user: user.userId }))
+      await queryClient.invalidateQueries({ queryKey: ['managed-users'] })
+      await queryClient.invalidateQueries({ queryKey: ['account-switcher'] })
+    },
+  })
+
   async function copyKey(value: string | undefined): Promise<void> {
     if (!value) {
       return
@@ -291,6 +312,9 @@ function UserManagementRoute() {
   }
 
   const users = usersQuery.data ?? []
+  const managerCount = users.filter(
+    (user) => user.role === 'admin' || user.role === 'root',
+  ).length
   const visibleKeys = users.filter(
     (user) => user.apiKey || user.keyPrefix,
   ).length
@@ -415,6 +439,16 @@ function UserManagementRoute() {
                       user.accountId === connection.accountId &&
                       user.userId === connection.userId
                     const isSwitching = switchingIdentityKey === identityKey
+                    const isLastManager =
+                      (user.role === 'admin' || user.role === 'root') &&
+                      managerCount <= 1
+                    const removeDisabled =
+                      isCurrentIdentity || isLastManager || removeUser.isPending
+                    const removeDisabledReason = isCurrentIdentity
+                      ? t('management.cannotRemoveCurrentIdentity')
+                      : isLastManager
+                        ? t('management.cannotRemoveLastManager')
+                        : t('actions.removeUser', { user: user.userId })
 
                     return (
                       <TableRow
@@ -487,25 +521,60 @@ function UserManagementRoute() {
                           )}
                         </TableCell>
                         <TableCell>
-                          <div className="flex min-w-0 items-center gap-2">
+                          <div className="flex min-w-0 items-center gap-1">
                             <code className="max-w-[20rem] truncate rounded-md border bg-muted/40 px-2 py-1 font-mono text-xs">
                               {resolveKeyLabel(user)}
                             </code>
                             {user.apiKey ? (
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon-xs"
-                                aria-label={t('actions.copy')}
-                                onClick={() => void copyKey(user.apiKey)}
-                              >
-                                <CopyIcon />
-                              </Button>
+                              <Tooltip>
+                                <TooltipTrigger
+                                  render={
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon-xs"
+                                      aria-label={t('actions.copy')}
+                                      onClick={() => void copyKey(user.apiKey)}
+                                    />
+                                  }
+                                >
+                                  <CopyIcon />
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  {t('actions.copy')}
+                                </TooltipContent>
+                              </Tooltip>
                             ) : null}
+                            <div className="ml-1 flex items-center border-l border-border/70 pl-1.5">
+                              <Tooltip>
+                                <TooltipTrigger
+                                  render={
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon-xs"
+                                      aria-label={t('actions.regenerate')}
+                                      onClick={() =>
+                                        setPendingRegenerateUser(user)
+                                      }
+                                      disabled={
+                                        regenerateKey.isPending ||
+                                        Boolean(switchingIdentityKey)
+                                      }
+                                    />
+                                  }
+                                >
+                                  <RotateCwIcon />
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  {t('actions.regenerate')}
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
                           </div>
                         </TableCell>
                         <TableCell>
-                          <div className="flex justify-end gap-2">
+                          <div className="flex items-center justify-end gap-1">
                             {user.apiKey && !isCurrentIdentity ? (
                               <Button
                                 type="button"
@@ -521,20 +590,41 @@ function UserManagementRoute() {
                                 )}
                                 {t('actions.switchIdentity')}
                               </Button>
+                            ) : isCurrentIdentity ? (
+                              <span
+                                aria-hidden="true"
+                                className="px-3 text-muted-foreground/45"
+                              >
+                                —
+                              </span>
                             ) : null}
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              onClick={() => setPendingRegenerateUser(user)}
-                              disabled={
-                                regenerateKey.isPending ||
-                                Boolean(switchingIdentityKey)
-                              }
-                            >
-                              <RotateCwIcon />
-                              {t('actions.regenerate')}
-                            </Button>
+                            <Tooltip>
+                              <TooltipTrigger
+                                render={
+                                  <span
+                                    className="inline-flex"
+                                    title={removeDisabledReason}
+                                  />
+                                }
+                              >
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon-sm"
+                                  disabled={removeDisabled}
+                                  className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                                  aria-label={t('actions.removeUser', {
+                                    user: user.userId,
+                                  })}
+                                  onClick={() => setPendingRemoveUser(user)}
+                                >
+                                  <Trash2Icon />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                {removeDisabledReason}
+                              </TooltipContent>
+                            </Tooltip>
                           </div>
                         </TableCell>
                       </TableRow>
@@ -628,6 +718,49 @@ function UserManagementRoute() {
                 <LoaderCircleIcon className="animate-spin" />
               ) : null}
               {t('actions.confirmRoleChange')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={Boolean(pendingRemoveUser)}
+        onOpenChange={(open) => {
+          if (!open && !removeUser.isPending) {
+            setPendingRemoveUser(null)
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('dialogs.removeUser.title')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('dialogs.removeUser.description', {
+                account: pendingRemoveUser?.accountId,
+                user: pendingRemoveUser?.userId,
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={removeUser.isPending}>
+              {t('actions.cancel')}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={removeUser.isPending}
+              onClick={(event) => {
+                event.preventDefault()
+                if (pendingRemoveUser) {
+                  removeUser.mutate(pendingRemoveUser)
+                }
+              }}
+            >
+              {removeUser.isPending ? (
+                <LoaderCircleIcon className="animate-spin" />
+              ) : (
+                <Trash2Icon />
+              )}
+              {t('actions.confirmRemoveUser')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

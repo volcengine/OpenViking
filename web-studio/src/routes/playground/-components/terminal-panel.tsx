@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import {
   ArrowRightIcon,
@@ -7,7 +8,6 @@ import {
   Loader2Icon,
   SendIcon,
   SparklesIcon,
-  TerminalIcon,
   TrashIcon,
   XCircleIcon,
 } from 'lucide-react'
@@ -450,6 +450,7 @@ export function TerminalPanel({
   openingUri,
   onSessionChange,
   sessionId,
+  toolbarContainer,
 }: {
   currentUri: string
   entries: VikingFsEntry[]
@@ -458,6 +459,7 @@ export function TerminalPanel({
   openingUri: string | null
   onSessionChange: (sessionId: string) => void
   sessionId?: string
+  toolbarContainer: HTMLDivElement | null
 }) {
   const { t } = useTranslation('playground')
   const { connectionRole, identityScopeKey } = useAppConnection()
@@ -1373,31 +1375,30 @@ export function TerminalPanel({
 
   return (
     <>
+      {toolbarContainer
+        ? createPortal(
+            <>
+              <span
+                className="min-w-0 max-w-40 truncate rounded-md border bg-muted/40 px-2 py-1 font-mono text-[11px] text-foreground"
+                title={currentUri}
+              >
+                {t('terminal.scopeLabel', { uri: currentUri })}
+              </span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className="size-7 shrink-0"
+                title={t('terminal.history')}
+                onClick={() => setHistoryOpen(true)}
+              >
+                <HistoryIcon className="size-3.5" />
+              </Button>
+            </>,
+            toolbarContainer,
+          )
+        : null}
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="border-b bg-background/70 px-4 py-3">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <TerminalIcon className="size-3.5 shrink-0" />
-            <span className="min-w-0 flex-1 truncate">
-              {t('terminal.header')}
-            </span>
-            <span
-              className="min-w-0 max-w-[60%] truncate rounded-md border bg-muted/40 px-2 py-1 font-mono text-[11px] text-foreground"
-              title={currentUri}
-            >
-              {t('terminal.scopeLabel', { uri: currentUri })}
-            </span>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              className="size-7 shrink-0"
-              title={t('terminal.history')}
-              onClick={() => setHistoryOpen(true)}
-            >
-              <HistoryIcon className="size-3.5" />
-            </Button>
-          </div>
-        </div>
         <div
           ref={scrollRef}
           className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
