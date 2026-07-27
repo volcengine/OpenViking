@@ -123,16 +123,30 @@ middleware = OpenVikingContextMiddleware(
 当应用已经自行管理会话生命周期，只需要复用 OpenViking 持久化能力时，可使用 recorder：
 
 ```python
-from openviking.integrations.langchain import OpenVikingSessionRecorder
+from openviking.integrations.langchain import (
+    OpenVikingPartialWriteError,
+    OpenVikingSessionRecorder,
+)
 
 recorder = OpenVikingSessionRecorder(url="http://localhost:1933", api_key="...")
-recorder.record("support-thread-1", messages, peer_id="assistant-a")
+try:
+    recorder.record("support-thread-1", messages, peer_id="assistant-a")
+except OpenVikingPartialWriteError as exc:
+    recorder.record(
+        "support-thread-1",
+        messages[exc.input_messages_consumed :],
+        peer_id="assistant-a",
+    )
 recorder.flush("support-thread-1")
 recorder.close()
 ```
 
 `record()` 只写入调用方传入的消息；它会过滤框架控制消息、按服务端限制分批写入，并应用已配置的
-commit 策略。`flush()` 仅在 session 存在待提交内容时强制 commit。
+commit 策略。如果后续批次或写入后的 commit 失败，`OpenVikingPartialWriteError` 会报告已经
+确认写入的输入前缀，调用方可仅重试尚未写入的后缀；空后缀会安全地重试待完成的 commit。
+传入 `context_parts` 时，仅在 `exc.context_attached` 为 false 时重传。`flush()` 仅在 session
+存在待提交内容时强制 commit。`close()` 后 recorder 不可复用；由调用方注入的 client
+仍归调用方管理。
 
 ## 运行示例
 

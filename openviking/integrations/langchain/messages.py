@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from copy import deepcopy
 from typing import Any
 
 try:
@@ -31,8 +32,6 @@ def is_recordable_langchain_message(message: BaseMessage) -> bool:
 
     if isinstance(message, SystemMessage):
         return False
-    if OPENVIKING_CONTEXT_MARKER in extract_message_text(getattr(message, "content", "")):
-        return False
     additional_kwargs = getattr(message, "additional_kwargs", {}) or {}
     if additional_kwargs.get("lc_source") == LANGCHAIN_SUMMARIZATION_SOURCE:
         return False
@@ -43,6 +42,15 @@ def is_recordable_langchain_message(message: BaseMessage) -> bool:
             or additional_kwargs.get("tool_calls")
         )
     return bool(langchain_message_to_openviking(message))
+
+
+def is_context_carrier_langchain_message(message: BaseMessage) -> bool:
+    """Return whether an otherwise-empty assistant can carry recalled context."""
+
+    if not isinstance(message, AIMessage):
+        return False
+    additional_kwargs = getattr(message, "additional_kwargs", {}) or {}
+    return additional_kwargs.get("lc_source") != LANGCHAIN_SUMMARIZATION_SOURCE
 
 
 def langchain_message_to_openviking(
@@ -190,8 +198,8 @@ def _tool_args(value: Any) -> dict[str, Any]:
     if value is None:
         return {}
     if isinstance(value, dict):
-        return value
-    return {"value": value}
+        return deepcopy(value)
+    return {"value": deepcopy(value)}
 
 
 def _tool_status(message: ToolMessage) -> str:

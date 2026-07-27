@@ -29,7 +29,10 @@ from openviking.integrations.langchain.messages import (
 from openviking.integrations.langchain.messages import (
     restore_openviking_messages,
 )
-from openviking.integrations.langchain.recording import OpenVikingSessionRecorder
+from openviking.integrations.langchain.recording import (
+    OpenVikingPartialWriteError,
+    OpenVikingSessionRecorder,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +59,7 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
         persist_system_messages: bool = False,
         commit_policy: OpenVikingCommitPolicy | None = None,
         context_parts_provider: Callable[[str], list[dict[str, Any]]] | None = None,
+        context_parts_acknowledger: Callable[[str], None] | None = None,
         peer_id: str | None = None,
         peer_id_provider: Callable[[str], str | None] | None = None,
     ):
@@ -67,6 +71,8 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
         # policy, not conversation memory, so they are never persisted.
         self.persist_system_messages = False
         self.context_parts_provider = context_parts_provider
+        self.context_parts_acknowledger = context_parts_acknowledger
+        self._pending_context_parts: list[dict[str, Any]] = []
         self._recorder = OpenVikingSessionRecorder(
             client=client,
             url=url,
@@ -110,26 +116,32 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
         return restore_openviking_messages(context.get("messages") or [])
 
     def add_messages(self, messages: Sequence[BaseMessage]) -> None:
-        context_parts = (
-            list(self.context_parts_provider(self.session_id))
-            if self.context_parts_provider
-            else []
-        )
-        self._recorder.record(
-            self.session_id,
-            messages,
-            peer_id=self._effective_peer_id(),
-            context_parts=context_parts,
-        )
+        if not self._pending_context_parts and self.context_parts_provider:
+            self._pending_context_parts = list(self.context_parts_provider(self.session_id))
+        try:
+            result = self._recorder.record(
+                self.session_id,
+                messages,
+                peer_id=self._effective_peer_id(),
+                context_parts=self._pending_context_parts,
+            )
+        except OpenVikingPartialWriteError as exc:
+            if exc.context_attached:
+                self._acknowledge_context_parts()
+            raise
+        if result.context_attached:
+            self._acknowledge_context_parts()
 
     def clear(self) -> None:
         client = self._get_client()
         call_openviking(client, "delete_session", session_id=self.session_id)
         self._ensure_session(client)
+        self._acknowledge_context_parts()
 
     def close(self) -> None:
         """Release resources owned by this history adapter."""
 
+        self._acknowledge_context_parts()
         self._recorder.close()
 
     def _get_client(self) -> Any:
@@ -151,6 +163,19 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
             return None
         text = str(value).strip()
         return text or None
+
+    def _acknowledge_context_parts(self) -> None:
+        had_pending_context = bool(self._pending_context_parts)
+        self._pending_context_parts = []
+        if not had_pending_context or self.context_parts_acknowledger is None:
+            return
+        try:
+            self.context_parts_acknowledger(self.session_id)
+        except Exception:
+            logger.warning(
+                "OpenViking context-parts acknowledgement failed",
+                exc_info=True,
+            )
 
 
 def context_parts_from_documents(documents: Sequence[Any]) -> list[dict[str, Any]]:

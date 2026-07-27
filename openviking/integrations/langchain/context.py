@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
@@ -268,6 +269,18 @@ def with_openviking_context(
     active_peer_ids: dict[str, str | None] = {}
 
     def make_history(active_session_id: str) -> OpenVikingChatMessageHistory:
+        def pending_key(current_session_id: str) -> tuple[str, str]:
+            return _pending_context_key(
+                current_session_id,
+                active_peer_ids.get(current_session_id, peer_id),
+            )
+
+        def provide_context_parts(current_session_id: str) -> list[dict[str, Any]]:
+            return list(pending_context_parts.get(pending_key(current_session_id), []))
+
+        def acknowledge_context_parts(current_session_id: str) -> None:
+            pending_context_parts.pop(pending_key(current_session_id), None)
+
         return OpenVikingChatMessageHistory(
             session_id=active_session_id,
             peer_id=peer_id,
@@ -288,22 +301,22 @@ def with_openviking_context(
             auto_initialize=auto_initialize,
             token_budget=token_budget,
             commit_policy=commit_policy,
-            context_parts_provider=lambda current_session_id: pending_context_parts.pop(
-                _pending_context_key(
-                    current_session_id,
-                    active_peer_ids.get(current_session_id, peer_id),
-                ),
-                [],
-            ),
+            context_parts_provider=provide_context_parts,
+            context_parts_acknowledger=acknowledge_context_parts,
         )
 
     if session_id is None:
 
-        def session_history_factory(resolved_session_id: str) -> OpenVikingChatMessageHistory:
+        def dynamic_session_history_factory(
+            resolved_session_id: str,
+        ) -> OpenVikingChatMessageHistory:
             return make_history(
                 _validate_session_id(resolved_session_id, key=session_id_config_key)
             )
 
+        session_history_factory: Callable[..., OpenVikingChatMessageHistory] = (
+            dynamic_session_history_factory
+        )
         history_factory_config = [
             ConfigurableFieldSpec(
                 id=session_id_config_key,
@@ -316,9 +329,10 @@ def with_openviking_context(
         ]
     else:
 
-        def session_history_factory() -> OpenVikingChatMessageHistory:
+        def fixed_session_history_factory() -> OpenVikingChatMessageHistory:
             return make_history(session_id)
 
+        session_history_factory = fixed_session_history_factory
         history_factory_config = None
 
     def inject(input_value: Any, config: dict[str, Any] | None = None) -> Any:

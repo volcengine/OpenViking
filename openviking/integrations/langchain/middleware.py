@@ -24,12 +24,14 @@ except ImportError as exc:  # pragma: no cover - exercised by optional import pa
 
 from openviking.integrations.langchain.client import (
     OpenVikingCommitPolicy,
-    apply_commit_policy,
     extract_message_text,
     get_latest_user_text,
 )
 from openviking.integrations.langchain.context import OpenVikingSessionContextAssembler
-from openviking.integrations.langchain.recording import OpenVikingSessionRecorder
+from openviking.integrations.langchain.recording import (
+    OpenVikingPartialWriteError,
+    OpenVikingSessionRecorder,
+)
 from openviking.integrations.langchain.retrievers import OpenVikingRetriever
 
 _SESSION_ID_ERROR = (
@@ -177,6 +179,8 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         current_signatures = tuple(_message_signature(message) for message in messages)
 
         if current_signatures == previous_signatures:
+            self.recorder.commit_policy = self.commit_policy
+            self.recorder.record(session_id, ())
             self._pending_context_parts.pop(capture_key, None)
             return None
         start = 0
@@ -187,26 +191,26 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         ):
             start = len(previous_signatures)
 
-        added = 0
         pending_context_parts = list(self._pending_context_parts.get(capture_key, []))
-        for chunk_start in range(start, len(messages), self.recorder.batch_size):
-            chunk_end = min(chunk_start + self.recorder.batch_size, len(messages))
+        self.recorder.commit_policy = self.commit_policy
+        try:
             result = self.recorder.record(
                 session_id,
-                messages[chunk_start:chunk_end],
+                messages[start:],
                 peer_id=peer_id,
                 context_parts=pending_context_parts,
             )
-            added += result.messages_written
-            self._captured_signatures[capture_key] = current_signatures[:chunk_end]
-            if result.context_attached:
-                pending_context_parts = []
+        except OpenVikingPartialWriteError as exc:
+            if exc.input_messages_consumed:
+                consumed_end = start + exc.input_messages_consumed
+                self._captured_signatures[capture_key] = current_signatures[:consumed_end]
+            if exc.context_attached:
                 self._pending_context_parts.pop(capture_key, None)
+            raise
 
-        self._pending_context_parts.pop(capture_key, None)
         self._captured_signatures[capture_key] = current_signatures
-        if added:
-            apply_commit_policy(self.recorder.client, session_id, self.commit_policy)
+        if result.context_attached:
+            self._pending_context_parts.pop(capture_key, None)
         return None
 
     def _resolve_session_id(self, state: dict[str, Any], runtime: Any) -> str:

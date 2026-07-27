@@ -16,6 +16,7 @@ from openviking.integrations.langchain import (
     InMemoryOpenVikingClient,
     OpenVikingChatMessageHistory,
     OpenVikingContextMiddleware,
+    with_openviking_context,
 )
 
 
@@ -66,6 +67,49 @@ def test_real_runnable_with_message_history_records_each_turn_as_one_batch():
     assert response.content == "I remember azure."
     assert client.batch_sizes == [2, 2]
     assert len(client.sessions["real-history-recorder"]) == 4
+
+
+def test_real_runnable_with_message_history_preserves_context_marker_text():
+    client = BatchTrackingClient()
+    app = RunnableWithMessageHistory(
+        RunnableLambda(lambda _messages: AIMessage(content="Literal marker preserved.")),
+        lambda session_id: OpenVikingChatMessageHistory(
+            session_id=session_id,
+            client=client,
+        ),
+    )
+
+    app.invoke(
+        [HumanMessage(content="How do I write <openviking_context> literally?")],
+        config={"configurable": {"session_id": "real-history-marker"}},
+    )
+
+    stored = client.sessions["real-history-marker"]
+    assert [message["role"] for message in stored] == ["user", "assistant"]
+    assert stored[0]["parts"][0]["text"] == ("How do I write <openviking_context> literally?")
+
+
+def test_real_openviking_context_wrapper_attributes_context_to_empty_assistant():
+    client = BatchTrackingClient()
+    client.records["viking://resources/runbooks/empty.md"] = "The deployment color is azure."
+
+    def answer(messages: list[BaseMessage]) -> AIMessage:
+        assert "The deployment color is azure." in str(messages[0].content)
+        return AIMessage(content="")
+
+    app = with_openviking_context(
+        RunnableLambda(answer),
+        client=client,
+        session_id="real-empty-assistant",
+        target_uri="viking://resources",
+    )
+
+    app.invoke([HumanMessage(content="What is the deployment color?")])
+
+    stored = client.sessions["real-empty-assistant"]
+    assert [message["role"] for message in stored] == ["user", "assistant"]
+    assert not any(part["type"] == "context" for part in stored[0]["parts"])
+    assert any(part["type"] == "context" for part in stored[1]["parts"])
 
 
 def test_real_create_agent_records_through_middleware_recorder():

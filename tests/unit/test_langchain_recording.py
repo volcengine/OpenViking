@@ -6,7 +6,13 @@ import pytest
 
 pytest.importorskip("langchain_core")
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 
 import openviking.integrations.langchain.recording as recording_module
 from openviking.integrations.langchain import (
@@ -14,6 +20,7 @@ from openviking.integrations.langchain import (
     OpenVikingChatMessageHistory,
     OpenVikingCommitPolicy,
     OpenVikingContextMiddleware,
+    OpenVikingPartialWriteError,
     OpenVikingRecordResult,
     OpenVikingSessionRecorder,
 )
@@ -65,10 +72,6 @@ def test_recorder_filters_framework_control_messages_and_preserves_tool_parts():
                 content="Here is a summary of the conversation to date.",
                 additional_kwargs={"lc_source": "summarization"},
             ),
-            HumanMessage(
-                content=f"{OPENVIKING_CONTEXT_MARKER}\nInjected context\n</openviking_context>"
-            ),
-            AIMessage(content=""),
             HumanMessage(content="Find the deployment notes."),
             AIMessage(
                 content="Searching.",
@@ -109,6 +112,109 @@ def test_recorder_filters_framework_control_messages_and_preserves_tool_parts():
     ]
 
 
+def test_recorder_preserves_user_text_containing_context_marker():
+    client = TrackingOpenVikingClient()
+    recorder = OpenVikingSessionRecorder(client=client)
+
+    result = recorder.record(
+        "recorder-user-marker",
+        [
+            HumanMessage(content=f"How do I escape {OPENVIKING_CONTEXT_MARKER} in my prompt?"),
+            AIMessage(content="Use it as literal text."),
+        ],
+    )
+
+    assert result.messages_written == 2
+    assert [message["parts"][0]["text"] for message in client.sessions["recorder-user-marker"]] == [
+        "How do I escape <openviking_context> in my prompt?",
+        "Use it as literal text.",
+    ]
+
+
+def test_recorder_uses_empty_assistant_as_context_carrier():
+    client = TrackingOpenVikingClient()
+    recorder = OpenVikingSessionRecorder(client=client)
+    context_parts = [
+        {
+            "type": "context",
+            "uri": "viking://user/memories/context-carrier.md",
+            "context_type": "memory",
+        }
+    ]
+
+    result = recorder.record(
+        "recorder-empty-assistant",
+        [
+            HumanMessage(content="Use recalled context."),
+            AIMessage(content=""),
+        ],
+        context_parts=context_parts,
+    )
+
+    assert result.messages_written == 2
+    assert result.input_messages_consumed == 2
+    assert result.context_attached is True
+    stored = client.sessions["recorder-empty-assistant"]
+    assert [message["role"] for message in stored] == ["user", "assistant"]
+    assert [part["type"] for part in stored[1]["parts"]] == ["text", "context"]
+    assert not any(part["type"] == "context" for part in stored[0]["parts"])
+
+
+def test_recorder_leaves_context_unattached_without_assistant_payload():
+    client = TrackingOpenVikingClient()
+    recorder = OpenVikingSessionRecorder(client=client)
+
+    result = recorder.record(
+        "recorder-user-only-context",
+        [HumanMessage(content="No assistant response yet.")],
+        context_parts=[
+            {
+                "type": "context",
+                "uri": "viking://user/memories/pending.md",
+                "context_type": "memory",
+            }
+        ],
+    )
+
+    assert result.messages_written == 1
+    assert result.context_attached is False
+    assert client.sessions["recorder-user-only-context"][0]["role"] == "user"
+    assert not any(
+        part["type"] == "context"
+        for part in client.sessions["recorder-user-only-context"][0]["parts"]
+    )
+
+
+def test_recorder_does_not_attribute_context_to_tool_result_payload():
+    client = TrackingOpenVikingClient()
+    recorder = OpenVikingSessionRecorder(client=client)
+    context_parts = [
+        {
+            "type": "context",
+            "uri": "viking://user/memories/assistant-only.md",
+            "context_type": "memory",
+        }
+    ]
+
+    result = recorder.record(
+        "recorder-tool-result-context",
+        [
+            ToolMessage(
+                content="Tool output.",
+                tool_call_id="call-1",
+                name="lookup",
+            ),
+            AIMessage(content="Used the tool output."),
+        ],
+        context_parts=context_parts,
+    )
+
+    assert result.context_attached is True
+    stored = client.sessions["recorder-tool-result-context"]
+    assert not any(part["type"] == "context" for part in stored[0]["parts"])
+    assert any(part["type"] == "context" for part in stored[1]["parts"])
+
+
 def test_recorder_chunks_writes_at_server_batch_limit():
     client = TrackingOpenVikingClient()
     recorder = OpenVikingSessionRecorder(client=client)
@@ -119,8 +225,79 @@ def test_recorder_chunks_writes_at_server_batch_limit():
     )
 
     assert result.messages_written == 101
+    assert result.input_messages_consumed == 101
     assert client.batch_sizes == [100, 1]
     assert len(client.sessions["recorder-batches"]) == 101
+
+
+def test_recorder_batches_by_payload_count_without_splitting_source_messages(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    class FailSecondBatchClient(TrackingOpenVikingClient):
+        def batch_add_messages(
+            self,
+            session_id: str,
+            messages: list[dict[str, Any]],
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            if len(self.batch_sizes) == 1:
+                self.batch_sizes.append(len(messages))
+                raise RuntimeError("second payload batch failed")
+            return super().batch_add_messages(session_id, messages, **kwargs)
+
+    def split_message(message: BaseMessage) -> list[dict[str, Any]]:
+        text = str(message.content)
+        return [
+            {"role": "user", "parts": [{"type": "text", "text": f"{text}:1"}]},
+            {"role": "user", "parts": [{"type": "text", "text": f"{text}:2"}]},
+        ]
+
+    monkeypatch.setattr(recording_module, "langchain_message_to_openviking", split_message)
+    client = FailSecondBatchClient()
+    recorder = OpenVikingSessionRecorder(client=client, batch_size=3)
+    messages = [HumanMessage(content="first"), HumanMessage(content="second")]
+
+    with pytest.raises(
+        OpenVikingPartialWriteError,
+        match="second payload batch failed",
+    ) as exc_info:
+        recorder.record("recorder-payload-batches", messages)
+
+    assert client.batch_sizes == [2, 2]
+    assert exc_info.value.messages_written == 2
+    assert exc_info.value.input_messages_consumed == 1
+
+    recorder.record(
+        "recorder-payload-batches",
+        messages[exc_info.value.input_messages_consumed :],
+    )
+
+    assert client.batch_sizes == [2, 2, 2]
+    assert [
+        message["parts"][0]["text"] for message in client.sessions["recorder-payload-batches"]
+    ] == ["first:1", "first:2", "second:1", "second:2"]
+
+
+def test_recorder_rejects_source_message_larger_than_configured_batch(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        recording_module,
+        "langchain_message_to_openviking",
+        lambda _message: [
+            {"role": "user", "parts": [{"type": "text", "text": str(index)}]} for index in range(3)
+        ],
+    )
+    client = TrackingOpenVikingClient()
+    recorder = OpenVikingSessionRecorder(client=client, batch_size=2)
+
+    with pytest.raises(ValueError, match="one LangChain message produced"):
+        recorder.record(
+            "recorder-oversized-source-message",
+            [HumanMessage(content="Expands to three payloads.")],
+        )
+
+    assert client.batch_sizes == []
 
 
 def test_recorder_ignores_filtered_only_batch_without_initializing_client():
@@ -159,7 +336,7 @@ def test_recorder_applies_commit_policy_once_after_all_batches():
     assert len(client.archives["recorder-commit"][0]["messages"]) == 101
 
 
-def test_recorder_does_not_apply_commit_policy_after_failed_batch():
+def test_recorder_reports_partial_progress_and_retries_only_unwritten_suffix():
     class FailSecondBatchClient(TrackingOpenVikingClient):
         def batch_add_messages(
             self,
@@ -178,15 +355,91 @@ def test_recorder_does_not_apply_commit_policy_after_failed_batch():
         commit_policy=OpenVikingCommitPolicy(mode="always"),
     )
 
-    with pytest.raises(RuntimeError, match="second batch failed"):
+    messages = [HumanMessage(content=f"Message {index}") for index in range(101)]
+    with pytest.raises(OpenVikingPartialWriteError, match="second batch failed") as exc_info:
         recorder.record(
             "recorder-failed-batch",
-            [HumanMessage(content=f"Message {index}") for index in range(101)],
+            messages,
         )
 
     assert client.batch_sizes == [100, 1]
     assert client.commit_calls == []
     assert len(client.sessions["recorder-failed-batch"]) == 100
+    assert exc_info.value.messages_written == 100
+    assert exc_info.value.input_messages_consumed == 100
+    assert exc_info.value.context_attached is False
+
+    recorder.record(
+        "recorder-failed-batch",
+        messages[exc_info.value.input_messages_consumed :],
+    )
+
+    assert client.batch_sizes == [100, 1, 1]
+    assert client.commit_calls == ["recorder-failed-batch"]
+    assert client.sessions["recorder-failed-batch"] == []
+    archived = client.archives["recorder-failed-batch"][0]["messages"]
+    assert len(archived) == 101
+    assert [message["parts"][0]["text"] for message in archived] == [
+        f"Message {index}" for index in range(101)
+    ]
+
+
+def test_recorder_reports_commit_failure_and_retries_without_duplicate_writes():
+    class FailFirstCommitClient(TrackingOpenVikingClient):
+        def commit_session(self, session_id: str, **kwargs: Any) -> dict[str, Any]:
+            self.commit_calls.append(session_id)
+            if len(self.commit_calls) == 1:
+                raise RuntimeError("commit failed")
+            return InMemoryOpenVikingClient.commit_session(self, session_id, **kwargs)
+
+    client = FailFirstCommitClient()
+    recorder = OpenVikingSessionRecorder(
+        client=client,
+        commit_policy=OpenVikingCommitPolicy(mode="always"),
+    )
+    messages = [
+        HumanMessage(content="Remember this turn."),
+        AIMessage(content="Remembered."),
+    ]
+
+    with pytest.raises(OpenVikingPartialWriteError, match="commit failed") as exc_info:
+        recorder.record("recorder-failed-commit", messages)
+
+    assert exc_info.value.stage == "commit"
+    assert exc_info.value.commit_pending is True
+    assert exc_info.value.messages_written == 2
+    assert exc_info.value.input_messages_consumed == 2
+    assert client.batch_sizes == [2]
+    assert len(client.sessions["recorder-failed-commit"]) == 2
+
+    recorder.record(
+        "recorder-failed-commit",
+        messages[exc_info.value.input_messages_consumed :],
+    )
+
+    assert client.batch_sizes == [2]
+    assert client.commit_calls == ["recorder-failed-commit", "recorder-failed-commit"]
+    assert client.sessions["recorder-failed-commit"] == []
+    assert len(client.archives["recorder-failed-commit"][0]["messages"]) == 2
+
+
+def test_recorder_preserves_first_batch_exception_type():
+    class FailFirstBatchClient(TrackingOpenVikingClient):
+        def batch_add_messages(
+            self,
+            session_id: str,
+            messages: list[dict[str, Any]],
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            raise FileNotFoundError("first batch failed")
+
+    recorder = OpenVikingSessionRecorder(client=FailFirstBatchClient())
+
+    with pytest.raises(FileNotFoundError, match="first batch failed"):
+        recorder.record(
+            "recorder-first-batch-failure",
+            [HumanMessage(content="Not written.")],
+        )
 
 
 def test_recorder_flush_commits_only_pending_content():
@@ -244,9 +497,15 @@ def test_recorder_close_does_not_close_injected_client():
     assert recorder.client is client
 
     recorder.close()
+    recorder.close()
 
     assert client.closed is False
-    assert recorder.client is client
+    with pytest.raises(RuntimeError, match="closed"):
+        recorder.record("closed-injected-recorder", [HumanMessage(content="Rejected.")])
+    with pytest.raises(RuntimeError, match="closed"):
+        recorder.flush("closed-injected-recorder")
+    with pytest.raises(RuntimeError, match="closed"):
+        _ = recorder.client
 
 
 def test_recorder_close_closes_owned_client(monkeypatch: pytest.MonkeyPatch):
@@ -256,8 +515,11 @@ def test_recorder_close_closes_owned_client(monkeypatch: pytest.MonkeyPatch):
     assert recorder.client is client
 
     recorder.close()
+    recorder.close()
 
     assert client.closed is True
+    with pytest.raises(RuntimeError, match="closed"):
+        recorder.record("closed-owned-recorder", [HumanMessage(content="Rejected.")])
 
 
 @pytest.mark.parametrize("batch_size", [0, 101])
@@ -290,6 +552,78 @@ def test_chat_message_history_delegates_writes_to_recorder_batching():
         "assistant",
         "user",
     ]
+
+
+def test_chat_message_history_keeps_context_pending_until_assistant_message():
+    client = TrackingOpenVikingClient()
+    acknowledged_sessions: list[str] = []
+    history = OpenVikingChatMessageHistory(
+        session_id="history-pending-context",
+        client=client,
+        context_parts_provider=lambda _session_id: [
+            {
+                "type": "context",
+                "uri": "viking://user/memories/history-pending.md",
+                "context_type": "memory",
+            }
+        ],
+        context_parts_acknowledger=acknowledged_sessions.append,
+    )
+
+    history.add_messages([HumanMessage(content="Wait for the assistant.")])
+
+    assert acknowledged_sessions == []
+    assert not any(
+        part["type"] == "context" for part in client.sessions["history-pending-context"][0]["parts"]
+    )
+
+    history.add_messages([AIMessage(content="")])
+
+    assert acknowledged_sessions == ["history-pending-context"]
+    stored = client.sessions["history-pending-context"]
+    assert [message["role"] for message in stored] == ["user", "assistant"]
+    assert any(part["type"] == "context" for part in stored[1]["parts"])
+
+
+def test_chat_message_history_close_is_terminal():
+    client = TrackingOpenVikingClient()
+    history = OpenVikingChatMessageHistory(
+        session_id="history-close",
+        client=client,
+    )
+
+    history.close()
+
+    assert client.closed is False
+    with pytest.raises(RuntimeError, match="closed"):
+        history.add_messages([HumanMessage(content="Rejected.")])
+    with pytest.raises(RuntimeError, match="closed"):
+        _ = history.messages
+
+
+@pytest.mark.parametrize("lifecycle_method", ["clear", "close"])
+def test_chat_message_history_lifecycle_discards_pending_context(
+    lifecycle_method: str,
+):
+    client = TrackingOpenVikingClient()
+    acknowledged_sessions: list[str] = []
+    history = OpenVikingChatMessageHistory(
+        session_id=f"history-{lifecycle_method}-pending-context",
+        client=client,
+        context_parts_provider=lambda _session_id: [
+            {
+                "type": "context",
+                "uri": "viking://user/memories/discarded.md",
+                "context_type": "memory",
+            }
+        ],
+        context_parts_acknowledger=acknowledged_sessions.append,
+    )
+    history.add_messages([HumanMessage(content="No assistant response yet.")])
+
+    getattr(history, lifecycle_method)()
+
+    assert acknowledged_sessions == [history.session_id]
 
 
 def test_chat_message_history_uses_updated_commit_policy():
@@ -400,3 +734,72 @@ def test_middleware_retains_pending_context_when_first_recorder_batch_fails():
     stored = client.sessions["middleware-first-batch-retry"]
     assert len(stored) == 2
     assert sum(part["type"] == "context" for message in stored for part in message["parts"]) == 1
+
+
+def test_middleware_keeps_context_pending_until_empty_assistant_arrives():
+    client = TrackingOpenVikingClient()
+    middleware = OpenVikingContextMiddleware(
+        client=client,
+        session_id_resolver=lambda _state, _runtime: "middleware-pending-assistant",
+    )
+    capture_key = ("middleware-pending-assistant", "")
+    middleware._pending_context_parts[capture_key] = [
+        {
+            "type": "context",
+            "uri": "viking://user/memories/pending-assistant.md",
+            "context_type": "memory",
+        }
+    ]
+    user_message = HumanMessage(content="The assistant has not responded yet.")
+
+    middleware.after_agent({"messages": [user_message]}, runtime=None)
+
+    assert capture_key in middleware._pending_context_parts
+    assert not any(
+        part["type"] == "context"
+        for part in client.sessions["middleware-pending-assistant"][0]["parts"]
+    )
+
+    middleware.after_agent(
+        {"messages": [user_message, AIMessage(content="")]},
+        runtime=None,
+    )
+
+    assert capture_key not in middleware._pending_context_parts
+    stored = client.sessions["middleware-pending-assistant"]
+    assert [message["role"] for message in stored] == ["user", "assistant"]
+    assert any(part["type"] == "context" for part in stored[1]["parts"])
+
+
+def test_middleware_retries_failed_commit_without_duplicate_writes():
+    class FailFirstCommitClient(TrackingOpenVikingClient):
+        def commit_session(self, session_id: str, **kwargs: Any) -> dict[str, Any]:
+            self.commit_calls.append(session_id)
+            if len(self.commit_calls) == 1:
+                raise RuntimeError("commit failed")
+            return InMemoryOpenVikingClient.commit_session(self, session_id, **kwargs)
+
+    client = FailFirstCommitClient()
+    middleware = OpenVikingContextMiddleware(
+        client=client,
+        session_id_resolver=lambda _state, _runtime: "middleware-commit-retry",
+        commit_on_after_agent=True,
+    )
+    state = {
+        "messages": [
+            HumanMessage(content="Remember this middleware turn."),
+            AIMessage(content="Remembered."),
+        ]
+    }
+
+    with pytest.raises(OpenVikingPartialWriteError, match="commit failed"):
+        middleware.after_agent(state, runtime=None)
+    middleware.after_agent(state, runtime=None)
+
+    assert client.batch_sizes == [2]
+    assert client.commit_calls == [
+        "middleware-commit-retry",
+        "middleware-commit-retry",
+    ]
+    assert client.sessions["middleware-commit-retry"] == []
+    assert len(client.archives["middleware-commit-retry"][0]["messages"]) == 2
