@@ -29,6 +29,7 @@ from openviking.integrations.langchain.client import (
     call_openviking,
     ensure_client,
     extract_message_text,
+    item_value,
 )
 
 logger = logging.getLogger(__name__)
@@ -122,13 +123,18 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
                 batch.append(payload)
 
         if batch:
-            call_openviking(
+            write_result = call_openviking(
                 client,
                 "batch_add_messages",
                 session_id=self.session_id,
                 messages=batch,
             )
-            apply_commit_policy(client, self.session_id, self.commit_policy)
+            apply_commit_policy(
+                client,
+                self.session_id,
+                self.commit_policy,
+                persisted_pending_tokens=item_value(write_result, "pending_tokens"),
+            )
 
     def clear(self) -> None:
         client = self._get_client()

@@ -158,12 +158,26 @@ def ensure_client(connection: OpenVikingConnection) -> Any:
     return client
 
 
+def is_not_found_error(exc: BaseException) -> bool:
+    """True for OpenViking NOT_FOUND across cli/sdk exception classes."""
+
+    return getattr(exc, "code", None) == "NOT_FOUND"
+
+
 def apply_commit_policy(
     client: Any,
     session_id: str,
     policy: OpenVikingCommitPolicy | None,
+    *,
+    persisted_pending_tokens: Any = None,
 ) -> dict[str, Any] | None:
-    """Apply the configured session commit policy."""
+    """Apply the configured session commit policy after message persistence.
+
+    ``persisted_pending_tokens`` is the post-write value returned by
+    ``add_message`` or ``batch_add_messages``.  When an older client does not
+    return it, the pending-token policy falls back to the legacy session lookup.
+    Committing remains a separate operation from message persistence.
+    """
 
     if policy is None or policy.mode == "never":
         return None
@@ -176,15 +190,32 @@ def apply_commit_policy(
     if policy.mode != "pending_tokens":
         raise ValueError(f"Unsupported OpenViking commit policy: {policy.mode}")
 
-    try:
-        session = call_openviking(client, "get_session", session_id=session_id, auto_create=False)
-    except Exception:
-        logger.debug(
-            "Skipping OpenViking pending-token commit because session lookup failed",
-            exc_info=True,
-        )
-        return None
-    pending_tokens = int(item_value(session, "pending_tokens", 0) or 0)
+    pending_tokens: int | None = None
+    if persisted_pending_tokens is not None:
+        try:
+            pending_tokens = int(persisted_pending_tokens or 0)
+        except (TypeError, ValueError):
+            logger.debug(
+                "Ignoring invalid persisted pending-token value and falling back "
+                "to session lookup: %r",
+                persisted_pending_tokens,
+            )
+
+    if pending_tokens is None:
+        try:
+            session = call_openviking(
+                client,
+                "get_session",
+                session_id=session_id,
+                auto_create=False,
+            )
+        except Exception:
+            logger.debug(
+                "Skipping OpenViking pending-token commit because session lookup failed",
+                exc_info=True,
+            )
+            return None
+        pending_tokens = int(item_value(session, "pending_tokens", 0) or 0)
     if pending_tokens < policy.pending_token_threshold:
         return None
     return call_openviking(

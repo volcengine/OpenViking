@@ -31,6 +31,7 @@ from openviking.integrations.langchain.client import (
     ensure_client,
     extract_message_text,
     get_latest_user_text,
+    item_value,
 )
 from openviking.integrations.langchain.context import (
     OPENVIKING_CONTEXT_MARKER,
@@ -197,7 +198,7 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             start = len(previous_signatures)
 
         client = ensure_client(self._connection)
-        added = 0
+        batch: list[dict[str, Any]] = []
         pending_context_parts = list(self._pending_context_parts.pop(capture_key, []))
         for message in messages[start:]:
             if OPENVIKING_CONTEXT_MARKER in _message_content(message):
@@ -207,18 +208,26 @@ class OpenVikingContextMiddleware(AgentMiddleware):
                 if pending_context_parts and payload["role"] == "assistant":
                     payload["parts"].extend(pending_context_parts)
                     pending_context_parts = []
-                call_openviking(
-                    client,
-                    "add_message",
-                    session_id=session_id,
-                    role=payload["role"],
-                    parts=payload["parts"],
-                    peer_id=peer_id,
-                )
-                added += 1
+                if peer_id is not None:
+                    payload["peer_id"] = peer_id
+                batch.append(payload)
+
+        write_result = None
+        if batch:
+            write_result = call_openviking(
+                client,
+                "batch_add_messages",
+                session_id=session_id,
+                messages=batch,
+            )
         self._captured_signatures[capture_key] = current_signatures
-        if added:
-            apply_commit_policy(client, session_id, self.commit_policy)
+        if batch:
+            apply_commit_policy(
+                client,
+                session_id,
+                self.commit_policy,
+                persisted_pending_tokens=item_value(write_result, "pending_tokens"),
+            )
         return None
 
     def _resolve_session_id(self, state: dict[str, Any], runtime: Any) -> str:
