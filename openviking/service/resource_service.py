@@ -1180,30 +1180,37 @@ class ResourceService:
         # Spawn one background ingestion per child document. Each child is a
         # guaranteed single-doc URL (expand_feishu_url emits direct docx/sheets/
         # base URLs), so it will not re-enter the batch branch.
+        #
+        # Throttle concurrency: a wiki space can contain hundreds of docs, and
+        # firing one Feishu fetch per doc simultaneously would hammer the Feishu
+        # API and risk rate-limiting /风控. Bound the in-flight imports.
+        batch_semaphore = asyncio.Semaphore(_FEISHU_BATCH_CONCURRENCY)
+
         async def _import_child(doc_url: str) -> None:
-            try:
-                await self.add_resource(
-                    path=doc_url,
-                    ctx=ctx,
-                    to=None,
-                    parent=batch_parent,
-                    reason=reason,
-                    instruction=instruction,
-                    wait=False,
-                    timeout=timeout,
-                    build_index=build_index,
-                    summarize=summarize,
-                    # Watch the whole space via the parent request, not per child.
-                    watch_interval=0,
-                    allow_local_path_resolution=allow_local_path_resolution,
-                    enforce_public_remote_targets=enforce_public_remote_targets,
-                    args=parser_args,
-                )
-            except Exception:
-                logger.exception(
-                    "[ResourceService] Feishu batch child import failed: %s",
-                    doc_url,
-                )
+            async with batch_semaphore:
+                try:
+                    await self.add_resource(
+                        path=doc_url,
+                        ctx=ctx,
+                        to=None,
+                        parent=batch_parent,
+                        reason=reason,
+                        instruction=instruction,
+                        wait=False,
+                        timeout=timeout,
+                        build_index=build_index,
+                        summarize=summarize,
+                        # Watch the whole space via the parent request, not per child.
+                        watch_interval=0,
+                        allow_local_path_resolution=allow_local_path_resolution,
+                        enforce_public_remote_targets=enforce_public_remote_targets,
+                        args=parser_args,
+                    )
+                except Exception:
+                    logger.exception(
+                        "[ResourceService] Feishu batch child import failed: %s",
+                        doc_url,
+                    )
 
         for doc_url, _title in expanded:
             background = asyncio.create_task(_import_child(doc_url))
