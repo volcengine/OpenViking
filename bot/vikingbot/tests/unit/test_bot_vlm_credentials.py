@@ -349,6 +349,8 @@ def test_console_credentials_edit_does_not_persist_inherited_model(tmp_path, mon
                 "provider": "openai",
                 "model": "root-model",
                 "api_key": "root-key",
+                "api_base": "https://root-gateway.example/v1",
+                "extra_headers": {"X-Root-Tenant": "root"},
             }
         },
     )
@@ -367,13 +369,63 @@ def test_console_credentials_edit_does_not_persist_inherited_model(tmp_path, mon
     loader.reconcile_vlm_inheritance_after_edit(previous, edited)
     loader.save_config(edited, tmp_path / "ov.conf")
 
+    assert edited.inherits_root_vlm() is False
     saved = json.loads((tmp_path / "ov.conf").read_text())
     assert "model" not in saved["bot"]["agents"]
+    assert saved["bot"]["agents"]["provider"] == ""
+    assert saved["bot"]["agents"]["apiKey"] == ""
+    assert saved["bot"]["agents"]["apiBase"] == ""
+    assert saved["bot"]["agents"]["extraHeaders"] == {}
 
     reloaded = loader.load_config()
     assert reloaded.inherits_root_vlm() is False
     assert reloaded.agents.model == ""
     assert reloaded.agents.credentials[0].model == "bot-model"
+
+    from vikingbot.cli.commands import _make_provider
+
+    provider = _make_provider(reloaded)
+    assert provider._vlm.model == "bot-model"
+    assert provider._vlm.api_key == "bot-key"
+    assert provider._vlm.api_base is None
+    assert provider._vlm.extra_headers is None
+
+
+def test_console_bot_credentials_do_not_inherit_root_api_key(tmp_path, monkeypatch):
+    previous = _write_config(
+        tmp_path,
+        monkeypatch,
+        {
+            "vlm": {
+                "provider": "openai",
+                "model": "root-model",
+                "api_key": "root-key",
+                "api_base": "https://root-gateway.example/v1",
+            }
+        },
+    )
+
+    config_dict = previous.model_dump()
+    config_dict["agents"]["credentials"] = [
+        {
+            "id": "bot-primary",
+            "provider": "openai",
+            "model": "bot-model",
+        }
+    ]
+    edited = Config(**config_dict)
+
+    loader.reconcile_vlm_inheritance_after_edit(previous, edited)
+    loader.save_config(edited, tmp_path / "ov.conf")
+
+    reloaded = loader.load_config()
+    assert reloaded.agents.api_key == ""
+    assert reloaded.agents.api_base == ""
+
+    from vikingbot.cli.commands import _make_provider
+
+    with pytest.raises(ValueError, match="requires 'api_key' to be set"):
+        _make_provider(reloaded)
 
 
 def test_saving_credentials_only_config_keeps_model_omitted(tmp_path, monkeypatch):

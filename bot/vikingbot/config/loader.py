@@ -756,11 +756,28 @@ def reconcile_vlm_inheritance_after_edit(previous: Config, edited: Config) -> No
     Editors such as the Web Console serialize and reconstruct ``Config``. The
     hidden inheritance marker must survive an unchanged round-trip, but it must
     be cleared when the user explicitly edits the Bot-owned model connection.
-    Bot credentials are intentionally excluded from this comparison: when they
-    are added without editing the inherited model, ``save_config`` strips that
-    model so the two credential chains are not mixed.
+
+    When Bot credentials are added to an inherited config, connection fields
+    flattened from the root VLM must not become implicit Bot-level fallbacks.
+    Preserve only fields whose values were explicitly changed by the editor.
     """
     if not previous.inherits_root_vlm():
+        return
+
+    connection_fields = ("model", "provider", "api_key", "api_base", "extra_headers")
+    credentials_changed = previous.agents.credentials != edited.agents.credentials
+    if credentials_changed:
+        empty_values = {
+            "model": "",
+            "provider": "",
+            "api_key": "",
+            "api_base": "",
+            "extra_headers": {},
+        }
+        for field in connection_fields:
+            if getattr(previous.agents, field) == getattr(edited.agents, field):
+                setattr(edited.agents, field, empty_values[field])
+        edited.set_inherits_root_vlm(False)
         return
 
     ownership_fields = ("model", "provider", "api_key", "api_base")
