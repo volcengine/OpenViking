@@ -6,6 +6,7 @@ from unittest.mock import Mock
 import pytest
 
 from openviking.parse.parsers.code.ast import extract_skeleton_result
+from openviking.parse.parsers.code.ast.providers import is_skeleton_useful
 from openviking.parse.parsers.code.ast.aider_repomap import _clean_repromap_rendered
 from openviking.parse.parsers.code.ast.languages.process_engine import (
     extract_process_skeleton,
@@ -92,6 +93,30 @@ def test_both_extractors_unavailable_requests_llm_fallback(monkeypatch):
     assert result.text is None
     assert result.provider == "llm"
     assert result.should_fallback_to_llm
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "# sample.py [Python]",
+        "# sample.py [Python]\nimports: os, sys\nmodule: sample\nlanguage: Python",
+    ],
+)
+def test_skeleton_usefulness_rejects_empty_or_metadata_only_output(text):
+    assert not is_skeleton_useful(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "# sample.lisp [aider-repomap-lite, compact]\n\n(defun add (a b)\n  (+ a b))",
+        "# sample.ml [aider-repomap-lite, compact]\n\nlet add a b = a + b",
+        "# sample.rkt [aider-repomap-lite, compact]\n\n(define (add a b)\n  (+ a b))",
+    ],
+)
+def test_skeleton_usefulness_accepts_language_neutral_structure(text):
+    assert is_skeleton_useful(text)
 
 
 def test_clean_repromap_rendered_removes_tree_context_gutter():

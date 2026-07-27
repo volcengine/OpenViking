@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Routing for tags-query, process, and LLM-fallback code summaries."""
 
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -19,12 +18,6 @@ from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
-_SYMBOL_PATTERNS = (
-    re.compile(r"^\s*(class|def|func|function|interface|struct|enum|trait)\s+\w", re.M),
-    re.compile(r"^\s*\+\s+\w", re.M),
-    re.compile(r"^\s*-\s+L\d+:\s+\w", re.M),
-    re.compile(r"^\s*[\w:<>,*&~]+\s+\w+\s*\([^)]*\)\s*(?:const)?\s*[;{]?", re.M),
-)
 _IMPORT_ONLY_PREFIXES = ("#", "imports:", "module:", "language:")
 
 
@@ -43,16 +36,14 @@ class SkeletonExtractionResult:
 
 
 def is_skeleton_useful(text: Optional[str]) -> bool:
-    """Return whether a skeleton contains meaningful symbol structure."""
+    """Return whether a skeleton contains extractor-produced structure."""
 
     if not text or not text.strip():
         return False
-    meaningful_lines = [
-        line.strip()
+    return any(
+        line.strip() and not line.strip().startswith(_IMPORT_ONLY_PREFIXES)
         for line in text.splitlines()
-        if line.strip() and not line.strip().startswith(_IMPORT_ONLY_PREFIXES)
-    ]
-    return len(meaningful_lines) >= 1 and any(pattern.search(text) for pattern in _SYMBOL_PATTERNS)
+    )
 
 
 def extract_skeleton_result(
