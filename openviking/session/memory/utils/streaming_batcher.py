@@ -176,11 +176,25 @@ class StreamingBatcher(Generic[T, R]):
 
     async def _run_timer_loop(self) -> None:
         while True:
+            flush_task: asyncio.Task[R | None] | None = None
             try:
                 await asyncio.sleep(self.config.timer_check_interval_seconds)
                 if await self._should_flush_by_time_or_count():
-                    await self.flush("time")
+                    flush_task = asyncio.create_task(
+                        self.flush("time"),
+                        name=f"{self.name}-flush-time",
+                    )
+                    await asyncio.shield(flush_task)
             except asyncio.CancelledError:
+                if flush_task is not None:
+                    try:
+                        await flush_task
+                    except Exception as exc:
+                        logger.warning(
+                            "[%s] timer flush failed while stopping: %s",
+                            self.name,
+                            exc,
+                        )
                 raise
             except Exception as exc:
                 logger.warning("[%s] timer flush iteration failed: %s", self.name, exc)
