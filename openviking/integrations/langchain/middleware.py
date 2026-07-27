@@ -198,8 +198,8 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             start = len(previous_signatures)
 
         client = ensure_client(self._connection)
-        batch = []
-        chunks = []
+        batch: list[dict[str, Any]] = []
+        chunks: list[tuple[list[dict[str, Any]], int, bool]] = []
         batch_has_context = False
         pending_context_parts = list(self._pending_context_parts.get(capture_key, []))
         for message_index, message in enumerate(messages[start:], start=start):
