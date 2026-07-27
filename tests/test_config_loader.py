@@ -15,6 +15,7 @@ from openviking_cli.utils.config.config_loader import (
     require_config,
     resolve_config_path,
 )
+from openviking_cli.utils.config.parser_config import CodeHostingConfig
 
 
 class TestResolveConfigPath:
@@ -113,6 +114,32 @@ class TestRequireConfig:
         monkeypatch.delenv("TEST_MISSING_ENV", raising=False)
         with pytest.raises(FileNotFoundError, match="configuration file not found"):
             require_config(None, "TEST_MISSING_ENV", "nonexistent_file.conf", "test")
+
+
+def test_generic_code_hosting_domains_include_supported_platforms():
+    config = CodeHostingConfig()
+
+    assert config.code_hosting_domains == [
+        "github.com",
+        "gitlab.com",
+        "gitcode.com",
+        "gitee.com",
+        "bitbucket.org",
+        "codeberg.org",
+        "gitea.com",
+        "atomgit.com",
+        "git.sr.ht",
+    ]
+
+
+def test_generic_code_hosting_domains_load_from_config():
+    config = CodeHostingConfig.from_dict(
+        {
+            "code_hosting_domains": ["git.generic.example.com"],
+        }
+    )
+
+    assert config.code_hosting_domains == ["git.generic.example.com"]
 
 
 def test_openviking_config_rejects_unknown_nested_parser_section(monkeypatch):

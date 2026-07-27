@@ -147,7 +147,7 @@ class CodeRepositoryParser(BaseParser):
             commit = source_meta.get("repo_commit")
 
             # If repo_name is still default, try to extract from original source
-            # original_source is the full GitHub/GitLab URL that the user provided
+            # original_source is the full code-hosting URL that the user provided
             # (e.g. "https://github.com/volcengine/OpenViking")
             if repo_name == "repository":
                 original_source = kwargs.get("original_source") or source_meta.get(
@@ -193,7 +193,7 @@ class CodeRepositoryParser(BaseParser):
             # source_path is CRITICAL:
             #   1. TreeBuilder uses source_path to parse org/repo via parse_code_hosting_url()
             #   2. If source_path is a local path (like /tmp/.../OpenViking), parsing fails
-            #   3. If source_path is the original GitHub URL (https://github.com/volcengine/OpenViking),
+            #   3. If source_path is the original code-hosting URL,
             #      TreeBuilder can correctly extract "volcengine/OpenViking"
             #
             # Priority order:
@@ -306,7 +306,7 @@ class CodeRepositoryParser(BaseParser):
         return url
 
     def _get_repo_name(self, url: str) -> str:
-        """Get repository name with organization for GitHub/GitLab URLs.
+        """Get repository name with organization for configured code-hosting URLs.
 
         For https://github.com/volcengine/OpenViking, returns "volcengine/OpenViking"
         For other URLs, falls back to just the repo name.
@@ -323,7 +323,7 @@ class CodeRepositoryParser(BaseParser):
         elif ":" in url and not url.startswith("file://"):
             name_source = url.split(":", 1)[1]
 
-        # Original logic for non-GitHub/GitLab URLs
+        # Fallback for URLs outside the configured code-hosting domains
         name = name_source.rstrip("/").split("/")[-1]
         if name.endswith(".git"):
             name = name[:-4]

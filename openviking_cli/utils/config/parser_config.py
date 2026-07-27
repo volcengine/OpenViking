@@ -201,7 +201,7 @@ class CodeHostingConfig(ParserConfig):
     Base configuration for code hosting platform domains.
 
     Attributes:
-        code_hosting_domains: List of code hosting platform domains (github.com, gitlab.com, etc.)
+        code_hosting_domains: List of allowed generic code hosting domains
         github_domains: List of GitHub domains (github.com, www.github.com)
         gitlab_domains: List of GitLab domains (gitlab.com, www.gitlab.com)
         azure_devops_domains: List of Azure DevOps domains (dev.azure.com, ssh.dev.azure.com)
@@ -216,7 +216,17 @@ class CodeHostingConfig(ParserConfig):
     def __post_init__(self):
         """Initialize default values for mutable fields."""
         if self.code_hosting_domains is None:
-            self.code_hosting_domains = ["github.com", "gitlab.com"]
+            self.code_hosting_domains = [
+                "github.com",
+                "gitlab.com",
+                "gitcode.com",
+                "gitee.com",
+                "bitbucket.org",
+                "codeberg.org",
+                "gitea.com",
+                "atomgit.com",
+                "git.sr.ht",
+            ]
         if self.github_domains is None:
             self.github_domains = ["github.com", "www.github.com"]
         if self.gitlab_domains is None:

@@ -22,7 +22,6 @@ from openviking.utils import is_github_url, is_gitlab_url, parse_code_hosting_ur
 from openviking.utils.code_hosting_utils import (
     _domain_matches,
     _extract_azure_devops_repo_parts,
-    is_code_hosting_url,
     is_git_repo_url,
     validate_git_ssh_uri,
 )
@@ -58,7 +57,7 @@ class GitAccessor(DataAccessor):
         Handles:
         - git@ SSH URLs
         - git://, ssh:// URLs
-        - GitHub/GitLab repository URLs (http/https)
+        - Configured code-hosting repository URLs (http/https)
         - Local paths ending with .git (NOT .zip - those go to ZipParser)
         """
         source_str = str(source)
@@ -68,7 +67,7 @@ class GitAccessor(DataAccessor):
             try:
                 if source_str.startswith("git@"):
                     validate_git_ssh_uri(source_str)
-                return is_code_hosting_url(source_str)
+                return is_git_repo_url(source_str)
             except ValueError:
                 return False
 
@@ -146,7 +145,7 @@ class GitAccessor(DataAccessor):
                             branch=branch,
                             commit=commit,
                         )
-                elif self._is_gitlab_url(repo_url):
+                elif self._can_use_gitlab_zip(repo_url):
                     # Try GitLab ZIP API first, fall back to git clone
                     try:
                         local_dir, repo_name = await self._gitlab_zip_download(
@@ -173,7 +172,7 @@ class GitAccessor(DataAccessor):
                             commit=commit,
                         )
                 else:
-                    # Non-GitHub/GitLab URL: use git clone
+                    # Other configured code-hosting URLs: use git clone
                     repo_name = await self._git_clone(
                         repo_url,
                         temp_local_dir,
@@ -247,14 +246,20 @@ class GitAccessor(DataAccessor):
         parts = [p for p in path.split("/") if p]
         branch = None
         commit = None
-        if "commit" in parts:
-            idx = parts.index("commit")
-            if idx + 1 < len(parts):
-                commit = parts[idx + 1]
-        if "tree" in parts:
-            idx = parts.index("tree")
-            if idx + 1 < len(parts):
-                ref = unquote(parts[idx + 1])
+
+        # Browse-route markers start after owner/repository, or immediately
+        # after GitLab's /-/ separator. Repository/group names such as
+        # "commit" and "tree" must not be mistaken for route markers.
+        route_parts = parts[2:]
+        dash_index = parts.index("-") if "-" in parts else -1
+        if dash_index >= 2:
+            route_parts = parts[dash_index + 1 :]
+
+        if len(route_parts) >= 2 and route_parts[0] == "commit":
+            commit = route_parts[1]
+        if len(route_parts) >= 2 and route_parts[0] == "tree":
+            ref = unquote(route_parts[1])
+            if ref:
                 if self._looks_like_sha(ref):
                     commit = ref
                 else:
@@ -267,23 +272,47 @@ class GitAccessor(DataAccessor):
         return 7 <= len(ref) <= 40 and all(c in "0123456789abcdefABCDEF" for c in ref)
 
     def _normalize_repo_url(self, url: str) -> str:
-        """Normalize repository URL to base form."""
+        """Normalize repository URL to a cloneable base form."""
         if url.startswith(("http://", "https://", "git://", "ssh://")):
             parsed = urlparse(url)
             path_parts = [p for p in parsed.path.split("/") if p]
             base_parts = path_parts
-            git_index = next((i for i, p in enumerate(path_parts) if p.endswith(".git")), None)
-            if git_index is not None:
-                base_parts = path_parts[: git_index + 1]
 
             config = get_openviking_config()
-            if _domain_matches(parsed, getattr(config.code, "azure_devops_domains", [])):
+            gitlab_domains = getattr(config.code, "gitlab_domains", [])
+            github_domains = getattr(config.code, "github_domains", [])
+            nested_domains = gitlab_domains + getattr(
+                config.code, "code_hosting_domains", []
+            )
+            supports_nested_path = not _domain_matches(
+                parsed, github_domains
+            ) and _domain_matches(parsed, nested_domains)
+            dash_index = (
+                path_parts.index("-")
+                if _domain_matches(parsed, gitlab_domains) and "-" in path_parts
+                else -1
+            )
+            git_index = next((i for i, p in enumerate(path_parts) if p.endswith(".git")), None)
+
+            if dash_index >= 2:
+                # GitLab "/-/" browse separator: the (possibly nested) repo
+                # path is everything before it
+                base_parts = path_parts[:dash_index]
+            elif git_index is not None and (git_index == 1 or supports_nested_path):
+                # Clone URL: keep the nested path through the .git segment
+                base_parts = path_parts[: git_index + 1]
+            elif git_index is not None:
+                base_parts = path_parts[:2]
+            elif _domain_matches(parsed, getattr(config.code, "azure_devops_domains", [])):
                 azure_repo_parts = _extract_azure_devops_repo_parts(path_parts)
                 if azure_repo_parts:
                     base_parts = path_parts[: len(azure_repo_parts) + 1]
-
-            if _domain_matches(parsed, config.code.github_domains + config.code.gitlab_domains):
+            elif len(path_parts) >= 3 and path_parts[2] in ("tree", "commit"):
+                # Browser URLs: owner/repo/tree/<ref>, owner/repo/commit/<sha>
                 base_parts = path_parts[:2]
+            elif _domain_matches(parsed, config.code.github_domains + config.code.gitlab_domains):
+                base_parts = path_parts[:2]
+
             base_path = "/" + "/".join(base_parts)
             return parsed._replace(path=base_path, query="", fragment="").geturl()
         return url
@@ -358,6 +387,13 @@ class GitAccessor(DataAccessor):
     def _is_gitlab_url(url: str) -> bool:
         """Return True for gitlab.com URLs (supports ZIP archive API)."""
         return is_gitlab_url(url)
+
+    def _can_use_gitlab_zip(self, url: str) -> bool:
+        """Return True when the URL fits the two-segment GitLab ZIP helper."""
+        if not self._is_gitlab_url(url):
+            return False
+        path_parts = [p for p in urlparse(url).path.split("/") if p]
+        return len(path_parts) == 2
 
     async def _git_clone(
         self,

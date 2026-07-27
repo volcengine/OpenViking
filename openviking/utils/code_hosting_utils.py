@@ -7,13 +7,175 @@ This module provides shared functionality for parsing URLs from code hosting
 platforms like GitHub and GitLab.
 """
 
+from collections.abc import Iterable
 from typing import Optional
 from urllib.parse import ParseResult, parse_qs, unquote, urlparse
 
 from openviking_cli.utils.config import get_openviking_config
 
+# Platform-specific domain lists select specialized behavior. All other
+# supported Git hosts live in the generic ``code_hosting_domains`` allowlist.
+_CODE_HOSTING_DOMAIN_CONFIG_FIELDS = (
+    "github_domains",
+    "gitlab_domains",
+    "azure_devops_domains",
+    "code_hosting_domains",
+)
 
-def _domain_matches(parsed: ParseResult, domains: list[str]) -> bool:
+# Repo-page path segments that mark an http(s) URL as a browse page rather
+# than a cloneable repository (github.com/org/repo/issues/123 etc.).
+_NON_REPO_PATH_SEGMENTS = frozenset(
+    {
+        "blob",
+        "commit",
+        "commits",
+        "issues",
+        "merge_requests",
+        "pull",
+        "pulls",
+        "raw",
+        "releases",
+        "wiki",
+    }
+)
+
+# Hosting-specific browse routes for public platforms in the generic domain
+# category. These are URL parsing profiles, not additional allowlists: the host
+# must still be configured in ``code_hosting_domains`` before they apply.
+_KNOWN_PLATFORM_NON_REPO_PATH_SEGMENTS = {
+    "bitbucket.org": frozenset({"src"}),
+    "codeberg.org": frozenset({"src"}),
+    "gitea.com": frozenset({"src"}),
+}
+
+# Top-level namespaces reserved by each hosting platform. Keeping these rules
+# attached to platform categories prevents generic custom hosts from inheriting
+# unrelated GitHub/GitLab route semantics.
+_COMMON_RESERVED_TOP_LEVEL_SEGMENTS = frozenset(
+    {"dashboard", "help", "join", "login", "new", "search", "settings"}
+)
+_PLATFORM_RESERVED_TOP_LEVEL_SEGMENTS = {
+    "github_domains": _COMMON_RESERVED_TOP_LEVEL_SEGMENTS
+    | frozenset(
+        {
+            "apps",
+            "codespaces",
+            "collections",
+            "enterprise",
+            "features",
+            "issues",
+            "marketplace",
+            "notifications",
+            "orgs",
+            "pricing",
+            "pulls",
+            "sponsors",
+            "topics",
+            "trending",
+        }
+    ),
+    "gitlab_domains": _COMMON_RESERVED_TOP_LEVEL_SEGMENTS
+    | frozenset(
+        {
+            "-",
+            "admin",
+            "explore",
+            "groups",
+            "users",
+        }
+    ),
+}
+
+# Public-platform URL profiles are parsing rules, not an allowlist. A host must
+# still be present in one of the configured domain lists before these apply.
+_KNOWN_PLATFORM_RESERVED_TOP_LEVEL_SEGMENTS = {
+    "gitee.com": _COMMON_RESERVED_TOP_LEVEL_SEGMENTS
+    | frozenset({"enterprise", "explore"}),
+}
+
+# Generic Git hosts may use nested namespaces when a clone URL ends in .git.
+# GitHub is explicitly excluded because its archive fast path is owner/repo
+# only; accepting a nested URL would fetch a different repository.
+_NESTED_REPOSITORY_DOMAIN_CONFIG_FIELDS = (
+    "gitlab_domains",
+    "code_hosting_domains",
+)
+
+
+def _get_code_config():
+    return get_openviking_config().code
+
+
+def _get_domains_for_field(field_name: str, code_config=None) -> list[str]:
+    """Return one configured platform-domain category."""
+    if code_config is None:
+        code_config = _get_code_config()
+    return list(getattr(code_config, field_name, []) or [])
+
+
+def get_configured_code_hosting_domains(code_config=None) -> set[str]:
+    """Return the union of every platform-specific and generic domain list."""
+    if code_config is None:
+        code_config = _get_code_config()
+
+    domains: set[str] = set()
+    for field_name in _CODE_HOSTING_DOMAIN_CONFIG_FIELDS:
+        domains.update(domain.lower() for domain in _get_domains_for_field(field_name, code_config))
+    return domains
+
+
+def _host_matches_domain_fields(host: str, field_names: Iterable[str]) -> bool:
+    normalized_host = host.lower()
+    code_config = _get_code_config()
+    return any(
+        normalized_host in {domain.lower() for domain in _get_domains_for_field(field, code_config)}
+        for field in field_names
+    )
+
+
+def _matches_domain_field(parsed: ParseResult, field_name: str) -> bool:
+    return _domain_matches(parsed, _get_domains_for_field(field_name))
+
+
+def _get_reserved_top_level_segments(parsed: ParseResult) -> frozenset[str]:
+    """Return reserved first-path segments for the URL's configured platform."""
+    reserved: set[str] = set()
+    for field_name, segments in _PLATFORM_RESERVED_TOP_LEVEL_SEGMENTS.items():
+        if _matches_domain_field(parsed, field_name):
+            reserved.update(segments)
+    reserved.update(
+        _KNOWN_PLATFORM_RESERVED_TOP_LEVEL_SEGMENTS.get(
+            (parsed.hostname or "").lower(), frozenset()
+        )
+    )
+    return frozenset(reserved)
+
+
+def _get_known_platform_non_repo_segments(parsed: ParseResult) -> frozenset[str]:
+    """Return browse-route markers for a configured public platform."""
+    return _KNOWN_PLATFORM_NON_REPO_PATH_SEGMENTS.get(
+        (parsed.hostname or "").lower(), frozenset()
+    )
+
+
+def _supports_nested_repository_host(host: str) -> bool:
+    return not _host_matches_domain_fields(host, ("github_domains",)) and (
+        _host_matches_domain_fields(host, _NESTED_REPOSITORY_DOMAIN_CONFIG_FIELDS)
+    )
+
+
+def _supports_nested_repository_path(parsed: ParseResult) -> bool:
+    return bool(
+        parsed.hostname and _supports_nested_repository_host(parsed.hostname)
+    )
+
+
+def _looks_like_commit_sha(ref: str) -> bool:
+    """Return True if ref looks like a git commit SHA (7-40 hex chars)."""
+    return 7 <= len(ref) <= 40 and all(c in "0123456789abcdefABCDEF" for c in ref)
+
+
+def _domain_matches(parsed: ParseResult, domains: Iterable[str]) -> bool:
     """Return True when parsed URL host matches configured domains.
 
     ``urlparse().netloc`` includes optional userinfo and port values. Repository
@@ -52,20 +214,11 @@ def _extract_host(url: str) -> str:
 
 
 def _get_all_domains() -> list[str]:
-    config = get_openviking_config()
-    return list(
-        set(
-            config.code.github_domains
-            + config.code.gitlab_domains
-            + getattr(config.code, "azure_devops_domains", [])
-            + config.code.code_hosting_domains
-        )
-    )
+    return sorted(get_configured_code_hosting_domains())
 
 
 def _get_azure_devops_domains() -> set[str]:
-    config = get_openviking_config()
-    return set(getattr(config.code, "azure_devops_domains", []))
+    return set(_get_domains_for_field("azure_devops_domains"))
 
 
 def _sanitize_segment(segment: str) -> str:
@@ -133,14 +286,14 @@ def parse_code_hosting_url(url: str) -> Optional[str]:
                 )
         if len(path_parts) < 2:
             return None
-        # Take only first 2 segments (consistent with HTTP branch)
-        org = path_parts[0]
-        repo = path_parts[1]
-        if repo.endswith(".git"):
-            repo = repo[:-4]
-        org = _sanitize_segment(org)
-        repo = _sanitize_segment(repo)
-        return f"{org}/{repo}"
+        # Only platforms configured with nested namespaces keep every segment.
+        if path_parts[-1].endswith(".git") and _supports_nested_repository_host(host_part):
+            repo_parts = list(path_parts)
+        else:
+            repo_parts = path_parts[:2]
+        if repo_parts[-1].endswith(".git"):
+            repo_parts[-1] = repo_parts[-1][:-4]
+        return "/".join(_sanitize_segment(part) for part in repo_parts)
 
     if not url.startswith(("http://", "https://", "git://", "ssh://")):
         return None
@@ -158,17 +311,35 @@ def parse_code_hosting_url(url: str) -> Optional[str]:
             )
         return None
 
+    # GitLab "/-/" browse separator: everything before "-" is the full
+    # (possibly nested) repository path.
+    from_dash_separator = False
+    if (
+        _matches_domain_field(parsed, "gitlab_domains")
+        and "-" in path_parts
+        and path_parts.index("-") >= 2
+    ):
+        path_parts = path_parts[: path_parts.index("-")]
+        from_dash_separator = True
+
     # For code hosting URLs with org/repo structure
     if _domain_matches(parsed, all_domains) and len(path_parts) >= 2:
-        # Take first two parts: org/repo
-        org = path_parts[0]
-        repo = path_parts[1]
-        if repo.endswith(".git"):
-            repo = repo[:-4]
-        # Sanitize both parts
-        org = _sanitize_segment(org)
-        repo = _sanitize_segment(repo)
-        return f"{org}/{repo}"
+        has_git_suffix = path_parts[-1].endswith(".git")
+        # Segments between repo and filename that mark a browse URL
+        # (org/repo/blob/main/file.git must not be taken as a nested path).
+        browse_markers = set(path_parts[2:-1]) & (
+            _NON_REPO_PATH_SEGMENTS | _get_known_platform_non_repo_segments(parsed) | {"tree"}
+        )
+        if from_dash_separator or (
+            has_git_suffix and not browse_markers and _supports_nested_repository_path(parsed)
+        ):
+            repo_parts = list(path_parts)
+        else:
+            # Plain browser URL: take first two parts (org/repo)
+            repo_parts = path_parts[:2]
+        if repo_parts[-1].endswith(".git"):
+            repo_parts[-1] = repo_parts[-1][:-4]
+        return "/".join(_sanitize_segment(part) for part in repo_parts)
 
     return None
 
@@ -270,7 +441,20 @@ def is_git_repo_url(url: str) -> bool:
     """Strict check for cloneable git repository URLs.
 
     Distinguishes repo URLs (github.com/org/repo) from non-repo URLs
-    (github.com/org/repo/issues/123).
+    (github.com/org/repo/issues/123). The domain must always be whitelisted.
+
+    Accepted http(s) shapes:
+    - owner/repo, with or without a .git suffix
+    - nested clone URLs ending in .git, e.g. GitLab subgroups or
+      GitCode/Gitee nested groups (host/group/subgroup/repo.git)
+    - browser tree URLs with an unambiguous single-segment ref:
+      owner/repo/tree/<ref> and GitLab-style group/.../repo/-/tree/<ref>
+    - commit pins: owner/repo/commit/<sha> and group/.../repo/-/commit/<sha>
+    - Azure DevOps org/project/_git/repo (browse URLs with ?path= excluded)
+
+    Rejected: platform-reserved top-level pages (topics, orgs, groups, ...),
+    repo browse pages (issues, pull, blob, ...), and Azure DevOps URLs
+    without the _git form.
 
     Args:
         url: URL to check
@@ -278,54 +462,91 @@ def is_git_repo_url(url: str) -> bool:
     Returns:
         True if the URL points to a cloneable git repository
     """
-    # git@/ssh://git:// protocols: always a repo if the domain matches
+    # git@/ssh://git:// protocols: domain must match and a repo path must exist
     if url.startswith(("git@", "ssh://", "git://")):
-        return is_code_hosting_url(url)
-
-    # http/https: check domain AND require exactly 2 path parts (owner/repo)
-    if url.startswith(("http://", "https://")):
-        config = get_openviking_config()
-        all_domains = _get_all_domains()
-        parsed = urlparse(url)
-        if not _domain_matches(parsed, all_domains):
+        if not is_code_hosting_url(url):
             return False
-        path_parts = [p for p in parsed.path.split("/") if p]
-        # Strip .git suffix from last part for counting
-        if path_parts and path_parts[-1].endswith(".git"):
-            path_parts[-1] = path_parts[-1][:-4]
+        if url.startswith("git@"):
+            rest = url[4:]
+            path = rest.split(":", 1)[1] if ":" in rest else ""
+        else:
+            path = urlparse(url).path
+        return any(p for p in path.split("/") if p)
 
-        if _extract_host(url) in _get_azure_devops_domains():
-            azure_repo_parts = _extract_azure_devops_repo_parts(path_parts)
-            if azure_repo_parts:
-                if _is_azure_devops_browse_url(parsed.query):
-                    return False
-                return True
+    if not url.startswith(("http://", "https://")):
+        return False
 
-        non_repo_paths = {
-            "blob",
-            "commit",
-            "commits",
-            "issues",
-            "merge_requests",
-            "pull",
-            "pulls",
-            "raw",
-            "releases",
-            "wiki",
-        }
-        if (
-            _extract_host(url) in config.code.github_domains + config.code.gitlab_domains
-            and len(path_parts) >= 3
-            and path_parts[2] in non_repo_paths
-        ):
+    all_domains = _get_all_domains()
+    parsed = urlparse(url)
+    if not _domain_matches(parsed, all_domains):
+        return False
+    path_parts = [p for p in parsed.path.split("/") if p]
+
+    # Strip the .git suffix from the last part but remember it: a trailing
+    # .git is a strong clone-URL signal used below.
+    has_git_suffix = bool(path_parts) and path_parts[-1].endswith(".git")
+    if has_git_suffix:
+        path_parts[-1] = path_parts[-1][:-4]
+        if not path_parts[-1]:
             return False
 
-        # owner/repo
-        if len(path_parts) == 2:
+    # Azure DevOps: only the org/project/_git/repo form is cloneable;
+    # anything else on an Azure domain (e.g. the project page) is not a repo.
+    if _domain_matches(parsed, list(_get_azure_devops_domains())):
+        azure_repo_parts = _extract_azure_devops_repo_parts(path_parts)
+        if not azure_repo_parts:
+            return False
+        return not _is_azure_devops_browse_url(parsed.query)
+
+    # Platform-reserved top-level namespaces are never repositories.
+    if path_parts and path_parts[0].lower() in _get_reserved_top_level_segments(parsed):
+        return False
+
+    # GitLab "/-/" browse separator: group/.../repo/-/<page>/...
+    # Everything before "-" is the (possibly nested) repo path; only the
+    # tree and commit pages still identify a cloneable snapshot.
+    dash_index = (
+        path_parts.index("-")
+        if _matches_domain_field(parsed, "gitlab_domains") and "-" in path_parts
+        else -1
+    )
+    if dash_index >= 2:
+        browse = path_parts[dash_index + 1 :]
+        if len(browse) == 2 and browse[0] == "tree":
             return True
-        # owner/repo/tree/<ref> (branch name or commit SHA)
-        if len(path_parts) == 4 and path_parts[2] == "tree":
+        if len(browse) == 2 and browse[0] == "commit" and _looks_like_commit_sha(browse[1]):
             return True
         return False
 
+    # owner/repo/commit/<sha> pins the repo to an exact snapshot.
+    if len(path_parts) == 4 and path_parts[2] == "commit" and _looks_like_commit_sha(path_parts[3]):
+        return True
+
+    # Known platform browse routes stay on the web path, even when the selected
+    # file happens to end in ".git".
+    known_platform_non_repo_segments = _get_known_platform_non_repo_segments(parsed)
+    if len(path_parts) >= 3 and path_parts[2] in known_platform_non_repo_segments:
+        return False
+
+    # Common repo browse pages -- unless the matching segment is itself the final
+    # .git-suffixed repo name (a nested repo literally named e.g. "blob").
+    if (
+        len(path_parts) >= 3
+        and path_parts[2] in _NON_REPO_PATH_SEGMENTS
+        and not (has_git_suffix and len(path_parts) == 3)
+    ):
+        return False
+
+    # Clone-style URL: two-segment paths work for every configured host, while
+    # nested group paths are limited to platform categories that support them.
+    if has_git_suffix:
+        return len(path_parts) == 2 or _supports_nested_repository_path(parsed)
+
+    # owner/repo
+    if len(path_parts) == 2:
+        return True
+    # owner/repo/tree/<ref>. Additional segments are ambiguous: they may be
+    # part of a slashed ref or a path within the repository.
+    if len(path_parts) == 4 and path_parts[2] == "tree":
+        return True
     return False
