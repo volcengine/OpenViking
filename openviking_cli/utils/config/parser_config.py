@@ -236,22 +236,19 @@ class CodeConfig(CodeHostingConfig):
 
     Attributes:
         code_summary_mode: Summary generation mode ("llm" | "ast" | "ast_llm")
-        code_skeleton_provider: Skeleton extraction provider. "auto" routes through
-            maintained tags queries and then process().
-        extract_functions: Whether to extract function definitions
-        extract_classes: Whether to extract class definitions
-        extract_imports: Whether to extract import statements
-        include_comments: Whether to include comments in L1/L2
-        max_line_length: Maximum line length before splitting
-        language_hint: Optional language hint (auto-detected if None)
-        max_token_limit: Maximum tokens to process per file
-        truncation_strategy: "head", "tail", or "balanced"
-        warn_on_truncation: Whether to warn when truncation occurs
+        extract_functions: Legacy compatibility field; ignored by the fixed skeleton route
+        extract_classes: Legacy compatibility field; ignored by the fixed skeleton route
+        extract_imports: Legacy compatibility field; ignored by the fixed skeleton route
+        include_comments: Legacy compatibility field; ignored by the fixed skeleton route
+        max_line_length: Legacy compatibility field; ignored by the fixed skeleton route
+        language_hint: Legacy compatibility field; ignored by the fixed skeleton route
+        max_token_limit: Legacy compatibility field; ignored by the fixed skeleton route
+        truncation_strategy: Legacy compatibility field; ignored by the fixed skeleton route
+        warn_on_truncation: Legacy compatibility field; ignored by the fixed skeleton route
         github_raw_domain: Domain for GitHub raw content (raw.githubusercontent.com)
     """
 
     code_summary_mode: str = "ast"  # "llm" | "ast" | "ast_llm"
-    code_skeleton_provider: str = "auto"
     extract_functions: bool = True
     extract_classes: bool = True
     extract_imports: bool = True
@@ -278,21 +275,6 @@ class CodeConfig(CodeHostingConfig):
             raise ValueError(
                 f"Invalid code_summary_mode '{self.code_summary_mode}'. "
                 "Must be 'llm', 'ast', or 'ast_llm'"
-            )
-
-        if self.code_skeleton_provider not in (
-            "auto",
-            "ov_ast",
-            "aider_repomap",
-            "repomap_query",
-            "query",
-            "aider_query",
-            "process",
-        ):
-            raise ValueError(
-                f"Invalid code_skeleton_provider '{self.code_skeleton_provider}'. "
-                "Must be 'auto', 'ov_ast', 'aider_repomap', 'repomap_query', "
-                "'query', 'aider_query', or 'process'"
             )
 
         if self.max_line_length <= 0:
@@ -716,8 +698,7 @@ def get_parser_config(
 
         >>> # Get custom code configuration
         >>> code_config = get_parser_config("code", {
-        ...     "enable_ast": False,
-        ...     "max_token_limit": 10000
+        ...     "code_summary_mode": "llm"
         ... })
     """
     if parser_type not in PARSER_CONFIG_REGISTRY:
@@ -745,7 +726,7 @@ def load_parser_configs_from_dict(config_dict: Dict[str, Any]) -> Dict[str, Pars
     Examples:
         >>> configs = load_parser_configs_from_dict({
         ...     "pdf": {"strategy": "auto"},
-        ...     "code": {"enable_ast": false}
+        ...     "code": {"code_summary_mode": "llm"}
         ... })
         >>> pdf_config = configs["pdf"]
         >>> code_config = configs["code"]

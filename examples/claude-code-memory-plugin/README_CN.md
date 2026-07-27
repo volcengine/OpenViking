@@ -348,7 +348,7 @@ Claude Code 自带 `MEMORY.md` 文件系统，本插件**与之互补**：
 
 ### 服务器暴露的 MCP 工具
 
-插件的 `.mcp.json` 启动本地 stdio 代理，代理再连到 OpenViking 服务器原生 HTTP MCP endpoint `/mcp`。Claude 可按需调用服务器提供的检索、记忆、资源、watch、文件系统和代码导航工具。
+插件的 `.mcp.json` 启动本地 stdio 代理，代理再连到 OpenViking 服务器原生 HTTP MCP endpoint `/mcp`。Claude 可按需调用服务器提供的检索、记忆、资源、watch 和文件系统工具。
 
 完整工具清单和参数详见 [MCP 集成指南](../../docs/zh/guides/06-mcp-integration.md)。
 

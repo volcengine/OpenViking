@@ -11,15 +11,6 @@ from openviking.parse.parsers.code.ast.extractor import (
     supports_code_skeleton,
 )
 from openviking.parse.parsers.code.ast.providers import extract_skeleton_with_routing
-from openviking_cli.utils.config.parser_config import CodeConfig
-
-
-@pytest.fixture(autouse=True)
-def auto_provider(monkeypatch):
-    monkeypatch.setattr(
-        "openviking.parse.parsers.code.ast.providers._configured_provider",
-        lambda: "auto",
-    )
 
 
 def test_tags_query_wins_without_calling_process(monkeypatch):
@@ -130,20 +121,3 @@ def test_viking_resource_path_recovers_parent_suffix():
     text = get_process_extractor().extract_skeleton(file_name, "def run():\n    pass\n")
     assert text is not None
     assert "run" in text
-
-
-@pytest.mark.parametrize(
-    "provider",
-    [
-        "auto",
-        "ov_ast",
-        "aider_repomap",
-        "repomap_query",
-        "query",
-        "aider_query",
-        "process",
-    ],
-)
-def test_code_provider_config_compatibility(provider):
-    config = CodeConfig(code_skeleton_provider=provider)
-    config.validate()

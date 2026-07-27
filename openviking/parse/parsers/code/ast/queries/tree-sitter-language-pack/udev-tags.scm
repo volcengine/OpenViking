@@ -8,10 +8,6 @@
   (value
     (content) @name.reference.label)) @reference.label
 
-(assignment
-  key: "ENV"
-  (env_var) @name.definition.variable) @definition.variable
-
 (match
   key: "ENV"
   (env_var) @name.reference.variable) @reference.variable
