@@ -19,6 +19,7 @@ from openviking.server.routers.skills import (
 )
 from openviking.service import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
+from openviking.session.memory.utils.content_visibility import visible_content
 from openviking.telemetry import TelemetryRequest
 from openviking.telemetry.execution import (
     attach_telemetry_payload,
@@ -618,7 +619,8 @@ class LocalClient(BaseClient):
             offset: Starting line number (0-indexed). Default 0.
             limit: Number of lines to read. -1 means read to end. Default -1.
         """
-        return await self._service.fs.read(uri, ctx=self._ctx, offset=offset, limit=limit)
+        raw_content = await self._service.fs.read(uri, ctx=self._ctx)
+        return visible_content(raw_content, uri=uri, offset=offset, limit=limit)
 
     async def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
         """Read raw file content, including hidden MEMORY_FIELDS metadata."""
