@@ -6,6 +6,7 @@ import asyncio
 import threading
 from dataclasses import dataclass, field
 from typing import ClassVar, Dict, List, Optional, Set
+from uuid import uuid4
 from weakref import WeakKeyDictionary
 
 from openviking.server.identity import RequestContext
@@ -182,6 +183,7 @@ class SemanticDagExecutor:
         self._incremental_update = incremental_update
         self._target_uri = target_uri
         self._semantic_msg_id = semantic_msg_id
+        self._embedding_tracker_id = f"{semantic_msg_id}:{uuid4().hex}" if semantic_msg_id else None
         self._telemetry_id = telemetry_id
         self._recursive = recursive
         self._lock = lock
@@ -257,15 +259,18 @@ class SemanticDagExecutor:
 
         try:
             self._register_active()
-            if not self._skip_vectorization and self._semantic_msg_id:
+            if not self._skip_vectorization and self._embedding_tracker_id:
                 from .embedding_tracker import EmbeddingTaskTracker
 
                 self._embedding_tracker = EmbeddingTaskTracker.get_instance()
                 await self._embedding_tracker.register_open(
-                    semantic_msg_id=self._semantic_msg_id,
+                    semantic_msg_id=self._embedding_tracker_id,
                     on_complete=wrapped_on_complete,
                     on_leaf_complete=wrapped_on_leaf_complete,
-                    metadata={"uri": root_uri},
+                    metadata={
+                        "uri": root_uri,
+                        "semantic_msg_id": self._semantic_msg_id,
+                    },
                 )
 
             self._schedule_dir(root_uri, parent_uri=None)
@@ -278,8 +283,8 @@ class SemanticDagExecutor:
             if pending_vectorize_work > 0:
                 await self._vectorize_done.wait()
 
-            if self._embedding_tracker is not None and self._semantic_msg_id is not None:
-                await self._embedding_tracker.seal(self._semantic_msg_id)
+            if self._embedding_tracker is not None and self._embedding_tracker_id is not None:
+                await self._embedding_tracker.seal(self._embedding_tracker_id)
             else:
                 try:
                     await wrapped_on_complete()
@@ -287,9 +292,9 @@ class SemanticDagExecutor:
                     logger.error(f"Error in on_complete callback: {e}", exc_info=True)
         except BaseException:
             self._closed = True
-            if self._embedding_tracker is not None and self._semantic_msg_id is not None:
+            if self._embedding_tracker is not None and self._embedding_tracker_id is not None:
                 try:
-                    await self._embedding_tracker.discard(self._semantic_msg_id)
+                    await self._embedding_tracker.discard(self._embedding_tracker_id)
                 except Exception:
                     pass
             try:
@@ -431,8 +436,8 @@ class SemanticDagExecutor:
         ):
             return
         self._leaf_sealed = True
-        if self._embedding_tracker is not None and self._semantic_msg_id is not None:
-            await self._embedding_tracker.seal_leaf(self._semantic_msg_id)
+        if self._embedding_tracker is not None and self._embedding_tracker_id is not None:
+            await self._embedding_tracker.seal_leaf(self._embedding_tracker_id)
 
     async def _run_vectorize_work(self, task: Optional[VectorizeTask]) -> None:
         try:
@@ -746,7 +751,7 @@ class SemanticDagExecutor:
                     uri=file_path,
                     context_type=self._context_type,
                     ctx=self._ctx,
-                    semantic_msg_id=self._semantic_msg_id,
+                    semantic_msg_id=self._embedding_tracker_id,
                     file_path=file_path,
                     summary_dict={"name": file_name, "summary": ""},
                     parent_uri=parent_uri,
@@ -777,7 +782,7 @@ class SemanticDagExecutor:
                     uri=file_path,
                     context_type=self._context_type,
                     ctx=self._ctx,
-                    semantic_msg_id=self._semantic_msg_id,
+                    semantic_msg_id=self._embedding_tracker_id,
                     file_path=file_path,
                     summary_dict=summary_dict,
                     parent_uri=parent_uri,
@@ -792,9 +797,9 @@ class SemanticDagExecutor:
         await self._on_file_done(parent_uri, file_path, summary_dict)
 
     async def _add_metadata_patch(self, file_path: str, summary: str) -> None:
-        if self._embedding_tracker is not None and self._semantic_msg_id is not None:
+        if self._embedding_tracker is not None and self._embedding_tracker_id is not None:
             await self._embedding_tracker.add(
-                self._semantic_msg_id,
+                self._embedding_tracker_id,
                 count=1,
                 leaf_count=0,
             )
@@ -814,15 +819,15 @@ class SemanticDagExecutor:
         await self._enqueue_registered_metadata_patch(file_path, summary)
 
     async def _discard_registered_metadata_patch(self) -> None:
-        if self._embedding_tracker is not None and self._semantic_msg_id is not None:
+        if self._embedding_tracker is not None and self._embedding_tracker_id is not None:
             await self._embedding_tracker.decrement(
-                self._semantic_msg_id,
+                self._embedding_tracker_id,
                 is_leaf=False,
             )
 
     async def _enqueue_registered_metadata_patch(self, file_path: str, summary: str) -> None:
         tracker = self._embedding_tracker
-        semantic_msg_id = self._semantic_msg_id
+        semantic_msg_id = self._embedding_tracker_id
         if tracker is None or semantic_msg_id is None:
             return
 
@@ -843,14 +848,14 @@ class SemanticDagExecutor:
                         file_path=file_path,
                         summary=summary,
                         ctx=self._ctx,
-                        semantic_msg_id=self._semantic_msg_id,
+                        semantic_msg_id=semantic_msg_id,
                     )
             else:
                 enqueued = await self._processor._patch_file_summary(
                     file_path=file_path,
                     summary=summary,
                     ctx=self._ctx,
-                    semantic_msg_id=self._semantic_msg_id,
+                    semantic_msg_id=semantic_msg_id,
                 )
         except Exception as exc:
             logger.error(
@@ -1006,7 +1011,7 @@ class SemanticDagExecutor:
                         uri=dir_uri,
                         context_type=self._context_type,
                         ctx=self._ctx,
-                        semantic_msg_id=self._semantic_msg_id,
+                        semantic_msg_id=self._embedding_tracker_id,
                         abstract=abstract,
                         overview=overview,
                     )
@@ -1066,9 +1071,9 @@ class SemanticDagExecutor:
 
         task_count = 1 if task.task_type == "file" else 2
         leaf_count = 1 if task.task_type == "file" else 0
-        if self._embedding_tracker is not None and self._semantic_msg_id is not None:
+        if self._embedding_tracker is not None and self._embedding_tracker_id is not None:
             await self._embedding_tracker.add(
-                self._semantic_msg_id,
+                self._embedding_tracker_id,
                 count=task_count,
                 leaf_count=leaf_count,
             )

@@ -181,6 +181,7 @@ class _EmbeddingFirstProcessor(_FakeProcessor):
         self.summary_started = asyncio.Event()
         self.allow_summary = asyncio.Event()
         self.vectorize_summaries = []
+        self.vectorize_semantic_msg_ids = []
         self.metadata_patches = []
 
     async def _generate_single_file_summary(self, file_path, llm_sem=None, ctx=None):
@@ -202,6 +203,7 @@ class _EmbeddingFirstProcessor(_FakeProcessor):
     ):
         self.events.append("vectorize_persisted")
         self.vectorize_summaries.append(dict(summary_dict))
+        self.vectorize_semantic_msg_ids.append(semantic_msg_id)
         return True
 
     async def _patch_file_summary(
@@ -585,6 +587,47 @@ async def test_semantic_dag_marks_content_only_leaf_indexed_while_summary_is_blo
 
 
 @pytest.mark.asyncio
+async def test_semantic_dag_retry_ignores_stale_embedding_completion(monkeypatch):
+    root_uri = "viking://resources/root"
+    semantic_msg_id = "semantic-retry"
+    fake_fs = _FakeVikingFS(
+        {
+            root_uri: [{"name": "leaf.md", "isDir": False}],
+        }
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(EmbeddingTaskTracker, "_instance", None)
+    monkeypatch.setattr(EmbeddingTaskTracker, "_initialized", False)
+    embedding_tracker = EmbeddingTaskTracker.get_instance()
+
+    async def run_attempt():
+        processor = _EmbeddingFirstProcessor()
+        processor.allow_summary.set()
+        executor = SemanticDagExecutor(
+            processor=processor,
+            context_type="resource",
+            max_concurrent_llm=1,
+            ctx=RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER),
+            semantic_msg_id=semantic_msg_id,
+        )
+        monkeypatch.setattr(executor, "_write_directory_semantics", AsyncMock(return_value=False))
+        await executor.run(root_uri)
+        return processor.vectorize_semantic_msg_ids[0]
+
+    first_attempt_id = await run_attempt()
+    await embedding_tracker.discard(first_attempt_id)
+    second_attempt_id = await run_attempt()
+
+    try:
+        stale_remaining = await embedding_tracker.decrement(first_attempt_id, is_leaf=True)
+
+        assert first_attempt_id != second_attempt_id
+        assert stale_remaining is None
+    finally:
+        await embedding_tracker.discard(second_attempt_id)
+
+
+@pytest.mark.asyncio
 async def test_semantic_dag_keeps_summary_dependent_leaf_summary_first(monkeypatch):
     root_uri = "viking://resources/root"
     fake_fs = _FakeVikingFS(
@@ -707,7 +750,10 @@ async def test_semantic_dag_compensates_full_tracker_when_metadata_patch_is_not_
 
     try:
         await executor.run(root_uri)
-        leaf_done = asyncio.create_task(embedding_tracker.decrement(semantic_msg_id, is_leaf=True))
+        embedding_tracker_id = processor.vectorize_semantic_msg_ids[0]
+        leaf_done = asyncio.create_task(
+            embedding_tracker.decrement(embedding_tracker_id, is_leaf=True)
+        )
         await lock.close_started.wait()
 
         status = request_tracker.build_queue_status(telemetry_id)
@@ -717,7 +763,8 @@ async def test_semantic_dag_compensates_full_tracker_when_metadata_patch_is_not_
         lock.allow_close.set()
         if "leaf_done" in locals():
             await leaf_done
-        await embedding_tracker.discard(semantic_msg_id)
+        if "embedding_tracker_id" in locals():
+            await embedding_tracker.discard(embedding_tracker_id)
         request_tracker.cleanup(telemetry_id)
 
 
@@ -751,11 +798,12 @@ async def test_semantic_dag_enqueues_metadata_patch_only_after_leaf_embedding_fi
     await executor.run(root_uri)
 
     assert processor.metadata_patches == []
-    await embedding_tracker.decrement("semantic-1", is_leaf=True)
+    embedding_tracker_id = processor.vectorize_semantic_msg_ids[0]
+    await embedding_tracker.decrement(embedding_tracker_id, is_leaf=True)
     assert processor.metadata_patches == [
-        ("viking://resources/root/leaf.md", "generated summary", "semantic-1")
+        ("viking://resources/root/leaf.md", "generated summary", embedding_tracker_id)
     ]
-    await embedding_tracker.discard("semantic-1")
+    await embedding_tracker.discard(embedding_tracker_id)
 
 
 @pytest.mark.asyncio
@@ -810,7 +858,10 @@ async def test_semantic_dag_leaf_milestone_does_not_wait_for_metadata_patch_enqu
 
     try:
         await executor.run(root_uri)
-        leaf_done = asyncio.create_task(embedding_tracker.decrement(semantic_msg_id, is_leaf=True))
+        embedding_tracker_id = processor.vectorize_semantic_msg_ids[0]
+        leaf_done = asyncio.create_task(
+            embedding_tracker.decrement(embedding_tracker_id, is_leaf=True)
+        )
         await processor.patch_started.wait()
 
         assert request_tracker.is_leaf_indexed(telemetry_id) is True
@@ -818,7 +869,8 @@ async def test_semantic_dag_leaf_milestone_does_not_wait_for_metadata_patch_enqu
         processor.allow_patch.set()
         if "leaf_done" in locals():
             await leaf_done
-        await embedding_tracker.discard(semantic_msg_id)
+        if "embedding_tracker_id" in locals():
+            await embedding_tracker.discard(embedding_tracker_id)
         request_tracker.cleanup(telemetry_id)
 
 
@@ -861,13 +913,15 @@ async def test_semantic_dag_drops_pending_metadata_patch_after_leaf_embedding_fa
             "leaf embedding failed",
             is_leaf=True,
         )
-        await embedding_tracker.decrement(semantic_msg_id, is_leaf=True)
+        embedding_tracker_id = processor.vectorize_semantic_msg_ids[0]
+        await embedding_tracker.decrement(embedding_tracker_id, is_leaf=True)
 
         assert processor.metadata_patches == []
         assert request_tracker.is_leaf_indexed(telemetry_id) is False
         assert request_tracker.is_complete(telemetry_id) is True
     finally:
-        await embedding_tracker.discard(semantic_msg_id)
+        if "embedding_tracker_id" in locals():
+            await embedding_tracker.discard(embedding_tracker_id)
         request_tracker.cleanup(telemetry_id)
 
 
