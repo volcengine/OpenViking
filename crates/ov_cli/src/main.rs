@@ -2589,11 +2589,35 @@ fn language_command_can_run_picker(has_language_value: bool, is_interactive: boo
     has_language_value || is_interactive
 }
 
+fn render_pre_language_help_request(args: &[OsString]) -> Option<String> {
+    if !args
+        .iter()
+        .skip(1)
+        .any(|arg| matches!(arg.to_str(), Some("-h" | "--help")))
+    {
+        return None;
+    }
+
+    let error = Cli::try_parse_from(args).err()?;
+    if error.kind() != clap::error::ErrorKind::DisplayHelp {
+        return None;
+    }
+
+    if help_ui::is_top_level_help_request(args) {
+        return Some(help_ui::render_top_level_help());
+    }
+    help_ui::render_command_help_request(args).or_else(|| Some(error.to_string()))
+}
+
 #[tokio::main]
 async fn main() {
     let args = preprocess_cli_args(std::env::args_os().collect());
     let command_display = error_ui::display_command(&args);
     let (pre_parse_output_format, pre_parse_compact) = pre_parse_output_options(&args);
+    if let Some(help) = render_pre_language_help_request(&args) {
+        print!("{help}");
+        return;
+    }
     match ensure_language_selected_before_command(&args).await {
         Ok(true) => {}
         Ok(false) => return,
@@ -3325,7 +3349,7 @@ mod tests {
         first_command_token, is_language_command_request, language_command_can_run_picker,
         language_gate_action, language_required_message, legacy_upload_option_error,
         plain_help_misuse, pre_parse_output_options, pre_parse_requires_cli_config_file,
-        preprocess_cli_args, preprocess_privacy_args,
+        preprocess_cli_args, preprocess_privacy_args, render_pre_language_help_request,
     };
     use crate::config::{Config, DEFAULT_CUSTOM_URL};
     use crate::output::OutputFormat;
@@ -4288,6 +4312,33 @@ mod tests {
 
         let status = Cli::try_parse_from(["ov", "status"]).expect("status should parse");
         assert!(!status.command.allows_invalid_runtime_config());
+    }
+
+    #[test]
+    fn only_explicit_clap_help_bypasses_language_setup() {
+        for args in [
+            ["ov", "--help"].as_slice(),
+            ["ov", "-h"].as_slice(),
+            ["ov", "status", "--help"].as_slice(),
+            ["ov", "system", "wait", "-h"].as_slice(),
+        ] {
+            assert!(
+                render_pre_language_help_request(&os_args(args)).is_some(),
+                "{args:?} should render before language setup"
+            );
+        }
+
+        for args in [
+            ["ov", "status"].as_slice(),
+            ["ov", "task"].as_slice(),
+            ["ov", "-help"].as_slice(),
+            ["ov", "--account", "--help", "status"].as_slice(),
+        ] {
+            assert!(
+                render_pre_language_help_request(&os_args(args)).is_none(),
+                "{args:?} should keep the language gate"
+            );
+        }
     }
 
     #[test]
