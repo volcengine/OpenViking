@@ -316,7 +316,12 @@ enum Commands {
         #[arg(long, help_heading = "Common options")]
         wait: bool,
         /// Wait timeout in seconds (only used with --wait)
-        #[arg(long, value_name = "seconds", help_heading = "Common options")]
+        #[arg(
+            long,
+            value_parser = config::parse_positive_timeout,
+            value_name = "seconds",
+            help_heading = "Common options"
+        )]
         timeout: Option<f64>,
         /// Enable strict mode for directory scanning (fail if any unsupported files found)
         #[arg(
@@ -364,7 +369,12 @@ enum Commands {
         #[arg(long, help_heading = "Common options")]
         wait: bool,
         /// Wait timeout in seconds
-        #[arg(long, value_name = "seconds", help_heading = "Common options")]
+        #[arg(
+            long,
+            value_parser = config::parse_positive_timeout,
+            value_name = "seconds",
+            help_heading = "Common options"
+        )]
         timeout: Option<f64>,
         /// Parent skill root URI (e.g. viking://agent/skills); defaults to user-private skills
         #[arg(
@@ -412,6 +422,7 @@ enum Commands {
             short = 'n',
             alias = "limit",
             default_value = "256",
+            value_parser = clap::value_parser!(i32).range(1..),
             value_name = "n",
             help_heading = "Common options"
         )]
@@ -440,6 +451,7 @@ enum Commands {
             short = 'n',
             alias = "limit",
             default_value = "256",
+            value_parser = clap::value_parser!(i32).range(1..),
             value_name = "n",
             help_heading = "Common options"
         )]
@@ -476,7 +488,12 @@ enum Commands {
         #[arg(long, help_heading = "Common options")]
         wait: bool,
         /// Wait timeout in seconds (only used with --wait)
-        #[arg(long, value_name = "seconds", help_heading = "Common options")]
+        #[arg(
+            long,
+            value_parser = config::parse_positive_timeout,
+            value_name = "seconds",
+            help_heading = "Common options"
+        )]
         timeout: Option<f64>,
     },
     /// [Data] Move or rename resource
@@ -554,7 +571,12 @@ enum Commands {
         #[arg(long, default_value = "false", help_heading = "Common options")]
         wait: bool,
         /// Optional wait timeout in seconds
-        #[arg(long, value_name = "seconds", help_heading = "Common options")]
+        #[arg(
+            long,
+            value_parser = config::parse_positive_timeout,
+            value_name = "seconds",
+            help_heading = "Common options"
+        )]
         timeout: Option<f64>,
     },
     /// [Data] Update explicit retrieval tags metadata for a file or directory
@@ -608,6 +630,7 @@ enum Commands {
             long = "node-limit",
             alias = "limit",
             default_value = "10",
+            value_parser = clap::value_parser!(i32).range(1..),
             value_name = "n",
             help_heading = "Common options"
         )]
@@ -676,6 +699,7 @@ enum Commands {
             long = "node-limit",
             alias = "limit",
             default_value = "10",
+            value_parser = clap::value_parser!(i32).range(1..),
             value_name = "n",
             help_heading = "Common options"
         )]
@@ -745,6 +769,7 @@ enum Commands {
             long = "node-limit",
             alias = "limit",
             default_value = "256",
+            value_parser = clap::value_parser!(i32).range(1..),
             value_name = "n",
             help_heading = "Common options"
         )]
@@ -779,6 +804,7 @@ enum Commands {
             long = "node-limit",
             alias = "limit",
             default_value = "256",
+            value_parser = clap::value_parser!(i32).range(1..),
             value_name = "n",
             help_heading = "Common options"
         )]
@@ -945,7 +971,12 @@ enum Commands {
     /// [Status] Wait for queued async processing to complete
     Wait {
         /// Wait timeout in seconds
-        #[arg(long, value_name = "seconds", help_heading = "Common options")]
+        #[arg(
+            long,
+            value_parser = config::parse_positive_timeout,
+            value_name = "seconds",
+            help_heading = "Common options"
+        )]
         timeout: Option<f64>,
     },
     /// [Status] Track async resource processing tasks
@@ -1165,7 +1196,7 @@ enum SystemCommands {
     /// Wait for queued async processing to complete
     Wait {
         /// Wait timeout in seconds
-        #[arg(long, value_name = "seconds")]
+        #[arg(long, value_parser = config::parse_positive_timeout, value_name = "seconds")]
         timeout: Option<f64>,
     },
     /// Show component status
@@ -1324,6 +1355,7 @@ enum SkillCommands {
             long = "node-limit",
             alias = "limit",
             default_value = "1000",
+            value_parser = clap::value_parser!(i32).range(1..),
             value_name = "n"
         )]
         node_limit: i32,
@@ -1342,6 +1374,7 @@ enum SkillCommands {
             long = "node-limit",
             alias = "limit",
             default_value = "10",
+            value_parser = clap::value_parser!(i32).range(1..),
             value_name = "n"
         )]
         node_limit: i32,
@@ -1688,6 +1721,10 @@ impl Commands {
                 action: SkillCommands::Validate { .. },
             } | Commands::Version
         )
+    }
+
+    fn allows_invalid_runtime_config(&self) -> bool {
+        matches!(self, Commands::Config { .. })
     }
 }
 
@@ -2710,6 +2747,18 @@ async fn main() {
             std::process::exit(2);
         }
     };
+    if !cli.command.allows_invalid_runtime_config() {
+        if let Err(e) = config.validate_runtime_values() {
+            error_ui::print_runtime_error(
+                &command_display,
+                &e,
+                output_format,
+                compact,
+                cli.verbose,
+            );
+            std::process::exit(2);
+        }
+    }
     let ctx = CliContext::from_config(
         config,
         output_format,
@@ -4161,6 +4210,84 @@ mod tests {
             Commands::Language { language } => assert!(language.is_none()),
             _ => panic!("expected language command"),
         }
+    }
+
+    #[test]
+    fn all_timeout_options_require_positive_finite_seconds() {
+        let command_prefixes = [
+            vec!["ov", "add-resource", "https://example.com", "--timeout"],
+            vec!["ov", "add-skill", "skill", "--timeout"],
+            vec!["ov", "rm", "viking://resources/item", "--timeout"],
+            vec![
+                "ov",
+                "write",
+                "viking://resources/item",
+                "--content",
+                "value",
+                "--timeout",
+            ],
+            vec!["ov", "wait", "--timeout"],
+            vec!["ov", "system", "wait", "--timeout"],
+        ];
+
+        for prefix in command_prefixes {
+            for invalid in ["0", "-1", "inf", "NaN", "1e300"] {
+                let mut args = prefix.clone();
+                args.push(invalid);
+                assert!(
+                    Cli::try_parse_from(&args).is_err(),
+                    "{args:?} should reject an invalid timeout"
+                );
+            }
+
+            let mut args = prefix;
+            args.push("0.1");
+            assert!(
+                Cli::try_parse_from(&args).is_ok(),
+                "{args:?} should accept a positive finite timeout"
+            );
+        }
+    }
+
+    #[test]
+    fn all_node_limit_options_require_positive_values() {
+        let command_prefixes = [
+            vec!["ov", "ls", "--node-limit"],
+            vec!["ov", "tree", "viking://resources", "--node-limit"],
+            vec!["ov", "find", "query", "--node-limit"],
+            vec!["ov", "search", "query", "--node-limit"],
+            vec!["ov", "grep", "query", "--node-limit"],
+            vec!["ov", "glob", "**/*", "--node-limit"],
+            vec!["ov", "skills", "list", "--node-limit"],
+            vec!["ov", "skills", "find", "query", "--node-limit"],
+        ];
+
+        for prefix in command_prefixes {
+            for invalid in ["0", "-1"] {
+                let mut args = prefix.clone();
+                args.push(invalid);
+                assert!(
+                    Cli::try_parse_from(&args).is_err(),
+                    "{args:?} should reject a non-positive node limit"
+                );
+            }
+
+            let mut args = prefix;
+            args.push("1");
+            assert!(
+                Cli::try_parse_from(&args).is_ok(),
+                "{args:?} should accept a positive node limit"
+            );
+        }
+    }
+
+    #[test]
+    fn config_commands_can_load_invalid_runtime_values_for_repair() {
+        let cli = Cli::try_parse_from(["ov", "config", "show"]).expect("config show should parse");
+        assert!(cli.command.allows_invalid_runtime_config());
+
+        let status = Cli::try_parse_from(["ov", "status"]).expect("status should parse");
+        assert!(!status.command.allows_invalid_runtime_config());
     }
 
     #[test]
