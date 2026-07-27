@@ -5,11 +5,13 @@ import {
   deleteSession,
   fetchBotHealth,
   fetchSession,
+  fetchSessionMemoryDiffs,
   fetchSessionMessages,
   fetchSessions,
 } from './api'
 import type { Message } from './types/message'
-import type { SessionListItem } from '@ov-server/api/v1/sessions'
+import type { SessionMemoryDiff } from './memory-diff'
+import type { SessionListItem, SessionMeta } from '@ov-server/api/v1/sessions'
 
 const SESSIONS_KEY = ['sessions'] as const
 const BOT_HEALTH_KEY = ['bot', 'health'] as const
@@ -68,11 +70,38 @@ export function useSession(sessionId: string | undefined) {
 
 /** Fetch message history for a session. */
 export function useSessionMessages(sessionId: string | undefined) {
+  const queryClient = useQueryClient()
+
   return useQuery<Message[]>({
     queryKey: [...SESSIONS_KEY, sessionId, 'messages'],
-    queryFn: () => fetchSessionMessages(sessionId!),
+    queryFn: async () => {
+      const session = await queryClient.fetchQuery({
+        queryFn: () => fetchSession(sessionId!),
+        queryKey: [...SESSIONS_KEY, sessionId],
+        staleTime: 15_000,
+      })
+      return fetchSessionMessages(sessionId!, session)
+    },
     enabled: Boolean(sessionId),
     staleTime: 30_000, // cache for 30s to avoid flash on session switch
+  })
+}
+
+export function useSessionMemoryDiffs(
+  session: SessionMeta | undefined,
+  enabled = true,
+) {
+  return useQuery<SessionMemoryDiff[]>({
+    queryKey: [
+      ...SESSIONS_KEY,
+      session?.session_id,
+      'memory-diffs',
+      session?.commit_count,
+      session?.last_commit_at,
+    ],
+    queryFn: () => fetchSessionMemoryDiffs(session!),
+    enabled: Boolean(enabled && session && session.commit_count > 0),
+    staleTime: 30_000,
   })
 }
 

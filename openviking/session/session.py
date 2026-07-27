@@ -17,6 +17,7 @@ from openviking.core.namespace import canonical_session_uri
 from openviking.core.peer_id import normalize_peer_id, safe_peer_id
 from openviking.message import Message, Part
 from openviking.message.part import ContextPart, TextPart, ToolPart
+from openviking.pyagfs.exceptions import AGFSClientError, AGFSHTTPError, AGFSNotFoundError
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.constants import EXECUTION_MEMORY_TYPES
@@ -45,7 +46,7 @@ from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.model_retry import is_retryable_api_error, retry_async
 from openviking.utils.time_utils import get_current_timestamp
 from openviking.utils.token_estimation import estimate_text_tokens, truncate_text_to_token_budget
-from openviking_cli.exceptions import FailedPreconditionError
+from openviking_cli.exceptions import FailedPreconditionError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger, run_async
 from openviking_cli.utils.config import get_openviking_config
@@ -66,6 +67,21 @@ _MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS = 1.0
 _MEMORY_EXTRACTION_RETRY_MAX_DELAY_SECONDS = 8.0
 _SESSION_PHASE1_LOCK_TIMEOUT_SECONDS = 30.0
 _MEMORY_STEP_NAMES = ("long_term", "execution")
+
+
+class _ArchiveMessagesCorruptError(ValueError):
+    """Raised when an archive messages file cannot be deserialized."""
+
+
+def _is_storage_not_found(exc: BaseException) -> bool:
+    if isinstance(exc, AGFSClientError):
+        return isinstance(exc, AGFSNotFoundError) or (
+            isinstance(exc, AGFSHTTPError) and exc.status_code == 404
+        )
+    if isinstance(exc, (FileNotFoundError, NotFoundError)):
+        nested = exc.__cause__ or exc.__context__
+        return nested is None or _is_storage_not_found(nested)
+    return False
 
 
 def _wm_debug(msg: str) -> None:
@@ -529,7 +545,9 @@ class Session:
                 if line.strip()
             ]
             logger.info(f"Session loaded: {self.session_id} ({len(self._messages)} messages)")
-        except (FileNotFoundError, Exception):
+        except Exception as exc:
+            if not _is_storage_not_found(exc):
+                raise
             logger.debug(f"Session {self.session_id} not found, starting fresh")
 
         # Restore compression_index (scan history directory)
@@ -543,8 +561,9 @@ class Session:
                 self._compression.compression_index = max_index
                 self._stats.compression_count = len(archives)
                 logger.debug(f"Restored compression_index: {max_index}")
-        except Exception:
-            pass
+        except Exception as exc:
+            if not _is_storage_not_found(exc):
+                raise
 
         # Load .meta.json
         try:
@@ -552,7 +571,9 @@ class Session:
                 f"{self._session_uri}/.meta.json", ctx=self.ctx
             )
             self._meta = SessionMeta.from_dict(json.loads(meta_content))
-        except Exception:
+        except Exception as exc:
+            if not _is_storage_not_found(exc):
+                raise
             # Old session without meta — derive from existing data
             self._meta.message_count = len(self._messages)
             self._meta.commit_count = self._compression.compression_index
@@ -613,7 +634,9 @@ class Session:
         try:
             await self._viking_fs.stat(self._session_uri, ctx=self.ctx)
             return True
-        except Exception:
+        except Exception as exc:
+            if not _is_storage_not_found(exc):
+                raise
             return False
 
     async def ensure_exists(self) -> None:
@@ -1906,8 +1929,9 @@ class Session:
 
         try:
             await self._viking_fs.read_file(f"{msg.archive_uri}/.done", ctx=self.ctx)
-        except Exception:
-            pass
+        except Exception as exc:
+            if not _is_storage_not_found(exc):
+                raise
         else:
             if task.status.value == "completed":
                 return
@@ -1923,8 +1947,9 @@ class Session:
             failed = json.loads(
                 await self._viking_fs.read_file(f"{msg.archive_uri}/.failed.json", ctx=self.ctx)
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            if not _is_storage_not_found(exc):
+                raise
         else:
             await tracker.fail(
                 msg.task_id,
@@ -1953,9 +1978,18 @@ class Session:
             )
             return
 
-        archive_messages = await self._read_archive_messages(msg.archive_uri)
+        archive_error = ""
+        try:
+            archive_messages = await self._read_archive_messages(msg.archive_uri)
+        except _ArchiveMessagesCorruptError as exc:
+            archive_messages = []
+            archive_error = f"session commit archive has invalid messages: {exc}"
+        except Exception as exc:
+            if not _is_storage_not_found(exc):
+                raise
+            archive_messages = []
         if not archive_messages:
-            error = "session commit archive has no messages"
+            error = archive_error or "session commit archive has no messages"
             await self._write_failed_marker(
                 msg.archive_uri,
                 stage="archive_read",
@@ -2966,10 +3000,7 @@ class Session:
 
     async def _read_archive_messages(self, archive_uri: str) -> List[Message]:
         """Read archived messages from one archive."""
-        try:
-            content = await self._viking_fs.read_file(f"{archive_uri}/messages.jsonl", ctx=self.ctx)
-        except Exception:
-            return []
+        content = await self._viking_fs.read_file(f"{archive_uri}/messages.jsonl", ctx=self.ctx)
 
         messages: List[Message] = []
         for line in content.strip().split("\n"):
@@ -2977,8 +3008,8 @@ class Session:
                 continue
             try:
                 messages.append(Message.from_dict(json.loads(line)))
-            except Exception:
-                continue
+            except (json.JSONDecodeError, AttributeError, KeyError, TypeError, ValueError) as exc:
+                raise _ArchiveMessagesCorruptError("invalid message record") from exc
 
         return messages
 
@@ -3294,7 +3325,15 @@ class Session:
         for state in states:
             if state.archive_id in covered or state.state == "completed":
                 continue
-            messages.extend(await self._read_archive_messages(state.archive_uri))
+            try:
+                messages.extend(await self._read_archive_messages(state.archive_uri))
+            except Exception as exc:
+                if not _is_storage_not_found(exc):
+                    raise
+                logger.warning(
+                    "Skipping pending archive %s because messages.jsonl is missing",
+                    state.archive_uri,
+                )
         return self._stable_deduplicate_messages(messages)
 
     async def _get_pending_archive_messages(self) -> List[Message]:

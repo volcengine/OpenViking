@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.message import Message, TextPart
-from openviking.service.task_tracker import TaskTracker, set_task_tracker
+from openviking.service.task_tracker import TaskStatus, TaskTracker, set_task_tracker
 from openviking.session.session import Session
 from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
 
@@ -84,3 +84,62 @@ async def test_resume_queued_commit_continues_phase2(monkeypatch):
     assert [
         item.id for item in session._run_memory_extraction.await_args.kwargs["messages"]
     ] == ["archived"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("archive_content", [None, "{invalid json", "{}"])
+async def test_resume_queued_commit_fails_terminally_for_unreadable_archive(
+    monkeypatch, archive_content
+):
+    session_uri = "viking://user/sessions/session-1"
+    archive_uri = f"{session_uri}/history/archive_001"
+    files = {}
+    if archive_content is not None:
+        files[f"{archive_uri}/messages.jsonl"] = archive_content
+    viking_fs = _MemoryVikingFS(files)
+    session = Session(viking_fs=viking_fs, session_id="session-1", session_uri=session_uri)
+    tracker = TaskTracker(_TaskStore())
+    set_task_tracker(tracker)
+    monkeypatch.setattr(session, "_run_memory_extraction", AsyncMock())
+    message = SessionCommitMsg(
+        task_id="task-1",
+        session_id="session-1",
+        session_uri=session_uri,
+        archive_uri=archive_uri,
+        user={"account_id": "default", "user_id": "default"},
+    )
+
+    try:
+        await session.resume_queued_commit(message)
+        task = await tracker.get("task-1")
+    finally:
+        set_task_tracker(None)
+
+    assert task.status == TaskStatus.FAILED
+    failed = json.loads(files[f"{archive_uri}/.failed.json"])
+    assert failed["stage"] == "archive_read"
+    session._run_memory_extraction.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_session_context_skips_pending_archive_with_missing_messages(monkeypatch):
+    session_uri = "viking://user/sessions/session-1"
+    archive_uri = f"{session_uri}/history/archive_001"
+    session = Session(
+        viking_fs=_MemoryVikingFS({}),
+        session_id="session-1",
+        session_uri=session_uri,
+    )
+    monkeypatch.setattr(
+        session,
+        "_list_archive_refs",
+        AsyncMock(
+            return_value=[
+                {"archive_id": "archive_001", "archive_uri": archive_uri, "index": 1}
+            ]
+        ),
+    )
+
+    context = await session.get_context_for_search(query="test")
+
+    assert context == {"latest_archive_overview": "", "current_messages": []}

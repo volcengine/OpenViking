@@ -7,6 +7,8 @@ export const PLAYGROUND_RIGHT_WIDTH_STORAGE_KEY =
   'openviking.playground.rightWidth'
 export const PLAYGROUND_AGENT_SESSIONS_STORAGE_KEY =
   'openviking.playground.agentSessions'
+export const PLAYGROUND_EXPANDED_URIS_STORAGE_KEY =
+  'openviking.playground.expandedUris'
 export const PLAYGROUND_LEFT_WIDTH = {
   default: 330,
   max: 620,

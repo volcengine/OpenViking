@@ -313,10 +313,8 @@ async def chat_stream(
                     response.raise_for_status()
 
                     # Stream the response content
-                    async for line in response.aiter_lines():
-                        if line:
-                            # Forward the SSE line as-is
-                            yield f"{line}\n"
+                    async for chunk in response.aiter_text():
+                        yield chunk
         except httpx.RequestError as e:
             logger.error(f"Failed to connect to bot service: {e}")
             error_event = {

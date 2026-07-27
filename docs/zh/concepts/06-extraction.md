@@ -131,11 +131,11 @@ SemanticMsg(
 
 ## 代码骨架提取
 
-对于代码文件，OpenViking 使用基于 tree-sitter 的代码骨架提取，作为 LLM 摘要的轻量替代方案。
+对于代码文件，OpenViking 使用固定的代码骨架提取路线，作为 LLM 摘要的轻量替代方案。
 
 ### 工作模式
 
-在 `ov.conf` 中通过 `code_summary_mode` 字段控制（参见[配置文档](../guides/01-configuration.md#code)），支持三种模式：
+`ov.conf` 中的 `code_summary_mode` 字段只控制代码文件使用骨架提取还是直接走 LLM 摘要（参见[配置文档](../guides/01-configuration.md#code)），支持三种模式：
 
 | 模式 | 说明 |
 |------|------|
@@ -143,15 +143,19 @@ SemanticMsg(
 | `"llm"` | 全部走 LLM 生成摘要 |
 | `"ast_llm"` | 提取更详细的代码骨架，不再额外调用一次 LLM |
 
+### 代码骨架内容
+
+骨架可包含 import、类、方法、函数及其他语言级符号，具体内容取决于处理该文件的提取器。提取路线本身不可配置：OpenViking 会优先使用维护中的 `tags.scm` query 集；未覆盖或结果不可用时，再使用 `tree-sitter-language-pack.process()` 扩展语言覆盖范围。
+
 ### Fallback 机制
 
-默认的 `auto` provider 按以下顺序执行：
+代码骨架提取按以下固定顺序执行：
 
 1. 语言存在维护中的 `tags.scm` 时，优先使用 tags query。
 2. 不存在 query 或 query 未产出可用骨架时，使用 `tree-sitter-language-pack.process()`。
 3. 两种提取方式都无可用结果时，才回退到 `semantic.code_summary`。
 
-长短代码文件都遵循同一路由。仅在兼容旧配置或专项评测时设置 `code_skeleton_provider`。
+长短代码文件都遵循同一路由。
 
 ## 三种上下文提取
 

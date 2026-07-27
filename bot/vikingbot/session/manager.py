@@ -248,8 +248,9 @@ class SessionManager:
                 metadata=metadata,
             )
         except Exception as e:
-            logger.warning(f"Failed to load session {session_key}: {e}")
-            return None
+            raise RuntimeError(
+                f"Failed to load session from {path}: {e}"
+            ) from e
 
     async def save(self, session: Session) -> None:
         """Save a session to disk."""

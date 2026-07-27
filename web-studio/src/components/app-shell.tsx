@@ -3,19 +3,19 @@ import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import {
   BlocksIcon,
   BookOpenIcon,
+  BracesIcon,
   ChevronRightIcon,
+  ClipboardListIcon,
   HomeIcon,
   GithubIcon,
   KeyRoundIcon,
-  LoaderIcon,
-  MessageSquareIcon,
   MoonIcon,
-  PlusIcon,
+  MonitorUpIcon,
   PlugZapIcon,
   ScrollTextIcon,
   SearchIcon,
+  SparklesIcon,
   SunIcon,
-  TrashIcon,
   UsersRoundIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -28,18 +28,18 @@ import {
 } from '#/components/ui/collapsible'
 import { CrossDeviceVerifyDialog } from '#/components/cross-device-verify-dialog'
 import { AccountSwitcher } from '#/components/account-switcher'
+import { CurrentUserMenu } from '#/components/current-user-menu'
 import { GeneratedCredentialDialog } from '#/components/generated-credential-dialog'
 import { ScrollArea } from '#/components/ui/scroll-area'
 import {
   Sidebar,
   SidebarContent,
-  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
+  SidebarGroupLabel,
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
-  SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSub,
@@ -54,16 +54,11 @@ import {
 } from '#/hooks/use-app-connection'
 import { cn } from '#/lib/utils'
 import { resolveStudioManagementCapabilities } from '#/lib/studio-permissions'
-import {
-  useSessionListByRecency,
-  useCreateSession,
-  useDeleteSession,
-} from '#/lib/sessions/use-sessions'
-import { useSessionTitles } from '#/lib/sessions/use-session-titles'
 
 type NavItem = {
   icon: React.ComponentType
   id: string
+  section: 'workspace' | 'operations'
   titleKey: string
   to: string
   children?: readonly NavSubItem[]
@@ -87,32 +82,69 @@ const NAV_ITEMS: readonly NavItem[] = [
   {
     icon: HomeIcon,
     id: 'home',
+    section: 'workspace',
     titleKey: 'navigation.home.title',
     to: '/home',
   },
   {
     icon: PlugZapIcon,
     id: 'playground',
+    section: 'workspace',
     titleKey: 'navigation.playground.title',
     to: '/playground',
   },
   {
     icon: SearchIcon,
     id: 'retrieval',
+    section: 'workspace',
     titleKey: 'navigation.retrieval.title',
     to: '/retrieval',
   },
   {
-    icon: ScrollTextIcon,
-    id: 'requestLogs',
-    titleKey: 'navigation.requestLogs.title',
-    to: '/request-logs',
+    icon: SparklesIcon,
+    id: 'skills',
+    section: 'workspace',
+    titleKey: 'navigation.skills.title',
+    to: '/skills',
   },
   {
     icon: BlocksIcon,
     id: 'sessions',
+    section: 'operations',
     titleKey: 'navigation.sessions.title',
     to: '/sessions',
+  },
+  {
+    icon: ScrollTextIcon,
+    id: 'requestLogs',
+    section: 'operations',
+    titleKey: 'navigation.requestLogs.title',
+    to: '/request-logs',
+  },
+  {
+    icon: ClipboardListIcon,
+    id: 'tasks',
+    section: 'operations',
+    titleKey: 'navigation.tasks.title',
+    to: '/tasks',
+  },
+  {
+    icon: MonitorUpIcon,
+    id: 'monitoring',
+    section: 'operations',
+    titleKey: 'navigation.monitoring.title',
+    to: '/monitoring',
+  },
+] as const
+
+const NAV_SECTIONS = [
+  {
+    id: 'workspace',
+    titleKey: 'sidebar.groups.workspace',
+  },
+  {
+    id: 'operations',
+    titleKey: 'sidebar.groups.operations',
   },
 ] as const
 
@@ -197,133 +229,6 @@ function NavGroupItem({ item, pathname, title, t }: NavGroupItemProps) {
   )
 }
 
-function NavSessionsItem({
-  pathname,
-  title,
-}: {
-  pathname: string
-  title: string
-}) {
-  const { t } = useTranslation(['appShell', 'sessions'])
-  const { identityScopeKey } = useAppConnection()
-  const navigate = useNavigate()
-  const isActive = pathname === '/sessions' || pathname.startsWith('/sessions/')
-  const [open, setOpen] = React.useState(isActive)
-
-  const { data: sessions, isLoading } = useSessionListByRecency()
-  const { getTitle, removeTitle, setTitle } = useSessionTitles(identityScopeKey)
-  const createSession = useCreateSession()
-  const deleteSession = useDeleteSession()
-
-  const activeSessionId = useRouterState({
-    select: (s) => {
-      const search = s.location.search as { s?: string }
-      return search.s ?? null
-    },
-  })
-
-  React.useEffect(() => {
-    if (isActive) setOpen(true)
-  }, [isActive])
-
-  const handleNewSession = React.useCallback(async () => {
-    const result = await createSession.mutateAsync(undefined)
-    setTitle(result.session_id, t('threadList.newSession', { ns: 'sessions' }))
-    void navigate({ to: '/sessions', search: { s: result.session_id } })
-  }, [createSession, navigate, setTitle, t])
-
-  const handleDeleteSession = React.useCallback(
-    async (e: React.MouseEvent, id: string) => {
-      e.stopPropagation()
-      e.preventDefault()
-      await deleteSession.mutateAsync(id)
-      removeTitle(id)
-      if (activeSessionId === id) {
-        void navigate({
-          to: '/sessions',
-          search: { s: undefined } as { s?: string },
-        })
-      }
-    },
-    [activeSessionId, deleteSession, navigate, removeTitle],
-  )
-
-  return (
-    <Collapsible
-      open={open}
-      onOpenChange={setOpen}
-      className="group/collapsible"
-    >
-      <SidebarMenuItem>
-        <CollapsibleTrigger
-          render={
-            <SidebarMenuButton tooltip={title} className="text-base">
-              <BlocksIcon />
-              <span>{title}</span>
-              <ChevronRightIcon className="ml-auto transition-transform duration-200 group-data-[open]/collapsible:rotate-90" />
-            </SidebarMenuButton>
-          }
-        />
-        <SidebarMenuAction
-          onClick={handleNewSession}
-          title={t('threadList.newSession', { ns: 'sessions' })}
-        >
-          <PlusIcon className="size-4" />
-        </SidebarMenuAction>
-        <CollapsibleContent>
-          <SidebarMenuSub>
-            {isLoading ? (
-              <SidebarMenuSubItem>
-                <div className="flex items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground">
-                  <LoaderIcon className="size-3 animate-spin" />
-                  <span>
-                    {t('sidebar.loadingSessions', { ns: 'appShell' })}
-                  </span>
-                </div>
-              </SidebarMenuSubItem>
-            ) : sessions.length === 0 ? (
-              <SidebarMenuSubItem>
-                <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                  {t('sidebar.noSessions', { ns: 'appShell' })}
-                </div>
-              </SidebarMenuSubItem>
-            ) : (
-              sessions.map((s) => {
-                const sessionTitle = getTitle(s.session_id)
-                const isSessionActive = activeSessionId === s.session_id
-
-                return (
-                  <SidebarMenuSubItem
-                    key={s.session_id}
-                    className="group/session"
-                  >
-                    <SidebarMenuSubButton
-                      render={
-                        <Link to="/sessions" search={{ s: s.session_id }} />
-                      }
-                      isActive={isSessionActive}
-                    >
-                      <MessageSquareIcon className="size-3.5 shrink-0 opacity-60" />
-                      <span className="truncate">{sessionTitle}</span>
-                    </SidebarMenuSubButton>
-                    <button
-                      type="button"
-                      onClick={(e) => handleDeleteSession(e, s.session_id)}
-                      className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover/session:opacity-100"
-                    >
-                      <TrashIcon className="size-3" />
-                    </button>
-                  </SidebarMenuSubItem>
-                )
-              })
-            )}
-          </SidebarMenuSub>
-        </CollapsibleContent>
-      </SidebarMenuItem>
-    </Collapsible>
-  )
-}
-
 export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <AppConnectionProvider>
@@ -347,6 +252,12 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
   const currentLanguage = resolveLanguage(
     i18n.resolvedLanguage ?? i18n.language,
   )
+  const agentIntegrationsHref = `https://docs.openviking.ai/${
+    currentLanguage === 'zh-CN' ? 'zh' : 'en'
+  }/agent-integrations/01-overview`
+  const sdkApiHref = `https://docs.openviking.ai/${
+    currentLanguage === 'zh-CN' ? 'zh' : 'en'
+  }/api/01-overview`
   const [crossDeviceVerifyOpen, setCrossDeviceVerifyOpen] =
     React.useState(false)
   const { connection, connectionRole, isConnectionRoleLoading, serverMode } =
@@ -386,7 +297,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
       defaultOpen
       className="flex h-svh overflow-hidden bg-sidebar"
     >
-      <Sidebar variant="sidebar" collapsible="icon" className="!border-r-0">
+      <Sidebar variant="sidebar" collapsible="icon">
         <SidebarHeader className="h-12 border-b border-sidebar-border/70 px-2 py-0">
           <div className="flex h-full items-center justify-between gap-2 group-data-[collapsible=icon]:justify-center">
             <div className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
@@ -396,135 +307,168 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
           </div>
         </SidebarHeader>
 
-        <SidebarContent>
-          <SidebarGroup>
+        <SidebarContent className="gap-0 py-1">
+          {NAV_SECTIONS.map((section) => (
+            <SidebarGroup key={section.id} className="pb-1">
+              <SidebarGroupLabel className="h-7 px-2 pt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-sidebar-foreground/45">
+                {t(section.titleKey, { ns: 'appShell' })}
+              </SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {visibleNavItems
+                    .filter((item) => item.section === section.id)
+                    .map((item) => {
+                      const isActive =
+                        pathname === item.to ||
+                        pathname.startsWith(`${item.to}/`)
+                      const title = t(item.titleKey, { ns: 'appShell' })
+
+                      if (item.children) {
+                        return (
+                          <NavGroupItem
+                            key={item.id}
+                            item={
+                              item as NavItem & {
+                                children: readonly NavSubItem[]
+                              }
+                            }
+                            pathname={pathname}
+                            title={title}
+                            t={t}
+                          />
+                        )
+                      }
+
+                      const Icon = item.icon
+
+                      return (
+                        <SidebarMenuItem key={item.id}>
+                          <SidebarMenuButton
+                            render={<Link to={item.to} />}
+                            isActive={isActive}
+                            tooltip={title}
+                            className="h-9"
+                          >
+                            <Icon />
+                            <span>{title}</span>
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      )
+                    })}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          ))}
+
+          <SidebarGroup className="pb-1">
+            <SidebarGroupLabel className="h-7 px-2 pt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-sidebar-foreground/45">
+              {t('sidebar.groups.settings', { ns: 'appShell' })}
+            </SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                {visibleNavItems.map((item) => {
-                  const isActive =
-                    pathname === item.to || pathname.startsWith(`${item.to}/`)
-                  const title = t(item.titleKey, { ns: 'appShell' })
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    render={<Link to="/settings" />}
+                    isActive={settingsActive}
+                    tooltip={t('footer.connection', { ns: 'appShell' })}
+                    className="h-9"
+                  >
+                    <PlugZapIcon />
+                    <span>{t('footer.connection', { ns: 'appShell' })}</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                {canManageUsers ? (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      render={<Link to="/users" />}
+                      isActive={usersActive}
+                      tooltip={t('footer.users', { ns: 'appShell' })}
+                      className="h-9"
+                    >
+                      <UsersRoundIcon />
+                      <span>{t('footer.users', { ns: 'appShell' })}</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ) : null}
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    onClick={openCrossDeviceVerify}
+                    isActive={crossDeviceVerifyActive}
+                    tooltip={t('navigation.crossDeviceVerify.title', {
+                      ns: 'appShell',
+                    })}
+                    className="h-9"
+                  >
+                    <KeyRoundIcon />
+                    <span>
+                      {t('navigation.crossDeviceVerify.title', {
+                        ns: 'appShell',
+                      })}
+                    </span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
 
-                  if (item.id === 'sessions') {
-                    return (
-                      <NavSessionsItem
-                        key={item.id}
-                        pathname={pathname}
-                        title={title}
+          <SidebarGroup className="pb-1">
+            <SidebarGroupLabel className="h-7 px-2 pt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-sidebar-foreground/45">
+              {t('sidebar.groups.resources', { ns: 'appShell' })}
+            </SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    render={
+                      <a
+                        href="https://docs.openviking.ai/"
+                        target="_blank"
+                        rel="noreferrer"
                       />
-                    )
-                  }
-
-                  if (item.children) {
-                    return (
-                      <NavGroupItem
-                        key={item.id}
-                        item={
-                          item as NavItem & { children: readonly NavSubItem[] }
-                        }
-                        pathname={pathname}
-                        title={title}
-                        t={t}
+                    }
+                    tooltip={t('footer.docs', { ns: 'appShell' })}
+                    className="h-9"
+                  >
+                    <BookOpenIcon />
+                    <span>{t('footer.docs', { ns: 'appShell' })}</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    render={
+                      <a href={sdkApiHref} target="_blank" rel="noreferrer" />
+                    }
+                    tooltip={t('footer.sdkApi', { ns: 'appShell' })}
+                    className="h-9"
+                  >
+                    <BracesIcon />
+                    <span>{t('footer.sdkApi', { ns: 'appShell' })}</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    render={
+                      <a
+                        href={agentIntegrationsHref}
+                        target="_blank"
+                        rel="noreferrer"
                       />
-                    )
-                  }
-
-                  const Icon = item.icon
-
-                  return (
-                    <SidebarMenuItem key={item.id}>
-                      <SidebarMenuButton
-                        render={<Link to={item.to} />}
-                        isActive={isActive}
-                        tooltip={title}
-                        className="text-base"
-                      >
-                        <Icon />
-                        <span>{title}</span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  )
-                })}
+                    }
+                    tooltip={t('footer.agentIntegrations', {
+                      ns: 'appShell',
+                    })}
+                    className="h-9"
+                  >
+                    <PlugZapIcon />
+                    <span>
+                      {t('footer.agentIntegrations', { ns: 'appShell' })}
+                    </span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
         </SidebarContent>
-
-        <SidebarFooter>
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                render={<Link to="/settings" />}
-                isActive={settingsActive}
-                tooltip={t('footer.connection', { ns: 'appShell' })}
-                className="text-base"
-              >
-                <PlugZapIcon className="size-5" />
-                <span>{t('footer.connection', { ns: 'appShell' })}</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            {canManageUsers ? (
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  render={<Link to="/users" />}
-                  isActive={usersActive}
-                  tooltip={t('footer.users', { ns: 'appShell' })}
-                  className="text-base"
-                >
-                  <UsersRoundIcon className="size-5" />
-                  <span>{t('footer.users', { ns: 'appShell' })}</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            ) : null}
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                onClick={openCrossDeviceVerify}
-                isActive={crossDeviceVerifyActive}
-                tooltip={t('navigation.crossDeviceVerify.title', {
-                  ns: 'appShell',
-                })}
-                className="text-base"
-              >
-                <KeyRoundIcon className="size-5" />
-                <span>
-                  {t('navigation.crossDeviceVerify.title', { ns: 'appShell' })}
-                </span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                render={
-                  <a
-                    href="https://github.com/volcengine/OpenViking"
-                    target="_blank"
-                    rel="noreferrer"
-                  />
-                }
-                tooltip={t('footer.github', { ns: 'appShell' })}
-                className="text-base"
-              >
-                <GithubIcon className="size-5" />
-                <span>{t('footer.github', { ns: 'appShell' })}</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                render={
-                  <a
-                    href="https://docs.openviking.ai/"
-                    target="_blank"
-                    rel="noreferrer"
-                  />
-                }
-                tooltip={t('footer.docs', { ns: 'appShell' })}
-                className="text-base"
-              >
-                <BookOpenIcon className="size-5" />
-                <span>{t('footer.docs', { ns: 'appShell' })}</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
-        </SidebarFooter>
       </Sidebar>
 
       <SidebarInset className="min-h-0 flex-1 overflow-hidden rounded-none border-0 bg-background shadow-none ring-0 md:m-0 md:ml-0">
@@ -587,6 +531,13 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
             >
               <GithubIcon className="size-5" />
             </a>
+
+            <div className="h-6 w-px bg-border/80" aria-hidden="true" />
+
+            <CurrentUserMenu
+              accountId={connection.accountId}
+              userId={connection.userId}
+            />
           </div>
         </header>
 

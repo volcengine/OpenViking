@@ -759,13 +759,12 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 
 ### code
 
-通过 `code_summary_mode` 控制代码文件的摘要生成方式。以下两种写法等价：
+通过 `code_summary_mode` 控制代码文件使用骨架提取还是直接走 LLM 摘要。以下两种写法等价：
 
 ```json
 {
   "code": {
-    "code_summary_mode": "ast",
-    "code_skeleton_provider": "auto"
+    "code_summary_mode": "ast"
   }
 }
 ```
@@ -774,8 +773,7 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 {
   "parsers": {
     "code": {
-      "code_summary_mode": "ast",
-      "code_skeleton_provider": "auto"
+      "code_summary_mode": "ast"
     }
   }
 }
@@ -789,7 +787,7 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 | `"llm"` | 全部走 LLM 生成摘要（成本较高） | |
 | `"ast_llm"` | 提取更详细的代码骨架，不再额外调用一次 LLM | |
 
-`code_skeleton_provider` 默认为 `"auto"`：优先执行维护中的 tags query，其余语言使用 `tree-sitter-language-pack.process()`，结果不可用时再回退到 LLM。`"ov_ast"` 等历史值仍可配置，并会映射到自动路由。
+代码骨架提取使用固定路线，且不再提供 provider 级配置：优先执行维护中的 tags query，其余语言使用 `tree-sitter-language-pack.process()`，结果不可用时再回退到 LLM。
 
 详见 [代码骨架提取](../concepts/06-extraction.md#代码骨架提取)。
 

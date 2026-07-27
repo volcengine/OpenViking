@@ -790,13 +790,12 @@ Configuration for Feishu/Lark cloud document parsing. See [Resources](../api/02-
 
 ### code
 
-Controls how code files are summarized via `code_summary_mode`. Both config formats are equivalent:
+Controls whether code files use skeleton extraction or direct LLM summarization. Both config formats are equivalent:
 
 ```json
 {
   "code": {
-    "code_summary_mode": "ast",
-    "code_skeleton_provider": "auto"
+    "code_summary_mode": "ast"
   }
 }
 ```
@@ -805,8 +804,7 @@ Controls how code files are summarized via `code_summary_mode`. Both config form
 {
   "parsers": {
     "code": {
-      "code_summary_mode": "ast",
-      "code_skeleton_provider": "auto"
+      "code_summary_mode": "ast"
     }
   }
 }
@@ -820,7 +818,7 @@ Set `code_summary_mode` to one of:
 | `"llm"` | Always use LLM for summarization (higher cost) | |
 | `"ast_llm"` | Extract a more detailed skeleton without an additional LLM call | |
 
-`code_skeleton_provider` defaults to `"auto"`: maintained tags queries run first, `tree-sitter-language-pack.process()` handles the remaining languages, and unusable results fall back to LLM. Historical values such as `"ov_ast"` remain accepted and map to automatic routing.
+Skeleton extraction follows a fixed route and has no provider-level configuration: maintained tags queries run first, `tree-sitter-language-pack.process()` handles the remaining languages, and unusable results fall back to LLM.
 
 See [Code Skeleton Extraction](../concepts/06-extraction.md#code-skeleton-extraction) for details.
 

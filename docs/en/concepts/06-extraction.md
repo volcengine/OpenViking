@@ -132,11 +132,11 @@ Leaf directories → Parent directories → Root
 
 ## Code Skeleton Extraction
 
-For code files, OpenViking uses tree-sitter-based skeleton extraction as a lightweight alternative to LLM summarization.
+For code files, OpenViking uses a fixed skeleton extraction route as a lightweight alternative to LLM summarization.
 
 ### Modes
 
-Controlled by `code_summary_mode` in `ov.conf` (see [Configuration](../guides/01-configuration.md#code)):
+`code_summary_mode` in `ov.conf` controls whether code files use skeleton extraction or direct LLM summarization (see [Configuration](../guides/01-configuration.md#code)):
 
 | Mode | Description |
 |------|-------------|
@@ -144,15 +144,19 @@ Controlled by `code_summary_mode` in `ov.conf` (see [Configuration](../guides/01
 | `"llm"` | Always use LLM summarization |
 | `"ast_llm"` | Extract a more detailed skeleton; it does not add a second LLM call |
 
+### What Skeleton Extraction Includes
+
+The skeleton can include imports, classes, methods, functions, and other language-level symbols depending on the extractor that handles the file. The extractor route itself is not configurable: OpenViking first uses the maintained `tags.scm` query set, then falls back to `tree-sitter-language-pack.process()` for broader language coverage.
+
 ### Fallback Behavior
 
-The default `auto` provider follows this order:
+Code skeleton extraction follows this fixed order:
 
 1. Use a maintained `tags.scm` query when one exists for the language.
 2. Otherwise, or when that query produces no useful result, use `tree-sitter-language-pack.process()`.
 3. Fall back to `semantic.code_summary` only when neither extractor produces a useful skeleton.
 
-This routing applies to short and long code files alike. Set `code_skeleton_provider` only when a specific provider is needed for compatibility or evaluation.
+This routing applies to short and long code files alike.
 
 ## Three Context Types Extraction
 

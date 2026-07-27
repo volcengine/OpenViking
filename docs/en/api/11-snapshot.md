@@ -347,7 +347,22 @@ ov snapshot diff viking://resources/my_project/guide.md \
   --to 9a0b1c2d
 ```
 
-The response contains `path`, resolved `from_commit` and `to_commit`, `change_type` (`added`, `deleted`, `modified`, or `unchanged`), and `diff_text`. Each side is limited to 10 MiB and 100,000 lines, and the generated diff is limited to 20 MiB; larger requests return `RESOURCE_EXHAUSTED` rather than a truncated diff.
+**Response**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "path": "viking://resources/my_project/guide.md",
+    "from_commit": "3f2a1b9c...",
+    "to_commit": "9a0b1c2d...",
+    "change_type": "modified",
+    "diff_text": "--- a/guide.md\n+++ b/guide.md\n@@ -1 +1 @@\n-old line\n+new line\n"
+  }
+}
+```
+
+`change_type` is `added`, `deleted`, `modified`, or `unchanged`. Each side is limited to 10 MiB and 100,000 lines, and the generated diff is limited to 20 MiB; larger requests return `RESOURCE_EXHAUSTED` rather than a truncated diff.
 
 ---
 

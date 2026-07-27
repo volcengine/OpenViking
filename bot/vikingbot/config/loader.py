@@ -140,8 +140,7 @@ def load_config() -> Config:
 
             return config
         except (json.JSONDecodeError, ValueError) as e:
-            print(f"Warning: Failed to load config from {path}: {e}")
-            print("Using default configuration.")
+            raise ValueError(f"Failed to load config from {path}: {e}") from e
 
     return Config()
 

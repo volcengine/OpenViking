@@ -16,6 +16,7 @@ export type RetrievalSearch = {
   scope?: RetrievalScope
   path?: string
   session?: string
+  ignoreCase?: boolean
 }
 
 export interface FlatRetrievalItem {

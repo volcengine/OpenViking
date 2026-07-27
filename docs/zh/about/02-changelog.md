@@ -241,11 +241,11 @@ OpenViking 的所有重要变更都将记录在此文件中。
 ### 重点更新
 
 - **Web Studio 成为默认 Console**：新增 `web-studio` 前端 console workspace，随 Docker 与 pip 分发并通过 `/studio` 提供服务；OAuth authorize UI 迁入 Web Studio，legacy console 下线，同时保留 favicon 兼容路由。
-- **MCP / API / CLI 自动化能力**：Watch Management 覆盖 REST、`ov` CLI 与 MCP；新增本地文件 progressive single-entrypoint upload 和代码导航支持，并修正 upload-only 与 zip `--ignore-dirs` 的作用域处理。
+- **MCP / API / CLI 自动化能力**：Watch Management 覆盖 REST、`ov` CLI 与 MCP；新增本地文件 progressive single-entrypoint upload；增加 `code_outline`、`code_search`、`code_expand` 代码导航工具，并修正 upload-only 与 zip `--ignore-dirs` 的作用域处理。
 - **Agent 与 OpenClaw 生态**：OpenClaw setup helper 支持 npm 插件安装，插件文档对齐 ClawHub package metadata，新增 `ov_dream` OpenClaw skill，并支持将过大的 OpenClaw tool result externalize 到 OpenViking。
 - **Memory 与检索**：升级 trajectory extraction，新增 memory link 能力，支持通过开关启用 Vaka memory templates，修复缺失 tool-call 计数和消息 peer 检索缺失问题，并行化 hierarchical child search。
 - **Storage、VectorDB 与模型链路稳定性**：存储锁与 IO 异步化，异步客户端按 event loop 隔离；修复 semantic lock ownership、`mv not found` 误报、URI remapping、S3 grep 性能、VectorDB Unicode recovery、超大 bytes row、embedding 错误透出和 VLM LiteLLM native routes 等问题。
-- **可观测性、文档与部署打磨**：新增 VikingBot feedback observability，集中化 metric registry，usage audit SQLite 迁入 system data，刷新 Helm chart 默认配置，更新品牌资产与二维码，并补齐 public base URL、signed upload TTL、Watch API、ready 探针和 `/studio` 迁移文档。
+- **可观测性、文档与部署打磨**：新增 VikingBot feedback observability，集中化 metric registry，usage audit SQLite 迁入 system data，刷新 Helm chart 默认配置，更新品牌资产与二维码，并补齐 public base URL、signed upload TTL、Watch API、MCP code tools、ready 探针和 `/studio` 迁移文档。
 
 ### 升级说明
 

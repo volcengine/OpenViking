@@ -1,6 +1,6 @@
-# System and Monitoring
+# System Status
 
-OpenViking provides system health, observability, and debug APIs for monitoring component status.
+The OpenViking System API provides health, readiness, consistency, and multi-write backend synchronization status. Component observers and Prometheus metrics are documented separately.
 
 ## API Reference
 
@@ -426,769 +426,105 @@ ov system wait --timeout 60
 
 ---
 
-### reindex()
+### backend_sync_status()
 
-Reindex semantic and/or vector artifacts for existing content already stored in OpenViking. This is an operational maintenance API intended for scenarios such as embedding model changes, VLM changes, vector store rebuild, or post-upgrade repair of existing indexes.
-
-This API operates on existing `viking://...` content. It does not import new files. For normal ingestion, use [Resources](02-resources.md).
-
-**Authentication**
-
-- HTTP endpoint: requires admin/root role when authentication is enabled. In `api_key` mode, use an admin key for tenant content; a raw root key cannot access tenant-scoped data.
-- Python embedded mode: uses the current service context
-- Python HTTP client / CLI: sends the current authenticated identity
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| uri | str | Yes | - | Viking URI to reindex |
-| mode | str | No | `vectors_only` | Reindex mode: `vectors_only`, `semantic_and_vectors`, or `prune_orphans` |
-| wait | bool | No | `true` | Whether to wait for completion |
-| dry_run | bool | No | `false` | Only valid with `mode="prune_orphans"`; report orphan vector records without deleting them |
-
-The HTTP request body rejects unknown fields. `uri` may use OpenViking path variables accepted by other content APIs; it is resolved before validation.
-
-**Supported URI scopes**
-
-- `viking://`
-- `viking://user`
-- `viking://user/<user_id>`
-- `viking://resources`
-- `viking://resources/...`
-- `viking://user/<user_id>/memories/...`
-- `viking://user/<user_id>/skills`
-- `viking://user/<user_id>/skills/<skill_name>`
-
-Session namespaces are not supported by `reindex()`. Requests for
-`viking://session/...` or `viking://user/<user_id>/sessions/...` are rejected;
-when reindexing a broader user namespace, session subtrees are skipped.
-
-**Modes**
-
-- `vectors_only`: rebuilds vector-store records from currently recoverable source data without rewriting `.abstract.md` or `.overview.md`
-- `semantic_and_vectors`: regenerates semantic artifacts first, then rebuilds vectors from the refreshed semantic outputs
-- `prune_orphans`: deletes vector-store records under the requested URI whose source files no longer exist in the filesystem. With `dry_run=true`, it only reports how many records would be deleted.
-
-For `resource` and `skill`, `semantic_and_vectors` refreshes directory/file semantic artifacts, including `.abstract.md` and `.overview.md`. For `memory`, it rebuilds the current persisted memory subtree semantics and vectors, but it does not replay historical extraction order.
-
-For `semantic_and_vectors`, semantic generation and vector rebuilding are sequenced by the reindex executor. The semantic refresh step does not enqueue its own background vectorization work; vectors are rebuilt by the reindex step so `wait=true` reflects the reindex operation itself.
-
-For `prune_orphans`, source existence is checked against the filesystem. If an entire directory is missing, vector records for files and semantic sidecars below that directory, such as `.abstract.md` and `.overview.md`, are pruned together. `dry_run` is rejected for other modes.
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-result = client.reindex(
-    uri="viking://resources",
-    mode="vectors_only",
-    wait=True,
-)
-print(result)
-```
-
-```python
-result = client.reindex(
-    uri="viking://user/default/skills",
-    mode="semantic_and_vectors",
-    wait=False,
-)
-print(result["status"])
-```
-
-```python
-result = client.reindex(
-    uri="viking://resources",
-    mode="prune_orphans",
-    dry_run=True,
-)
-print(result["would_delete_records"])
-```
-
-**TypeScript SDK**
-
-```typescript
-console.log(await client.reindex("viking://resources/docs/"));
-```
-
-**Go SDK**
-
-```go
-result, err := client.Reindex(ctx, "viking://resources", &openviking.ReindexOptions{
-    Mode: "vectors_only",
-    Wait: true,
-})
-if err != nil {
-    return err
-}
-fmt.Println(result["status"])
-```
-
-```go
-result, err := client.Reindex(ctx, "viking://resources", &openviking.ReindexOptions{
-    Mode: "prune_orphans",
-    Wait: true,
-    DryRun: true,
-})
-if err != nil {
-    return err
-}
-fmt.Println(result["would_delete_records"])
-```
+Return multi-write backend synchronization status for a Viking URI subtree. This endpoint requires ROOT or ADMIN permission.
 
 **HTTP API**
 
+```http
+POST /api/v1/system/backend/sync-status
+Content-Type: application/json
 ```
-POST /api/v1/content/reindex
-```
-
-There is no `/api/v1/maintenance/reindex` endpoint. Use `/api/v1/content/reindex`.
 
 ```bash
-curl -X POST http://localhost:1933/api/v1/content/reindex \
+curl -X POST http://localhost:1933/api/v1/system/backend/sync-status \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -H "X-OpenViking-Account: default" \
-  -d '{
-    "uri": "viking://resources",
-    "mode": "prune_orphans",
-    "wait": true,
-    "dry_run": true
-  }'
+  -H "X-API-Key: your-admin-key" \
+  -d '{"uri":"viking://resources"}'
+```
+
+The URI-path form is also available:
+
+```http
+GET /api/v1/system/sync/{sync_path}
 ```
 
 **CLI**
 
 ```bash
-openviking reindex viking://resources --mode vectors_only
+ov system backend sync-status viking://resources
 ```
 
-```bash
-openviking reindex viking://user/default/skills --mode semantic_and_vectors --wait false
-```
-
-```bash
-openviking reindex viking://resources --mode prune_orphans --dry-run
-```
-
-**Synchronous response (`wait=true`)**
+**Response example**
 
 ```json
 {
   "status": "ok",
   "result": {
-    "uri": "viking://resources",
-    "mode": "vectors_only",
-    "status": "completed",
-    "object_type": "resource",
-    "scanned_records": 120,
-    "rebuilt_records": 118,
-    "deleted_records": 0,
-    "would_delete_records": 0,
-    "unsupported_records": 2,
-    "failed_records": 0,
-    "duration_ms": 1284,
-    "warnings": []
-  },
-  "time": 0.1
+    "path": "viking://resources",
+    "entry_count": 12
+  }
 }
 ```
 
-**Asynchronous response (`wait=false`)**
+`result` is supplied by the active filesystem backend. `path` identifies the queried scope and `entry_count` is the number of sync records in that scope. A backend may add diagnostics such as pending or failed records.
 
-```json
-{
-  "status": "ok",
-  "result": {
-    "uri": "viking://resources",
-    "mode": "vectors_only",
-    "object_type": "resource",
-    "status": "accepted",
-    "task_id": "task_xxx"
-  },
-  "time": 0.1
-}
-```
+### backend_sync_retry()
 
-Poll the returned task through the task API:
-
-```bash
-curl -X GET http://localhost:1933/api/v1/tasks/task_xxx \
-  -H "X-API-Key: your-key" \
-  -H "X-OpenViking-Account: default"
-```
-
-Reindex background tasks use `task_type="admin_reindex"` and `resource_id` equal to the requested `uri`, so they can also be listed with:
-
-```text
-GET /api/v1/tasks?task_type=admin_reindex&resource_id=viking://resources
-```
-
-Task records are persisted under `/local/{account_id}/_system/tasks/{user_id}/{task_id}.json` and can be queried after restart.
-
-**Result fields**
-
-| Field | Description |
-|-------|-------------|
-| status | `completed` for synchronous completion, `accepted` for background execution |
-| uri | Requested URI after path-variable resolution |
-| object_type | Inferred target type, such as `resource`, `skill`, `memory`, `user_namespace`, `skill_namespace`, or `global_namespace` |
-| mode | Effective reindex mode |
-| scanned_records | Number of records or semantic sources considered |
-| rebuilt_records | Number of vector records successfully rebuilt |
-| deleted_records | Number of vector records deleted by `prune_orphans`; `0` for `dry_run=true` |
-| would_delete_records | Number of vector records that would be deleted by `prune_orphans` in dry-run mode |
-| unsupported_records | Number of records skipped because no usable vector source was available |
-| failed_records | Number of records that failed while rebuilding |
-| duration_ms | Synchronous run duration in milliseconds |
-| warnings | Recoverable per-record warnings |
-| task_id | Background task ID, present only when `wait=false` |
-
-**Behavior notes**
-
-- `vectors_only` and `semantic_and_vectors` are non-destructive. They use rebuild/upsert behavior and do not require dropping the vector collection first.
-- `prune_orphans` is destructive unless `dry_run=true`: it removes vector records whose source files no longer exist.
-- `viking://` reindex fans out to supported top-level namespaces and excludes `session`.
-- Namespace reindex operations such as `viking://user` propagate to supported child content types.
-- `vectors_only` is the right mode when only the embedding model or vector index needs to be refreshed.
-- `semantic_and_vectors` is the right mode when semantic artifacts themselves must be regenerated before re-vectorization.
-- `prune_orphans` is the right mode when the filesystem has been changed outside normal APIs and the vector store may still contain records for deleted paths.
-- Only one reindex task can run for the same URI and owner at a time. A concurrent request for the same target returns a conflict.
-- For resource files, text files can use file content when no summary is available. Non-text files require a generated summary or existing vector record fallback; otherwise they are counted as unsupported.
-
-**Current limitations**
-
-- Reindex uses the best currently recoverable source inputs. It is not guaranteed to replay the exact historical embedding input byte-for-byte in every case.
-- Memory semantic reindex is based on the currently persisted memory tree. It does not reconstruct the original chronological memory-extraction pipeline.
-
----
-
-## Observer API
-
-The observer API provides detailed component-level monitoring.
-
-### observer.queue
-
-#### 1. API Implementation Overview
-
-Get queue system status (embedding and semantic processing queues). Shows pending, in-progress, completed, and error counts for each queue.
-
-**Code Entry Points**:
-- `openviking/server/routers/observer.py:observer_queue` - HTTP route
-- `openviking/service/debug_service.py:ObserverService.queue` - Core implementation
-- `openviking/storage/observers/queue_observer.py` - Queue observer
-
-#### 2. Interface and Parameters
-
-No parameters.
-
-#### 3. Usage Examples
+Retry incomplete multi-write backend synchronization work for a URI subtree. This endpoint requires ROOT or ADMIN permission.
 
 **HTTP API**
 
-```
-GET /api/v1/observer/queue
+```http
+POST /api/v1/system/backend/sync-retry
+Content-Type: application/json
 ```
 
 ```bash
-curl -X GET http://localhost:1933/api/v1/observer/queue \
-  -H "X-API-Key: your-key"
+curl -X POST http://localhost:1933/api/v1/system/backend/sync-retry \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-admin-key" \
+  -d '{"uri":"viking://resources"}'
 ```
 
-**Python SDK**
+The URI-path form is:
 
-```python
-print(client.observer.queue)
-# Output:
-# [queue] (healthy)
-# Queue                 Pending  In Progress  Processed  Errors  Total
-# Embedding             0        0            10         0       10
-# Semantic              0        0            10         0       10
-# TOTAL                 0        0            20         0       20
-```
-
-**TypeScript SDK**
-
-```typescript
-console.log(await client.queueStatus());
-```
-
-**Go SDK**
-
-```go
-status, err := client.QueueStatus(ctx)
-if err != nil {
-    return err
-}
-fmt.Println(status["is_healthy"])
+```http
+POST /api/v1/system/sync/{sync_path}/retry
 ```
 
 **CLI**
 
 ```bash
-ov observer queue
+ov system backend sync-retry viking://resources
 ```
 
-**Response Example**
+**Response example**
 
 ```json
 {
   "status": "ok",
   "result": {
-    "name": "queue",
-    "is_healthy": true,
-    "has_errors": false,
-    "status": "Queue                 Pending  In Progress  Processed  Errors  Total\nEmbedding             0        0            10         0       10\nSemantic              0        0            10         0       10\nTOTAL                 0        0            20         0       20"
-  },
-  "time": 0.1
+    "path": "viking://resources",
+    "retried": 2,
+    "failed": 0
+  }
 }
 ```
+
+`retried` is the number of records rescheduled by this request, and `failed` is the number that could not be scheduled. A backend may include additional diagnostic fields.
+
+The public Python, TypeScript, and Go SDKs do not currently expose multi-write backend synchronization methods, so the sections above show only HTTP and CLI tabs.
 
 ---
 
-### observer.vikingdb
-
-#### 1. API Implementation Overview
-
-Get VikingDB status (collections, indexes, vector counts).
-
-**Code Entry Points**:
-- `openviking/server/routers/observer.py:observer_vikingdb` - HTTP route
-- `openviking/service/debug_service.py:ObserverService.vikingdb` - Core implementation
-- `openviking/storage/observers/vikingdb_observer.py` - VikingDB observer
-- `crates/ov_cli/src/commands/observer.rs` - CLI command
-
-#### 2. Interface and Parameters
-
-No parameters.
-
-#### 3. Usage Examples
-
-**HTTP API**
-
-```
-GET /api/v1/observer/vikingdb
-```
-
-```bash
-curl -X GET http://localhost:1933/api/v1/observer/vikingdb \
-  -H "X-API-Key: your-key"
-```
-
-**Python SDK**
-
-```python
-print(client.observer.vikingdb())
-# Output:
-# [vikingdb] (healthy)
-# Collection  Index Count  Vector Count  Status
-# context     1            55            OK
-# TOTAL       1            55
-
-# Access specific attributes
-print(client.observer.vikingdb().is_healthy)  # True
-print(client.observer.vikingdb().status)      # Status table string
-```
-
-**TypeScript SDK**
-
-```typescript
-console.log(await client.vikingDBStatus());
-```
-
-**Go SDK**
-
-```go
-status, err := client.VikingDBStatus(ctx)
-if err != nil {
-    return err
-}
-fmt.Println(status["is_healthy"])
-```
-
-**CLI**
-
-```bash
-ov observer vikingdb
-```
-
-**Response Example**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "name": "vikingdb",
-    "is_healthy": true,
-    "has_errors": false,
-    "status": "Collection  Index Count  Vector Count  Status\ncontext     1            55            OK\nTOTAL       1            55"
-  },
-  "time": 0.1
-}
-```
-
----
-
-### observer.models
-
-#### 1. API Implementation Overview
-
-Get aggregated model subsystem status (VLM, embedding, rerank). Checks if each model provider is healthy and available.
-
-**Code Entry Points**:
-- `openviking/server/routers/observer.py:observer_models` - HTTP route
-- `openviking/service/debug_service.py:ObserverService.models` - Core implementation
-- `openviking/storage/observers/models_observer.py` - Models observer
-- `crates/ov_cli/src/commands/observer.rs` - CLI command
-
-#### 2. Interface and Parameters
-
-No parameters.
-
-#### 3. Usage Examples
-
-**HTTP API**
-
-```
-GET /api/v1/observer/models
-```
-
-```bash
-curl -X GET http://localhost:1933/api/v1/observer/models \
-  -H "X-API-Key: your-key"
-```
-
-**Python SDK**
-
-```python
-print(client.observer.models)
-# Output:
-# [models] (healthy)
-# provider_model         healthy  detail
-# dense_embedding        yes      ...
-# rerank                 yes      ...
-# vlm                    yes      ...
-```
-
-**TypeScript SDK**
-
-```typescript
-console.log(await client.modelsStatus());
-```
-
-**Go SDK**
-
-```go
-status, err := client.ModelsStatus(ctx)
-if err != nil {
-    return err
-}
-fmt.Println(status["is_healthy"])
-```
-
-**CLI**
-
-```bash
-ov observer models
-```
-
-**Response Example**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "name": "models",
-    "is_healthy": true,
-    "has_errors": false,
-    "status": "provider_model         healthy  detail\ndense_embedding        yes      ...\nrerank                 yes      ...\nvlm                    yes      ..."
-  },
-  "time": 0.1
-}
-```
-
----
-
-### observer.lock
-
-#### 1. API Implementation Overview
-
-Get distributed lock system status.
-
-**Code Entry Points**:
-- `openviking/server/routers/observer.py:observer_lock` - HTTP route
-- `openviking/service/debug_service.py:ObserverService.lock` - Core implementation
-- `openviking/storage/observers/lock_observer.py` - Lock observer
-- `crates/ov_cli/src/commands/observer.rs` - CLI command
-
-#### 2. Interface and Parameters
-
-No parameters.
-
-#### 3. Usage Examples
-
-**HTTP API**
-
-```
-GET /api/v1/observer/lock
-```
-
-```bash
-curl -X GET http://localhost:1933/api/v1/observer/lock \
-  -H "X-API-Key: your-key"
-```
-
-**Python SDK**
-
-```python
-print(client.observer.lock)
-```
-
-The CLI does not currently expose a lock-specific observer subcommand. Use the HTTP API or Python SDK for this component; `ov observer system` includes it in the aggregate status.
-
-**Response Example**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "name": "lock",
-    "is_healthy": true,
-    "has_errors": false,
-    "status": "..."
-  },
-  "time": 0.1
-}
-```
-
----
-
-### observer.retrieval
-
-#### 1. API Implementation Overview
-
-Get retrieval quality metrics.
-
-**Code Entry Points**:
-- `openviking/server/routers/observer.py:observer_retrieval` - HTTP route
-- `openviking/service/debug_service.py:ObserverService.retrieval` - Core implementation
-- `openviking/storage/observers/retrieval_observer.py` - Retrieval observer
-- `crates/ov_cli/src/commands/observer.rs` - CLI command
-
-#### 2. Interface and Parameters
-
-No parameters.
-
-#### 3. Usage Examples
-
-**HTTP API**
-
-```
-GET /api/v1/observer/retrieval
-```
-
-```bash
-curl -X GET http://localhost:1933/api/v1/observer/retrieval \
-  -H "X-API-Key: your-key"
-```
-
-**Python SDK**
-
-```python
-print(client.observer.retrieval)
-```
-
-**CLI**
-
-```bash
-ov observer retrieval
-```
-
-**Response Example**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "name": "retrieval",
-    "is_healthy": true,
-    "has_errors": false,
-    "status": "..."
-  },
-  "time": 0.1
-}
-```
-
----
-
-### observer.filesystem
-
-#### 1. API Implementation Overview
-
-Get filesystem operation metrics.
-
-**Code Entry Points**:
-- `openviking/server/routers/observer.py:observer_filesystem` - HTTP route
-- `openviking/service/debug_service.py:ObserverService.filesystem` - Core implementation
-- `openviking/storage/observers/filesystem_observer.py` - Filesystem observer
-- `crates/ov_cli/src/commands/observer.rs` - CLI command
-
-#### 2. Interface and Parameters
-
-No parameters.
-
-#### 3. Usage Examples
-
-**HTTP API**
-
-```
-GET /api/v1/observer/filesystem
-```
-
-```bash
-curl -X GET http://localhost:1933/api/v1/observer/filesystem \
-  -H "X-API-Key: your-key"
-```
-
-**Python SDK**
-
-```python
-print(client.observer.filesystem)
-```
-
-**CLI**
-
-```bash
-ov observer filesystem
-```
-
-**Response Example**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "name": "filesystem",
-    "is_healthy": true,
-    "has_errors": false,
-    "status": "..."
-  },
-  "time": 0.1
-}
-```
-
----
-
-### observer.system
-
-#### 1. API Implementation Overview
-
-Get overall system status, including all components (queue, vikingdb, models, lock, retrieval).
-
-**Code Entry Points**:
-- `openviking/server/routers/observer.py:observer_system` - HTTP route
-- `openviking/service/debug_service.py:ObserverService.system` - Core implementation
-- `crates/ov_cli/src/commands/observer.rs` - CLI command
-
-#### 2. Interface and Parameters
-
-No parameters.
-
-#### 3. Usage Examples
-
-**HTTP API**
-
-```
-GET /api/v1/observer/system
-```
-
-```bash
-curl -X GET http://localhost:1933/api/v1/observer/system \
-  -H "X-API-Key: your-key"
-```
-
-**Python SDK**
-
-```python
-print(client.observer.system())
-# Output:
-# [queue] (healthy)
-# ...
-#
-# [vikingdb] (healthy)
-# ...
-#
-# [models] (healthy)
-# ...
-#
-# [system] (healthy)
-```
-
-**Go SDK**
-
-```go
-status, err := client.GetStatus(ctx)
-if err != nil {
-    return err
-}
-fmt.Println(status["is_healthy"])
-```
-
-**CLI**
-
-```bash
-ov observer system
-```
-
-**Response Example**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "is_healthy": true,
-    "errors": [],
-    "components": {
-      "queue": {
-        "name": "queue",
-        "is_healthy": true,
-        "has_errors": false,
-        "status": "..."
-      },
-      "vikingdb": {
-        "name": "vikingdb",
-        "is_healthy": true,
-        "has_errors": false,
-        "status": "..."
-      },
-      "models": {
-        "name": "models",
-        "is_healthy": true,
-        "has_errors": false,
-        "status": "..."
-      },
-      "lock": {
-        "name": "lock",
-        "is_healthy": true,
-        "has_errors": false,
-        "status": "..."
-      },
-      "retrieval": {
-        "name": "retrieval",
-        "is_healthy": true,
-        "has_errors": false,
-        "status": "..."
-      }
-    }
-  },
-  "time": 0.1
-}
-```
-
----
+<a id="reindex"></a><a id="observer-api"></a>
 
 ## Related Documentation
 
 - [Resources](02-resources.md) - Resource management
 - [Retrieval](06-retrieval.md) - Search and retrieval
 - [Sessions](05-sessions.md) - Session management
+- [Runtime Observability](18-observer.md) - immediate component status
+- [Metrics](09-metrics.md) - Prometheus metrics
