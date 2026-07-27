@@ -471,7 +471,7 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(monk
     }
 
     queued_msg = AddResourceMsg.from_dict(payload)
-    service.add_resource = AsyncMock(
+    service._execute_resource_ingestion = AsyncMock(
         return_value={
             "status": "success",
             "root_uri": "viking://resources/lark/真实文档标题",
@@ -484,9 +484,9 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(monk
         stage_callback=AsyncMock(),
     )
 
-    call = service.add_resource.await_args
+    call = service._execute_resource_ingestion.await_args
     assert call.kwargs[PREPARED_RESPONSE_ID_ARG] == "response-1"
-    assert call.kwargs["args"] == {"custom_option": "forwarded"}
+    assert call.kwargs["custom_option"] == "forwarded"
     assert call.kwargs["parser_backend"] == "understanding"
 
 
@@ -650,7 +650,7 @@ def test_internal_parser_fields_are_reserved_from_public_args(field, value):
 @pytest.mark.asyncio
 async def test_add_resource_job_defers_target_and_expands_prepared_response():
     service = ResourceService()
-    service.add_resource = AsyncMock(
+    service._execute_resource_ingestion = AsyncMock(
         return_value={
             "status": "success",
             "root_uri": "viking://resources/真实文档标题",
@@ -678,18 +678,17 @@ async def test_add_resource_job_defers_target_and_expands_prepared_response():
         stage_callback=AsyncMock(),
     )
 
-    call = service.add_resource.await_args
+    call = service._execute_resource_ingestion.await_args
     assert call.kwargs["to"] is None
     assert call.kwargs["parent"] == "viking://resources/lark"
     assert call.kwargs[PREPARED_RESPONSE_ID_ARG] == "response-1"
-    assert call.kwargs["args"] == {}
     assert result["root_uri"] == "viking://resources/真实文档标题"
 
 
 @pytest.mark.asyncio
 async def test_add_resource_job_expands_parser_args():
     service = ResourceService()
-    service.add_resource = AsyncMock(
+    service._execute_resource_ingestion = AsyncMock(
         return_value={
             "status": "success",
             "root_uri": "viking://resources/doxcnToken",
@@ -716,10 +715,10 @@ async def test_add_resource_job_expands_parser_args():
         stage_callback=AsyncMock(),
     )
 
-    call = service.add_resource.await_args
+    call = service._execute_resource_ingestion.await_args
     assert call.kwargs["to"] == "viking://resources/doxcnToken"
     assert call.kwargs["parent"] is None
-    assert call.kwargs["args"] == {"custom_option": "forwarded"}
+    assert call.kwargs["custom_option"] == "forwarded"
 
 
 @pytest.mark.asyncio

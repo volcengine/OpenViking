@@ -213,7 +213,7 @@ class WatchScheduler:
     async def _execute_task(self, task) -> None:
         """Execute a single watch task.
 
-        Calls ResourceService.add_resource to process the resource.
+        Calls ResourceService.refresh_resource to re-process the resource.
         Handles errors gracefully and updates execution time regardless of success/failure.
         Deactivates tasks when resources no longer exist.
 
@@ -282,7 +282,7 @@ class WatchScheduler:
                                 raise
 
                 if not should_deactivate:
-                    result = await self._resource_service.add_resource(
+                    result = await self._resource_service.refresh_resource(
                         path=task.path,
                         ctx=ctx,
                         to=task.to_uri,
@@ -292,7 +292,6 @@ class WatchScheduler:
                         build_index=getattr(task, "build_index", True),
                         summarize=getattr(task, "summarize", False),
                         watch_interval=task.watch_interval,
-                        skip_watch_management=True,
                         **processor_kwargs,
                     )
 

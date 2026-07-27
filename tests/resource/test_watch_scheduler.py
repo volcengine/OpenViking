@@ -42,7 +42,7 @@ class TestWatchSchedulerResourceExistence:
                 super().__init__()
                 self.calls = []
 
-            async def add_resource(self, **kwargs):
+            async def refresh_resource(self, **kwargs):
                 self.calls.append(kwargs)
                 return {"root_uri": kwargs.get("to")}
 
@@ -81,7 +81,7 @@ class TestWatchSchedulerResourceExistence:
                 super().__init__()
                 self.calls = []
 
-            async def add_resource(self, **kwargs):
+            async def refresh_resource(self, **kwargs):
                 self.calls.append(kwargs)
                 return {"root_uri": kwargs.get("to")}
 

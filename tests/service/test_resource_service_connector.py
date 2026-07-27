@@ -4,7 +4,7 @@
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -291,8 +291,33 @@ async def test_add_resource_falls_back_for_shared_source_with_exact_to(
 
 
 @pytest.mark.asyncio
-async def test_add_resource_job_reenters_public_route_synchronously(ctx, service):
-    service.add_resource = AsyncMock(return_value={"status": "success", "root_uri": "root"})
+@pytest.mark.parametrize(
+    "field",
+    [
+        "manage_watch",
+        "parser_args",
+        "resource_lock",
+        "route_source",
+        "skip_watch_management",
+        "stage_callback",
+        "watch_auth_state",
+    ],
+)
+async def test_add_resource_rejects_internal_execution_fields(ctx, service, field):
+    with pytest.raises(InvalidArgumentError, match=field):
+        await service.add_resource(
+            path="https://example.com/manual.pdf",
+            ctx=ctx,
+            **{field: object()},
+        )
+
+
+@pytest.mark.asyncio
+async def test_add_resource_job_executes_frozen_route(ctx, service):
+    service._execute_resource_ingestion = AsyncMock(
+        return_value={"status": "success", "root_uri": "root"}
+    )
+    service._should_use_connector = Mock()
     resource_lock = SimpleNamespace(close=AsyncMock())
     stage_callback = AsyncMock()
     msg = AddResourceMsg(
@@ -313,13 +338,13 @@ async def test_add_resource_job_reenters_public_route_synchronously(ctx, service
     )
 
     assert result == {"status": "success", "root_uri": "root"}
-    call = service.add_resource.await_args.kwargs
+    call = service._execute_resource_ingestion.await_args.kwargs
     assert call["path"] == msg.path
     assert call["to"] == msg.root_uri
     assert call["wait"] is True
     assert call["resource_lock"] is resource_lock
-    assert call["args"] == {}
     assert call["parser_backend"] == "understanding"
+    service._should_use_connector.assert_not_called()
 
 
 @pytest.mark.asyncio

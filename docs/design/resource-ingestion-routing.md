@@ -2,12 +2,13 @@
 
 本文描述当前 `add_resource` 从收到资源到落盘、建索引的真实执行链。重点回答四个问题：入口在哪里分流、资源类型在哪里确定、Understanding 与 Connector 分别做什么，以及 `wait` 到底等待什么。
 
-## 先记住四条规则
+## 先记住五条规则
 
-1. 对外只有一个兼容入口：`ResourceService.add_resource`。SDK、HTTP API、MCP 最终都应调用它；内部 Parser 类和注册方法不是兼容接口。
+1. 对外只有一个资源添加入口：`ResourceService.add_resource`。SDK、HTTP API、MCP 最终都应调用它；Worker 不再拿后台任务冒充一次新的资源添加请求。
 2. Connector 是一条独立的端到端导入链；Understanding 只是标准链里的一个 Parser 后端。
 3. 普通文件只做一次 Parser 选择。选择依据是 Accessor 获取资源后冻结的 `resolved_extension`，不是临时文件名，也不会在队列消费者里重新猜；原始飞书 URL 是一个显式例外，可在 Accessor 前按配置直达 Understanding。
 4. 目录、网站目录以及内部 Parser 遍历出的子文件不逐个调用 Understanding，统一留在内置 Parser 链内处理。
+5. Watch 是一次新的来源刷新，会重新走提交分流，但不会创建、取消或覆盖自身的 Watch 任务。
 
 ## 总流程
 
@@ -18,7 +19,7 @@ SDK / HTTP API / MCP
 ResourceService.add_resource                  对外入口
         |
         v
-ResourceService._add_resource                 阶段一：选择执行方式
+ResourceService._submit_resource_ingestion    阶段一：对新请求选择执行方式
         |
         +-- Connector 命中且参数受支持 ------> Connector doc/add
         |                                         |
@@ -26,8 +27,6 @@ ResourceService._add_resource                 阶段一：选择执行方式
         |                                         +--> Connector 自己解析并写入资源
         |
         +-- Git && wait=false ----------------> 预检 + AddResource 队列 --> 返回 task_id
-        |                                                          |
-        |                                                          +--> Worker
         |
         +-- HTTP 服务远程资源 && wait=false && Understanding 已启用
         |       |
@@ -43,12 +42,12 @@ ResourceService._add_resource                 阶段一：选择执行方式
         |               |
         |               +-- 未命中 ------------> 复用 LocalResource，进入当前请求标准链
         |
-        +-- 其余场景（包括所有 wait=true） -----> 当前请求标准链
+        +-- 其余场景（包括所有 wait=true） -----> _execute_resource_ingestion
 
-当前请求 / Worker
+_execute_resource_ingestion                    阶段二：执行标准链
         |
         v
-ResourceProcessor.process_resource             阶段二：标准解析链
+ResourceProcessor.process_resource
         |
         v
 UnifiedResourceProcessor
@@ -80,6 +79,20 @@ UnifiedResourceProcessor
         +-- wait=true  --> 继续等待摘要 / 语义队列 / 向量索引后返回
         |
         +-- wait=false --> 普通标准链落盘后进入 AddResource 队列并返回
+
+后台队列 Worker
+        |
+        +-- source job -----------------------> _execute_resource_ingestion(wait=true)
+        |                                      使用消息中冻结的 backend / response_id / extension
+        |
+        +-- prepared job ---------------------> finish_prepared_resource
+        |
+        +-- 不再调用 add_resource，也不再重做 Connector / Git 顶层分类
+
+WatchScheduler
+        |
+        +-- refresh_resource -----------------> _submit_resource_ingestion(manage_watch=false)
+                                               重新获取和解析来源，但不修改 Watch 任务
 ```
 
 Understanding 不受 `wait=false` 限制。`wait=true` 在当前请求内完成 Understanding 提交、轮询、解析和 TreeBuilder，并继续等待后续队列；`wait=false` 的远程服务路径会先提交 Understanding、将 `response_id` 入队，再由 Worker 恢复任务。
@@ -88,12 +101,13 @@ Understanding 不受 `wait=false` 限制。`wait=true` 在当前请求内完成 
 
 | 分类内容 | 代码位置 | 输出 |
 |---|---|---|
-| Connector、异步 Git、异步 Understanding、标准链 | `ResourceService._add_resource` | 选定顶层执行链 |
+| Connector、异步 Git、标准执行链 | `ResourceService._submit_resource_ingestion` | 选定新请求的顶层执行方式 |
+| 异步 Understanding 或当前请求内执行 | `ResourceService._execute_resource_ingestion` | 根据 `wait`、配置和已识别类型决定提交还是同步执行 |
 | Feishu、Git、Feed、HTTP、本地文件 | `AccessorRegistry.access` | `LocalResource` |
 | Understanding 能否直接接收原始 URL | `ParserRouter.should_use_understanding_directly` | 直达 Understanding 或继续 Accessor |
 | Understanding 与内置 Parser | `ParserRouter.parse` | `ParseResult` |
 
-后台资源任务统一使用可恢复的 `AddResourceMsg`，但按工作类型进入两个独立队列：Understanding 使用受外部解析并发限制的 `ExternalParse`；Git 和已落盘的本地后处理使用 `AddResource`。两个队列都由 `AddResourceProcessor` 消费，锁接管失败时仍回到原队列。Worker 以 `wait=true` 重新进入同步添加链，因此不会再次进入异步入队分支。
+后台资源任务统一使用可恢复的 `AddResourceMsg`，但按工作类型进入两个独立队列：Understanding 使用受外部解析并发限制的 `ExternalParse`；Git 和已落盘的本地后处理使用 `AddResource`。两个队列都由 `AddResourceProcessor` 消费，锁接管失败时仍回到原队列。消息已经冻结了生产端做出的选择，例如 `parser_backend`、`understanding_response_id` 和 `resolved_extension`。Worker 直接执行该选择，不再把任务送回公开 `add_resource` 重新分类。
 
 ## 顶层路由表
 
@@ -272,7 +286,8 @@ Connector 不返回本地 `ParseResult`，也不调用当前进程的 `TreeBuild
 
 | 职责 | 入口 |
 |---|---|
-| 公开分流与异步任务 | `openviking/service/resource_service.py`：`ResourceService.add_resource`、`_add_resource` |
+| 公开入口、新请求分流与内部执行 | `openviking/service/resource_service.py`：`ResourceService.add_resource`、`_submit_resource_ingestion`、`_execute_resource_ingestion` |
+| Watch 刷新入口 | `openviking/service/resource_service.py`：`ResourceService.refresh_resource`；`openviking/resource/watch_scheduler.py` |
 | 标准解析与落盘编排 | `openviking/utils/resource_processor.py`：`ResourceProcessor.process_resource` |
 | Accessor 与 Parser 两层衔接 | `openviking/utils/media_processor.py`：`UnifiedResourceProcessor` |
 | 文件 Parser 单次选择 | `openviking/parse/parser_router.py`：`ParserRouter` |
