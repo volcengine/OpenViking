@@ -11,10 +11,12 @@ from openviking.parse.parsers.code.ast.aider_repomap import (
     _extract_with_grep_ast,
     has_tag_query,
 )
-from openviking.parse.parsers.code.ast.extractor import get_process_extractor
+from openviking.parse.parsers.code.ast.languages.process_engine import ProcessAutoExtractor
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+_process_extractor: Optional[ProcessAutoExtractor] = None
 
 _SYMBOL_PATTERNS = (
     re.compile(r"^\s*(class|def|func|function|interface|struct|enum|trait)\s+\w", re.M),
@@ -23,6 +25,19 @@ _SYMBOL_PATTERNS = (
     re.compile(r"^\s*[\w:<>,*&~]+\s+\w+\s*\([^)]*\)\s*(?:const)?\s*[;{]?", re.M),
 )
 _IMPORT_ONLY_PREFIXES = ("#", "imports:", "module:", "language:")
+
+
+def get_process_extractor() -> ProcessAutoExtractor:
+    global _process_extractor
+    if _process_extractor is None:
+        _process_extractor = ProcessAutoExtractor()
+    return _process_extractor
+
+
+def supports_code_skeleton(file_name: str) -> bool:
+    """Return whether tags or process extraction recognizes the file."""
+
+    return has_tag_query(file_name) or get_process_extractor().supports(file_name)
 
 
 @dataclass(frozen=True)

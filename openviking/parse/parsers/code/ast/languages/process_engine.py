@@ -12,11 +12,6 @@ from tree_sitter_language_pack import (
     process,
 )
 
-from openviking.parse.parsers.code.ast.skeleton import (
-    ClassSkeleton,
-    CodeSkeleton,
-    FunctionSig,
-)
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -107,24 +102,6 @@ _PROCESS_SUFFIX_DENYLIST = {
 }
 
 
-def _span(node) -> tuple[int, int]:
-    """Convert process() spans from 0-based to 1-based inclusive."""
-
-    return int(node.span.start_line) + 1, int(node.span.end_line) + 1
-
-
-def _func_sig(node) -> FunctionSig:
-    line_start, line_end = _span(node)
-    return FunctionSig(
-        name=node.name or "",
-        params="",
-        return_type="",
-        docstring="",
-        line_start=line_start,
-        line_end=line_end,
-    )
-
-
 def _display_language(lang: str) -> str:
     return _DISPLAY.get(lang, lang.replace("_", " ").title())
 
@@ -149,45 +126,31 @@ def _detect_process_language(file_name: str) -> Optional[str]:
     return lang
 
 
-def _extract_process_skeleton(file_name: str, content: str, lang: str) -> CodeSkeleton:
+def _extract_process_skeleton(file_name: str, content: str, lang: str) -> str:
     result = process(
         content,
         ProcessConfig(language=lang, structure=True, imports=True),
     )
 
-    classes: list[ClassSkeleton] = []
-    functions: list[FunctionSig] = []
+    lines: list[str] = [f"# {file_name} [{_display_language(lang)}]"]
+
+    imports = [item.source.strip() for item in result.imports if item.source]
+    if imports:
+        lines.append(f"imports: {', '.join(imports)}")
+    lines.append("")
+
     for node in result.structure:
         kind = str(node.kind).lower()
         if kind in _CLASS_KINDS:
-            methods = [
-                _func_sig(child)
-                for child in node.children
-                if str(child.kind).lower() in _FUNC_KINDS and child.name
-            ]
-            line_start, line_end = _span(node)
-            classes.append(
-                ClassSkeleton(
-                    name=node.name or "",
-                    bases=[],
-                    docstring="",
-                    methods=methods,
-                    line_start=line_start,
-                    line_end=line_end,
-                )
-            )
+            lines.append(f"class {node.name or ''}")
+            for child in node.children:
+                if str(child.kind).lower() in _FUNC_KINDS and child.name:
+                    lines.append(f"  + {child.name}()")
+            lines.append("")
         elif kind in _FUNC_KINDS and node.name:
-            functions.append(_func_sig(node))
+            lines.append(f"def {node.name}()")
 
-    imports = [item.source.strip() for item in result.imports if item.source]
-    return CodeSkeleton(
-        file_name=file_name,
-        language=_display_language(lang),
-        module_doc="",
-        imports=imports,
-        classes=classes,
-        functions=functions,
-    )
+    return "\n".join(lines).strip()
 
 
 class ProcessAutoExtractor:
@@ -196,7 +159,7 @@ class ProcessAutoExtractor:
     def supports(self, file_name: str) -> bool:
         return _detect_process_language(file_name) is not None
 
-    def extract(self, file_name: str, content: str) -> Optional[CodeSkeleton]:
+    def extract(self, file_name: str, content: str) -> Optional[str]:
         lang = _detect_process_language(file_name)
         if lang is None:
             return None
@@ -217,5 +180,5 @@ class ProcessAutoExtractor:
         content: str,
         verbose: bool = False,
     ) -> Optional[str]:
-        skeleton = self.extract(file_name, content)
-        return skeleton.to_text(verbose=verbose) if skeleton is not None else None
+        del verbose
+        return self.extract(file_name, content)

@@ -6,8 +6,10 @@ from unittest.mock import Mock
 import pytest
 
 from openviking.parse.parsers.code.ast import extract_skeleton, extract_skeleton_result
-from openviking.parse.parsers.code.ast.extractor import get_process_extractor
-from openviking.parse.parsers.code.ast.providers import extract_skeleton_with_routing
+from openviking.parse.parsers.code.ast.providers import (
+    extract_skeleton_with_routing,
+    get_process_extractor,
+)
 
 
 def test_tags_query_wins_without_calling_process(monkeypatch):
