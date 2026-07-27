@@ -249,6 +249,23 @@ async def wait_processed(
     return Response(status="ok", result=result)
 
 
+@router.get("/api/v1/system/idle", tags=["system"])
+async def system_idle(
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Return whether the server has any outstanding async work in flight.
+
+    Non-blocking sibling of ``POST /api/v1/system/wait``: instead of blocking
+    until pending work drains, it immediately reports ``idle=true`` iff every
+    aggregated subsystem (queue layer + central TaskTracker) has zero
+    outstanding work. See ``ResourceService.get_idle_status`` for the exact
+    aggregation and the (intentionally excluded) subsystems.
+    """
+    service = get_service()
+    result = await service.resources.get_idle_status()
+    return Response(status="ok", result=result)
+
+
 @router.post("/api/v1/system/consistency", tags=["system"])
 async def check_consistency(
     request: ConsistencyRequest,

@@ -546,3 +546,28 @@ class TaskTracker:
         for t in tasks:
             grouped[t.task_type][t.status.value] += 1
         return {k: dict(v) for k, v in grouped.items()}
+
+    # ── Idle-aggregation helpers (read-only) ──
+
+    _ACTIVE_STATUSES = (TaskStatus.PENDING, TaskStatus.RUNNING)
+
+    def count_active(self) -> int:
+        """Return the number of non-terminal tasks (PENDING + RUNNING).
+
+        Used by the server-level idle status endpoint to decide whether any
+        user-visible background operation (e.g. session_commit with wait=false,
+        reindex, ...) is still in flight.
+        """
+        with self._lock:
+            return sum(1 for t in self._tasks.values() if t.status in self._ACTIVE_STATUSES)
+
+    def snapshot_active_counts_by_type(self) -> Dict[str, int]:
+        """Return non-terminal (PENDING + RUNNING) task counts grouped by task_type."""
+        from collections import defaultdict
+
+        grouped: Dict[str, int] = defaultdict(int)
+        with self._lock:
+            for t in self._tasks.values():
+                if t.status in self._ACTIVE_STATUSES:
+                    grouped[t.task_type] += 1
+        return dict(grouped)

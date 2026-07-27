@@ -78,6 +78,225 @@ async def test_system_status(client: httpx.AsyncClient):
     assert body["result"]["initialized"] is True
 
 
+# ---------------------------------------------------------------------------
+# GET /api/v1/system/idle (issue #3488)
+#
+# Light fixture (create_app + SimpleNamespace service) is used so the tests do
+# not need to boot a full OpenVikingService (which requires the ragfs native
+# binding). Route-level behaviour is covered here; the aggregation logic of
+# ResourceService.get_idle_status is covered by the unit tests below.
+# ---------------------------------------------------------------------------
+
+
+def _idle_app(get_idle_status):
+    """Build an app whose service.resources.get_idle_status is the given awaitable.
+
+    Uses dev auth (no API key required) so we can drive the route without
+    initialising the APIKeyManager (the ASGI transport does not run lifespan).
+    """
+    from openviking.server.auth.plugins import DevAuthPlugin
+    from openviking.server.auth.registry import get_registry
+    from openviking.server.dependencies import set_service
+
+    service = SimpleNamespace(
+        resources=SimpleNamespace(get_idle_status=get_idle_status),
+    )
+    app = create_app(config=ServerConfig(), service=service)
+    set_service(service)
+    registry = get_registry()
+    if registry.get("dev") is None:
+        registry.register(DevAuthPlugin)
+    app.state.auth_plugin = DevAuthPlugin()
+    return app
+
+
+async def test_system_idle_route_returns_true():
+    """Route forwards the ResourceService result and returns 200 when idle."""
+
+    async def _idle_true():
+        return {
+            "idle": True,
+            "pending": 0,
+            "breakdown": {
+                "queue": {"pending": 0, "by_queue": {}},
+                "tasks": {"pending": 0, "by_type": {}},
+            },
+        }
+
+    app = _idle_app(_idle_true)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/v1/system/idle")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["idle"] is True
+    assert body["result"]["pending"] == 0
+
+
+async def test_system_idle_route_returns_false():
+    """Route propagates idle=false when the service reports pending work."""
+
+    async def _idle_false():
+        return {
+            "idle": False,
+            "pending": 3,
+            "breakdown": {
+                "queue": {"pending": 2, "by_queue": {"Embedding": {"pending": 0, "in_progress": 2}}},
+                "tasks": {"pending": 1, "by_type": {"session_commit": 1}},
+            },
+        }
+
+    app = _idle_app(_idle_false)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/v1/system/idle")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["result"]["idle"] is False
+    assert body["result"]["pending"] == 3
+
+
+# ---------------------------------------------------------------------------
+# ResourceService.get_idle_status aggregation logic (unit-level, no HTTP)
+# ---------------------------------------------------------------------------
+
+
+async def test_get_idle_status_when_idle(monkeypatch):
+    """Both sources at zero => idle=True, pending=0."""
+    from openviking.service.resource_service import ResourceService
+    from openviking.storage.queuefs.named_queue import QueueStatus
+
+    class _FakeQM:
+        async def check_status(self):
+            return {"Embedding": QueueStatus(pending=0, in_progress=0)}
+
+    monkeypatch.setattr(
+        "openviking.service.resource_service.get_queue_manager", lambda: _FakeQM()
+    )
+
+    class _FakeTracker:
+        def count_active(self):
+            return 0
+
+        def snapshot_active_counts_by_type(self):
+            return {}
+
+    import openviking.service.task_tracker as tt
+
+    monkeypatch.setattr(tt, "get_task_tracker", lambda: _FakeTracker())
+
+    result = await ResourceService().get_idle_status()
+
+    assert result["idle"] is True
+    assert result["pending"] == 0
+    assert result["breakdown"]["queue"]["pending"] == 0
+    assert result["breakdown"]["queue"]["by_queue"]["Embedding"] == {
+        "pending": 0,
+        "in_progress": 0,
+    }
+    assert result["breakdown"]["tasks"]["pending"] == 0
+    assert result["breakdown"]["tasks"]["by_type"] == {}
+
+
+async def test_get_idle_status_with_queue_work(monkeypatch):
+    """Queue with in-progress items => idle=False, pending reflects queue work."""
+    from openviking.service.resource_service import ResourceService
+    from openviking.storage.queuefs.named_queue import QueueStatus
+
+    class _FakeQM:
+        async def check_status(self):
+            return {
+                "Embedding": QueueStatus(pending=0, in_progress=2),
+                "Semantic": QueueStatus(pending=1, in_progress=0),
+            }
+
+    monkeypatch.setattr(
+        "openviking.service.resource_service.get_queue_manager", lambda: _FakeQM()
+    )
+
+    class _FakeTracker:
+        def count_active(self):
+            return 0
+
+        def snapshot_active_counts_by_type(self):
+            return {}
+
+    import openviking.service.task_tracker as tt
+
+    monkeypatch.setattr(tt, "get_task_tracker", lambda: _FakeTracker())
+
+    result = await ResourceService().get_idle_status()
+
+    assert result["idle"] is False
+    # 2 in_progress + 1 pending across the two queues.
+    assert result["pending"] == 3
+    assert result["breakdown"]["queue"]["by_queue"]["Embedding"]["in_progress"] == 2
+    assert result["breakdown"]["queue"]["by_queue"]["Semantic"]["pending"] == 1
+
+
+async def test_get_idle_status_with_active_task(monkeypatch):
+    """Central TaskTracker with a running task => idle=False."""
+    from openviking.service.resource_service import ResourceService
+    from openviking.storage.queuefs.named_queue import QueueStatus
+
+    class _FakeQM:
+        async def check_status(self):
+            return {"Embedding": QueueStatus(pending=0, in_progress=0)}
+
+    monkeypatch.setattr(
+        "openviking.service.resource_service.get_queue_manager", lambda: _FakeQM()
+    )
+
+    class _FakeTracker:
+        def count_active(self):
+            return 1
+
+        def snapshot_active_counts_by_type(self):
+            return {"session_commit": 1}
+
+    import openviking.service.task_tracker as tt
+
+    monkeypatch.setattr(tt, "get_task_tracker", lambda: _FakeTracker())
+
+    result = await ResourceService().get_idle_status()
+
+    assert result["idle"] is False
+    assert result["pending"] == 1
+    assert result["breakdown"]["tasks"]["by_type"] == {"session_commit": 1}
+
+
+async def test_get_idle_status_conservative_on_queue_error(monkeypatch):
+    """If a source raises, idle must be forced to False (never claim idle)."""
+    from openviking.service.resource_service import ResourceService
+
+    def _boom():
+        raise RuntimeError("QueueManager is not initialized")
+
+    monkeypatch.setattr(
+        "openviking.service.resource_service.get_queue_manager", _boom
+    )
+
+    class _FakeTracker:
+        def count_active(self):
+            return 0
+
+        def snapshot_active_counts_by_type(self):
+            return {}
+
+    import openviking.service.task_tracker as tt
+
+    monkeypatch.setattr(tt, "get_task_tracker", lambda: _FakeTracker())
+
+    result = await ResourceService().get_idle_status()
+
+    # Uncertain source => never report idle=True even though pending==0.
+    assert result["idle"] is False
+    assert "error" in result["breakdown"]["queue"]
+
+
 async def test_backend_sync_status_endpoint(client: httpx.AsyncClient, service):
     calls: list[str] = []
 
