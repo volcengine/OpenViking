@@ -17,7 +17,7 @@ Thank you for your interest in OpenViking! We welcome contributions of all kinds
 - **Go**: 1.22+ (Required only for Go SDK development under `sdk/go`)
 - **Rust**: 1.91.1+ (Required for source builds because the bundled `ov` CLI is built during packaging)
 - **C++ Compiler**: GCC 9+ or Clang 11+ (Required for building core extensions, must support C++17)
-- **CMake**: 3.12+
+- **CMake**: 3.15+
 
 #### Platform-Specific Native Build Tools
 
