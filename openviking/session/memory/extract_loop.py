@@ -832,6 +832,35 @@ The final output of the model must strictly follow the JSON Schema format shown 
             )
             return None
 
+        # Per-item tolerance: validate each item against its target type BEFORE the
+        # whole-batch validate. Without this, a single malformed item (e.g. a
+        # legacy item missing a required immutable field after key-cleaning) makes
+        # model_validate fail the ENTIRE memory_type bucket, losing every valid item
+        # alongside it — reproducing the very silent-drop this recovery exists to
+        # prevent. Drop only the bad items, keep the good ones.
+        for mt in list(bucketed.keys()):
+            items = bucketed[mt]
+            if not items:
+                continue
+            item_type = self._get_item_model_type(mt)
+            if item_type is None:
+                continue
+            kept: List[Dict[str, Any]] = []
+            for item in items:
+                try:
+                    item_type.model_validate(item, strict=False)
+                    kept.append(item)
+                except Exception:
+                    dropped += 1
+                    tracer.info(
+                        f"legacy recovery: dropped malformed {mt} item: {item!r}"
+                    )
+            bucketed[mt] = kept
+
+        if all(len(v) == 0 for v in bucketed.values()):
+            tracer.info(f"legacy recovery: every item failed per-item validation (dropped {dropped})")
+            return None
+
         try:
             recovered = self._operations_model.model_validate(bucketed, strict=False)
         except Exception as exc:
