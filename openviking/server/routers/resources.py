@@ -16,7 +16,7 @@ from openviking.server.resource_ingest import ingest_temp_upload
 from openviking.server.responses import response_from_result
 from openviking.server.skill_source_metadata import persist_skill_source_metadata
 from openviking.server.telemetry import run_operation
-from openviking.server.temp_upload_store import TempUploadStore
+from openviking.server.temp_upload_store import MATERIALIZED_WATCH_SOURCE_KEY, TempUploadStore
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError
 
@@ -194,12 +194,16 @@ async def add_resource(
     original_filename = None
     resolved = None
     store = None
+    materialized_watch_source = None
     if request.temp_file_id:
         store = TempUploadStore.build(http_request.app.state.config)
         resolved = await store.resolve_for_consume(request.temp_file_id, _ctx)
         path = resolved.local_path
         original_filename = resolved.original_filename
         allow_local_path_resolution = True
+        if request.watch_interval > 0:
+            materialized_watch_source = store.materialize_watch_source(resolved)
+            path = materialized_watch_source
     elif path is not None:
         path = require_remote_resource_source(path)
     if path is None:
@@ -225,8 +229,10 @@ async def add_resource(
     # omitted because ResourceService reads it with kwargs.get(..., False).
     if "create_parent" in request.model_fields_set:
         kwargs["create_parent"] = request.create_parent
-    if request.temp_file_id:
+    if request.temp_file_id and request.watch_interval <= 0:
         kwargs["temp_file_id"] = request.temp_file_id
+    if materialized_watch_source:
+        kwargs[MATERIALIZED_WATCH_SOURCE_KEY] = materialized_watch_source
     if request.preserve_structure is not None:
         kwargs["preserve_structure"] = request.preserve_structure
 
@@ -249,6 +255,7 @@ async def add_resource(
                 **kwargs,
             )
         except Exception:
+            TempUploadStore.cleanup_materialized_watch_source(materialized_watch_source)
             if resolved and store:
                 await store.mark_failed(resolved, _ctx)
             raise

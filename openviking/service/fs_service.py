@@ -17,6 +17,7 @@ from openviking.privacy import (
 )
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
+from openviking.server.temp_upload_store import TempUploadStore
 from openviking.session.memory.memory_updater import MemoryUpdater
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
@@ -425,6 +426,8 @@ class FSService:
             return
         deactivated = await watch_manager.deactivate_tasks_under_uri_internal(uri, account_id)
         if deactivated:
+            for task in deactivated:
+                TempUploadStore.cleanup_materialized_watch_source_for_task(task)
             logger.info(
                 "Deactivated %d watch task(s) after deleting %s",
                 len(deactivated),

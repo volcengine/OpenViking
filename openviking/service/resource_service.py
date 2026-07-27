@@ -39,6 +39,7 @@ from openviking.server.local_input_guard import (
     is_remote_resource_source,
     require_remote_resource_source,
 )
+from openviking.server.temp_upload_store import MATERIALIZED_WATCH_SOURCE_KEY, TempUploadStore
 from openviking.server.user_config import (
     effective_resource_add_target,
     effective_skill_add_target,
@@ -193,6 +194,9 @@ class ResourceService:
     def _sanitize_watch_processor_kwargs(self, processor_kwargs: Dict[str, Any]) -> Dict[str, Any]:
         sanitized: Dict[str, Any] = {}
         for key, value in processor_kwargs.items():
+            if key == MATERIALIZED_WATCH_SOURCE_KEY:
+                sanitized[key] = value
+                continue
             try:
                 json.dumps(value, ensure_ascii=False)
             except TypeError:
@@ -211,6 +215,11 @@ class ResourceService:
             watch_kwargs["tags"] = tags
             watch_kwargs["tag_mode"] = tag_mode
         return watch_kwargs
+
+    def _processor_args_for_watch_run(self, processor_kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        args = self._sanitize_watch_processor_kwargs(processor_kwargs)
+        args.pop(MATERIALIZED_WATCH_SOURCE_KEY, None)
+        return args
 
     def _validate_add_resource_tag_policy(
         self,
@@ -667,7 +676,7 @@ class ResourceService:
                 preserve_structure=kwargs.get("preserve_structure"),
                 create_parent=bool(kwargs.get("create_parent", False)),
                 source_name=source_name,
-                args=self._sanitize_watch_processor_kwargs(processor_args),
+                args=self._processor_args_for_watch_run(processor_args),
             )
             task = await self._enqueue_add_resource_job(
                 msg,
@@ -2035,6 +2044,7 @@ class ResourceService:
                     f"Please cancel the existing task first.",
                     resource=to_uri,
                 )
+            TempUploadStore.cleanup_materialized_watch_source_for_task(existing_task)
             await watch_manager.update_task(
                 task_id=existing_task.task_id,
                 account_id=ctx.account_id,
@@ -2100,6 +2110,7 @@ class ResourceService:
                 role=str(ctx.role),
                 is_active=False,
             )
+            TempUploadStore.cleanup_materialized_watch_source_for_task(existing_task)
             logger.info(
                 f"[ResourceService] Deactivated watch task {existing_task.task_id} for {to_uri}"
             )

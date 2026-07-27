@@ -816,6 +816,135 @@ async def test_shared_temp_upload_and_add_resource_deletes_upload_dir(
     assert not await vfs.exists(upload_root)
 
 
+async def test_shared_temp_upload_with_watch_and_tags_creates_watch(
+    client: httpx.AsyncClient,
+    service,
+    upload_temp_dir,
+):
+    upload_resp = await client.post(
+        "/api/v1/resources/temp_upload",
+        files={"file": ("watched.md", b"# watched shared upload\n", "text/markdown")},
+        data={"upload_mode": "shared"},
+    )
+    assert upload_resp.status_code == 200
+    temp_file_id = upload_resp.json()["result"]["temp_file_id"]
+    upload_id = temp_file_id[len("shared_") :]
+    upload_root = f"viking://upload/{upload_id}"
+    target_uri = "viking://resources/watched-shared-upload.md"
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": temp_file_id,
+            "to": target_uri,
+            "reason": "shared upload watch",
+            "wait": True,
+            "watch_interval": 5.0,
+            "tags": ["team=watch", "env=test"],
+            "tag_mode": "replace",
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["root_uri"] == target_uri
+    assert body["result"]["tags_result"]["tags"] == ["team=watch", "env=test"]
+    task = await service.watch_scheduler.watch_manager.get_task_by_uri(
+        to_uri=target_uri,
+        account_id="default",
+        user_id="test_user",
+        role="ROOT",
+    )
+    assert task is not None
+    assert task.watch_interval == 5.0
+    assert task.processor_kwargs.get("tags") == ["team=watch", "env=test"]
+    assert task.processor_kwargs.get("tag_mode") == "replace"
+    assert task.path
+    assert "ov_shared_upload_" not in task.path
+    assert task.path.endswith(".md")
+    materialized_path = upload_temp_dir / "watch_sources" / task.path.rsplit("/", 1)[-1]
+    assert materialized_path.exists()
+    assert not await get_viking_fs().exists(upload_root)
+
+    delete_resp = await client.delete("/api/v1/watches", params={"to_uri": target_uri})
+    assert delete_resp.status_code == 200, delete_resp.text
+    assert not materialized_path.exists()
+
+
+async def test_local_temp_upload_with_watch_and_tags_creates_watch(
+    client: httpx.AsyncClient,
+    service,
+    upload_temp_dir,
+):
+    upload_resp = await client.post(
+        "/api/v1/resources/temp_upload",
+        files={"file": ("watched-local.md", b"# watched local upload\n", "text/markdown")},
+    )
+    assert upload_resp.status_code == 200
+    temp_file_id = upload_resp.json()["result"]["temp_file_id"]
+    target_uri = "viking://resources/watched-local-upload.md"
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": temp_file_id,
+            "to": target_uri,
+            "reason": "local upload watch",
+            "wait": True,
+            "watch_interval": 5.0,
+            "tags": ["team=watch", "env=local"],
+            "tag_mode": "replace",
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["root_uri"] == target_uri
+    assert body["result"]["tags_result"]["tags"] == ["team=watch", "env=local"]
+    task = await service.watch_scheduler.watch_manager.get_task_by_uri(
+        to_uri=target_uri,
+        account_id="default",
+        user_id="test_user",
+        role="ROOT",
+    )
+    assert task is not None
+    assert task.watch_interval == 5.0
+    assert task.processor_kwargs.get("tags") == ["team=watch", "env=local"]
+    assert task.path
+    assert "/watch_sources/" in task.path
+    assert task.path.endswith(".md")
+    assert (upload_temp_dir / "watch_sources").exists()
+
+
+async def test_temp_upload_watch_source_is_removed_when_add_resource_fails(
+    client: httpx.AsyncClient,
+    upload_temp_dir,
+):
+    upload_resp = await client.post(
+        "/api/v1/resources/temp_upload",
+        files={"file": ("bad-watch.md", b"# bad watch upload\n", "text/markdown")},
+    )
+    assert upload_resp.status_code == 200
+    temp_file_id = upload_resp.json()["result"]["temp_file_id"]
+    watch_sources = upload_temp_dir / "watch_sources"
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": temp_file_id,
+            "to": "viking://resources/bad-watch-upload.md",
+            "wait": True,
+            "watch_interval": 5.0,
+            "tags": ["missing-equals"],
+        },
+    )
+
+    assert resp.status_code == 400
+    assert not watch_sources.exists() or list(watch_sources.iterdir()) == []
+
+
 async def test_shared_temp_upload_failed_consume_is_retryable(
     client: httpx.AsyncClient,
     app,
