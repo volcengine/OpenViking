@@ -1396,7 +1396,7 @@ HTTP 客户端（`SyncHTTPClient` / `AsyncHTTPClient`）和 CLI 工具连接远�
 | `upload.ignore_dirs` | `add-resource` 默认忽略目录列表（CSV） | `null` |
 | `upload.include` | `add-resource` 默认包含模式（CSV） | `null` |
 | `upload.exclude` | `add-resource` 默认排除模式（CSV） | `null` |
-| `upload.mode` | 临时上传后端：`"local"`（仅当前实例本地磁盘）或 `"shared"`（分布式共享存储，当消费请求可能落到不同实例时必需）。可通过 `OPENVIKING_UPLOAD_MODE` 单次覆盖。 | `null`（使用服务端 `temp_upload.default_mode`，默认仍为 `"local"`） |
+| `upload.mode` | Python HTTP client 的临时上传后端：`"local"`（仅当前实例本地磁盘）或 `"shared"`（分布式共享存储）。Rust `ov` CLI 不读取这个字段；如需 shared 上传，请设置 `OPENVIKING_UPLOAD_MODE=shared`。 | `null`（使用服务端 `temp_upload.default_mode`，默认仍为 `"local"`） |
 
 本地目录上传会默认遵循 `.gitignore`（根目录和子目录，含 `!` 反向规则）。`ignore_dirs/include/exclude` 会在此基础上进一步过滤。
 

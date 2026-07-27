@@ -332,6 +332,12 @@ impl Config {
                 self.timeout
             )));
         }
+        if !matches!(self.output.as_str(), "table" | "json") {
+            return Err(Error::Config(format!(
+                "Invalid output value {:?}: expected table or json",
+                self.output
+            )));
+        }
         Ok(())
     }
 
@@ -510,6 +516,22 @@ mod tests {
 
         assert_eq!(config.timeout, -1.0);
         assert!(config.validate_runtime_values().is_err());
+    }
+
+    #[test]
+    fn config_file_with_invalid_output_still_loads_for_repair() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let path = dir.path().join("ovcli.conf");
+        std::fs::write(&path, r#"{"output": "yaml"}"#).expect("config file should be written");
+
+        let config =
+            Config::from_file(&path.to_string_lossy()).expect("repair commands must load the file");
+
+        assert_eq!(config.output, "yaml");
+        let error = config
+            .validate_runtime_values()
+            .expect_err("normal commands must reject an invalid output format");
+        assert!(error.to_string().contains("Invalid output value \"yaml\""));
     }
 
     #[test]

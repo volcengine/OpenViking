@@ -118,12 +118,11 @@ struct Cli {
         short,
         long,
         value_enum,
-        default_value = "table",
         global = true,
         hide = true,
         value_name = "table|json"
     )]
-    output: OutputFormat,
+    output: Option<OutputFormat>,
 
     /// Use compact table/JSON rendering
     #[arg(
@@ -2590,6 +2589,10 @@ fn language_command_can_run_picker(has_language_value: bool, is_interactive: boo
     has_language_value || is_interactive
 }
 
+fn resolve_output_format(cli_output: Option<OutputFormat>, config: &Config) -> OutputFormat {
+    cli_output.unwrap_or_else(|| OutputFormat::from(config.output.as_str()))
+}
+
 fn render_pre_language_help_request(args: &[OsString]) -> Option<String> {
     if !args
         .iter()
@@ -2679,7 +2682,7 @@ async fn main() {
         }
     };
 
-    let output_format = cli.output;
+    let output_override = cli.output;
     let compact = cli.compact;
     let legacy_upload_options = UploadCliOptions {
         progress: cli.progress,
@@ -2742,7 +2745,7 @@ async fn main() {
             error_ui::print_runtime_error(
                 &command_display,
                 &e,
-                output_format,
+                pre_parse_output_format,
                 compact,
                 cli.verbose,
             );
@@ -2765,24 +2768,19 @@ async fn main() {
             error_ui::print_runtime_error(
                 &command_display,
                 &e,
-                output_format,
+                pre_parse_output_format,
                 compact,
                 cli.verbose,
             );
             std::process::exit(2);
         }
     };
-    if !cli.command.allows_invalid_runtime_config() {
-        if let Err(e) = config.validate_runtime_values() {
-            error_ui::print_runtime_error(
-                &command_display,
-                &e,
-                output_format,
-                compact,
-                cli.verbose,
-            );
-            std::process::exit(2);
-        }
+    let output_format = resolve_output_format(output_override, &config);
+    if !cli.command.allows_invalid_runtime_config()
+        && let Err(e) = config.validate_runtime_values()
+    {
+        error_ui::print_runtime_error(&command_display, &e, output_format, compact, cli.verbose);
+        std::process::exit(2);
     }
     let ctx = CliContext::from_config(
         config,
@@ -3351,7 +3349,7 @@ mod tests {
         language_command_can_run_picker, language_gate_action, language_required_message,
         legacy_upload_option_error, plain_help_misuse, pre_parse_output_options,
         pre_parse_requires_cli_config_file, preprocess_cli_args, preprocess_privacy_args,
-        render_pre_language_help_request,
+        render_pre_language_help_request, resolve_output_format,
     };
     use crate::config::{Config, DEFAULT_CUSTOM_URL};
     use crate::output::OutputFormat;
@@ -4085,7 +4083,7 @@ mod tests {
         let show_global_output =
             Cli::try_parse_from(["ov", "skills", "show", "code-review", "-o", "json"])
                 .expect("skills show should accept global -o after the subcommand");
-        assert_eq!(show_global_output.output, OutputFormat::Json);
+        assert_eq!(show_global_output.output, Some(OutputFormat::Json));
 
         let remove = Cli::try_parse_from(["ov", "skills", "remove", "foo", "bar", "--yes"])
             .expect("skills remove --yes should parse");
@@ -4314,6 +4312,32 @@ mod tests {
 
         let status = Cli::try_parse_from(["ov", "status"]).expect("status should parse");
         assert!(!status.command.allows_invalid_runtime_config());
+    }
+
+    #[test]
+    fn configured_output_is_used_unless_cli_overrides_it() {
+        let config = Config {
+            output: "json".to_string(),
+            ..Config::default()
+        };
+
+        assert_eq!(resolve_output_format(None, &config), OutputFormat::Json);
+        assert_eq!(
+            resolve_output_format(Some(OutputFormat::Table), &config),
+            OutputFormat::Table
+        );
+        let cli = Cli::try_parse_from(["ov", "status"]).unwrap();
+        assert_eq!(cli.output, None);
+
+        let invalid_config = Config {
+            output: "yaml".to_string(),
+            ..Config::default()
+        };
+        assert_eq!(
+            resolve_output_format(None, &invalid_config),
+            OutputFormat::Table,
+            "repair commands need a safe fallback for invalid persisted output"
+        );
     }
 
     #[test]
