@@ -443,6 +443,27 @@ class MarkdownConfig(ParserConfig):
 
 
 @dataclass
+class ExcelConfig(ParserConfig):
+    """
+    Configuration for Excel parsing.
+
+    Attributes:
+        enable_process_pool: Offload Excel→Markdown conversion and layout
+            planning to a ProcessPoolExecutor (default off).
+        process_pool_workers: Max worker processes when the pool is enabled.
+    """
+
+    enable_process_pool: bool = False
+    process_pool_workers: int = 2
+
+    def validate(self) -> None:
+        """Validate Excel-specific configuration."""
+        super().validate()
+        if self.process_pool_workers < 1:
+            raise ValueError("process_pool_workers must be at least 1")
+
+
+@dataclass
 class HTMLConfig(ParserConfig):
     """
     Configuration for HTML parsing.
@@ -668,6 +689,7 @@ PARSER_CONFIG_REGISTRY = {
     "audio": AudioConfig,
     "video": VideoConfig,
     "markdown": MarkdownConfig,
+    "excel": ExcelConfig,
     "html": HTMLConfig,
     "text": TextConfig,
     "directory": DirectoryConfig,
