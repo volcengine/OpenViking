@@ -1,0 +1,139 @@
+openviking/service/resource_service.py
+  s_455b15ffc6358d::t_e132ccf6b7af16 18,27,57-60,641-677,691-701,703,707-713 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a672668487193ea3fb37eac","tool_type":"agent","tool_id":"apply_patch","line_ranges":[{"Single":18},{"Single":27},{"Range":[57,60]},{"Range":[641,677]},{"Range":[691,701]},{"Single":703},{"Range":[707,713]}]}]}
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "44a3998033e8501aecbc87b2be7f7f67d0ced44a",
+  "prompts": {},
+  "humans": {
+    "h_540aa6adc07650": {
+      "author": "chenxiaobin.monkey <chenxiaobin.monkey@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_455b15ffc6358d": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a474f3cd16c13f6c4bb890d",
+        "model": "gpt-5.5__dev"
+      },
+      "human_author": "chenxiaobin.monkey <chenxiaobin.monkey@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {
+    "openviking/service/resource_service.py": [
+      {
+        "hash": "s_455b15ffc6358d::t_e132ccf6b7af16",
+        "line_ranges": [
+          {
+            "Single": 18
+          },
+          {
+            "Single": 27
+          },
+          {
+            "Range": [
+              57,
+              60
+            ]
+          },
+          {
+            "Range": [
+              641,
+              677
+            ]
+          },
+          {
+            "Range": [
+              691,
+              701
+            ]
+          },
+          {
+            "Single": 703
+          },
+          {
+            "Range": [
+              707,
+              713
+            ]
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a672668487193ea3fb37eac",
+            "tool_type": "agent",
+            "tool_id": "apply_patch",
+            "line_ranges": [
+              {
+                "Single": 18
+              },
+              {
+                "Single": 27
+              },
+              {
+                "Range": [
+                  57,
+                  60
+                ]
+              },
+              {
+                "Range": [
+                  641,
+                  677
+                ]
+              },
+              {
+                "Range": [
+                  691,
+                  701
+                ]
+              },
+              {
+                "Single": 703
+              },
+              {
+                "Range": [
+                  707,
+                  713
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "remote_transcripts": {
+    "s_455b15ffc6358d": {
+      "tool": "trae",
+      "conversation_id": "6a474f3cd16c13f6c4bb890d",
+      "session_id": "6a474f3cd16c13f6c4bb890d",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    },
+    "s_455b15ffc6358d::t_038ff6981dd487": {
+      "tool": "trae",
+      "conversation_id": "6a474f3cd16c13f6c4bb890d",
+      "session_id": "6a474f3cd16c13f6c4bb890d",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    },
+    "s_455b15ffc6358d::t_6c2f50f3fb0ceb": {
+      "tool": "trae",
+      "conversation_id": "6a474f3cd16c13f6c4bb890d",
+      "session_id": "6a474f3cd16c13f6c4bb890d",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    },
+    "s_455b15ffc6358d::t_e132ccf6b7af16": {
+      "tool": "trae",
+      "conversation_id": "6a474f3cd16c13f6c4bb890d",
+      "session_id": "6a474f3cd16c13f6c4bb890d",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    }
+  }
+}
