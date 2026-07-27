@@ -7,6 +7,35 @@ from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.telemetry.request_wait_tracker import RequestWaitTracker
 
 
+def test_embedding_msg_defaults_legacy_payload_to_embed_operation():
+    msg = EmbeddingMsg.from_dict(
+        {
+            "message": "text",
+            "context_data": {"uri": "viking://resources/a.md"},
+        }
+    )
+
+    assert msg.operation == "embed"
+    assert msg.retry_count == 0
+
+
+def test_embedding_msg_round_trips_metadata_patch_fields():
+    msg = EmbeddingMsg(
+        message="",
+        context_data={
+            "uri": "viking://resources/a.md",
+            "abstract": "summary",
+        },
+        operation="metadata_patch",
+        retry_count=2,
+    )
+
+    restored = EmbeddingMsg.from_json(msg.to_json())
+
+    assert restored.operation == "metadata_patch"
+    assert restored.retry_count == 2
+
+
 def test_embedding_msg_roundtrip_preserves_id_for_request_wait_tracker():
     telemetry_id = f"tm_{uuid4().hex}"
     tracker = RequestWaitTracker.get_instance()

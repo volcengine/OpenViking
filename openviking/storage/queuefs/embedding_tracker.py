@@ -6,7 +6,7 @@ import asyncio
 import inspect
 import threading
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from openviking_cli.utils.logger import get_logger
 
@@ -22,6 +22,13 @@ class _EmbeddingTaskRecord:
     on_complete: Optional[Callable[[], Any]]
     metadata: Dict[str, Any]
     owner_loop: Optional[asyncio.AbstractEventLoop]
+    sealed: bool = True
+    tracks_leaf: bool = False
+    leaf_remaining: int = 0
+    leaf_total: int = 0
+    leaf_sealed: bool = True
+    on_leaf_complete: Optional[Callable[[], Any]] = None
+    leaf_callback_fired: bool = False
 
 
 class EmbeddingTaskTracker:
@@ -61,15 +68,15 @@ class EmbeddingTaskTracker:
         """Invoke a completion callback and await async results."""
         await self._await_callback_result(on_complete())
 
-    async def _run_on_complete(
+    async def _run_callback(
         self,
         semantic_msg_id: str,
-        record: _EmbeddingTaskRecord,
+        callback_name: str,
+        callback: Optional[Callable[[], Any]],
+        owner_loop: Optional[asyncio.AbstractEventLoop],
     ) -> None:
-        """Execute the completion callback on the loop that registered it."""
-        on_complete = record.on_complete
-        owner_loop = record.owner_loop
-        if on_complete is None:
+        """Execute a tracker callback on the loop that registered it."""
+        if callback is None:
             return
 
         try:
@@ -93,7 +100,7 @@ class EmbeddingTaskTracker:
                 else:
                     try:
                         fut = asyncio.run_coroutine_threadsafe(
-                            self._execute_callback(on_complete),
+                            self._execute_callback(callback),
                             owner_loop,
                         )
                     except RuntimeError:
@@ -106,11 +113,26 @@ class EmbeddingTaskTracker:
                         await asyncio.wrap_future(fut)
                         return
 
-            await self._execute_callback(on_complete)
+            await self._execute_callback(callback)
         except Exception as e:
             logger.error(
-                f"Error in completion callback for {semantic_msg_id}: {e}",
+                f"Error in {callback_name} callback for {semantic_msg_id}: {e}",
                 exc_info=True,
+            )
+
+    async def _run_callbacks(
+        self,
+        semantic_msg_id: str,
+        callbacks: List[
+            Tuple[str, Optional[Callable[[], Any]], Optional[asyncio.AbstractEventLoop]]
+        ],
+    ) -> None:
+        for callback_name, callback, owner_loop in callbacks:
+            await self._run_callback(
+                semantic_msg_id,
+                callback_name,
+                callback,
+                owner_loop,
             )
 
     @classmethod
@@ -166,9 +188,119 @@ class EmbeddingTaskTracker:
                 )
 
         if record_to_finalize is not None:
-            await self._run_on_complete(semantic_msg_id, record_to_finalize)
+            await self._run_callback(
+                semantic_msg_id,
+                "completion",
+                record_to_finalize.on_complete,
+                record_to_finalize.owner_loop,
+            )
 
-    async def decrement(self, semantic_msg_id: str) -> Optional[int]:
+    async def register_open(
+        self,
+        semantic_msg_id: str,
+        on_complete: Optional[Callable[[], Any]] = None,
+        on_leaf_complete: Optional[Callable[[], Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Register a tracker whose task counts will be discovered incrementally."""
+        owner_loop = asyncio.get_running_loop()
+        with self._lock:
+            existing = self._tasks.get(semantic_msg_id)
+            if existing is not None:
+                logger.warning(
+                    "Overwriting existing embedding tracker record for SemanticMsg %s",
+                    semantic_msg_id,
+                )
+
+            self._tasks[semantic_msg_id] = _EmbeddingTaskRecord(
+                remaining=0,
+                total=0,
+                on_complete=on_complete,
+                metadata=metadata or {},
+                owner_loop=owner_loop,
+                sealed=False,
+                tracks_leaf=True,
+                leaf_sealed=False,
+                on_leaf_complete=on_leaf_complete,
+            )
+
+    async def add(
+        self,
+        semantic_msg_id: str,
+        count: int,
+        leaf_count: int = 0,
+    ) -> None:
+        """Add newly discovered embedding tasks to an open tracker."""
+        if count < 0 or leaf_count < 0 or leaf_count > count:
+            raise ValueError("count and leaf_count must satisfy 0 <= leaf_count <= count")
+
+        with self._lock:
+            record = self._tasks.get(semantic_msg_id)
+            if record is None:
+                raise KeyError(f"Embedding tracker not found: {semantic_msg_id}")
+            if record.sealed and count:
+                raise RuntimeError(f"Embedding tracker is sealed: {semantic_msg_id}")
+            if record.leaf_sealed and leaf_count:
+                raise RuntimeError(f"Leaf embedding tracker is sealed: {semantic_msg_id}")
+
+            record.remaining += count
+            record.total += count
+            record.leaf_remaining += leaf_count
+            record.leaf_total += leaf_count
+
+    async def seal_leaf(self, semantic_msg_id: str) -> Optional[int]:
+        """Seal leaf discovery and fire the leaf callback once all leaves finish."""
+        callbacks: List[
+            Tuple[str, Optional[Callable[[], Any]], Optional[asyncio.AbstractEventLoop]]
+        ] = []
+        with self._lock:
+            record = self._tasks.get(semantic_msg_id)
+            if record is None:
+                return None
+
+            record.leaf_sealed = True
+            if record.leaf_remaining <= 0 and not record.leaf_callback_fired:
+                record.leaf_callback_fired = True
+                callbacks.append(("leaf completion", record.on_leaf_complete, record.owner_loop))
+            remaining = record.leaf_remaining
+
+        await self._run_callbacks(semantic_msg_id, callbacks)
+        return remaining
+
+    async def seal(self, semantic_msg_id: str) -> Optional[int]:
+        """Seal all task discovery and complete once all registered tasks finish."""
+        callbacks: List[
+            Tuple[str, Optional[Callable[[], Any]], Optional[asyncio.AbstractEventLoop]]
+        ] = []
+        with self._lock:
+            record = self._tasks.get(semantic_msg_id)
+            if record is None:
+                return None
+
+            record.sealed = True
+            record.leaf_sealed = True
+            if record.leaf_remaining <= 0 and not record.leaf_callback_fired:
+                record.leaf_callback_fired = True
+                callbacks.append(("leaf completion", record.on_leaf_complete, record.owner_loop))
+
+            remaining = record.remaining
+            if remaining <= 0:
+                self._tasks.pop(semantic_msg_id)
+                callbacks.append(("completion", record.on_complete, record.owner_loop))
+
+        await self._run_callbacks(semantic_msg_id, callbacks)
+        return remaining
+
+    async def discard(self, semantic_msg_id: str) -> bool:
+        """Remove a tracker without running completion callbacks."""
+        with self._lock:
+            return self._tasks.pop(semantic_msg_id, None) is not None
+
+    async def decrement(
+        self,
+        semantic_msg_id: str,
+        is_leaf: bool = False,
+    ) -> Optional[int]:
         """Decrement the remaining task count for a SemanticMsg.
 
         This method should be called when an embedding task is completed.
@@ -181,7 +313,9 @@ class EmbeddingTaskTracker:
         Returns:
             The remaining count after decrement, or None if not found
         """
-        record_to_finalize: Optional[_EmbeddingTaskRecord] = None
+        callbacks: List[
+            Tuple[str, Optional[Callable[[], Any]], Optional[asyncio.AbstractEventLoop]]
+        ] = []
 
         with self._lock:
             record = self._tasks.get(semantic_msg_id)
@@ -190,13 +324,24 @@ class EmbeddingTaskTracker:
 
             record.remaining -= 1
             remaining = record.remaining
+            if is_leaf and record.tracks_leaf:
+                record.leaf_remaining -= 1
 
-            if remaining <= 0:
-                record_to_finalize = self._tasks.pop(semantic_msg_id)
+            if (
+                record.tracks_leaf
+                and record.leaf_sealed
+                and record.leaf_remaining <= 0
+                and not record.leaf_callback_fired
+            ):
+                record.leaf_callback_fired = True
+                callbacks.append(("leaf completion", record.on_leaf_complete, record.owner_loop))
+
+            if record.sealed and remaining <= 0:
+                self._tasks.pop(semantic_msg_id)
                 logger.info(
                     f"All embedding tasks({record.total}) completed for SemanticMsg {semantic_msg_id}"
                 )
+                callbacks.append(("completion", record.on_complete, record.owner_loop))
 
-        if record_to_finalize is not None:
-            await self._run_on_complete(semantic_msg_id, record_to_finalize)
+        await self._run_callbacks(semantic_msg_id, callbacks)
         return remaining

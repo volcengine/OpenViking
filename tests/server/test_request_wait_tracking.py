@@ -25,9 +25,19 @@ class _FakeRequestWaitTracker:
     def register_request(self, telemetry_id: str) -> None:
         self.registered_requests.append(telemetry_id)
 
-    async def wait_for_request(self, telemetry_id: str, timeout, poll_interval=None):
+    async def wait_for_request(
+        self,
+        telemetry_id: str,
+        timeout,
+        poll_interval=None,
+        on_leaf_indexed=None,
+    ):
         del poll_interval
         self.wait_calls.append((telemetry_id, timeout))
+        if on_leaf_indexed is not None:
+            result = on_leaf_indexed()
+            if hasattr(result, "__await__"):
+                await result
 
     def build_queue_status(self, telemetry_id: str):
         self.build_calls.append(telemetry_id)
@@ -87,6 +97,7 @@ async def test_add_resource_wait_uses_request_tracker(service, monkeypatch):
     )
     ctx = RequestContext(user=service.user, role=Role.ROOT)
     telemetry = OperationTelemetry(operation="resources.add_resource", enabled=True)
+    stages = []
 
     async def _fake_process_resource(**kwargs):
         del kwargs
@@ -112,6 +123,7 @@ async def test_add_resource_wait_uses_request_tracker(service, monkeypatch):
             reason="request wait test",
             wait=True,
             timeout=12.0,
+            stage_callback=stages.append,
         )
 
     assert result["queue_status"] == tracker.queue_status
@@ -119,6 +131,7 @@ async def test_add_resource_wait_uses_request_tracker(service, monkeypatch):
     assert tracker.wait_calls == [(telemetry.telemetry_id, 12.0)]
     assert tracker.build_calls == [telemetry.telemetry_id]
     assert tracker.cleaned == [telemetry.telemetry_id]
+    assert stages == ["processing_queue", "leaf_indexed"]
 
 
 @pytest.mark.asyncio

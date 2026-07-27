@@ -13,6 +13,8 @@ class EmbeddingMsg:
     id: str = field(default_factory=lambda: str(uuid4()))
     telemetry_id: str = ""
     semantic_msg_id: Optional[str] = None
+    operation: str = "embed"
+    retry_count: int = 0
 
     def __init__(
         self,
@@ -20,12 +22,16 @@ class EmbeddingMsg:
         context_data: Dict[str, Any],
         telemetry_id: str = "",
         semantic_msg_id: Optional[str] = None,
+        operation: str = "embed",
+        retry_count: int = 0,
     ):
         self.id = str(uuid4())
         self.message = message
         self.context_data = context_data
         self.telemetry_id = telemetry_id
         self.semantic_msg_id = semantic_msg_id
+        self.operation = operation
+        self.retry_count = retry_count
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert embedding message to dictionary format."""
@@ -43,6 +49,8 @@ class EmbeddingMsg:
             context_data=data["context_data"],
             telemetry_id=data.get("telemetry_id", ""),
             semantic_msg_id=data.get("semantic_msg_id"),
+            operation=data.get("operation", "embed"),
+            retry_count=data.get("retry_count", 0),
         )
         obj.id = data.get("id", obj.id)
         return obj

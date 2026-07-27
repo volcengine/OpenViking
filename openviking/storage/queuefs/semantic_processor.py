@@ -1564,12 +1564,13 @@ class SemanticProcessor(DequeueHandlerBase):
         semantic_msg_id: Optional[str] = None,
         use_summary: bool = False,
         preserve_existing_created_at: bool = False,
-    ) -> None:
+        record_failure: bool = True,
+    ) -> bool:
         """Vectorize a single file using its content or summary."""
         from openviking.utils.embedding_utils import vectorize_file
 
         active_ctx = ctx or self._default_ctx
-        await vectorize_file(
+        return await vectorize_file(
             file_path=file_path,
             summary_dict=summary_dict,
             parent_uri=parent_uri,
@@ -1578,4 +1579,23 @@ class SemanticProcessor(DequeueHandlerBase):
             semantic_msg_id=semantic_msg_id,
             use_summary=use_summary,
             preserve_existing_created_at=preserve_existing_created_at,
+            record_failure=record_failure,
+        )
+
+    async def _patch_file_summary(
+        self,
+        file_path: str,
+        summary: str,
+        ctx: Optional[RequestContext] = None,
+        semantic_msg_id: Optional[str] = None,
+    ) -> bool:
+        """Enqueue a metadata-only abstract update for an indexed file."""
+        from openviking.utils.embedding_utils import enqueue_file_metadata_patch
+
+        active_ctx = ctx or self._default_ctx
+        return await enqueue_file_metadata_patch(
+            file_path=file_path,
+            summary=summary,
+            ctx=active_ctx,
+            semantic_msg_id=semantic_msg_id,
         )

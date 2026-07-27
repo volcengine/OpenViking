@@ -5,16 +5,19 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
 
 @dataclass
 class _RequestWaitState:
     pending_semantic_roots: Set[str] = field(default_factory=set)
+    pending_leaf_semantic_roots: Set[str] = field(default_factory=set)
     pending_embedding_roots: Set[str] = field(default_factory=set)
+    leaf_tracking_started: bool = False
     semantic_processed: int = 0
     semantic_requeue_count: int = 0
     semantic_error_count: int = 0
@@ -22,6 +25,7 @@ class _RequestWaitState:
     embedding_processed: int = 0
     embedding_requeue_count: int = 0
     embedding_error_count: int = 0
+    leaf_embedding_error_count: int = 0
     embedding_errors: List[str] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
 
@@ -63,6 +67,8 @@ class RequestWaitTracker:
             if state is None:
                 return
             state.pending_semantic_roots.add(semantic_msg_id)
+            state.pending_leaf_semantic_roots.add(semantic_msg_id)
+            state.leaf_tracking_started = True
 
     def register_embedding_root(self, telemetry_id: str, root_id: str) -> None:
         if not telemetry_id or not root_id:
@@ -91,7 +97,13 @@ class RequestWaitTracker:
                 return
             state.embedding_requeue_count += max(delta, 0)
 
-    def record_embedding_error(self, telemetry_id: str, message: str) -> None:
+    def record_embedding_error(
+        self,
+        telemetry_id: str,
+        message: str,
+        *,
+        is_leaf: bool = False,
+    ) -> None:
         if not telemetry_id:
             return
         with self._lock:
@@ -99,8 +111,23 @@ class RequestWaitTracker:
             if state is None:
                 return
             state.embedding_error_count += 1
+            if is_leaf:
+                state.leaf_embedding_error_count += 1
             if message:
                 state.embedding_errors.append(message)
+
+    def mark_semantic_leaf_done(
+        self,
+        telemetry_id: str,
+        semantic_msg_id: str,
+    ) -> None:
+        if not telemetry_id:
+            return
+        with self._lock:
+            state = self._states.get(telemetry_id)
+            if state is None:
+                return
+            state.pending_leaf_semantic_roots.discard(semantic_msg_id)
 
     def mark_semantic_done(
         self,
@@ -134,6 +161,7 @@ class RequestWaitTracker:
             if state is None:
                 return
             state.pending_semantic_roots.discard(semantic_msg_id)
+            state.pending_leaf_semantic_roots.discard(semantic_msg_id)
             state.semantic_error_count += 1
             if message:
                 state.semantic_errors.append(message)
@@ -174,16 +202,48 @@ class RequestWaitTracker:
                 return True
             return not state.pending_semantic_roots and not state.pending_embedding_roots
 
+    def is_leaf_indexed(self, telemetry_id: str) -> bool:
+        if not telemetry_id:
+            return False
+        with self._lock:
+            state = self._states.get(telemetry_id)
+            if state is None:
+                return False
+            return (
+                state.leaf_tracking_started
+                and not state.pending_leaf_semantic_roots
+                and state.semantic_error_count == 0
+                and state.leaf_embedding_error_count == 0
+            )
+
+    def has_leaf_embedding_errors(self, telemetry_id: str) -> bool:
+        if not telemetry_id:
+            return False
+        with self._lock:
+            state = self._states.get(telemetry_id)
+            return bool(state and state.leaf_embedding_error_count > 0)
+
     async def wait_for_request(
         self,
         telemetry_id: str,
         timeout: Optional[float] = None,
         poll_interval: float = 0.05,
+        on_leaf_indexed: Optional[Callable[[], Any]] = None,
     ) -> None:
         if not telemetry_id:
             return
         start = time.time()
+        leaf_callback_fired = False
         while True:
+            if (
+                on_leaf_indexed is not None
+                and not leaf_callback_fired
+                and self.is_leaf_indexed(telemetry_id)
+            ):
+                leaf_callback_fired = True
+                callback_result = on_leaf_indexed()
+                if inspect.isawaitable(callback_result):
+                    await callback_result
             if self.is_complete(telemetry_id):
                 return
             if timeout is not None and (time.time() - start) > timeout:

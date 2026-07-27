@@ -234,6 +234,17 @@ class TaskTracker:
         if not account_id or not user_id:
             raise ValueError("Task ownership requires non-empty account_id and user_id")
 
+    @staticmethod
+    def _nonterminal_stage(task: TaskRecord, requested_stage: str) -> str:
+        """Keep the externally observable add-resource milestone until terminal."""
+        if (
+            task.task_type == "add_resource"
+            and task.stage == "leaf_indexed"
+            and requested_stage != "leaf_indexed"
+        ):
+            return task.stage
+        return requested_stage
+
     # ── CRUD ──
 
     async def create(
@@ -339,7 +350,7 @@ class TaskTracker:
             if task and task.status not in _TERMINAL_STATUSES:
                 task.status = TaskStatus.RUNNING
                 if stage is not None:
-                    task.stage = stage
+                    task.stage = self._nonterminal_stage(task, stage)
                 task.updated_at = time.time()
                 await self._store.update(task)
                 with self._lock:
@@ -356,7 +367,7 @@ class TaskTracker:
         async with self._async_lock:
             task = await self._load_for_update(task_id, account_id, user_id)
             if task and task.status not in _TERMINAL_STATUSES:
-                task.stage = stage
+                task.stage = self._nonterminal_stage(task, stage)
                 task.updated_at = time.time()
                 await self._store.update(task)
                 with self._lock:

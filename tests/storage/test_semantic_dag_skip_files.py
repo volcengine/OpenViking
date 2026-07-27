@@ -74,8 +74,10 @@ class _FakeProcessor:
         ctx=None,
         semantic_msg_id=None,
         use_summary=False,
+        record_failure=True,
     ):
         self.vectorized_files.append(file_path)
+        return True
 
 
 class _DummyTracker:

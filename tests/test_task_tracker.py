@@ -140,6 +140,25 @@ async def test_update_stage(tracker: TaskTracker):
     assert retrieved.stage == "parsing"
 
 
+async def test_add_resource_leaf_indexed_stage_is_durable_until_terminal(tracker: TaskTracker):
+    task = await tracker.create("add_resource", **_owner_kwargs())
+    await tracker.start(task.task_id, stage="processing_queue")
+    await tracker.update_stage(task.task_id, "leaf_indexed")
+
+    await tracker.update_stage(task.task_id, "linking_reason")
+    await tracker.start(task.task_id, stage="queued")
+
+    running = await tracker.get(task.task_id)
+    assert running is not None
+    assert running.status == TaskStatus.RUNNING
+    assert running.stage == "leaf_indexed"
+
+    await tracker.complete(task.task_id, {})
+    completed = await tracker.get(task.task_id)
+    assert completed is not None
+    assert completed.stage == "completed"
+
+
 async def test_complete_task(tracker: TaskTracker):
     task = await tracker.create("session_commit", resource_id="s1", **_owner_kwargs())
     await tracker.start(task.task_id)

@@ -22,12 +22,12 @@ from openviking.storage.errors import EmbeddingRebuildRequiredError
 from openviking.storage.expr import Eq
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.vectordb import engine as vectordb_engine
+from openviking.storage.vectordb.collection.result import UpsertDataResult
+from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
 from openviking.storage.vectordb.collection.volcengine_api_key_collection import (
     VolcengineApiKeyCollection,
 )
-from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
 from openviking.storage.vectordb.collection.volcengine_collection import VolcengineCollection
-from openviking.storage.vectordb.collection.result import UpsertDataResult
 from openviking.storage.vectordb_adapters.base import (
     VIKINGDB_TEXT_FIELD_BYTE_LIMIT,
     _truncate_text_field,
@@ -126,6 +126,273 @@ def _build_queue_payload_for_account(account_id: str) -> dict:
         telemetry_id="telemetry-1",
     )
     return {"data": json.dumps(msg.to_dict())}
+
+
+def _build_metadata_patch_payload(retry_count: int = 0) -> dict:
+    msg = EmbeddingMsg(
+        message="",
+        context_data={
+            "uri": "viking://resources/a.md",
+            "account_id": "acct",
+            "level": 2,
+            "is_leaf": True,
+            "abstract": "generated summary",
+        },
+        semantic_msg_id="semantic-1",
+        operation="metadata_patch",
+        retry_count=retry_count,
+    )
+    return {"data": json.dumps(msg.to_dict())}
+
+
+@pytest.mark.asyncio
+async def test_embedding_handler_metadata_patch_updates_abstract_without_embedding(monkeypatch):
+    captured = {}
+
+    class _PatchVikingDB:
+        is_closing = False
+
+        async def get(self, ids, *, ctx):
+            captured["fetched_ids"] = list(ids)
+            return [{"id": ids[0]}]
+
+        async def upsert(self, data, *, ctx, partial_update=False):
+            captured["data"] = dict(data)
+            captured["partial_update"] = partial_update
+            return data["id"]
+
+    class _FakeTracker:
+        def __init__(self):
+            self.calls = []
+
+        async def decrement(self, semantic_msg_id, is_leaf=False):
+            self.calls.append((semantic_msg_id, is_leaf))
+            return 0
+
+    embedder = _DummyEmbedder()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(embedder),
+    )
+    tracker = _FakeTracker()
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
+        lambda: tracker,
+    )
+
+    result = await TextEmbeddingHandler(_PatchVikingDB()).on_dequeue(
+        _build_metadata_patch_payload()
+    )
+
+    expected_id = hashlib.md5(b"acct:viking://resources/a.md").hexdigest()
+    assert result["id"] == expected_id
+    assert captured["fetched_ids"] == [expected_id]
+    assert captured["partial_update"] is True
+    assert captured["data"] == {
+        "id": expected_id,
+        "uri": "viking://resources/a.md",
+        "account_id": "acct",
+        "abstract": "generated summary",
+    }
+    assert embedder.calls == 0
+    assert tracker.calls == [("semantic-1", False)]
+
+
+@pytest.mark.asyncio
+async def test_embedding_handler_metadata_patch_requeues_until_target_exists(monkeypatch):
+    class _PatchVikingDB:
+        is_closing = False
+        has_queue_manager = True
+
+        def __init__(self):
+            self.enqueued = []
+
+        async def get(self, _ids, *, ctx):
+            return []
+
+        async def enqueue_embedding_msg(self, msg):
+            self.enqueued.append(msg)
+            return True
+
+    class _FakeTracker:
+        def __init__(self):
+            self.calls = []
+
+        async def decrement(self, semantic_msg_id, is_leaf=False):
+            self.calls.append((semantic_msg_id, is_leaf))
+            return 0
+
+    embedder = _DummyEmbedder()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(embedder),
+    )
+    tracker = _FakeTracker()
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
+        lambda: tracker,
+    )
+
+    vikingdb = _PatchVikingDB()
+    result = await TextEmbeddingHandler(vikingdb).on_dequeue(_build_metadata_patch_payload())
+
+    assert result is None
+    assert len(vikingdb.enqueued) == 1
+    assert vikingdb.enqueued[0].operation == "metadata_patch"
+    assert vikingdb.enqueued[0].retry_count == 1
+    assert embedder.calls == 0
+    assert tracker.calls == []
+
+
+@pytest.mark.asyncio
+async def test_embedding_handler_metadata_patch_requeue_requires_persistence_ack(monkeypatch):
+    class _PatchVikingDB:
+        is_closing = False
+        has_queue_manager = True
+
+        async def get(self, _ids, *, ctx):
+            return []
+
+        async def enqueue_embedding_msg(self, _msg):
+            return False
+
+    class _FakeTracker:
+        def __init__(self):
+            self.calls = []
+
+        async def decrement(self, semantic_msg_id, is_leaf=False):
+            self.calls.append((semantic_msg_id, is_leaf))
+            return 0
+
+    embedder = _DummyEmbedder()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(embedder),
+    )
+    tracker = _FakeTracker()
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
+        lambda: tracker,
+    )
+
+    handler = TextEmbeddingHandler(_PatchVikingDB())
+    handler._metadata_patch_retry_delay = 0
+    errors = []
+    handler.set_callbacks(
+        on_success=lambda: None,
+        on_requeue=lambda: None,
+        on_error=lambda *_args: errors.append(True),
+    )
+
+    result = await handler.on_dequeue(_build_metadata_patch_payload())
+
+    assert result is None
+    assert tracker.calls == [("semantic-1", False)]
+    assert errors == [True]
+
+
+@pytest.mark.asyncio
+async def test_embedding_handler_metadata_patch_waits_before_ordering_retry(monkeypatch):
+    class _PatchVikingDB:
+        is_closing = False
+        has_queue_manager = True
+
+        def __init__(self):
+            self.enqueued = []
+
+        async def get(self, _ids, *, ctx):
+            return []
+
+        async def enqueue_embedding_msg(self, msg):
+            self.enqueued.append(msg)
+            return True
+
+    class _FakeTracker:
+        async def decrement(self, _semantic_msg_id, is_leaf=False):
+            raise AssertionError("ordering retry must keep the tracker pending")
+
+    sleeps = []
+
+    async def _fake_sleep(delay):
+        sleeps.append(delay)
+
+    embedder = _DummyEmbedder()
+    config = _DummyConfig(embedder)
+    config.embedding.max_retries = 0
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
+        lambda: _FakeTracker(),
+    )
+    monkeypatch.setattr("openviking.storage.collection_schemas.asyncio.sleep", _fake_sleep)
+
+    vikingdb = _PatchVikingDB()
+    handler = TextEmbeddingHandler(vikingdb)
+    result = await handler.on_dequeue(_build_metadata_patch_payload())
+
+    assert result is None
+    assert sleeps == [handler._metadata_patch_retry_delay]
+    assert len(vikingdb.enqueued) == 1
+    assert vikingdb.enqueued[0].retry_count == 1
+
+
+@pytest.mark.asyncio
+async def test_embedding_handler_metadata_patch_fails_after_retry_budget(monkeypatch):
+    class _PatchVikingDB:
+        is_closing = False
+        has_queue_manager = True
+
+        def __init__(self):
+            self.enqueued = []
+
+        async def get(self, _ids, *, ctx):
+            return []
+
+        async def enqueue_embedding_msg(self, msg):
+            self.enqueued.append(msg)
+            return True
+
+    class _FakeTracker:
+        def __init__(self):
+            self.calls = []
+
+        async def decrement(self, semantic_msg_id, is_leaf=False):
+            self.calls.append((semantic_msg_id, is_leaf))
+            return 0
+
+    embedder = _DummyEmbedder()
+    config = _DummyConfig(embedder)
+    config.embedding.max_retries = 3
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+    tracker = _FakeTracker()
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
+        lambda: tracker,
+    )
+
+    vikingdb = _PatchVikingDB()
+    handler = TextEmbeddingHandler(vikingdb)
+    handler._metadata_patch_max_retries = 3
+    handler._metadata_patch_retry_delay = 0
+    errors = []
+    handler.set_callbacks(
+        on_success=lambda: None,
+        on_requeue=lambda: None,
+        on_error=lambda *_args: errors.append(True),
+    )
+    result = await handler.on_dequeue(_build_metadata_patch_payload(retry_count=3))
+
+    assert result is None
+    assert vikingdb.enqueued == []
+    assert embedder.calls == 0
+    assert tracker.calls == [("semantic-1", False)]
+    assert errors == [True]
 
 
 def test_embedding_handler_builds_circuit_breaker_from_config(monkeypatch):
@@ -260,17 +527,25 @@ def test_build_embedding_metadata_hashes_resolved_local_model_path(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_embedding_handler_skip_all_work_when_manager_is_closing(monkeypatch):
+async def test_embedding_handler_does_not_complete_leaf_when_manager_is_closing(monkeypatch):
     class _ClosingVikingDB:
         is_closing = True
 
         async def upsert(self, _data, *, ctx):  # pragma: no cover - should never run
             raise AssertionError("upsert should not be called during shutdown")
 
+    class _FakeTracker:
+        async def decrement(self, _semantic_msg_id, is_leaf=False):
+            raise AssertionError("shutdown must keep the leaf tracker pending")
+
     embedder = _DummyEmbedder()
     monkeypatch.setattr(
         "openviking_cli.utils.config.get_openviking_config",
         lambda: _DummyConfig(embedder),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
+        lambda: _FakeTracker(),
     )
 
     handler = TextEmbeddingHandler(_ClosingVikingDB())
@@ -280,14 +555,140 @@ async def test_embedding_handler_skip_all_work_when_manager_is_closing(monkeypat
         on_requeue=lambda: status.__setitem__("requeue", status["requeue"] + 1),
         on_error=lambda *_: status.__setitem__("error", status["error"] + 1),
     )
+    msg = EmbeddingMsg(
+        message="hello",
+        context_data={
+            "uri": "viking://resources/leaf.md",
+            "account_id": "default",
+            "abstract": "",
+            "is_leaf": True,
+        },
+        semantic_msg_id="semantic-1",
+    )
 
-    result = await handler.on_dequeue(_build_queue_payload())
+    with pytest.raises(asyncio.CancelledError):
+        await handler.on_dequeue({"data": json.dumps(msg.to_dict())})
+
+    assert embedder.calls == 0
+    assert status["success"] == 0
+    assert status["requeue"] == 0
+    assert status["error"] == 0
+
+
+@pytest.mark.asyncio
+async def test_embedding_handler_rejects_unsupported_leaf_message_as_terminal_error(monkeypatch):
+    class _VikingDB:
+        is_closing = False
+
+    class _FakeTracker:
+        def __init__(self):
+            self.calls = []
+
+        async def decrement(self, semantic_msg_id, is_leaf=False):
+            self.calls.append((semantic_msg_id, is_leaf))
+            return 0
+
+    embedder = _DummyEmbedder()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(embedder),
+    )
+    tracker = _FakeTracker()
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
+        lambda: tracker,
+    )
+    handler = TextEmbeddingHandler(_VikingDB())
+    status = {"success": 0, "requeue": 0, "error": 0}
+    handler.set_callbacks(
+        on_success=lambda: status.__setitem__("success", status["success"] + 1),
+        on_requeue=lambda: status.__setitem__("requeue", status["requeue"] + 1),
+        on_error=lambda *_: status.__setitem__("error", status["error"] + 1),
+    )
+    msg = EmbeddingMsg(
+        message={"unsupported": True},
+        context_data={
+            "uri": "viking://resources/leaf.md",
+            "account_id": "default",
+            "abstract": "",
+            "is_leaf": True,
+        },
+        semantic_msg_id="semantic-1",
+    )
+
+    result = await handler.on_dequeue({"data": json.dumps(msg.to_dict())})
 
     assert result is None
     assert embedder.calls == 0
-    assert status["success"] == 1
-    assert status["requeue"] == 0
-    assert status["error"] == 0
+    assert tracker.calls == [("semantic-1", True)]
+    assert status == {"success": 0, "requeue": 0, "error": 1}
+
+
+@pytest.mark.asyncio
+async def test_embedding_handler_empty_upsert_id_fails_leaf_terminally(monkeypatch):
+    class _EmptyWriteVikingDB:
+        is_closing = False
+
+        async def upsert(self, _data, *, ctx, partial_update=False):
+            assert partial_update is True
+            return ""
+
+    class _FakeTracker:
+        def __init__(self):
+            self.calls = []
+
+        async def decrement(self, semantic_msg_id, is_leaf=False):
+            self.calls.append((semantic_msg_id, is_leaf))
+            return 0
+
+    class _FakeRequestTracker:
+        def __init__(self):
+            self.errors = []
+
+        def record_embedding_error(self, telemetry_id, message, *, is_leaf=False):
+            self.errors.append((telemetry_id, message, is_leaf))
+
+        def record_embedding_processed(self, _telemetry_id):
+            return None
+
+    embedder = _DummyEmbedder()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(embedder),
+    )
+    tracker = _FakeTracker()
+    request_tracker = _FakeRequestTracker()
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
+        lambda: tracker,
+    )
+    monkeypatch.setattr(
+        "openviking.storage.collection_schemas.get_request_wait_tracker",
+        lambda: request_tracker,
+    )
+
+    payload = _build_queue_payload_for_account("acct")
+    queue_data = json.loads(payload["data"])
+    queue_data["semantic_msg_id"] = "semantic-1"
+    queue_data["context_data"]["is_leaf"] = True
+    payload["data"] = json.dumps(queue_data)
+    errors = []
+    handler = TextEmbeddingHandler(_EmptyWriteVikingDB())
+    handler.set_callbacks(
+        on_success=lambda: None,
+        on_requeue=lambda: None,
+        on_error=lambda *_args: errors.append(True),
+    )
+
+    result = await handler.on_dequeue(payload)
+
+    assert result is None
+    assert tracker.calls == [("semantic-1", True)]
+    assert errors == [True]
+    assert len(request_tracker.errors) == 1
+    assert request_tracker.errors[0][0] == "telemetry-1"
+    assert "did not persist a record" in request_tracker.errors[0][1]
+    assert request_tracker.errors[0][2] is True
 
 
 @pytest.mark.asyncio
@@ -305,7 +706,7 @@ async def test_embedding_handler_open_breaker_logs_summary_instead_of_per_item_w
 
         async def enqueue_embedding_msg(self, msg):
             self.enqueued.append(msg.id)
-            return None
+            return True
 
     embedder = _DummyEmbedder()
     monkeypatch.setattr(
@@ -343,6 +744,60 @@ async def test_embedding_handler_open_breaker_logs_summary_instead_of_per_item_w
 
 
 @pytest.mark.asyncio
+async def test_embedding_handler_does_not_complete_semantic_tracker_when_requeued(monkeypatch):
+    from openviking.utils.circuit_breaker import CircuitBreakerOpen
+
+    class _QueueingVikingDB:
+        is_closing = False
+        has_queue_manager = True
+
+        def __init__(self):
+            self.enqueued = []
+
+        async def enqueue_embedding_msg(self, msg):
+            self.enqueued.append(msg.id)
+            return True
+
+    class _FakeTracker:
+        def __init__(self):
+            self.decrement_calls = []
+
+        async def decrement(self, semantic_msg_id, is_leaf=False):
+            self.decrement_calls.append((semantic_msg_id, is_leaf))
+            return 0
+
+    embedder = _DummyEmbedder()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(embedder),
+    )
+    tracker = _FakeTracker()
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
+        lambda: tracker,
+    )
+
+    vikingdb = _QueueingVikingDB()
+    handler = TextEmbeddingHandler(vikingdb)
+    monkeypatch.setattr(
+        handler._circuit_breaker,
+        "check",
+        lambda: (_ for _ in ()).throw(CircuitBreakerOpen("open")),
+    )
+
+    payload = _build_queue_payload()
+    queue_data = json.loads(payload["data"])
+    queue_data["semantic_msg_id"] = "semantic-1"
+    queue_data["context_data"]["is_leaf"] = False
+    payload["data"] = json.dumps(queue_data)
+
+    await handler.on_dequeue(payload)
+
+    assert vikingdb.enqueued == [queue_data["id"]]
+    assert tracker.decrement_calls == []
+
+
+@pytest.mark.asyncio
 async def test_embedding_auth_error_fails_terminally_without_reenqueue(monkeypatch):
     """A credential (401/403) failure must fail terminally, not re-enqueue: an
     infinite re-enqueue holds the resource's tree lock and add-resource --wait
@@ -357,7 +812,7 @@ async def test_embedding_auth_error_fails_terminally_without_reenqueue(monkeypat
 
         async def enqueue_embedding_msg(self, msg):
             self.enqueued.append(msg.id)
-            return None
+            return True
 
     class _AuthErrorEmbedder(_DummyEmbedder):
         async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
@@ -385,7 +840,7 @@ async def test_embedding_auth_error_fails_terminally_without_reenqueue(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_embedding_handler_treats_shutdown_write_lock_as_success(monkeypatch):
+async def test_embedding_handler_keeps_leaf_pending_when_shutdown_interrupts_write(monkeypatch):
     class _ClosingDuringUpsertVikingDB:
         def __init__(self):
             self.is_closing = False
@@ -397,10 +852,18 @@ async def test_embedding_handler_treats_shutdown_write_lock_as_success(monkeypat
             self.is_closing = True
             raise RuntimeError("IO error: lock /tmp/LOCK: already held by process")
 
+    class _FakeTracker:
+        async def decrement(self, _semantic_msg_id, is_leaf=False):
+            raise AssertionError("shutdown must keep the leaf tracker pending")
+
     embedder = _DummyEmbedder()
     monkeypatch.setattr(
         "openviking_cli.utils.config.get_openviking_config",
         lambda: _DummyConfig(embedder),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
+        lambda: _FakeTracker(),
     )
 
     vikingdb = _ClosingDuringUpsertVikingDB()
@@ -411,13 +874,23 @@ async def test_embedding_handler_treats_shutdown_write_lock_as_success(monkeypat
         on_requeue=lambda: status.__setitem__("requeue", status["requeue"] + 1),
         on_error=lambda *_: status.__setitem__("error", status["error"] + 1),
     )
+    msg = EmbeddingMsg(
+        message="hello",
+        context_data={
+            "uri": "viking://resources/leaf.md",
+            "account_id": "default",
+            "abstract": "",
+            "is_leaf": True,
+        },
+        semantic_msg_id="semantic-1",
+    )
 
-    result = await handler.on_dequeue(_build_queue_payload())
+    with pytest.raises(asyncio.CancelledError):
+        await handler.on_dequeue({"data": json.dumps(msg.to_dict())})
 
-    assert result is None
     assert vikingdb.calls == 1
     assert embedder.calls == 1
-    assert status["success"] == 1
+    assert status["success"] == 0
     assert status["requeue"] == 0
     assert status["error"] == 0
 
@@ -535,7 +1008,7 @@ async def test_embedding_handler_drops_input_too_large_without_requeue(monkeypat
 
         async def enqueue_embedding_msg(self, msg):
             self.enqueued.append(msg)
-            return None
+            return True
 
     class _OversizedInputEmbedder:
         def prepare_embedding_input(self, content):
@@ -620,9 +1093,12 @@ async def test_embedding_handler_marks_success_only_after_tracker_completion(mon
 
     decrement_started = asyncio.Event()
     allow_decrement_finish = asyncio.Event()
+    decrement_is_leaf = None
 
     class _FakeTracker:
-        async def decrement(self, _semantic_msg_id):
+        async def decrement(self, _semantic_msg_id, is_leaf=False):
+            nonlocal decrement_is_leaf
+            decrement_is_leaf = is_leaf
             decrement_started.set()
             await allow_decrement_finish.wait()
             return 0
@@ -643,6 +1119,7 @@ async def test_embedding_handler_marks_success_only_after_tracker_completion(mon
     payload = _build_queue_payload()
     queue_data = json.loads(payload["data"])
     queue_data["semantic_msg_id"] = "semantic-1"
+    queue_data["context_data"]["is_leaf"] = True
     payload["data"] = json.dumps(queue_data)
 
     task = asyncio.create_task(handler.on_dequeue(payload))
@@ -658,6 +1135,7 @@ async def test_embedding_handler_marks_success_only_after_tracker_completion(mon
     assert status["success"] == 1
     assert status["requeue"] == 0
     assert status["error"] == 0
+    assert decrement_is_leaf is True
 
 
 def test_context_collection_excludes_parent_uri():
