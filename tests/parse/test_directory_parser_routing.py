@@ -49,6 +49,24 @@ def registry() -> ParserRegistry:
     return ParserRegistry(register_optional=False)
 
 
+@pytest.mark.parametrize(
+    ("filename", "parser_name"),
+    [
+        ("photo.png", "image"),
+        ("recording.mp3", "audio"),
+        ("clip.mp4", "video"),
+    ],
+)
+def test_optional_media_parsers_respect_registration_flag(filename: str, parser_name: str) -> None:
+    """Optional media parsers are only available when explicitly enabled."""
+    disabled_registry = ParserRegistry(register_optional=False)
+    enabled_registry = ParserRegistry()
+
+    assert parser_name not in disabled_registry.list_parsers()
+    assert disabled_registry.get_parser_for_file(Path(filename)) is None
+    assert parser_name in enabled_registry.list_parsers()
+
+
 # -- directory tree that covers every parser type ----------------------------
 
 

@@ -75,9 +75,11 @@ class ParserRegistry:
         self.register("zip", ZipParser())
         self.register("directory", DirectoryParser())
 
-        self.register("image", ImageParser(config=self._parser_configs.get("image")))
-        self.register("audio", AudioParser())
-        self.register("video", VideoParser())
+        # Register optional media parsers
+        if register_optional:
+            self.register("image", ImageParser(config=self._parser_configs.get("image")))
+            self.register("audio", AudioParser())
+            self.register("video", VideoParser())
 
     def register(self, name: str, parser: BaseParser) -> None:
         """
