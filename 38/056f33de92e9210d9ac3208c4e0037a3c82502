@@ -1,0 +1,27 @@
+tests/session/test_commit_skill_inference.py
+  s_cdd38986f8bd9a::t_087be5fd160a70 563-577
+openviking/core/skill_loader.py
+  s_cdd38986f8bd9a::t_52d6cd412bf417 86,95-97,127-128
+bot/vikingbot/agent/skills.py
+  s_cdd38986f8bd9a::t_b068bc309d83bc 9-11,171-175,177,224-228
+bot/tests/test_skills_metadata.py
+  s_cdd38986f8bd9a::t_2323d7cb3f5c01 1-24
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "38056f33de92e9210d9ac3208c4e0037a3c82502",
+  "prompts": {},
+  "sessions": {
+    "s_cdd38986f8bd9a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa2df-be1f-73e2-99e6-04aa7cfe807c",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
