@@ -4,12 +4,10 @@
 
 from openviking.parse.parsers.code.ast.providers import (
     SkeletonExtractionResult,
-    extract_skeleton,
     extract_skeleton_result,
 )
 
 __all__ = [
     "SkeletonExtractionResult",
-    "extract_skeleton",
     "extract_skeleton_result",
 ]

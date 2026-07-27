@@ -153,32 +153,26 @@ def _extract_process_skeleton(file_name: str, content: str, lang: str) -> str:
     return "\n".join(lines).strip()
 
 
-class ProcessAutoExtractor:
-    """Path-detected process() skeleton extractor."""
+def supports_process_skeleton(file_name: str) -> bool:
+    return _detect_process_language(file_name) is not None
 
-    def supports(self, file_name: str) -> bool:
-        return _detect_process_language(file_name) is not None
 
-    def extract(self, file_name: str, content: str) -> Optional[str]:
-        lang = _detect_process_language(file_name)
-        if lang is None:
-            return None
-        try:
-            return _extract_process_skeleton(file_name, content, lang)
-        except Exception as exc:
-            logger.warning(
-                "process extraction failed for '%s' (language: %s): %s",
-                file_name,
-                lang,
-                exc,
-            )
-            return None
-
-    def extract_skeleton(
-        self,
-        file_name: str,
-        content: str,
-        verbose: bool = False,
-    ) -> Optional[str]:
-        del verbose
-        return self.extract(file_name, content)
+def extract_process_skeleton(
+    file_name: str,
+    content: str,
+    verbose: bool = False,
+) -> Optional[str]:
+    del verbose
+    lang = _detect_process_language(file_name)
+    if lang is None:
+        return None
+    try:
+        return _extract_process_skeleton(file_name, content, lang)
+    except Exception as exc:
+        logger.warning(
+            "process extraction failed for '%s' (language: %s): %s",
+            file_name,
+            lang,
+            exc,
+        )
+        return None

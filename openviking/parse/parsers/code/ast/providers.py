@@ -11,12 +11,13 @@ from openviking.parse.parsers.code.ast.aider_repomap import (
     _extract_with_grep_ast,
     has_tag_query,
 )
-from openviking.parse.parsers.code.ast.languages.process_engine import ProcessAutoExtractor
+from openviking.parse.parsers.code.ast.languages.process_engine import (
+    extract_process_skeleton,
+    supports_process_skeleton,
+)
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
-
-_process_extractor: Optional[ProcessAutoExtractor] = None
 
 _SYMBOL_PATTERNS = (
     re.compile(r"^\s*(class|def|func|function|interface|struct|enum|trait)\s+\w", re.M),
@@ -27,17 +28,10 @@ _SYMBOL_PATTERNS = (
 _IMPORT_ONLY_PREFIXES = ("#", "imports:", "module:", "language:")
 
 
-def get_process_extractor() -> ProcessAutoExtractor:
-    global _process_extractor
-    if _process_extractor is None:
-        _process_extractor = ProcessAutoExtractor()
-    return _process_extractor
-
-
 def supports_code_skeleton(file_name: str) -> bool:
     """Return whether tags or process extraction recognizes the file."""
 
-    return has_tag_query(file_name) or get_process_extractor().supports(file_name)
+    return has_tag_query(file_name) or supports_process_skeleton(file_name)
 
 
 @dataclass(frozen=True)
@@ -61,7 +55,7 @@ def is_skeleton_useful(text: Optional[str]) -> bool:
     return len(meaningful_lines) >= 1 and any(pattern.search(text) for pattern in _SYMBOL_PATTERNS)
 
 
-def extract_skeleton_with_routing(
+def extract_skeleton_result(
     file_name: str,
     content: str,
     verbose: bool = False,
@@ -80,7 +74,7 @@ def extract_skeleton_with_routing(
     else:
         reasons.append("no maintained tags query")
 
-    text = get_process_extractor().extract_skeleton(file_name, content, verbose=verbose)
+    text = extract_process_skeleton(file_name, content, verbose=verbose)
     if is_skeleton_useful(text):
         return SkeletonExtractionResult(text, "process", False, "process extraction succeeded")
     reasons.append("process produced no useful skeleton")
@@ -88,19 +82,3 @@ def extract_skeleton_with_routing(
     reason = "; ".join(reasons)
     logger.info("Code skeleton requires LLM fallback for '%s': %s", file_name, reason)
     return SkeletonExtractionResult(None, "llm", True, reason)
-
-
-def extract_skeleton_result(
-    file_name: str,
-    content: str,
-    verbose: bool = False,
-) -> SkeletonExtractionResult:
-    return extract_skeleton_with_routing(file_name, content, verbose=verbose)
-
-
-def extract_skeleton(
-    file_name: str,
-    content: str,
-    verbose: bool = False,
-) -> Optional[str]:
-    return extract_skeleton_result(file_name, content, verbose=verbose).text
