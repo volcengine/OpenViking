@@ -698,9 +698,12 @@ class FeishuAccessor(DataAccessor):
             )
 
         results: List[Tuple[str, str]] = []
-        # ``seen_tokens`` breaks accidental cycles (parent_token loops in the API
-        # response or shared subtrees).
+        # ``seen_tokens`` (obj_token) dedupes *emitted results* across shared subtrees.
         seen_tokens: set[str] = set()
+        # ``seen_node_tokens`` (node_token) breaks *recursion cycles* — without it,
+        # a node whose child points back at an already-expanded ancestor
+        # (A -> B -> A) would recurse forever (RecursionError once depth is large).
+        seen_node_tokens: set[str] = set()
         truncated = False
 
         def _record(node: "FeishuAccessor._WikiNode") -> bool:
