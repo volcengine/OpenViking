@@ -120,13 +120,7 @@ def _extract_with_grep_ast(
         return None
 
     try:
-        lang, captures = _query_captures(rel_name, content)
-        if lang == "c":
-            rendered = _render_c_signature_skeleton(captures, content)
-            if rendered:
-                mode = "verbose" if verbose else "compact"
-                return f"# {file_name} [aider-repomap-lite, {mode}]\n\n{rendered}"
-
+        _, captures = _query_captures(rel_name, content)
         def_lines = _definition_lines(captures)
         if not def_lines:
             return None
@@ -154,91 +148,6 @@ def _extract_with_grep_ast(
     except Exception as exc:
         logger.warning("grep-ast RepoMap extraction failed for '%s': %s", file_name, exc)
         return None
-
-
-def _render_c_signature_skeleton(captures, content: str) -> Optional[str]:
-    """Render C definitions as declarations instead of function-body context."""
-
-    source = content.encode("utf-8")
-    signatures: set[tuple[int, str]] = set()
-
-    def add_signature(tag: str, node) -> None:
-        prefix = "name.definition."
-        if not tag.startswith(prefix):
-            return
-        kind = tag[len(prefix) :]
-        line_no = node.start_point[0] + 1
-        name = source[node.start_byte : node.end_byte].decode("utf-8", errors="replace").strip()
-        signature = _c_definition_signature(node, source)
-        if not signature and name:
-            signature = f"{kind} {name}"
-        if signature:
-            signatures.add((line_no, signature))
-
-    if isinstance(captures, dict):
-        for tag, nodes in captures.items():
-            for node in nodes:
-                add_signature(str(tag), node)
-    else:
-        for node, tag in captures:
-            add_signature(str(tag), node)
-
-    if not signatures:
-        return None
-    return "\n".join(signature for _, signature in sorted(signatures))
-
-
-def _c_definition_signature(node, source: bytes) -> str:
-    ancestor = node
-    while ancestor is not None:
-        node_type = getattr(ancestor, "type", "")
-        if node_type == "function_definition":
-            return _c_function_signature(ancestor, source)
-        if node_type in {
-            "struct_specifier",
-            "union_specifier",
-            "enum_specifier",
-            "type_definition",
-        }:
-            return _c_type_signature(ancestor, node, source)
-        ancestor = getattr(ancestor, "parent", None)
-    return ""
-
-
-def _c_function_signature(node, source: bytes) -> str:
-    body = _first_child_of_type(node, "compound_statement")
-    end_byte = body.start_byte if body is not None else node.end_byte
-    signature = source[node.start_byte : end_byte].decode("utf-8", errors="replace")
-    return _normalise_c_signature(signature)
-
-
-def _c_type_signature(node, name_node, source: bytes) -> str:
-    name = source[name_node.start_byte : name_node.end_byte].decode("utf-8", errors="replace").strip()
-    if not name:
-        return ""
-    if node.type == "struct_specifier":
-        return f"struct {name}"
-    if node.type == "union_specifier":
-        return f"union {name}"
-    if node.type == "enum_specifier":
-        return f"enum {name}"
-    if node.type == "type_definition":
-        return f"typedef {name}"
-    return name
-
-
-def _first_child_of_type(node, node_type: str):
-    for child in getattr(node, "children", ()):
-        if getattr(child, "type", "") == node_type:
-            return child
-    return None
-
-
-def _normalise_c_signature(signature: str) -> str:
-    signature = signature.strip()
-    if signature.endswith("{"):
-        signature = signature[:-1].rstrip()
-    return " ".join(signature.split())
 
 
 def _query_captures(rel_name: str, content: str):
