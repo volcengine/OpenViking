@@ -9,12 +9,14 @@ export function RetrievalSearchBar({
   onSubmit,
   placeholder,
   query,
+  submitLabel,
 }: {
   inputRef: RefObject<HTMLInputElement | null>
   onChange: (value: string) => void
   onSubmit: () => void
   placeholder: string
   query: string
+  submitLabel: string
 }) {
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
@@ -35,6 +37,7 @@ export function RetrievalSearchBar({
         className="flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground/60 md:text-sm"
       />
       <Button
+        aria-label={submitLabel}
         variant="ghost"
         size="icon"
         className="size-8 shrink-0"

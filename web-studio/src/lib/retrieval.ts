@@ -1,5 +1,6 @@
 import {
   getOvResult,
+  ovClient,
   normalizeOvClientError,
   postSearchFind,
   postSearchGlob,
@@ -53,10 +54,17 @@ export interface VikingApiError {
 }
 
 export interface FetchFindOptions {
+  contextTypes?: FindContextType[]
+  includeProvenance?: boolean
+  levels?: number[]
   targetUri?: string
   limit?: number
   scoreThreshold?: number
   filter?: Record<string, unknown>
+  since?: string
+  tags?: string[]
+  timeField?: 'created_at' | 'updated_at'
+  until?: string
 }
 
 export interface FetchSearchOptions extends FetchFindOptions {
@@ -72,6 +80,51 @@ export interface FetchGrepOptions {
 export interface FetchGlobOptions {
   limit?: number
   uri?: string
+}
+
+export type RecallMemoryType =
+  | 'entities'
+  | 'events'
+  | 'experiences'
+  | 'preferences'
+export type RecallOrigin = 'actor_peer' | 'other_peer' | 'self'
+export type RecallRenderMode = 'full' | 'summary' | 'uri'
+
+export interface RecallEntry {
+  abstract?: string
+  content?: string
+  mode: RecallRenderMode
+  origin?: RecallOrigin
+  rank: number
+  score: number
+  summary?: string
+  type: RecallMemoryType
+  uri: string
+}
+
+export interface RecallStats {
+  dropped: number
+  max_chars: number
+  min_score: number
+  origins: Record<string, number>
+  peer_scope: 'actor' | 'all'
+  quotas: Record<string, number>
+  returned: number
+  searched: Record<string, number>
+}
+
+export interface RecallResult {
+  entries: RecallEntry[]
+  rendered: string
+  stats: RecallStats
+}
+
+export interface FetchRecallOptions {
+  maxChars?: number
+  minScore?: number
+  peerScope?: 'actor' | 'all'
+  quotas?: Partial<Record<RecallMemoryType, number>>
+  render?: boolean
 }
 
 const FIND_CONTEXT_TYPES = ['resource', 'memory', 'skill'] as const
@@ -199,10 +252,24 @@ export async function fetchFind(
       postSearchFind({
         body: {
           filter: options.filter,
+          context_type:
+            options.contextTypes && options.contextTypes.length > 0
+              ? options.contextTypes
+              : undefined,
+          include_provenance: options.includeProvenance,
+          level:
+            options.levels && options.levels.length > 0
+              ? options.levels
+              : undefined,
           limit: options.limit ?? 10,
           query,
           score_threshold: options.scoreThreshold,
+          since: options.since,
+          tags:
+            options.tags && options.tags.length > 0 ? options.tags : undefined,
           target_uri: options.targetUri,
+          time_field: options.timeField,
+          until: options.until,
         },
       }),
     )
@@ -222,16 +289,134 @@ export async function fetchSearch(
       postSearchSearch({
         body: {
           filter: options.filter,
+          context_type:
+            options.contextTypes && options.contextTypes.length > 0
+              ? options.contextTypes
+              : undefined,
+          include_provenance: options.includeProvenance,
+          level:
+            options.levels && options.levels.length > 0
+              ? options.levels
+              : undefined,
           limit: options.limit ?? 10,
           query,
           score_threshold: options.scoreThreshold,
+          since: options.since,
           session_id: options.sessionId,
+          tags:
+            options.tags && options.tags.length > 0 ? options.tags : undefined,
           target_uri: options.targetUri,
+          time_field: options.timeField,
+          until: options.until,
         },
       }),
     )
 
     return normalizeGroupedFindResult(result)
+  } catch (error) {
+    throw toVikingApiError(error)
+  }
+}
+
+const RECALL_MEMORY_TYPES = new Set<RecallMemoryType>([
+  'entities',
+  'events',
+  'experiences',
+  'preferences',
+])
+const RECALL_ORIGINS = new Set<RecallOrigin>([
+  'actor_peer',
+  'other_peer',
+  'self',
+])
+const RECALL_RENDER_MODES = new Set<RecallRenderMode>([
+  'full',
+  'summary',
+  'uri',
+])
+
+function numberRecord(value: unknown): Record<string, number> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      (entry): entry is [string, number] => typeof entry[1] === 'number',
+    ),
+  )
+}
+
+function normalizeRecallEntry(value: unknown): RecallEntry | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const entry = value as Record<string, unknown>
+  if (
+    typeof entry.uri !== 'string' ||
+    !RECALL_MEMORY_TYPES.has(entry.type as RecallMemoryType)
+  ) {
+    return null
+  }
+
+  return {
+    abstract: typeof entry.abstract === 'string' ? entry.abstract : undefined,
+    content: typeof entry.content === 'string' ? entry.content : undefined,
+    mode: RECALL_RENDER_MODES.has(entry.mode as RecallRenderMode)
+      ? (entry.mode as RecallRenderMode)
+      : 'uri',
+    origin: RECALL_ORIGINS.has(entry.origin as RecallOrigin)
+      ? (entry.origin as RecallOrigin)
+      : undefined,
+    rank: typeof entry.rank === 'number' ? entry.rank : 0,
+    score: typeof entry.score === 'number' ? entry.score : 0,
+    summary: typeof entry.summary === 'string' ? entry.summary : undefined,
+    type: entry.type as RecallMemoryType,
+    uri: entry.uri,
+  }
+}
+
+function normalizeRecallResult(value: unknown): RecallResult {
+  const data =
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {}
+  const stats =
+    data.stats && typeof data.stats === 'object' && !Array.isArray(data.stats)
+      ? (data.stats as Record<string, unknown>)
+      : {}
+
+  return {
+    entries: Array.isArray(data.entries)
+      ? data.entries
+          .map(normalizeRecallEntry)
+          .filter((entry): entry is RecallEntry => entry !== null)
+      : [],
+    rendered: typeof data.rendered === 'string' ? data.rendered : '',
+    stats: {
+      dropped: typeof stats.dropped === 'number' ? stats.dropped : 0,
+      max_chars: typeof stats.max_chars === 'number' ? stats.max_chars : 0,
+      min_score: typeof stats.min_score === 'number' ? stats.min_score : 0,
+      origins: numberRecord(stats.origins),
+      peer_scope: stats.peer_scope === 'actor' ? 'actor' : 'all',
+      quotas: numberRecord(stats.quotas),
+      returned: typeof stats.returned === 'number' ? stats.returned : 0,
+      searched: numberRecord(stats.searched),
+    },
+  }
+}
+
+export async function fetchRecall(
+  query: string,
+  options: FetchRecallOptions = {},
+): Promise<RecallResult> {
+  try {
+    const result = await getOvResult<unknown>(
+      ovClient.instance.post('/api/v1/search/recall', {
+        max_chars: options.maxChars,
+        min_score: options.minScore,
+        peer_scope: options.peerScope,
+        query,
+        quotas: options.quotas,
+        render: options.render,
+      }),
+    )
+    return normalizeRecallResult(result)
   } catch (error) {
     throw toVikingApiError(error)
   }

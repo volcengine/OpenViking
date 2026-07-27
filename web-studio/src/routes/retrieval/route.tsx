@@ -7,27 +7,77 @@ import { RetrievalResults } from './-components/retrieval-results'
 import { RetrievalSearchBar } from './-components/search-bar'
 import {
   DEFAULT_CUSTOM_PATH_INPUT,
+  DEFAULT_RECALL_MAX_CHARS,
+  DEFAULT_RECALL_MIN_SCORE,
+  DEFAULT_RECALL_QUOTAS,
   DEFAULT_RESULT_COUNT,
   DEFAULT_RETRIEVAL_MODE,
   DEFAULT_RETRIEVAL_SCOPE,
 } from './-constants/retrieval'
 import { useResourceContextProbe } from './-hooks/use-resource-context-probe'
 import { useRetrievalQuery } from './-hooks/use-retrieval-query'
-import { flattenResults } from './-lib/results'
 import { resolveScopeTargetUri } from './-lib/scope'
 import {
   buildSubmittedSearch,
   hasRetrievalSearch,
+  parseCsv,
+  parseLevels,
+  parseRecallQuotas,
   readLastRetrievalSearch,
   validateRetrievalSearch,
   writeLastRetrievalSearch,
 } from './-lib/search-state'
-import type { RetrievalMode, RetrievalScope } from './-types/retrieval'
+import type {
+  RetrievalMode,
+  RetrievalRequestOptions,
+  RetrievalSearch,
+} from './-types/retrieval'
+import type { FindContextType } from '#/lib/retrieval'
 
 export const Route = createFileRoute('/retrieval')({
   validateSearch: validateRetrievalSearch,
   component: RetrievalPage,
 })
+
+const FIND_CONTEXT_TYPES = new Set<FindContextType>([
+  'memory',
+  'resource',
+  'skill',
+])
+
+function optionsFromSearch(search: RetrievalSearch): RetrievalRequestOptions {
+  const mode = search.mode ?? DEFAULT_RETRIEVAL_MODE
+  const scope = search.scope ?? DEFAULT_RETRIEVAL_SCOPE
+  const customPathInput = search.path ?? DEFAULT_CUSTOM_PATH_INPUT
+
+  return {
+    contextTypes: parseCsv(search.types).filter(
+      (type): type is FindContextType =>
+        FIND_CONTEXT_TYPES.has(type as FindContextType),
+    ),
+    customPathInput,
+    ignoreCase: search.ignoreCase ?? false,
+    includeProvenance: search.provenance ?? false,
+    levels: parseLevels(search.levels),
+    recallMaxChars: search.maxChars ?? DEFAULT_RECALL_MAX_CHARS,
+    recallMinScore:
+      mode === 'recall'
+        ? (search.minScore ?? DEFAULT_RECALL_MIN_SCORE)
+        : DEFAULT_RECALL_MIN_SCORE,
+    recallPeerScope: search.peerScope ?? 'all',
+    recallQuotas: parseRecallQuotas(search.recallQuotas),
+    recallRender: search.render ?? true,
+    resultCount: search.count ?? DEFAULT_RESULT_COUNT,
+    scoreThreshold: mode === 'recall' ? undefined : search.minScore,
+    sessionId: search.session,
+    since: search.since,
+    scope,
+    tags: parseCsv(search.tags),
+    targetUri: resolveScopeTargetUri(scope, customPathInput),
+    timeField: search.timeField ?? 'updated_at',
+    until: search.until,
+  }
+}
 
 function RetrievalPage() {
   const { t } = useTranslation('retrieval')
@@ -39,81 +89,79 @@ function RetrievalPage() {
     [hasUrlSearch],
   )
   const activeSearch = hasUrlSearch ? search : (restoredSearch ?? search)
-
-  const initialQuery = activeSearch.q ?? ''
   const initialMode = activeSearch.mode ?? DEFAULT_RETRIEVAL_MODE
-  const initialResultCount = activeSearch.count ?? DEFAULT_RESULT_COUNT
-  const initialScope = activeSearch.scope ?? DEFAULT_RETRIEVAL_SCOPE
-  const initialCustomPath = activeSearch.path ?? DEFAULT_CUSTOM_PATH_INPUT
-  const initialSessionId = activeSearch.session ?? ''
-  const initialIgnoreCase = activeSearch.ignoreCase ?? false
+  const initialOptions = useMemo(
+    () => optionsFromSearch(activeSearch),
+    [activeSearch],
+  )
 
   const [retrievalMode, setRetrievalMode] = useState<RetrievalMode>(initialMode)
-  const [query, setQuery] = useState(initialQuery)
-  const [submittedQuery, setSubmittedQuery] = useState(initialQuery)
-  const [resultCount, setResultCount] = useState<number>(initialResultCount)
-  const [retrievalScope, setRetrievalScope] =
-    useState<RetrievalScope>(initialScope)
-  const [customPathInput, setCustomPathInput] = useState(initialCustomPath)
-  const [sessionIdInput, setSessionIdInput] = useState(initialSessionId)
-  const [ignoreCase, setIgnoreCase] = useState(initialIgnoreCase)
+  const [submittedMode, setSubmittedMode] = useState<RetrievalMode>(initialMode)
+  const [query, setQuery] = useState(activeSearch.q ?? '')
+  const [submittedQuery, setSubmittedQuery] = useState(activeSearch.q ?? '')
+  const [options, setOptions] =
+    useState<RetrievalRequestOptions>(initialOptions)
+  const [submittedOptions, setSubmittedOptions] =
+    useState<RetrievalRequestOptions>(initialOptions)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const targetUri = useMemo(() => {
-    return resolveScopeTargetUri(retrievalScope, customPathInput)
-  }, [customPathInput, retrievalScope])
-
   const hasSubmitted = submittedQuery.trim().length > 0
-  const sessionId = sessionIdInput.trim() || undefined
   const retrievalQuery = useRetrievalQuery({
     enabled: hasSubmitted,
-    ignoreCase,
-    mode: retrievalMode,
+    mode: submittedMode,
+    options: submittedOptions,
     query: submittedQuery,
-    resultCount,
-    sessionId,
-    targetUri,
   })
   const resourceProbeQuery = useResourceContextProbe()
 
-  const data = hasSubmitted ? retrievalQuery.data : undefined
-  const hasResults = Boolean(data && data.total > 0)
-  const hasRetrievableContext = resourceProbeQuery.data?.hasContext ?? false
-  const flatItems = useMemo(() => (data ? flattenResults(data) : []), [data])
-  const queryPlanItems = data?.query_plan?.queries ?? []
+  const handleOptionsChange = useCallback(
+    (patch: Partial<RetrievalRequestOptions>) => {
+      setOptions((current) => {
+        const next = { ...current, ...patch }
+        return {
+          ...next,
+          targetUri: resolveScopeTargetUri(next.scope, next.customPathInput),
+        }
+      })
+    },
+    [],
+  )
 
   const handleSubmit = useCallback(() => {
     const trimmed = query.trim()
-    if (trimmed.length === 0) {
-      return
-    }
+    if (!trimmed) return
 
     const nextSearch = buildSubmittedSearch({
-      count: resultCount,
-      ignoreCase,
+      count: options.resultCount,
+      ignoreCase: options.ignoreCase,
+      includeProvenance: options.includeProvenance,
+      levels: options.levels,
       mode: retrievalMode,
-      path: customPathInput,
+      path: options.customPathInput,
       q: trimmed,
-      scope: retrievalScope,
-      session: sessionIdInput,
+      recallMaxChars: options.recallMaxChars,
+      recallPeerScope: options.recallPeerScope,
+      recallQuotas: options.recallQuotas,
+      recallRender: options.recallRender,
+      scoreThreshold:
+        retrievalMode === 'recall'
+          ? options.recallMinScore
+          : options.scoreThreshold,
+      scope: options.scope,
+      session: options.sessionId ?? '',
+      since: options.since ?? '',
+      tags: options.tags,
+      timeField: options.timeField,
+      types: options.contextTypes,
+      until: options.until ?? '',
     })
 
+    setSubmittedMode(retrievalMode)
+    setSubmittedOptions(options)
     setSubmittedQuery(trimmed)
     writeLastRetrievalSearch(nextSearch)
-    void navigate({
-      replace: true,
-      search: nextSearch,
-    })
-  }, [
-    customPathInput,
-    ignoreCase,
-    navigate,
-    query,
-    resultCount,
-    retrievalMode,
-    retrievalScope,
-    sessionIdInput,
-  ])
+    void navigate({ replace: true, search: nextSearch })
+  }, [navigate, options, query, retrievalMode])
 
   const handleUploadClick = useCallback(() => {
     void navigate({ to: '/playground', search: { upload: true } })
@@ -124,55 +172,47 @@ function RetrievalPage() {
   }, [])
 
   useEffect(() => {
-    if (!activeSearch.q) {
-      return
-    }
+    if (!activeSearch.q) return
 
     const nextMode = activeSearch.mode ?? DEFAULT_RETRIEVAL_MODE
-    const nextResultCount = activeSearch.count ?? DEFAULT_RESULT_COUNT
-    const nextScope = activeSearch.scope ?? DEFAULT_RETRIEVAL_SCOPE
-    const nextCustomPath = activeSearch.path ?? DEFAULT_CUSTOM_PATH_INPUT
-    const nextSessionId = activeSearch.session ?? ''
-    const nextIgnoreCase = activeSearch.ignoreCase ?? false
-
+    const nextOptions = optionsFromSearch(activeSearch)
     setRetrievalMode(nextMode)
+    setSubmittedMode(nextMode)
     setQuery(activeSearch.q)
     setSubmittedQuery(activeSearch.q)
-    setResultCount(nextResultCount)
-    setRetrievalScope(nextScope)
-    setCustomPathInput(nextCustomPath)
-    setSessionIdInput(nextSessionId)
-    setIgnoreCase(nextIgnoreCase)
+    setOptions(nextOptions)
+    setSubmittedOptions(nextOptions)
 
     const nextSearch = buildSubmittedSearch({
-      count: nextResultCount,
-      ignoreCase: nextIgnoreCase,
+      count: nextOptions.resultCount,
+      ignoreCase: nextOptions.ignoreCase,
+      includeProvenance: nextOptions.includeProvenance,
+      levels: nextOptions.levels,
       mode: nextMode,
-      path: nextCustomPath,
+      path: nextOptions.customPathInput,
       q: activeSearch.q,
-      scope: nextScope,
-      session: nextSessionId,
+      recallMaxChars: nextOptions.recallMaxChars,
+      recallPeerScope: nextOptions.recallPeerScope,
+      recallQuotas: nextOptions.recallQuotas,
+      recallRender: nextOptions.recallRender,
+      scoreThreshold:
+        nextMode === 'recall'
+          ? nextOptions.recallMinScore
+          : nextOptions.scoreThreshold,
+      scope: nextOptions.scope,
+      session: nextOptions.sessionId ?? '',
+      since: nextOptions.since ?? '',
+      tags: nextOptions.tags,
+      timeField: nextOptions.timeField,
+      types: nextOptions.contextTypes,
+      until: nextOptions.until ?? '',
     })
-
     writeLastRetrievalSearch(nextSearch)
 
     if (!hasUrlSearch) {
-      void navigate({
-        replace: true,
-        search: nextSearch,
-      })
+      void navigate({ replace: true, search: nextSearch })
     }
-  }, [
-    activeSearch.count,
-    activeSearch.ignoreCase,
-    activeSearch.mode,
-    activeSearch.path,
-    activeSearch.q,
-    activeSearch.scope,
-    activeSearch.session,
-    hasUrlSearch,
-    navigate,
-  ])
+  }, [activeSearch, hasUrlSearch, navigate])
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-5">
@@ -182,36 +222,26 @@ function RetrievalPage() {
         onSubmit={handleSubmit}
         placeholder={t(`placeholders.${retrievalMode}`)}
         query={query}
+        submitLabel={t('send')}
       />
 
       <RetrievalControls
-        customPathInput={customPathInput}
-        ignoreCase={ignoreCase}
         mode={retrievalMode}
-        onCustomPathInputChange={setCustomPathInput}
-        onIgnoreCaseChange={setIgnoreCase}
         onModeChange={setRetrievalMode}
-        onResultCountChange={setResultCount}
-        onScopeChange={setRetrievalScope}
-        onSessionIdInputChange={setSessionIdInput}
-        resultCount={resultCount}
-        scope={retrievalScope}
-        sessionIdInput={sessionIdInput}
+        onOptionsChange={handleOptionsChange}
+        options={options}
         t={t}
-        targetUri={targetUri}
       />
 
       <RetrievalResults
-        flatItems={flatItems}
-        hasRetrievableContext={hasRetrievableContext}
-        hasResults={hasResults}
+        data={hasSubmitted ? retrievalQuery.data : undefined}
+        hasRetrievableContext={resourceProbeQuery.data?.hasContext ?? false}
         hasSubmitted={hasSubmitted}
         isCheckingContext={resourceProbeQuery.isLoading}
         isError={retrievalQuery.isError}
         isLoading={retrievalQuery.isLoading}
         onUploadClick={handleUploadClick}
-        queryPlanItems={queryPlanItems}
-        resultCount={resultCount}
+        resultCount={submittedOptions.resultCount}
         t={t}
       />
     </div>

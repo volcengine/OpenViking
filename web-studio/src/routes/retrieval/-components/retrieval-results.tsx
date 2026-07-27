@@ -9,6 +9,7 @@ import {
   Workflow,
   Wrench,
 } from 'lucide-react'
+import { useMemo, useState } from 'react'
 import type { TFunction } from 'i18next'
 
 import { Button } from '#/components/ui/button'
@@ -16,7 +17,16 @@ import { cn } from '#/lib/utils'
 import type { FindContextType, FindQueryPlanItem } from '#/lib/retrieval'
 
 import { LoadingHint } from './loading-hint'
-import { displayName, resourceSearchForResult } from '../-lib/results'
+import { MemoryDetailSheet } from './memory-detail-sheet'
+import type { MemoryDetail } from './memory-detail-sheet'
+import { RecallResults } from './recall-results'
+import type { RetrievalQueryResult } from '../-hooks/use-retrieval-query'
+import {
+  displayName,
+  flattenResults,
+  memoryTypeFromUri,
+  resourceSearchForResult,
+} from '../-lib/results'
 import type { FlatRetrievalItem } from '../-types/retrieval'
 
 const TYPE_META: Record<
@@ -37,73 +47,97 @@ const TYPE_META: Record<
 }
 
 export function RetrievalResults({
-  flatItems,
+  data,
   hasRetrievableContext,
-  hasResults,
   hasSubmitted,
   isCheckingContext,
   isError,
   isLoading,
   onUploadClick,
-  queryPlanItems,
   resultCount,
   t,
 }: {
-  flatItems: FlatRetrievalItem[]
+  data?: RetrievalQueryResult
   hasRetrievableContext: boolean
-  hasResults: boolean
   hasSubmitted: boolean
   isCheckingContext: boolean
   isError: boolean
   isLoading: boolean
   onUploadClick: () => void
-  queryPlanItems: FindQueryPlanItem[]
   resultCount: number
   t: TFunction<'retrieval'>
 }) {
-  return (
-    <div className="flex flex-col gap-3">
-      <h2 className="text-base font-medium">
-        {hasSubmitted && hasResults
-          ? t('results.topN', {
-              count: Math.min(flatItems.length, resultCount),
-            })
-          : t('results.title')}
-      </h2>
+  const [memoryDetail, setMemoryDetail] = useState<MemoryDetail | null>(null)
+  const flatItems = useMemo(
+    () => (data?.kind === 'results' ? flattenResults(data.result) : []),
+    [data],
+  )
+  const queryPlanItems =
+    data?.kind === 'results' ? (data.result.query_plan?.queries ?? []) : []
+  const total =
+    data?.kind === 'recall' ? data.result.entries.length : flatItems.length
+  const hasResults = total > 0
 
-      <div className="min-h-80 rounded-lg border border-dashed bg-card/50">
-        {!hasSubmitted ? (
-          <EmptyRetrievalState
-            hasRetrievableContext={hasRetrievableContext}
-            isCheckingContext={isCheckingContext}
-            onUploadClick={onUploadClick}
-            t={t}
-          />
-        ) : isLoading ? (
-          <LoadingHint />
-        ) : isError ? (
-          <div className="flex min-h-80 items-center justify-center text-sm text-destructive">
-            {t('error')}
-          </div>
-        ) : !hasResults ? (
-          <div className="flex min-h-80 flex-col items-center justify-center gap-2 text-center">
-            <SearchIcon className="size-8 text-muted-foreground/25" />
-            <p className="text-sm text-muted-foreground/60">
-              {t('noResults.title')}
-            </p>
-            <p className="text-xs text-muted-foreground/40">
-              {t('noResults.subtitle')}
-            </p>
-          </div>
-        ) : (
-          <ResultList
-            flatItems={flatItems}
-            queryPlanItems={queryPlanItems}
-            t={t}
-          />
-        )}
+  return (
+    <>
+      <div className="flex flex-col gap-3">
+        <h2 className="text-base font-medium">
+          {hasSubmitted && hasResults
+            ? data?.kind === 'recall'
+              ? t('recall.resultTitle', { count: total })
+              : t('results.topN', {
+                  count: Math.min(flatItems.length, resultCount),
+                })
+            : t('results.title')}
+        </h2>
+
+        <div className="min-h-80 overflow-hidden rounded-lg border border-dashed bg-card/50">
+          {!hasSubmitted ? (
+            <EmptyRetrievalState
+              hasRetrievableContext={hasRetrievableContext}
+              isCheckingContext={isCheckingContext}
+              onUploadClick={onUploadClick}
+              t={t}
+            />
+          ) : isLoading ? (
+            <LoadingHint />
+          ) : isError ? (
+            <div className="flex min-h-80 items-center justify-center text-sm text-destructive">
+              {t('error')}
+            </div>
+          ) : !hasResults ? (
+            <div className="flex min-h-80 flex-col items-center justify-center gap-2 text-center">
+              <SearchIcon className="size-8 text-muted-foreground/25" />
+              <p className="text-sm text-muted-foreground/60">
+                {t('noResults.title')}
+              </p>
+              <p className="text-xs text-muted-foreground/40">
+                {t('noResults.subtitle')}
+              </p>
+            </div>
+          ) : data?.kind === 'recall' ? (
+            <RecallResults
+              onSelect={setMemoryDetail}
+              result={data.result}
+              t={t}
+            />
+          ) : (
+            <ResultList
+              flatItems={flatItems}
+              onSelectMemory={setMemoryDetail}
+              queryPlanItems={queryPlanItems}
+              t={t}
+            />
+          )}
+        </div>
       </div>
-    </div>
+
+      <MemoryDetailSheet
+        detail={memoryDetail}
+        onClose={() => setMemoryDetail(null)}
+        t={t}
+      />
+    </>
   )
 }
 
@@ -143,10 +177,10 @@ function EmptyRetrievalState({
             {t('empty.description')}
           </p>
           <Button
-            size="sm"
-            variant="secondary"
             className="mt-1 gap-1.5"
             onClick={onUploadClick}
+            size="sm"
+            variant="secondary"
           >
             <Upload className="size-4" />
             {t('empty.upload')}
@@ -159,16 +193,18 @@ function EmptyRetrievalState({
 
 function ResultList({
   flatItems,
+  onSelectMemory,
   queryPlanItems,
   t,
 }: {
   flatItems: FlatRetrievalItem[]
+  onSelectMemory: (detail: MemoryDetail) => void
   queryPlanItems: FindQueryPlanItem[]
   t: TFunction<'retrieval'>
 }) {
   return (
     <div className="divide-y">
-      {queryPlanItems.length > 0 && (
+      {queryPlanItems.length > 0 ? (
         <div className="border-b bg-muted/20 px-4 py-3">
           <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
             <Workflow className="size-3.5" />
@@ -179,10 +215,10 @@ function ResultList({
           <div className="mt-2 flex flex-wrap gap-1.5">
             {queryPlanItems.slice(0, 4).map((plan, index) => (
               <span
-                key={`${plan.query}-${index}`}
                 className="inline-flex max-w-full items-center gap-1 rounded-md border bg-background px-2 py-1 text-xs text-muted-foreground"
+                key={`${plan.query}-${index}`}
               >
-                {plan.context_type && (
+                {plan.context_type ? (
                   <span
                     className={cn(
                       'font-medium',
@@ -191,26 +227,75 @@ function ResultList({
                   >
                     {t(`types.${plan.context_type}`)}
                   </span>
-                )}
+                ) : null}
                 <span className="truncate">{plan.query}</span>
               </span>
             ))}
-            {queryPlanItems.length > 4 && (
+            {queryPlanItems.length > 4 ? (
               <span className="rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">
                 {t('queryPlan.more', { count: queryPlanItems.length - 4 })}
               </span>
-            )}
+            ) : null}
           </div>
         </div>
-      )}
-      {flatItems.map((fi) => (
-        <ResultRow key={`${fi.item.uri}-${fi.flatIndex}`} item={fi} t={t} />
+      ) : null}
+      {flatItems.map((item) => (
+        <ResultRow
+          item={item}
+          key={`${item.item.uri}-${item.flatIndex}`}
+          onSelectMemory={onSelectMemory}
+          t={t}
+        />
       ))}
     </div>
   )
 }
 
 function ResultRow({
+  item,
+  onSelectMemory,
+  t,
+}: {
+  item: FlatRetrievalItem
+  onSelectMemory: (detail: MemoryDetail) => void
+  t: TFunction<'retrieval'>
+}) {
+  const row = <ResultRowContent item={item} t={t} />
+
+  if (item.type === 'memory') {
+    return (
+      <button
+        className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+        onClick={() =>
+          onSelectMemory({
+            abstract: item.item.abstract,
+            item: item.item,
+            memoryType: memoryTypeFromUri(item.item.uri) ?? 'MEMORY',
+            score: item.item.score,
+            uri: item.item.uri,
+          })
+        }
+        type="button"
+      >
+        {row}
+      </button>
+    )
+  }
+
+  return (
+    <Link
+      className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+      rel="noreferrer noopener"
+      search={resourceSearchForResult(item.item)}
+      target="_blank"
+      to="/playground"
+    >
+      {row}
+    </Link>
+  )
+}
+
+function ResultRowContent({
   item,
   t,
 }: {
@@ -220,16 +305,11 @@ function ResultRow({
   const { name, parent } = displayName(item.item.uri)
   const meta = TYPE_META[item.type]
   const Icon = meta.icon
-  const resourceSearch = resourceSearchForResult(item.item)
+  const memoryType =
+    item.type === 'memory' ? memoryTypeFromUri(item.item.uri) : undefined
 
   return (
-    <Link
-      to="/playground"
-      search={resourceSearch}
-      target="_blank"
-      rel="noreferrer noopener"
-      className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
-    >
+    <>
       <div
         className={cn(
           'mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold uppercase tracking-wide',
@@ -240,17 +320,22 @@ function ResultRow({
         <Icon className="size-3" />
         <span>{t(`types.${item.type}`)}</span>
       </div>
+      {memoryType ? (
+        <span className="mt-0.5 rounded-md border bg-background px-2 py-1 font-mono text-[10px] font-medium text-muted-foreground">
+          {memoryType}
+        </span>
+      ) : null}
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-medium">{name}</div>
         <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground/70">
           <FolderOpen className="size-3 shrink-0" />
           <span className="truncate">{parent}</span>
         </div>
-        {item.item.abstract && (
+        {item.item.abstract ? (
           <p className="mt-1 line-clamp-2 text-xs text-muted-foreground/60">
             {item.item.abstract}
           </p>
-        )}
+        ) : null}
       </div>
       {item.item.result_kind === 'grep' && item.item.line !== undefined ? (
         <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
@@ -261,6 +346,6 @@ function ResultRow({
           {item.item.score.toFixed(3)}
         </span>
       ) : null}
-    </Link>
+    </>
   )
 }
