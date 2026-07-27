@@ -18,6 +18,7 @@ from openviking.server.identity import RequestContext
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
+from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.image_search import image_bytes_to_data_uri
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.utils import VikingURI, get_logger
@@ -422,6 +423,7 @@ async def vectorize_file(
     use_summary: bool = False,
     preserve_existing_created_at: bool = False,
     scalar_override: Optional[Dict[str, Any]] = None,
+    register_request_wait: bool = False,
 ) -> None:
     """
     Vectorize a single file.
@@ -431,6 +433,7 @@ async def vectorize_file(
     `use_summary` flag (code path override) or the embedding config.
     """
     enqueued = False
+    registered_wait_root: Optional[tuple[str, str]] = None
 
     try:
         if not ctx:
@@ -541,12 +544,31 @@ async def vectorize_file(
 
         _apply_scalar_overrides(embedding_msg, scalar_override)
         embedding_msg.semantic_msg_id = semantic_msg_id
-        await embedding_queue.enqueue(embedding_msg)
+        if register_request_wait:
+            get_request_wait_tracker().register_embedding_root(
+                embedding_msg.telemetry_id,
+                embedding_msg.id,
+            )
+            registered_wait_root = (embedding_msg.telemetry_id, embedding_msg.id)
+        enqueued_id = await embedding_queue.enqueue(embedding_msg)
+        if register_request_wait and not enqueued_id:
+            get_request_wait_tracker().mark_embedding_failed(
+                embedding_msg.telemetry_id,
+                embedding_msg.id,
+                f"Failed to enqueue file vector for {file_path}",
+            )
+            return
         enqueued = True
         logger.debug(f"Enqueued file for vectorization: {file_path}")
 
     except Exception as e:
         logger.error(f"Failed to vectorize file {file_path}: {e}", exc_info=True)
+        if registered_wait_root is not None:
+            get_request_wait_tracker().mark_embedding_failed(
+                registered_wait_root[0],
+                registered_wait_root[1],
+                f"Failed to enqueue file vector for {file_path}: {e}",
+            )
     finally:
         if not enqueued:
             await _decrement_embedding_tracker(semantic_msg_id, 1)

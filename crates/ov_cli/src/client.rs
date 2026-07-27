@@ -616,6 +616,7 @@ impl HttpClient {
         exclude: Option<String>,
         directly_upload_media: bool,
         watch_interval: f64,
+        processing_mode: String,
         resource_args: Option<Map<String, Value>>,
         show_progress: bool,
         verbose: bool,
@@ -678,6 +679,7 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
+                    "processing_mode": processing_mode.as_str(),
                     "args": args.clone(),
                 }));
 
@@ -713,6 +715,7 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
+                    "processing_mode": processing_mode.as_str(),
                     "args": args.clone(),
                 }));
 
@@ -736,6 +739,7 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
+                    "processing_mode": processing_mode.as_str(),
                     "args": args.clone(),
                 }));
 
@@ -756,6 +760,7 @@ impl HttpClient {
                 "exclude": exclude,
                 "directly_upload_media": directly_upload_media,
                 "watch_interval": watch_interval,
+                "processing_mode": processing_mode.as_str(),
                 "args": args,
             }));
 

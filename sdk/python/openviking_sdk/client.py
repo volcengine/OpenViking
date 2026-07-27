@@ -639,6 +639,7 @@ class AsyncHTTPClient:
         directly_upload_media: bool = True,
         preserve_structure: Optional[bool] = None,
         watch_interval: float = 0,
+        processing_mode: Optional[str] = None,
         args: Optional[Dict[str, Any]] = None,
         telemetry: Any = False,
     ) -> Dict[str, Any]:
@@ -661,6 +662,8 @@ class AsyncHTTPClient:
             "args": args or {},
             "telemetry": telemetry,
         }
+        if processing_mode is not None:
+            request_data["processing_mode"] = processing_mode
         if preserve_structure is not None:
             request_data["preserve_structure"] = preserve_structure
 
@@ -1784,6 +1787,7 @@ class SyncHTTPClient:
         directly_upload_media: bool = True,
         preserve_structure: Optional[bool] = None,
         watch_interval: float = 0,
+        processing_mode: Optional[str] = None,
         args: Optional[Dict[str, Any]] = None,
         telemetry: Any = False,
     ) -> Dict[str, Any]:
@@ -1803,6 +1807,7 @@ class SyncHTTPClient:
                 directly_upload_media=directly_upload_media,
                 preserve_structure=preserve_structure,
                 watch_interval=watch_interval,
+                processing_mode=processing_mode,
                 args=args,
                 telemetry=telemetry,
             )

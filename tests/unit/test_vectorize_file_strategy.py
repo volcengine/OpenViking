@@ -14,6 +14,18 @@ class DummyQueue:
         self.items.append(msg)
 
 
+class DummyQueueWithId(DummyQueue):
+    async def enqueue(self, msg):
+        self.items.append(msg)
+        return "queue-message-id"
+
+
+class FailingQueue(DummyQueue):
+    async def enqueue(self, msg):
+        self.items.append(msg)
+        raise RuntimeError("queue unavailable")
+
+
 class DummyQueueManager:
     EMBEDDING = "embedding"
 
@@ -117,6 +129,83 @@ async def test_vectorize_file_uses_summary_first(monkeypatch):
     assert len(queue.items) == 1
     assert isinstance(queue.items[0], Context)
     assert queue.items[0].get_vectorization_text() == "short summary"
+
+
+@pytest.mark.asyncio
+async def test_vectorize_file_registers_request_wait_with_embedding_msg_id(monkeypatch):
+    queue = DummyQueueWithId()
+    registered = []
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("hello"))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
+        ),
+    )
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_request_wait_tracker",
+        lambda: types.SimpleNamespace(
+            register_embedding_root=lambda telemetry_id, root_id: registered.append(
+                (telemetry_id, root_id)
+            )
+        ),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/test.md",
+        summary_dict={"name": "test.md", "summary": ""},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+        register_request_wait=True,
+    )
+
+    assert len(queue.items) == 1
+    assert registered == [(queue.items[0].telemetry_id, queue.items[0].id)]
+    assert registered[0][1] != "queue-message-id"
+
+
+@pytest.mark.asyncio
+async def test_vectorize_file_marks_registered_wait_root_failed_when_enqueue_raises(monkeypatch):
+    queue = FailingQueue()
+    registered = []
+    failed = []
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("hello"))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
+        ),
+    )
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_request_wait_tracker",
+        lambda: types.SimpleNamespace(
+            register_embedding_root=lambda telemetry_id, root_id: registered.append(
+                (telemetry_id, root_id)
+            ),
+            mark_embedding_failed=lambda telemetry_id, root_id, message: failed.append(
+                (telemetry_id, root_id, message)
+            ),
+        ),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/test.md",
+        summary_dict={"name": "test.md", "summary": ""},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+        register_request_wait=True,
+    )
+
+    assert len(queue.items) == 1
+    assert registered == [(queue.items[0].telemetry_id, queue.items[0].id)]
+    assert failed
+    assert failed[0][0:2] == registered[0]
 
 
 @pytest.mark.asyncio

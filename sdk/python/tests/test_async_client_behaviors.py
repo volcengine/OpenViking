@@ -454,6 +454,41 @@ async def test_add_resource_uploads_local_file_even_when_url_is_localhost(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_add_resource_forwards_processing_mode():
+    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {
+        "result": {"root_uri": "viking://resources/demo"}
+    }
+
+    await client.add_resource(
+        "https://example.com/demo.md",
+        processing_mode="vectors_only",
+    )
+
+    fake_http.post.assert_awaited_once()
+    payload = fake_http.post.await_args.kwargs["json"]
+    assert payload["processing_mode"] == "vectors_only"
+
+
+@pytest.mark.asyncio
+async def test_add_resource_omits_default_processing_mode_for_legacy_servers():
+    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {
+        "result": {"root_uri": "viking://resources/demo"}
+    }
+
+    await client.add_resource("https://example.com/demo.md")
+
+    fake_http.post.assert_awaited_once()
+    payload = fake_http.post.await_args.kwargs["json"]
+    assert "processing_mode" not in payload
+
+
+@pytest.mark.asyncio
 async def test_admin_create_paths_accept_initial_user_config():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
