@@ -23,6 +23,41 @@ tools = create_openviking_tools(
 
 省略 `url` 时，适配器自动从 OpenViking CLI 配置加载连接信息。Embedding 和 VLM 在 OpenViking 侧配置，不在你的应用中。
 
+### 异步应用
+
+Retriever、context wrapper、chat history、session recorder 和 LangGraph
+middleware 都支持原生异步路径。通过 URL 配置时，适配器会自动创建异步 OpenViking HTTP
+client：
+
+```python
+docs = await retriever.ainvoke("用户之前做了什么决定？")
+result = await chain.ainvoke(
+    {"messages": [...]},
+    config={"configurable": {"session_id": "support-thread-1"}},
+)
+```
+
+长期运行的应用可以初始化一个由调用方管理的 client，并在多个适配器之间复用：
+
+```python
+from openviking.client import AsyncHTTPClient
+from openviking.integrations.langchain import OpenVikingRetriever
+
+client = AsyncHTTPClient(url="http://localhost:1933", api_key="...")
+await client.initialize()
+try:
+    retriever = OpenVikingRetriever(async_client=client)
+    docs = await retriever.ainvoke("部署决定")
+finally:
+    await client.close()
+```
+
+`OpenVikingChatMessageHistory` 提供 `aget_messages()`、`aadd_messages()` 和
+`aclear()`；`OpenVikingSessionRecorder` 提供 `arecord()`、`aflush()` 和
+`aclose()`。异步 LangGraph 运行会自动选择 `awrap_model_call()` 和
+`aafter_agent()`。原有同步 client 仍可注入，其调用会在 worker thread 中执行，不会阻塞
+event loop。
+
 ## Peer 身份
 
 传入 `actor_peer_id` 可以在文件系统和检索操作中过滤当前用户的 peer 集合。session message capture 仍可使用 `peer_id` 表达每条消息的说话人归属。
@@ -147,6 +182,9 @@ commit 策略。如果后续批次或写入后的 commit 失败，`OpenVikingPar
 传入 `context_parts` 时，仅在 `exc.context_attached` 为 false 时重传。`flush()` 仅在 session
 存在待提交内容时强制 commit。`close()` 后 recorder 不可复用；由调用方注入的 client
 仍归调用方管理。
+
+异步生命周期使用对应的 `await recorder.arecord(...)`、
+`await recorder.aflush(...)` 和 `await recorder.aclose()`。
 
 ## 运行示例
 

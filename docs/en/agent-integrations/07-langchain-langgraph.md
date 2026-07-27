@@ -23,6 +23,42 @@ tools = create_openviking_tools(
 
 When `url` is omitted, the adapters load connection settings from the OpenViking CLI config. Embedding and VLM providers are configured in OpenViking, not in your app.
 
+### Async applications
+
+The retriever, context wrapper, chat history, session recorder, and LangGraph
+middleware all have native async paths. URL-based adapters create an async
+OpenViking HTTP client automatically:
+
+```python
+docs = await retriever.ainvoke("What did the user decide?")
+result = await chain.ainvoke(
+    {"messages": [...]},
+    config={"configurable": {"session_id": "support-thread-1"}},
+)
+```
+
+Long-lived applications can initialize one caller-owned client and reuse it
+across adapters:
+
+```python
+from openviking.client import AsyncHTTPClient
+from openviking.integrations.langchain import OpenVikingRetriever
+
+client = AsyncHTTPClient(url="http://localhost:1933", api_key="...")
+await client.initialize()
+try:
+    retriever = OpenVikingRetriever(async_client=client)
+    docs = await retriever.ainvoke("deployment decision")
+finally:
+    await client.close()
+```
+
+`OpenVikingChatMessageHistory` provides `aget_messages()`, `aadd_messages()`,
+and `aclear()`. `OpenVikingSessionRecorder` provides `arecord()`, `aflush()`,
+and `aclose()`. Async LangGraph runs select `awrap_model_call()` and
+`aafter_agent()` automatically. A synchronous injected client remains
+supported; its calls run in a worker thread instead of blocking the event loop.
+
 ## Peer Identity
 
 Pass `actor_peer_id` to filter the current user's peer collection for filesystem and retrieval operations. Session message capture can still use `peer_id` for per-message speaker attribution.
@@ -151,6 +187,9 @@ commit. When supplying `context_parts`, resend them only if
 `exc.context_attached` is false. `flush()` forces a commit only when the session
 has pending content. After `close()`, the recorder cannot be reused; injected
 clients remain owned by the caller.
+
+For async lifecycles, use the equivalent `await recorder.arecord(...)`,
+`await recorder.aflush(...)`, and `await recorder.aclose()` methods.
 
 ## Try the examples
 

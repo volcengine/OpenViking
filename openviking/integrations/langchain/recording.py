@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 from collections.abc import Iterable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
@@ -19,8 +21,11 @@ except ImportError as exc:  # pragma: no cover - exercised by optional import pa
 from openviking.integrations.langchain.client import (
     OpenVikingCommitPolicy,
     OpenVikingConnection,
+    aapply_commit_policy,
+    acall_openviking,
     apply_commit_policy,
     call_openviking,
+    ensure_async_client,
     ensure_client,
     item_value,
 )
@@ -116,6 +121,7 @@ class OpenVikingSessionRecorder:
         self,
         *,
         client: Any = None,
+        async_client: Any = None,
         url: str | None = None,
         api_key: str | None = None,
         account: str | None = None,
@@ -133,6 +139,7 @@ class OpenVikingSessionRecorder:
             raise ValueError(f"batch_size must be between 1 and {MAX_RECORDING_BATCH_SIZE}")
         self._connection = OpenVikingConnection(
             client=client,
+            async_client=async_client,
             url=url,
             api_key=api_key,
             account=account,
@@ -145,7 +152,9 @@ class OpenVikingSessionRecorder:
             auto_initialize=auto_initialize,
         )
         self._owns_client = client is None
+        self._owns_async_client = async_client is None and client is None
         self._client_cache: Any = None
+        self._async_client_cache: Any = None
         self._pending_commit_sessions: set[str] = set()
         self._closed = False
         self.commit_policy = commit_policy
@@ -226,10 +235,83 @@ class OpenVikingSessionRecorder:
             ) from exc
         return result
 
+    async def arecord(
+        self,
+        session_id: str,
+        messages: Iterable[BaseMessage],
+        peer_id: str | None = None,
+        context_parts: Sequence[dict[str, Any]] = (),
+    ) -> OpenVikingRecordResult:
+        """Asynchronously persist messages and apply the configured commit policy."""
+
+        self._raise_if_closed()
+        await self._aretry_pending_commit(session_id)
+        input_messages = list(messages)
+        prepared_messages = _prepare_messages(
+            input_messages,
+            peer_id=peer_id,
+            context_parts=context_parts,
+        )
+        if not prepared_messages:
+            return OpenVikingRecordResult(input_messages_consumed=len(input_messages))
+
+        batches = _prepare_batches(prepared_messages, batch_size=self.batch_size)
+        client = await self._get_async_client()
+        messages_written = 0
+        input_messages_consumed = 0
+        context_attached = False
+        for batch in batches:
+            try:
+                await acall_openviking(
+                    client,
+                    "batch_add_messages",
+                    session_id=session_id,
+                    messages=batch.payloads,
+                )
+            except Exception as exc:
+                if messages_written == 0:
+                    raise
+                result = OpenVikingRecordResult(
+                    messages_written=messages_written,
+                    input_messages_consumed=input_messages_consumed,
+                    context_attached=context_attached,
+                )
+                raise OpenVikingPartialWriteError(
+                    session_id=session_id,
+                    result=result,
+                    cause=exc,
+                ) from exc
+            messages_written += len(batch.payloads)
+            input_messages_consumed = batch.input_end
+            context_attached = context_attached or batch.context_attached
+        result = OpenVikingRecordResult(
+            messages_written=messages_written,
+            input_messages_consumed=len(input_messages),
+            context_attached=context_attached,
+        )
+        try:
+            await aapply_commit_policy(client, session_id, self.commit_policy)
+        except Exception as exc:
+            self._pending_commit_sessions.add(session_id)
+            raise OpenVikingPartialWriteError(
+                session_id=session_id,
+                result=result,
+                cause=exc,
+                stage="commit",
+            ) from exc
+        return result
+
     def flush(self, session_id: str) -> dict[str, Any] | None:
         """Commit a session only when it contains pending, uncommitted content."""
 
         result = self._flush_pending_content(session_id)
+        self._pending_commit_sessions.discard(session_id)
+        return result
+
+    async def aflush(self, session_id: str) -> dict[str, Any] | None:
+        """Asynchronously commit pending, uncommitted session content."""
+
+        result = await self._aflush_pending_content(session_id)
         self._pending_commit_sessions.discard(session_id)
         return result
 
@@ -251,11 +333,41 @@ class OpenVikingSessionRecorder:
             return None
         return call_openviking(client, "commit_session", session_id=session_id)
 
+    async def _aflush_pending_content(self, session_id: str) -> dict[str, Any] | None:
+        client = await self._get_async_client()
+        try:
+            session = await acall_openviking(
+                client,
+                "get_session",
+                session_id=session_id,
+                auto_create=False,
+            )
+        except Exception as exc:
+            error_code = str(getattr(exc, "code", "")).upper()
+            if isinstance(exc, FileNotFoundError) or error_code == "NOT_FOUND":
+                return None
+            raise
+        if int(item_value(session, "pending_tokens", 0) or 0) <= 0:
+            return None
+        return await acall_openviking(client, "commit_session", session_id=session_id)
+
     def _retry_pending_commit(self, session_id: str) -> None:
         if session_id not in self._pending_commit_sessions:
             return
         self._flush_pending_content(session_id)
         self._pending_commit_sessions.discard(session_id)
+
+    async def _aretry_pending_commit(self, session_id: str) -> None:
+        if session_id not in self._pending_commit_sessions:
+            return
+        await self._aflush_pending_content(session_id)
+        self._pending_commit_sessions.discard(session_id)
+
+    async def _get_async_client(self) -> Any:
+        self._raise_if_closed()
+        if self._async_client_cache is None:
+            self._async_client_cache = await ensure_async_client(self._connection)
+        return self._async_client_cache
 
     def close(self) -> None:
         """Release an internally created client.
@@ -265,6 +377,11 @@ class OpenVikingSessionRecorder:
 
         if self._closed:
             return
+        if self._async_client_cache is not None and self._owns_async_client:
+            raise RuntimeError(
+                "OpenVikingSessionRecorder has an active async client; "
+                "use `await recorder.aclose()`"
+            )
         self._closed = True
         self._pending_commit_sessions.clear()
         client = self._client_cache
@@ -274,6 +391,23 @@ class OpenVikingSessionRecorder:
         close = getattr(client, "close", None)
         if callable(close):
             close()
+
+    async def aclose(self) -> None:
+        """Release internally created sync and async clients."""
+
+        if self._closed:
+            return
+        self._closed = True
+        self._pending_commit_sessions.clear()
+        sync_client = self._client_cache
+        async_client = self._async_client_cache
+        self._client_cache = None
+        self._async_client_cache = None
+
+        if sync_client is not None and self._owns_client:
+            await _aclose_client(sync_client)
+        if async_client is not None and self._owns_async_client and async_client is not sync_client:
+            await _aclose_client(async_client)
 
     def _raise_if_closed(self) -> None:
         if self._closed:
@@ -362,3 +496,15 @@ def _normalize_peer_id(peer_id: str | None) -> str | None:
         return None
     text = str(peer_id).strip()
     return text or None
+
+
+async def _aclose_client(client: Any) -> None:
+    close = getattr(client, "close", None)
+    if not callable(close):
+        return
+    if inspect.iscoroutinefunction(close):
+        await close()
+        return
+    result = await asyncio.to_thread(close)
+    if inspect.isawaitable(result):
+        await result

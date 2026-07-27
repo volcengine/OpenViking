@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
@@ -68,6 +69,7 @@ class OpenVikingConnection:
     timeout: float = 60.0
     extra_headers: dict[str, str] | None = None
     auto_initialize: bool = True
+    async_client: Any = None
 
 
 @dataclass(slots=True)
@@ -141,6 +143,78 @@ class OpenVikingClientHandle:
         return recovered_method
 
 
+class OpenVikingAsyncClientHandle:
+    """Lazy async client wrapper with one-shot recovery for safe reads."""
+
+    def __init__(self, connection: OpenVikingConnection):
+        self._connection = connection
+        self._client: Any = None
+
+    async def close(self) -> None:
+        await self.reset()
+
+    async def reset(self) -> None:
+        client = self._client
+        self._client = None
+        if client is None:
+            return
+        close = getattr(client, "close", None)
+        if not callable(close):
+            return
+        try:
+            result = close()
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            logger.debug("OpenViking async client close during recovery failed", exc_info=True)
+
+    async def get(self) -> Any:
+        if self._client is None:
+            self._client = await _create_async_client_from_connection(self._connection)
+        return self._client
+
+    async def _openviking_acall(self, method_name: str, /, **kwargs: Any) -> Any:
+        return await self._call_with_recovery(method_name, **kwargs)
+
+    async def _call_with_recovery(
+        self,
+        method_name: str,
+        /,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        try:
+            return await _acall_client_method(
+                await self.get(),
+                method_name,
+                *args,
+                **kwargs,
+            )
+        except Exception as exc:
+            if not _is_recoverable_client_error(exc):
+                raise
+            await self.reset()
+            if not _should_retry_method(method_name):
+                raise
+            try:
+                return await _acall_client_method(
+                    await self.get(),
+                    method_name,
+                    *args,
+                    **kwargs,
+                )
+            except Exception as retry_exc:
+                if _is_recoverable_client_error(retry_exc):
+                    await self.reset()
+                raise
+
+    def __getattr__(self, name: str) -> Any:
+        async def recovered_method(*args: Any, **kwargs: Any) -> Any:
+            return await self._call_with_recovery(name, *args, **kwargs)
+
+        return recovered_method
+
+
 def ensure_client(connection: OpenVikingConnection) -> Any:
     """Return an initialized OpenViking client from explicit or connection settings."""
 
@@ -155,6 +229,27 @@ def ensure_client(connection: OpenVikingConnection) -> Any:
     if connection.auto_initialize and hasattr(client, "initialize"):
         if not getattr(client, "_initialized", False):
             client.initialize()
+    return client
+
+
+async def ensure_async_client(connection: OpenVikingConnection) -> Any:
+    """Return a client suitable for non-blocking OpenViking calls.
+
+    An explicitly supplied async client is preferred. Existing synchronous
+    clients remain supported and are dispatched through a worker thread by
+    :func:`acall_openviking`.
+    """
+
+    client = connection.async_client
+    if client is None and connection.client is not None:
+        client = connection.client
+    if client is None:
+        handle = OpenVikingAsyncClientHandle(connection)
+        if connection.auto_initialize:
+            await handle.get()
+        return handle
+    if connection.auto_initialize and hasattr(client, "initialize"):
+        await _ainitialize_client(client)
     return client
 
 
@@ -194,6 +289,47 @@ def apply_commit_policy(
     )
 
 
+async def aapply_commit_policy(
+    client: Any,
+    session_id: str,
+    policy: OpenVikingCommitPolicy | None,
+) -> dict[str, Any] | None:
+    """Apply the configured session commit policy without blocking the event loop."""
+
+    if policy is None or policy.mode == "never":
+        return None
+    if policy.mode == "always":
+        return await acall_openviking(
+            client,
+            "commit_session",
+            session_id=session_id,
+        )
+    if policy.mode != "pending_tokens":
+        raise ValueError(f"Unsupported OpenViking commit policy: {policy.mode}")
+
+    try:
+        session = await acall_openviking(
+            client,
+            "get_session",
+            session_id=session_id,
+            auto_create=False,
+        )
+    except Exception:
+        logger.debug(
+            "Skipping OpenViking pending-token commit because session lookup failed",
+            exc_info=True,
+        )
+        return None
+    pending_tokens = int(item_value(session, "pending_tokens", 0) or 0)
+    if pending_tokens < policy.pending_token_threshold:
+        return None
+    return await acall_openviking(
+        client,
+        "commit_session",
+        session_id=session_id,
+    )
+
+
 def call_openviking(client: Any, method_name: str, /, **kwargs: Any) -> Any:
     """Call a client method, filtering kwargs unsupported by local/HTTP variants."""
 
@@ -203,7 +339,17 @@ def call_openviking(client: Any, method_name: str, /, **kwargs: Any) -> Any:
     return _call_client_method(client, method_name, **kwargs)
 
 
+async def acall_openviking(client: Any, method_name: str, /, **kwargs: Any) -> Any:
+    """Call an async or sync client method without blocking the event loop."""
+
+    openviking_call = getattr(client, "_openviking_acall", None)
+    if callable(openviking_call):
+        return await openviking_call(method_name, **kwargs)
+    return await _acall_client_method(client, method_name, **kwargs)
+
+
 def _create_client_from_connection(connection: OpenVikingConnection) -> Any:
+    client: Any
     if connection.url or connection.path is None:
         from openviking.client import SyncHTTPClient
 
@@ -228,6 +374,31 @@ def _create_client_from_connection(connection: OpenVikingConnection) -> Any:
     return client
 
 
+async def _create_async_client_from_connection(connection: OpenVikingConnection) -> Any:
+    client: Any
+    if connection.url or connection.path is None:
+        from openviking.client import AsyncHTTPClient
+
+        client = AsyncHTTPClient(
+            url=connection.url,
+            api_key=connection.api_key,
+            account=connection.account,
+            user=connection.user,
+            user_id=connection.user_id,
+            actor_peer_id=connection.actor_peer_id,
+            timeout=connection.timeout,
+            extra_headers=connection.extra_headers,
+        )
+    else:
+        from openviking.async_client import AsyncOpenViking
+
+        client = AsyncOpenViking(path=connection.path, actor_peer_id=connection.actor_peer_id)
+
+    if connection.auto_initialize and hasattr(client, "initialize"):
+        await _ainitialize_client(client)
+    return client
+
+
 def _call_client_method(
     client: Any,
     method_name: str,
@@ -236,27 +407,72 @@ def _call_client_method(
     **kwargs: Any,
 ) -> Any:
     method = getattr(client, method_name)
+    return method(*args, **_filter_client_kwargs(method, kwargs))
+
+
+async def _acall_client_method(
+    client: Any,
+    method_name: str,
+    /,
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    method = getattr(client, method_name)
+    filtered_kwargs = _filter_client_kwargs(method, kwargs)
+    if inspect.iscoroutinefunction(method):
+        return await method(*args, **filtered_kwargs)
+    result = await asyncio.to_thread(method, *args, **filtered_kwargs)
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
+async def _ainitialize_client(client: Any) -> None:
+    if _async_client_is_initialized(client):
+        return
+    await _acall_client_method(client, "initialize")
+    try:
+        client._openviking_integration_initialized = True
+    except Exception:
+        pass
+
+
+def _async_client_is_initialized(client: Any) -> bool:
+    for name in ("_initialized", "_http"):
+        try:
+            inspect.getattr_static(client, name)
+        except AttributeError:
+            continue
+        value = getattr(client, name, None)
+        if name == "_http":
+            return value is not None
+        return bool(value)
+    try:
+        inspect.getattr_static(client, "_openviking_integration_initialized")
+    except AttributeError:
+        return False
+    return bool(getattr(client, "_openviking_integration_initialized", False))
+
+
+def _filter_client_kwargs(method: Any, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Drop ``None`` and arguments unsupported by a concrete client variant."""
+
     try:
         signature = inspect.signature(method)
     except (TypeError, ValueError):
-        return method(
-            *args,
-            **{key: value for key, value in kwargs.items() if value is not None},
-        )
+        return {key: value for key, value in kwargs.items() if value is not None}
 
     accepts_kwargs = any(
         parameter.kind == inspect.Parameter.VAR_KEYWORD
         for parameter in signature.parameters.values()
     )
     if accepts_kwargs:
-        filtered = {key: value for key, value in kwargs.items() if value is not None}
-    else:
-        filtered = {
-            key: value
-            for key, value in kwargs.items()
-            if value is not None and key in signature.parameters
-        }
-    return method(*args, **filtered)
+        return {key: value for key, value in kwargs.items() if value is not None}
+    return {
+        key: value
+        for key, value in kwargs.items()
+        if value is not None and key in signature.parameters
+    }
 
 
 def _should_retry_method(method_name: str) -> bool:
