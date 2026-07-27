@@ -64,6 +64,12 @@ def _apply_scalar_overrides(embedding_msg, overrides: Optional[Dict[str, Any]]) 
             embedding_msg.context_data[field] = value
 
 
+def _apply_search_tags(embedding_msg, search_tags: Optional[list[str]]) -> None:
+    if not embedding_msg or search_tags is None:
+        return
+    embedding_msg.context_data["search_tags"] = list(search_tags)
+
+
 async def _decrement_embedding_tracker(semantic_msg_id: Optional[str], count: int) -> None:
     if not semantic_msg_id or count <= 0:
         return
@@ -312,6 +318,7 @@ async def vectorize_directory_meta(
     semantic_msg_id: Optional[str] = None,
     include_overview: bool = True,
     scalar_overrides: Optional[Dict[int, Dict[str, Any]]] = None,
+    search_tags: Optional[list[str]] = None,
 ) -> None:
     """
     Vectorize directory metadata (.abstract.md and .overview.md).
@@ -359,6 +366,7 @@ async def vectorize_directory_meta(
             msg_abstract,
             (scalar_overrides or {}).get(int(ContextLevel.ABSTRACT.value)),
         )
+        _apply_search_tags(msg_abstract, search_tags)
         if msg_abstract:
             msg_abstract.semantic_msg_id = semantic_msg_id
             try:
@@ -392,6 +400,7 @@ async def vectorize_directory_meta(
                 msg_overview,
                 (scalar_overrides or {}).get(int(ContextLevel.OVERVIEW.value)),
             )
+            _apply_search_tags(msg_overview, search_tags)
             if msg_overview:
                 msg_overview.semantic_msg_id = semantic_msg_id
                 try:
@@ -424,6 +433,7 @@ async def vectorize_file(
     preserve_existing_created_at: bool = False,
     scalar_override: Optional[Dict[str, Any]] = None,
     register_request_wait: bool = False,
+    search_tags: Optional[list[str]] = None,
 ) -> None:
     """
     Vectorize a single file.
@@ -543,6 +553,7 @@ async def vectorize_file(
             return
 
         _apply_scalar_overrides(embedding_msg, scalar_override)
+        _apply_search_tags(embedding_msg, search_tags)
         embedding_msg.semantic_msg_id = semantic_msg_id
         if register_request_wait:
             get_request_wait_tracker().register_embedding_root(
@@ -577,6 +588,7 @@ async def vectorize_file(
 async def index_resource(
     uri: str,
     ctx: RequestContext,
+    search_tags: Optional[list[str]] = None,
 ) -> None:
     """
     Build vector index for a resource directory.
@@ -611,7 +623,14 @@ async def index_resource(
         overview = content.decode("utf-8") if isinstance(content, bytes) else content
 
     if abstract or overview:
-        await vectorize_directory_meta(uri, abstract, overview, context_type=context_type, ctx=ctx)
+        await vectorize_directory_meta(
+            uri,
+            abstract,
+            overview,
+            context_type=context_type,
+            ctx=ctx,
+            search_tags=search_tags,
+        )
 
     # 2. Index Files
     try:
@@ -637,6 +656,7 @@ async def index_resource(
                 parent_uri=uri,
                 context_type=context_type,
                 ctx=ctx,
+                search_tags=search_tags,
             )
 
     except Exception as e:

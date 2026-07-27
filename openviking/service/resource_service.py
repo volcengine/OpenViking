@@ -44,7 +44,6 @@ from openviking.server.user_config import (
     effective_skill_add_target,
 )
 from openviking.storage import VikingDBManager
-from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking.storage.transaction import NO_LOCK, LockLease
 from openviking.storage.viking_fs import VikingFS
@@ -61,6 +60,7 @@ from openviking.utils.media_processor import _smart_stem
 from openviking.utils.network_guard import ensure_public_remote_target
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking.utils.skill_processor import SkillProcessingPreparation, SkillProcessor
+from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import (
     ConflictError,
     DeadlineExceededError,
@@ -224,30 +224,18 @@ class ResourceService:
         if tags is not None and tag_mode not in _ADD_RESOURCE_TAG_MODES:
             raise InvalidArgumentError(f"unsupported tag mode: {tag_mode}")
 
-    async def _apply_add_resource_tags(
+    def _add_resource_ingest_tag_kwargs(
         self,
         *,
-        result: Dict[str, Any],
-        ctx: RequestContext,
         tags: Optional[List[str]],
         tag_mode: str,
-        uri: Optional[str] = None,
-    ) -> None:
+    ) -> Dict[str, Any]:
         if tags is None:
-            return
-        target_uri = uri or result.get("root_uri")
-        if not target_uri:
-            return
-        if not self._viking_fs:
-            raise NotInitializedError("VikingFS")
-        coordinator = ContentWriteCoordinator(viking_fs=self._viking_fs)
-        result["tags_result"] = await coordinator.set_tags(
-            uri=str(target_uri),
-            tags=tags,
-            mode=tag_mode,
-            recursive=True,
-            ctx=ctx,
-        )
+            return {}
+        return {
+            "ingest_search_tags": normalize_search_tags(tags),
+            "ingest_search_tag_mode": tag_mode,
+        }
 
     async def _manage_watch_if_needed(
         self,
@@ -507,6 +495,10 @@ class ResourceService:
             )
 
         telemetry_id = get_current_telemetry().telemetry_id
+        ingest_tag_kwargs = self._add_resource_ingest_tag_kwargs(
+            tags=msg.tags,
+            tag_mode=msg.tag_mode,
+        )
         request_wait_tracker = get_request_wait_tracker()
         request_wait_tracker.register_request(telemetry_id)
         try:
@@ -520,6 +512,7 @@ class ResourceService:
                 summarize=msg.summarize,
                 build_index=msg.build_index,
                 processing_mode=msg.processing_mode,
+                **ingest_tag_kwargs,
             )
             await request_wait_tracker.wait_for_request(
                 telemetry_id,
@@ -533,12 +526,6 @@ class ResourceService:
                 reason=msg.reason,
                 source_name=msg.source_name,
                 timeout=msg.timeout,
-            )
-            await self._apply_add_resource_tags(
-                result=result,
-                ctx=ctx,
-                tags=msg.tags,
-                tag_mode=msg.tag_mode,
             )
             return result
         except TimeoutError as exc:
@@ -926,6 +913,10 @@ class ResourceService:
         self._ensure_initialized()
         processing_mode = normalize_processing_mode(processing_mode)
         self._validate_add_resource_tag_policy(tags=tags, tag_mode=tag_mode)
+        ingest_tag_kwargs = self._add_resource_ingest_tag_kwargs(
+            tags=tags,
+            tag_mode=tag_mode,
+        )
         normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
         kwargs.update(normalized_args.processor_kwargs)
         if watch_interval > 0 and kwargs.get("temp_file_id"):
@@ -1286,6 +1277,7 @@ class ResourceService:
                 allow_local_path_resolution=allow_local_path_resolution,
                 prepared_resource=prepared_resource,
                 defer_post_processing=not wait,
+                **ingest_tag_kwargs,
                 **kwargs,
             )
             prepared_resource = None
@@ -1409,12 +1401,6 @@ class ResourceService:
                     reason=reason,
                     source_name=kwargs.get("source_name"),
                     timeout=timeout,
-                )
-                await self._apply_add_resource_tags(
-                    result=result,
-                    ctx=ctx,
-                    tags=tags,
-                    tag_mode=tag_mode,
                 )
             return result
         except Exception as exc:
@@ -1939,16 +1925,6 @@ class ResourceService:
                             for key in ("memory_linking", "warnings"):
                                 if key in link_result:
                                     completion[key] = link_result[key]
-                        tag_result: Dict[str, Any] = {"root_uri": link_root_uri}
-                        await self._apply_add_resource_tags(
-                            result=tag_result,
-                            ctx=ctx,
-                            tags=tags,
-                            tag_mode=tag_mode,
-                            uri=link_root_uri,
-                        )
-                        if "tags_result" in tag_result:
-                            completion["tags_result"] = tag_result["tags_result"]
                         await task_tracker.complete(
                             ov_task_id,
                             completion,

@@ -233,17 +233,14 @@ class TestWatchTaskCreation:
         assert "processing_mode" not in task.processor_kwargs
 
     @pytest.mark.asyncio
-    async def test_add_resource_applies_tags_without_passing_them_to_parser(
+    async def test_add_resource_forwards_tags_to_ingest_without_calling_set_tags(
         self,
         resource_service: ResourceService,
         request_context: RequestContext,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        calls = []
-
         async def fake_set_tags(self, **kwargs):
-            calls.append(kwargs)
-            return {"tags_updated": True, "tags": kwargs["tags"], "mode": kwargs["mode"]}
+            raise AssertionError("add_resource(tags=...) must write tags during ingest")
 
         class FakeQueueManager:
             async def wait_complete(self, timeout=None):
@@ -261,22 +258,11 @@ class TestWatchTaskCreation:
             tag_mode="append",
         )
 
-        assert result["tags_result"] == {
-            "tags_updated": True,
-            "tags": ["team=search"],
-            "mode": "append",
-        }
-        assert calls == [
-            {
-                "uri": "viking://resources/tagged_resource",
-                "tags": ["team=search"],
-                "mode": "append",
-                "recursive": True,
-                "ctx": request_context,
-            }
+        assert "tags_result" not in result
+        assert resource_service._resource_processor.calls[-1]["ingest_search_tags"] == [
+            "team=search"
         ]
-        assert "tags" not in resource_service._resource_processor.calls[-1]
-        assert "tag_mode" not in resource_service._resource_processor.calls[-1]
+        assert resource_service._resource_processor.calls[-1]["ingest_search_tag_mode"] == "append"
 
     @pytest.mark.asyncio
     async def test_add_resource_rejects_invalid_tag_mode_before_processing(
@@ -329,19 +315,19 @@ class TestWatchTaskCreation:
         assert task.processor_kwargs["tag_mode"] == "replace"
 
     @pytest.mark.asyncio
-    async def test_execute_prepared_add_resource_job_applies_tags(
+    async def test_execute_prepared_add_resource_job_forwards_tags_to_ingest(
         self,
         resource_service: ResourceService,
         request_context: RequestContext,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        tag_calls = []
+        finish_calls = []
 
         async def fake_set_tags(self, **kwargs):
-            tag_calls.append(kwargs)
-            return {"tags_updated": True, "mode": kwargs["mode"]}
+            raise AssertionError("queued add_resource(tags=...) must write tags during ingest")
 
-        async def fake_finish_prepared_resource(*_args, **_kwargs):
+        async def fake_finish_prepared_resource(*args, **kwargs):
+            finish_calls.append({"args": args, "kwargs": kwargs})
             return {"root_uri": "viking://resources/queued"}
 
         class FakeRequestWaitTracker:
@@ -391,16 +377,9 @@ class TestWatchTaskCreation:
             stage_callback=lambda _stage: None,
         )
 
-        assert result["tags_result"] == {"tags_updated": True, "mode": "append"}
-        assert tag_calls == [
-            {
-                "uri": "viking://resources/queued",
-                "tags": ["team=search"],
-                "mode": "append",
-                "recursive": True,
-                "ctx": request_context,
-            }
-        ]
+        assert "tags_result" not in result
+        assert finish_calls[-1]["kwargs"]["ingest_search_tags"] == ["team=search"]
+        assert finish_calls[-1]["kwargs"]["ingest_search_tag_mode"] == "append"
 
     @pytest.mark.asyncio
     async def test_create_watch_task_with_default_interval(

@@ -236,6 +236,51 @@ async def test_vectorize_unknown_text_file_embeds_summary_but_indexes_raw_conten
 
 
 @pytest.mark.asyncio
+async def test_vectorize_file_writes_search_tags_into_embedding_context(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("deployment guide"))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
+        ),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/demo.md",
+        summary_dict={"name": "demo.md", "summary": "deployment summary"},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+        search_tags=["team=search", "env=test"],
+    )
+
+    assert len(queue.items) == 1
+    msg = queue.items[0]
+    assert msg.context_data["search_tags"] == ["team=search", "env=test"]
+
+
+@pytest.mark.asyncio
+async def test_vectorize_directory_meta_writes_search_tags_into_embedding_context(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("ignored"))
+
+    await embedding_utils.vectorize_directory_meta(
+        uri="viking://user/default/resources/demo",
+        abstract="demo abstract",
+        overview="demo overview",
+        ctx=DummyReq(),
+        search_tags=["team=search", "env=test"],
+    )
+
+    assert len(queue.items) == 2
+    for msg in queue.items:
+        assert msg.context_data["search_tags"] == ["team=search", "env=test"]
+
+
+@pytest.mark.asyncio
 async def test_vectorize_unknown_text_file_sniffs_non_utf8_raw_content(monkeypatch):
     queue = DummyQueue()
     raw_content = (

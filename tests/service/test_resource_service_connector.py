@@ -971,22 +971,20 @@ async def test_monitor_links_reason_memory_on_success(
 
 
 @pytest.mark.asyncio
-async def test_monitor_connector_task_applies_tags_on_success(
+async def test_monitor_connector_task_does_not_apply_tags_after_success(
     monkeypatch,
     connector_config,
     ctx,
     service,
 ):
     tracker = _task_tracker()
-    tag_calls = []
     monkeypatch.setattr(
         "openviking.service.task_tracker.get_task_tracker",
         lambda: tracker,
     )
 
     async def fake_set_tags(self, **kwargs):
-        tag_calls.append(kwargs)
-        return {"tags_updated": True, "mode": kwargs["mode"]}
+        raise AssertionError("connector completion must not call set_tags after add_resource")
 
     monkeypatch.setattr(ContentWriteCoordinator, "set_tags", fake_set_tags)
     client = SimpleNamespace(get_task_info=AsyncMock(return_value={"Status": "succeeded"}))
@@ -1005,16 +1003,7 @@ async def test_monitor_connector_task_applies_tags_on_success(
 
     assert outcome["status"] == "completed"
     completion = tracker.complete.await_args.args[1]
-    assert completion["tags_result"] == {"tags_updated": True, "mode": "append"}
-    assert tag_calls == [
-        {
-            "uri": "viking://resources/imports",
-            "tags": ["team=search"],
-            "mode": "append",
-            "recursive": True,
-            "ctx": ctx,
-        }
-    ]
+    assert "tags_result" not in completion
 
 
 @pytest.mark.asyncio

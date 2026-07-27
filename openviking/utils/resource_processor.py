@@ -137,7 +137,7 @@ class ResourceProcessor:
     ) -> Dict[str, Any]:
         """Expose index building as a standalone method."""
         for uri in resource_uris:
-            await index_resource(uri, ctx)
+            await index_resource(uri, ctx, search_tags=kwargs.get("search_tags"))
         return {"status": "success", "message": f"Indexed {len(resource_uris)} resources"}
 
     async def summarize(
@@ -178,6 +178,8 @@ class ResourceProcessor:
         }
         defer_post_processing = bool(kwargs.pop("defer_post_processing", False))
         preacquired_lock = kwargs.pop("resource_lock", NO_LOCK) or NO_LOCK
+        ingest_search_tags = kwargs.pop("ingest_search_tags", None)
+        ingest_search_tag_mode = kwargs.pop("ingest_search_tag_mode", "replace")
         telemetry = get_current_telemetry()
 
         async def _set_stage(stage: str) -> None:
@@ -420,6 +422,8 @@ class ResourceProcessor:
                     ctx=ctx,
                     resource_lock=resource_lock,
                     summarize=summarize,
+                    ingest_search_tags=ingest_search_tags,
+                    ingest_search_tag_mode=ingest_search_tag_mode,
                     **kwargs,
                 )
                 if post_result.get("warnings"):
@@ -452,6 +456,9 @@ class ResourceProcessor:
         build_index = bool(kwargs.get("build_index", True))
         processing_mode = normalize_processing_mode(processing_mode)
         vectors_only = processing_mode == VECTORS_ONLY
+        ingest_search_tags = kwargs.pop("ingest_search_tags", None)
+        kwargs.pop("ingest_search_tag_mode", None)
+        search_tags = kwargs.pop("search_tags", ingest_search_tags)
         should_summarize = not vectors_only and (summarize or build_index)
         result: Dict[str, Any] = {"status": "success", "root_uri": root_uri}
 
@@ -468,6 +475,7 @@ class ResourceProcessor:
                         temp_uris=[temp_uri],
                         is_code_repo=bool(prepared.get("is_code_repo")),
                         target_preexisting=target_preexisting,
+                        search_tags=search_tags,
                         **kwargs,
                     )
                     if (

@@ -47,6 +47,7 @@ class Summarizer:
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
 
         temp_uris = kwargs.get("temp_uris", [])
+        search_tags = kwargs.get("search_tags")
         if not temp_uris:
             temp_uris = resource_uris
         if len(temp_uris) != len(resource_uris):
@@ -125,6 +126,7 @@ class Summarizer:
                     lock_handoff=lock_handoff,
                     is_code_repo=kwargs.get("is_code_repo", False),
                     target_preexisting=resolve_target_preexisting(idx, target_uri),
+                    search_tags=search_tags,
                 )
                 if msg.telemetry_id:
                     get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)

@@ -96,25 +96,22 @@ curl -sS -X POST "$OV_URL/api/v1/resources" \
   }'
 ```
 
-成功后，响应里会包含 `tags_result`：
+成功后，`tags` 会随本次导入生成的向量检索记录一起写入。`add_resource`
+响应本身不再额外返回 `tags_result`：
 
 ```json
 {
   "status": "ok",
   "result": {
     "root_uri": "viking://resources/demo.md",
-    "tags_result": {
-      "uri": "viking://resources/demo.md",
-      "tags": ["team=search", "env=test"],
-      "mode": "replace",
-      "success_count": 3,
-      "skipped_count": 0,
-      "failed_count": 0,
-      "tags_updated": true
+    "queue_status": {
+      "status": "completed"
     }
   }
 }
 ```
+
+可以随后用 search/find 的 `tags` 参数验证召回是否只命中这批资源。
 
 ### 2.2 上传文件并设置标签
 
@@ -263,7 +260,7 @@ result = await client.add_resource(
     tag_mode="replace",
 )
 
-print(result["tags_result"])
+print(result["root_uri"])
 ```
 
 ### 5.2 OpenViking
@@ -417,9 +414,15 @@ curl -sS -G "$OV_URL/api/v1/fs/attrs" \
 
 ## 8. 常见问题
 
-### 8.1 `tags_result.tags_updated=false` 是什么意思？
+### 8.1 `add_resource(tags=...)` 没有返回 `tags_result` 是正常的吗？
 
-这表示本次没有找到可更新的向量检索记录，或者目标记录尚未对当前后端可见。常见原因：
+正常。`add_resource` 的 tags 会在导入过程中随每条向量检索记录一起写入，
+不会在完成后再调用 `set_tags`，因此响应里没有批量更新结果。可以用
+`/api/v1/search/search` 或 `/api/v1/search/find` 带 tags 验证召回。
+
+### 8.2 `set_tags.tags_updated=false` 是什么意思？
+
+这表示本次显式 `set_tags` 没有找到可更新的向量检索记录，或者目标记录尚未对当前后端可见。常见原因：
 
 - 资源导入没有生成向量记录。
 - 后端存在短暂最终一致性延迟。
@@ -427,7 +430,7 @@ curl -sS -G "$OV_URL/api/v1/fs/attrs" \
 
 可以稍后调用 `/api/v1/fs/attrs/set_tags` 显式重试。
 
-### 8.2 `set_tags` 返回成功，但 `fs attrs` 还是空怎么办？
+### 8.3 `set_tags` 返回成功，但 `fs attrs` 还是空怎么办？
 
 先区分两种情况：
 
@@ -436,12 +439,12 @@ curl -sS -G "$OV_URL/api/v1/fs/attrs" \
 
 排查顺序：
 
-1. 看 `set_tags` 或 `add_resource` 的 `tags_result`。
+1. 如果是 `add_resource(tags=...)`，用 `/api/v1/search/search` 或 `/api/v1/search/find` 带 tags 验证召回。
 2. 查 `GET /api/v1/fs/attrs?uri=...`。
-3. 用 `/api/v1/search/search` 或 `/api/v1/search/find` 带 tags 验证召回。
+3. 如果是显式 `set_tags`，查看它的 `tags_result`。
 4. 如有 debug 权限，查 vector record 的 `search_tags` 字段。
 
-### 8.3 为什么 tag 必须是 `k=v`？
+### 8.4 为什么 tag 必须是 `k=v`？
 
 `k=v` 让标签可组合、可覆盖、可审计。`append` 模式可以按 key 覆盖旧值，例如 `env=dev` 追加 `env=prod` 后变为 `env=prod`，避免同一维度出现多个冲突值。
 
