@@ -55,7 +55,8 @@ class Session:
         If both content and parts are provided, parts takes precedence.
 
         Returns:
-            Result dict with session_id and message_count
+            Result dict with session_id, message_count, and the persisted
+            pending_tokens value.
         """
         if parts is not None:
             parts_dicts = [asdict(p) for p in parts]
@@ -85,7 +86,8 @@ class Session:
                       "parts", "created_at", "peer_id".
 
         Returns:
-            Result dict with session_id, message_count, and added count.
+            Result dict with session_id, message_count, added count, and the
+            persisted pending_tokens value.
         """
         return await self._client.batch_add_messages(
             self.session_id,

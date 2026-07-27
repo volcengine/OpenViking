@@ -988,15 +988,20 @@ class LocalClient(BaseClient):
         else:
             raise ValueError("Either content or parts must be provided")
 
-        session.add_message(
-            role,
-            message_parts,
-            peer_id=self._resolve_message_peer_id(role, peer_id),
-            created_at=created_at,
+        await session._add_messages_async(
+            [
+                {
+                    "role": role,
+                    "parts": message_parts,
+                    "peer_id": self._resolve_message_peer_id(role, peer_id),
+                    "created_at": created_at,
+                }
+            ]
         )
         return {
             "session_id": session_id,
             "message_count": len(session.messages),
+            "pending_tokens": int(session.meta.pending_tokens or 0),
         }
 
     async def batch_add_messages(
@@ -1048,11 +1053,12 @@ class LocalClient(BaseClient):
                 }
             )
 
-        added = session.add_messages(specs)
+        added = await session._add_messages_async(specs)
         return {
             "session_id": session_id,
             "message_count": len(session.messages),
             "added": len(added),
+            "pending_tokens": int(session.meta.pending_tokens or 0),
         }
 
     def _resolve_message_peer_id(

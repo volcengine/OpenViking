@@ -675,7 +675,7 @@ class Session:
         part.tool_output_group_budget_chars = cfg.assistant_turn_inline_budget_chars
         return True
 
-    def _externalize_tool_part(
+    async def _externalize_tool_part(
         self,
         msg: Message,
         part: ToolPart,
@@ -694,19 +694,17 @@ class Session:
 
         digest = sha256_text(original_output)
         try:
-            stored = run_async(
-                store.write(
-                    content=original_output,
-                    tool_id=part.tool_id,
-                    tool_name=part.tool_name,
-                    message_id=msg.id,
-                    user_id=self.ctx.user.user_id if self.ctx and self.ctx.user else None,
-                    peer_id=msg.peer_id,
-                    created_at=msg.created_at,
-                    preview_chars=preview_chars,
-                    mime_type=part.tool_output_mime_type or "text/plain",
-                    synopsis=synopsis,
-                )
+            stored = await store.write(
+                content=original_output,
+                tool_id=part.tool_id,
+                tool_name=part.tool_name,
+                message_id=msg.id,
+                user_id=self.ctx.user.user_id if self.ctx and self.ctx.user else None,
+                peer_id=msg.peer_id,
+                created_at=msg.created_at,
+                preview_chars=preview_chars,
+                mime_type=part.tool_output_mime_type or "text/plain",
+                synopsis=synopsis,
             )
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
@@ -756,7 +754,7 @@ class Session:
         part.tool_output_group_original_chars = group_original_chars
         part.tool_output_group_budget_chars = cfg.assistant_turn_inline_budget_chars
 
-    def _externalize_large_tool_output_group(self, messages: List[Message]) -> None:
+    async def _externalize_large_tool_output_group(self, messages: List[Message]) -> None:
         cfg = self._tool_output_externalization_config
         if not cfg.enabled:
             return
@@ -867,7 +865,7 @@ class Session:
                 else "turn_budget"
             )
             synopsis, _rendered_len = prepared_externalized_preview(idx, part, preview_chars)
-            self._externalize_tool_part(
+            await self._externalize_tool_part(
                 msg,
                 part,
                 cfg,
@@ -878,15 +876,15 @@ class Session:
                 synopsis=synopsis,
             )
 
-    def _externalize_large_tool_outputs(self, msg: Message) -> None:
-        self._externalize_large_tool_output_group([msg])
+    async def _externalize_large_tool_outputs(self, msg: Message) -> None:
+        await self._externalize_large_tool_output_group([msg])
 
     def _is_tool_result_aggregate(self, role: str, parts: List[Part]) -> bool:
         return (
             role == "user" and len(parts) > 1 and all(isinstance(part, ToolPart) for part in parts)
         )
 
-    def _append_messages(self, messages: List[Message]) -> None:
+    async def _append_messages(self, messages: List[Message]) -> None:
         """Append multiple messages: update lists, stats, JSONL, meta."""
         for msg in messages:
             self._messages.append(msg)
@@ -903,23 +901,18 @@ class Session:
                 pushed_out = self._messages[-(keep + 1)]
                 self._meta.pending_tokens += int(pushed_out.estimated_tokens or 0)
 
-        self._append_messages_to_jsonl_batch(messages)
+        await self._append_messages_to_jsonl_batch(messages)
 
         self._meta.message_count = len(self._messages)
         if self._meta.total_message_count is not None:
             self._meta.total_message_count += len(messages)
-        self._save_meta_sync()
+        await self._save_meta()
 
-    def add_messages(
+    async def _add_messages_async(
         self,
         messages_spec: List[dict],
     ) -> List[Message]:
-        """Add multiple messages in a single batch.
-
-        Args:
-            messages_spec: List of dicts, each with keys:
-                role, parts, peer_id (optional), created_at (optional)
-        """
+        """Async implementation shared by async entrypoints and sync wrappers."""
         all_messages = []
         for i, spec in enumerate(messages_spec):
             if "role" not in spec:
@@ -948,7 +941,7 @@ class Session:
                     )
                     for part in parts
                 ]
-                self._externalize_large_tool_output_group(msgs)
+                await self._externalize_large_tool_output_group(msgs)
                 all_messages.extend(msgs)
             else:
                 msg = Message(
@@ -958,11 +951,23 @@ class Session:
                     peer_id=peer_id,
                     created_at=created_at,
                 )
-                self._externalize_large_tool_outputs(msg)
+                await self._externalize_large_tool_outputs(msg)
                 all_messages.append(msg)
 
-        self._append_messages(all_messages)
+        await self._append_messages(all_messages)
         return all_messages
+
+    def add_messages(
+        self,
+        messages_spec: List[dict],
+    ) -> List[Message]:
+        """Add multiple messages in a single batch and wait for persistence.
+
+        Args:
+            messages_spec: List of dicts, each with keys:
+                role, parts, peer_id (optional), created_at (optional)
+        """
+        return run_async(self._add_messages_async(messages_spec))
 
     def add_message(
         self,
@@ -3214,17 +3219,15 @@ class Session:
             ctx=self.ctx,
         )
 
-    def _append_messages_to_jsonl_batch(self, messages: List[Message]) -> None:
+    async def _append_messages_to_jsonl_batch(self, messages: List[Message]) -> None:
         """Append multiple messages to messages.jsonl in a single write."""
         if not self._viking_fs:
             return
         batch_content = "".join(msg.to_jsonl() + "\n" for msg in messages)
-        run_async(
-            self._viking_fs.append_file(
-                f"{self._session_uri}/messages.jsonl",
-                batch_content,
-                ctx=self.ctx,
-            )
+        await self._viking_fs.append_file(
+            f"{self._session_uri}/messages.jsonl",
+            batch_content,
+            ctx=self.ctx,
         )
 
     def _generate_abstract(self) -> str:

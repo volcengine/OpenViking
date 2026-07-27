@@ -407,6 +407,10 @@ class BaseClient(ABC):
             telemetry: Whether to attach operation telemetry data to the result.
 
         If both content and parts are provided, parts takes precedence.
+
+        Returns:
+            Result dict with session_id, message_count, and the persisted
+            pending_tokens value.
         """
         ...
 
@@ -426,7 +430,8 @@ class BaseClient(ABC):
             telemetry: Whether to attach operation telemetry data to the result.
 
         Returns:
-            Result dict with session_id, message_count, and added count.
+            Result dict with session_id, message_count, added count, and the
+            persisted pending_tokens value.
         """
         ...
 

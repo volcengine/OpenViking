@@ -422,6 +422,7 @@ async def test_add_message(client: httpx.AsyncClient):
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["message_count"] == 1
+    assert body["result"]["pending_tokens"] > 0
 
 
 async def test_add_message_accepts_image_part(client: httpx.AsyncClient, service):
@@ -445,6 +446,8 @@ async def test_add_message_accepts_image_part(client: httpx.AsyncClient, service
     )
 
     assert resp.status_code == 200
+    body = resp.json()
+    assert body["result"]["pending_tokens"] >= 0
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
     session = service.sessions.session(ctx, session_id)
     await session.load()
@@ -489,6 +492,8 @@ async def test_add_message_resolves_image_part_url_path_variables(
     )
 
     assert resp.status_code == 200
+    body = resp.json()
+    assert body["result"]["pending_tokens"] >= 0
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
     session = service.sessions.session(ctx, session_id)
     await session.load()
@@ -580,6 +585,9 @@ async def test_batch_add_message_accepts_mixed_parts(client: httpx.AsyncClient, 
     )
 
     assert resp.status_code == 200
+    body = resp.json()
+    assert body["result"]["added"] == 1
+    assert body["result"]["pending_tokens"] > 0
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
     session = service.sessions.session(ctx, session_id)
     await session.load()
