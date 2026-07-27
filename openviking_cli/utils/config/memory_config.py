@@ -77,6 +77,26 @@ class MemoryConfig(BaseModel):
             "default."
         ),
     )
+    phase2_max_concurrent: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Optional process-wide cap on concurrent commit Phase 2 memory-extraction "
+            "tasks. 0 disables the cap (default). Pure resource-backpressure knob; "
+            "write consistency comes from phase2_per_space_max_concurrent."
+        ),
+    )
+    phase2_per_space_max_concurrent: int = Field(
+        default=1,
+        ge=1,
+        description=(
+            "Max concurrent Phase 2 memory-extraction tasks per user space "
+            "(account_id:user_id). Default 1 serializes same-space extraction so each "
+            "run sees the previous run's completed memory state — matching the "
+            "effective serialization the original long lock window provided — "
+            "while different user spaces still run in parallel."
+        ),
+    )
     link_enabled: bool = Field(
         default=False,
         description=(
