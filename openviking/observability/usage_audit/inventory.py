@@ -45,11 +45,13 @@ class ContextInventoryProvider:
     async def _read_counts(self, ctx: RequestContext) -> dict[str, int]:
         user_root = canonical_user_root(ctx)
 
-        files, skills, memories = await asyncio.gather(
+        files, user_skills, agent_skills, memories = await asyncio.gather(
             self._stat_count("viking://resources", ctx=ctx),
             self._stat_count(f"{user_root}/skills", ctx=ctx),
+            self._stat_count("viking://agent/skills", ctx=ctx),
             self._stat_count(f"{user_root}/memories", ctx=ctx),
         )
+        skills = user_skills + agent_skills
         return {
             "files": files,
             "skills": skills,
