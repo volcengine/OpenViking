@@ -6,6 +6,7 @@ from unittest.mock import Mock
 import pytest
 
 from openviking.parse.parsers.code.ast import extract_skeleton, extract_skeleton_result
+from openviking.parse.parsers.code.ast.aider_repomap import extract_repromap_skeleton
 from openviking.parse.parsers.code.ast.extractor import (
     get_process_extractor,
     supports_code_skeleton,
@@ -121,3 +122,28 @@ def test_viking_resource_path_recovers_parent_suffix():
     text = get_process_extractor().extract_skeleton(file_name, "def run():\n    pass\n")
     assert text is not None
     assert "run" in text
+
+
+def test_c_tags_render_signatures_without_function_bodies():
+    content = """
+struct User {
+    int id;
+};
+
+static int add(int a, int b)
+{
+    int value = a + b;
+    return value;
+}
+
+void run(void) { do_work(); }
+"""
+
+    text = extract_repromap_skeleton("sample.c", content)
+
+    assert text is not None
+    assert "struct User" in text
+    assert "static int add(int a, int b)" in text
+    assert "void run(void)" in text
+    assert "return value" not in text
+    assert "do_work" not in text
