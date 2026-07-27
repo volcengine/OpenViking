@@ -746,7 +746,20 @@ class FeishuAccessor(DataAccessor):
                     parent_node_token or "<root>",
                 )
                 return
+            # Cycle guard: never expand the same node_token twice. A wiki whose
+            # child points back at an already-expanded ancestor (A -> B -> A) would
+            # otherwise recurse unboundedly -> RecursionError once depth grows.
+            if parent_node_token and parent_node_token in seen_node_tokens:
+                logger.warning(
+                    "[FeishuAccessor] wiki subtree cycle detected at node=%s; "
+                    "skipping re-entry to avoid unbounded recursion.",
+                    parent_node_token,
+                )
+                return
+            if parent_node_token:
+                seen_node_tokens.add(parent_node_token)
             page_token: Optional[str] = None
+            seen_page_tokens: set[str] = set()
             while True:
                 if len(results) >= max_nodes:
                     truncated = True
@@ -767,9 +780,11 @@ class FeishuAccessor(DataAccessor):
                             return
                 if not has_more or not next_page_token:
                     return
-                if next_page_token == page_token:
-                    # Defensive: avoid spinning on an unchanging page token.
+                if next_page_token == page_token or next_page_token in seen_page_tokens:
+                    # Defensive: avoid spinning on a repeating page token
+                    # (adjacent dup OR an A -> B -> A token cycle from a buggy/malicious API).
                     return
+                seen_page_tokens.add(next_page_token)
                 page_token = next_page_token
 
         if space_id:

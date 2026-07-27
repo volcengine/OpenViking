@@ -755,3 +755,69 @@ def test_expand_space_root_api_failure_propagates(monkeypatch):
         asyncio.run(
             accessor.expand_feishu_url("https://x.feishu.cn/wiki/settings/space_1")
         )
+
+
+# ---------------------------------------------------------------------------
+# Adversarial-review regression: cycle safety (issue #3120).
+# ---------------------------------------------------------------------------
+
+
+def test_list_wiki_subtree_breaks_node_token_cycle(monkeypatch):
+    """An A -> B -> A node cycle must not recurse forever (RecursionError).
+
+    Before the fix, ``seen_tokens`` only deduped *results*; the walker re-entered
+    recursion on ``has_child`` regardless, so a true cycle blew the stack once
+    ``max_depth`` was large. Now ``seen_node_tokens`` stops re-expansion.
+    """
+    _install_fake_lark_wiki(monkeypatch)
+    children = {
+        None: [_make_node(node_token="A", obj_type="docx", obj_token="docA", has_child=True)],
+        "A": [_make_node(node_token="B", obj_type="docx", obj_token="docB", has_child=True)],
+        "B": [_make_node(node_token="A", obj_type="docx", obj_token="docA", has_child=True)],  # cycle
+    }
+    calls = {"n": 0}
+
+    def fake_list(space, parent_node_token, feishu_access_token=None, page_token=None):
+        calls["n"] += 1
+        return children.get(parent_node_token, []), False, None
+
+    accessor = FeishuAccessor()
+    accessor._list_wiki_child_nodes = fake_list
+    result = asyncio.run(
+        accessor.list_wiki_subtree(
+            space_id="space_1", feishu_access_token="u", max_depth=100, max_nodes=1000
+        )
+    )
+    # Each node_token expanded at most once: root listing + A + B = 3 calls.
+    assert calls["n"] == 3, calls
+    urls = [u for u, _t in result]
+    assert sorted(urls) == ["https://feishu.cn/docx/docA", "https://feishu.cn/docx/docB"]
+    assert len(urls) == 2  # no duplication from the cycle
+
+
+def test_list_wiki_subtree_breaks_page_token_cycle(monkeypatch):
+    """An A -> B -> A *page-token* cycle from a buggy/malicious API must terminate.
+
+    The old ``next_page_token == page_token`` guard only caught an adjacent dup;
+    an alternating A/B cycle span until ``max_nodes``. The seen-set stops it.
+    """
+    _install_fake_lark_wiki(monkeypatch)
+    calls = {"n": 0}
+
+    def fake_list(space, parent_node_token, feishu_access_token=None, page_token=None):
+        calls["n"] += 1
+        nxt = "B" if page_token in (None, "A") else "A"  # alternate -> cycle
+        node = _make_node(
+            node_token=f"n{page_token}", obj_type="docx", obj_token=f"doc{page_token}"
+        )
+        return [node], True, nxt
+
+    accessor = FeishuAccessor()
+    accessor._list_wiki_child_nodes = fake_list
+    result = asyncio.run(
+        accessor.list_wiki_subtree(
+            space_id="space_1", feishu_access_token="u", max_depth=1, max_nodes=1000
+        )
+    )
+    # Would spin ~1000 times without the fix; now stops as soon as a token repeats.
+    assert calls["n"] <= 4, calls
