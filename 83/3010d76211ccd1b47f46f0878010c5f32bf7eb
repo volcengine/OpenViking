@@ -1,0 +1,27 @@
+bot/tests/test_compile.py
+  s_cdd38986f8bd9a::t_8830f6eeaf4a6d 150-169,849,876,886-887,889-895,1549,1564,1609,1844,1853-1854,1856,1861,1875-1876,1880,1882,1887-1888,1890,1895-1899,1902,1919-1923,1929,1961-1963
+bot/vikingbot/agent/tools/compile.py
+  s_cdd38986f8bd9a::t_20dfc6d343104b 183-188,193,198,203-209,218-228,474-475,478-479
+bot/vikingbot/compile/service.py
+  s_cdd38986f8bd9a::t_ef4c6a0728a91b 62,72-75,345,438,1035,1046-1047,1081,1096-1097,1102,1131-1132,1138-1140
+docs/design/ov-compile-design.md
+  s_cdd38986f8bd9a::t_21aa850b04a236 320-321,324,326,328,346,352-354,530-531,608,640-641
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "833010d76211ccd1b47f46f0878010c5f32bf7eb",
+  "prompts": {},
+  "sessions": {
+    "s_cdd38986f8bd9a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa2df-be1f-73e2-99e6-04aa7cfe807c",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
