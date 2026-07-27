@@ -1,0 +1,25 @@
+bot/tests/test_compile.py
+  s_cdd38986f8bd9a::t_46d7cb3457b0c0 21,301-308,348
+bot/vikingbot/agent/tools/compile.py
+  s_cdd38986f8bd9a::t_56f2bf18b8eb1a 34,514
+bot/vikingbot/compile/renderer.py
+  s_cdd38986f8bd9a::t_cfdc8c0a768f92 62-66,286,413,605
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "7b29be369aae8070459f66b15420403818467b97",
+  "prompts": {},
+  "sessions": {
+    "s_cdd38986f8bd9a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa2df-be1f-73e2-99e6-04aa7cfe807c",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
