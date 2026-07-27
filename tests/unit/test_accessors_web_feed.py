@@ -122,6 +122,7 @@ class TestCanHandle:
             "https://example.com/index.xml",
             "https://example.com/feed",
             "https://example.com/blog/feed/",
+            "HTTPS://example.com/sitemap.xml",
         ],
     )
     def test_handles_feed_like(self, accessor, url):
@@ -558,6 +559,7 @@ class TestDiscoverHint:
 # --------------------------------------------------------------------------- #
 def test_looks_like_feed_url():
     assert looks_like_feed_url("https://h/sitemap.xml")
+    assert looks_like_feed_url("HTTPS://h/sitemap.xml")
     assert looks_like_feed_url("https://h/rss.xml")
     assert not looks_like_feed_url("https://h/post")
     assert not looks_like_feed_url("/tmp/sitemap.xml")

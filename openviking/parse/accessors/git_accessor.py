@@ -34,6 +34,10 @@ from .base import DataAccessor, LocalResource, SourceType
 logger = get_logger(__name__)
 
 
+def _has_url_scheme(source: str) -> bool:
+    return source.lower().startswith(("http://", "https://", "git://", "ssh://"))
+
+
 class GitAccessor(DataAccessor):
     """
     Accessor for Git repositories and code archives.
@@ -64,7 +68,7 @@ class GitAccessor(DataAccessor):
         source_str = str(source)
 
         # Git protocol URLs
-        if source_str.startswith(("git@", "git://", "ssh://")):
+        if source_str.startswith("git@") or source_str.lower().startswith(("git://", "ssh://")):
             try:
                 if source_str.startswith("git@"):
                     validate_git_ssh_uri(source_str)
@@ -73,7 +77,7 @@ class GitAccessor(DataAccessor):
                 return False
 
         # HTTP/HTTPS URLs to code hosting repos
-        if source_str.startswith(("http://", "https://")):
+        if source_str.lower().startswith(("http://", "https://")):
             return is_git_repo_url(source_str)
 
         # Local .git files (NOT .zip - .zip goes to ZipParser via LocalAccessor)
@@ -118,7 +122,7 @@ class GitAccessor(DataAccessor):
                     branch=branch,
                     commit=commit,
                 )
-            elif source_str.startswith(("http://", "https://", "git://", "ssh://")):
+            elif _has_url_scheme(source_str):
                 repo_url, branch, commit = self._parse_repo_source(source_str, **kwargs)
                 if self._is_github_url(repo_url):
                     # Try GitHub ZIP API first, fall back to git clone
@@ -217,7 +221,7 @@ class GitAccessor(DataAccessor):
         branch = kwargs.get("branch") or kwargs.get("ref")
         commit = kwargs.get("commit")
         repo_url = source
-        if source.startswith(("http://", "https://", "git://", "ssh://")):
+        if _has_url_scheme(source):
             parsed = urlparse(source)
             repo_url = parsed._replace(query="", fragment="").geturl()
             if commit is None or branch is None:
@@ -268,7 +272,7 @@ class GitAccessor(DataAccessor):
 
     def _normalize_repo_url(self, url: str) -> str:
         """Normalize repository URL to base form."""
-        if url.startswith(("http://", "https://", "git://", "ssh://")):
+        if _has_url_scheme(url):
             parsed = urlparse(url)
             path_parts = [p for p in parsed.path.split("/") if p]
             base_parts = path_parts
@@ -305,7 +309,7 @@ class GitAccessor(DataAccessor):
 
         # Fallback for other URLs
         name_source = url
-        if url.startswith(("http://", "https://", "git://", "ssh://")):
+        if _has_url_scheme(url):
             name_source = urlparse(url).path.rstrip("/")
         elif ":" in url and not url.startswith("file://"):
             name_source = url.split(":", 1)[1]

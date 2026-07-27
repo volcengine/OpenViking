@@ -7,7 +7,13 @@ from unittest.mock import patch
 
 import pytest
 
-from openviking.parse.accessors import AccessorRegistry, GitAccessor, HTTPAccessor
+from openviking.parse.accessors import (
+    AccessorRegistry,
+    FeishuAccessor,
+    GitAccessor,
+    HTTPAccessor,
+    WebFeedAccessor,
+)
 from openviking.parse.accessors.http_accessor import URLType
 
 
@@ -53,6 +59,7 @@ class TestHTTPAccessor:
             "https://example.com/page.html",
             "http://example.com/document.pdf",
             "https://example.org/file.md",
+            "HTTPS://example.com/page.html",
         ],
     )
     def test_can_handle_http_urls(self, accessor: HTTPAccessor, source: str) -> None:
@@ -272,6 +279,29 @@ class TestHTTPAccessorPriorityRouting:
         accessor = registry.get_accessor(test_url)
         assert accessor is not None
         assert accessor.__class__.__name__ == "HTTPAccessor"
+
+    @pytest.mark.parametrize(
+        ("test_url", "expected_accessor"),
+        [
+            ("HTTPS://github.com/volcengine/OpenViking", "GitAccessor"),
+            ("HTTPS://example.com/page.html", "HTTPAccessor"),
+            ("HTTPS://example.com/sitemap.xml", "WebFeedAccessor"),
+            ("HTTPS://example.feishu.cn/docx/doc_token", "FeishuAccessor"),
+        ],
+    )
+    def test_uppercase_scheme_routes_to_expected_accessor(
+        self, test_url: str, expected_accessor: str
+    ) -> None:
+        registry = AccessorRegistry(register_default=False)
+        registry.register(HTTPAccessor())
+        registry.register(WebFeedAccessor())
+        registry.register(GitAccessor())
+        registry.register(FeishuAccessor())
+
+        accessor = registry.get_accessor(test_url)
+
+        assert accessor is not None
+        assert accessor.__class__.__name__ == expected_accessor
 
 class TestHTTPAccessorRawUrlConversion:
     """Tests for HTTPAccessor._convert_to_raw_url (GitHub/GitLab blob -> raw)."""
