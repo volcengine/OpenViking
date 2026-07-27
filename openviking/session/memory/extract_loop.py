@@ -875,6 +875,22 @@ The final output of the model must strictly follow the JSON Schema format shown 
         )
         return recovered
 
+    def _get_item_model_type(self, memory_type: str) -> Optional[Any]:
+        """Return the per-item Pydantic model for a memory_type field, or None.
+
+        The structured operations model stores each memory_type as ``List[FlatModel]``;
+        this pulls out ``FlatModel`` so callers can validate items individually
+        (used by legacy recovery to tolerate one bad item without losing the batch).
+        """
+        model = self._operations_model
+        if model is None:
+            return None
+        field = model.model_fields.get(memory_type)
+        if field is None:
+            return None
+        args = getattr(field.annotation, "__args__", ())
+        return args[0] if args else None
+
     @staticmethod
     def _singularize_type(name: str) -> str:
         """Canonicalize a memory_type or discriminator to a singular lowercased form."""

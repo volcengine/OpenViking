@@ -193,3 +193,38 @@ class TestSingularizeType:
         assert ExtractLoop._singularize_type("cases") == "case"
         assert ExtractLoop._singularize_type("profile") == "profile"
         assert ExtractLoop._singularize_type("Entities") == "entity"
+
+
+class TestAdversaryRegression:
+    """Regression tests from same-model adversarial review (per-item tolerance)."""
+
+    def test_one_bad_item_does_not_poison_the_batch(self):
+        """A single malformed item must not lose the valid items in the same type."""
+        loop = _make_loop([_preferences_schema()])
+        # 2 valid preferences + 1 junk (no user/topic -> missing required immutable).
+        content = (
+            '[{"user": "alice", "topic": "drink", "content": "coffee"}, '
+            '{"user": "bob", "topic": "editor", "content": "vscode"}, '
+            '{"type": "entity", "name": "stray"}]'
+        )
+        recovered = loop._recover_legacy_operations(content)
+        assert recovered is not None
+        # Both valid preferences survive; the junk item is dropped, not the batch.
+        assert len(recovered.preferences) == 2
+        topics = {p.topic for p in recovered.preferences}
+        assert topics == {"drink", "editor"}
+
+    def test_envelope_with_non_list_expected_field_is_not_short_circuited(self):
+        """A stray {expected_field: non-list} must not skip a sibling envelope."""
+        loop = _make_loop([_preferences_schema(), _entities_schema()])
+        # "preferences" is an expected field but a STRING, not a list -> must NOT
+        # short-circuit; the "memories" envelope must still be recovered.
+        content = (
+            '{"preferences": "user likes tea", "memories": ['
+            '{"type": "entity", "category": "people", "name": "sinking", '
+            '"content": "admin"}]}'
+        )
+        recovered = loop._recover_legacy_operations(content)
+        assert recovered is not None
+        assert len(recovered.entities) == 1
+        assert recovered.entities[0].name == "sinking"
