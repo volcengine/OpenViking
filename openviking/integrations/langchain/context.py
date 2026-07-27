@@ -29,9 +29,9 @@ from openviking.integrations.langchain.history import (
     OpenVikingChatMessageHistory,
     context_parts_from_documents,
 )
+from openviking.integrations.langchain.messages import OPENVIKING_CONTEXT_MARKER
 from openviking.integrations.langchain.retrievers import OpenVikingRetriever
 
-OPENVIKING_CONTEXT_MARKER = "<openviking_context>"
 logger = logging.getLogger(__name__)
 
 

@@ -59,6 +59,7 @@ chain.invoke(
 | 存储跨线程的持久化状态 | `OpenVikingStore` |
 | 在 LangGraph 中以 middleware 注入上下文 | `OpenVikingContextMiddleware` |
 | 用 OpenViking 存储 LangChain 聊天记录 | `OpenVikingChatMessageHistory` |
+| 在自定义生命周期中记录调用方选定的 LangChain 消息 | `OpenVikingSessionRecorder` |
 
 ## 快速示例
 
@@ -116,6 +117,22 @@ middleware = OpenVikingContextMiddleware(
     capture_on_after_agent=True,
 )
 ```
+
+### Session recorder
+
+当应用已经自行管理会话生命周期，只需要复用 OpenViking 持久化能力时，可使用 recorder：
+
+```python
+from openviking.integrations.langchain import OpenVikingSessionRecorder
+
+recorder = OpenVikingSessionRecorder(url="http://localhost:1933", api_key="...")
+recorder.record("support-thread-1", messages, peer_id="assistant-a")
+recorder.flush("support-thread-1")
+recorder.close()
+```
+
+`record()` 只写入调用方传入的消息；它会过滤框架控制消息、按服务端限制分批写入，并应用已配置的
+commit 策略。`flush()` 仅在 session 存在待提交内容时强制 commit。
 
 ## 运行示例
 

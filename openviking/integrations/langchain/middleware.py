@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import json
-import logging
 from typing import Any, Callable
 
 try:
@@ -25,23 +24,14 @@ except ImportError as exc:  # pragma: no cover - exercised by optional import pa
 
 from openviking.integrations.langchain.client import (
     OpenVikingCommitPolicy,
-    OpenVikingConnection,
     apply_commit_policy,
-    call_openviking,
-    ensure_client,
     extract_message_text,
     get_latest_user_text,
 )
-from openviking.integrations.langchain.context import (
-    OPENVIKING_CONTEXT_MARKER,
-    OpenVikingSessionContextAssembler,
-)
-from openviking.integrations.langchain.history import langchain_message_to_openviking
+from openviking.integrations.langchain.context import OpenVikingSessionContextAssembler
+from openviking.integrations.langchain.recording import OpenVikingSessionRecorder
 from openviking.integrations.langchain.retrievers import OpenVikingRetriever
 
-logger = logging.getLogger(__name__)
-
-_BATCH_ADD_MESSAGES_LIMIT = 100
 _SESSION_ID_ERROR = (
     "OpenVikingContextMiddleware requires a LangGraph session id. Pass "
     'config={"configurable": {"thread_id": "..."}}, set state["session_id"], '
@@ -83,8 +73,7 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         include_active_messages: bool = False,
     ):
         super().__init__()
-        self._client = client
-        self._connection = OpenVikingConnection(
+        self.recorder = OpenVikingSessionRecorder(
             client=client,
             url=url,
             api_key=api_key,
@@ -93,6 +82,7 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             user_id=user_id,
             actor_peer_id=actor_peer_id,
             path=path,
+            commit_policy=None,
         )
         self.retriever = retriever or OpenVikingRetriever(
             client=client,
@@ -197,43 +187,26 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         ):
             start = len(previous_signatures)
 
-        client = ensure_client(self._connection)
-        batch: list[dict[str, Any]] = []
-        chunks: list[tuple[list[dict[str, Any]], int, bool]] = []
-        batch_has_context = False
+        added = 0
         pending_context_parts = list(self._pending_context_parts.get(capture_key, []))
-        for message_index, message in enumerate(messages[start:], start=start):
-            if OPENVIKING_CONTEXT_MARKER in _message_content(message):
-                continue
-            payloads = langchain_message_to_openviking(message)
-            if batch and len(batch) + len(payloads) > _BATCH_ADD_MESSAGES_LIMIT:
-                chunks.append((batch, message_index, batch_has_context))
-                batch = []
-                batch_has_context = False
-            for payload in payloads:
-                if pending_context_parts and payload["role"] == "assistant":
-                    payload["parts"].extend(pending_context_parts)
-                    pending_context_parts = []
-                    batch_has_context = True
-                if peer_id is not None:
-                    payload["peer_id"] = peer_id
-                batch.append(payload)
-        if batch:
-            chunks.append((batch, len(messages), batch_has_context))
-        for chunk, signature_end, has_context in chunks:
-            call_openviking(
-                client,
-                "batch_add_messages",
-                session_id=session_id,
-                messages=chunk,
+        for chunk_start in range(start, len(messages), self.recorder.batch_size):
+            chunk_end = min(chunk_start + self.recorder.batch_size, len(messages))
+            result = self.recorder.record(
+                session_id,
+                messages[chunk_start:chunk_end],
+                peer_id=peer_id,
+                context_parts=pending_context_parts,
             )
-            self._captured_signatures[capture_key] = current_signatures[:signature_end]
-            if has_context:
+            added += result.messages_written
+            self._captured_signatures[capture_key] = current_signatures[:chunk_end]
+            if result.context_attached:
+                pending_context_parts = []
                 self._pending_context_parts.pop(capture_key, None)
+
         self._pending_context_parts.pop(capture_key, None)
         self._captured_signatures[capture_key] = current_signatures
-        if batch:
-            apply_commit_policy(client, session_id, self.commit_policy)
+        if added:
+            apply_commit_policy(self.recorder.client, session_id, self.commit_policy)
         return None
 
     def _resolve_session_id(self, state: dict[str, Any], runtime: Any) -> str:
@@ -272,13 +245,6 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             if resolved:
                 return resolved
         return None
-
-    def _ensure_session(self, client: Any, session_id: str) -> None:
-        try:
-            call_openviking(client, "create_session", session_id=session_id)
-        except Exception:
-            logger.debug("OpenViking LangGraph middleware session ensure failed", exc_info=True)
-            pass
 
 
 def _nested_get(value: Any, *keys: str) -> Any:
