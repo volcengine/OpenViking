@@ -287,3 +287,41 @@ test("integration: main checkout and a linked worktree without remote share loca
     await rm(mainRepo, { recursive: true, force: true });
   }
 });
+
+
+// ---------------------------------------------------------------------------
+// Adversarial-review regression: non-default port + "@" in path (issue #3516).
+// ---------------------------------------------------------------------------
+
+test("normalizeGitRemoteUrl: non-default port collapses with default port", () => {
+  // Enterprise GitLab/Gitea commonly run ssh on 2222 / 3000. Same repo, different
+  // port config must NOT split peers.
+  const a = normalizeGitRemoteUrl("ssh://git@gitlab.mycompany.com:2222/team/repo.git");
+  const b = normalizeGitRemoteUrl("git@gitlab.mycompany.com:team/repo.git");
+  assert.equal(a, b);
+  assert.equal(a, "gitlab.mycompany.com/team/repo");
+});
+
+test("normalizeGitRemoteUrl: https with non-default https port collapses", () => {
+  const a = normalizeGitRemoteUrl("https://git.example.com:8443/org/repo.git");
+  const b = normalizeGitRemoteUrl("https://git.example.com/org/repo.git");
+  assert.equal(a, b);
+  assert.equal(a, "git.example.com/org/repo");
+});
+
+test("normalizeGitRemoteUrl: @ in path is not treated as userinfo", () => {
+  // A ref/path containing "@" must not be mistaken for user@host separation.
+  // https://github.com/@scope/repo must keep host "github.com" (not drop to "scope/repo").
+  const out = normalizeGitRemoteUrl("https://github.com/@scope/repo.git");
+  assert.equal(out, "github.com/@scope/repo");
+  // And it must NOT collide across hosts.
+  const other = normalizeGitRemoteUrl("https://gitlab.com/@scope/repo.git");
+  assert.notEqual(out, other);
+});
+
+test("normalizeGitRemoteUrl: trailing @v1.0 ref does not corrupt the host", () => {
+  const out = normalizeGitRemoteUrl("https://github.com/org/repo.git/@v1.0");
+  // host is preserved; the @ref stays in path (silently, no credential leak)
+  assert.ok(out.startsWith("github.com/org/repo"), out);
+  assert.ok(!out.includes("user:pass"), out);
+});

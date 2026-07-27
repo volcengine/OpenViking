@@ -54,17 +54,20 @@ export function normalizeGitRemoteUrl(raw) {
   const schemeMatch = url.match(/^([A-Za-z][A-Za-z0-9+.\-]*):\/\/(.+)$/);
   if (schemeMatch) {
     let rest = schemeMatch[2];
-    // Strip userinfo: [user[:pass]@]
-    const at = rest.lastIndexOf("@");
-    if (at !== -1) rest = rest.slice(at + 1);
-    // Strip query / fragment.
+    // Strip query / fragment first (they apply to the whole URL).
     rest = rest.split(/[?#]/)[0];
     const slash = rest.indexOf("/");
-    const hostPort = (slash === -1 ? rest : rest.slice(0, slash)).toLowerCase();
+    const authority = slash === -1 ? rest : rest.slice(0, slash);
     const path = slash === -1 ? "" : rest.slice(slash + 1);
+    // Strip userinfo ONLY within the authority segment — a "@" later in the path
+    // (e.g. ".../org/repo/@v1.0" or ".../@scope/repo") is NOT a credential marker
+    // and must not corrupt host detection.
+    const at = authority.lastIndexOf("@");
+    const hostPort = (at === -1 ? authority : authority.slice(at + 1)).toLowerCase();
     if (!hostPort) return "";
-    // Drop default scheme ports.
-    const host = hostPort.replace(/:(443|22|80)$/, "");
+    // Drop ANY explicit port — host identity is host-only; a team using ssh:2222
+    // vs the default port is still the same repository and must share a peer id.
+    const host = hostPort.replace(/:\d+$/, "");
     const cleanPath = stripRemoteSuffix(path);
     if (!host || !cleanPath) return "";
     return `${host}/${cleanPath}`;
