@@ -98,10 +98,15 @@ impl<T: Clone> TtlLruCache<T> {
             return;
         }
 
+        let child_prefix = if prefix == "/" {
+            "/".to_string()
+        } else {
+            format!("{}/", prefix.trim_end_matches('/'))
+        };
         let to_remove: Vec<String> = inner
             .cache
             .iter()
-            .filter(|(k, _)| *k == prefix || k.starts_with(&format!("{}/", prefix)))
+            .filter(|(k, _)| *k == prefix || k.starts_with(&child_prefix))
             .map(|(k, _)| k.clone())
             .collect();
 
@@ -296,5 +301,19 @@ mod tests {
 
         cache.put("/test".to_string(), vec![]).await;
         assert!(cache.get("/test").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_root_prefix_invalidation_clears_descendants() {
+        let cache = S3ListDirCache::new(10, 60, true);
+        cache.put("/".to_string(), vec![]).await;
+        cache.put("/a".to_string(), vec![]).await;
+        cache.put("/a/b".to_string(), vec![]).await;
+
+        cache.invalidate_prefix("/").await;
+
+        assert!(cache.get("/").await.is_none());
+        assert!(cache.get("/a").await.is_none());
+        assert!(cache.get("/a/b").await.is_none());
     }
 }
