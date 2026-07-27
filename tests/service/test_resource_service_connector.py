@@ -723,23 +723,26 @@ async def test_add_resource_falls_back_for_shared_source_with_parent(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "field",
+    ("field", "value"),
     [
-        "manage_watch",
-        "parser_args",
-        "resource_lock",
-        "route_source",
-        "skip_watch_management",
-        "stage_callback",
-        "watch_auth_state",
+        ("manage_watch", False),
+        ("parser_args", {}),
+        ("resource_lock", object()),
+        ("route_source", False),
+        ("skip_watch_management", True),
+        ("stage_callback", object()),
+        ("watch_auth_state", {}),
+        ("understanding_response_id", "response-1"),
+        ("parser_backend", "understanding"),
+        ("resolved_extension", ".pdf"),
     ],
 )
-async def test_add_resource_rejects_internal_execution_fields(ctx, service, field):
+async def test_add_resource_rejects_internal_execution_fields(ctx, service, field, value):
     with pytest.raises(InvalidArgumentError, match=field):
         await service.add_resource(
             path="https://example.com/manual.pdf",
             ctx=ctx,
-            **{field: object()},
+            **{field: value},
         )
 
 

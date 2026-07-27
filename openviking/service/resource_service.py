@@ -117,6 +117,9 @@ _INTERNAL_INGESTION_FIELDS = frozenset(
         "skip_watch_management",
         "stage_callback",
         "watch_auth_state",
+        "understanding_response_id",
+        "parser_backend",
+        "resolved_extension",
     }
 )
 
