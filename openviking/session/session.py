@@ -1931,46 +1931,77 @@ class Session:
     # ============= Internal methods =============
 
     async def _collect_session_context_components(self) -> Dict[str, Any]:
-        """Collect the latest summary archive and merged pending/live messages."""
-        completed_archives = await self._get_completed_archive_refs()
+        """Collect overview (if newest terminal is .done) and messages after that terminal.
+
+        Scan archives from newest to oldest. ``.done`` and ``.failed.json`` are both
+        terminal:
+
+        - newest terminal is ``.done`` → return that archive's overview (if readable)
+          plus messages from newer non-terminal archives and live messages;
+        - newest terminal is ``.failed`` → no overview; only subsequent messages;
+        - no terminal yet → no overview; all non-terminal archive messages + live.
+
+        Older archives are not probed once the first terminal is found.
+        """
+        archive_refs = await self._list_archive_refs()
+        pending_newer: List[Dict[str, Any]] = []
         latest_archive = None
-        pre_archive_abstracts: List[Dict[str, Any]] = []
         failed_archives = 0
+        terminal_seen = False
 
-        for archive in completed_archives:
-            if latest_archive is None:
+        for archive in archive_refs:  # newest → oldest
+            state = await self._archive_terminal_state(archive["archive_uri"])
+            if state == "pending":
+                if not terminal_seen:
+                    pending_newer.append(archive)
+                continue
+
+            terminal_seen = True
+            if state == "done":
                 overview = await self._read_archive_overview(archive["archive_uri"])
-                if not overview:
-                    failed_archives += 1
-                    continue
-
-                latest_archive = {
-                    "archive_id": archive["archive_id"],
-                    "archive_uri": archive["archive_uri"],
-                    "overview": overview,
-                    "overview_tokens": await self._read_archive_overview_tokens(
-                        archive["archive_uri"], overview
-                    ),
-                }
-            abstract = await self._read_archive_abstract(archive["archive_uri"])
-            if abstract:
-                pre_archive_abstracts.append(
-                    {
+                if overview:
+                    latest_archive = {
                         "archive_id": archive["archive_id"],
-                        "abstract": abstract,
-                        "tokens": estimate_text_tokens(abstract),
+                        "archive_uri": archive["archive_uri"],
+                        "overview": overview,
+                        "overview_tokens": await self._read_archive_overview_tokens(
+                            archive["archive_uri"], overview
+                        ),
                     }
-                )
+                else:
+                    failed_archives = 1
             else:
-                failed_archives += 1
+                # .failed.json — terminal without a usable summary for context.
+                failed_archives = 1
+            break
+
+        pending_messages: List[Message] = []
+        # pending_newer was collected newest-first; restore chronological order.
+        for archive in reversed(pending_newer):
+            pending_messages.extend(await self._read_archive_messages(archive["archive_uri"]))
 
         return {
             "latest_archive": latest_archive,
-            "pre_archive_abstracts": pre_archive_abstracts,
-            "total_archives": len(completed_archives),
+            "pre_archive_abstracts": [],
+            "total_archives": len(archive_refs),
             "failed_archives": failed_archives,
-            "messages": await self._get_pending_archive_messages() + list(self._messages),
+            "messages": pending_messages + list(self._messages),
         }
+
+    async def _archive_terminal_state(self, archive_uri: str) -> str:
+        """Return ``done``, ``failed``, or ``pending`` for one archive directory."""
+        if not self._viking_fs:
+            return "pending"
+        try:
+            await self._viking_fs.read_file(f"{archive_uri}/.done", ctx=self.ctx)
+            return "done"
+        except Exception:
+            pass
+        try:
+            await self._viking_fs.read_file(f"{archive_uri}/.failed.json", ctx=self.ctx)
+            return "failed"
+        except Exception:
+            return "pending"
 
     async def _list_archive_refs(self) -> List[Dict[str, Any]]:
         """List archive refs sorted by archive index descending."""
@@ -2105,41 +2136,23 @@ class Session:
         return summary["overview"] if summary else ""
 
     async def _get_pending_archive_messages(self) -> List[Message]:
-        """Return messages from in-progress archives newer than the latest completed archive."""
-        # Seed from 0 rather than ``commit_count``: Phase 1 bumps ``commit_count``
-        # as soon as an archive's messages are written, before its Phase 2 memory
-        # extraction finishes and the ``.done`` marker is written. The in-flight
-        # archive's index therefore equals ``commit_count``, so seeding from
-        # ``commit_count`` would treat that still-pending archive as already
-        # completed and drop its messages from the assembled context (issue #3129).
-        # Completed archives are detected below via their ``.done`` marker.
-        latest_completed_index = 0
-        pending_archives: List[Dict[str, Any]] = []
-        for archive in sorted(await self._list_archive_refs(), key=lambda item: item["index"]):
-            try:
-                await self._viking_fs.read_file(f"{archive['archive_uri']}/.done", ctx=self.ctx)
-                latest_completed_index = max(latest_completed_index, archive["index"])
-                continue
-            except Exception:
-                pass
+        """Return messages from non-terminal archives newer than the newest terminal.
 
-            try:
-                await self._viking_fs.read_file(
-                    f"{archive['archive_uri']}/.failed.json",
-                    ctx=self.ctx,
-                )
+        ``.done`` and ``.failed.json`` both count as terminal cutoffs. Scanning
+        newest-first avoids treating an in-flight archive as completed when
+        Phase 1 has bumped ``commit_count`` before ``.done`` is written.
+        """
+        pending_newer: List[Dict[str, Any]] = []
+        for archive in await self._list_archive_refs():
+            state = await self._archive_terminal_state(archive["archive_uri"])
+            if state == "pending":
+                pending_newer.append(archive)
                 continue
-            except Exception:
-                pass
-
-            pending_archives.append(archive)
+            break
 
         pending_messages: List[Message] = []
-        for archive in pending_archives:
-            if archive["index"] <= latest_completed_index:
-                continue
+        for archive in reversed(pending_newer):
             pending_messages.extend(await self._read_archive_messages(archive["archive_uri"]))
-
         return pending_messages
 
     @staticmethod
