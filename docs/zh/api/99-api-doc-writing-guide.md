@@ -30,7 +30,7 @@ API 文档按模块组织，每个模块一个文件，使用两位数字序号�
 **代码入口**：
 - `openviking/<模块>/<文件>.py:<类名>.<方法名>` - 核心实现
 - `openviking/server/routers/<路由文件>.py` - HTTP 路由
-- `openviking_cli/commands/<命令文件>.py` - CLI 命令
+- `crates/ov_cli/src/commands/<命令文件>.rs` - CLI 命令
 
 #### 2. 接口和参数说明
 

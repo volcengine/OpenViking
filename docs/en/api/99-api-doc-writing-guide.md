@@ -30,7 +30,7 @@ Explain the purpose of this API, point to the corresponding code entry, and brie
 **Code Entry**:
 - `openviking/<module>/<file>.py:<ClassName>.<MethodName>` - Core implementation
 - `openviking/server/routers/<router-file>.py` - HTTP router
-- `openviking_cli/commands/<command-file>.py` - CLI command
+- `crates/ov_cli/src/commands/<command-file>.rs` - CLI command
 
 #### 2. Interface and Parameter Description
 
