@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import tempfile
 import time
 import uuid
@@ -24,7 +23,6 @@ from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedErro
 from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
 _CHUNK_SIZE = 1024 * 1024
-MATERIALIZED_WATCH_SOURCE_KEY = "_openviking_materialized_watch_source"
 
 
 @dataclass
@@ -169,53 +167,6 @@ class TempUploadStore:
         uri = _shared_upload_uri(self.temp_cfg, ctx, shared_id)
         with suppress(Exception):
             await get_viking_fs().rm(uri, recursive=True, ctx=self._internal_ctx(ctx))
-
-    def materialize_watch_source(self, resolved: ResolvedTempUpload) -> str:
-        """Copy a consumed upload into a durable local source for watch re-runs.
-
-        Temp uploads are consumption-scoped: local uploads may be cleaned up, and
-        shared uploads are deleted after successful consume. A watch task needs a
-        source path that survives the consume lifecycle, so HTTP add_resource
-        materializes a server-owned copy before handing the path to ResourceService.
-        """
-        upload_temp_dir = get_openviking_config().storage.get_upload_temp_dir()
-        watch_sources_dir = upload_temp_dir / "watch_sources"
-        watch_sources_dir.mkdir(parents=True, exist_ok=True)
-        suffix = Path(resolved.original_filename or resolved.local_path).suffix or ".tmp"
-        durable_path = watch_sources_dir / f"watch_{uuid.uuid4().hex}{suffix}"
-        shutil.copyfile(resolved.local_path, durable_path)
-        return str(durable_path.resolve(strict=True))
-
-    @staticmethod
-    def is_materialized_watch_source(path: str | None) -> bool:
-        if not path:
-            return False
-        try:
-            upload_temp_dir = get_openviking_config().storage.get_upload_temp_dir()
-            watch_sources_dir = (upload_temp_dir / "watch_sources").resolve()
-            candidate = Path(path).expanduser().resolve()
-            return (
-                candidate.parent == watch_sources_dir
-                and candidate.name.startswith("watch_")
-                and candidate.is_file()
-            )
-        except Exception:
-            return False
-
-    @staticmethod
-    def cleanup_materialized_watch_source(path: str | None) -> None:
-        if TempUploadStore.is_materialized_watch_source(path):
-            with suppress(FileNotFoundError):
-                Path(str(path)).unlink()
-
-    @staticmethod
-    def cleanup_materialized_watch_source_for_task(task: Any) -> None:
-        processor_kwargs = getattr(task, "processor_kwargs", None)
-        if not isinstance(processor_kwargs, dict):
-            return
-        TempUploadStore.cleanup_materialized_watch_source(
-            processor_kwargs.get(MATERIALIZED_WATCH_SOURCE_KEY)
-        )
 
     async def _save_local(self, upload_file: Any) -> str:
         config = get_openviking_config()

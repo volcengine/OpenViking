@@ -20,7 +20,6 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
-from openviking.server.temp_upload_store import TempUploadStore
 from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
@@ -263,7 +262,6 @@ async def _delete_impl(target: WatchTask, ctx: RequestContext):
         raise _translate_perm(e, target.to_uri or target.task_id) from e
     if not ok:
         raise NotFoundError(target.task_id, "watch_task")
-    TempUploadStore.cleanup_materialized_watch_source_for_task(target)
     return Response(
         status="ok",
         result={"task_id": target.task_id, "to_uri": target.to_uri, "deleted": True},
