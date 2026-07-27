@@ -30,6 +30,8 @@ pub async fn handle_add_resource(
     watch_interval: f64,
     processing_mode: String,
     resource_args: Option<String>,
+    tags: Vec<String>,
+    tag_mode: String,
     ctx: CliContext,
 ) -> Result<()> {
     let is_url =
@@ -111,6 +113,8 @@ pub async fn handle_add_resource(
         watch_interval,
         processing_mode,
         add_resource_args,
+        tags,
+        tag_mode,
         ctx.output_format,
         ctx.compact,
         ctx.should_show_progress(),
