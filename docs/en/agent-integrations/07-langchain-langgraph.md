@@ -58,6 +58,14 @@ and `aclear()`. `OpenVikingSessionRecorder` provides `arecord()`, `aflush()`,
 and `aclose()`. Async LangGraph runs select `awrap_model_call()` and
 `aafter_agent()` automatically. A synchronous injected client remains
 supported; its calls run in a worker thread instead of blocking the event loop.
+Concurrent first use initializes one shared client per adapter.
+
+Adapters never close an injected client. When an adapter creates its own client,
+release it with `await retriever.aclose()`, `await assembler.aclose()`,
+`await middleware.aclose()`, `await history.aclose()`, or
+`await recorder.aclose()` as appropriate. Calling synchronous
+`recorder.close()` after an async operation raises and intentionally leaves the
+recorder open so `await recorder.aclose()` can still release every resource.
 
 ## Peer Identity
 
@@ -189,7 +197,8 @@ has pending content. After `close()`, the recorder cannot be reused; injected
 clients remain owned by the caller.
 
 For async lifecycles, use the equivalent `await recorder.arecord(...)`,
-`await recorder.aflush(...)`, and `await recorder.aclose()` methods.
+`await recorder.aflush(...)`, and `await recorder.aclose()` methods. Do not
+finish an async lifecycle with `recorder.close()`.
 
 ## Try the examples
 

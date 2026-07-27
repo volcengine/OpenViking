@@ -150,6 +150,19 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         self._captured_signatures: dict[tuple[str, str], tuple[str, ...]] = {}
         self._pending_context_parts: dict[tuple[str, str], list[dict[str, Any]]] = {}
 
+    async def aclose(self) -> None:
+        """Release all clients internally owned by this middleware."""
+
+        first_error: BaseException | None = None
+        for component in (self.recorder, self.assembler, self.retriever):
+            try:
+                await component.aclose()
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
+
     def wrap_model_call(self, request: ModelRequest, handler: Callable[[ModelRequest], Any]) -> Any:
         plan = self._model_context_plan(request)
         if plan is None:

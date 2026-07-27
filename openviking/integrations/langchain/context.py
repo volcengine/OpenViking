@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -22,6 +23,7 @@ from openviking.integrations.langchain.client import (
     OpenVikingCommitPolicy,
     OpenVikingConnection,
     acall_openviking,
+    aclose_openviking_clients,
     call_openviking,
     ensure_async_client,
     ensure_client,
@@ -113,8 +115,13 @@ class OpenVikingSessionContextAssembler:
         self.include_active_messages = include_active_messages
         self.include_recall = include_recall
         self.recall_header = recall_header
+        self._owns_client = client is None
+        self._owns_async_client = async_client is None and client is None
+        self._owns_retriever = retriever is None
         self._client_cache: Any = None
         self._async_client_cache: Any = None
+        self._async_client_lock = asyncio.Lock()
+        self._closed = False
 
     def assemble(
         self,
@@ -162,14 +169,57 @@ class OpenVikingSessionContextAssembler:
         )
 
     def _get_client(self) -> Any:
+        self._raise_if_closed()
         if self._client_cache is None:
             self._client_cache = ensure_client(self._connection)
         return self._client_cache
 
-    async def _get_async_client(self) -> Any:
+    async def get_async_client(self) -> Any:
+        """Return the lazily initialized client used by async assembly."""
+
+        self._raise_if_closed()
         if self._async_client_cache is None:
-            self._async_client_cache = await ensure_async_client(self._connection)
+            async with self._async_client_lock:
+                self._raise_if_closed()
+                if self._async_client_cache is None:
+                    self._async_client_cache = await ensure_async_client(self._connection)
         return self._async_client_cache
+
+    async def _get_async_client(self) -> Any:
+        return await self.get_async_client()
+
+    async def aclose(self) -> None:
+        """Release clients and the default retriever owned by this assembler."""
+
+        if self._closed:
+            return
+        self._closed = True
+        sync_client = self._client_cache
+        self._client_cache = None
+        async with self._async_client_lock:
+            async_client = self._async_client_cache
+            self._async_client_cache = None
+
+        first_error: BaseException | None = None
+        try:
+            await aclose_openviking_clients(
+                sync_client if self._owns_client else None,
+                async_client if self._owns_async_client else None,
+            )
+        except BaseException as exc:
+            first_error = exc
+        if self._owns_retriever:
+            try:
+                await self.retriever.aclose()
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
+
+    def _raise_if_closed(self) -> None:
+        if self._closed:
+            raise RuntimeError("OpenVikingSessionContextAssembler is closed")
 
     def _ensure_session(self, client: Any, session_id: str) -> None:
         try:

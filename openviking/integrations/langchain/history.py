@@ -202,7 +202,7 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
         return self._recorder.client
 
     async def _get_async_client(self) -> Any:
-        return await self._recorder._get_async_client()
+        return await self._recorder.get_async_client()
 
     def _ensure_session(self, client: Any) -> None:
         try:

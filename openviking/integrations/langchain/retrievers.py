@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Literal
 
 from pydantic import ConfigDict, Field, PrivateAttr
@@ -19,6 +20,7 @@ except ImportError as exc:  # pragma: no cover - exercised by optional import pa
 from openviking.integrations.langchain.client import (
     OpenVikingConnection,
     acall_openviking,
+    aclose_openviking_clients,
     call_openviking,
     ensure_async_client,
     ensure_client,
@@ -60,9 +62,15 @@ class OpenVikingRetriever(BaseRetriever):
 
     _client_cache: Any = PrivateAttr(default=None)
     _async_client_cache: Any = PrivateAttr(default=None)
+    _async_client_lock: asyncio.Lock = PrivateAttr(default_factory=asyncio.Lock)
+    _owns_client_cache: bool = PrivateAttr(default=False)
+    _owns_async_client_cache: bool = PrivateAttr(default=False)
+    _closed: bool = PrivateAttr(default=False)
 
     def _get_client(self) -> Any:
+        self._raise_if_closed()
         if self._client_cache is None:
+            self._owns_client_cache = self.client is None
             self._client_cache = ensure_client(
                 OpenVikingConnection(
                     client=self.client,
@@ -80,25 +88,58 @@ class OpenVikingRetriever(BaseRetriever):
             )
         return self._client_cache
 
-    async def _get_async_client(self) -> Any:
+    async def get_async_client(self) -> Any:
+        """Return the lazily initialized client used by async retrieval."""
+
+        self._raise_if_closed()
         if self._async_client_cache is None:
-            self._async_client_cache = await ensure_async_client(
-                OpenVikingConnection(
-                    client=self.client,
-                    async_client=self.async_client,
-                    url=self.url,
-                    api_key=self.api_key,
-                    account=self.account,
-                    user=self.user,
-                    user_id=self.user_id,
-                    actor_peer_id=self.actor_peer_id,
-                    path=self.path,
-                    timeout=self.timeout,
-                    extra_headers=self.extra_headers,
-                    auto_initialize=self.auto_initialize,
-                )
-            )
+            async with self._async_client_lock:
+                self._raise_if_closed()
+                if self._async_client_cache is None:
+                    self._owns_async_client_cache = (
+                        self.async_client is None and self.client is None
+                    )
+                    self._async_client_cache = await ensure_async_client(
+                        OpenVikingConnection(
+                            client=self.client,
+                            async_client=self.async_client,
+                            url=self.url,
+                            api_key=self.api_key,
+                            account=self.account,
+                            user=self.user,
+                            user_id=self.user_id,
+                            actor_peer_id=self.actor_peer_id,
+                            path=self.path,
+                            timeout=self.timeout,
+                            extra_headers=self.extra_headers,
+                            auto_initialize=self.auto_initialize,
+                        )
+                    )
         return self._async_client_cache
+
+    async def _get_async_client(self) -> Any:
+        return await self.get_async_client()
+
+    async def aclose(self) -> None:
+        """Release clients created internally by this retriever."""
+
+        if self._closed:
+            return
+        self._closed = True
+        sync_client = self._client_cache
+        self._client_cache = None
+        async with self._async_client_lock:
+            async_client = self._async_client_cache
+            self._async_client_cache = None
+
+        await aclose_openviking_clients(
+            sync_client if self._owns_client_cache else None,
+            async_client if self._owns_async_client_cache else None,
+        )
+
+    def _raise_if_closed(self) -> None:
+        if self._closed:
+            raise RuntimeError("OpenVikingRetriever is closed")
 
     def _get_relevant_documents(self, query: str, *, run_manager: Any) -> list[Document]:
         client = self._get_client()

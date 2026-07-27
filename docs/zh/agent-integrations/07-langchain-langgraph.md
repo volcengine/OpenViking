@@ -56,7 +56,14 @@ finally:
 `aclear()`；`OpenVikingSessionRecorder` 提供 `arecord()`、`aflush()` 和
 `aclose()`。异步 LangGraph 运行会自动选择 `awrap_model_call()` 和
 `aafter_agent()`。原有同步 client 仍可注入，其调用会在 worker thread 中执行，不会阻塞
-event loop。
+event loop。同一 adapter 首次被并发调用时只会初始化一个共享 client。
+
+Adapter 不会关闭调用方注入的 client。对于 adapter 自行创建的 client，应按实际使用的组件调用
+`await retriever.aclose()`、`await assembler.aclose()`、
+`await middleware.aclose()`、`await history.aclose()` 或
+`await recorder.aclose()`。如果 async 操作完成后误调用同步
+`recorder.close()`，该方法会抛出异常并保持 recorder 可用，以便后续
+`await recorder.aclose()` 仍能释放全部资源。
 
 ## Peer 身份
 
@@ -184,7 +191,8 @@ commit 策略。如果后续批次或写入后的 commit 失败，`OpenVikingPar
 仍归调用方管理。
 
 异步生命周期使用对应的 `await recorder.arecord(...)`、
-`await recorder.aflush(...)` 和 `await recorder.aclose()`。
+`await recorder.aflush(...)` 和 `await recorder.aclose()`。不要用
+`recorder.close()` 结束异步生命周期。
 
 ## 运行示例
 

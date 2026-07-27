@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 from collections.abc import Iterable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
@@ -23,6 +22,7 @@ from openviking.integrations.langchain.client import (
     OpenVikingConnection,
     aapply_commit_policy,
     acall_openviking,
+    aclose_openviking_clients,
     apply_commit_policy,
     call_openviking,
     ensure_async_client,
@@ -155,6 +155,7 @@ class OpenVikingSessionRecorder:
         self._owns_async_client = async_client is None and client is None
         self._client_cache: Any = None
         self._async_client_cache: Any = None
+        self._async_client_lock = asyncio.Lock()
         self._pending_commit_sessions: set[str] = set()
         self._closed = False
         self.commit_policy = commit_policy
@@ -256,7 +257,7 @@ class OpenVikingSessionRecorder:
             return OpenVikingRecordResult(input_messages_consumed=len(input_messages))
 
         batches = _prepare_batches(prepared_messages, batch_size=self.batch_size)
-        client = await self._get_async_client()
+        client = await self.get_async_client()
         messages_written = 0
         input_messages_consumed = 0
         context_attached = False
@@ -334,7 +335,7 @@ class OpenVikingSessionRecorder:
         return call_openviking(client, "commit_session", session_id=session_id)
 
     async def _aflush_pending_content(self, session_id: str) -> dict[str, Any] | None:
-        client = await self._get_async_client()
+        client = await self.get_async_client()
         try:
             session = await acall_openviking(
                 client,
@@ -363,21 +364,34 @@ class OpenVikingSessionRecorder:
         await self._aflush_pending_content(session_id)
         self._pending_commit_sessions.discard(session_id)
 
-    async def _get_async_client(self) -> Any:
+    async def get_async_client(self) -> Any:
+        """Return the lazily initialized client used by async recorder methods."""
+
         self._raise_if_closed()
         if self._async_client_cache is None:
-            self._async_client_cache = await ensure_async_client(self._connection)
+            async with self._async_client_lock:
+                self._raise_if_closed()
+                if self._async_client_cache is None:
+                    self._async_client_cache = await ensure_async_client(self._connection)
         return self._async_client_cache
 
+    async def _get_async_client(self) -> Any:
+        return await self.get_async_client()
+
     def close(self) -> None:
-        """Release an internally created client.
+        """Release resources after exclusively synchronous use.
 
         Injected clients remain owned by their caller and are never closed here.
+        After any async operation has initialized an owned client, callers must
+        use :meth:`aclose`; this method leaves the recorder open so that async
+        cleanup can still complete.
         """
 
         if self._closed:
             return
-        if self._async_client_cache is not None and self._owns_async_client:
+        if self._owns_async_client and (
+            self._async_client_cache is not None or self._async_client_lock.locked()
+        ):
             raise RuntimeError(
                 "OpenVikingSessionRecorder has an active async client; "
                 "use `await recorder.aclose()`"
@@ -400,14 +414,15 @@ class OpenVikingSessionRecorder:
         self._closed = True
         self._pending_commit_sessions.clear()
         sync_client = self._client_cache
-        async_client = self._async_client_cache
         self._client_cache = None
-        self._async_client_cache = None
+        async with self._async_client_lock:
+            async_client = self._async_client_cache
+            self._async_client_cache = None
 
-        if sync_client is not None and self._owns_client:
-            await _aclose_client(sync_client)
-        if async_client is not None and self._owns_async_client and async_client is not sync_client:
-            await _aclose_client(async_client)
+        await aclose_openviking_clients(
+            sync_client if self._owns_client else None,
+            async_client if self._owns_async_client else None,
+        )
 
     def _raise_if_closed(self) -> None:
         if self._closed:
@@ -496,15 +511,3 @@ def _normalize_peer_id(peer_id: str | None) -> str | None:
         return None
     text = str(peer_id).strip()
     return text or None
-
-
-async def _aclose_client(client: Any) -> None:
-    close = getattr(client, "close", None)
-    if not callable(close):
-        return
-    if inspect.iscoroutinefunction(close):
-        await close()
-        return
-    result = await asyncio.to_thread(close)
-    if inspect.isawaitable(result):
-        await result

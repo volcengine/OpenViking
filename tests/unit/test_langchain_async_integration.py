@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import copy
 import threading
 from typing import Any
 
@@ -21,6 +23,7 @@ from openviking.integrations.langchain import (
     OpenVikingSessionRecorder,
 )
 from openviking.integrations.langchain.client import (
+    OpenVikingAsyncClientHandle,
     OpenVikingConnection,
     acall_openviking,
     ensure_async_client,
@@ -99,13 +102,15 @@ async def test_injected_async_client_is_initialized_only_once_across_adapters():
             self.initialize_calls = 0
 
         async def initialize(self) -> None:
+            await asyncio.sleep(0.01)
             self.initialize_calls += 1
 
     client = AsyncClientWithoutInitializedFlag()
     connection = OpenVikingConnection(async_client=client)
 
-    assert await ensure_async_client(connection) is client
-    assert await ensure_async_client(connection) is client
+    clients = await asyncio.gather(*(ensure_async_client(connection) for _ in range(5)))
+
+    assert all(resolved is client for resolved in clients)
     assert client.initialize_calls == 1
 
 
@@ -130,6 +135,226 @@ async def test_injected_async_client_respects_disabled_auto_initialize():
         is client
     )
     assert client.initialize_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_async_client_handle_initializes_once_under_concurrency(monkeypatch):
+    instances: list[Any] = []
+
+    class SlowAsyncHTTPClient:
+        def __init__(self, **_kwargs: Any):
+            self.closed = False
+            instances.append(self)
+
+        async def initialize(self) -> None:
+            await asyncio.sleep(0.01)
+
+        async def close(self) -> None:
+            self.closed = True
+
+    import openviking.client as client_module
+
+    monkeypatch.setattr(client_module, "AsyncHTTPClient", SlowAsyncHTTPClient)
+    handle = OpenVikingAsyncClientHandle(OpenVikingConnection(url="http://localhost:1933"))
+
+    clients = await asyncio.gather(*(handle.get() for _ in range(5)))
+
+    assert len(instances) == 1
+    assert all(client is clients[0] for client in clients)
+    await handle.close()
+    assert instances[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_async_client_initialization_failure_closes_candidate(monkeypatch):
+    instances: list[Any] = []
+
+    class FailingAsyncHTTPClient:
+        def __init__(self, **_kwargs: Any):
+            self.closed = False
+            instances.append(self)
+
+        async def initialize(self) -> None:
+            raise RuntimeError("initialization failed")
+
+        async def close(self) -> None:
+            self.closed = True
+
+    import openviking.client as client_module
+
+    monkeypatch.setattr(client_module, "AsyncHTTPClient", FailingAsyncHTTPClient)
+
+    with pytest.raises(RuntimeError, match="initialization failed"):
+        await ensure_async_client(OpenVikingConnection(url="http://localhost:1933"))
+
+    assert len(instances) == 1
+    assert instances[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_async_adapter_client_caches_initialize_once_under_concurrency(monkeypatch):
+    instances: list[Any] = []
+
+    class SlowAsyncHTTPClient:
+        def __init__(self, **_kwargs: Any):
+            self.closed = False
+            instances.append(self)
+
+        async def initialize(self) -> None:
+            await asyncio.sleep(0.01)
+
+        async def close(self) -> None:
+            self.closed = True
+
+    import openviking.client as client_module
+
+    monkeypatch.setattr(client_module, "AsyncHTTPClient", SlowAsyncHTTPClient)
+    recorder = OpenVikingSessionRecorder(url="http://localhost:1933")
+    assembler = OpenVikingSessionContextAssembler(
+        url="http://localhost:1933",
+        include_recall=False,
+    )
+    retriever = OpenVikingRetriever(url="http://localhost:1933")
+
+    recorder_clients = await asyncio.gather(*(recorder.get_async_client() for _ in range(5)))
+    assembler_clients = await asyncio.gather(*(assembler.get_async_client() for _ in range(5)))
+    retriever_clients = await asyncio.gather(*(retriever.get_async_client() for _ in range(5)))
+
+    assert len(instances) == 3
+    assert all(client is recorder_clients[0] for client in recorder_clients)
+    assert all(client is assembler_clients[0] for client in assembler_clients)
+    assert all(client is retriever_clients[0] for client in retriever_clients)
+
+    await assembler.retriever.get_async_client()
+    assert len(instances) == 4
+
+    await recorder.aclose()
+    await assembler.aclose()
+    await retriever.aclose()
+    assert all(client.closed for client in instances)
+
+
+@pytest.mark.asyncio
+async def test_async_handle_copy_and_missing_attribute_behavior(monkeypatch):
+    class FakeAsyncHTTPClient:
+        marker = "async-client"
+
+        def __init__(self, **_kwargs: Any):
+            self.closed = False
+
+        async def initialize(self) -> None:
+            return None
+
+        async def close(self) -> None:
+            self.closed = True
+
+    import openviking.client as client_module
+
+    monkeypatch.setattr(client_module, "AsyncHTTPClient", FakeAsyncHTTPClient)
+    retriever = OpenVikingRetriever(url="http://localhost:1933")
+    handle = await retriever.get_async_client()
+
+    copied = copy.deepcopy(retriever)
+    copied_handle = copied._async_client_cache
+
+    assert isinstance(copied_handle, OpenVikingAsyncClientHandle)
+    assert copied_handle is not handle
+    assert copied_handle._client is None
+    assert (await copied_handle.get()).marker == "async-client"
+    assert handle.marker == "async-client"
+    assert not hasattr(handle, "definitely_not_an_openviking_client_attribute")
+    await copied.aclose()
+    await retriever.aclose()
+
+
+@pytest.mark.asyncio
+async def test_sync_close_after_async_use_remains_recoverable(monkeypatch):
+    class FakeAsyncHTTPClient:
+        def __init__(self, **_kwargs: Any):
+            self.closed = False
+
+        async def initialize(self) -> None:
+            return None
+
+        async def close(self) -> None:
+            self.closed = True
+
+    class FakeSyncHTTPClient:
+        def __init__(self, **_kwargs: Any):
+            self.closed = False
+            self._initialized = False
+
+        def initialize(self) -> None:
+            self._initialized = True
+
+        def close(self) -> None:
+            self.closed = True
+
+    import openviking.client as client_module
+
+    monkeypatch.setattr(client_module, "AsyncHTTPClient", FakeAsyncHTTPClient)
+    monkeypatch.setattr(client_module, "SyncHTTPClient", FakeSyncHTTPClient)
+    recorder = OpenVikingSessionRecorder(url="http://localhost:1933")
+    sync_handle = recorder.client
+    async_handle = await recorder.get_async_client()
+    sync_client = sync_handle.get()
+    async_client = await async_handle.get()
+
+    with pytest.raises(RuntimeError, match=r"await recorder\.aclose"):
+        recorder.close()
+
+    assert recorder._closed is False
+    assert sync_client.closed is False
+    assert async_client.closed is False
+
+    await recorder.aclose()
+
+    assert recorder._closed is True
+    assert sync_client.closed is True
+    assert async_client.closed is True
+
+
+@pytest.mark.asyncio
+async def test_async_middleware_closes_all_internally_owned_clients(monkeypatch):
+    instances: list[Any] = []
+
+    class FakeAsyncHTTPClient:
+        def __init__(self, **_kwargs: Any):
+            self.closed = False
+            instances.append(self)
+
+        async def initialize(self) -> None:
+            return None
+
+        async def close(self) -> None:
+            self.closed = True
+
+    import openviking.client as client_module
+
+    monkeypatch.setattr(client_module, "AsyncHTTPClient", FakeAsyncHTTPClient)
+    middleware = OpenVikingContextMiddleware(url="http://localhost:1933")
+
+    await middleware.recorder.get_async_client()
+    await middleware.assembler.get_async_client()
+    await middleware.retriever.get_async_client()
+    assert len(instances) == 3
+
+    await middleware.aclose()
+
+    assert all(client.closed for client in instances)
+
+
+@pytest.mark.asyncio
+async def test_async_middleware_does_not_close_injected_client():
+    client = AsyncInMemoryOpenVikingClient()
+    middleware = OpenVikingContextMiddleware(async_client=client)
+
+    await middleware.recorder.get_async_client()
+    await middleware.assembler.get_async_client()
+    await middleware.retriever.get_async_client()
+    await middleware.aclose()
+
+    assert client.closed is False
 
 
 @pytest.mark.asyncio

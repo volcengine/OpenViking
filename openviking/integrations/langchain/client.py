@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import inspect
 import json
 import logging
@@ -40,6 +41,7 @@ _RECOVERABLE_RUNTIME_MESSAGE_FRAGMENTS = (
     "attached to a different loop",
     "bound to a different event loop",
 )
+_ASYNC_INITIALIZATION_LOCK_ATTR = "_openviking_integration_initialize_lock"
 
 
 class OptionalDependencyError(ImportError):
@@ -149,28 +151,37 @@ class OpenVikingAsyncClientHandle:
     def __init__(self, connection: OpenVikingConnection):
         self._connection = connection
         self._client: Any = None
+        self._client_lock = asyncio.Lock()
+
+    @property
+    def _initialized(self) -> bool:
+        client = self._client
+        return bool(client is not None and _async_client_is_initialized(client))
+
+    async def initialize(self) -> None:
+        """Initialize the underlying client once."""
+
+        await self.get()
 
     async def close(self) -> None:
         await self.reset()
 
     async def reset(self) -> None:
-        client = self._client
-        self._client = None
+        async with self._client_lock:
+            client = self._client
+            self._client = None
         if client is None:
             return
-        close = getattr(client, "close", None)
-        if not callable(close):
-            return
         try:
-            result = close()
-            if inspect.isawaitable(result):
-                await result
+            await aclose_openviking_client(client)
         except Exception:
             logger.debug("OpenViking async client close during recovery failed", exc_info=True)
 
     async def get(self) -> Any:
         if self._client is None:
-            self._client = await _create_async_client_from_connection(self._connection)
+            async with self._client_lock:
+                if self._client is None:
+                    self._client = await _create_async_client_from_connection(self._connection)
         return self._client
 
     async def _openviking_acall(self, method_name: str, /, **kwargs: Any) -> Any:
@@ -208,7 +219,24 @@ class OpenVikingAsyncClientHandle:
                     await self.reset()
                 raise
 
+    def __copy__(self) -> OpenVikingAsyncClientHandle:
+        return self
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> OpenVikingAsyncClientHandle:
+        copied = type(self)(copy.deepcopy(self._connection, memo))
+        memo[id(self)] = copied
+        return copied
+
     def __getattr__(self, name: str) -> Any:
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        client = self._client
+        if client is None:
+            raise AttributeError(name)
+        attr = getattr(client, name)
+        if not callable(attr):
+            return attr
+
         async def recovered_method(*args: Any, **kwargs: Any) -> Any:
             return await self._call_with_recovery(name, *args, **kwargs)
 
@@ -394,9 +422,51 @@ async def _create_async_client_from_connection(connection: OpenVikingConnection)
 
         client = AsyncOpenViking(path=connection.path, actor_peer_id=connection.actor_peer_id)
 
-    if connection.auto_initialize and hasattr(client, "initialize"):
-        await _ainitialize_client(client)
+    try:
+        if connection.auto_initialize and hasattr(client, "initialize"):
+            await _ainitialize_client(client)
+    except BaseException:
+        try:
+            await aclose_openviking_client(client)
+        except Exception:
+            logger.debug(
+                "OpenViking async client close after initialization failure failed",
+                exc_info=True,
+            )
+        raise
     return client
+
+
+async def aclose_openviking_client(client: Any) -> None:
+    """Close an async or sync OpenViking client without blocking the event loop."""
+
+    close = getattr(client, "close", None)
+    if not callable(close):
+        return
+    if inspect.iscoroutinefunction(close):
+        await close()
+        return
+    result = await asyncio.to_thread(close)
+    if inspect.isawaitable(result):
+        await result
+
+
+async def aclose_openviking_clients(*clients: Any) -> None:
+    """Close every distinct client and re-raise the first cleanup failure."""
+
+    seen: set[int] = set()
+    first_error: BaseException | None = None
+    for client in clients:
+        if client is None or id(client) in seen:
+            continue
+        seen.add(id(client))
+        try:
+            await aclose_openviking_client(client)
+        except BaseException as exc:
+            if first_error is None:
+                first_error = exc
+    if first_error is not None:
+        raise first_error
 
 
 def _call_client_method(
@@ -430,11 +500,27 @@ async def _acall_client_method(
 async def _ainitialize_client(client: Any) -> None:
     if _async_client_is_initialized(client):
         return
-    await _acall_client_method(client, "initialize")
+    lock = _async_client_initialization_lock(client)
+    async with lock:
+        if _async_client_is_initialized(client):
+            return
+        await _acall_client_method(client, "initialize")
+        try:
+            client._openviking_integration_initialized = True
+        except Exception:
+            pass
+
+
+def _async_client_initialization_lock(client: Any) -> asyncio.Lock:
     try:
-        client._openviking_integration_initialized = True
-    except Exception:
-        pass
+        lock = inspect.getattr_static(client, _ASYNC_INITIALIZATION_LOCK_ATTR)
+    except AttributeError:
+        lock = asyncio.Lock()
+        try:
+            setattr(client, _ASYNC_INITIALIZATION_LOCK_ATTR, lock)
+        except Exception:
+            return lock
+    return lock
 
 
 def _async_client_is_initialized(client: Any) -> bool:
