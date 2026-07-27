@@ -137,7 +137,6 @@ user/admin API key 的 API_KEY mode 时应留空。
 - `openviking_read`、`openviking_list`、`openviking_grep`、`openviking_glob`
 - `openviking_remember`、`openviking_add_resource`、`openviking_forget`、`openviking_health`
 - `openviking_list_watches`、`openviking_cancel_watch`
-- `openviking_code_search`、`openviking_code_outline`、`openviking_code_expand`
 
 如果行为异常，先查看运行时文件：
 
@@ -167,7 +166,6 @@ curl http://localhost:1933/health
 - `openviking_add_resource`：添加 URL、本地文件、sitemap 或 feed
 - `openviking_forget`：在用户明确确认后删除 `viking://` URI
 - `openviking_list_watches` / `openviking_cancel_watch`：查看或取消资源 watch
-- `openviking_code_search`、`openviking_code_outline`、`openviking_code_expand`：查看已索引代码符号
 - `openviking_health`：检查 OpenViking server 健康状态
 
 使用建议：

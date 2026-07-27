@@ -129,9 +129,9 @@ SemanticMsg(
 | `max_images_per_call` | 10 | 单次 VLM 最大图片数 |
 | `max_sections_per_call` | 20 | 单次 VLM 最大章节数 |
 
-## 代码骨架提取（AST 模式）
+## 代码骨架提取
 
-对于代码文件，OpenViking 支持基于 tree-sitter 的 AST 骨架提取，作为 LLM 摘要的轻量替代方案，可显著降低处理成本。
+对于代码文件，OpenViking 使用基于 tree-sitter 的代码骨架提取，作为 LLM 摘要的轻量替代方案。
 
 ### 工作模式
 
@@ -139,51 +139,19 @@ SemanticMsg(
 
 | 模式 | 说明 |
 |------|------|
-| `"ast"` | 对 ≥100 行的代码文件提取结构骨架，跳过 LLM 调用（**默认**） |
-| `"llm"` | 全部走 LLM 生成摘要（原有行为） |
-| `"ast_llm"` | 先提取 AST 骨架，再将骨架作为上下文辅助 LLM 生成摘要 |
-
-### AST 提取内容
-
-提取的骨架包含：
-
-- 模块级 docstring（首行）
-- import 语句列表
-- 类名、继承关系及方法签名（`ast` 模式仅保留 docstring 首行，`ast_llm` 模式保留完整 docstring）
-- 顶层函数签名
-
-### 支持语言
-
-以下语言有专属 extractor，基于 tree-sitter 实现精确提取：
-
-| 语言 | 说明 |
-|------|------|
-| Python | 完整支持 |
-| JavaScript / TypeScript | 完整支持 |
-| Rust | 完整支持 |
-| Go | 完整支持 |
-| Java | 完整支持 |
-| C / C++ | 完整支持 |
-
-其他语言不在支持列表内，自动 fallback 到 LLM。
+| `"ast"` | 提取紧凑的结构骨架（**默认**） |
+| `"llm"` | 全部走 LLM 生成摘要 |
+| `"ast_llm"` | 提取更详细的代码骨架，不再额外调用一次 LLM |
 
 ### Fallback 机制
 
-以下情况自动回退到 LLM，并在日志中记录原因，整体流程不受影响：
+默认的 `auto` provider 按以下顺序执行：
 
-- 语言不在支持列表中
-- 文件行数 < 100
-- AST 解析报错
-- 提取结果为空骨架
+1. 语言存在维护中的 `tags.scm` 时，优先使用 tags query。
+2. 不存在 query 或 query 未产出可用骨架时，使用 `tree-sitter-language-pack.process()`。
+3. 两种提取方式都无可用结果时，才回退到 `semantic.code_summary`。
 
-### 文件结构
-
-```
-openviking/parse/parsers/code/ast/
-├── extractor.py      # 语言检测 + 分发入口
-├── skeleton.py       # CodeSkeleton / FunctionSig / ClassSkeleton 数据结构
-└── languages/        # 各语言专属 extractor
-```
+长短代码文件都遵循同一路由。仅在兼容旧配置或专项评测时设置 `code_skeleton_provider`。
 
 ## 三种上下文提取
 

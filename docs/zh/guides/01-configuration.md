@@ -764,7 +764,8 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 ```json
 {
   "code": {
-    "code_summary_mode": "ast"
+    "code_summary_mode": "ast",
+    "code_skeleton_provider": "auto"
   }
 }
 ```
@@ -773,7 +774,8 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 {
   "parsers": {
     "code": {
-      "code_summary_mode": "ast"
+      "code_summary_mode": "ast",
+      "code_skeleton_provider": "auto"
     }
   }
 }
@@ -783,13 +785,13 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 
 | 值 | 说明 | 默认 |
 |----|------|------|
-| `"ast"` | 对 ≥100 行的代码文件提取 AST 骨架（类名、方法签名、首行注释、import），跳过 LLM 调用。**推荐用于大规模代码索引** | ✓ |
+| `"ast"` | 提取紧凑的代码骨架。**推荐用于大规模代码索引** | ✓ |
 | `"llm"` | 全部走 LLM 生成摘要（成本较高） | |
-| `"ast_llm"` | 先提取 AST 骨架（含完整注释），再将骨架作为上下文辅助 LLM 生成摘要（质量最高，成本居中） | |
+| `"ast_llm"` | 提取更详细的代码骨架，不再额外调用一次 LLM | |
 
-AST 提取支持：Python、JavaScript/TypeScript、Rust、Go、Java、C/C++。其他语言、提取失败或骨架为空时自动 fallback 到 LLM。
+`code_skeleton_provider` 默认为 `"auto"`：优先执行维护中的 tags query，其余语言使用 `tree-sitter-language-pack.process()`，结果不可用时再回退到 LLM。`"ov_ast"` 等历史值仍可配置，并会映射到自动路由。
 
-详见 [代码骨架提取](../concepts/06-extraction.md#代码骨架提取ast-模式)。
+详见 [代码骨架提取](../concepts/06-extraction.md#代码骨架提取)。
 
 #### 远程资源网络防护
 

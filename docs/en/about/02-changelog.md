@@ -241,11 +241,11 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 ### Highlights
 
 - **Web Studio as the default console**: Added the `web-studio` console workspace, shipped it in Docker and pip distributions, served it at `/studio`, moved OAuth authorize UI into it, and retired the legacy console while keeping favicon compatibility routes.
-- **MCP, API, and CLI automation**: Added Watch Management across REST, `ov`, and MCP; added progressive single-entrypoint local-file upload; added `code_outline`, `code_search`, and `code_expand`; and tightened upload-only and zip `--ignore-dirs` handling.
+- **MCP, API, and CLI automation**: Added Watch Management across REST, `ov`, and MCP; added progressive single-entrypoint local-file upload and code navigation support; and tightened upload-only and zip `--ignore-dirs` handling.
 - **Agent and OpenClaw ecosystem**: OpenClaw setup helper now supports npm plugin installs, plugin docs align with ClawHub package metadata, `ov_dream` was added as an OpenClaw skill, and oversized OpenClaw tool results can be externalized to OpenViking.
 - **Memory and retrieval**: Upgraded trajectory extraction, added memory link support, added switchable Vaka memory templates, fixed missing tool-call counts and missing message-peer retrieval, and parallelized hierarchical child search.
 - **Storage, VectorDB, and model reliability**: Async storage locks/IO and loop-isolated async clients reduce contention; fixes cover semantic lock ownership, false `mv not found`, URI remapping, S3 grep performance, VectorDB Unicode recovery, oversized byte rows, embedding error surfacing, and VLM LiteLLM native routes.
-- **Observability, docs, and deployment polish**: Added VikingBot feedback observability, centralized the metric registry, moved usage audit SQLite into system data, refreshed Helm chart defaults, updated brand assets and QR code, and documented public base URL, signed upload TTLs, Watch APIs, MCP code tools, readiness probes, and the `/studio` migration.
+- **Observability, docs, and deployment polish**: Added VikingBot feedback observability, centralized the metric registry, moved usage audit SQLite into system data, refreshed Helm chart defaults, updated brand assets and QR code, and documented public base URL, signed upload TTLs, Watch APIs, readiness probes, and the `/studio` migration.
 
 ### Upgrade Notes
 

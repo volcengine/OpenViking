@@ -130,9 +130,9 @@ Leaf directories → Parent directories → Root
 | `max_images_per_call` | 10 | Max images per VLM call |
 | `max_sections_per_call` | 20 | Max sections per VLM call |
 
-## Code Skeleton Extraction (AST Mode)
+## Code Skeleton Extraction
 
-For code files, OpenViking supports AST-based skeleton extraction via tree-sitter as a lightweight alternative to LLM summarization, significantly reducing processing cost.
+For code files, OpenViking uses tree-sitter-based skeleton extraction as a lightweight alternative to LLM summarization.
 
 ### Modes
 
@@ -140,51 +140,19 @@ Controlled by `code_summary_mode` in `ov.conf` (see [Configuration](../guides/01
 
 | Mode | Description |
 |------|-------------|
-| `"ast"` | Extract structural skeleton for files ≥100 lines, skip LLM calls (**default**) |
-| `"llm"` | Always use LLM for summarization (original behavior) |
-| `"ast_llm"` | Extract AST skeleton first, then pass it as context to LLM for summarization |
-
-### What AST Extracts
-
-The skeleton includes:
-
-- Module-level docstring (first line)
-- Import statement list
-- Class names, base classes, and method signatures (`ast` mode: first-line docstrings only; `ast_llm` mode: full docstrings)
-- Top-level function signatures
-
-### Supported Languages
-
-The following languages have dedicated extractors built on tree-sitter:
-
-| Language | Status |
-|----------|--------|
-| Python | Supported |
-| JavaScript / TypeScript | Supported |
-| Rust | Supported |
-| Go | Supported |
-| Java | Supported |
-| C / C++ | Supported |
-
-Other languages automatically fall back to LLM.
+| `"ast"` | Extract a compact structural skeleton (**default**) |
+| `"llm"` | Always use LLM summarization |
+| `"ast_llm"` | Extract a more detailed skeleton; it does not add a second LLM call |
 
 ### Fallback Behavior
 
-The following conditions trigger automatic fallback to LLM, with the reason logged. The overall pipeline is unaffected:
+The default `auto` provider follows this order:
 
-- Language not in the supported list
-- File has fewer than 100 lines
-- AST parse error
-- Extraction produces an empty skeleton
+1. Use a maintained `tags.scm` query when one exists for the language.
+2. Otherwise, or when that query produces no useful result, use `tree-sitter-language-pack.process()`.
+3. Fall back to `semantic.code_summary` only when neither extractor produces a useful skeleton.
 
-### File Structure
-
-```
-openviking/parse/parsers/code/ast/
-├── extractor.py      # Language detection and dispatch
-├── skeleton.py       # CodeSkeleton / FunctionSig / ClassSkeleton data structures
-└── languages/        # Per-language extractors
-```
+This routing applies to short and long code files alike. Set `code_skeleton_provider` only when a specific provider is needed for compatibility or evaluation.
 
 ## Three Context Types Extraction
 

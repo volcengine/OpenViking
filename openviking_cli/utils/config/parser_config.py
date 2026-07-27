@@ -236,6 +236,8 @@ class CodeConfig(CodeHostingConfig):
 
     Attributes:
         code_summary_mode: Summary generation mode ("llm" | "ast" | "ast_llm")
+        code_skeleton_provider: Skeleton extraction provider. "auto" routes through
+            maintained tags queries and then process().
         extract_functions: Whether to extract function definitions
         extract_classes: Whether to extract class definitions
         extract_imports: Whether to extract import statements
@@ -249,6 +251,7 @@ class CodeConfig(CodeHostingConfig):
     """
 
     code_summary_mode: str = "ast"  # "llm" | "ast" | "ast_llm"
+    code_skeleton_provider: str = "auto"
     extract_functions: bool = True
     extract_classes: bool = True
     extract_imports: bool = True
@@ -275,6 +278,21 @@ class CodeConfig(CodeHostingConfig):
             raise ValueError(
                 f"Invalid code_summary_mode '{self.code_summary_mode}'. "
                 "Must be 'llm', 'ast', or 'ast_llm'"
+            )
+
+        if self.code_skeleton_provider not in (
+            "auto",
+            "ov_ast",
+            "aider_repomap",
+            "repomap_query",
+            "query",
+            "aider_query",
+            "process",
+        ):
+            raise ValueError(
+                f"Invalid code_skeleton_provider '{self.code_skeleton_provider}'. "
+                "Must be 'auto', 'ov_ast', 'aider_repomap', 'repomap_query', "
+                "'query', 'aider_query', or 'process'"
             )
 
         if self.max_line_length <= 0:
@@ -629,7 +647,7 @@ class SemanticConfig:
     """Maximum characters of file content sent to LLM for summary generation."""
 
     max_skeleton_chars: int = 12000
-    """Maximum characters of AST skeleton used for embedding (~3000 tokens)."""
+    """Maximum characters of code skeleton used for embedding (~3000 tokens)."""
 
     max_overview_prompt_chars: int = 60000
     """Maximum characters allowed in the overview generation prompt.

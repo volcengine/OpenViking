@@ -795,7 +795,8 @@ Controls how code files are summarized via `code_summary_mode`. Both config form
 ```json
 {
   "code": {
-    "code_summary_mode": "ast"
+    "code_summary_mode": "ast",
+    "code_skeleton_provider": "auto"
   }
 }
 ```
@@ -804,7 +805,8 @@ Controls how code files are summarized via `code_summary_mode`. Both config form
 {
   "parsers": {
     "code": {
-      "code_summary_mode": "ast"
+      "code_summary_mode": "ast",
+      "code_skeleton_provider": "auto"
     }
   }
 }
@@ -814,13 +816,13 @@ Set `code_summary_mode` to one of:
 
 | Value | Description | Default |
 |-------|-------------|---------|
-| `"ast"` | Extract AST skeleton (class names, method signatures, first-line docstrings, imports) for files ≥100 lines, skip LLM calls. **Recommended for large-scale code indexing** | ✓ |
+| `"ast"` | Extract a compact code skeleton. **Recommended for large-scale code indexing** | ✓ |
 | `"llm"` | Always use LLM for summarization (higher cost) | |
-| `"ast_llm"` | Extract AST skeleton (with full docstrings) first, then pass it as context to LLM (highest quality, moderate cost) | |
+| `"ast_llm"` | Extract a more detailed skeleton without an additional LLM call | |
 
-AST extraction supports: Python, JavaScript/TypeScript, Rust, Go, Java, C/C++. Other languages, extraction failures, or empty skeletons automatically fall back to LLM.
+`code_skeleton_provider` defaults to `"auto"`: maintained tags queries run first, `tree-sitter-language-pack.process()` handles the remaining languages, and unusable results fall back to LLM. Historical values such as `"ov_ast"` remain accepted and map to automatic routing.
 
-See [Code Skeleton Extraction](../concepts/06-extraction.md#code-skeleton-extraction-ast-mode) for details.
+See [Code Skeleton Extraction](../concepts/06-extraction.md#code-skeleton-extraction) for details.
 
 #### Remote resource network guard
 

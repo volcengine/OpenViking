@@ -334,6 +334,7 @@ class TestGenerateTextSummaryOutputLanguage:
     def _create_mock_config(self, mock_vlm: LanguageAwareMockVLM) -> MagicMock:
         mock_config = MagicMock()
         mock_config.vlm = mock_vlm
+        mock_config.output_language_override = ""
         mock_config.language_fallback = "en"
         mock_config.semantic.max_file_content_chars = 10000
         mock_config.code.code_summary_mode = "llm"
@@ -499,7 +500,13 @@ class TestOutputLanguageOverride:
 
     def test_timezone_hint_used_when_locale_hint_absent(self):
         config = self._make_config(override="")
-        with patch.dict(os.environ, {"TZ": "Asia/Tokyo"}, clear=True):
+        with (
+            patch.dict(os.environ, {"TZ": "Asia/Tokyo"}, clear=True),
+            patch(
+                "openviking.session.memory.utils.language.locale.getlocale",
+                return_value=("C", "UTF-8"),
+            ),
+        ):
             result = resolve_output_language("12345 ---", config=config)
         assert result == "ja"
 
@@ -546,13 +553,25 @@ class TestOutputLanguageOverride:
 
     def test_english_timezone_hint_used_when_locale_hint_absent(self):
         config = self._make_config(override="")
-        with patch.dict(os.environ, {"TZ": "America/New_York"}, clear=True):
+        with (
+            patch.dict(os.environ, {"TZ": "America/New_York"}, clear=True),
+            patch(
+                "openviking.session.memory.utils.language.locale.getlocale",
+                return_value=("C", "UTF-8"),
+            ),
+        ):
             result = resolve_output_language("12345 ---", config=config)
         assert result == "en"
 
     def test_arabic_timezone_hint_used_when_locale_hint_absent(self):
         config = self._make_config(override="")
-        with patch.dict(os.environ, {"TZ": "Asia/Riyadh"}, clear=True):
+        with (
+            patch.dict(os.environ, {"TZ": "Asia/Riyadh"}, clear=True),
+            patch(
+                "openviking.session.memory.utils.language.locale.getlocale",
+                return_value=("C", "UTF-8"),
+            ),
+        ):
             result = resolve_output_language("12345 ---", config=config)
         assert result == "ar"
 
