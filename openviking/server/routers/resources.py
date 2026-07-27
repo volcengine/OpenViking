@@ -87,6 +87,8 @@ class AddResourceRequest(BaseModel):
     telemetry: TelemetryRequest = False
     watch_interval: float = 0
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
+    tags: Optional[list[str]] = None
+    tag_mode: str = "replace"
 
     @model_validator(mode="after")
     def check_path_or_temp_file_id(self):
@@ -156,6 +158,8 @@ async def temp_upload(
             to=signed.to,
             reason=signed.reason,
             processing_mode=signed.processing_mode,
+            tags=signed.tags,
+            tag_mode=signed.tag_mode,
         )
 
     try:
@@ -237,6 +241,8 @@ async def add_resource(
                 instruction=request.instruction,
                 wait=request.wait,
                 timeout=request.timeout,
+                tags=request.tags,
+                tag_mode=request.tag_mode,
                 allow_local_path_resolution=allow_local_path_resolution,
                 enforce_public_remote_targets=True,
                 args=request.args,

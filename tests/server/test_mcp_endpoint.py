@@ -643,6 +643,26 @@ async def test_add_resource_remote_parent_is_forwarded(service, monkeypatch):
     assert captured["to"] is None
 
 
+async def test_add_resource_remote_tags_are_forwarded(service, monkeypatch):
+    captured = {}
+
+    async def fake_add_resource(*, path, ctx, **kwargs):
+        captured.update(kwargs)
+        return {"root_uri": "viking://resources/tagged"}
+
+    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
+
+    result = await add_resource(
+        path="https://example.com/tagged.md",
+        tags=["team=search"],
+        tag_mode="append",
+    )
+
+    assert "Resource added" in result
+    assert captured["tags"] == ["team=search"]
+    assert captured["tag_mode"] == "append"
+
+
 async def test_add_resource_temp_file_id_branch_resolves_and_ingests(
     service, upload_temp_dir, monkeypatch
 ):

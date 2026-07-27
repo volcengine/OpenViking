@@ -146,6 +146,36 @@ async def test_add_resource_forwards_processing_mode_to_service(monkeypatch):
     assert seen["processing_mode"] == "vectors_only"
 
 
+async def test_add_resource_forwards_tags_to_service(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    seen = {}
+
+    async def fake_add_resource(**kwargs):
+        seen.update(kwargs)
+        return {
+            "status": "success",
+            "root_uri": "viking://resources/demo",
+        }
+
+    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "path": "https://example.com/demo.md",
+            "tags": ["team=search"],
+            "tag_mode": "append",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert seen["tags"] == ["team=search"]
+    assert seen["tag_mode"] == "append"
+
+
 async def test_add_resource_preserves_create_parent_field_presence(
     client: httpx.AsyncClient,
     service,

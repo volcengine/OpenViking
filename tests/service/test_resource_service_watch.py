@@ -13,6 +13,8 @@ from openviking.resource.watch_manager import WatchManager
 from openviking.server.identity import RequestContext, Role
 from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
+from openviking.storage.content_write import ContentWriteCoordinator
+from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 from openviking_cli.exceptions import ConflictError, InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -229,6 +231,176 @@ class TestWatchTaskCreation:
         assert task.processing_mode == "vectors_only"
         assert task.processor_kwargs.get("custom_option") == "x"
         assert "processing_mode" not in task.processor_kwargs
+
+    @pytest.mark.asyncio
+    async def test_add_resource_applies_tags_without_passing_them_to_parser(
+        self,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        calls = []
+
+        async def fake_set_tags(self, **kwargs):
+            calls.append(kwargs)
+            return {"tags_updated": True, "tags": kwargs["tags"], "mode": kwargs["mode"]}
+
+        class FakeQueueManager:
+            async def wait_complete(self, timeout=None):
+                return {}
+
+        monkeypatch.setattr(ContentWriteCoordinator, "set_tags", fake_set_tags)
+        monkeypatch.setattr(resource_service_module, "get_queue_manager", lambda: FakeQueueManager())
+
+        result = await resource_service.add_resource(
+            path="/test/path",
+            ctx=request_context,
+            to="viking://resources/tagged_resource",
+            wait=True,
+            tags=["team=search"],
+            tag_mode="append",
+        )
+
+        assert result["tags_result"] == {
+            "tags_updated": True,
+            "tags": ["team=search"],
+            "mode": "append",
+        }
+        assert calls == [
+            {
+                "uri": "viking://resources/tagged_resource",
+                "tags": ["team=search"],
+                "mode": "append",
+                "recursive": True,
+                "ctx": request_context,
+            }
+        ]
+        assert "tags" not in resource_service._resource_processor.calls[-1]
+        assert "tag_mode" not in resource_service._resource_processor.calls[-1]
+
+    @pytest.mark.asyncio
+    async def test_add_resource_rejects_invalid_tag_mode_before_processing(
+        self,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+    ):
+        with pytest.raises(InvalidArgumentError, match="unsupported tag mode"):
+            await resource_service.add_resource(
+                path="/test/path",
+                ctx=request_context,
+                tags=["team=search"],
+                tag_mode="create",
+            )
+
+        assert resource_service._resource_processor.calls == []
+
+    @pytest.mark.asyncio
+    async def test_watch_task_persists_tag_policy_for_refresh(
+        self,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        to_uri = "viking://resources/watch_tag_policy"
+
+        async def fake_set_tags(self, **kwargs):
+            return {"tags_updated": True}
+
+        class FakeQueueManager:
+            async def wait_complete(self, timeout=None):
+                return {}
+
+        monkeypatch.setattr(ContentWriteCoordinator, "set_tags", fake_set_tags)
+        monkeypatch.setattr(resource_service_module, "get_queue_manager", lambda: FakeQueueManager())
+
+        await resource_service.add_resource(
+            path="/test/path",
+            ctx=request_context,
+            to=to_uri,
+            wait=True,
+            watch_interval=30.0,
+            tags=["team=search"],
+            tag_mode="replace",
+        )
+
+        task = await get_task_by_uri(resource_service, to_uri, request_context)
+        assert task is not None
+        assert task.processor_kwargs["tags"] == ["team=search"]
+        assert task.processor_kwargs["tag_mode"] == "replace"
+
+    @pytest.mark.asyncio
+    async def test_execute_prepared_add_resource_job_applies_tags(
+        self,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        tag_calls = []
+
+        async def fake_set_tags(self, **kwargs):
+            tag_calls.append(kwargs)
+            return {"tags_updated": True, "mode": kwargs["mode"]}
+
+        async def fake_finish_prepared_resource(*_args, **_kwargs):
+            return {"root_uri": "viking://resources/queued"}
+
+        class FakeRequestWaitTracker:
+            def register_request(self, *_args, **_kwargs):
+                pass
+
+            async def wait_for_request(self, *_args, **_kwargs):
+                pass
+
+            def build_queue_status(self, *_args, **_kwargs):
+                return {}
+
+            def cleanup(self, *_args, **_kwargs):
+                pass
+
+        monkeypatch.setattr(ContentWriteCoordinator, "set_tags", fake_set_tags)
+        monkeypatch.setattr(
+            resource_service_module,
+            "get_request_wait_tracker",
+            lambda: FakeRequestWaitTracker(),
+        )
+        monkeypatch.setattr(
+            resource_service_module,
+            "unregister_wait_telemetry",
+            lambda *_args, **_kwargs: None,
+        )
+        resource_service._link_resource_reason_memory = AsyncMock()
+        resource_service._resource_processor.finish_prepared_resource = AsyncMock(
+            side_effect=fake_finish_prepared_resource
+        )
+
+        msg = AddResourceMsg(
+            task_id="task-1",
+            root_uri="viking://resources/queued",
+            account_id=request_context.account_id,
+            user_id=request_context.user.user_id,
+            role=str(request_context.role),
+            prepared={"path": "/test/path"},
+            tags=["team=search"],
+            tag_mode="append",
+        )
+
+        result = await resource_service.execute_add_resource_job(
+            msg,
+            ctx=request_context,
+            resource_lock=None,
+            stage_callback=lambda _stage: None,
+        )
+
+        assert result["tags_result"] == {"tags_updated": True, "mode": "append"}
+        assert tag_calls == [
+            {
+                "uri": "viking://resources/queued",
+                "tags": ["team=search"],
+                "mode": "append",
+                "recursive": True,
+                "ctx": request_context,
+            }
+        ]
 
     @pytest.mark.asyncio
     async def test_create_watch_task_with_default_interval(

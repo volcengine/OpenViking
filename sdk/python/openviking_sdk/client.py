@@ -640,6 +640,8 @@ class AsyncHTTPClient:
         preserve_structure: Optional[bool] = None,
         watch_interval: float = 0,
         args: Optional[Dict[str, Any]] = None,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
         telemetry: Any = False,
         processing_mode: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -664,6 +666,9 @@ class AsyncHTTPClient:
         }
         if processing_mode is not None:
             request_data["processing_mode"] = processing_mode
+        if tags is not None:
+            request_data["tags"] = tags
+            request_data["tag_mode"] = tag_mode
         if preserve_structure is not None:
             request_data["preserve_structure"] = preserve_structure
 
@@ -1840,6 +1845,8 @@ class SyncHTTPClient:
         preserve_structure: Optional[bool] = None,
         watch_interval: float = 0,
         args: Optional[Dict[str, Any]] = None,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
         telemetry: Any = False,
         processing_mode: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -1861,6 +1868,8 @@ class SyncHTTPClient:
                 watch_interval=watch_interval,
                 processing_mode=processing_mode,
                 args=args,
+                tags=tags,
+                tag_mode=tag_mode,
                 telemetry=telemetry,
             )
         )

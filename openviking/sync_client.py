@@ -236,6 +236,8 @@ class SyncOpenViking:
         build_index: bool = True,
         summarize: bool = False,
         args: Optional[Dict[str, Any]] = None,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
         telemetry: TelemetryRequest = False,
         processing_mode: str = "semantic_and_vectors",
         **kwargs,
@@ -270,6 +272,8 @@ class SyncOpenViking:
                 summarize=summarize,
                 processing_mode=processing_mode,
                 args=args,
+                tags=tags,
+                tag_mode=tag_mode,
                 telemetry=telemetry,
                 **kwargs,
             )
