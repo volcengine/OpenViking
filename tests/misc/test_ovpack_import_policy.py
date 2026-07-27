@@ -117,6 +117,37 @@ class MissingSidecarExportVikingFS(FakeExportVikingFS):
         self.text_files = {}
 
 
+class FileRelationSidecarExportVikingFS(FakeExportVikingFS):
+    def __init__(self) -> None:
+        super().__init__()
+        self.binary_files["viking://resources/demo/source.md.relations.json"] = b"[]"
+
+    async def tree(
+        self,
+        uri: str,
+        show_all_hidden: bool = False,
+        node_limit=None,
+        level_limit=None,
+        ctx=None,
+    ):
+        entries = await super().tree(
+            uri,
+            show_all_hidden=show_all_hidden,
+            node_limit=node_limit,
+            level_limit=level_limit,
+            ctx=ctx,
+        )
+        return [
+            *entries,
+            {
+                "rel_path": "source.md.relations.json",
+                "uri": "viking://resources/demo/source.md.relations.json",
+                "isDir": False,
+                "size": 2,
+            },
+        ]
+
+
 class ReservedPathExportVikingFS(FakeExportVikingFS):
     def __init__(self) -> None:
         super().__init__()
@@ -585,6 +616,36 @@ async def test_export_ovpack_skips_missing_semantic_sidecars(
     assert "demo/files/notes.txt" in names
     assert "demo/files/.overview.md" not in names
     assert ".overview.md" not in manifest_paths
+
+
+@pytest.mark.asyncio
+async def test_ovpack_excludes_and_rejects_file_relation_sidecars(
+    temp_ovpack_path: Path,
+    request_ctx: RequestContext,
+):
+    await export_ovpack(
+        FileRelationSidecarExportVikingFS(),
+        "viking://resources/demo",
+        str(temp_ovpack_path),
+        ctx=request_ctx,
+    )
+
+    with zipfile.ZipFile(temp_ovpack_path, "r") as zf:
+        names = set(zf.namelist())
+        manifest = json.loads(zf.read("demo/_ovpack/manifest.json").decode("utf-8"))
+
+    assert "demo/files/source.md.relations.json" not in names
+    assert "source.md.relations.json" not in {entry["path"] for entry in manifest["entries"]}
+
+    _write_ovpack_with_manifest(
+        temp_ovpack_path,
+        "demo",
+        {"source.md.relations.json": "[]"},
+    )
+    with pytest.raises(InvalidArgumentError, match="cannot import internal ovpack file"):
+        await import_ovpack(
+            FakeVikingFS(), str(temp_ovpack_path), "viking://resources", request_ctx
+        )
 
 
 @pytest.mark.asyncio

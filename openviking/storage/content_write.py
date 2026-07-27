@@ -17,6 +17,7 @@ from openviking.session.memory.utils.resource_refs import (
     sync_memory_resource_refs,
 )
 from openviking.storage.errors import ResourceBusyError
+from openviking.storage.internal_names import is_relation_sidecar_name
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.transaction import get_lock_manager
@@ -39,7 +40,7 @@ logger = get_logger(__name__)
 if TYPE_CHECKING:
     from openviking.storage.transaction.lock_handle import LockHandle
 
-_DERIVED_FILENAMES = frozenset({".abstract.md", ".overview.md", ".relations.json"})
+_DERIVED_FILENAMES = frozenset({".abstract.md", ".overview.md"})
 _CREATE_ALLOWED_EXTENSIONS = frozenset(
     {".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".py", ".js", ".ts"}
 )
@@ -345,7 +346,7 @@ class ContentWriteCoordinator:
 
     def _validate_target_uri(self, uri: str) -> None:
         name = uri.rstrip("/").split("/")[-1]
-        if name in _DERIVED_FILENAMES:
+        if name in _DERIVED_FILENAMES or is_relation_sidecar_name(name):
             raise InvalidArgumentError(f"cannot write derived semantic file directly: {uri}")
         if is_watch_task_control_uri(uri):
             raise InvalidArgumentError(f"cannot write watch task control file directly: {uri}")

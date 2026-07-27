@@ -8,6 +8,7 @@ from typing import Any
 
 from openviking.core.namespace import uri_depth, uri_parts
 from openviking.resource.watch_storage import is_watch_task_control_uri
+from openviking.storage.internal_names import is_relation_sidecar_name
 from openviking.storage.ovpack.format import (
     OVPACK_BACKUP_TYPE,
     join_uri,
@@ -21,11 +22,10 @@ from openviking_cli.utils.uri import VikingURI
 PUBLIC_SCOPES = ("resources", "user")
 IMPORTABLE_SCOPES = frozenset(PUBLIC_SCOPES)
 STRUCTURED_IMPORT_SCOPES = frozenset({"user"})
-EXCLUDED_FILENAMES = frozenset({".relations.json"})
 
 
 def is_excluded_rel_path(rel_path: str) -> bool:
-    return leaf_name(rel_path) in EXCLUDED_FILENAMES
+    return is_relation_sidecar_name(leaf_name(rel_path))
 
 
 def validate_ovpack_user_rel_path(rel_path: str, *, operation: str) -> None:
@@ -60,7 +60,7 @@ def validate_import_target_uri(uri: str) -> None:
     validate_public_scope(uri, operation="import")
     validate_ovpack_user_rel_path(_scope_relative_path(uri), operation="import")
     name = leaf_name(uri)
-    if name in EXCLUDED_FILENAMES:
+    if is_relation_sidecar_name(name):
         raise InvalidArgumentError(f"cannot import internal ovpack file: {uri}")
     if is_watch_task_control_uri(uri):
         raise InvalidArgumentError(f"cannot import watch task control file: {uri}")
@@ -70,7 +70,7 @@ def validate_export_source_uri(uri: str) -> None:
     validate_public_scope(uri, operation="export")
     validate_ovpack_user_rel_path(_scope_relative_path(uri), operation="export")
     name = leaf_name(uri)
-    if name in EXCLUDED_FILENAMES:
+    if is_relation_sidecar_name(name):
         raise InvalidArgumentError(f"cannot export internal ovpack file: {uri}")
     if is_watch_task_control_uri(uri):
         raise InvalidArgumentError(f"cannot export watch task control file: {uri}")

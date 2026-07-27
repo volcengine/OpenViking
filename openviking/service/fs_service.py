@@ -19,6 +19,7 @@ from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
 from openviking.session.memory.memory_updater import MemoryUpdater
 from openviking.storage.content_write import ContentWriteCoordinator
+from openviking.storage.internal_names import is_relation_sidecar_name
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.viking_fs import VikingFS
@@ -26,7 +27,11 @@ from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import build_queue_status_payload
 from openviking.utils.embedding_utils import vectorize_directory_meta
-from openviking_cli.exceptions import DeadlineExceededError, NotInitializedError
+from openviking_cli.exceptions import (
+    DeadlineExceededError,
+    InvalidArgumentError,
+    NotInitializedError,
+)
 from openviking_cli.utils import VikingURI, get_logger
 
 logger = get_logger(__name__)
@@ -75,6 +80,12 @@ class FSService:
         if not self._viking_fs:
             raise NotInitializedError("VikingFS")
         return self._viking_fs
+
+    @staticmethod
+    def _reject_relation_sidecar_uri(uri: str, *, operation: str) -> None:
+        name = uri.rstrip("/").rsplit("/", 1)[-1]
+        if is_relation_sidecar_name(name):
+            raise InvalidArgumentError(f"cannot {operation} relation sidecar directly: {uri}")
 
     def _get_watch_manager(self) -> Optional["WatchManager"]:
         if not self._watch_scheduler:
@@ -165,6 +176,7 @@ class FSService:
     ) -> None:
         """Create directory."""
         uri = validate_viking_uri(uri)
+        self._reject_relation_sidecar_uri(uri, operation="create")
         viking_fs = self._ensure_initialized()
         await viking_fs.mkdir(uri, ctx=ctx)
         abstract = self._normalize_directory_description(description)
@@ -205,6 +217,7 @@ class FSService:
     ) -> Optional[Dict[str, Any]]:
         """Remove resource."""
         uri = validate_viking_uri(uri)
+        self._reject_relation_sidecar_uri(uri, operation="remove")
         viking_fs = self._ensure_initialized()
         cleanup_result: Optional[Dict[str, Any]] = None
         context_type = context_type_for_uri(uri)
@@ -298,7 +311,7 @@ class FSService:
         if context_type != "memory":
             return None
         leaf = uri.rstrip("/").rsplit("/", 1)[-1]
-        if leaf in {".abstract.md", ".overview.md", ".relations.json"}:
+        if leaf in {".abstract.md", ".overview.md"} or is_relation_sidecar_name(leaf):
             return None
         parent = VikingURI(uri).parent
         if parent is None:
@@ -393,6 +406,8 @@ class FSService:
         """Move resource."""
         from_uri = validate_viking_uri(from_uri, field_name="from_uri")
         to_uri = validate_viking_uri(to_uri, field_name="to_uri")
+        self._reject_relation_sidecar_uri(from_uri, operation="move")
+        self._reject_relation_sidecar_uri(to_uri, operation="move")
         viking_fs = self._ensure_initialized()
         watch_manager = self._get_watch_manager()
         if not watch_manager or context_type_for_uri(from_uri) != "resource":

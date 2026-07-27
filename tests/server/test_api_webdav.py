@@ -6,6 +6,7 @@
 import xml.etree.ElementTree as ET
 
 import httpx
+import pytest
 
 from openviking.server.routers.webdav import _ensure_exposed_path, _exposed_child_entries
 from openviking_cli.exceptions import NotFoundError
@@ -68,6 +69,18 @@ async def test_webdav_rejects_direct_access_to_reserved_semantic_files(client_wi
     assert resp.status_code == 404
 
 
+async def test_webdav_rejects_direct_write_to_file_relation_sidecar(client_with_resource):
+    client, uri = client_with_resource
+    webdav_path = _webdav_path_from_uri(uri)
+
+    resp = await client.put(
+        f"/webdav/resources/{webdav_path}/source.md.relations.json",
+        content=b"[]",
+    )
+
+    assert resp.status_code == 404
+
+
 async def test_webdav_rejects_direct_access_to_multiwrite_internal_files(client_with_resource):
     client, uri = client_with_resource
     webdav_path = _webdav_path_from_uri(uri)
@@ -86,12 +99,19 @@ def test_webdav_unit_rejects_direct_access_to_multiwrite_internal_files():
         raise AssertionError(f"{hidden_name} should be rejected")
 
 
+def test_webdav_unit_rejects_file_relation_sidecars():
+    for hidden_name in (".relations.json", "source.md.relations.json"):
+        with pytest.raises(NotFoundError):
+            _ensure_exposed_path(f"workspace/{hidden_name}")
+
+
 def test_webdav_unit_filters_multiwrite_internal_files_from_children():
     entries = [
         {"name": ".obsidian"},
         {"name": ".path.ovlock"},
         {"name": ".sync_log.json"},
         {"name": ".redirect.json"},
+        {"name": "notes.md.relations.json"},
         {"name": "notes.md"},
     ]
     filtered = _exposed_child_entries(entries)

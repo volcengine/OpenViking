@@ -157,6 +157,34 @@ async def test_glob_trusts_backend_glob_matches(monkeypatch, fs):
 
 
 @pytest.mark.asyncio
+async def test_glob_filters_relation_sidecar_matches(monkeypatch, fs):
+    async def fake_glob_directory(path, pattern, **kwargs):
+        return {
+            "entries": [
+                {
+                    "path": "/local/test_account/resources/source.md",
+                    "rel_path": "source.md",
+                    "name": "source.md",
+                    "is_dir": False,
+                },
+                {
+                    "path": "/local/test_account/resources/source.md.relations.json",
+                    "rel_path": "source.md.relations.json",
+                    "name": "source.md.relations.json",
+                    "is_dir": False,
+                },
+            ],
+            "next_token": None,
+        }
+
+    monkeypatch.setattr(fs._async_agfs, "glob_directory", fake_glob_directory)
+
+    result = await fs.glob("**/*", uri="viking://resources", ctx=_default_ctx())
+
+    assert result == {"matches": ["viking://resources/source.md"], "count": 1}
+
+
+@pytest.mark.asyncio
 async def test_glob_rejects_empty_pattern(fs):
     with pytest.raises(InvalidArgumentError):
         await fs.glob("", uri="viking://resources", ctx=_default_ctx())

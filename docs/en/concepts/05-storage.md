@@ -62,7 +62,7 @@ viking://user/skills          →  /local/{account_id}/user/{user_id}/skills
 
 ### Relation Management
 
-VikingFS manages resource relations through `.relations.json`:
+VikingFS manages resource relations through a `.relations.json` sidecar next to a file or directory source:
 
 ```python
 # Create relation

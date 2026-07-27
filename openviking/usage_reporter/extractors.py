@@ -9,11 +9,12 @@ from datetime import datetime
 from typing import Any, Iterable, Protocol
 
 from openviking.message import Message, ToolPart
+from openviking.storage.internal_names import is_relation_sidecar_name
 from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
 
 from .models import UsageContext, UsageEvent, utc_now_iso
 
-_EXPERIENCE_SIDECAR_FILENAMES = {".abstract.md", ".overview.md", ".relations.json"}
+_EXPERIENCE_SIDECAR_FILENAMES = {".abstract.md", ".overview.md"}
 
 
 class UsageExtractor(Protocol):
@@ -47,7 +48,9 @@ def _is_experience_uri(uri: str, context: UsageContext) -> bool:
     segments = relative.split("/")
     if not relative or any(not segment or segment in {".", ".."} for segment in segments):
         return False
-    return segments[-1] not in _EXPERIENCE_SIDECAR_FILENAMES
+    return segments[-1] not in _EXPERIENCE_SIDECAR_FILENAMES and not is_relation_sidecar_name(
+        segments[-1]
+    )
 
 
 def _event_time(message: Message) -> str:
