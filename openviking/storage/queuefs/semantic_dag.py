@@ -207,6 +207,11 @@ class SemanticDagExecutor:
         self._pending_vectorize_tasks: List[VectorizeTask] = []
         self._pending_vectorize_work = 0
         self._vectorize_done: Optional[asyncio.Event] = None
+        self._vectorize_failure: Optional[Exception] = None
+        self._vectorize_dispatch_complete = False
+        self._embedding_tracker_done: Optional[asyncio.Event] = None
+        self._vectorize_finalized = False
+        self._vectorize_finalize_lock = asyncio.Lock()
         self._vectorize_lock = asyncio.Lock()
         self._file_change_status: Dict[str, bool] = {}
         self._dir_change_status: Dict[str, bool] = {}
@@ -227,15 +232,6 @@ class SemanticDagExecutor:
                 raise self._failure
 
             # Release owned semantic locks after downstream vectorization finishes.
-            async def wrapped_on_complete() -> None:
-                try:
-                    if self._telemetry_id and self._semantic_msg_id:
-                        get_request_wait_tracker().mark_semantic_done(
-                            self._telemetry_id, self._semantic_msg_id
-                        )
-                finally:
-                    await self._lock.close()
-
             async with self._vectorize_lock:
                 task_count = self._vectorize_task_count
                 tasks = list(self._pending_vectorize_tasks)
@@ -243,19 +239,33 @@ class SemanticDagExecutor:
             if task_count > 0:
                 from .embedding_tracker import EmbeddingTaskTracker
 
+                embedding_tracker_done = asyncio.Event()
+                self._embedding_tracker_done = embedding_tracker_done
                 tracker = EmbeddingTaskTracker.get_instance()
                 await tracker.register(
                     semantic_msg_id=self._semantic_msg_id,
                     total_count=task_count,
-                    on_complete=wrapped_on_complete,
+                    on_complete=self._on_embedding_tasks_complete,
                     metadata={"uri": root_uri},
                 )
 
                 await self._dispatch_vectorize_tasks(tasks)
+                self._vectorize_dispatch_complete = True
+
+                if self._vectorize_failure is not None:
+                    # A retry reuses the SemanticMsg id. Wait until every task
+                    # registered by this attempt has either enqueued or
+                    # decremented its slot so a retry cannot overwrite an
+                    # active tracker record and receive stale decrements.
+                    await embedding_tracker_done.wait()
+                if embedding_tracker_done.is_set():
+                    await self._finalize_vectorization()
+                if self._vectorize_failure is not None:
+                    raise self._vectorize_failure
             else:
-                # No vectorize tasks — release lock immediately (via wrapped callback)
+                # No vectorize tasks — mark semantic work done and release immediately.
                 try:
-                    await wrapped_on_complete()
+                    await self._finalize_vectorization()
                 except Exception as e:
                     logger.error(f"Error in on_complete callback: {e}", exc_info=True)
         except BaseException:
@@ -391,10 +401,29 @@ class SemanticDagExecutor:
                 await self._run_vectorize_task(task)
         except Exception as exc:
             logger.error("Vectorization dispatch task failed: %s", exc, exc_info=True)
+            if self._vectorize_failure is None:
+                self._vectorize_failure = exc
         finally:
             self._pending_vectorize_work = max(0, self._pending_vectorize_work - 1)
             if self._pending_vectorize_work == 0 and self._vectorize_done:
                 self._vectorize_done.set()
+
+    async def _on_embedding_tasks_complete(self) -> None:
+        if self._embedding_tracker_done is not None:
+            self._embedding_tracker_done.set()
+        if self._vectorize_dispatch_complete:
+            await self._finalize_vectorization()
+
+    async def _finalize_vectorization(self) -> None:
+        async with self._vectorize_finalize_lock:
+            if self._vectorize_finalized:
+                return
+            if self._vectorize_failure is None and self._telemetry_id and self._semantic_msg_id:
+                get_request_wait_tracker().mark_semantic_done(
+                    self._telemetry_id, self._semantic_msg_id
+                )
+            await self._lock.close()
+            self._vectorize_finalized = True
 
     async def _run_vectorize_task(self, task: VectorizeTask) -> None:
         if task.task_type == "file":
