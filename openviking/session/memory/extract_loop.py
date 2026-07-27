@@ -777,9 +777,11 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
         # Gather a flat list of item dicts.
         if isinstance(raw, dict):
-            # If it already carries an expected top-level field, the normal path
-            # should have handled it; nothing to recover here.
-            if any(k in raw for k in (self._expected_fields or [])):
+            # If it already carries an expected top-level field *as a list* (the
+            # conforming per-type operations shape), the normal path handled it.
+            # Only a list value counts — a stray {"entities": "some string"} must
+            # NOT short-circuit recovery of a sibling envelope (e.g. "memories").
+            if any(isinstance(raw.get(k), list) for k in (self._expected_fields or [])):
                 return None
             # Otherwise look for the single list-of-dicts field (e.g. "memories").
             item_lists = [
