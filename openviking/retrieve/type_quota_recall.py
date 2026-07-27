@@ -15,6 +15,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Mapping
 
 from openviking.core.namespace import canonical_user_root
+from openviking.core.peer_id import peer_id_aliases
 from openviking.server.identity import RequestContext
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
@@ -123,7 +124,10 @@ def memory_target_roots(ctx: RequestContext) -> list[str]:
     user_root = canonical_user_root(ctx)
     targets = [f"{user_root}/memories"]
     if ctx.actor_peer_id:
-        targets.append(f"{user_root}/peers/{ctx.actor_peer_id}/memories")
+        targets.extend(
+            f"{user_root}/peers/{peer_id}/memories"
+            for peer_id in peer_id_aliases(ctx.actor_peer_id)
+        )
     return targets
 
 
@@ -142,7 +146,7 @@ def _origin_for_uri(uri: str, actor_peer_id: str | None, user_root: str) -> str:
     if _is_under(uri, peers_root):
         suffix = uri[len(peers_root) :].strip("/")
         peer_id = suffix.split("/", 1)[0] if suffix else ""
-        if actor_peer_id and peer_id == actor_peer_id:
+        if peer_id in peer_id_aliases(actor_peer_id):
             return "actor_peer"
         return "other_peer"
     return "self"

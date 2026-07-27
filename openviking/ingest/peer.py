@@ -36,6 +36,11 @@ def _sanitize_component(value: str) -> str:
     return cleaned
 
 
+def _encoded_external_peer(value: str) -> Optional[str]:
+    encoded = base64.urlsafe_b64encode(value.encode("utf-8")).decode("ascii").rstrip("=")
+    return safe_peer_id(f"ext-{encoded}")
+
+
 def safe_external_peer(raw: Optional[str]) -> Optional[str]:
     """Return a valid peer_id for an arbitrary external identifier (readable if ASCII)."""
     if not raw:
@@ -43,14 +48,15 @@ def safe_external_peer(raw: Optional[str]) -> Optional[str]:
     text = str(raw).strip()
     if not text:
         return None
+    if not text.isascii():
+        return _encoded_external_peer(text)
     sanitized = _sanitize_component(text)
     if sanitized:
         pid = safe_peer_id(sanitized)
         if pid:
             return pid
-    # Non-ASCII / unsanitizable -> stable, valid, unique fallback.
-    encoded = base64.urlsafe_b64encode(text.encode("utf-8")).decode("ascii").rstrip("=")
-    return safe_peer_id(f"ext-{encoded}")
+    # Unsanitizable ASCII -> stable, valid, unique fallback.
+    return _encoded_external_peer(text)
 
 
 def assistant_peer_id(

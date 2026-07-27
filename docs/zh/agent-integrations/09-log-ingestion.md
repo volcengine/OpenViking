@@ -94,7 +94,11 @@ openviking-server ingest status
 - assistant 消息：`{harness}/{模型名}`（provider 有意义时为 `{harness}/{provider}/{模型名}`），例如 `claude_code/claude-opus-4-8`、`opencode/bytedance_ark/doubao-...`；
 - user 消息：单用户开发型 harness（claude_code / codex / opencode）取会话 cwd 所在仓库的 git 身份（`user.email` / `user.name`），无 git 仓库时回退为配置的 `ingest.user`；群聊 harness（hermes / openclaw）取日志里的原始用户名（由 `user_field` 指定）。
 
-非 ASCII 标识（如中文用户名）会回退为合法的 `ext-<base64>` 形式。
+任何包含非 ASCII 字符的标识（例如中文或混合文字用户名）都会将完整标识编码为无碰撞的
+`ext-<base64>` 形式。对于旧版本已经导入的数据，检索和记忆抽取读取时还会把旧的、
+有损的 ASCII peer id 作为只读兼容别名；所有新写入只使用规范的 `ext-` id。由于两个
+旧的混合文字名称可能已经共用同一个有损别名，升级过程不会自动重命名或删除既有 peer
+目录。
 
 ## 工作原理
 

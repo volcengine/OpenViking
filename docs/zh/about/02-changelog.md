@@ -3,6 +3,14 @@
 OpenViking 的所有重要变更都将记录在此文件中。
 此更新日志从 [GitHub Releases](https://github.com/volcengine/OpenViking/releases) 自动生成。
 
+## 未发布
+
+- **Session policy 兼容性**：字符串 `"false"` 现在会正确关闭对应的记忆抽取开关。
+  现有 boolean-like 值暂时保持兼容并产生弃用警告；新配置应使用 JSON 布尔值。
+- **外部 peer identity 迁移**：日志导入中的混合文字标识改用无损的
+  `ext-<base64>` id。读取时保留到旧有损 peer id 的非破坏性别名，使既有持久记忆继续
+  可见；所有新写入使用规范 id。
+
 ## v0.4.9 (2026-07-10)
 
 ### 重点更新

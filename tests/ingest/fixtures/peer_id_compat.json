@@ -1,0 +1,27 @@
+[
+  {
+    "raw": "alice",
+    "canonical": "alice",
+    "legacy_alias": null
+  },
+  {
+    "raw": "张三 Alice",
+    "canonical": "ext-5byg5LiJIEFsaWNl",
+    "legacy_alias": "Alice"
+  },
+  {
+    "raw": "李四 Alice",
+    "canonical": "ext-5p2O5ZubIEFsaWNl",
+    "legacy_alias": "Alice"
+  },
+  {
+    "raw": "José",
+    "canonical": "ext-Sm9zw6k",
+    "legacy_alias": "Jos"
+  },
+  {
+    "raw": "杨冠姝",
+    "canonical": "ext-5p2o5Yag5aed",
+    "legacy_alias": null
+  }
+]

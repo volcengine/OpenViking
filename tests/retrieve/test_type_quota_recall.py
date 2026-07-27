@@ -4,7 +4,7 @@
 import asyncio
 from types import SimpleNamespace
 
-from openviking.retrieve.type_quota_recall import search_type_quota_recall
+from openviking.retrieve.type_quota_recall import memory_target_roots, search_type_quota_recall
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -12,6 +12,20 @@ from openviking_cli.session.user_id import UserIdentifier
 class _FakeFindResult:
     def __init__(self, memories=None):
         self.memories = memories or []
+
+
+def test_memory_target_roots_include_legacy_external_peer_alias():
+    ctx = RequestContext(
+        user=UserIdentifier.the_default_user("test_user"),
+        role=Role.USER,
+        actor_peer_id="ext-5byg5LiJIEFsaWNl",
+    )
+
+    assert memory_target_roots(ctx) == [
+        "viking://user/test_user/memories",
+        "viking://user/test_user/peers/ext-5byg5LiJIEFsaWNl/memories",
+        "viking://user/test_user/peers/Alice/memories",
+    ]
 
 
 async def test_independent_type_searches_start_concurrently():

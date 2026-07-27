@@ -2,6 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0
 """peer_id resolution: assistant model peers, human/git peers, group usernames."""
 
+import json
+from pathlib import Path
+
+from openviking.core.peer_id import legacy_external_peer_id_alias, peer_id_aliases
 from openviking.ingest.peer import (
     assistant_peer_id,
     resolve_git_human_peer,
@@ -25,6 +29,29 @@ def test_external_peer_readable_and_sanitized():
 def test_external_peer_non_ascii_falls_back_to_ext():
     pid = safe_external_peer("杨冠姝")
     assert pid is not None and pid.startswith("ext-")
+
+
+def test_external_peer_mixed_unicode_encodes_full_value_without_collisions():
+    first = safe_external_peer("张三 Alice")
+    second = safe_external_peer("李四 Alice")
+
+    assert first != second
+    assert first is not None and first.startswith("ext-")
+    assert second is not None and second.startswith("ext-")
+
+
+def test_external_peer_compatibility_fixture():
+    fixture_path = Path(__file__).parent / "fixtures" / "peer_id_compat.json"
+    cases = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+    for case in cases:
+        canonical = safe_external_peer(case["raw"])
+        assert canonical == case["canonical"]
+        assert legacy_external_peer_id_alias(canonical) == case["legacy_alias"]
+        expected_aliases = [canonical]
+        if case["legacy_alias"]:
+            expected_aliases.append(case["legacy_alias"])
+        assert peer_id_aliases(canonical) == expected_aliases
 
 
 def test_git_human_peer_falls_back_without_repo(tmp_path):
