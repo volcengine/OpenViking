@@ -47,7 +47,7 @@ if TYPE_CHECKING:
     from openviking.parse.vlm import VLMProcessor
 
 logger = get_logger(__name__)
-SEMANTIC_MARKER_FILENAMES = frozenset({".abstract.md", ".overview.md"})
+VECTORDB_MAX_QUERY_LIMIT = 100_000
 
 
 class ResourceProcessor:
@@ -523,19 +523,11 @@ class ResourceProcessor:
                             dirs=sync_deleted_dirs,
                             ctx=ctx,
                         )
-                    await self._delete_resource_semantic_markers(
-                        root_uri,
-                        ctx=ctx,
-                        lock=resource_lock,
-                    )
-                    await self._delete_resource_semantic_vectors(root_uri, ctx=ctx)
                 if vectors_only and build_index:
                     await self._vectorize_resource_files(root_uri, ctx=ctx)
             finally:
                 await resource_lock.close()
         elif vectors_only:
-            await self._delete_resource_semantic_markers(root_uri, ctx=ctx, lock=NO_LOCK)
-            await self._delete_resource_semantic_vectors(root_uri, ctx=ctx)
             if not build_index:
                 return result
             await self._vectorize_resource_files(root_uri, ctx=ctx)
@@ -567,7 +559,7 @@ class ResourceProcessor:
                         Eq("account_id", ctx.account_id),
                     ]
                 ),
-                limit=LS_ALL_NODES,
+                limit=VECTORDB_MAX_QUERY_LIMIT,
                 output_fields=["id"],
                 ctx=ctx,
             )
@@ -575,67 +567,11 @@ class ResourceProcessor:
             if ids:
                 await self.vikingdb.delete(ids, ctx=ctx)
 
-    async def _delete_resource_semantic_markers(
-        self,
-        root_uri: str,
-        *,
-        ctx: RequestContext,
-        lock: LockLease,
-    ) -> None:
-        viking_fs = get_viking_fs()
-        entries = await viking_fs.tree(
-            root_uri,
-            node_limit=LS_ALL_NODES,
-            level_limit=None,
-            ctx=ctx,
-        )
-        for entry in entries:
-            entry_uri = entry.get("uri") if isinstance(entry, dict) else None
-            if not entry_uri or entry.get("isDir"):
-                continue
-            name = entry.get("name") or entry_uri.rsplit("/", 1)[-1]
-            if name not in SEMANTIC_MARKER_FILENAMES:
-                continue
-            try:
-                await viking_fs.rm(
-                    entry_uri,
-                    ctx=ctx,
-                    lock_handle=lock.handle,
-                )
-            except Exception as exc:
-                logger.warning("Failed to remove semantic marker %s: %s", entry_uri, exc)
-
-    async def _delete_resource_semantic_vectors(self, root_uri: str, *, ctx: RequestContext) -> None:
-        viking_fs = get_viking_fs()
-        entries = await viking_fs.tree(
-            root_uri,
-            node_limit=LS_ALL_NODES,
-            level_limit=None,
-            ctx=ctx,
-        )
-        directory_uris = [root_uri]
-        for entry in entries:
-            entry_uri = entry.get("uri") if isinstance(entry, dict) else None
-            if entry_uri and entry.get("isDir"):
-                directory_uris.append(entry_uri)
-
-        for uri in dict.fromkeys(directory_uris):
-            for level in (ContextLevel.ABSTRACT, ContextLevel.OVERVIEW):
-                records = await self.vikingdb.get_context_by_uri(
-                    uri=uri,
-                    level=int(level),
-                    limit=100,
-                    ctx=ctx,
-                )
-                ids = [str(record["id"]) for record in records if record.get("id")]
-                if ids:
-                    await self.vikingdb.delete(ids, ctx=ctx)
-
     async def _vectorize_resource_files(self, root_uri: str, *, ctx: RequestContext) -> None:
         viking_fs = get_viking_fs()
         entries = await viking_fs.tree(
             root_uri,
-            node_limit=LS_ALL_NODES,
+            node_limit=None,
             level_limit=None,
             ctx=ctx,
         )

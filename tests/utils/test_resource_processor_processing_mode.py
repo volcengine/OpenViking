@@ -74,6 +74,7 @@ async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch,
     monkeypatch.setattr("openviking.utils.resource_processor.vectorize_file", vectorize_file)
     processor = ResourceProcessor(_FakeVikingDB())
     processor._get_summarizer = Mock(side_effect=AssertionError("summarizer should not run"))
+    processor._delete_resource_semantic_markers = AsyncMock()
     processor._delete_resource_semantic_vectors = AsyncMock()
     processor._delete_removed_resource_vectors = AsyncMock()
     lock = SimpleNamespace(active=True, handle="lock-1", close=AsyncMock())
@@ -111,6 +112,8 @@ async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch,
         "summary": "",
     }
     assert vectorize_file.await_args.kwargs["register_request_wait"] is True
+    processor._delete_resource_semantic_markers.assert_not_awaited()
+    processor._delete_resource_semantic_vectors.assert_not_awaited()
     lock.close.assert_awaited_once()
 
 
@@ -142,15 +145,8 @@ async def test_vectors_only_skips_vectorization_when_build_index_false(monkeypat
         processing_mode="vectors_only",
     )
 
-    processor._delete_resource_semantic_markers.assert_awaited_once_with(
-        "viking://resources/demo",
-        ctx=ctx,
-        lock=lock,
-    )
-    processor._delete_resource_semantic_vectors.assert_awaited_once_with(
-        "viking://resources/demo",
-        ctx=ctx,
-    )
+    processor._delete_resource_semantic_markers.assert_not_awaited()
+    processor._delete_resource_semantic_vectors.assert_not_awaited()
     vectorize_file.assert_not_awaited()
 
 
@@ -198,7 +194,7 @@ async def test_vectors_only_syncs_preexisting_target_instead_of_merging(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_vectors_only_deletes_existing_directory_semantic_vectors(monkeypatch, ctx):
+async def test_vectors_only_leaves_existing_semantic_vectors_untouched(monkeypatch, ctx):
     viking_fs = SimpleNamespace(
         persist_temp_tree=AsyncMock(),
         delete_temp=AsyncMock(),
@@ -224,10 +220,7 @@ async def test_vectors_only_deletes_existing_directory_semantic_vectors(monkeypa
         processing_mode="vectors_only",
     )
 
-    processor._delete_resource_semantic_vectors.assert_awaited_once_with(
-        "viking://resources/demo",
-        ctx=ctx,
-    )
+    processor._delete_resource_semantic_vectors.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -275,46 +268,6 @@ async def test_vectors_only_deletes_sync_removed_detail_vectors(monkeypatch, ctx
 
 
 @pytest.mark.asyncio
-async def test_vectors_only_removes_existing_semantic_marker_files(monkeypatch, ctx):
-    viking_fs = SimpleNamespace(
-        tree=AsyncMock(
-            return_value=[
-                {
-                    "uri": "viking://resources/demo/.abstract.md",
-                    "isDir": False,
-                    "name": ".abstract.md",
-                },
-                {
-                    "uri": "viking://resources/demo/section",
-                    "isDir": True,
-                    "name": "section",
-                },
-                {
-                    "uri": "viking://resources/demo/section/.overview.md",
-                    "isDir": False,
-                    "name": ".overview.md",
-                },
-            ]
-        ),
-        rm=AsyncMock(),
-    )
-    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: viking_fs)
-    processor = ResourceProcessor(_FakeVikingDB())
-
-    await processor._delete_resource_semantic_markers(
-        "viking://resources/demo",
-        ctx=ctx,
-        lock=SimpleNamespace(handle="lock-1"),
-    )
-
-    assert viking_fs.rm.await_args_list[0].args == ("viking://resources/demo/.abstract.md",)
-    assert viking_fs.rm.await_args_list[0].kwargs == {"ctx": ctx, "lock_handle": "lock-1"}
-    assert viking_fs.rm.await_args_list[1].args == (
-        "viking://resources/demo/section/.overview.md",
-    )
-
-
-@pytest.mark.asyncio
 async def test_delete_removed_resource_vectors_deletes_detail_records(ctx):
     vikingdb = _RecordingVikingDB()
     processor = ResourceProcessor(vikingdb)
@@ -329,6 +282,7 @@ async def test_delete_removed_resource_vectors_deletes_detail_records(ctx):
         ("viking://resources/demo/old.md", 2, 100, ctx),
     ]
     assert len(vikingdb.filter_calls) == 1
+    assert vikingdb.filter_calls[0][1] == 100_000
     assert vikingdb.delete_calls == [
         (["viking://resources/demo/old.md:2"], ctx),
         (["recursive-child-detail"], ctx),
