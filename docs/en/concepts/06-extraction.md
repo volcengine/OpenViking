@@ -122,7 +122,7 @@ Leaf directories → Parent directories → Root
 5. **Write files**: Save to AGFS
 6. **Vectorize**: Create Context and queue to EmbeddingQueue
 
-### Configuration Parameters
+### Processing Limits
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -132,29 +132,19 @@ Leaf directories → Parent directories → Root
 
 ## Code Skeleton Extraction
 
-For code files, OpenViking uses a fixed skeleton extraction route as a lightweight alternative to LLM summarization.
-
-### Modes
-
-`code_summary_mode` in `ov.conf` controls whether code files use skeleton extraction or direct LLM summarization (see [Configuration](../guides/01-configuration.md#code)):
-
-| Mode | Description |
-|------|-------------|
-| `"ast"` | Extract a compact structural skeleton (**default**) |
-| `"llm"` | Always use LLM summarization |
-| `"ast_llm"` | Extract a more detailed skeleton; it does not add a second LLM call |
+For code files, OpenViking uses a fixed skeleton extraction route. This route is built into the code summary pipeline and is not selected or tuned by per-language parser settings.
 
 ### What Skeleton Extraction Includes
 
-The skeleton can include imports, classes, methods, functions, and other language-level symbols depending on the extractor that handles the file. The extractor route itself is not configurable: OpenViking first uses the maintained `tags.scm` query set, then falls back to `tree-sitter-language-pack.process()` for broader language coverage.
+The skeleton can include imports, classes, methods, functions, and other language-level symbols. Exact output depends on the maintained query or generic parser result for that language, but the route itself is fixed.
 
-### Fallback Behavior
+### Extraction Route
 
 Code skeleton extraction follows this fixed order:
 
 1. Use a maintained `tags.scm` query when one exists for the language.
 2. Otherwise, or when that query produces no useful result, use `tree-sitter-language-pack.process()`.
-3. Fall back to `semantic.code_summary` only when neither extractor produces a useful skeleton.
+3. Invoke `semantic.code_summary` only as fallback when neither extractor produces a useful skeleton.
 
 This routing applies to short and long code files alike.
 

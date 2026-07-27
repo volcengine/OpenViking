@@ -12,15 +12,9 @@ logger = logging.getLogger(__name__)
 _QUERY_DIR = Path(__file__).with_name("queries") / "tree-sitter-language-pack"
 
 _LANG_ALIASES = {
-    "c_sharp": "csharp",
     "common_lisp": "commonlisp",
     "emacs_lisp": "elisp",
-    "js": "javascript",
     "objective_caml": "ocaml",
-    "shell": "bash",
-    "sh": "bash",
-    "ts": "typescript",
-    "tsx": "typescript",
 }
 
 
@@ -32,27 +26,22 @@ def _query_language_name(lang: str) -> str:
 def _load_tag_query(lang: str) -> Optional[str]:
     """Load a maintained tree-sitter tags query for a grep-ast language."""
 
-    query_path = _QUERY_DIR / f"{_query_language_name(lang)}-tags.scm"
+    query_file = f"{_query_language_name(lang)}-tags.scm"
+    query_path = _QUERY_DIR / query_file
     try:
         query_scm = query_path.read_text(encoding="utf-8")
     except FileNotFoundError:
         logger.debug("No maintained tags query for language '%s'", lang)
         return None
     except OSError as exc:
-        logger.warning("Failed to load tags query '%s': %s", query_path, exc)
+        logger.warning(
+            "Failed to load tags query '%s' for language '%s': %s",
+            query_file,
+            lang,
+            exc,
+        )
         return None
     return query_scm.strip() or None
-
-
-def _normalise_repromap_name(file_name: str) -> str:
-    """Recover the original suffix from Viking's ``foo.py/foo.md`` layout."""
-
-    path = Path(file_name)
-    if path.suffix.lower() == ".md" and path.parent.name:
-        parent_suffix = Path(path.parent.name).suffix
-        if parent_suffix:
-            return path.parent.name
-    return path.name or "source.txt"
 
 
 def has_tag_query(file_name: str) -> bool:
@@ -61,50 +50,11 @@ def has_tag_query(file_name: str) -> bool:
     try:
         from grep_ast import filename_to_lang
 
-        lang = filename_to_lang(_normalise_repromap_name(file_name))
+        lang = filename_to_lang(Path(file_name).name or "source.txt")
     except Exception as exc:
         logger.debug("Unable to detect tags-query language for '%s': %s", file_name, exc)
         return False
     return bool(lang and _load_tag_query(lang))
-
-
-def extract_repromap_skeleton(
-    file_name: str,
-    content: str,
-    verbose: bool = False,
-) -> Optional[str]:
-    """Return a RepoMap-style skeleton for one source file."""
-
-    if not content:
-        return None
-    rel_name = _normalise_repromap_name(file_name)
-    return _extract_with_grep_ast(file_name, rel_name, content, verbose)
-
-
-def extract_query_skeleton(
-    file_name: str,
-    content: str,
-    verbose: bool = False,
-) -> Optional[str]:
-    """Return captured definition symbols without source context rendering."""
-
-    if not content:
-        return None
-
-    rel_name = _normalise_repromap_name(file_name)
-    try:
-        lang, captures = _query_captures(rel_name, content)
-        symbols = _name_definition_symbols(captures, content)
-        if not symbols:
-            return None
-
-        mode = "verbose" if verbose else "compact"
-        lines = [f"# {file_name} [repomap-query, {mode}]", "", f"language: {lang}", ""]
-        lines.extend(f"- L{line_no}: {kind} {name}" for line_no, kind, name in symbols)
-        return "\n".join(lines)
-    except Exception as exc:
-        logger.warning("RepoMap query extraction failed for '%s': %s", file_name, exc)
-        return None
 
 
 def _extract_with_grep_ast(
@@ -173,29 +123,6 @@ def _query_captures(rel_name: str, content: str):
 
         captures = QueryCursor(query).captures(tree.root_node)
     return lang, captures
-
-
-def _name_definition_symbols(captures, content: str) -> list[tuple[int, str, str]]:
-    source = content.encode("utf-8")
-    symbols: set[tuple[int, str, str]] = set()
-
-    def add_symbol(tag: str, node) -> None:
-        prefix = "name.definition."
-        if not tag.startswith(prefix):
-            return
-        kind = tag[len(prefix) :]
-        name = source[node.start_byte : node.end_byte].decode("utf-8", errors="replace").strip()
-        if name:
-            symbols.add((node.start_point[0] + 1, kind, " ".join(name.split())))
-
-    if isinstance(captures, dict):
-        for tag, nodes in captures.items():
-            for node in nodes:
-                add_symbol(str(tag), node)
-    else:
-        for node, tag in captures:
-            add_symbol(str(tag), node)
-    return sorted(symbols)
 
 
 def _definition_lines(captures) -> list[int]:

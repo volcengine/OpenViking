@@ -4,10 +4,11 @@
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 from openviking.parse.parsers.code.ast.aider_repomap import (
-    extract_repromap_skeleton,
+    _extract_with_grep_ast,
     has_tag_query,
 )
 from openviking.parse.parsers.code.ast.extractor import get_process_extractor
@@ -54,7 +55,10 @@ def extract_skeleton_with_routing(
 
     reasons: list[str] = []
     if has_tag_query(file_name):
-        text = extract_repromap_skeleton(file_name, content, verbose=verbose)
+        text = None
+        if content:
+            rel_name = Path(file_name).name or "source.txt"
+            text = _extract_with_grep_ast(file_name, rel_name, content, verbose)
         if is_skeleton_useful(text):
             return SkeletonExtractionResult(text, "aider_repomap", False, "maintained tags query")
         reasons.append("tags query produced no useful skeleton")

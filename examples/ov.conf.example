@@ -208,7 +208,6 @@
             "mineru_timeout": 300.0,
         },
         "code": {
-            "code_summary_mode": "ast",
             "github_raw_domain": "raw.githubusercontent.com",
             "code_hosting_domains": ["github.com", "gitlab.com"],
             "github_domains": ["github.com", "www.github.com"],

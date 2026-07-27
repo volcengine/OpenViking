@@ -45,7 +45,7 @@ class CodeSkeleton:
         """Generate skeleton text.
 
         Args:
-            verbose: If True, include full docstrings (for ast_llm mode / LLM input).
+            verbose: If True, include full docstrings.
                      If False, only keep the first line (for ast mode / direct embedding).
         """
 

@@ -235,7 +235,6 @@ class CodeConfig(CodeHostingConfig):
     Configuration for code parsing.
 
     Attributes:
-        code_summary_mode: Summary generation mode ("llm" | "ast" | "ast_llm")
         extract_functions: Legacy compatibility field; ignored by the fixed skeleton route
         extract_classes: Legacy compatibility field; ignored by the fixed skeleton route
         extract_imports: Legacy compatibility field; ignored by the fixed skeleton route
@@ -248,7 +247,6 @@ class CodeConfig(CodeHostingConfig):
         github_raw_domain: Domain for GitHub raw content (raw.githubusercontent.com)
     """
 
-    code_summary_mode: str = "ast"  # "llm" | "ast" | "ast_llm"
     extract_functions: bool = True
     extract_classes: bool = True
     extract_imports: bool = True
@@ -271,12 +269,6 @@ class CodeConfig(CodeHostingConfig):
         super().validate()
 
         # Validate code-specific fields
-        if self.code_summary_mode not in ("llm", "ast", "ast_llm"):
-            raise ValueError(
-                f"Invalid code_summary_mode '{self.code_summary_mode}'. "
-                "Must be 'llm', 'ast', or 'ast_llm'"
-            )
-
         if self.max_line_length <= 0:
             raise ValueError("max_line_length must be positive")
 
@@ -698,7 +690,7 @@ def get_parser_config(
 
         >>> # Get custom code configuration
         >>> code_config = get_parser_config("code", {
-        ...     "code_summary_mode": "llm"
+        ...     "github_raw_domain": "raw.githubusercontent.com"
         ... })
     """
     if parser_type not in PARSER_CONFIG_REGISTRY:
@@ -726,7 +718,7 @@ def load_parser_configs_from_dict(config_dict: Dict[str, Any]) -> Dict[str, Pars
     Examples:
         >>> configs = load_parser_configs_from_dict({
         ...     "pdf": {"strategy": "auto"},
-        ...     "code": {"code_summary_mode": "llm"}
+        ...     "code": {"github_raw_domain": "raw.githubusercontent.com"}
         ... })
         >>> pdf_config = configs["pdf"]
         >>> code_config = configs["code"]

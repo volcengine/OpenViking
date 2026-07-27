@@ -121,7 +121,7 @@ SemanticMsg(
 5. **写入文件**：保存到 AGFS
 6. **向量化**：创建 Context 并入队 EmbeddingQueue
 
-### 配置参数
+### 处理限制
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
@@ -131,29 +131,19 @@ SemanticMsg(
 
 ## 代码骨架提取
 
-对于代码文件，OpenViking 使用固定的代码骨架提取路线，作为 LLM 摘要的轻量替代方案。
-
-### 工作模式
-
-`ov.conf` 中的 `code_summary_mode` 字段只控制代码文件使用骨架提取还是直接走 LLM 摘要（参见[配置文档](../guides/01-configuration.md#code)），支持三种模式：
-
-| 模式 | 说明 |
-|------|------|
-| `"ast"` | 提取紧凑的结构骨架（**默认**） |
-| `"llm"` | 全部走 LLM 生成摘要 |
-| `"ast_llm"` | 提取更详细的代码骨架，不再额外调用一次 LLM |
+对于代码文件，OpenViking 使用固定的代码骨架提取路线。该路线内置在代码摘要流程中，不再通过逐语言解析参数选择或调节。
 
 ### 代码骨架内容
 
-骨架可包含 import、类、方法、函数及其他语言级符号，具体内容取决于处理该文件的提取器。提取路线本身不可配置：OpenViking 会优先使用维护中的 `tags.scm` query 集；未覆盖或结果不可用时，再使用 `tree-sitter-language-pack.process()` 扩展语言覆盖范围。
+骨架可包含 import、类、方法、函数及其他语言级符号。具体输出取决于该语言维护中的 query 或通用解析结果，但提取路线本身是固定的。
 
-### Fallback 机制
+### 提取路线
 
 代码骨架提取按以下固定顺序执行：
 
 1. 语言存在维护中的 `tags.scm` 时，优先使用 tags query。
 2. 不存在 query 或 query 未产出可用骨架时，使用 `tree-sitter-language-pack.process()`。
-3. 两种提取方式都无可用结果时，才回退到 `semantic.code_summary`。
+3. 两种提取方式都无可用结果时，才将 `semantic.code_summary` 作为兜底处理。
 
 长短代码文件都遵循同一路由。
 

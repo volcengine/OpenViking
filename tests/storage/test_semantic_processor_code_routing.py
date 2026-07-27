@@ -10,10 +10,9 @@ from openviking.parse.parsers.code.ast import SkeletonExtractionResult
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 
 
-def _config(mode: str, vlm_available: bool = True):
+def _config(vlm_available: bool = True):
     config = MagicMock()
     config.output_language_override = ""
-    config.code.code_summary_mode = mode
     config.semantic.max_file_content_chars = 10000
     config.semantic.max_skeleton_chars = 10000
     config.vlm.is_available.return_value = vlm_available
@@ -21,8 +20,8 @@ def _config(mode: str, vlm_available: bool = True):
     return config
 
 
-async def _generate(mode, extraction=None, vlm_available=True):
-    config = _config(mode, vlm_available)
+async def _generate(extraction=None, vlm_available=True):
+    config = _config(vlm_available)
     fs = MagicMock()
     fs.read_file = AsyncMock(return_value="def run():\n    return 1\n")
     patches = [
@@ -61,22 +60,14 @@ async def _generate(mode, extraction=None, vlm_available=True):
 
 
 @pytest.mark.asyncio
-async def test_llm_mode_calls_code_summary_directly():
-    result, config = await _generate("llm")
-    assert result["summary"] == "LLM summary"
-    config.vlm.get_completion_async.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["ast", "ast_llm"])
-async def test_useful_skeleton_skips_llm_even_when_vlm_unavailable(mode):
+async def test_useful_skeleton_skips_llm_even_when_vlm_unavailable():
     extraction = SkeletonExtractionResult(
         text="# sample.py [Python]\n\ndef run()",
         provider="process",
         should_fallback_to_llm=False,
         reason="process extraction succeeded",
     )
-    result, config = await _generate(mode, extraction, vlm_available=False)
+    result, config = await _generate(extraction, vlm_available=False)
     assert result["summary"] == extraction.text
     config.vlm.get_completion_async.assert_not_awaited()
 
@@ -89,7 +80,7 @@ async def test_missing_skeleton_calls_llm_fallback():
         should_fallback_to_llm=True,
         reason="unsupported",
     )
-    result, config = await _generate("ast", extraction)
+    result, config = await _generate(extraction)
     assert result["summary"] == "LLM summary"
     config.vlm.get_completion_async.assert_awaited_once()
 
@@ -102,7 +93,7 @@ async def test_missing_skeleton_without_vlm_returns_empty_summary():
         should_fallback_to_llm=True,
         reason="unsupported",
     )
-    result, config = await _generate("ast", extraction, vlm_available=False)
+    result, config = await _generate(extraction, vlm_available=False)
     assert result["summary"] == ""
     config.vlm.get_completion_async.assert_not_awaited()
 

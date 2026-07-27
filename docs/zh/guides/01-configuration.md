@@ -759,37 +759,9 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 
 ### code
 
-通过 `code_summary_mode` 控制代码文件使用骨架提取还是直接走 LLM 摘要。以下两种写法等价：
+代码骨架提取内置在代码摘要流程中，不再提供解析器级配置。OpenViking 会优先使用维护中的 `tags.scm` query；未覆盖或结果不可用时，使用 `tree-sitter-language-pack.process()`；两者都无可用结果时，才将 `semantic.code_summary` 作为兜底处理。
 
-```json
-{
-  "code": {
-    "code_summary_mode": "ast"
-  }
-}
-```
-
-```json
-{
-  "parsers": {
-    "code": {
-      "code_summary_mode": "ast"
-    }
-  }
-}
-```
-
-将 `code_summary_mode` 设置为以下三个值之一：
-
-| 值 | 说明 | 默认 |
-|----|------|------|
-| `"ast"` | 提取紧凑的代码骨架。**推荐用于大规模代码索引** | ✓ |
-| `"llm"` | 全部走 LLM 生成摘要（成本较高） | |
-| `"ast_llm"` | 提取更详细的代码骨架，不再额外调用一次 LLM | |
-
-代码骨架提取使用固定路线，且不再提供 provider 级配置：优先执行维护中的 tags query，其余语言使用 `tree-sitter-language-pack.process()`，结果不可用时再回退到 LLM。
-
-详见 [代码骨架提取](../concepts/06-extraction.md#代码骨架提取)。
+当前保留的 `code` 配置字段用于远程代码资源的网络防护和代码托管白名单。提取路线详见 [代码骨架提取](../concepts/06-extraction.md#代码骨架提取)。
 
 #### 远程资源网络防护
 
@@ -1675,9 +1647,6 @@ Task 记录文件位于所属账号的系统目录：
       "url": "string",
       "project": "string"
     }
-  },
-  "code": {
-    "code_summary_mode": "ast"
   },
   "server": {
     "host": "string",

@@ -790,37 +790,9 @@ Configuration for Feishu/Lark cloud document parsing. See [Resources](../api/02-
 
 ### code
 
-Controls whether code files use skeleton extraction or direct LLM summarization. Both config formats are equivalent:
+Code skeleton extraction is built into the code summary pipeline and has no parser-level configuration. OpenViking first uses maintained `tags.scm` queries, then falls back to `tree-sitter-language-pack.process()`, and invokes `semantic.code_summary` only when neither extractor produces a useful skeleton.
 
-```json
-{
-  "code": {
-    "code_summary_mode": "ast"
-  }
-}
-```
-
-```json
-{
-  "parsers": {
-    "code": {
-      "code_summary_mode": "ast"
-    }
-  }
-}
-```
-
-Set `code_summary_mode` to one of:
-
-| Value | Description | Default |
-|-------|-------------|---------|
-| `"ast"` | Extract a compact code skeleton. **Recommended for large-scale code indexing** | ✓ |
-| `"llm"` | Always use LLM for summarization (higher cost) | |
-| `"ast_llm"` | Extract a more detailed skeleton without an additional LLM call | |
-
-Skeleton extraction follows a fixed route and has no provider-level configuration: maintained tags queries run first, `tree-sitter-language-pack.process()` handles the remaining languages, and unusable results fall back to LLM.
-
-See [Code Skeleton Extraction](../concepts/06-extraction.md#code-skeleton-extraction) for details.
+The remaining `code` configuration fields are for remote code resource network guards and code-hosting allowlists. See [Code Skeleton Extraction](../concepts/06-extraction.md#code-skeleton-extraction) for the extraction route.
 
 #### Remote resource network guard
 
@@ -1708,9 +1680,6 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
       "url": "string",
       "project": "string"
     }
-  },
-  "code": {
-    "code_summary_mode": "ast"
   },
   "server": {
     "host": "127.0.0.1",

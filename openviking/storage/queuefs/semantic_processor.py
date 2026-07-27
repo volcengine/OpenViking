@@ -1061,24 +1061,20 @@ class SemanticProcessor(DequeueHandlerBase):
         file_type = self._detect_file_type(file_name)
 
         if file_type == FILE_TYPE_CODE:
-            code_mode = config.code.code_summary_mode
+            from openviking.parse.parsers.code.ast import extract_skeleton_result
 
-            if code_mode in ("ast", "ast_llm"):
-                from openviking.parse.parsers.code.ast import extract_skeleton_result
-
-                verbose = code_mode == "ast_llm"
-                extraction = extract_skeleton_result(file_name, content, verbose=verbose)
-                if extraction.text:
-                    skeleton_text = extraction.text
-                    max_skeleton_chars = config.semantic.max_skeleton_chars
-                    if len(skeleton_text) > max_skeleton_chars:
-                        skeleton_text = skeleton_text[:max_skeleton_chars]
-                    return result(skeleton_text)
-                logger.info(
-                    "Code skeleton fallback to LLM for '%s': %s",
-                    file_path,
-                    extraction.reason,
-                )
+            extraction = extract_skeleton_result(file_name, content)
+            if extraction.text:
+                skeleton_text = extraction.text
+                max_skeleton_chars = config.semantic.max_skeleton_chars
+                if len(skeleton_text) > max_skeleton_chars:
+                    skeleton_text = skeleton_text[:max_skeleton_chars]
+                return result(skeleton_text)
+            logger.info(
+                "Code skeleton fallback to LLM for '%s': %s",
+                file_path,
+                extraction.reason,
+            )
 
             if not vlm.is_available():
                 logger.warning("VLM not available for code summary fallback: %s", file_path)

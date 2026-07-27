@@ -6,10 +6,7 @@ from unittest.mock import Mock
 import pytest
 
 from openviking.parse.parsers.code.ast import extract_skeleton, extract_skeleton_result
-from openviking.parse.parsers.code.ast.extractor import (
-    get_process_extractor,
-    supports_code_skeleton,
-)
+from openviking.parse.parsers.code.ast.extractor import get_process_extractor
 from openviking.parse.parsers.code.ast.providers import extract_skeleton_with_routing
 
 
@@ -20,7 +17,7 @@ def test_tags_query_wins_without_calling_process(monkeypatch):
         lambda _name: True,
     )
     monkeypatch.setattr(
-        "openviking.parse.parsers.code.ast.providers.extract_repromap_skeleton",
+        "openviking.parse.parsers.code.ast.providers._extract_with_grep_ast",
         lambda *_args, **_kwargs: "# sample.cpp\n\nclass Widget",
     )
     monkeypatch.setattr(
@@ -43,7 +40,7 @@ def test_low_quality_tags_fall_through_to_process(monkeypatch):
         lambda _name: True,
     )
     monkeypatch.setattr(
-        "openviking.parse.parsers.code.ast.providers.extract_repromap_skeleton",
+        "openviking.parse.parsers.code.ast.providers._extract_with_grep_ast",
         lambda *_args, **_kwargs: "# sample.cpp",
     )
     monkeypatch.setattr(
@@ -113,11 +110,3 @@ def test_process_smoke(file_name, content, symbol):
 @pytest.mark.parametrize("file_name", ["README.md", "config.yaml", "data.json"])
 def test_process_denylist(file_name):
     assert not get_process_extractor().supports(file_name)
-
-
-def test_viking_resource_path_recovers_parent_suffix():
-    file_name = "viking://resources/sample.py/sample.md"
-    assert supports_code_skeleton(file_name)
-    text = get_process_extractor().extract_skeleton(file_name, "def run():\n    pass\n")
-    assert text is not None
-    assert "run" in text

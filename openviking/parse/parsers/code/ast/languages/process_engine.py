@@ -129,17 +129,8 @@ def _display_language(lang: str) -> str:
     return _DISPLAY.get(lang, lang.replace("_", " ").title())
 
 
-def _effective_path_for_detection(file_name: str) -> Path:
-    path = Path(file_name)
-    if path.suffix.lower() == ".md" and path.parent.name:
-        parent_path = Path(path.parent.name)
-        if parent_path.suffix:
-            return parent_path
-    return path
-
-
 def _detect_process_language(file_name: str) -> Optional[str]:
-    path = _effective_path_for_detection(file_name)
+    path = Path(file_name)
     if path.suffix.lower() in _PROCESS_SUFFIX_DENYLIST:
         return None
 

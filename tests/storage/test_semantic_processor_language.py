@@ -337,17 +337,12 @@ class TestGenerateTextSummaryOutputLanguage:
         mock_config.output_language_override = ""
         mock_config.language_fallback = "en"
         mock_config.semantic.max_file_content_chars = 10000
-        mock_config.code.code_summary_mode = "llm"
         return mock_config
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "file_key,file_name,expected_lang",
         [
-            ("chinese_py", "chinese_code.py", "zh-CN"),
-            ("english_py", "english_code.py", "en"),
-            ("japanese_py", "japanese_code.py", "ja"),
-            ("korean_py", "korean_code.py", "ko"),
             ("chinese_md", "chinese_doc.md", "zh-CN"),
             ("english_md", "english_doc.md", "en"),
         ],
