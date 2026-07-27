@@ -145,6 +145,23 @@ class _NormalizedAddResourceArgs:
     watch_auth_state: Optional[Dict[str, Any]] = None
 
 
+def _is_feishu_batch_candidate(path: str) -> bool:
+    """Return True if ``path`` might trigger Feishu wiki batch import (issue #3120).
+
+    Returns True for ``/wiki/settings/<space_id>`` (always batch) and
+    ``/wiki/<token>`` (potentially a directory — the service resolves
+    ``has_child`` via the Feishu API to decide). Returns False for
+    ``/docx/``, ``/sheets/``, ``/base/`` (always single doc) and non-Feishu URLs.
+    """
+    # Lazy import: feishu_accessor pulls in lark-oapi and the parse package.
+    from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+
+    classified = FeishuAccessor.classify_url(path)
+    if classified is None:
+        return False
+    return classified[0] in ("wiki_space_root", "wiki_node")
+
+
 class ResourceService:
     """Resource management service."""
 
@@ -1034,6 +1051,29 @@ class ResourceService:
                 **kwargs,
             )
 
+        # Feishu wiki space / directory URL → expand subtree and fan out one
+        # async add_resource per descendant document (issue #3120). Single Feishu
+        # doc URLs fall through to ``_execute_resource_ingestion`` unchanged.
+        if not wait and _is_feishu_batch_candidate(path):
+            batch_result = await self._maybe_enqueue_feishu_batch_add_resource(
+                path=path,
+                ctx=ctx,
+                to=to,
+                parent=parent,
+                reason=reason,
+                instruction=instruction,
+                timeout=timeout,
+                build_index=build_index,
+                summarize=summarize,
+                watch_interval=watch_interval,
+                allow_local_path_resolution=allow_local_path_resolution,
+                enforce_public_remote_targets=enforce_public_remote_targets,
+                parser_args=normalized_args.processor_kwargs,
+                kwargs=kwargs,
+            )
+            if batch_result is not None:
+                return batch_result
+
         return await self._execute_resource_ingestion(
             path=path,
             ctx=ctx,
@@ -1056,6 +1096,135 @@ class ResourceService:
             parser_args=normalized_args.processor_kwargs,
             **kwargs,
         )
+
+    async def _maybe_enqueue_feishu_batch_add_resource(
+        self,
+        *,
+        path: str,
+        ctx: RequestContext,
+        to: Optional[str] = None,
+        parent: Optional[str] = None,
+        reason: str = "",
+        instruction: str = "",
+        timeout: Optional[float] = None,
+        build_index: bool = True,
+        summarize: bool = False,
+        watch_interval: float = 0,
+        allow_local_path_resolution: bool = True,
+        enforce_public_remote_targets: bool = False,
+        parser_args: Optional[Dict[str, Any]] = None,
+        kwargs: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Expand a Feishu wiki space / directory URL into per-doc imports.
+
+        Returns ``None`` to signal "fall through to the single-doc path" — this
+        happens for ordinary ``/wiki/<token>`` URLs whose node has no children
+        and for any single-document URL that the expander returns unchanged.
+
+        When the URL expands to multiple documents, each child document is
+        enqueued as its own ``add_resource(wait=False)`` background task and a
+        summary payload is returned immediately. The original ``to`` becomes the
+        parent for the batch (every child gets an auto-generated URI under it).
+        """
+        from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+
+        kwargs = kwargs or {}
+        parser_args = parser_args or {}
+        feishu_token = (
+            kwargs.get(FEISHU_ACCESS_TOKEN_ARG)
+            or parser_args.get(FEISHU_ACCESS_TOKEN_ARG)
+        )
+
+        accessor = FeishuAccessor()
+        telemetry = get_current_telemetry()
+        try:
+            expanded = await accessor.expand_feishu_url(
+                path,
+                feishu_access_token=feishu_token,
+            )
+        except Exception as exc:
+            telemetry.set_error(
+                "resource_service.feishu_batch_expand",
+                type(exc).__name__,
+                str(exc),
+            )
+            raise
+
+        if not expanded:
+            # ``expand_feishu_url`` returns ``[]`` only for a recognised batch
+            # source whose space/subtree has no importable documents. Falling
+            # through to ``_execute_resource_ingestion`` would treat the
+            # ``/wiki/settings/<id>`` (or directory) URL as a single doc and
+            # fail in a confusing way, so surface the real cause instead.
+            raise InvalidArgumentError(
+                f"Feishu wiki URL has no importable documents: {path!r}"
+            )
+        if len(expanded) == 1:
+            # Single doc (wiki leaf or single-doc passthrough) — preserve the
+            # original single-doc behavior. Caller proceeds to
+            # ``_execute_resource_ingestion`` with the original ``path``.
+            return None
+
+        # Convert an explicit ``to`` into a parent so each child gets its own
+        # auto-generated URI underneath (a batch cannot share a single target).
+        batch_parent = parent
+        if to:
+            batch_parent = to
+
+        children_summary: List[Dict[str, Any]] = []
+        for idx, (doc_url, title) in enumerate(expanded):
+            children_summary.append(
+                {"url": doc_url, "title": title, "index": idx}
+            )
+
+        # Spawn one background ingestion per child document. Each child is a
+        # guaranteed single-doc URL (expand_feishu_url emits direct docx/sheets/
+        # base URLs), so it will not re-enter the batch branch.
+        async def _import_child(doc_url: str) -> None:
+            try:
+                await self.add_resource(
+                    path=doc_url,
+                    ctx=ctx,
+                    to=None,
+                    parent=batch_parent,
+                    reason=reason,
+                    instruction=instruction,
+                    wait=False,
+                    timeout=timeout,
+                    build_index=build_index,
+                    summarize=summarize,
+                    # Watch the whole space via the parent request, not per child.
+                    watch_interval=0,
+                    allow_local_path_resolution=allow_local_path_resolution,
+                    enforce_public_remote_targets=enforce_public_remote_targets,
+                    args=parser_args,
+                )
+            except Exception:
+                logger.exception(
+                    "[ResourceService] Feishu batch child import failed: %s",
+                    doc_url,
+                )
+
+        for doc_url, _title in expanded:
+            background = asyncio.create_task(_import_child(doc_url))
+            self._background_tasks.add(background)
+            background.add_done_callback(self._background_tasks.discard)
+
+        first_url = expanded[0][0] if expanded else ""
+        logger.info(
+            "[ResourceService] Feishu wiki batch import: %d documents under %s "
+            "(first=%s)",
+            len(expanded),
+            batch_parent or "<auto>",
+            first_url,
+        )
+        telemetry.set("resource.feishu_batch.count", len(expanded))
+        return {
+            "status": "queued_batch",
+            "root_uri": batch_parent or "",
+            "batch_count": len(expanded),
+            "children": children_summary,
+        }
 
     async def _execute_resource_ingestion(
         self,

@@ -516,6 +516,367 @@ class FeishuAccessor(DataAccessor):
 
         return doc_type, obj_token, title
 
+    # ========== Wiki Space / Directory Batch Expansion ==========
+    #
+    # Issue #3120: a Feishu "wiki space settings" URL
+    # (``https://*.feishu.cn/wiki/settings/<space_id>``) or a wiki node URL that
+    # has children should be expanded into one import per descendant document.
+    # The methods below reuse the same lark-oapi client + auth as ``_resolve_wiki_node``
+    # and walk the wiki tree via ``client.wiki.v2.space.list`` (paginated).
+
+    # Safety rails so a pathological space (cycles, very wide trees) cannot stall
+    # the importer. ``WIKI_BATCH_*`` constants are the defaults; callers can pass
+    # tighter limits via ``expand_feishu_url``.
+    WIKI_BATCH_DEFAULT_MAX_DEPTH = 5
+    WIKI_BATCH_DEFAULT_MAX_NODES = 500
+    WIKI_BATCH_PAGE_SIZE = 50
+
+    @staticmethod
+    def classify_url(url: str) -> Optional[Tuple[str, str, Optional[str]]]:
+        """Classify a Feishu URL for batch-import dispatch.
+
+        Returns ``None`` for non-Feishu URLs. Otherwise returns a 3-tuple
+        ``(kind, primary_token, secondary_token)`` where:
+
+        * ``("single_doc", doc_type, token)`` — always a single document import.
+          Covers ``/docx/<t>``, ``/sheets/<t>``, ``/base/<t>``.
+        * ``("wiki_node", node_token, None)`` — a ``/wiki/<token>`` URL. May be a
+          leaf document or a directory; the caller resolves ``has_child`` via the
+          wiki API to decide.
+        * ``("wiki_space_root", space_id, None)`` — a ``/wiki/settings/<space_id>``
+          URL that lists every node in the space.
+        """
+        if not FeishuAccessor._is_feishu_url(url):
+            return None
+        parsed = urlparse(url)
+        path_parts = [p for p in parsed.path.split("/") if p]
+        if len(path_parts) < 2:
+            return None
+        first, second = path_parts[0], path_parts[1]
+        if first == "wiki" and second == "settings":
+            # /wiki/settings/<space_id>(/...) — space root.
+            if len(path_parts) < 3:
+                return None
+            return ("wiki_space_root", path_parts[2], None)
+        if first == "wiki":
+            # /wiki/<node_token> — may be a leaf doc or a directory.
+            return ("wiki_node", second, None)
+        # /docx/<t>, /sheets/<t>, /base/<t> — always single-doc.
+        return ("single_doc", first, second)
+
+    @staticmethod
+    def is_batch_url(url: str) -> bool:
+        """Return True if ``url`` definitely triggers batch import.
+
+        A ``/wiki/settings/<space_id>`` URL always batches. A ``/wiki/<token>``
+        URL *may* batch (depending on ``has_child``) so this helper returns False
+        for it — the caller must run ``expand_feishu_url`` to find out.
+        """
+        classified = FeishuAccessor.classify_url(url)
+        return classified is not None and classified[0] == "wiki_space_root"
+
+    def _list_wiki_child_nodes(
+        self,
+        space_id: str,
+        parent_node_token: Optional[str],
+        *,
+        feishu_access_token: Optional[str] = None,
+        page_size: Optional[int] = None,
+        page_token: Optional[str] = None,
+    ) -> Tuple[List["FeishuAccessor._WikiNode"], bool, Optional[str]]:
+        """List the direct children of a wiki node, following pagination.
+
+        Returns ``(nodes, has_more, next_page_token)``. ``nodes`` may be empty
+        when the node is a leaf. Pure SDK call — wrap in ``asyncio.to_thread``
+        from async callers.
+        """
+        from lark_oapi.api.wiki.v2 import ListSpaceNodeRequest
+
+        client = self._get_client(use_user_token=bool(feishu_access_token))
+        builder = ListSpaceNodeRequest.builder().space_id(space_id)
+        if parent_node_token:
+            builder = builder.parent_node_token(parent_node_token)
+        if page_token:
+            builder = builder.page_token(page_token)
+        builder = builder.page_size(page_size or self.WIKI_BATCH_PAGE_SIZE)
+        request = builder.build()
+        response = self._call_api(client.wiki.v2.space.list, request, feishu_access_token)
+        if not response.success():
+            _raise_from_lark_response(
+                response,
+                operation=(
+                    f"list wiki nodes space={space_id} "
+                    f"parent={parent_node_token or '<root>'}"
+                ),
+                resource=space_id,
+            )
+        data = getattr(response, "data", None)
+        raw_items = getattr(data, "items", None) or []
+        nodes = [self._wiki_node_from_sdk(item) for item in raw_items]
+        has_more = bool(getattr(data, "has_more", False))
+        next_page_token = getattr(data, "page_token", None)
+        return nodes, has_more, next_page_token
+
+    @staticmethod
+    def _wiki_node_from_sdk(item: Any) -> "FeishuAccessor._WikiNode":
+        """Build a ``_WikiNode`` from a lark-oapi ``Node`` (SDK object or dict)."""
+        return FeishuAccessor._WikiNode(
+            node_token=_getattr_safe(item, "node_token", "") or "",
+            obj_token=_getattr_safe(item, "obj_token", "") or "",
+            obj_type=_getattr_safe(item, "obj_type", "") or "",
+            title=_getattr_safe(item, "title", "") or "",
+            has_child=bool(_getattr_safe(item, "has_child", False)),
+            space_id=str(_getattr_safe(item, "space_id", "") or ""),
+            parent_node_token=_getattr_safe(item, "parent_node_token", "") or None,
+            url=_getattr_safe(item, "url", "") or "",
+        )
+
+    @dataclass
+    class _WikiNode:
+        """Resolved view of a wiki node used during subtree traversal."""
+        node_token: str
+        obj_token: str
+        obj_type: str  # raw API type: docx/doc/sheet/bitable/wiki/...
+        title: str
+        has_child: bool
+        space_id: str
+        parent_node_token: Optional[str]
+        url: str = ""
+
+    def _resolve_wiki_node_full(
+        self,
+        node_token: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+    ) -> "_WikiNode":
+        """Resolve a wiki node token to its full node info (incl. ``has_child``).
+
+        Uses the same ``get_node`` API as ``_resolve_wiki_node`` but returns the
+        extra fields the batch importer needs.
+        """
+        from lark_oapi.api.wiki.v2 import GetNodeSpaceRequest
+
+        client = self._get_client(use_user_token=bool(feishu_access_token))
+        request = GetNodeSpaceRequest.builder().token(node_token).build()
+        response = self._call_api(
+            client.wiki.v2.space.get_node,
+            request,
+            feishu_access_token,
+        )
+        if not response.success():
+            _raise_from_lark_response(
+                response,
+                operation=f"resolve wiki node {node_token}",
+                resource=node_token,
+            )
+        node = getattr(response.data, "node", None)
+        return self._wiki_node_from_sdk(node)
+
+    async def list_wiki_subtree(
+        self,
+        *,
+        space_id: Optional[str] = None,
+        root_node_token: Optional[str] = None,
+        feishu_access_token: Optional[str] = None,
+        max_depth: int = WIKI_BATCH_DEFAULT_MAX_DEPTH,
+        max_nodes: int = WIKI_BATCH_DEFAULT_MAX_NODES,
+    ) -> List[Tuple[str, str]]:
+        """Walk a Feishu wiki subtree and return ``(doc_url, title)`` tuples.
+
+        Exactly one of ``space_id`` (whole space) or ``root_node_token`` (a single
+        wiki node + its descendants) must be provided. ``space_id`` lists every
+        top-level node via ``space.list``; ``root_node_token`` first resolves the
+        node via ``get_node`` and then lists its children.
+
+        Bounds: ``max_depth`` caps recursion (the root counts as depth 0);
+        ``max_nodes`` caps the total returned documents. Both bounds are enforced
+        best-effort — when hit, traversal stops and a warning is logged.
+        """
+        if (space_id is None) == (root_node_token is None):
+            raise ValueError(
+                "list_wiki_subtree requires exactly one of space_id or root_node_token."
+            )
+
+        results: List[Tuple[str, str]] = []
+        # ``seen_tokens`` breaks accidental cycles (parent_token loops in the API
+        # response or shared subtrees).
+        seen_tokens: set[str] = set()
+        truncated = False
+
+        def _record(node: "FeishuAccessor._WikiNode") -> bool:
+            """Append a node's doc URL. Return False if the cap is hit.
+
+            Nodes whose ``obj_type`` is not a parseable document type are skipped
+            for emission (their URL would be unparseable), but the caller still
+            recurses into them when ``has_child`` is set so folders of unknown
+            type are walked.
+            """
+            nonlocal truncated
+            if not node.obj_token or node.obj_token in seen_tokens:
+                return True
+            doc_url = self._build_doc_url(node)
+            if doc_url is None:
+                logger.debug(
+                    "[FeishuAccessor] skipping wiki node %s with unsupported obj_type=%r",
+                    node.node_token,
+                    node.obj_type,
+                )
+                return True
+            if len(results) >= max_nodes:
+                truncated = True
+                return False
+            seen_tokens.add(node.obj_token)
+            results.append((doc_url, node.title or ""))
+            return True
+
+        async def _walk(
+            space: str,
+            parent_node_token: Optional[str],
+            depth: int,
+        ) -> None:
+            nonlocal truncated
+            if depth >= max_depth:
+                logger.warning(
+                    "[FeishuAccessor] wiki subtree max_depth=%d hit at node=%s; "
+                    "stopping recursion (increase to fetch more).",
+                    max_depth,
+                    parent_node_token or "<root>",
+                )
+                return
+            page_token: Optional[str] = None
+            while True:
+                if len(results) >= max_nodes:
+                    truncated = True
+                    return
+                nodes, has_more, next_page_token = await asyncio.to_thread(
+                    self._list_wiki_child_nodes,
+                    space,
+                    parent_node_token,
+                    feishu_access_token=feishu_access_token,
+                    page_token=page_token,
+                )
+                for node in nodes:
+                    if not _record(node):
+                        return
+                    if node.has_child and node.node_token:
+                        await _walk(space, node.node_token, depth + 1)
+                        if truncated:
+                            return
+                if not has_more or not next_page_token:
+                    return
+                if next_page_token == page_token:
+                    # Defensive: avoid spinning on an unchanging page token.
+                    return
+                page_token = next_page_token
+
+        if space_id:
+            await _walk(space_id, None, 0)
+        else:
+            assert root_node_token is not None
+            root = await asyncio.to_thread(
+                self._resolve_wiki_node_full,
+                root_node_token,
+                feishu_access_token=feishu_access_token,
+            )
+            _record(root)
+            if root.has_child and root.node_token and not truncated:
+                # ``space_id`` from the node so child listings use the right space.
+                await _walk(root.space_id or "", root.node_token, 1)
+
+        if truncated:
+            logger.warning(
+                "[FeishuAccessor] wiki subtree truncated at max_nodes=%d "
+                "(space=%s root=%s).",
+                max_nodes,
+                space_id,
+                root_node_token,
+            )
+        return results
+
+    @staticmethod
+    def _build_doc_url(node: "FeishuAccessor._WikiNode") -> Optional[str]:
+        """Build a canonical single-doc URL for a wiki node, or None if unparseable.
+
+        Returns ``None`` for ``obj_type`` values outside ``_DOC_TYPE_HANDLERS``
+        so the caller can skip emission while still recursing into the node's
+        children. For parseable types we emit a *direct* doc URL
+        (``/docx/<obj_token>``, ``/sheets/<obj_token>``, ``/base/<obj_token>``)
+        so re-importing the child cannot re-trigger batch expansion (those URL
+        kinds are classified as ``single_doc``).
+        """
+        doc_type = FeishuAccessor._WIKI_TYPE_MAP.get(node.obj_type, node.obj_type)
+        if doc_type not in FeishuAccessor._DOC_TYPE_HANDLERS:
+            return None
+        if not node.obj_token:
+            return None
+        return f"https://feishu.cn/{doc_type}/{node.obj_token}"
+
+    async def expand_feishu_url(
+        self,
+        url: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+        max_depth: int = WIKI_BATCH_DEFAULT_MAX_DEPTH,
+        max_nodes: int = WIKI_BATCH_DEFAULT_MAX_NODES,
+    ) -> List[Tuple[str, str]]:
+        """Expand a Feishu URL into the list of documents to import.
+
+        Returns a list of ``(doc_url, title)`` tuples:
+
+        * Single-document URLs (``/docx/<t>``, ``/sheets/<t>``, ``/base/<t>``)
+          always return ``[(url, "")]`` — single-doc imports are unchanged.
+        * ``/wiki/settings/<space_id>`` returns every document in the space;
+          an empty list means the space has no importable documents.
+        * ``/wiki/<token>`` resolves the node: if it has children, returns the
+          node itself plus every descendant (empty list if the subtree has no
+          importable documents); otherwise returns ``[(url, "")]`` (unchanged
+          single-doc behavior).
+
+        A return of ``[]`` therefore means "recognised batch source with nothing
+        to import" — the caller must surface this rather than fall back to a
+        single-doc import (the original URL is not a valid doc URL).
+
+        Raising on API failure is intentional — the caller surfaces the error
+        instead of silently degrading to a single-doc import.
+        """
+        classified = self.classify_url(url)
+        if classified is None:
+            # Not a Feishu URL — let the caller handle it (existing path).
+            return [(url, "")]
+        kind, primary, _secondary = classified
+        if kind == "single_doc":
+            return [(url, "")]
+        if kind == "wiki_space_root":
+            children = await self.list_wiki_subtree(
+                space_id=primary,
+                feishu_access_token=feishu_access_token,
+                max_depth=max_depth,
+                max_nodes=max_nodes,
+            )
+            # Empty list is meaningful: caller surfaces "no documents" rather
+            # than trying to import the /wiki/settings/<id> URL as a doc.
+            return children
+        if kind == "wiki_node":
+            node = await asyncio.to_thread(
+                self._resolve_wiki_node_full,
+                primary,
+                feishu_access_token=feishu_access_token,
+            )
+            if not node.has_child:
+                return [(url, "")]
+            children = await self.list_wiki_subtree(
+                root_node_token=primary,
+                feishu_access_token=feishu_access_token,
+                max_depth=max_depth,
+                max_nodes=max_nodes,
+            )
+            # ``list_wiki_subtree`` always records the root first, so an empty
+            # result here means the root itself was deduped/filtered — surface
+            # it as "no documents" rather than re-importing the wiki URL.
+            return children
+        # Defensive — classify_url only returns the kinds above.
+        return [(url, "")]
+
     # ========== Docx Parsing ==========
 
     def _parse_docx(
