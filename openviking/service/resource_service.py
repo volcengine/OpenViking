@@ -76,6 +76,12 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+# Max in-flight Feishu wiki batch child imports. A wiki space can contain
+# hundreds of docs; without a cap, fanning out one fetch per doc simultaneously
+# hammers the Feishu API and risks rate-limiting/风控.
+_FEISHU_BATCH_CONCURRENCY = 8
+
+
 _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
     {
         "path",
