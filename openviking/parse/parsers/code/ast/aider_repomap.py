@@ -10,6 +10,8 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 _QUERY_DIR = Path(__file__).with_name("queries") / "tree-sitter-language-pack"
+_TREE_CONTEXT_OMISSION = "⋮"
+_TREE_CONTEXT_CODE_PREFIX = "│"
 
 _LANG_ALIASES = {
     "common_lisp": "commonlisp",
@@ -89,7 +91,7 @@ def _extract_with_grep_ast(
         )
         context.add_lines_of_interest(def_lines)
         context.add_context()
-        rendered = context.format().strip()
+        rendered = _clean_repromap_rendered(context.format()).strip()
         if not rendered:
             return None
 
@@ -98,6 +100,19 @@ def _extract_with_grep_ast(
     except Exception as exc:
         logger.warning("grep-ast RepoMap extraction failed for '%s': %s", file_name, exc)
         return None
+
+
+def _clean_repromap_rendered(rendered: str) -> str:
+    """Remove TreeContext visual gutter before skeleton usefulness checks."""
+
+    lines: list[str] = []
+    for line in rendered.splitlines():
+        if line.strip() == _TREE_CONTEXT_OMISSION:
+            continue
+        if line.startswith(_TREE_CONTEXT_CODE_PREFIX):
+            line = line[len(_TREE_CONTEXT_CODE_PREFIX) :]
+        lines.append(line.rstrip())
+    return "\n".join(lines)
 
 
 def _query_captures(rel_name: str, content: str):

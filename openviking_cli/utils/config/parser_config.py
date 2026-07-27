@@ -12,7 +12,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
+from openviking_cli.utils.logger import get_logger
+
 from .config_utils import raise_unknown_config_fields
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -257,6 +261,22 @@ class CodeConfig(CodeHostingConfig):
     truncation_strategy: str = "head"  # "head", "tail", or "balanced"
     warn_on_truncation: bool = True
     github_raw_domain: str = "raw.githubusercontent.com"
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "CodeConfig":
+        """Create code configuration, accepting removed fields for upgrade compatibility."""
+
+        data = dict(data)
+        if "code_summary_mode" in data:
+            data.pop("code_summary_mode", None)
+            logger.warning(
+                "code.code_summary_mode is deprecated and ignored; "
+                "code summaries now always use the fixed skeleton route with LLM fallback"
+            )
+
+        valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
+        raise_unknown_config_fields(data=data, valid_fields=valid_fields, context_name=cls.__name__)
+        return cls(**data)
 
     def validate(self) -> None:
         """

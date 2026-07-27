@@ -72,6 +72,37 @@ class TestURLTypeDetectorCodeExtensions:
         assert url_type == URLType.DOWNLOAD_TXT
 
     @pytest.mark.asyncio
+    async def test_ts_extension_defaults_to_text_when_headers_unavailable(self, monkeypatch):
+        _patch_httpx_client(
+            monkeypatch,
+            headers={"content-type": "text/plain"},
+            content=b"export const value = 1;\n",
+        )
+
+        url_type, meta = await self.detector.detect("https://example.com/path/index.ts")
+
+        assert url_type == URLType.DOWNLOAD_TXT
+        assert meta["detected_by"] == "extension"
+        assert meta["extension"] == ".ts"
+
+    @pytest.mark.asyncio
+    async def test_ts_extension_refines_to_video_from_content_type(self, monkeypatch):
+        _patch_httpx_client(
+            monkeypatch,
+            headers={"content-type": "video/mp2t"},
+            content=b"\x47mpeg-ts",
+            fail_head=False,
+        )
+
+        url_type, meta = await self.detector.detect(
+            "https://filesamples.com/samples/video/ts/sample_1280x720.ts"
+        )
+
+        assert url_type == URLType.DOWNLOAD_VIDEO
+        assert meta["detected_by"] == "media_type_pattern"
+        assert meta["media_type"] == "video/mp2t"
+
+    @pytest.mark.asyncio
     async def test_yaml_extension_detected(self):
         url = "https://example.com/config.yaml"
         url_type, meta = await self.detector.detect(url)
@@ -203,6 +234,25 @@ class TestHTTPAccessorGetFallback:
         assert temp_path.endswith(".ac3")
         assert meta["extension"] == ".ac3"
         assert meta["original_filename"] == "sample1.ac3"
+
+    @pytest.mark.asyncio
+    async def test_get_content_type_refines_ts_url_to_video(self, monkeypatch):
+        _patch_httpx_client(
+            monkeypatch,
+            headers={"content-type": "video/mp2t"},
+            content=b"\x47mpeg-ts",
+        )
+
+        accessor = HTTPAccessor()
+        temp_path, url_type, meta = await accessor._download_url(
+            "https://filesamples.com/samples/video/ts/sample_1280x720.ts"
+        )
+
+        assert url_type == URLType.DOWNLOAD_VIDEO
+        assert temp_path.endswith(".ts")
+        assert meta["extension"] == ".ts"
+        assert meta["original_filename"] == "sample_1280x720.ts"
+        assert meta["refined_by_get_headers"] is True
 
     @pytest.mark.asyncio
     async def test_get_content_disposition_refines_extensionless_docx_url(self, monkeypatch):

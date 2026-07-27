@@ -6,6 +6,7 @@ from unittest.mock import Mock
 import pytest
 
 from openviking.parse.parsers.code.ast import extract_skeleton_result
+from openviking.parse.parsers.code.ast.aider_repomap import _clean_repromap_rendered
 from openviking.parse.parsers.code.ast.languages.process_engine import (
     extract_process_skeleton,
     supports_process_skeleton,
@@ -91,6 +92,86 @@ def test_both_extractors_unavailable_requests_llm_fallback(monkeypatch):
     assert result.text is None
     assert result.provider == "llm"
     assert result.should_fallback_to_llm
+
+
+def test_clean_repromap_rendered_removes_tree_context_gutter():
+    rendered = "⋮\n│struct Widget { int x; };\n│\n│int add(int a, int b) {\n│    return a + b;\n⋮"
+
+    text = _clean_repromap_rendered(rendered)
+
+    assert text == "struct Widget { int x; };\n\nint add(int a, int b) {\n    return a + b;"
+
+
+def test_tags_query_rendered_skeleton_is_useful_after_cleaning(monkeypatch):
+    process = Mock()
+    monkeypatch.setattr(
+        "openviking.parse.parsers.code.ast.providers.extract_process_skeleton",
+        process,
+    )
+    content = """#include <stdio.h>
+
+struct Widget { int x; };
+
+int add(int a, int b) {
+    return a + b;
+}
+
+static void run(void) {
+    printf("%d", add(1, 2));
+}
+"""
+
+    result = extract_skeleton_result("sample.c", content)
+
+    assert result.provider == "aider_repomap"
+    assert not result.should_fallback_to_llm
+    assert result.text
+    assert "struct Widget" in result.text
+    assert "int add(int a, int b)" in result.text
+    assert "│" not in result.text
+    assert "⋮" not in result.text
+    process.assert_not_called()
+
+
+def test_ocaml_interface_tags_capture_interface_structures(monkeypatch):
+    process = Mock()
+    monkeypatch.setattr(
+        "openviking.parse.parsers.code.ast.providers.extract_process_skeleton",
+        process,
+    )
+    content = """type user = {
+  id : string;
+  name : string;
+}
+
+module type STORE = sig
+  val find : string -> user option
+end
+
+module Cache : sig
+  val get : string -> user option
+end
+
+class type printable = object
+  method render : string
+end
+
+external hash_user : user -> int = "hash_user"
+
+val create : id:string -> name:string -> user
+"""
+
+    result = extract_skeleton_result("sample.mli", content)
+
+    assert result.provider == "aider_repomap"
+    assert result.text
+    assert "type user" in result.text
+    assert "module type STORE" in result.text
+    assert "module Cache" in result.text
+    assert "class type printable" in result.text
+    assert "external hash_user" in result.text
+    assert "val create" in result.text
+    process.assert_not_called()
 
 
 @pytest.mark.parametrize(

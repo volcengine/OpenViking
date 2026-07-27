@@ -98,6 +98,7 @@ class URLTypeDetector:
         **dict.fromkeys(VIDEO_EXTENSIONS, URLType.DOWNLOAD_VIDEO),
         **dict.fromkeys(DOCUMENT_EXTENSIONS, URLType.DOWNLOAD_DOCUMENT),
     }
+    CONTENT_TYPE_REFINABLE_EXTENSIONS = {".ts"}
 
     # === IANA Media Type to URL type mapping ===
     # Maps IANA registered media types to our internal URLType
@@ -184,15 +185,19 @@ class URLTypeDetector:
         parsed = urlparse(url)
         path_lower = parsed.path.lower()
         valid_extensions = set(self.EXTENSION_MAP.keys())
+        extension_match: Optional[Tuple[str, URLType]] = None
 
         # === Step 1: Check extension from URL path ===
         path_ext = Path(path_lower).suffix
         if path_ext and path_ext in valid_extensions:
             for ext, url_type in self.EXTENSION_MAP.items():
                 if path_lower.endswith(ext):
+                    extension_match = (ext, url_type)
                     meta["detected_by"] = "extension"
                     meta["extension"] = ext
-                    return url_type, meta
+                    if ext not in self.CONTENT_TYPE_REFINABLE_EXTENSIONS:
+                        return url_type, meta
+                    break
 
         # === Step 2: Send HEAD request for headers ===
         try:
@@ -224,6 +229,12 @@ class URLTypeDetector:
         except Exception as e:
             meta["detection_error"] = str(e)
             logger.debug(f"[URLTypeDetector] HEAD request failed: {e}, falling back to default")
+
+        if extension_match is not None:
+            ext, url_type = extension_match
+            meta["detected_by"] = "extension"
+            meta["extension"] = ext
+            return url_type, meta
 
         # === Step 3: Default behavior ===
         meta["detected_by"] = "default"
@@ -646,7 +657,11 @@ class HTTPAccessor(DataAccessor):
             get_meta,
             detected_by_prefix="get_",
         )
-        if get_url_type != URLType.UNKNOWN and self._should_refine_url_type(url_type, get_url_type):
+        if get_url_type != URLType.UNKNOWN and self._should_refine_url_type(
+            url_type,
+            get_url_type,
+            meta,
+        ):
             url_type = get_url_type
             meta.update(get_meta)
             meta["refined_by_get_headers"] = True
@@ -687,11 +702,22 @@ class HTTPAccessor(DataAccessor):
         return meta
 
     @staticmethod
-    def _should_refine_url_type(current: URLType, candidate: URLType) -> bool:
+    def _should_refine_url_type(
+        current: URLType,
+        candidate: URLType,
+        meta: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         """Only replace ambiguous/default webpage guesses with file types."""
         if candidate in (URLType.UNKNOWN, URLType.WEBPAGE):
             return False
         if current in (URLType.UNKNOWN, URLType.WEBPAGE):
+            return True
+        if (
+            meta
+            and meta.get("detected_by") == "extension"
+            and meta.get("extension") in URLTypeDetector.CONTENT_TYPE_REFINABLE_EXTENSIONS
+            and candidate == URLType.DOWNLOAD_VIDEO
+        ):
             return True
         return current == candidate
 
