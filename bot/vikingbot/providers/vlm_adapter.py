@@ -82,13 +82,16 @@ class VLMProviderAdapter(LLMProvider):
 
             # --- Call VLM backend ---
             attempt = 1
+            # An explicit empty list asks VLM backends for a structured response
+            # without exposing tools, so per-response usage is preserved.
+            response_tools = tools if tools is not None else []
             while True:
                 try:
                     result = await self._vlm.get_completion_async(
                         messages=messages,
                         thinking=getattr(self._vlm, "thinking", None),
-                        tools=tools,
-                        tool_choice="auto" if tools else None,
+                        tools=response_tools,
+                        tool_choice="auto" if response_tools else None,
                     )
                     break
                 except Exception as e:

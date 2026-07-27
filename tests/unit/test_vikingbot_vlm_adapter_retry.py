@@ -149,6 +149,48 @@ async def test_chat_accepts_string_response_from_openai_backend_with_tools(monke
 
 
 @pytest.mark.asyncio
+async def test_chat_without_tools_preserves_usage_from_openai_backend(monkeypatch):
+    raw_response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="plain response", tool_calls=None),
+                finish_reason="stop",
+            )
+        ],
+        usage=SimpleNamespace(
+            prompt_tokens=13,
+            completion_tokens=5,
+            total_tokens=18,
+            prompt_tokens_details=None,
+            completion_tokens_details=None,
+        ),
+    )
+
+    async def create(**kwargs):
+        assert "tools" not in kwargs
+        return raw_response
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create)),
+    )
+    vlm = OpenAIVLM({"provider": "openai", "model": "gpt-5.6-terra"})
+    monkeypatch.setattr(vlm, "get_async_client", lambda: client)
+    adapter = VLMProviderAdapter(vlm, "gpt-5.6-terra", langfuse_client=_DisabledLangfuse())
+
+    response = await adapter.chat(messages=[{"role": "user", "content": "hello"}])
+
+    assert response.content == "plain response"
+    assert response.tool_calls == []
+    assert response.finish_reason == "stop"
+    assert response.usage == {
+        "prompt_tokens": 13,
+        "completion_tokens": 5,
+        "total_tokens": 18,
+        "prompt_tokens_details": None,
+    }
+
+
+@pytest.mark.asyncio
 async def test_chat_stream_retries_rate_limit_until_success(monkeypatch):
     sleep_delays: list[float] = []
 
