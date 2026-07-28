@@ -7,6 +7,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from openviking.core.path_variables import CalendarVariableProvider
+from openviking.parse.parsers.constants import (
+    MPEG_TS_EXTENSION_ALIAS,
+    TYPESCRIPT_MPEG_TS_EXTENSION,
+)
 from openviking.prompts import render_prompt
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.utils.config import get_openviking_config
@@ -18,6 +22,11 @@ if TYPE_CHECKING:
 from .constants import AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 
 logger = get_logger(__name__)
+
+MPEG_TS_PACKET_SIZE = 188
+MPEG_TS_PROBE_PACKETS = 3
+MPEG_TS_PROBE_BYTES = MPEG_TS_PACKET_SIZE * MPEG_TS_PROBE_PACKETS
+MPEG_TS_SYNC_BYTE = 0x47
 
 
 def _is_svg(data: bytes) -> bool:
@@ -51,6 +60,32 @@ def _convert_svg_to_png(svg_data: bytes) -> Optional[bytes]:
     return None
 
 
+def read_mpeg_ts_probe(path: Path) -> bytes:
+    """Read only the bytes needed to detect MPEG-TS packet sync."""
+    with path.open("rb") as file:
+        return file.read(MPEG_TS_PROBE_BYTES)
+
+
+def is_mpeg_ts(content: bytes) -> bool:
+    """Detect MPEG-TS by checking sync bytes at packet boundaries."""
+    if len(content) < MPEG_TS_PROBE_BYTES:
+        return False
+    return all(
+        content[index * MPEG_TS_PACKET_SIZE] == MPEG_TS_SYNC_BYTE
+        for index in range(MPEG_TS_PROBE_PACKETS)
+    )
+
+
+def _get_media_type_from_resource_uri(source_path: str) -> Optional[str]:
+    if source_path.startswith("viking://resources/images/"):
+        return "image"
+    if source_path.startswith("viking://resources/audio/"):
+        return "audio"
+    if source_path.startswith("viking://resources/video/"):
+        return "video"
+    return None
+
+
 def get_media_type(source_path: Optional[str], source_format: Optional[str]) -> Optional[str]:
     """
     Determine media type from source path or format.
@@ -65,13 +100,24 @@ def get_media_type(source_path: Optional[str], source_format: Optional[str]) -> 
     if source_format:
         if source_format in ["image", "audio", "video"]:
             return source_format
+        if source_format.lower().lstrip(".") == MPEG_TS_EXTENSION_ALIAS:
+            return "video"
 
     if source_path:
+        resource_media_type = _get_media_type_from_resource_uri(source_path)
+        if resource_media_type:
+            return resource_media_type
+
         ext = Path(source_path).suffix.lower()
         if ext in IMAGE_EXTENSIONS:
             return "image"
         elif ext in AUDIO_EXTENSIONS:
             return "audio"
+        elif ext == TYPESCRIPT_MPEG_TS_EXTENSION:
+            path = Path(source_path)
+            if not path.is_file():
+                return None
+            return "video" if is_mpeg_ts(read_mpeg_ts_probe(path)) else None
         elif ext in VIDEO_EXTENSIONS:
             return "video"
 
