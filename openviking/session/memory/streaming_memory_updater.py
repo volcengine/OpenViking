@@ -1272,6 +1272,12 @@ def attach_source_to_request_operations(request: MemoryUpdateRequest) -> None:
         source_trace_id = getattr(op.source, "trace_id", None)
         if source_trace_id:
             op.memory_fields.setdefault("last_update_trace_id", source_trace_id)
+        source_session_id = getattr(op.source, "session_id", None)
+        if source_session_id:
+            op.memory_fields.setdefault("source_session_id", source_session_id)
+        source_message_ids = getattr(op.source, "message_ids", None)
+        if source_message_ids:
+            op.memory_fields.setdefault("source_message_ids", list(source_message_ids))
 
 
 def memory_operation_source_from_request(
@@ -1281,9 +1287,18 @@ def memory_operation_source_from_request(
     extraction_id = metadata.get("source_extraction_id") or metadata.get("extraction_id")
     if not extraction_id:
         return None
+    message_ids = metadata.get("message_ids")
+    if not message_ids:
+        messages = list(getattr(request, "messages", []) or [])
+        message_ids = [
+            str(getattr(m, "id", ""))
+            for m in messages
+            if getattr(m, "id", None)
+        ] or None
     return MemoryOperationSource(
         extraction_id=str(extraction_id),
         session_id=_optional_str(metadata.get("session_id")),
+        message_ids=list(message_ids) if message_ids else None,
         archive_uri=_optional_str(metadata.get("archive_uri")),
         task_id=_optional_str(metadata.get("task_id")),
         trace_id=_optional_str(metadata.get("trace_id")),

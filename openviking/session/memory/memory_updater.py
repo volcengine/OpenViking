@@ -1005,6 +1005,12 @@ class MemoryUpdater:
             source_trace_id = _operation_trace_id(resolved_op)
             if source_trace_id:
                 metadata["last_update_trace_id"] = source_trace_id
+            source_session_id = getattr(source, "session_id", None) if source else None
+            if source_session_id:
+                metadata["source_session_id"] = str(source_session_id)
+            source_message_ids = getattr(source, "message_ids", None) if source else None
+            if source_message_ids:
+                metadata["source_message_ids"] = list(source_message_ids)
             # Process fields defined in schema (apply merge_op)
             for field in schema.fields:
                 if field.name in resolved_op.memory_fields:

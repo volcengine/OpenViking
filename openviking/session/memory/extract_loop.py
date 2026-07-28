@@ -16,6 +16,7 @@ from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import (
     DeleteId,
     MemoryFile,
+    MemoryOperationSource,
     ResolvedOperation,
     ResolvedOperations,
     StoredLink,
@@ -100,6 +101,8 @@ class ExtractLoop:
         context_provider: Optional[Any] = None,  # ExtractContextProvider
         isolation_handler: MemoryIsolationHandler = None,
         thinking: bool = False,
+        session_id: Optional[str] = None,
+        message_ids: Optional[List[str]] = None,
     ):
         """
         Initialize the ExtractLoop.
@@ -112,6 +115,8 @@ class ExtractLoop:
             ctx: Request context
             context_provider: ExtractContextProvider - 必须提供（由 provider 加载 schema）
             thinking: Whether to explicitly enable model thinking for this extraction loop.
+            session_id: Session identifier for source tracing.
+            message_ids: List of message IDs that contributed to this extraction.
         """
         self.vlm = vlm
         self.viking_fs = viking_fs or get_viking_fs()
@@ -120,6 +125,8 @@ class ExtractLoop:
         self.ctx = ctx
         self.context_provider = context_provider
         self.thinking = bool(thinking)
+        self._session_id = session_id
+        self._message_ids = message_ids
         # Use provided isolation_handler or create one in run()
         self._isolation_handler = isolation_handler
         # Track format error retry (max 1 retry)
@@ -409,6 +416,12 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     uris=[],
                     page_id=page_id,
                 )
+
+                if self._session_id or self._message_ids:
+                    resolved_op.source = MemoryOperationSource(
+                        session_id=self._session_id,
+                        message_ids=self._message_ids,
+                    )
 
                 if page_id is not None and page_id_map is not None:
                     resolved_uri = page_id_map.resolve(page_id)

@@ -140,6 +140,8 @@ class SessionCompressorV2:
         isolation_handler: Optional[MemoryIsolationHandler] = None,
         transaction_handle=None,
         context_provider: Optional[Any] = None,
+        session_id: Optional[str] = None,
+        message_ids: Optional[List[str]] = None,
     ) -> ExtractLoop:
         """Create new ExtractLoop instance with current ctx.
 
@@ -171,6 +173,8 @@ class SessionCompressorV2:
             ctx=ctx,
             context_provider=context_provider,
             isolation_handler=isolation_handler,
+            session_id=session_id,
+            message_ids=message_ids,
         )
 
     def _get_or_create_updater(self, registry, transaction_handle=None) -> MemoryUpdater:
@@ -328,6 +332,8 @@ class SessionCompressorV2:
                 isolation_handler=isolation_handler,
                 transaction_handle=transaction_handle,
                 context_provider=context_provider,
+                session_id=session_id,
+                message_ids=[str(getattr(m, "id", "")) for m in messages if getattr(m, "id", None)],
             )
             read_scope = isolation_handler.get_read_scope()
             if lock_manager:
