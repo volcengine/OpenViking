@@ -43,6 +43,7 @@ def _build_test_app(middleware_factory, *, route_path: str, handler):
 
     @app.middleware("http")
     async def middleware_entry(request, call_next):
+        request.state.request_id = "test-request"
         return await middleware_factory(request, call_next)
 
     app.get(route_path)(handler)

@@ -14,7 +14,6 @@ from __future__ import annotations
 import logging
 import threading
 import time
-import uuid
 from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, ContextManager, Optional
@@ -827,7 +826,7 @@ def create_http_observability_middleware() -> Callable[[Request, Callable], Resp
         raw_path = str(request.url.path)
         raw_query = request.url.query or None
         route_template = _get_route_template(request)
-        request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+        request_id = request.state.request_id
 
         # Create root span attributes
         root_attrs = create_root_span_attributes(

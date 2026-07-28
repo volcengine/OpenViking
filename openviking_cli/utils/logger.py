@@ -5,6 +5,7 @@ Logging utilities for OpenViking.
 """
 
 import atexit
+import contextvars
 import logging
 import queue
 import sys
@@ -12,7 +13,7 @@ import threading
 from contextlib import contextmanager
 from logging.handlers import QueueHandler, QueueListener, TimedRotatingFileHandler
 from pathlib import Path
-from typing import Any, Optional, Tuple
+from typing import Any, Iterator, Optional, Tuple
 from uuid import uuid4
 
 from openviking.observability.context import (
@@ -72,6 +73,21 @@ _shared_log_handler_key: Optional[tuple[Any, ...]] = None
 _std_stream_handlers: dict[str, Tuple[QueueListener, logging.Handler]] = {}
 _std_stream_handlers_lock = threading.RLock()
 _std_stream_atexit_registered = False
+
+_request_id_context: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "openviking_log_request_id", default=""
+)
+
+
+@contextmanager
+def bind_log_request_id(request_id: str) -> Iterator[None]:
+    """Bind a request ID to logs emitted in the current execution context."""
+
+    token = _request_id_context.set(request_id)
+    try:
+        yield
+    finally:
+        _request_id_context.reset(token)
 
 
 def _get_log_context() -> dict[str, Any]:
@@ -441,6 +457,17 @@ class TraceContextFilter(logging.Filter):
         return True
 
 
+class _RequestIdLoggingFilter(logging.Filter):
+    """Inject and render the request ID bound by the HTTP server."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        request_id = _request_id_context.get()
+        record.request_id = request_id
+        if request_id:
+            record.msg = f"[request_id={request_id}] {record.msg}"
+        return True
+
+
 class LogToSpanEventFilter(logging.Filter):
     """
     Log filter that automatically maps log records to OTel span events.
@@ -748,12 +775,10 @@ def _build_standard_handler(
         real = getattr(handler, "_ov_real_handler", None)
         if real is not None:
             real.setFormatter(logging.Formatter("%(message)s"))
-        handler.setFormatter(logging.Formatter(format_string))
-        _add_trace_id_filter(handler)
-        return handler
 
     handler.setFormatter(logging.Formatter(format_string))
     _add_trace_id_filter(handler)
+    handler.addFilter(_RequestIdLoggingFilter())
     return handler
 
 

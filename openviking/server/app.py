@@ -15,6 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.exceptions import ExceptionMiddleware
 
 from openviking.server.config import (
     ServerConfig,
@@ -27,6 +28,7 @@ from openviking.server.error_mapping import map_exception
 from openviking.server.identity import Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.server.profile_middleware import create_profile_http_middleware
+from openviking.server.request_id import REQUEST_ID_HEADER, RequestIdMiddleware
 from openviking.server.routers import (
     admin_router,
     bot_router,
@@ -334,15 +336,6 @@ def create_app(
     app.state.api_key_manager = None
     set_server_config(config)
 
-    # Add CORS middleware
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=config.cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
     # Body dump middleware must be registered BEFORE observability so it ends up
     # nested inside the trace span (in Starlette, middleware added later wraps
     # earlier-added ones — so earlier registration = inner layer).
@@ -478,8 +471,7 @@ def create_app(
         )
 
     # Catch-all for unhandled exceptions so clients always get JSON
-    @app.exception_handler(Exception)
-    async def general_error_handler(request: Request, exc: Exception):
+    async def general_error_handler(_request: Request, exc: Exception):
         mapped = map_exception(exc)
         if mapped is not None:
             http_status = ERROR_CODE_TO_HTTP_STATUS.get(mapped.code, 500)
@@ -511,6 +503,19 @@ def create_app(
                 ),
             ).model_dump(),
         )
+
+    # Keep exception rendering inside the request-ID and CORS layers. This lets
+    # those middleware own their response headers without special error paths.
+    app.add_middleware(ExceptionMiddleware, handlers={Exception: general_error_handler})
+    app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=config.cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=[REQUEST_ID_HEADER],
+    )
 
     # Configure Bot API if --with-bot is enabled
     if config.with_bot:
