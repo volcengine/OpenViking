@@ -1,0 +1,27 @@
+docs/en/api/12-content.md
+  s_cdd38986f8bd9a::t_b32771d6b9f8e3 357
+docs/zh/api/12-content.md
+  s_cdd38986f8bd9a::t_0d7de55cd4c5bc 357
+openviking/storage/content_write.py
+  s_cdd38986f8bd9a::t_fda5f50d6ad1f5 404-405,828,830
+tests/server/test_content_batch_write.py
+  s_cdd38986f8bd9a::t_c5d8ba1c706a15 408-415,417,425,433-434
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "f7db9cf8a321b02805dc857b6d8a4eda5033a6b1",
+  "prompts": {},
+  "sessions": {
+    "s_cdd38986f8bd9a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa2df-be1f-73e2-99e6-04aa7cfe807c",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
