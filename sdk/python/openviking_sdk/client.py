@@ -640,10 +640,10 @@ class AsyncHTTPClient:
         preserve_structure: Optional[bool] = None,
         watch_interval: float = 0,
         args: Optional[Dict[str, Any]] = None,
-        tags: Optional[List[str]] = None,
-        tag_mode: str = "replace",
         telemetry: Any = False,
         processing_mode: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
     ) -> Dict[str, Any]:
         if to and parent:
             raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
@@ -1845,10 +1845,10 @@ class SyncHTTPClient:
         preserve_structure: Optional[bool] = None,
         watch_interval: float = 0,
         args: Optional[Dict[str, Any]] = None,
-        tags: Optional[List[str]] = None,
-        tag_mode: str = "replace",
         telemetry: Any = False,
         processing_mode: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.add_resource(

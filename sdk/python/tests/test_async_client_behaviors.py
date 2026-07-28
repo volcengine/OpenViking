@@ -1,3 +1,4 @@
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
@@ -6,6 +7,13 @@ import pytest
 from openviking_sdk import AsyncHTTPClient, SyncHTTPClient
 from openviking_sdk.client import Session, SyncSession
 from openviking_sdk.errors import NotFoundError
+
+
+def test_add_resource_signatures_keep_telemetry_position():
+    for func in (AsyncHTTPClient.add_resource, SyncHTTPClient.add_resource):
+        params = list(inspect.signature(func).parameters)
+        assert params.index("telemetry") < params.index("tags")
+        assert params.index("telemetry") < params.index("tag_mode")
 
 
 @pytest.mark.asyncio

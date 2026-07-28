@@ -275,9 +275,10 @@ async def test_vectorize_file_appends_search_tags_to_existing_record_tags(monkey
     )
 
     class DummyVikingDB:
-        async def fetch_by_uri(self, uri, *, ctx):
-            assert uri == "viking://user/default/resources/demo.md"
-            return {"search_tags": ["owner=alice", "env=dev"]}
+        async def filter(self, *, filter, limit, output_fields, ctx):
+            assert limit == 1
+            assert output_fields == ["search_tags"]
+            return [{"search_tags": ["owner=alice", "env=dev"]}]
 
     monkeypatch.setattr(
         "openviking.server.dependencies.get_service",
@@ -300,6 +301,84 @@ async def test_vectorize_file_appends_search_tags_to_existing_record_tags(monkey
         "env=prod",
         "team=search",
     ]
+
+
+@pytest.mark.asyncio
+async def test_vectorize_file_append_reads_existing_tags_from_full_leveled_record(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("deployment guide"))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
+        ),
+    )
+
+    class DummyVikingDB:
+        async def get_context_by_uri(self, *_args, **_kwargs):
+            return [{"uri": "viking://user/default/resources/demo.md", "level": 2}]
+
+        async def filter(self, *, filter, limit, output_fields, ctx):
+            assert limit == 1
+            assert output_fields == ["search_tags"]
+            return [{"search_tags": ["owner=alice", "env=dev"]}]
+
+    monkeypatch.setattr(
+        "openviking.server.dependencies.get_service",
+        lambda: types.SimpleNamespace(vikingdb_manager=DummyVikingDB()),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/demo.md",
+        summary_dict={"name": "demo.md", "summary": "deployment summary"},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+        search_tags=["env=prod", "team=search"],
+        search_tag_mode="append",
+    )
+
+    assert queue.items[0].context_data["search_tags"] == [
+        "owner=alice",
+        "env=prod",
+        "team=search",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_vectorize_file_append_fails_when_existing_tag_read_fails(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("deployment guide"))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
+        ),
+    )
+
+    class DummyVikingDB:
+        async def filter(self, **_kwargs):
+            raise RuntimeError("backend unavailable")
+
+    monkeypatch.setattr(
+        "openviking.server.dependencies.get_service",
+        lambda: types.SimpleNamespace(vikingdb_manager=DummyVikingDB()),
+    )
+
+    with pytest.raises(RuntimeError, match="failed to read existing search tags"):
+        await embedding_utils.vectorize_file(
+            file_path="viking://user/default/resources/demo.md",
+            summary_dict={"name": "demo.md", "summary": "deployment summary"},
+            parent_uri="viking://user/default/resources",
+            ctx=DummyReq(),
+            search_tags=["env=prod", "team=search"],
+            search_tag_mode="append",
+        )
+
+    assert queue.items == []
 
 
 @pytest.mark.asyncio
@@ -328,13 +407,16 @@ async def test_vectorize_directory_meta_appends_search_tags_by_level(monkeypatch
     monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("ignored"))
 
     class DummyVikingDB:
-        async def get_context_by_uri(self, uri, *, level, limit, ctx):
-            assert uri == "viking://user/default/resources/demo"
-            assert limit == 1
+        async def filter(self, *, filter, limit, output_fields, ctx):
             tags_by_level = {
                 0: ["owner=l0", "env=old"],
                 1: ["owner=l1", "env=old"],
             }
+            level = next(
+                cond.value for cond in filter.conds if getattr(cond, "field", None) == "level"
+            )
+            assert limit == 1
+            assert output_fields == ["search_tags"]
             return [{"search_tags": tags_by_level[level]}]
 
     monkeypatch.setattr(

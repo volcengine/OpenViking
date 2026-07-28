@@ -13,8 +13,14 @@ from typing import Any, Dict, Optional
 from charset_normalizer import from_bytes
 
 from openviking.core.context import Context, ContextLevel, ResourceContentType, Vectorize
-from openviking.core.namespace import context_type_for_uri, is_session_uri, owner_space_for_uri
+from openviking.core.namespace import (
+    canonicalize_uri,
+    context_type_for_uri,
+    is_session_uri,
+    owner_space_for_uri,
+)
 from openviking.server.identity import RequestContext
+from openviking.storage.expr import And, Eq, PathScope
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
@@ -34,6 +40,10 @@ logger = get_logger(__name__)
 # not retrievable). Cap it with headroom, mirroring
 # memory_updater._truncate_memory_abstract introduced for the memory path (#2774).
 _ABSTRACT_MAX_BYTES = 50_000
+
+
+class _SearchTagAppendReadError(RuntimeError):
+    """Raised when append mode cannot read existing search tags safely."""
 
 
 def _truncate_abstract_bytes(abstract: str) -> str:
@@ -71,6 +81,38 @@ def _apply_search_tags(embedding_msg, search_tags: Optional[list[str]]) -> None:
     embedding_msg.context_data["search_tags"] = list(search_tags)
 
 
+async def _fetch_existing_search_tags(
+    vikingdb_manager: Any,
+    uri: str,
+    ctx: RequestContext,
+    *,
+    level: Optional[int],
+) -> Optional[list[str]]:
+    if level is None:
+        record = await vikingdb_manager.fetch_by_uri(uri, ctx=ctx)
+    else:
+        filter_contexts = getattr(vikingdb_manager, "filter", None)
+        if not callable(filter_contexts):
+            raise RuntimeError("vector store cannot read existing tags by level")
+        records = await filter_contexts(
+            filter=And(
+                [
+                    PathScope("uri", canonicalize_uri(uri, ctx), depth=0),
+                    Eq("account_id", ctx.account_id),
+                    Eq("level", level),
+                ]
+            ),
+            limit=1,
+            output_fields=["search_tags"],
+            ctx=ctx,
+        )
+        record = records[0] if records else None
+    if not isinstance(record, dict):
+        return None
+    value = record.get("search_tags")
+    return value if isinstance(value, list) else None
+
+
 async def _resolve_search_tags(
     uri: str,
     ctx: Optional[RequestContext],
@@ -88,24 +130,20 @@ async def _resolve_search_tags(
         from openviking.server.dependencies import get_service
 
         service = get_service()
-        if service and service.vikingdb_manager:
-            get_context_by_uri = getattr(service.vikingdb_manager, "get_context_by_uri", None)
-            if level is None or not callable(get_context_by_uri):
-                record = await service.vikingdb_manager.fetch_by_uri(uri, ctx=ctx)
-            else:
-                records = await get_context_by_uri(
-                    uri,
-                    level=level,
-                    limit=1,
-                    ctx=ctx,
-                )
-                record = records[0] if records else None
-            if isinstance(record, dict):
-                value = record.get("search_tags")
-                if isinstance(value, list):
-                    existing_tags = value
-    except Exception:
-        existing_tags = None
+        if not service or not service.vikingdb_manager:
+            raise _SearchTagAppendReadError("vector store is not initialized")
+        existing_tags = await _fetch_existing_search_tags(
+            service.vikingdb_manager,
+            uri,
+            ctx,
+            level=level,
+        )
+    except Exception as exc:
+        if isinstance(exc, _SearchTagAppendReadError):
+            raise
+        raise _SearchTagAppendReadError(
+            f"failed to read existing search tags for append: {uri}"
+        ) from exc
     return merge_search_tags(existing_tags, search_tags)
 
 
@@ -642,6 +680,8 @@ async def vectorize_file(
                 registered_wait_root[1],
                 f"Failed to enqueue file vector for {file_path}: {e}",
             )
+        if isinstance(e, _SearchTagAppendReadError):
+            raise
     finally:
         if not enqueued:
             await _decrement_embedding_tracker(semantic_msg_id, 1)

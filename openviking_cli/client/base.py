@@ -45,9 +45,9 @@ class BaseClient(ABC):
         watch_interval: float = 0,
         processing_mode: str = "semantic_and_vectors",
         args: Optional[Dict[str, Any]] = None,
+        telemetry: TelemetryRequest = False,
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
-        telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
         ...
