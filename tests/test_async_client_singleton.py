@@ -6,7 +6,7 @@ import asyncio
 import concurrent.futures
 import os
 import tempfile
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
@@ -165,20 +165,25 @@ class TestAsyncOpenVikingSingletonPath:
             workspace_b = os.path.join(root, "b")
 
             client_a = AsyncOpenViking(path=workspace_a)
+            original_close = client_a._client.close
             client_a._client.close = AsyncMock(
                 side_effect=asyncio.CancelledError("simulated cancellation")
             )
 
-            with pytest.raises(asyncio.CancelledError):
+            try:
+                with pytest.raises(asyncio.CancelledError):
+                    await client_a.close()
+
+                # Guard still active — different workspace rejected
+                with pytest.raises(ValueError):
+                    AsyncOpenViking(path=workspace_b)
+
+                # Same workspace still accepted
+                client_a2 = AsyncOpenViking(path=workspace_a)
+                assert client_a2 is client_a
+            finally:
+                client_a._client.close = original_close
                 await client_a.close()
-
-            # Guard still active — different workspace rejected
-            with pytest.raises(ValueError):
-                AsyncOpenViking(path=workspace_b)
-
-            # Same workspace still accepted
-            client_a2 = AsyncOpenViking(path=workspace_a)
-            assert client_a2 is client_a
 
     async def test_concurrent_first_construction_is_serialized(self, clean_singleton):
         """Two threads racing to construct the singleton produce exactly one workspace.
@@ -200,15 +205,18 @@ class TestAsyncOpenVikingSingletonPath:
             workspace = os.path.join(root, "ws")
             os.makedirs(workspace)
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-                futures = [
-                    pool.submit(AsyncOpenViking, path=workspace),
-                    pool.submit(AsyncOpenViking, path=workspace),
-                ]
-                results = [f.result() for f in concurrent.futures.as_completed(futures)]
+            with patch.object(LocalClient, "__init__", counting_init):
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                    futures = [
+                        pool.submit(AsyncOpenViking, path=workspace),
+                        pool.submit(AsyncOpenViking, path=workspace),
+                    ]
+                    results = [f.result() for f in concurrent.futures.as_completed(futures)]
 
             # Both calls return the same singleton
             assert results[0] is results[1]
+            # Exactly one LocalClient constructed under _construct_lock
+            assert run_count == 1
             # _path is set exactly once with the correct workspace
             assert os.path.realpath(results[0]._path) == os.path.realpath(workspace)
 
