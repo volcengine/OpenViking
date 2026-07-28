@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import sys
 import threading
 from typing import Any
 
@@ -981,7 +982,10 @@ async def test_async_middleware_preserves_partial_progress_when_recording_is_can
 
     progress = get_openviking_cancellation_progress(captured.value)
     assert recording.cancelled() is True
-    assert captured.value is client.cancellation
+    if sys.version_info >= (3, 11):
+        # Python 3.10 rebuilds CancelledError at task boundaries via
+        # Future._make_cancelled_error(), preserving the original in __context__.
+        assert captured.value is client.cancellation
     assert not isinstance(captured.value, Exception)
     assert isinstance(progress, OpenVikingCancellationProgress)
     assert progress.messages_written == 100
@@ -1085,7 +1089,7 @@ async def test_async_recording_cancellation_preserves_timeout_contract_and_retry
     )
     state = {"messages": [HumanMessage(content=f"Message {index}") for index in range(150)]}
 
-    with pytest.raises(TimeoutError) as captured:
+    with pytest.raises(asyncio.TimeoutError) as captured:
         if timeout_api == "wait_for":
             await asyncio.wait_for(middleware.aafter_agent(state, runtime=None), timeout=0.05)
         else:

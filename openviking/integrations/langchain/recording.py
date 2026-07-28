@@ -144,7 +144,7 @@ def get_openviking_cancellation_progress(
         progress = getattr(current, _CANCELLATION_PROGRESS_ATTRIBUTE, None)
         if isinstance(progress, OpenVikingCancellationProgress):
             return progress
-        current = current.__cause__
+        current = current.__cause__ or current.__context__
     return None
 
 

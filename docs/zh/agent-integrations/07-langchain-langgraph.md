@@ -82,7 +82,7 @@ lifecycle lock。只有最终的 append-and-commit 步骤会在同一个 event l
 串行执行。
 
 如果 recorder 已确认部分写入后任务被取消，`arecord()` 会重新抛出原始
-`asyncio.CancelledError`。可将该异常或外层的 `TimeoutError` 传给
+`asyncio.CancelledError`。可将该异常或外层的 `asyncio.TimeoutError` 传给
 `get_openviking_cancellation_progress()`，在重试前读取已确认写入的消息前缀或待
 commit 状态，避免重复写入。保留原始取消异常也会保留 `asyncio.wait_for()` 和
 `asyncio.timeout()` 的标准超时行为。

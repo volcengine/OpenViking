@@ -87,7 +87,7 @@ serialized per session and event loop.
 
 If cancellation occurs after a recorder has confirmed part of a write,
 `arecord()` re-raises the original `asyncio.CancelledError`. Pass that exception,
-or a wrapping `TimeoutError`, to
+or a wrapping `asyncio.TimeoutError`, to
 `get_openviking_cancellation_progress()` to inspect the confirmed message
 prefix or pending-commit state before retrying. Preserving the original
 cancellation object also preserves the standard `asyncio.wait_for()` and
