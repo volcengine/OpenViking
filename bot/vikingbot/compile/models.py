@@ -37,8 +37,13 @@ class CompileLimits(BaseModel):
     output_pages: int = 64
     output_files: int = 64
     output_total_bytes: int = 4 * 1024 * 1024
-    concurrent_tasks: int = 4
+    concurrent_tasks: int = 2
+    accepted_tasks: int = 16
+    accepted_tasks_per_principal: int = 4
+    queue_wait_seconds: float = 5 * 60
     task_runtime_seconds: float = 30 * 60
+    terminal_task_retention_seconds: float = 24 * 60 * 60
+    terminal_task_records: int = 1000
 
 
 class CompileRequest(BaseModel):

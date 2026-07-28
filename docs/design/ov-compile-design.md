@@ -325,7 +325,7 @@ request_tools = compile_tools + submit_wiki_bundle
 
 Compile 不使用 Skill 的 `allowed-tools` 推导、授权或限制工具，也不为 Skill 连接 MCP。该字段可作为其他 Skill 宿主的兼容 metadata 保留。Skill 需要飞书、方舟等外部能力时，通过 `exec` 调用 task sandbox 中预装的 CLI；可选的 `requires.bins/env` 只用于提前检查运行条件，不负责安装 CLI 或依赖。
 
-固定 allowlist 已排除 `message`、`cron`、`spawn`、Web、image、MCP 和 OpenViking 写入/提交工具，无需维护额外 blocklist。`exec` 仍可能产生外部副作用；现有 `direct` sandbox 只提供 task cwd，不是 OS 级隔离。远程多用户部署必须使用隔离 backend，或由管理员明确接受 direct backend 的主机权限风险。
+固定 allowlist 已排除 `message`、`cron`、`spawn`、Web、image、MCP 和 OpenViking 写入/提交工具，无需维护额外 blocklist。`exec` 仍可能产生外部副作用；现有 `direct` sandbox 只提供 task cwd，不是 OS 级隔离。`bot.sandbox.backends.direct.allow_compile_exec` 默认为 `true` 以保持本地兼容；多用户部署应设为 `false` 或使用配置了文件系统和网络 policy 的隔离 backend。关闭后，Compile 在接收任务前返回 `UNAVAILABLE`。
 
 ## 7. AgentLoop 输出协议
 
@@ -530,7 +530,7 @@ OpenViking proxy 复用 `bot.py` 现有 Bot URL、httpx client、Gateway Token�
 - 用户 connection 只注入 scope-guarded OpenViking read adapter，不传给 file 或 shell tool；
 - Compile 忽略 Skill 的 `allowed-tools`，固定工具集合中的 `exec` 可能产生 Compile 之外的副作用，不纳入 batch-write 的一致性保证；
 - Compile Prompt 明确把来源正文、catalog 和工具结果视为待整理数据，不能把其中的文本当作指令；只有用户的 reason、所选 Skill 和系统 Compile 规则构成指令层；
-- file tool 只能访问 task workspace；shell 的隔离强度取决于 backend，`direct` 模式可能访问 Bot host，不能表述为安全沙箱；
+- file tool 只能访问 task workspace；shell 的隔离强度取决于 backend，多用户部署必须关闭 `direct` Compile exec 或使用隔离 backend；
 - 最终 URI、写入条件和 metadata 由可信代码生成；
 - 日志不记录 source 正文、Skill 正文、完整 Prompt 或凭证。
 
@@ -544,13 +544,13 @@ Compile task 保存在 VikingBot 的 `bot_data_path/compile_tasks/`，包含：
 task_id, principal_scope, sanitized_request, status, stage, timestamps, result, error
 ```
 
-Bot 当前没有通用的持久化后台任务管理器，因此这里实现一个最小 JSON task store，使用 per-task lock 和临时文件原子替换。进程内以 `asyncio.Task` 集合和 semaphore 承载 accepted task；现有 `SessionManager` 继续只管理 chat JSONL，不承载 Compile 状态。
+Bot 当前没有通用的持久化后台任务管理器，因此这里实现一个最小 JSON task store，使用 per-task lock 和临时文件原子替换。进程内以有界的 `asyncio.Task` 集合和 semaphore 承载 accepted task；全局和单 principal admission 在任务创建前计数，超限同步返回 `RESOURCE_EXHAUSTED`。现有 `SessionManager` 继续只管理 chat JSONL，不承载 Compile 状态。
 
 `sanitized_request` 只包含 canonical `from/to/skill` 和 effective reason；`openviking_connection` 仅由运行中 `asyncio.Task` 持有，不进入 JSON、异常详情或日志。
 
-运行中任务目录可以保存有大小限制的 Skill 快照、catalog 和 draft，但不能保存用户凭证。任务进入终态后删除 workspace、Skill snapshot 和 draft，只保留有界的 task/result/error JSON 供查询。
+运行中任务目录可以保存有大小限制的 Skill 快照、catalog 和 draft，但不能保存用户凭证。任务进入终态后删除 workspace、Skill snapshot 和 draft；task/result/error JSON 最长保留 24 小时且最多保留 1,000 条，启动和任务结束时都会清理。
 
-VikingBot 使用独立的 compile 并发限制，并对同一 canonical 目标目录串行执行。该锁只减少同一 Bot 进程内的浪费；跨进程或人工写入冲突仍由 batch-write 的 tree lock 和 content hash 检查解决。v1 task store 以单个 VikingBot gateway 进程为部署边界，不承诺多副本共享 task 查询。
+VikingBot 使用独立的 compile 并发限制，并对同一 canonical 目标目录串行执行。accepted task 最多排队 5 分钟，取得 target lock 和全局执行 slot 后才开始计算 30 分钟 runtime。该锁只减少同一 Bot 进程内的浪费；跨进程或人工写入冲突仍由 batch-write 的 tree lock 和 content hash 检查解决。v1 task store 以单个 VikingBot gateway 进程为部署边界，不承诺多副本共享 task 查询。
 
 VikingBot 启动时把 store 中所有非终态任务统一标记为 `BOT_RESTARTED`，包括处于 committing 的任务；因为 API key 不落盘，重启后不能安全恢复原任务。用户可以重新提交，batch-write 通过最终 content hash 跳过已落盘内容并继续收敛。
 
@@ -562,11 +562,13 @@ v1 先使用集中定义、可测试的 `CompileLimits`，不把常量散落在 
 | --- | --- |
 | source roots | 16 |
 | Skill files / 单文件 / 总大小 | 128 / 8 MiB / 32 MiB |
-| target catalog pages | 2000 |
+| target inventory entries / relevance catalog pages | 2,000 / 10 |
 | initial prompt characters | 200,000 |
 | tool URI count / 单次结果 / 任务累计结果 | 32 / 1 MiB / 8 MiB |
 | output pages / 最终总大小 | 64 / 4 MiB |
 | concurrent Compile tasks / task runtime | 2 / 30 min |
+| accepted tasks（全局 / 单 principal）/ queue wait | 16 / 4 / 5 min |
+| terminal task retention / records | 24 h / 1,000 |
 
 OpenViking batch-write 自己还要设置独立的 request 上限，至少覆盖 Compile 的 64 pages / 4 MiB，但不能信任 Bot 已经做过限制。超限统一返回 `RESOURCE_EXHAUSTED`。
 

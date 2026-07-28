@@ -1,5 +1,7 @@
+import asyncio
 import base64
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,7 +23,7 @@ from vikingbot.compile.models import (
 from vikingbot.compile.renderer import WikiRenderer, content_hash, wiki_page_path_from_title
 from vikingbot.compile.service import BotCompileService
 from vikingbot.compile.store import CompileTaskStore
-from vikingbot.config.schema import SessionKey
+from vikingbot.config.schema import DirectBackendConfig, SandboxBackend, SessionKey
 
 from openviking.core.skill_loader import SkillLoader
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
@@ -95,6 +97,15 @@ def test_compile_bundle_schema_distinguishes_wiki_pages_and_artifact_files():
     assert "filename derives from title" in page_properties["path_hint"]["description"]
     assert "supplied source roots" in page_properties["source_ids"]["description"]
     assert "preserve every required path and format" in properties["files"]["description"]
+
+
+def test_compile_limit_defaults_match_the_resource_envelope():
+    limits = CompileLimits()
+
+    assert limits.concurrent_tasks == 2
+    assert limits.target_inventory_entries == 2000
+    assert limits.target_catalog_pages == 10
+    assert DirectBackendConfig().allow_compile_exec is True
 
 
 def test_wiki_page_requires_exactly_one_body_source():
@@ -1261,6 +1272,7 @@ async def test_structured_wrapper_delegates_to_only_existing_loop_without_fallba
 async def test_request_normalization_uses_default_reason_and_canonical_skill(monkeypatch):
     class Client:
         created = set()
+        skill_content = "---\nname: wiki\ndescription: Wiki\n---\nCompile it"
 
         async def attrs(self, uri):
             if uri == "viking://resources/wiki" and uri not in self.created:
@@ -1278,7 +1290,7 @@ async def test_request_normalization_uses_default_reason_and_canonical_skill(mon
             assert target_uri == "viking://agent/skills"
             return {
                 "root_uri": "viking://agent/skills/wiki",
-                "content": "---\nname: wiki\ndescription: Wiki\n---\nCompile it",
+                "content": self.skill_content,
             }
 
         async def close(self):
@@ -1307,6 +1319,22 @@ async def test_request_normalization_uses_default_reason_and_canonical_skill(mon
     assert normalized.to == "viking://resources/wiki"
     assert normalized.skill == "viking://agent/skills/wiki"
     assert normalized.reason == DEFAULT_COMPILE_REASON
+
+    Client.created.clear()
+    Client.skill_content = "---\nname: wiki\n---\nCompile it"
+    with pytest.raises(CompileFailure) as raised:
+        await service._normalize_request(
+            CompileRequest.model_validate(
+                {
+                    "from": ["viking://resources/source"],
+                    "to": "viking://resources/wiki",
+                    "skill": "viking://agent/skills/wiki",
+                }
+            ),
+            connection={"api_key": "secret"},
+        )
+    assert raised.value.code == "SKILL_INVALID"
+    assert Client.created == set()
 
 
 def test_compile_target_accepts_only_exact_skill_namespaces():
@@ -1841,6 +1869,50 @@ async def test_target_catalog_search_failure_keeps_collision_inventory():
     assert set(inventory) == {"viking://resources/wiki/existing.md"}
 
 
+@pytest.mark.asyncio
+async def test_memory_target_catalog_uses_memory_search_results():
+    target = "viking://user/alice/memories/preferences/wiki"
+    existing = f"{target}/topic.md"
+
+    class Client:
+        async def tree(self, uri, *, node_limit):
+            assert uri == target
+            return [{"uri": existing, "isDir": False, "abstract": "Existing topic"}]
+
+        async def find(self, query, **kwargs):
+            assert query == "topic"
+            assert kwargs == {
+                "target_uri": target,
+                "context_type": "memory",
+                "limit": CompileLimits().target_catalog_pages,
+            }
+            return {"memories": [{"uri": existing, "abstract": "Relevant topic"}]}
+
+        async def read_raw(self, uri, *, offset=0, limit=-1):
+            assert uri == existing
+            return "---\ntype: concept\n---\n\n# Topic"
+
+    service = object.__new__(BotCompileService)
+    service.limits = CompileLimits()
+    catalog, inventory = await service._build_catalog(
+        Client(),
+        target,
+        query="topic",
+    )
+
+    assert set(inventory) == {existing}
+    assert catalog == [
+        {
+            "uri": existing,
+            "kind": "wiki_page",
+            "title": "topic",
+            "type": "concept",
+            "summary": "Relevant topic",
+            "page_id": 1,
+        }
+    ]
+
+
 class _NamedTool(_EchoTool):
     def __init__(self, name):
         self._name = name
@@ -1979,6 +2051,182 @@ def test_compile_prompt_requires_one_complete_skill_package_for_skill_target():
     assert "Existing target files" not in user
 
 
+def _compile_service(
+    tmp_path: Path,
+    *,
+    auth_mode: str,
+    backend: SandboxBackend,
+    allow_compile_exec: bool = True,
+    limits: CompileLimits | None = None,
+) -> BotCompileService:
+    config = SimpleNamespace(
+        bot_data_path=tmp_path,
+        ov_server=SimpleNamespace(effective_auth_mode=auth_mode),
+        sandbox=SimpleNamespace(
+            backend=backend,
+            backends=SimpleNamespace(
+                direct=SimpleNamespace(allow_compile_exec=allow_compile_exec),
+            ),
+        ),
+    )
+    return BotCompileService(
+        agent_loop=SimpleNamespace(config=config),
+        limits=limits,
+    )
+
+
+def _compile_request(*, connection: bool = False) -> CompileRequest:
+    payload = {
+        "from": ["viking://resources/source"],
+        "to": "viking://resources/wiki",
+        "skill": "viking://agent/skills/wiki",
+    }
+    if connection:
+        payload["openviking_connection"] = {"api_key": "secret"}
+    return CompileRequest.model_validate(payload)
+
+
+def _sanitized_compile_request() -> SanitizedCompileRequest:
+    return SanitizedCompileRequest.model_validate(
+        {
+            "from": ["viking://resources/source"],
+            "to": "viking://resources/wiki",
+            "reason": "Compile",
+            "skill": "viking://agent/skills/wiki",
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_local_dev_compile_uses_config_backed_connection(monkeypatch, tmp_path: Path):
+    service = _compile_service(
+        tmp_path,
+        auth_mode="dev",
+        backend=SandboxBackend.DIRECT,
+    )
+    started = asyncio.Event()
+    release = asyncio.Event()
+    observed = {}
+
+    async def normalize(request, *, connection):
+        del request
+        observed["connection"] = connection
+        return _sanitized_compile_request()
+
+    async def run_task(task_id, request, connection):
+        del task_id, request
+        observed["runner_connection"] = connection
+        started.set()
+        await release.wait()
+
+    monkeypatch.setattr(service, "_normalize_request", normalize)
+    monkeypatch.setattr(service, "_run_task", run_task)
+
+    accepted = await service.create_task(_compile_request(), principal_scope="dev")
+    await started.wait()
+
+    assert accepted.status == "accepted"
+    assert observed == {"connection": {}, "runner_connection": {}}
+    runners = list(service._tasks)
+    release.set()
+    await asyncio.gather(*runners)
+    assert service._admitted_tasks == 0
+
+
+@pytest.mark.asyncio
+async def test_direct_compile_exec_can_be_disabled(tmp_path: Path):
+    service = _compile_service(
+        tmp_path,
+        auth_mode="api_key",
+        backend=SandboxBackend.DIRECT,
+        allow_compile_exec=False,
+    )
+
+    with pytest.raises(CompileFailure) as raised:
+        await service.create_task(
+            _compile_request(connection=True),
+            principal_scope="owner",
+        )
+
+    assert raised.value.code == "UNAVAILABLE"
+    assert not list(service.store.root.glob("cmp_*.json"))
+
+
+@pytest.mark.asyncio
+async def test_compile_admission_is_bounded_per_principal_and_globally(monkeypatch, tmp_path: Path):
+    limits = CompileLimits(
+        accepted_tasks=2,
+        accepted_tasks_per_principal=1,
+    )
+    service = _compile_service(
+        tmp_path,
+        auth_mode="api_key",
+        backend=SandboxBackend.AIOSANDBOX,
+        limits=limits,
+    )
+    release = asyncio.Event()
+
+    async def normalize(request, *, connection):
+        del request, connection
+        return _sanitized_compile_request()
+
+    async def run_task(*args):
+        del args
+        await release.wait()
+
+    monkeypatch.setattr(service, "_normalize_request", normalize)
+    monkeypatch.setattr(service, "_run_task", run_task)
+
+    await service.create_task(_compile_request(connection=True), principal_scope="alice")
+    with pytest.raises(CompileFailure) as per_principal:
+        await service.create_task(_compile_request(connection=True), principal_scope="alice")
+    await service.create_task(_compile_request(connection=True), principal_scope="bob")
+    with pytest.raises(CompileFailure) as global_limit:
+        await service.create_task(_compile_request(connection=True), principal_scope="carol")
+
+    assert per_principal.value.code == "RESOURCE_EXHAUSTED"
+    assert global_limit.value.code == "RESOURCE_EXHAUSTED"
+    runners = list(service._tasks)
+    release.set()
+    await asyncio.gather(*runners)
+    assert service._admitted_tasks == 0
+    assert service._admitted_by_principal == {}
+
+
+@pytest.mark.asyncio
+async def test_compile_queue_wait_has_a_deadline(tmp_path: Path):
+    service = _compile_service(
+        tmp_path,
+        auth_mode="api_key",
+        backend=SandboxBackend.AIOSANDBOX,
+        limits=CompileLimits(concurrent_tasks=1, queue_wait_seconds=0.01),
+    )
+    request = _sanitized_compile_request()
+    task = CompileTask(
+        task_id="cmp_queued",
+        principal_scope="owner",
+        sanitized_request=request,
+        status="accepted",
+        stage="queued",
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    await service.store.create(task)
+    await service._semaphore.acquire()
+    try:
+        await service._run_task(task.task_id, request, {"api_key": "secret"})
+    finally:
+        service._semaphore.release()
+
+    failed = await service.store.get(task.task_id)
+    assert failed is not None
+    assert failed.status == "failed"
+    assert failed.stage == "queued"
+    assert failed.error is not None
+    assert failed.error.code == "DEADLINE_EXCEEDED"
+    assert service._target_locks == {}
+
+
 @pytest.mark.asyncio
 async def test_task_store_restart_marks_nonterminal_without_persisting_connection(tmp_path: Path):
     store = CompileTaskStore(tmp_path)
@@ -2006,6 +2254,36 @@ async def test_task_store_restart_marks_nonterminal_without_persisting_connectio
     assert failed is not None
     assert failed.status == "failed"
     assert failed.error is not None and failed.error.code == "BOT_RESTARTED"
+
+
+@pytest.mark.asyncio
+async def test_task_store_prunes_expired_and_excess_terminal_records(tmp_path: Path):
+    store = CompileTaskStore(tmp_path)
+    request = _sanitized_compile_request()
+    now = datetime.now(timezone.utc)
+    timestamps = {
+        "cmp_expired": now - timedelta(days=2),
+        "cmp_older": now - timedelta(minutes=2),
+        "cmp_newest": now - timedelta(minutes=1),
+    }
+    for task_id, updated_at in timestamps.items():
+        timestamp = updated_at.isoformat().replace("+00:00", "Z")
+        await store.create(
+            CompileTask(
+                task_id=task_id,
+                principal_scope="owner",
+                sanitized_request=request,
+                status="completed",
+                stage="completed",
+                created_at=timestamp,
+                updated_at=timestamp,
+            )
+        )
+
+    assert await store.prune_terminal(retention_seconds=24 * 60 * 60, max_records=1) == 2
+    assert await store.get("cmp_expired") is None
+    assert await store.get("cmp_older") is None
+    assert await store.get("cmp_newest") is not None
 
 
 @pytest.mark.asyncio

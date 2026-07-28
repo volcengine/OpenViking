@@ -99,6 +99,8 @@ def _attach_openviking_connection(
     body: dict,
     request: Request,
     ctx: RequestContext,
+    *,
+    include_legacy_user_id: bool = True,
 ) -> dict:
     """Attach the authenticated Studio connection to the bot request body.
 
@@ -121,7 +123,8 @@ def _attach_openviking_connection(
                     server_url=server_url,
                 )
                 return enriched
-            enriched.setdefault("user_id", ctx.user.user_id)
+            if include_legacy_user_id:
+                enriched.setdefault("user_id", ctx.user.user_id)
             return enriched
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -183,7 +186,12 @@ async def create_compile(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid JSON in request body",
         ) from exc
-    enriched = _attach_openviking_connection(body, request, _ctx)
+    enriched = _attach_openviking_connection(
+        body,
+        request,
+        _ctx,
+        include_legacy_user_id=False,
+    )
     try:
         async with _create_bot_proxy_client() as client:
             response = await client.post(
@@ -213,9 +221,12 @@ async def get_compile(
 ):
     """Read compile status without exposing tasks owned by another principal."""
     bot_url = get_bot_url()
-    connection = _attach_openviking_connection({}, request, _ctx).get(
-        "openviking_connection"
-    )
+    connection = _attach_openviking_connection(
+        {},
+        request,
+        _ctx,
+        include_legacy_user_id=False,
+    ).get("openviking_connection")
     try:
         async with _create_bot_proxy_client() as client:
             response = await client.get(

@@ -984,6 +984,14 @@ class OpenAPIChannel(BaseChannel):
                     status_code=403,
                     detail="openviking_connection is only accepted from trusted server proxy",
                 )
+        # Dev auth is a single principal, so forwarded credentials must not change task ownership.
+        if self._ov_server_auth_mode() == "dev":
+            _connection, scope = await self._resolve_request_identity(http_request, auth)
+            compile_request._principal_scope = scope
+            compile_request.openviking_connection = None
+            return
+
+        if compile_request.openviking_connection is not None:
             if not self._ov_server_url():
                 raise HTTPException(
                     status_code=503,

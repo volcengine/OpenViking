@@ -313,6 +313,7 @@ Restart `vikingbot gateway` after changing the configuration.
 | `bot.gateway.port` | `18790` | Gateway listen port |
 | `bot.sandbox.backend` | `direct` | Execution backend |
 | `bot.sandbox.mode` | `shared` | Workspace isolation mode |
+| `bot.sandbox.backends.direct.allow_compile_exec` | `true` | Allow Compile to run host commands with the `direct` backend |
 | `bot.heartbeat.enabled` | `true` | Whether to check `HEARTBEAT.md` periodically |
 | `bot.heartbeat.interval_seconds` | `600` | Heartbeat interval |
 | `bot.mode` | `normal` | One of `normal`, `readonly`, or `debug` |

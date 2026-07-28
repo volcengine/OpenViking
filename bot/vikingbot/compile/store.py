@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -86,6 +87,36 @@ class CompileTaskStore:
             except (OSError, ValueError):
                 continue
         return count
+
+    async def prune_terminal(self, *, retention_seconds: float, max_records: int) -> int:
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=retention_seconds)
+        retained: list[tuple[datetime, str]] = []
+        expired: list[str] = []
+        for path in sorted(self.root.glob("cmp_*.json")):
+            try:
+                task = await self.get(path.stem)
+                if task is None or task.status not in TERMINAL_STATUSES:
+                    continue
+                updated_at = datetime.fromisoformat(task.updated_at.replace("Z", "+00:00"))
+                if updated_at.tzinfo is None:
+                    updated_at = updated_at.replace(tzinfo=timezone.utc)
+                if updated_at < cutoff:
+                    expired.append(task.task_id)
+                else:
+                    retained.append((updated_at, task.task_id))
+            except (OSError, ValueError):
+                continue
+
+        retained.sort(reverse=True)
+        task_ids = [*expired, *(task_id for _, task_id in retained[max_records:])]
+        for task_id in task_ids:
+            lock = await self._task_lock(task_id)
+            async with lock:
+                self._path(task_id).unlink(missing_ok=True)
+            async with self._locks_guard:
+                if self._locks.get(task_id) is lock and not lock.locked():
+                    self._locks.pop(task_id, None)
+        return len(task_ids)
 
     @staticmethod
     def _write_atomic(path: Path, task: CompileTask) -> None:

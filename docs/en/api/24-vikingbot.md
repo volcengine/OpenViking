@@ -151,6 +151,8 @@ ov compile \
 
 `--wait` polls the status endpoint until the task reaches a terminal state. `--timeout` limits only the local wait and does not cancel the server task.
 
+The `direct` backend runs Compile `exec` commands with the Bot host's permissions. `bot.sandbox.backends.direct.allow_compile_exec` defaults to `true` for local compatibility; multi-user deployments should set it to `false` or use an isolated backend. When disabled, task creation returns `503 UNAVAILABLE`. Admission overflow returns `429 RESOURCE_EXHAUSTED`.
+
 **Response Example**
 
 The HTTP endpoint returns `202 Accepted`:

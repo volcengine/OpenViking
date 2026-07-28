@@ -45,7 +45,7 @@ from vikingbot.compile.renderer import (
     validate_declared_okf_markdown,
 )
 from vikingbot.compile.store import CompileTaskStore
-from vikingbot.config.schema import SandboxMode, SessionKey
+from vikingbot.config.schema import SandboxBackend, SandboxMode, SessionKey
 from vikingbot.openviking_mount.ov_server import VikingClient
 from vikingbot.sandbox import SandboxManager
 
@@ -88,8 +88,11 @@ class BotCompileService:
         self.store = CompileTaskStore(self.config.bot_data_path)
         self.renderer = WikiRenderer(self.limits)
         self._semaphore = asyncio.Semaphore(self.limits.concurrent_tasks)
-        self._target_locks: dict[str, asyncio.Lock] = {}
+        self._target_locks: dict[str, tuple[asyncio.Lock, int]] = {}
         self._target_locks_guard = asyncio.Lock()
+        self._admission_guard = asyncio.Lock()
+        self._admitted_tasks = 0
+        self._admitted_by_principal: dict[str, int] = {}
         self._tasks: set[asyncio.Task[Any]] = set()
         self._start_lock = asyncio.Lock()
         self._started = False
@@ -99,6 +102,7 @@ class BotCompileService:
             if self._started:
                 return
             await self.store.mark_interrupted_failed()
+            await self._prune_terminal_tasks()
             self._started = True
 
     async def create_task(
@@ -108,37 +112,51 @@ class BotCompileService:
         principal_scope: str,
     ) -> CompileAccepted:
         await self.start()
-        connection = (
-            request.openviking_connection.model_dump(exclude_none=True)
-            if request.openviking_connection is not None
-            else None
-        )
-        if not connection:
-            raise CompileFailure(
-                "UNAVAILABLE",
-                "Compile requires an authenticated OpenViking connection.",
-                stage="queued",
+        self._validate_execution_boundary()
+        await self._admit(principal_scope)
+        runner_started = False
+        try:
+            connection = (
+                request.openviking_connection.model_dump(exclude_none=True)
+                if request.openviking_connection is not None
+                else None
             )
-        normalized_request = await self._normalize_request(request, connection=connection)
-        task_id = "cmp_" + uuid.uuid4().hex
-        now = utc_now()
-        task = CompileTask(
-            task_id=task_id,
-            principal_scope=principal_scope,
-            sanitized_request=normalized_request,
-            status="accepted",
-            stage="queued",
-            created_at=now,
-            updated_at=now,
-        )
-        await self.store.create(task)
-        runner = asyncio.create_task(
-            self._run_task(task_id, normalized_request, connection),
-            name=f"compile:{task_id}",
-        )
-        self._tasks.add(runner)
-        runner.add_done_callback(self._tasks.discard)
-        return CompileAccepted(task_id=task_id, to=normalized_request.to)
+            if not connection and self._openviking_auth_mode() != "dev":
+                raise CompileFailure(
+                    "UNAVAILABLE",
+                    "Compile requires an authenticated OpenViking connection.",
+                    stage="queued",
+                )
+            connection = connection or {}
+            normalized_request = await self._normalize_request(request, connection=connection)
+            task_id = "cmp_" + uuid.uuid4().hex
+            now = utc_now()
+            task = CompileTask(
+                task_id=task_id,
+                principal_scope=principal_scope,
+                sanitized_request=normalized_request,
+                status="accepted",
+                stage="queued",
+                created_at=now,
+                updated_at=now,
+            )
+            await self.store.create(task)
+            runner = asyncio.create_task(
+                self._run_admitted_task(
+                    task_id,
+                    normalized_request,
+                    connection,
+                    principal_scope,
+                ),
+                name=f"compile:{task_id}",
+            )
+            self._tasks.add(runner)
+            runner.add_done_callback(self._tasks.discard)
+            runner_started = True
+            return CompileAccepted(task_id=task_id, to=normalized_request.to)
+        finally:
+            if not runner_started:
+                await self._release_admission(principal_scope)
 
     async def get_task(self, task_id: str, *, principal_scope: str) -> dict[str, Any] | None:
         await self.start()
@@ -149,6 +167,69 @@ class BotCompileService:
         if task is None or task.principal_scope != principal_scope:
             return None
         return task.public_dict()
+
+    def _openviking_auth_mode(self) -> str:
+        ov_server = getattr(self.config, "ov_server", None)
+        return str(getattr(ov_server, "effective_auth_mode", "") or "").strip().lower()
+
+    def _validate_execution_boundary(self) -> None:
+        sandbox = getattr(self.config, "sandbox", None)
+        if getattr(sandbox, "backend", None) != SandboxBackend.DIRECT:
+            return
+        backends = getattr(sandbox, "backends", None)
+        direct = getattr(backends, "direct", None)
+        if getattr(direct, "allow_compile_exec", True):
+            return
+        raise CompileFailure(
+            "UNAVAILABLE",
+            "Compile exec is disabled for the direct sandbox backend.",
+            stage="queued",
+        )
+
+    async def _admit(self, principal_scope: str) -> None:
+        async with self._admission_guard:
+            principal_tasks = self._admitted_by_principal.get(principal_scope, 0)
+            if (
+                self._admitted_tasks >= self.limits.accepted_tasks
+                or principal_tasks >= self.limits.accepted_tasks_per_principal
+            ):
+                raise CompileFailure(
+                    "RESOURCE_EXHAUSTED",
+                    "Compile task admission limit exceeded.",
+                    stage="queued",
+                )
+            self._admitted_tasks += 1
+            self._admitted_by_principal[principal_scope] = principal_tasks + 1
+
+    async def _release_admission(self, principal_scope: str) -> None:
+        async with self._admission_guard:
+            principal_tasks = self._admitted_by_principal.get(principal_scope, 0)
+            if principal_tasks == 0:
+                return
+            if principal_tasks <= 1:
+                self._admitted_by_principal.pop(principal_scope, None)
+            else:
+                self._admitted_by_principal[principal_scope] = principal_tasks - 1
+            self._admitted_tasks -= 1
+
+    async def _prune_terminal_tasks(self) -> None:
+        await self.store.prune_terminal(
+            retention_seconds=self.limits.terminal_task_retention_seconds,
+            max_records=self.limits.terminal_task_records,
+        )
+
+    async def _run_admitted_task(
+        self,
+        task_id: str,
+        request: SanitizedCompileRequest,
+        connection: dict[str, Any],
+        principal_scope: str,
+    ) -> None:
+        try:
+            await self._run_task(task_id, request, connection)
+        finally:
+            await self._release_admission(principal_scope)
+            await self._prune_terminal_tasks()
 
     async def _normalize_request(
         self,
@@ -183,19 +264,6 @@ class BotCompileService:
                     "RESOURCE_EXHAUSTED", "Compile source root limit exceeded.", stage="queued"
                 )
 
-            raw_target = request.to.strip().rstrip("/")
-            try:
-                target_attrs = await client.attrs(raw_target)
-            except OpenVikingError as exc:
-                if exc.code != "NOT_FOUND":
-                    raise
-                self._validate_target_directory(raw_target, {"isDir": True})
-                await client.mkdir(raw_target)
-                target_attrs = await client.attrs(raw_target)
-            target = str(target_attrs.get("uri") or "").rstrip("/")
-            target_stat = await client.stat(target)
-            self._validate_target_directory(target, target_stat)
-
             skill_uri = request.skill.strip().rstrip("/")
             if skill_uri.endswith("/SKILL.md"):
                 skill_uri = skill_uri[: -len("/SKILL.md")]
@@ -216,6 +284,19 @@ class BotCompileService:
                 )
             except ValueError as exc:
                 raise CompileFailure("SKILL_INVALID", str(exc), stage="queued") from exc
+
+            raw_target = request.to.strip().rstrip("/")
+            try:
+                target_attrs = await client.attrs(raw_target)
+            except OpenVikingError as exc:
+                if exc.code != "NOT_FOUND":
+                    raise
+                self._validate_target_directory(raw_target, {"isDir": True})
+                await client.mkdir(raw_target)
+                target_attrs = await client.attrs(raw_target)
+            target = str(target_attrs.get("uri") or "").rstrip("/")
+            target_stat = await client.stat(target)
+            self._validate_target_directory(target, target_stat)
         except CompileFailure:
             raise
         except OpenVikingError as exc:
@@ -284,9 +365,29 @@ class BotCompileService:
             raise CompileFailure("SKILL_INVALID", "Skill URI must identify one Skill root", stage="queued")
         return parts[-1], "viking://" + "/".join(parts[: index + 1])
 
-    async def _target_lock(self, target: str) -> asyncio.Lock:
+    async def _retain_target_lock(self, target: str) -> asyncio.Lock:
         async with self._target_locks_guard:
-            return self._target_locks.setdefault(target, asyncio.Lock())
+            lock, references = self._target_locks.get(target, (asyncio.Lock(), 0))
+            self._target_locks[target] = (lock, references + 1)
+            return lock
+
+    async def _release_target_lock(self, target: str, lock: asyncio.Lock) -> None:
+        async with self._target_locks_guard:
+            current, references = self._target_locks.get(target, (lock, 0))
+            if current is not lock:
+                return
+            if references <= 1:
+                self._target_locks.pop(target, None)
+            else:
+                self._target_locks[target] = (lock, references - 1)
+
+    async def _acquire_execution_slot(self, target_lock: asyncio.Lock) -> None:
+        await target_lock.acquire()
+        try:
+            await self._semaphore.acquire()
+        except BaseException:
+            target_lock.release()
+            raise
 
     async def _run_task(
         self,
@@ -294,10 +395,26 @@ class BotCompileService:
         request: SanitizedCompileRequest,
         connection: dict[str, Any],
     ) -> None:
-        task_lock = await self._target_lock(request.to)
-        # A same-target queue must not occupy all global task slots while
-        # unrelated target trees are ready to run.
-        async with task_lock, self._semaphore:
+        task_lock = await self._retain_target_lock(request.to)
+        acquired = False
+        try:
+            try:
+                await asyncio.wait_for(
+                    self._acquire_execution_slot(task_lock),
+                    timeout=self.limits.queue_wait_seconds,
+                )
+                acquired = True
+            except asyncio.TimeoutError:
+                await self._fail(
+                    task_id,
+                    CompileFailure(
+                        "DEADLINE_EXCEEDED",
+                        "Compile task exceeded its queue wait limit.",
+                        stage="queued",
+                    ),
+                )
+                return
+
             try:
                 await asyncio.wait_for(
                     self._execute_task(task_id, request, connection),
@@ -321,6 +438,11 @@ class BotCompileService:
                 stage = task.stage if task else "agent"
                 code = self._unexpected_error_code(exc, stage=stage)
                 await self._fail(task_id, CompileFailure(code, str(exc), stage=stage))
+        finally:
+            if acquired:
+                self._semaphore.release()
+                task_lock.release()
+            await self._release_target_lock(request.to, task_lock)
 
     async def _execute_task(
         self,
@@ -940,25 +1062,27 @@ class BotCompileService:
 
         if not inventory or not query.strip() or self.limits.target_catalog_pages <= 0:
             return [], inventory
+        context_type = classify_uri(target_uri).context_type
+        result_key = "memories" if context_type == "memory" else "resources"
         try:
             result = await client.find(
                 query,
                 target_uri=target_uri,
-                context_type="resource",
+                context_type=context_type,
                 limit=self.limits.target_catalog_pages,
             )
         except Exception as exc:
             logger.warning("Compile target relevance search failed: {}", exc)
             return [], inventory
 
-        resources = (
-            result.get("resources", [])
+        matches_result = (
+            result.get(result_key, [])
             if isinstance(result, Mapping)
-            else getattr(result, "resources", [])
+            else getattr(result, result_key, [])
         )
         matches: list[tuple[str, Any]] = []
         seen: set[str] = set()
-        for match in resources if isinstance(resources, list) else []:
+        for match in matches_result if isinstance(matches_result, list) else []:
             uri = str(
                 match.get("uri") if isinstance(match, Mapping) else getattr(match, "uri", "")
             ).rstrip("/")

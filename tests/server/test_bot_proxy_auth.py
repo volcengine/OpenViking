@@ -310,6 +310,66 @@ async def test_compile_proxy_forwards_create_and_status_identity(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_compile_proxy_supports_no_key_dev_mode(monkeypatch):
+    forwarded = {}
+
+    class FakeResponse:
+        status_code = 202
+        text = '{"task_id":"cmp_dev"}'
+        is_success = True
+
+        @staticmethod
+        def json():
+            return {
+                "task_id": "cmp_dev",
+                "status": "accepted",
+                "to": "viking://resources/wiki",
+            }
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, json, headers, timeout):
+            from vikingbot.compile.models import CompileRequest
+
+            CompileRequest.model_validate(json)
+            forwarded.update(url=url, body=json, headers=headers, timeout=timeout)
+            return FakeResponse()
+
+    monkeypatch.setattr(bot_router_module, "BOT_API_URL", "http://127.0.0.1:18790")
+    monkeypatch.setattr(bot_router_module, "BOT_API_KEY", "")
+    monkeypatch.setattr(bot_router_module, "_create_bot_proxy_client", lambda: FakeClient())
+
+    app = FastAPI()
+    app.state.config = ServerConfig(auth_mode="dev", host="127.0.0.1", port=1944)
+    app.state.auth_plugin = DevAuthPlugin()
+    app.include_router(bot_router_module.router, prefix="/bot/v1")
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/bot/v1/compile",
+            json={
+                "from": ["viking://resources/source"],
+                "to": "viking://resources/wiki",
+                "skill": "viking://agent/skills/wiki",
+            },
+        )
+
+    assert response.status_code == 202
+    assert forwarded["url"].endswith("/bot/v1/compile")
+    assert "user_id" not in forwarded["body"]
+    assert "openviking_connection" not in forwarded["body"]
+    assert "X-API-Key" not in forwarded["headers"]
+
+
+@pytest.mark.asyncio
 async def test_chat_stream_proxy_preserves_sse_event_boundaries(monkeypatch):
     payload = (
         'data: {"event":"reasoning_delta","data":"thinking"}\n\n'
