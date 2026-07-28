@@ -4,7 +4,7 @@
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -12,6 +12,7 @@ import pytest
 from openviking.server.identity import RequestContext, Role
 from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
+from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -49,12 +50,13 @@ def connector_config(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        "openviking.parse.accessors.git_accessor.get_openviking_config",
+        "openviking.utils.code_hosting_utils.get_openviking_config",
         lambda: SimpleNamespace(
             code=SimpleNamespace(
                 github_domains=["github.com", "git.example"],
                 gitlab_domains=[],
                 azure_devops_domains=[],
+                code_hosting_domains=[],
             )
         ),
     )
@@ -500,6 +502,60 @@ def test_git_route_degrades_when_disabled_or_type_not_allowed(connector_config, 
     assert service._should_use_connector("https://git.example/org/repo.git") is False
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "git@git.example.com:repo.git",
+        "git@git.example.com:repo",
+        "ssh://git@git.example.com/repo.git",
+        "ssh://git@git.example.com/repo",
+        "git://git.example.com/repo.git",
+        "git://git.example.com/repo",
+        "git@git.example.com:org/subgroup/repo",
+        "ssh://git@git.example.com/org/subgroup/repo",
+        "git://git.example.com/org/subgroup/repo",
+    ],
+)
+def test_git_connector_detection_accepts_explicit_protocol_repo(monkeypatch, path):
+    from openviking.connector.routing import detect_connector_add_type
+    from openviking.utils import code_hosting_utils
+
+    config = SimpleNamespace(
+        code=SimpleNamespace(
+            github_domains=[],
+            gitlab_domains=[],
+            azure_devops_domains=[],
+            code_hosting_domains=["git.example.com"],
+        )
+    )
+    monkeypatch.setattr(code_hosting_utils, "get_openviking_config", lambda: config)
+
+    assert detect_connector_add_type(path) == ("git", False)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "https://gitcode.com/GitHub_Trending/no/nocobase/blob/bcfdc2/examples/base/config.git",
+        "https://gitcode.com/ploc-org/CNPL/tree/master/projects/sample/config.git",
+    ],
+)
+def test_git_connector_detection_rejects_gitcode_browse_file(monkeypatch, path):
+    from openviking.connector.routing import detect_connector_add_type
+    from openviking.utils import code_hosting_utils
+
+    config = SimpleNamespace(
+        code=SimpleNamespace(
+            github_domains=[],
+            gitlab_domains=[],
+            azure_devops_domains=[],
+            code_hosting_domains=["gitcode.com"],
+        )
+    )
+    monkeypatch.setattr(code_hosting_utils, "get_openviking_config", lambda: config)
+    assert detect_connector_add_type(path) is None
+
+
 def test_git_source_falls_back_for_parent_target(
     connector_config,
     service,
@@ -718,6 +774,66 @@ async def test_add_resource_falls_back_for_shared_source_with_parent(
     assert result == {"root_uri": "standard-pipeline"}
     service._add_resource_via_connector.assert_not_awaited()
     service.enqueue_git_add_resource.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("manage_watch", False),
+        ("parser_args", {}),
+        ("resource_lock", object()),
+        ("route_source", False),
+        ("skip_watch_management", True),
+        ("stage_callback", object()),
+        ("watch_auth_state", {}),
+        ("understanding_response_id", "response-1"),
+        ("parser_backend", "understanding"),
+        ("resolved_extension", ".pdf"),
+    ],
+)
+async def test_add_resource_rejects_internal_execution_fields(ctx, service, field, value):
+    with pytest.raises(InvalidArgumentError, match=field):
+        await service.add_resource(
+            path="https://example.com/manual.pdf",
+            ctx=ctx,
+            **{field: value},
+        )
+
+
+@pytest.mark.asyncio
+async def test_add_resource_job_executes_frozen_route(ctx, service):
+    service._execute_resource_ingestion = AsyncMock(
+        return_value={"status": "success", "root_uri": "root"}
+    )
+    service._should_use_connector = Mock()
+    resource_lock = SimpleNamespace(close=AsyncMock())
+    stage_callback = AsyncMock()
+    msg = AddResourceMsg(
+        task_id="task-1",
+        path="git://example.com/repo.git",
+        root_uri="viking://resources/repo",
+        account_id=ctx.account_id,
+        user_id=ctx.user.user_id,
+        role=str(ctx.role),
+        args={"parser_backend": "understanding"},
+    )
+
+    result = await service.execute_add_resource_job(
+        msg,
+        ctx=ctx,
+        resource_lock=resource_lock,
+        stage_callback=stage_callback,
+    )
+
+    assert result == {"status": "success", "root_uri": "root"}
+    call = service._execute_resource_ingestion.await_args.kwargs
+    assert call["path"] == msg.path
+    assert call["to"] == msg.root_uri
+    assert call["wait"] is True
+    assert call["resource_lock"] is resource_lock
+    assert call["parser_backend"] == "understanding"
+    service._should_use_connector.assert_not_called()
 
 
 @pytest.mark.asyncio

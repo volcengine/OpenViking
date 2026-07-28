@@ -14,7 +14,11 @@ from starlette.requests import Request
 
 from openviking.message import ImagePart, Message, TextPart
 from openviking.server.app import create_app
-from openviking.server.config import ServerConfig, ToolOutputExternalizationConfig
+from openviking.server.config import (
+    AgentEvolutionConfig,
+    ServerConfig,
+    ToolOutputExternalizationConfig,
+)
 from openviking.server.dependencies import set_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import sessions as sessions_router
@@ -1035,6 +1039,8 @@ async def test_commit_failed_when_execution_extraction_fails_does_not_block_next
     retries), the whole archive is marked .failed.json and skipped — there is
     no partial state — but a failed archive must not block the next commit.
     """
+    service.sessions.set_agent_evolution_config(AgentEvolutionConfig(enabled=True))
+
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
 

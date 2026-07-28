@@ -5,7 +5,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import gradio as gr
 
-from vikingbot.config.loader import get_config_path, load_config, save_config
+from vikingbot.config.loader import (
+    get_config_path,
+    load_config,
+    reconcile_vlm_inheritance_after_edit,
+    save_config,
+)
 from vikingbot.config.schema import Config
 from vikingbot.observability.feedback_stats import (
     FEEDBACK_STATS_SORT_FIELDS,
@@ -351,7 +356,8 @@ def create_config_tabs():
 
     def save_config_fn(*args):
         try:
-            config_dict = load_config().model_dump()
+            previous_config = load_config()
+            config_dict = previous_config.model_dump()
 
             remaining_args = list(args)
             comp_idx = 0
@@ -366,6 +372,7 @@ def create_config_tabs():
                     comp_idx += num_consumed
 
             config = Config(**config_dict)
+            reconcile_vlm_inheritance_after_edit(previous_config, config)
             save_config(config)
             return "✓ Config saved successfully! Please restart the gateway service for changes to take effect."
         except Exception as e:

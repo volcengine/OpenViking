@@ -53,4 +53,4 @@ OpenCode 与 Claude Code、Codex 共用这一个安装器。它会询问要安�
 ## 参考文档
 
 - [插件 README](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin) - 完整 tools、配置字段和运行时说明
-- [部署指南](https://www.openviking.ai/zh/guides/03-deployment) - OpenViking server 与 CLI 配置
+- [部署指南](https://docs.openviking.ai/zh/guides/03-deployment) - OpenViking server 与 CLI 配置

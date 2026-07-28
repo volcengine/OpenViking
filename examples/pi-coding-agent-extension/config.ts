@@ -1,7 +1,10 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { resolveOpenVikingCredentials } from "./shared/credentials.mjs";
+import { buildUserAgent, resolveOpenVikingCredentials } from "./shared/credentials.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
+
+/** Hand-maintained: this extension ships no manifest to read a version from. */
+export const EXTENSION_VERSION = "0.1.0";
 
 export interface OVConfig {
   enabled: boolean;
@@ -10,6 +13,7 @@ export interface OVConfig {
   account: string;
   user: string;
   peerId: string;
+  userAgent: string;
   workspacePeer: boolean;
   recallPeerScope: "actor" | "all";
   syncTurns: boolean;
@@ -45,6 +49,7 @@ const DEFAULT_CONFIG: OVConfig = {
   account: "",
   user: "",
   peerId: "",
+  userAgent: "",
   workspacePeer: true,
   recallPeerScope: "all",
   syncTurns: true,
@@ -92,6 +97,7 @@ export function loadConfig(extensionDir: string): OVConfig {
     account: creds.account,
     user: creds.user,
     peerId: creds.peerId,
+    userAgent: buildUserAgent("pi", EXTENSION_VERSION),
     recallTokenBudget: file.recallTokenBudget ?? file.recallBudget ?? DEFAULT_CONFIG.recallTokenBudget,
     scoreThreshold: file.scoreThreshold ?? file.recallScoreThreshold ?? DEFAULT_CONFIG.scoreThreshold,
     minQueryLength: file.minQueryLength ?? file.recallMinQueryLength ?? DEFAULT_CONFIG.minQueryLength,

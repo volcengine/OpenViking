@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { resolveOpenVikingCredentials } from "./credentials.mjs";
+import { buildUserAgent, resolveOpenVikingCredentials } from "./credentials.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { sendSessionMessages } from "./batch-send.mjs";
 import { enqueue, replayPending } from "./pending-queue.mjs";
@@ -44,6 +44,7 @@ export function loadAgentHookConfig(clientId) {
   return {
     ...credentials,
     clientId,
+    userAgent: buildUserAgent(clientId, process.env.OPENVIKING_INTEGRATION_VERSION),
     enabled: envBool("OPENVIKING_MEMORY_ENABLED", true),
     autoRecall: envBool("OPENVIKING_AUTO_RECALL", true),
     autoCapture: envBool("OPENVIKING_AUTO_CAPTURE", true),
@@ -175,6 +176,7 @@ export function makeAgentFetchJSON(cfg, cwd = process.cwd()) {
       if (cfg.user) headers["X-OpenViking-User"] = cfg.user;
       const peerId = options.actorPeerId ?? effectivePeer.peerId;
       if (peerId) headers["X-OpenViking-Actor-Peer"] = peerId;
+      if (cfg.userAgent) headers["User-Agent"] = cfg.userAgent;
       const response = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
       const body = await response.json().catch(() => ({}));
       if (!response.ok || body.status === "error") {

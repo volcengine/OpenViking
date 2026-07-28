@@ -165,7 +165,7 @@ class WatchManager:
             viking_fs: VikingFS instance for persistence storage
         """
         self._tasks: Dict[str, WatchTask] = {}
-        self._uri_to_task: Dict[str, str] = {}
+        self._uri_to_task: Dict[tuple[str, str], str] = {}
         self._lock = asyncio.Lock()
         self._viking_fs = viking_fs
         self._initialized = False
@@ -243,7 +243,7 @@ class WatchManager:
                             normalized = True
                     self._tasks[task.task_id] = task
                     if task.to_uri:
-                        self._uri_to_task[task.to_uri] = task.task_id
+                        self._uri_to_task[(task.account_id, task.to_uri)] = task.task_id
                 except Exception as e:
                     logger.warning(
                         f"[WatchManager] Failed to load task {task_data.get('task_id')}: {e}"
@@ -345,7 +345,10 @@ class WatchManager:
         return task.user_id == user_id
 
     def _check_uri_conflict(
-        self, to_uri: Optional[str], exclude_task_id: Optional[str] = None
+        self,
+        to_uri: Optional[str],
+        account_id: str = "default",
+        exclude_task_id: Optional[str] = None,
     ) -> bool:
         """Check if target URI conflicts with existing tasks.
 
@@ -359,7 +362,7 @@ class WatchManager:
         if not to_uri:
             return False
 
-        existing_task_id = self._uri_to_task.get(to_uri)
+        existing_task_id = self._uri_to_task.get((account_id, to_uri))
         if not existing_task_id:
             return False
 
@@ -409,7 +412,7 @@ class WatchManager:
             raise ValueError("watch_interval must be > 0")
 
         async with self._lock:
-            if self._check_uri_conflict(to_uri):
+            if self._check_uri_conflict(to_uri, account_id=account_id):
                 raise ConflictError(
                     f"Target URI '{to_uri}' is already used by another task",
                     resource=to_uri,
@@ -435,7 +438,7 @@ class WatchManager:
 
             self._tasks[task.task_id] = task
             if to_uri:
-                self._uri_to_task[to_uri] = task.task_id
+                self._uri_to_task[(account_id, to_uri)] = task.task_id
 
             await self._save_tasks()
 
@@ -495,7 +498,9 @@ class WatchManager:
                     f"User {account_id}/{user_id} does not have permission to update task {task_id}"
                 )
 
-            if self._check_uri_conflict(to_uri, exclude_task_id=task_id):
+            if self._check_uri_conflict(
+                to_uri, account_id=task.account_id, exclude_task_id=task_id
+            ):
                 raise ConflictError(
                     f"Target URI '{to_uri}' is already used by another task",
                     resource=to_uri,
@@ -549,9 +554,9 @@ class WatchManager:
 
             if to_uri is not None:
                 if old_to_uri and old_to_uri != to_uri:
-                    self._uri_to_task.pop(old_to_uri, None)
+                    self._uri_to_task.pop((task.account_id, old_to_uri), None)
                 if to_uri:
-                    self._uri_to_task[to_uri] = task_id
+                    self._uri_to_task[(task.account_id, to_uri)] = task_id
 
             await self._save_tasks()
 
@@ -575,17 +580,18 @@ class WatchManager:
         self,
         old_uri: str,
         new_uri: str,
+        account_id: str = "default",
     ) -> Dict[str, str]:
         old_prefix = old_uri.rstrip("/")
         new_prefix = new_uri.rstrip("/")
         plan: Dict[str, str] = {}
         for task_id, task in self._tasks.items():
-            if _uri_matches_prefix(task.to_uri, old_prefix):
+            if task.account_id == account_id and _uri_matches_prefix(task.to_uri, old_prefix):
                 plan[task_id] = _rewrite_uri_prefix(task.to_uri or "", old_prefix, new_prefix)
 
         moving_task_ids = set(plan)
         for task_id, target_uri in plan.items():
-            existing_task_id = self._uri_to_task.get(target_uri)
+            existing_task_id = self._uri_to_task.get((account_id, target_uri))
             if existing_task_id and existing_task_id not in moving_task_ids:
                 raise ConflictError(
                     f"Target URI '{target_uri}' is already used by another task",
@@ -604,10 +610,11 @@ class WatchManager:
         new_uri: str,
         move_resource: Callable[[], Awaitable[None]],
         rollback_resource: Optional[Callable[[], Awaitable[None]]] = None,
+        account_id: str = "default",
     ) -> List[WatchTask]:
         """Move a resource and keep watch-task target URIs in sync under one lock."""
         async with self._lock:
-            plan = self._plan_move_tasks_under_uri_unlocked(old_uri, new_uri)
+            plan = self._plan_move_tasks_under_uri_unlocked(old_uri, new_uri, account_id)
             move_result = move_resource()
             if inspect.isawaitable(move_result):
                 await move_result
@@ -625,7 +632,7 @@ class WatchManager:
                 for task_id in plan:
                     task = self._tasks[task_id]
                     if task.to_uri:
-                        self._uri_to_task.pop(task.to_uri, None)
+                        self._uri_to_task.pop((account_id, task.to_uri), None)
 
                 updated: List[WatchTask] = []
                 for task_id, target_uri in plan.items():
@@ -634,7 +641,7 @@ class WatchManager:
                     task.to_uri = target_uri
                     if task.parent_uri is not None and task.parent_uri == old_parent:
                         task.parent_uri = _parent_uri(target_uri)
-                    self._uri_to_task[target_uri] = task_id
+                    self._uri_to_task[(account_id, target_uri)] = task_id
                     updated.append(task)
 
                 await self._save_tasks()
@@ -655,13 +662,15 @@ class WatchManager:
                         await rollback_result
                 raise
 
-    async def deactivate_tasks_under_uri_internal(self, uri: str) -> List[WatchTask]:
+    async def deactivate_tasks_under_uri_internal(
+        self, uri: str, account_id: str = "default"
+    ) -> List[WatchTask]:
         """Deactivate watch tasks whose target URI is deleted."""
         async with self._lock:
             matched = [
                 task
                 for task in self._tasks.values()
-                if _uri_matches_prefix(task.to_uri, uri)
+                if task.account_id == account_id and _uri_matches_prefix(task.to_uri, uri)
             ]
             if not matched:
                 return []
@@ -707,7 +716,7 @@ class WatchManager:
 
             self._tasks.pop(task_id, None)
             if task.to_uri:
-                self._uri_to_task.pop(task.to_uri, None)
+                self._uri_to_task.pop((task.account_id, task.to_uri), None)
 
             await self._save_tasks()
 
@@ -789,7 +798,7 @@ class WatchManager:
             WatchTask if found and accessible, None otherwise
         """
         async with self._lock:
-            task_id = self._uri_to_task.get(to_uri)
+            task_id = self._uri_to_task.get((account_id, to_uri))
             if not task_id:
                 return None
 

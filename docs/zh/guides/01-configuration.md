@@ -595,6 +595,9 @@ provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的�
 | `thinking` | bool | 启用思考模式（仅对部分火山模型生效，默认：`false`） |
 | `max_concurrent` | int | 语义处理阶段 LLM 最大并发调用数（默认：`64`） |
 | `max_retries` | int | VLM provider 瞬时错误的最大重试次数（默认：`3`；`0` 表示禁用重试） |
+| `credentials` | array | 有序 VLM 凭据/模型列表，索引 0 优先级最高。每项可单独覆盖 `provider`、`model`、`api_key`、`api_base`、`api_version`、`extra_headers`、`extra_request_body` 和 `stream` |
+| `failback_timeout_seconds` | float | 切换到低优先级 credential 后，尝试逐级切回的时间阈值（默认：`600`） |
+| `failback_request_count` | int | 低优先级 credential 成功处理多少次请求后尝试逐级切回（默认：`50`） |
 | `backup` | object | 可选的备用 VLM 配置（结构与 `vlm` 相同），当主 VLM 遇到限流、`5xx`、超时或连接失败等可重试错误时自动切换。仅支持 1 层备用 &mdash; 备用 VLM 本身不能再嵌套 `backup` |
 | `timeout` | float | 单次 VLM API 请求的 HTTP 超时时间（秒），传递给底层 OpenAI/LiteLLM 客户端。慢端点（如 DashScope、本地推理）可调大。必须 `> 0`（默认：`600.0`） |
 | `extra_headers` | object | 兼容 HTTP provider 的自定义请求头。`kimi` 默认已注入所需订阅请求头，也支持在这里覆盖或扩展 |
@@ -772,7 +775,7 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 | `github_domains` | list[str] | 允许的 GitHub 主机（在此添加你的 GitHub Enterprise 主机） | `["github.com", "www.github.com"]` |
 | `gitlab_domains` | list[str] | 允许的 GitLab 主机（在此添加你的自建 GitLab 主机） | `["gitlab.com", "www.gitlab.com"]` |
 | `azure_devops_domains` | list[str] | 允许的 Azure DevOps 主机 | `["dev.azure.com", "ssh.dev.azure.com", "vs-ssh.visualstudio.com"]` |
-| `code_hosting_domains` | list[str] | 额外的通用代码托管主机 | `["github.com", "gitlab.com"]` |
+| `code_hosting_domains` | list[str] | 允许的通用代码托管主机 | `["github.com", "gitlab.com", "gitcode.com", "gitee.com", "bitbucket.org", "codeberg.org", "gitea.com", "atomgit.com", "git.sr.ht"]` |
 
 要从私有/内网地址（例如内部镜像）拉取，请将顶层的 `allow_private_networks` 设为 `true`（默认关闭，因此仅允许公网地址）：
 
@@ -785,7 +788,8 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 }
 ```
 
-`PermissionDeniedError` 的报错信息会指明针对被拦截主机应添加的具体配置键。
+需要 GitHub、GitLab 或 Azure DevOps 专属 URL 语义时，应配置到对应的平台字段；
+其他 Git 主机统一添加到 `code_hosting_domains`。
 
 ### rerank
 
@@ -1409,6 +1413,9 @@ openviking add-resource ./docs --exclude "*.tmp"
         "resource_uri": "viking://user/resources",
         "skill_uri": "viking://user/skills"
       }
+    },
+    "agent_evolution": {
+      "enabled": false
     }
   }
 }
@@ -1429,12 +1436,50 @@ openviking add-resource ./docs --exclude "*.tmp"
 | `temp_upload.shared_prefix` | str | 分配 shared `temp_file_id` 对象时使用的 URI 前缀。 | `"viking://upload"` |
 | `user_config_defaults.add_targets.resource_uri` | str | `add_resource` 未传 `to` 和 `parent` 时使用的部署级默认资源添加目录。`viking://user/...` 会按请求用户解析。 | `null` |
 | `user_config_defaults.add_targets.skill_uri` | str | `add_skill` 未传 `target_uri` 时使用的部署级默认技能添加根目录。仅允许 `viking://user/skills` 和 `viking://agent/skills`。 | `null` |
+| `agent_evolution.enabled` | bool | 实例级 Agent 进化开关。开启时，session commit 可按 session `memory_policy` 生成或更新 cases、trajectories 和 experiences；关闭时，所有账号和用户均停止生产这三类记忆。已有记忆仍可读取和检索。 | `false` |
 
 `api_key` 模式使用 API Key 认证，也是默认模式；`trusted` 模式信任上游网关或受信调用方注入的 `X-OpenViking-Account` / `X-OpenViking-User` 请求头。
 
 在 `api_key` 模式下配置 `root_api_key` 后，服务端启用正式多租户认证，并通过 Admin API 创建工作区和用户 key。在 `trusted` 模式下，普通请求不需要先注册 user key；每个请求都会根据注入的身份头解析成 `USER`。只有在 `auth_mode = "api_key"` 且未配置 `root_api_key` 时，服务端才会进入开发模式。
 
-`user_config_defaults` 用于给没有个人覆盖配置的新老用户提供默认用户配置。添加操作中，显式请求目标仍然优先：`add_resource.to` / `add_resource.parent` 优先于用户默认值，`add_skill.target_uri` 优先于用户默认值。个人覆盖配置存储在 `viking://user/{user_id}/settings/user_config.json`。
+`user_config_defaults` 仅用于添加目标的用户级默认配置。添加操作中，显式请求目标仍然优先：`add_resource.to` / `add_resource.parent` 优先于用户默认值，`add_skill.target_uri` 优先于用户默认值。`agent_evolution.enabled` 是当前 OpenViking 实例的统一开关，不支持用户级覆盖；修改后需重启服务加载配置。
+
+### Usage Reporter
+
+可选的 Usage Reporter 从已 commit session 的 tool parts 中抽取记忆使用事件。内置 HTTP Sink 会先把事件批次持久化到本地 outbox，再发送给采集服务：
+
+```json
+{
+  "server": {
+    "usage_reporter": {
+      "enabled": true,
+      "extractors": ["memory_usage"],
+      "sinks": [
+        {
+          "type": "http",
+          "config": {
+            "endpoint": "https://collector.example.com/openviking/usage",
+            "resource_id_env": "OV_RESOURCE_ID",
+            "outbox_dir": "/var/lib/openviking/.usage_outbox",
+            "request_timeout_seconds": 10,
+            "inflight_lease_seconds": 60,
+            "retry_base_seconds": 1,
+            "retry_max_seconds": 300,
+            "max_batch_bytes": 1048576,
+            "max_outbox_bytes": 268435456
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+启动服务前，需要设置 `resource_id_env` 指定的环境变量。未配置 `outbox_dir` 时，默认使用 OpenViking 运行用户的 `~/.openviking/data/.usage_outbox`。
+
+HTTP Sink 使用本地持久化队列重试，同一事件可能被重复发送，采集端需要按 `CountRecord.uniqueId` 去重。所有 `2xx` 响应都表示批次已确认；瞬时失败使用指数退避重试；`400` 和 `422` 会将批次移入 `dead_letter`；`413` 会拆分包含多条事件的批次。outbox 总量受 `max_outbox_bytes` 限制，达到上限后先删除最旧的 dead-letter 批次，再删除最旧的 pending 批次，正在发送的批次不会被淘汰。由于容量压力可能丢弃 pending 数据，整体上报仍是 best-effort，不提供端到端 at-least-once 保证。
+
+`inflight_lease_seconds` 必须大于 `request_timeout_seconds`。worker 领取批次时会刷新 lease，避免其他 worker 把正在发送的批次误判为过期任务。
 
 支持的 add target URI：
 
@@ -1442,6 +1487,8 @@ openviking add-resource ./docs --exclude "*.tmp"
 - `skill_uri` 作为 `add_skill` 的默认目标根目录使用。v1 只允许 `viking://user/skills` 和 `viking://agent/skills`；不支持显式写成 `viking://user/{user_id}/skills`。
 
 启动方式和部署详情见 [服务部署](./03-deployment.md)，认证详情见 [认证](./04-authentication.md)。
+
+<a id="encryption"></a>
 
 ## encryption 段
 

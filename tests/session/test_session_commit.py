@@ -79,6 +79,91 @@ class TestCommit:
         # Wait for semantic/embedding queues
         await client.wait_processed(timeout=60.0)
 
+    async def test_commit_default_disables_agent_memory_but_keeps_archive(
+        self, session_with_messages: Session
+    ):
+        session_with_messages._agent_evolution_enabled = False
+        session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            return_value=[]
+        )
+
+        result = await session_with_messages.commit_async()
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert result["archived"] is True
+        assert task_result["status"] == "completed"
+        assert task_result["result"]["agent_evolution_enabled"] is False
+        assert "cases" not in task_result["result"]["effective_memory_types"]
+        assert "trajectories" not in task_result["result"]["effective_memory_types"]
+        assert "experiences" not in task_result["result"]["effective_memory_types"]
+        assert task_result["result"]["agent_memory_skip_reason"] == ("agent_evolution_disabled")
+        call_kwargs = (
+            session_with_messages._session_compressor.extract_long_term_memories.call_args.kwargs
+        )
+        assert call_kwargs["agent_evolution_enabled"] is False
+        assert "cases" not in call_kwargs["allowed_memory_types"]
+        assert "trajectories" not in call_kwargs["allowed_memory_types"]
+        assert "experiences" not in call_kwargs["allowed_memory_types"]
+
+    async def test_commit_uses_global_setting_and_enables_agent_memory(
+        self, session_with_messages: Session
+    ):
+        session_with_messages._agent_evolution_enabled = True
+        session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            return_value=[]
+        )
+
+        result = await session_with_messages.commit_async()
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert task_result["status"] == "completed"
+        assert task_result["result"]["agent_evolution_enabled"] is True
+        assert "cases" in task_result["result"]["effective_memory_types"]
+        assert "trajectories" in task_result["result"]["effective_memory_types"]
+        assert "experiences" in task_result["result"]["effective_memory_types"]
+        call_kwargs = (
+            session_with_messages._session_compressor.extract_long_term_memories.call_args.kwargs
+        )
+        assert call_kwargs["agent_evolution_enabled"] is True
+        assert call_kwargs["allowed_memory_types"] is None
+
+    async def test_disabled_agent_evolution_keeps_working_memory(
+        self, session_with_messages: Session, monkeypatch
+    ):
+        session_with_messages._agent_evolution_enabled = False
+        summary_called = False
+
+        async def fake_summary(_session, messages, latest_archive_overview=""):
+            nonlocal summary_called
+            del messages, latest_archive_overview
+            summary_called = True
+            return "# Working Memory\n\nAgent memory production is disabled."
+
+        monkeypatch.setattr(Session, "_generate_archive_summary_async", fake_summary)
+        session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            return_value=[]
+        )
+        if hasattr(session_with_messages._session_compressor, "extract_execution_memories"):
+            session_with_messages._session_compressor.extract_execution_memories = AsyncMock(
+                return_value={"contexts": [], "session_skills": []}
+            )
+
+        result = await session_with_messages.commit_async(
+            memory_policy={
+                "memory_types": ["cases", "trajectories", "experiences"],
+                "working_memory": {"enabled": True},
+            }
+        )
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert task_result["status"] == "completed"
+        assert summary_called is True
+        archive_uri = task_result["result"]["archive_uri"]
+        assert await _marker_exists(session_with_messages, archive_uri, ".overview.md")
+        session_with_messages._session_compressor.extract_long_term_memories.assert_not_awaited()
+        if hasattr(session_with_messages._session_compressor, "extract_execution_memories"):
+            session_with_messages._session_compressor.extract_execution_memories.assert_not_awaited()
+
     async def test_commit_reports_session_skills_separately(
         self, session_with_messages: Session, monkeypatch
     ):
@@ -120,9 +205,7 @@ class TestCommit:
         session_with_messages._session_compressor.extract_long_term_memories.assert_not_awaited()
         if hasattr(session_with_messages._session_compressor, "extract_execution_memories"):
             session_with_messages._session_compressor.extract_execution_memories.assert_awaited_once()
-            call_kwargs = (
-                session_with_messages._session_compressor.extract_execution_memories.call_args.kwargs
-            )
+            call_kwargs = session_with_messages._session_compressor.extract_execution_memories.call_args.kwargs
             assert call_kwargs["allowed_memory_types"] == {"trajectories"}
             assert call_kwargs["include_session_skills"] is True
 
@@ -184,9 +267,7 @@ class TestCommit:
         session_with_messages._session_compressor.extract_long_term_memories.assert_awaited_once()
         if hasattr(session_with_messages._session_compressor, "extract_execution_memories"):
             session_with_messages._session_compressor.extract_execution_memories.assert_awaited_once()
-            call_kwargs = (
-                session_with_messages._session_compressor.extract_execution_memories.call_args.kwargs
-            )
+            call_kwargs = session_with_messages._session_compressor.extract_execution_memories.call_args.kwargs
             assert call_kwargs["include_session_skills"] is False
 
     async def test_commit_can_skip_working_memory_summary(

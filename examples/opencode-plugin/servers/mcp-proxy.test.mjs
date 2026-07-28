@@ -56,6 +56,7 @@ function makeProxy(url) {
       account: "acct",
       user: "user",
       peerId: "peer",
+      userAgent: "openviking-memory-opencode/9.9.9",
       timeoutMs: 5000,
       debug: false,
       debugLogPath: "",
@@ -81,6 +82,7 @@ test("OpenCode MCP proxy forwards initialize with auth and identity headers", as
     assert.equal(entry.headers["x-openviking-account"], "acct")
     assert.equal(entry.headers["x-openviking-user"], "user")
     assert.equal(entry.headers["x-openviking-actor-peer"], "peer")
+    assert.equal(entry.headers["user-agent"], "openviking-memory-opencode/9.9.9")
     res.writeHead(200, {
       "content-type": "text/event-stream",
       "mcp-session-id": "sid-oc",

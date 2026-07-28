@@ -7,6 +7,7 @@ from openviking_sdk import AsyncHTTPClient, SyncHTTPClient
 from openviking_sdk.client import Session, SyncSession
 from openviking_sdk.errors import NotFoundError
 
+
 @pytest.mark.asyncio
 async def test_async_http_client_initialize_forwards_event_hooks():
     async def request_hook(_request):
@@ -151,6 +152,19 @@ async def test_async_http_client_reindex_posts_content_reindex():
             "wait": False,
             "dry_run": True,
         },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("cleanup", "action"), [(False, "migrate"), (True, "cleanup")])
+async def test_async_http_client_admin_migrate_posts_action_payload(cleanup, action):
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=object())
+    client._handle_response = lambda _response: {"status": "accepted"}
+
+    assert await client.admin_migrate(cleanup=cleanup) == {"status": "accepted"}
+    client._request.assert_awaited_once_with(
+        "POST", "/api/v1/admin/migrate", json={"action": action}
     )
 
 

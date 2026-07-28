@@ -66,6 +66,7 @@ export async function probeServer(cfg, { ttlMs = DEFAULT_TTL_MS } = {}) {
   if (cfg.apiKey) headers["Authorization"] = `Bearer ${cfg.apiKey}`;
   if (cfg.accountId) headers["X-OpenViking-Account"] = cfg.accountId;
   if (cfg.userId) headers["X-OpenViking-User"] = cfg.userId;
+  if (cfg.userAgent) headers["User-Agent"] = cfg.userAgent;
 
   const t0 = Date.now();
   let healthy = false;

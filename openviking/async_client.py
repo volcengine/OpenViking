@@ -24,7 +24,6 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-
 if TYPE_CHECKING:
     from openviking.snapshot_namespace import AsyncSnapshotNamespace
 

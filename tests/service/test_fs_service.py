@@ -50,17 +50,20 @@ class _FakeWatchManager:
         self,
         from_uri,
         to_uri,
+        account_id,
         move_resource,
         rollback_resource=None,
     ):
-        self.sync_calls.append({"from_uri": from_uri, "to_uri": to_uri})
+        self.sync_calls.append(
+            {"from_uri": from_uri, "to_uri": to_uri, "account_id": account_id}
+        )
         if self.plan_error:
             raise self.plan_error
         await move_resource()
         return [SimpleNamespace(task_id="watch-1")]
 
-    async def deactivate_tasks_under_uri_internal(self, uri):
-        self.deactivate_calls.append(uri)
+    async def deactivate_tasks_under_uri_internal(self, uri, account_id):
+        self.deactivate_calls.append({"uri": uri, "account_id": account_id})
         return [SimpleNamespace(task_id="watch-1")]
 
 
@@ -220,7 +223,9 @@ async def test_resource_rm_deactivates_watch_tasks(request_context):
 
     await service.rm("viking://resources/codeask/wiki", ctx=request_context, recursive=True)
 
-    assert watch_manager.deactivate_calls == ["viking://resources/codeask/wiki"]
+    assert watch_manager.deactivate_calls == [
+        {"uri": "viking://resources/codeask/wiki", "account_id": "default"}
+    ]
 
 
 @pytest.mark.asyncio
@@ -256,6 +261,7 @@ async def test_resource_mv_plans_then_moves_then_rewrites_watch_tasks(request_co
         {
             "from_uri": "viking://resources/codeask/wiki",
             "to_uri": "viking://resources/codeask/wiki-renamed",
+            "account_id": "default",
         }
     ]
     assert viking_fs.mv_calls == [

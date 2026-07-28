@@ -99,6 +99,7 @@ async function fetchJSON(path, init = {}) {
     if (cfg.sendIdentityHeaders && cfg.account) headers["X-OpenViking-Account"] = cfg.account;
     if (cfg.sendIdentityHeaders && cfg.user) headers["X-OpenViking-User"] = cfg.user;
     if (effectivePeer.peerId) headers["X-OpenViking-Actor-Peer"] = effectivePeer.peerId;
+    if (cfg.userAgent) headers["User-Agent"] = cfg.userAgent;
     const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     const body = await res.json().catch(() => null);
     if (!body) return { ok: false, status: res.status };

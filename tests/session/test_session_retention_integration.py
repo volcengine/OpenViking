@@ -12,6 +12,7 @@ from openviking import AsyncOpenViking
 from openviking.message import Message, TextPart, ToolPart
 from openviking.models.vlm.base import ToolCall, VLMResponse
 from openviking.service.task_tracker import get_task_tracker
+from openviking.session.memory.constants import AGENT_EVOLUTION_MEMORY_TYPES
 from openviking.session.session import Session, _ArchiveSummaryResult, _CheckpointRequest
 
 
@@ -366,9 +367,15 @@ async def test_phase2_roll_forward_writes_coverage_and_calls_existing_summary_on
         1,
         [_text_message("u1", "user", "failed one")],
         failed=True,
+        meta={"agent_evolution": {"enabled": False}},
     )
     current = _text_message("u2", "user", "current two")
-    current_uri = await _write_archive(session, 2, [current])
+    current_uri = await _write_archive(
+        session,
+        2,
+        [current],
+        meta={"agent_evolution": {"enabled": True}},
+    )
     seen_message_ids: list[list[str]] = []
 
     async def fake_summary(messages, latest_archive_overview=""):
@@ -401,11 +408,14 @@ async def test_phase2_roll_forward_writes_coverage_and_calls_existing_summary_on
         first_message_id=current.id,
         last_message_id=current.id,
         memory_policy={"working_memory": {"enabled": True}},
+        agent_evolution_enabled=True,
     )
 
     done = json.loads(await session._viking_fs.read_file(f"{current_uri}/.done", ctx=session.ctx))
+    task = await get_task_tracker().get(task_id)
     context = await session.get_session_context()
     assert seen_message_ids == [["u1", "u2"]]
+    assert task.result["agent_evolution_enabled"] is True
     assert done["coverage_start_archive"] == "archive_001"
     assert done["coverage_end_archive"] == "archive_002"
     assert done["covered_failed_archives"] == ["archive_001"]
@@ -1620,4 +1630,16 @@ async def test_stale_worker_uses_lock_snapshot_memory_policy_for_queue_message(
     result = await stale_session.commit_async()
 
     assert result["archived"] is True
-    assert queued[0]["memory_policy"] == updater.meta.memory_policy
+    queued_policy = queued[0]["memory_policy"]
+    assert {
+        key: queued_policy[key] for key in updater.meta.memory_policy
+    } == updater.meta.memory_policy
+    assert set(queued_policy["memory_types"]).isdisjoint(AGENT_EVOLUTION_MEMORY_TYPES)
+    assert "agent_evolution_enabled" not in queued[0]
+    archive_meta = json.loads(
+        await stale_session._viking_fs.read_file(
+            f"{result['archive_uri']}/.meta.json",
+            ctx=stale_session.ctx,
+        )
+    )
+    assert archive_meta["agent_evolution"]["enabled"] is False

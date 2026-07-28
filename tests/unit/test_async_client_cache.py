@@ -3,6 +3,7 @@
 """Tests for event-loop scoped async client caching."""
 
 import asyncio
+import copy
 import threading
 
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
@@ -44,3 +45,17 @@ def test_loop_scoped_async_client_cache_reuses_within_loop_and_isolates_between_
     assert worker_results[0][0] is worker_results[0][1]
     assert main_first is not worker_results[0][0]
     assert len(created) == 2
+
+
+def test_loop_scoped_async_client_cache_copies_without_live_clients():
+    cache = LoopScopedAsyncClientCache()
+    client = object()
+
+    assert cache.get(lambda: client) is client
+
+    shallow = copy.copy(cache)
+    deep = copy.deepcopy(cache)
+
+    assert cache.has_clients()
+    assert not shallow.has_clients()
+    assert not deep.has_clients()

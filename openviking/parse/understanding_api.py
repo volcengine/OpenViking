@@ -87,30 +87,41 @@ class UnderstandingAPI(BaseParser):
         """
         source_str = str(source)
         original_source = kwargs.get("original_source")
-        candidate = original_source if isinstance(original_source, str) else source_str
-        explicit_name = kwargs.get("resource_name") or kwargs.get("source_name")
+        resolved_extension = str(kwargs.get("resolved_extension") or "").lower().lstrip(".")
+        display_name = kwargs.get("resource_name") or kwargs.get("source_name")
         prepared_response_id = kwargs.get(PREPARED_RESPONSE_ID_ARG)
         if prepared_response_id is not None:
             if not isinstance(prepared_response_id, str) or not prepared_response_id.strip():
                 raise ValueError(f"{PREPARED_RESPONSE_ID_ARG} must be a non-empty string")
             prepared_response_id = prepared_response_id.strip()
-        lark_file = self._normalize_lark_file(kwargs)
-        # Legacy accessor output may keep a Feishu URL in original_source while
-        # the actual parser input is a local Markdown file. Only direct URL
-        # routing may use the parser API Lark protocol.
+
+        # Only a directly routed Feishu URL uses the Lark protocol. Accessor
+        # output is an existing local Markdown file and must stay local.
         is_feishu_url = self._is_feishu_url(source_str)
-        if is_feishu_url and not lark_file and not prepared_response_id:
-            raise ValueError(
-                "exactly one Feishu user or tenant access token is required for parser API imports"
-            )
+        lark_file = (
+            await self._resolve_lark_file(kwargs)
+            if is_feishu_url and not prepared_response_id
+            else None
+        )
 
         url: Optional[str] = None
         local_path: Optional[Path] = None
-        if isinstance(candidate, str) and candidate.startswith(("http://", "https://")):
-            url = candidate
+        source_path = Path(source_str)
+        if source_path.is_file():
+            local_path = source_path
+        elif source_str.startswith(("http://", "https://")):
+            url = source_str
+        elif isinstance(original_source, str) and original_source.startswith(
+            ("http://", "https://")
+        ):
+            url = original_source
+        else:
+            local_path = source_path
+
+        if url is not None:
             parsed = urlparse(url)
-            doc_name = Path(parsed.path).stem or "resource"
-            doc_type = Path(parsed.path).suffix.lower().lstrip(".") or "unknown"
+            inferred_name = Path(parsed.path).name
+            doc_type = resolved_extension or Path(parsed.path).suffix.lower().lstrip(".")
             if is_feishu_url:
                 path_parts = [part for part in parsed.path.split("/") if part]
                 doc_type = {
@@ -118,17 +129,17 @@ class UnderstandingAPI(BaseParser):
                     "base": "bitable",
                 }.get(path_parts[0], path_parts[0])
         else:
-            local_path = Path(candidate)
-            if not local_path.is_file():
+            inferred_name = local_path.name if local_path is not None else ""
+            if local_path is None or not local_path.is_file():
                 raise ValueError(
                     "UnderstandingAPI supports http(s) URLs or local files. "
                     "Got an invalid local file path."
                 )
-            doc_name = local_path.stem or "resource"
-            doc_type = local_path.suffix.lower().lstrip(".") or "unknown"
+            doc_type = resolved_extension or local_path.suffix.lower().lstrip(".")
 
-        if explicit_name:
-            doc_name = Path(str(explicit_name)).name or doc_name
+        effective_name = str(display_name or inferred_name or "resource")
+        doc_name = Path(effective_name).stem or "resource"
+        doc_type = doc_type or "unknown"
 
         task_meta: Dict[str, Any] = {}
 
@@ -170,7 +181,7 @@ class UnderstandingAPI(BaseParser):
 
         zip_path = await self._download_zip(zip_url)
         try:
-            if is_feishu_url and not explicit_name:
+            if is_feishu_url and not display_name:
                 archive_root = self._single_zip_root_name(zip_path)
                 if archive_root:
                     doc_name = archive_root
@@ -211,7 +222,7 @@ class UnderstandingAPI(BaseParser):
 
         result = ParseResult(
             root=root_node,
-            source_path=url or source_str,
+            source_path=original_source if isinstance(original_source, str) else url or source_str,
             source_format=doc_type,
             temp_dir_path=temp_dir_path,
             parser_name="UnderstandingAPI",
@@ -221,17 +232,32 @@ class UnderstandingAPI(BaseParser):
         logger.info("[UnderstandingAPI] done")
         return result
 
+    async def submit_file(self, source: Union[str, Path]) -> str:
+        """Upload a local file and submit it without retaining the local artifact."""
+        local_path = Path(source)
+        if not local_path.is_file():
+            raise ValueError("UnderstandingAPI file submission requires an existing local file")
+
+        file_obj = await self._create_file(local_path=local_path)
+        file_id = file_obj.get("id")
+        if not file_id:
+            raise RuntimeError(f"files api missing file_id: {self._safe_error_summary(file_obj)}")
+
+        response_obj = await self._create_response_for_file(file_id=str(file_id))
+        response_id = response_obj.get("id")
+        if not response_id:
+            raise RuntimeError(
+                f"responses api missing id: {self._safe_error_summary(response_obj)}"
+            )
+        return str(response_id)
+
     async def submit_url(self, source: str, **kwargs) -> str:
         """Submit a URL without persisting its credentials in a queue payload."""
         if not isinstance(source, str) or not source.startswith(("http://", "https://")):
             raise ValueError("UnderstandingAPI URL submission requires an http(s) URL")
 
         is_feishu_url = self._is_feishu_url(source)
-        lark_file = self._normalize_lark_file(kwargs)
-        if is_feishu_url and not lark_file:
-            raise ValueError(
-                "exactly one Feishu user or tenant access token is required for parser API imports"
-            )
+        lark_file = await self._resolve_lark_file(kwargs) if is_feishu_url else None
 
         parsed = urlparse(source)
         doc_type = Path(parsed.path).suffix.lower().lstrip(".") or "unknown"
@@ -253,6 +279,20 @@ class UnderstandingAPI(BaseParser):
                 f"responses api missing id: {self._safe_error_summary(response_obj)}"
             )
         return str(response_id)
+
+    def can_submit_url_directly(self, source: str, **kwargs) -> bool:
+        """Return whether this URL can bypass source materialization."""
+        if not source.startswith(("http://", "https://")) or not self._is_feishu_url(source):
+            return False
+        if self._normalize_lark_file(kwargs):
+            return True
+        try:
+            from openviking.resource.feishu_watch_auth import load_feishu_app_credentials
+
+            load_feishu_app_credentials()
+            return True
+        except (FileNotFoundError, ValueError):
+            return False
 
     async def parse_content(
         self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs
@@ -395,6 +435,20 @@ class UnderstandingAPI(BaseParser):
                 "lark_file must contain exactly one of user_access_token or tenant_access_token"
             )
         return auth or None
+
+    async def _resolve_lark_file(self, kwargs: Dict[str, Any]) -> Dict[str, str]:
+        auth = self._normalize_lark_file(kwargs)
+        if auth:
+            return auth
+        try:
+            from openviking.resource.feishu_watch_auth import FeishuOAuthClient
+
+            token = await FeishuOAuthClient.from_config().get_tenant_access_token()
+        except (FileNotFoundError, ValueError) as exc:
+            raise ValueError(
+                "exactly one Feishu user or tenant access token is required for parser API imports"
+            ) from exc
+        return {"tenant_access_token": token}
 
     @staticmethod
     def _single_zip_root_name(zip_path: Path) -> Optional[str]:
@@ -591,40 +645,51 @@ class UnderstandingAPI(BaseParser):
     async def _unpack_zip_to_temp_dir(self, zip_path: Path, resource_name: str) -> str:
         viking_fs = get_viking_fs()
         temp_uri = viking_fs.create_temp_uri()
-        await viking_fs.mkdir(temp_uri)
+        try:
+            await viking_fs.mkdir(temp_uri)
 
-        temp_doc_uri = f"{temp_uri}/{resource_name}"
-        await viking_fs.mkdir(temp_doc_uri)
+            temp_doc_uri = f"{temp_uri}/{resource_name}"
+            await viking_fs.mkdir(temp_doc_uri)
 
-        with tempfile.TemporaryDirectory() as extract_dir:
-            with zipfile.ZipFile(zip_path, "r") as zf:
-                safe_extract_zip(zf, extract_dir)
-            extract_path = Path(extract_dir)
-            items = [p for p in extract_path.iterdir() if p.name not in {".", ".."}]
-            if len(items) == 1 and items[0].is_dir():
-                root_dir = items[0]
-            else:
-                root_dir = extract_path
-
-            image_mappings = await asyncio.to_thread(build_artifact_image_mappings, root_dir)
-
-            for child in root_dir.iterdir():
-                if child.name in {".", "..", IMAGE_MAPPINGS_FILENAME}:
-                    continue
-                if child.is_dir():
-                    sub_uri = f"{temp_doc_uri}/{child.name}"
-                    await viking_fs.mkdir(sub_uri)
-                    await self._copy_dir_to_fs(child, sub_uri)
+            with tempfile.TemporaryDirectory() as extract_dir:
+                with zipfile.ZipFile(zip_path, "r") as zf:
+                    safe_extract_zip(zf, extract_dir)
+                extract_path = Path(extract_dir)
+                items = [p for p in extract_path.iterdir() if p.name not in {".", ".."}]
+                if len(items) == 1 and items[0].is_dir():
+                    root_dir = items[0]
                 else:
-                    await viking_fs.write_file_bytes(
-                        f"{temp_doc_uri}/{child.name}", child.read_bytes()
-                    )
+                    root_dir = extract_path
 
-            if image_mappings:
-                await viking_fs.write_file(
-                    f"{temp_doc_uri}/{IMAGE_MAPPINGS_FILENAME}",
-                    json.dumps(image_mappings, ensure_ascii=False),
+                image_mappings = await asyncio.to_thread(build_artifact_image_mappings, root_dir)
+
+                for child in root_dir.iterdir():
+                    if child.name in {".", "..", IMAGE_MAPPINGS_FILENAME}:
+                        continue
+                    if child.is_dir():
+                        sub_uri = f"{temp_doc_uri}/{child.name}"
+                        await viking_fs.mkdir(sub_uri)
+                        await self._copy_dir_to_fs(child, sub_uri)
+                    else:
+                        await viking_fs.write_file_bytes(
+                            f"{temp_doc_uri}/{child.name}", child.read_bytes()
+                        )
+
+                if image_mappings:
+                    await viking_fs.write_file(
+                        f"{temp_doc_uri}/{IMAGE_MAPPINGS_FILENAME}",
+                        json.dumps(image_mappings, ensure_ascii=False),
+                    )
+        except BaseException:
+            try:
+                await viking_fs.delete_temp(temp_uri)
+            except Exception as cleanup_exc:
+                logger.warning(
+                    "[UnderstandingAPI] Failed to clean temporary artifact %s: %s",
+                    temp_uri,
+                    cleanup_exc,
                 )
+            raise
 
         return temp_uri
 

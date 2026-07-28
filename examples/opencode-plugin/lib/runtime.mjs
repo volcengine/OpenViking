@@ -6,6 +6,7 @@ export async function checkServiceHealth(config, timeoutMs = 3000) {
   try {
     const response = await fetch(`${normalizeEndpoint(config.endpoint)}/health`, {
       method: "GET",
+      headers: config.userAgent ? { "User-Agent": config.userAgent } : undefined,
       signal: controller.signal,
     })
     return response.ok

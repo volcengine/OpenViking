@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for config_loader utilities."""
 
+import json
 import logging
+import re
 from logging.handlers import QueueHandler
+from pathlib import Path
 
 import pytest
 
@@ -15,6 +18,7 @@ from openviking_cli.utils.config.config_loader import (
     require_config,
     resolve_config_path,
 )
+from openviking_cli.utils.config.parser_config import CodeHostingConfig
 
 
 class TestResolveConfigPath:
@@ -113,6 +117,44 @@ class TestRequireConfig:
         monkeypatch.delenv("TEST_MISSING_ENV", raising=False)
         with pytest.raises(FileNotFoundError, match="configuration file not found"):
             require_config(None, "TEST_MISSING_ENV", "nonexistent_file.conf", "test")
+
+
+def test_generic_code_hosting_domains_include_supported_platforms():
+    config = CodeHostingConfig()
+
+    assert config.code_hosting_domains == [
+        "github.com",
+        "gitlab.com",
+        "gitcode.com",
+        "gitee.com",
+        "bitbucket.org",
+        "codeberg.org",
+        "gitea.com",
+        "atomgit.com",
+        "git.sr.ht",
+    ]
+
+
+def test_example_code_hosting_domains_match_runtime_defaults():
+    example_path = Path(__file__).resolve().parents[1] / "examples" / "ov.conf.example"
+    example_text = example_path.read_text(encoding="utf-8")
+    domains_match = re.search(
+        r'"code_hosting_domains"\s*:\s*(\[[^\]]*\])',
+        example_text,
+    )
+
+    assert domains_match is not None
+    assert json.loads(domains_match.group(1)) == CodeHostingConfig().code_hosting_domains
+
+
+def test_generic_code_hosting_domains_load_from_config():
+    config = CodeHostingConfig.from_dict(
+        {
+            "code_hosting_domains": ["git.generic.example.com"],
+        }
+    )
+
+    assert config.code_hosting_domains == ["git.generic.example.com"]
 
 
 def test_openviking_config_rejects_unknown_nested_parser_section(monkeypatch):

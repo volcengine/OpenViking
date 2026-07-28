@@ -60,6 +60,7 @@ def test_http_observability_middleware_updates_route_template_after_routing(monk
 
     @app.middleware("http")
     async def _mw(request, call_next):
+        request.state.request_id = "test-request"
         return await http_mw(request, call_next)
 
     @app.get("/hello")

@@ -177,19 +177,14 @@ class ExtractLoop:
             if tool.name in allowed_tools
         ]
 
-        # 预计算 expected_fields
+        # Resolve global link support before generating the operations model.
         config = get_openviking_config()
         self._link_enabled = config.memory.link_enabled if config.memory else False
-        self._expected_fields = []
-        if self._link_enabled:
-            self._expected_fields.append("links")
 
         # 获取 ExtractContext（整个流程复用）
         self._extract_context = self.context_provider.get_extract_context()
         if self._extract_context is None:
             raise ValueError("Failed to get ExtractContext from provider")
-        for schema in schemas:
-            self._expected_fields.append(f"{schema.memory_type}")
 
         # 预计算 operations_model
         role_scope = self._isolation_handler.get_read_scope() if self._isolation_handler else None
@@ -197,6 +192,9 @@ class ExtractLoop:
         self._operations_model = self.schema_model_generator.create_structured_operations_model(
             role_scope
         )
+        # Keep the stability parser's allowlist aligned with the generated
+        # contract, including conditional fields such as delete_ids and links.
+        self._expected_fields = list(self._operations_model.model_fields)
 
         json_schema = self._operations_model.model_json_schema()
 

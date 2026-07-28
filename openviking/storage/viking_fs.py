@@ -695,7 +695,9 @@ class VikingFS:
                 lock_mode=lock_mode,
                 handle=lock_handle,
             ):
-                uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
+                uris_to_delete = (
+                    await self._collect_uris(path, recursive, ctx=ctx) if is_dir else []
+                )
                 uris_to_delete.append(target_uri)
                 real_ctx = self._ctx_or_default(ctx)
                 estimated_count = await _estimate_deleted_count(path, real_ctx)
@@ -804,7 +806,9 @@ class VikingFS:
         )
 
         async with lock_context as active_lock_handle:
-            uris_to_move = await self._collect_uris(old_path, recursive=True, ctx=ctx)
+            uris_to_move = (
+                await self._collect_uris(old_path, recursive=True, ctx=ctx) if is_dir else []
+            )
             uris_to_move.append(target_uri)
 
             # Check if it's temp directory (files already encrypted)
@@ -824,8 +828,15 @@ class VikingFS:
                 )
             except Exception as e:
                 if "not found" in str(e).lower():
-                    await self._delete_from_vector_store(uris_to_move, ctx=ctx)
-                    logger.info(f"[VikingFS] mv source not found, cleaned orphan index: {old_uri}")
+                    try:
+                        await self._delete_from_vector_store(uris_to_move, ctx=ctx)
+                    except Exception:
+                        # Orphan cleanup is best effort here; preserve the copy error.
+                        pass
+                    else:
+                        logger.info(
+                            f"[VikingFS] mv source not found, cleaned orphan index: {old_uri}"
+                        )
                 raise
 
             # Remove carried lock file from the copy (directory only)
@@ -2958,19 +2969,23 @@ class VikingFS:
 
         async def _collect(p: str):
             try:
-                for entry in await self._ls_entries(p, ctx=ctx):
-                    name = entry.get("name", "")
-                    if name in [".", ".."]:
-                        continue
-                    full_path = f"{p}/{name}".replace("//", "/")
-                    if entry.get("isDir"):
-                        uris.append(self._path_to_uri(full_path, ctx=ctx))
-                        if recursive:
-                            await _collect(full_path)
-                    else:
-                        uris.append(self._path_to_uri(full_path, ctx=ctx))
-            except Exception:
-                pass
+                entries = await self._ls_entries(p, ctx=ctx)
+            except Exception as exc:
+                if is_not_found_error(exc):
+                    return
+                raise
+
+            for entry in entries:
+                name = entry.get("name", "")
+                if name in [".", ".."]:
+                    continue
+                full_path = f"{p}/{name}".replace("//", "/")
+                if entry.get("isDir"):
+                    uris.append(self._path_to_uri(full_path, ctx=ctx))
+                    if recursive:
+                        await _collect(full_path)
+                else:
+                    uris.append(self._path_to_uri(full_path, ctx=ctx))
 
         await _collect(path)
         return uris
@@ -2993,6 +3008,7 @@ class VikingFS:
                 logger.debug(f"[VikingFS] Deleted from vector store: {uri}")
         except Exception as e:
             logger.warning(f"[VikingFS] Failed to delete from vector store: {e}")
+            raise
 
     async def _update_vector_store_uris(
         self,
