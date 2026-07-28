@@ -56,6 +56,7 @@ class SemanticMsg:
     is_code_repo: bool = False
     target_preexisting: Optional[bool] = None
     search_tags: Optional[List[str]] = None
+    search_tag_mode: str = "replace"
     coalesce_key: str = ""
     coalesce_version: int = 0
     changes: Optional[Dict[str, List[str]]] = (
@@ -78,6 +79,7 @@ class SemanticMsg:
         is_code_repo: bool = False,
         target_preexisting: Optional[bool] = None,
         search_tags: Optional[List[str]] = None,
+        search_tag_mode: str = "replace",
         coalesce_key: str = "",
         coalesce_version: int = 0,
         changes: Optional[Dict[str, List[str]]] = None,
@@ -97,6 +99,7 @@ class SemanticMsg:
         self.is_code_repo = is_code_repo
         self.target_preexisting = target_preexisting
         self.search_tags = list(search_tags) if search_tags is not None else None
+        self.search_tag_mode = search_tag_mode
         self.coalesce_key = coalesce_key
         self.coalesce_version = coalesce_version
         self.changes = changes
@@ -141,6 +144,7 @@ class SemanticMsg:
             is_code_repo=data.get("is_code_repo", False),
             target_preexisting=data.get("target_preexisting"),
             search_tags=data.get("search_tags"),
+            search_tag_mode=data.get("search_tag_mode", "replace"),
             coalesce_key=data.get("coalesce_key", ""),
             coalesce_version=data.get("coalesce_version", 0),
             changes=data.get("changes"),

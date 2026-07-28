@@ -12,7 +12,6 @@ import pytest
 from openviking.server.identity import RequestContext, Role
 from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
-from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
@@ -938,6 +937,17 @@ async def test_tos_connector_rejects_wait(connector_config, ctx, service):
 
 
 @pytest.mark.asyncio
+async def test_tos_connector_rejects_tags_instead_of_dropping_them(connector_config, ctx, service):
+    with pytest.raises(InvalidArgumentError, match="tags"):
+        await service.add_resource(
+            path="tos://bucket/prefix",
+            ctx=ctx,
+            to="viking://resources/imports",
+            tags=["team=search"],
+        )
+
+
+@pytest.mark.asyncio
 async def test_monitor_links_reason_memory_on_success(
     monkeypatch,
     connector_config,
@@ -968,42 +978,6 @@ async def test_monitor_links_reason_memory_on_success(
     link_kwargs = service._link_resource_reason_memory.await_args.kwargs
     assert link_kwargs["reason"] == "track quarterly reports"
     assert link_kwargs["result"] == {"root_uri": "viking://resources/imports"}
-
-
-@pytest.mark.asyncio
-async def test_monitor_connector_task_does_not_apply_tags_after_success(
-    monkeypatch,
-    connector_config,
-    ctx,
-    service,
-):
-    tracker = _task_tracker()
-    monkeypatch.setattr(
-        "openviking.service.task_tracker.get_task_tracker",
-        lambda: tracker,
-    )
-
-    async def fake_set_tags(self, **kwargs):
-        raise AssertionError("connector completion must not call set_tags after add_resource")
-
-    monkeypatch.setattr(ContentWriteCoordinator, "set_tags", fake_set_tags)
-    client = SimpleNamespace(get_task_info=AsyncMock(return_value={"Status": "succeeded"}))
-
-    outcome = await service._monitor_connector_task(
-        client=client,
-        connector_task_key="connector-1",
-        ov_task_id="task-1",
-        poll_interval_ms=10,
-        timeout_seconds=5,
-        ctx=ctx,
-        link_root_uri="viking://resources/imports",
-        tags=["team=search"],
-        tag_mode="append",
-    )
-
-    assert outcome["status"] == "completed"
-    completion = tracker.complete.await_args.args[1]
-    assert "tags_result" not in completion
 
 
 @pytest.mark.asyncio

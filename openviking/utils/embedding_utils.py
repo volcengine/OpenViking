@@ -20,6 +20,7 @@ from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConve
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.image_search import image_bytes_to_data_uri
+from openviking.utils.tags import merge_search_tags
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
@@ -68,6 +69,44 @@ def _apply_search_tags(embedding_msg, search_tags: Optional[list[str]]) -> None:
     if not embedding_msg or search_tags is None:
         return
     embedding_msg.context_data["search_tags"] = list(search_tags)
+
+
+async def _resolve_search_tags(
+    uri: str,
+    ctx: Optional[RequestContext],
+    *,
+    search_tags: Optional[list[str]],
+    search_tag_mode: str = "replace",
+    level: Optional[int] = None,
+) -> Optional[list[str]]:
+    if search_tags is None:
+        return None
+    if search_tag_mode != "append":
+        return list(search_tags)
+    existing_tags: Optional[list[str]] = None
+    try:
+        from openviking.server.dependencies import get_service
+
+        service = get_service()
+        if service and service.vikingdb_manager:
+            get_context_by_uri = getattr(service.vikingdb_manager, "get_context_by_uri", None)
+            if level is None or not callable(get_context_by_uri):
+                record = await service.vikingdb_manager.fetch_by_uri(uri, ctx=ctx)
+            else:
+                records = await get_context_by_uri(
+                    uri,
+                    level=level,
+                    limit=1,
+                    ctx=ctx,
+                )
+                record = records[0] if records else None
+            if isinstance(record, dict):
+                value = record.get("search_tags")
+                if isinstance(value, list):
+                    existing_tags = value
+    except Exception:
+        existing_tags = None
+    return merge_search_tags(existing_tags, search_tags)
 
 
 async def _decrement_embedding_tracker(semantic_msg_id: Optional[str], count: int) -> None:
@@ -319,6 +358,7 @@ async def vectorize_directory_meta(
     include_overview: bool = True,
     scalar_overrides: Optional[Dict[int, Dict[str, Any]]] = None,
     search_tags: Optional[list[str]] = None,
+    search_tag_mode: str = "replace",
 ) -> None:
     """
     Vectorize directory metadata (.abstract.md and .overview.md).
@@ -339,6 +379,13 @@ async def vectorize_directory_meta(
         owner_space = owner_space_for_uri(uri, ctx)
 
         created_at, updated_at = await _resolve_context_timestamps(uri, ctx)
+        effective_search_tags = await _resolve_search_tags(
+            uri,
+            ctx,
+            search_tags=search_tags,
+            search_tag_mode=search_tag_mode,
+            level=int(ContextLevel.ABSTRACT.value),
+        )
 
         # Cap the abstract scalar below the bytes_row 65535-byte limit. #2774
         # added this for the memory path; the resource indexing paths (here and
@@ -366,7 +413,7 @@ async def vectorize_directory_meta(
             msg_abstract,
             (scalar_overrides or {}).get(int(ContextLevel.ABSTRACT.value)),
         )
-        _apply_search_tags(msg_abstract, search_tags)
+        _apply_search_tags(msg_abstract, effective_search_tags)
         if msg_abstract:
             msg_abstract.semantic_msg_id = semantic_msg_id
             try:
@@ -396,11 +443,18 @@ async def vectorize_directory_meta(
             )
             context_overview.set_vectorize(Vectorize(text=overview, full_text=overview))
             msg_overview = EmbeddingMsgConverter.from_context(context_overview)
+            overview_search_tags = await _resolve_search_tags(
+                uri,
+                ctx,
+                search_tags=search_tags,
+                search_tag_mode=search_tag_mode,
+                level=int(ContextLevel.OVERVIEW.value),
+            )
             _apply_scalar_overrides(
                 msg_overview,
                 (scalar_overrides or {}).get(int(ContextLevel.OVERVIEW.value)),
             )
-            _apply_search_tags(msg_overview, search_tags)
+            _apply_search_tags(msg_overview, overview_search_tags)
             if msg_overview:
                 msg_overview.semantic_msg_id = semantic_msg_id
                 try:
@@ -434,6 +488,7 @@ async def vectorize_file(
     scalar_override: Optional[Dict[str, Any]] = None,
     register_request_wait: bool = False,
     search_tags: Optional[list[str]] = None,
+    search_tag_mode: str = "replace",
 ) -> None:
     """
     Vectorize a single file.
@@ -467,6 +522,13 @@ async def vectorize_file(
             file_path,
             ctx,
             preserve_existing_created_at=preserve_existing_created_at,
+        )
+        effective_search_tags = await _resolve_search_tags(
+            file_path,
+            ctx,
+            search_tags=search_tags,
+            search_tag_mode=search_tag_mode,
+            level=int(ContextLevel.DETAIL.value),
         )
 
         context = Context(
@@ -553,7 +615,7 @@ async def vectorize_file(
             return
 
         _apply_scalar_overrides(embedding_msg, scalar_override)
-        _apply_search_tags(embedding_msg, search_tags)
+        _apply_search_tags(embedding_msg, effective_search_tags)
         embedding_msg.semantic_msg_id = semantic_msg_id
         if register_request_wait:
             get_request_wait_tracker().register_embedding_root(
@@ -589,6 +651,7 @@ async def index_resource(
     uri: str,
     ctx: RequestContext,
     search_tags: Optional[list[str]] = None,
+    search_tag_mode: str = "replace",
 ) -> None:
     """
     Build vector index for a resource directory.
@@ -630,6 +693,7 @@ async def index_resource(
             context_type=context_type,
             ctx=ctx,
             search_tags=search_tags,
+            search_tag_mode=search_tag_mode,
         )
 
     # 2. Index Files
@@ -657,6 +721,7 @@ async def index_resource(
                 context_type=context_type,
                 ctx=ctx,
                 search_tags=search_tags,
+                search_tag_mode=search_tag_mode,
             )
 
     except Exception as e:

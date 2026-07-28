@@ -262,6 +262,47 @@ async def test_vectorize_file_writes_search_tags_into_embedding_context(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_vectorize_file_appends_search_tags_to_existing_record_tags(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("deployment guide"))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
+        ),
+    )
+
+    class DummyVikingDB:
+        async def fetch_by_uri(self, uri, *, ctx):
+            assert uri == "viking://user/default/resources/demo.md"
+            return {"search_tags": ["owner=alice", "env=dev"]}
+
+    monkeypatch.setattr(
+        "openviking.server.dependencies.get_service",
+        lambda: types.SimpleNamespace(vikingdb_manager=DummyVikingDB()),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/demo.md",
+        summary_dict={"name": "demo.md", "summary": "deployment summary"},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+        search_tags=["env=prod", "team=search"],
+        search_tag_mode="append",
+    )
+
+    assert len(queue.items) == 1
+    msg = queue.items[0]
+    assert msg.context_data["search_tags"] == [
+        "owner=alice",
+        "env=prod",
+        "team=search",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_vectorize_directory_meta_writes_search_tags_into_embedding_context(monkeypatch):
     queue = DummyQueue()
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
@@ -278,6 +319,51 @@ async def test_vectorize_directory_meta_writes_search_tags_into_embedding_contex
     assert len(queue.items) == 2
     for msg in queue.items:
         assert msg.context_data["search_tags"] == ["team=search", "env=test"]
+
+
+@pytest.mark.asyncio
+async def test_vectorize_directory_meta_appends_search_tags_by_level(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("ignored"))
+
+    class DummyVikingDB:
+        async def get_context_by_uri(self, uri, *, level, limit, ctx):
+            assert uri == "viking://user/default/resources/demo"
+            assert limit == 1
+            tags_by_level = {
+                0: ["owner=l0", "env=old"],
+                1: ["owner=l1", "env=old"],
+            }
+            return [{"search_tags": tags_by_level[level]}]
+
+    monkeypatch.setattr(
+        "openviking.server.dependencies.get_service",
+        lambda: types.SimpleNamespace(vikingdb_manager=DummyVikingDB()),
+    )
+
+    await embedding_utils.vectorize_directory_meta(
+        uri="viking://user/default/resources/demo",
+        abstract="demo abstract",
+        overview="demo overview",
+        ctx=DummyReq(),
+        search_tags=["env=prod", "team=search"],
+        search_tag_mode="append",
+    )
+
+    assert len(queue.items) == 2
+    assert queue.items[0].context_data["level"] == 0
+    assert queue.items[0].context_data["search_tags"] == [
+        "owner=l0",
+        "env=prod",
+        "team=search",
+    ]
+    assert queue.items[1].context_data["level"] == 1
+    assert queue.items[1].context_data["search_tags"] == [
+        "owner=l1",
+        "env=prod",
+        "team=search",
+    ]
 
 
 @pytest.mark.asyncio

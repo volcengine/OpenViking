@@ -457,8 +457,9 @@ class ResourceProcessor:
         processing_mode = normalize_processing_mode(processing_mode)
         vectors_only = processing_mode == VECTORS_ONLY
         ingest_search_tags = kwargs.pop("ingest_search_tags", None)
-        kwargs.pop("ingest_search_tag_mode", None)
+        ingest_search_tag_mode = kwargs.pop("ingest_search_tag_mode", "replace")
         search_tags = kwargs.pop("search_tags", ingest_search_tags)
+        search_tag_mode = kwargs.pop("search_tag_mode", ingest_search_tag_mode)
         should_summarize = not vectors_only and (summarize or build_index)
         result: Dict[str, Any] = {"status": "success", "root_uri": root_uri}
 
@@ -476,6 +477,7 @@ class ResourceProcessor:
                         is_code_repo=bool(prepared.get("is_code_repo")),
                         target_preexisting=target_preexisting,
                         search_tags=search_tags,
+                        search_tag_mode=search_tag_mode,
                         **kwargs,
                     )
                     if (

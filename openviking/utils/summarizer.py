@@ -48,6 +48,7 @@ class Summarizer:
 
         temp_uris = kwargs.get("temp_uris", [])
         search_tags = kwargs.get("search_tags")
+        search_tag_mode = kwargs.get("search_tag_mode", "replace")
         if not temp_uris:
             temp_uris = resource_uris
         if len(temp_uris) != len(resource_uris):
@@ -127,6 +128,7 @@ class Summarizer:
                     is_code_repo=kwargs.get("is_code_repo", False),
                     target_preexisting=resolve_target_preexisting(idx, target_uri),
                     search_tags=search_tags,
+                    search_tag_mode=search_tag_mode,
                 )
                 if msg.telemetry_id:
                     get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)
