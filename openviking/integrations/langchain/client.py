@@ -349,6 +349,8 @@ async def ensure_async_client(
             return handle
         if embedded_client_factory is not None:
             if client_cache is not None:
+                # The thread hop is load-bearing: without a running event loop,
+                # the embedded singleton occupies the cache's shared fallback slot.
                 return await asyncio.to_thread(
                     client_cache.get,
                     embedded_client_factory,

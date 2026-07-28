@@ -206,6 +206,8 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         try:
             return await handler(updated_request)
         except BaseException:
+            # CancelledError is a BaseException, so cancellation must also discard
+            # context references prepared for the interrupted model call.
             self._pending_context_parts.pop(pending_key, None)
             raise
 
