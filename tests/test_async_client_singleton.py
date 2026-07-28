@@ -57,10 +57,13 @@ class TestAsyncOpenVikingSingletonPath:
             await client_a.close()
 
             client_b = AsyncOpenViking(path=workspace_b)
-            # Singleton instance is reused; only the effective workspace changes
+            # Singleton instance is reused; only the effective workspace changes.
+            # Compare resolved forms to be portable across platforms where
+            # TemporaryDirectory() exposes /var/... but Path.resolve() stores
+            # /private/var/... on macOS.
             assert client_b is client_a
-            assert client_b._path == workspace_b
-            assert client_a._path == workspace_b
+            assert os.path.realpath(client_b._path) == os.path.realpath(workspace_b)
+            assert os.path.realpath(client_a._path) == os.path.realpath(workspace_b)
 
     async def test_different_path_after_reset_is_allowed(self, clean_singleton):
         """After reset(), a different workspace can be constructed."""
@@ -87,6 +90,42 @@ class TestAsyncOpenVikingSingletonPath:
             client_a = AsyncOpenViking(path=real_path)
             client_b = AsyncOpenViking(path=symlink_path)
             assert client_a is client_b
+
+    async def test_explicit_then_implicit_same_workspace(self, clean_singleton):
+        """AsyncOpenViking(path=<workspace>) followed by AsyncOpenViking() succeeds.
+
+        The implicit call (path=None) resolves through the shared config to the
+        same effective workspace that was set explicitly, so no error is raised.
+        """
+        with tempfile.TemporaryDirectory() as root:
+            workspace = os.path.join(root, "workspace")
+            os.makedirs(workspace)
+
+            # Set an explicit workspace first
+            client_a = AsyncOpenViking(path=workspace)
+            # Implicit call resolves through config to the same workspace
+            client_b = AsyncOpenViking()
+            assert client_b is client_a
+            assert os.path.realpath(client_b._path) == os.path.realpath(workspace)
+
+    async def test_implicit_then_explicit_same_workspace(self, clean_singleton):
+        """AsyncOpenViking() followed by AsyncOpenViking(path=<same workspace>) succeeds.
+
+        The first implicit call establishes the workspace from config.
+        The second explicit call requests the same effective workspace.
+        """
+        with tempfile.TemporaryDirectory() as root:
+            workspace = os.path.join(root, "workspace")
+            os.makedirs(workspace)
+
+            # First call uses config's default workspace
+            client_a = AsyncOpenViking()
+            default_path = client_a._path
+
+            # Second call explicitly requests the same path as the implicit default
+            client_b = AsyncOpenViking(path=default_path)
+            assert client_b is client_a
+            assert os.path.realpath(client_b._path) == os.path.realpath(default_path)
 
     async def test_sync_client_raises_same_error(self, clean_singleton):
         """SyncOpenViking raises the same error when its underlying AsyncOpenViking has a different path."""

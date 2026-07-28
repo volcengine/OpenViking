@@ -77,14 +77,19 @@ class AsyncOpenViking:
             # Compare effective workspaces resolved by the config, not raw arguments.
             # LocalClient resolves path=None through the shared config, so we must
             # compare the resolved workspace paths to handle the implicit/explicit case.
+            # Resolve path through LocalClient's config to get the effective workspace.
+            # This handles path=None correctly (it resolves to the config's default
+            # workspace) and ensures implicit and explicit forms of the same path
+            # compare equal.
             if path is not None:
                 requested_workspace = os.path.realpath(path)
             else:
-                requested_workspace = None
-            if self._path is not None:
-                live_workspace = os.path.realpath(self._path)
-            else:
-                live_workspace = None
+                # path=None resolves through the already-constructed LocalClient's
+                # shared config, which gives the effective workspace.
+                requested_workspace = os.path.realpath(
+                    self._client._service._config.storage.workspace
+                )
+            live_workspace = os.path.realpath(self._path)
             if requested_workspace != live_workspace:
                 raise ValueError(
                     f"Only one embedded OpenViking workspace can be live per process. "
