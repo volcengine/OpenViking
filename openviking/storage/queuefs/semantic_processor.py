@@ -1081,6 +1081,24 @@ class SemanticProcessor(DequeueHandlerBase):
         if len(content) > max_chars:
             content = content[:max_chars] + "\n...(truncated)"
 
+        # Check for near-empty content to prevent hallucinated L0/L1 summaries.
+        # Empty or title-only documents (e.g. just a heading with no body) cause
+        # the VLM to hallucinate content. Skip VLM when there is insufficient
+        # actual text to summarize.
+        _meaningful_chars = 0
+        if content:
+            _stripped = re.sub(r"#+\s*", "", content)
+            _stripped = re.sub(r"[*_`~\-><!\[\]()]", "", _stripped)
+            _meaningful_chars = len(_stripped.strip())
+        if _meaningful_chars < 50:
+            logger.warning(
+                "Skipping VLM summarization for near-empty document: %s "
+                "(%d chars of meaningful content)",
+                file_path,
+                _meaningful_chars,
+            )
+            return result("")
+
         # Generate summary
         if not vlm.is_available():
             logger.warning("VLM not available, using empty summary")
