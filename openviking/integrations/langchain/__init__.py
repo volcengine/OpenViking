@@ -17,6 +17,7 @@ __all__ = [
     "OpenVikingContextMiddleware",
     "OpenVikingPartialWriteError",
     "OpenVikingRecordResult",
+    "OpenVikingRecordingCancelledError",
     "OpenVikingRetriever",
     "OpenVikingSessionContextAssembler",
     "OpenVikingSessionRecorder",
@@ -59,6 +60,12 @@ def __getattr__(name: str) -> Any:
         from openviking.integrations.langchain.recording import OpenVikingRecordResult
 
         return OpenVikingRecordResult
+    if name == "OpenVikingRecordingCancelledError":
+        from openviking.integrations.langchain.recording import (
+            OpenVikingRecordingCancelledError,
+        )
+
+        return OpenVikingRecordingCancelledError
     if name == "OpenVikingCommitPolicy":
         from openviking.integrations.langchain.client import OpenVikingCommitPolicy
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -111,6 +112,185 @@ async def test_real_openviking_context_wrapper_ainvoke_uses_async_lifecycle():
     assert {"create_session", "get_session_context", "search", "read"}.issubset(client.calls)
     assistant_parts = client.backing.sessions["real-async-wrapper"][1]["parts"]
     assert any(part["type"] == "context" for part in assistant_parts)
+
+
+@pytest.mark.asyncio
+async def test_real_openviking_context_wrapper_serializes_same_session_ainvoke():
+    client = AsyncTrackingClient()
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    second_started = asyncio.Event()
+
+    async def answer(messages: list[BaseMessage]) -> AIMessage:
+        latest_user = next(
+            message.content for message in reversed(messages) if isinstance(message, HumanMessage)
+        )
+        if latest_user == "from-a":
+            first_started.set()
+            await release_first.wait()
+        else:
+            second_started.set()
+        return AIMessage(content=f"answer:{latest_user}")
+
+    app = with_openviking_context(
+        RunnableLambda(answer),
+        async_client=client,
+        session_id="real-async-concurrent-history",
+        inject_context=False,
+    )
+
+    first = asyncio.create_task(app.ainvoke([HumanMessage(content="from-a")]))
+    await asyncio.wait_for(first_started.wait(), timeout=1)
+    second = asyncio.create_task(app.ainvoke([HumanMessage(content="from-b")]))
+
+    try:
+        await asyncio.sleep(0.05)
+        assert second_started.is_set() is False
+    finally:
+        release_first.set()
+
+    await asyncio.gather(first, second)
+
+    assert [
+        message["parts"][0]["text"]
+        for message in client.backing.sessions["real-async-concurrent-history"]
+    ] == [
+        "from-a",
+        "answer:from-a",
+        "from-b",
+        "answer:from-b",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_real_openviking_context_wrapper_keeps_different_sessions_concurrent():
+    client = AsyncTrackingClient()
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    second_started = asyncio.Event()
+
+    async def answer(messages: list[BaseMessage]) -> AIMessage:
+        latest_user = next(
+            message.content for message in reversed(messages) if isinstance(message, HumanMessage)
+        )
+        if latest_user == "from-a":
+            first_started.set()
+            await release_first.wait()
+        else:
+            second_started.set()
+        return AIMessage(content=f"answer:{latest_user}")
+
+    app = with_openviking_context(
+        RunnableLambda(answer),
+        async_client=client,
+        inject_context=False,
+    )
+
+    first = asyncio.create_task(
+        app.ainvoke(
+            [HumanMessage(content="from-a")],
+            config={"configurable": {"session_id": "real-async-session-a"}},
+        )
+    )
+    await asyncio.wait_for(first_started.wait(), timeout=1)
+    second = asyncio.create_task(
+        app.ainvoke(
+            [HumanMessage(content="from-b")],
+            config={"configurable": {"session_id": "real-async-session-b"}},
+        )
+    )
+
+    try:
+        await asyncio.wait_for(second_started.wait(), timeout=1)
+    finally:
+        release_first.set()
+
+    await asyncio.gather(first, second)
+
+    assert len(client.backing.sessions["real-async-session-a"]) == 2
+    assert len(client.backing.sessions["real-async-session-b"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_session_failure_keeps_other_session_context_attribution():
+    client = AsyncTrackingClient(
+        {"viking://resources/runbooks/concurrent.md": "Concurrent context is violet."}
+    )
+    second_started = asyncio.Event()
+    release_second = asyncio.Event()
+
+    async def answer(messages: list[BaseMessage]) -> AIMessage:
+        latest_user = next(
+            message.content for message in reversed(messages) if isinstance(message, HumanMessage)
+        )
+        if latest_user == "fail-a":
+            raise RuntimeError("session a failed")
+        second_started.set()
+        await release_second.wait()
+        return AIMessage(content="answer:from-b")
+
+    app = with_openviking_context(
+        RunnableLambda(answer),
+        async_client=client,
+        target_uri="viking://resources",
+    )
+    second = asyncio.create_task(
+        app.ainvoke(
+            [HumanMessage(content="violet")],
+            config={"configurable": {"session_id": "real-async-context-b"}},
+        )
+    )
+    await asyncio.wait_for(second_started.wait(), timeout=1)
+
+    try:
+        with pytest.raises(RuntimeError, match="session a failed"):
+            await app.ainvoke(
+                [HumanMessage(content="fail-a")],
+                config={"configurable": {"session_id": "real-async-context-a"}},
+            )
+    finally:
+        release_second.set()
+    await second
+
+    assistant_parts = client.backing.sessions["real-async-context-b"][-1]["parts"]
+    assert any(part["type"] == "context" for part in assistant_parts)
+
+
+@pytest.mark.asyncio
+async def test_real_openviking_context_wrapper_serializes_same_session_abatch():
+    client = AsyncTrackingClient()
+
+    async def answer(messages: list[BaseMessage]) -> AIMessage:
+        latest_user = next(
+            message.content for message in reversed(messages) if isinstance(message, HumanMessage)
+        )
+        await asyncio.sleep(0)
+        return AIMessage(content=f"answer:{latest_user}")
+
+    app = with_openviking_context(
+        RunnableLambda(answer),
+        async_client=client,
+        session_id="real-async-batch-history",
+        inject_context=False,
+    )
+
+    results = await app.abatch(
+        [
+            [HumanMessage(content="from-a")],
+            [HumanMessage(content="from-b")],
+        ]
+    )
+
+    assert [result.content for result in results] == ["answer:from-a", "answer:from-b"]
+    assert [
+        message["parts"][0]["text"]
+        for message in client.backing.sessions["real-async-batch-history"]
+    ] == [
+        "from-a",
+        "answer:from-a",
+        "from-b",
+        "answer:from-b",
+    ]
 
 
 @pytest.mark.asyncio

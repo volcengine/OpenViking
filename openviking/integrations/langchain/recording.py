@@ -96,6 +96,54 @@ class OpenVikingPartialWriteError(RuntimeError):
         return self.stage == "commit"
 
 
+class OpenVikingRecordingCancelledError(asyncio.CancelledError):
+    """Preserve cancellation while reporting confirmed recording progress."""
+
+    def __init__(
+        self,
+        *,
+        session_id: str,
+        result: OpenVikingRecordResult,
+        cause: asyncio.CancelledError,
+        stage: Literal["batch", "commit"] = "batch",
+    ):
+        if stage == "batch":
+            detail = "before a later batch was cancelled"
+        else:
+            detail = "before the commit policy was cancelled"
+        super().__init__(
+            f"OpenViking recorded {result.messages_written} messages for session "
+            f"{session_id!r} {detail}: {cause}"
+        )
+        self.session_id = session_id
+        self.result = result
+        self.stage = stage
+
+    @property
+    def messages_written(self) -> int:
+        """Return the number of payloads confirmed written before cancellation."""
+
+        return self.result.messages_written
+
+    @property
+    def input_messages_consumed(self) -> int:
+        """Return the caller-message prefix that is safe to skip on retry."""
+
+        return self.result.input_messages_consumed
+
+    @property
+    def context_attached(self) -> bool:
+        """Return whether recalled context was confirmed persisted."""
+
+        return self.result.context_attached
+
+    @property
+    def commit_pending(self) -> bool:
+        """Return whether only the post-write commit remains incomplete."""
+
+        return self.stage == "commit"
+
+
 @dataclass(slots=True)
 class _PreparedMessage:
     input_end: int
@@ -268,6 +316,19 @@ class OpenVikingSessionRecorder:
                     session_id=session_id,
                     messages=batch.payloads,
                 )
+            except asyncio.CancelledError as exc:
+                if messages_written == 0:
+                    raise
+                result = OpenVikingRecordResult(
+                    messages_written=messages_written,
+                    input_messages_consumed=input_messages_consumed,
+                    context_attached=context_attached,
+                )
+                raise OpenVikingRecordingCancelledError(
+                    session_id=session_id,
+                    result=result,
+                    cause=exc,
+                ) from exc
             except Exception as exc:
                 if messages_written == 0:
                     raise
@@ -291,6 +352,14 @@ class OpenVikingSessionRecorder:
         )
         try:
             await aapply_commit_policy(client, session_id, self.commit_policy)
+        except asyncio.CancelledError as exc:
+            self._pending_commit_sessions.add(session_id)
+            raise OpenVikingRecordingCancelledError(
+                session_id=session_id,
+                result=result,
+                cause=exc,
+                stage="commit",
+            ) from exc
         except Exception as exc:
             self._pending_commit_sessions.add(session_id)
             raise OpenVikingPartialWriteError(

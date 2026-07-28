@@ -18,6 +18,7 @@ from openviking.integrations.langchain import (
     OpenVikingCommitPolicy,
     OpenVikingContextMiddleware,
     OpenVikingPartialWriteError,
+    OpenVikingRecordingCancelledError,
     OpenVikingRetriever,
     OpenVikingSessionContextAssembler,
     OpenVikingSessionRecorder,
@@ -943,6 +944,97 @@ async def test_async_recorder_reports_confirmed_prefix_for_partial_batch_retry()
     assert captured.value.input_messages_consumed == 100
     assert backing.batch_sizes == [100, 1, 1]
     assert len(backing.sessions["async-partial-retry"]) == 101
+
+
+@pytest.mark.asyncio
+async def test_async_middleware_preserves_partial_progress_when_recording_is_cancelled():
+    class CancelSecondBatchClient(AsyncInMemoryOpenVikingClient):
+        def __init__(self):
+            super().__init__()
+            self.batch_calls = 0
+
+        async def batch_add_messages(
+            self,
+            session_id: str,
+            messages: list[dict[str, Any]],
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            self.batch_calls += 1
+            if self.batch_calls == 2:
+                raise asyncio.CancelledError
+            return self.backing.batch_add_messages(session_id, messages, **kwargs)
+
+    client = CancelSecondBatchClient()
+    middleware = OpenVikingContextMiddleware(
+        async_client=client,
+        session_id_resolver=lambda _state, _runtime: "async-cancelled-batch",
+    )
+    messages = [HumanMessage(content=f"Message {index}") for index in range(150)]
+    state = {"messages": messages}
+
+    recording = asyncio.create_task(middleware.aafter_agent(state, runtime=None))
+    with pytest.raises(OpenVikingRecordingCancelledError) as captured:
+        await recording
+    await middleware.aafter_agent(state, runtime=None)
+
+    assert recording.cancelled() is True
+    assert isinstance(captured.value, asyncio.CancelledError)
+    assert not isinstance(captured.value, Exception)
+    assert captured.value.messages_written == 100
+    assert captured.value.input_messages_consumed == 100
+    assert client.batch_calls == 3
+    assert len(client.backing.sessions["async-cancelled-batch"]) == 150
+
+
+@pytest.mark.asyncio
+async def test_async_middleware_retries_cancelled_commit_without_duplicate_writes():
+    class CancelFirstCommitClient(AsyncInMemoryOpenVikingClient):
+        def __init__(self):
+            super().__init__()
+            self.batch_calls = 0
+            self.commit_calls = 0
+
+        async def batch_add_messages(
+            self,
+            session_id: str,
+            messages: list[dict[str, Any]],
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            self.batch_calls += 1
+            return self.backing.batch_add_messages(session_id, messages, **kwargs)
+
+        async def commit_session(
+            self,
+            session_id: str,
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            self.commit_calls += 1
+            if self.commit_calls == 1:
+                raise asyncio.CancelledError
+            return self.backing.commit_session(session_id, **kwargs)
+
+    client = CancelFirstCommitClient()
+    middleware = OpenVikingContextMiddleware(
+        async_client=client,
+        session_id_resolver=lambda _state, _runtime: "async-cancelled-commit",
+        commit_policy=OpenVikingCommitPolicy(mode="always"),
+    )
+    state = {
+        "messages": [
+            HumanMessage(content="Persist once."),
+            AIMessage(content="Commit once."),
+        ]
+    }
+
+    with pytest.raises(OpenVikingRecordingCancelledError) as captured:
+        await middleware.aafter_agent(state, runtime=None)
+    await middleware.aafter_agent(state, runtime=None)
+
+    assert captured.value.commit_pending is True
+    assert captured.value.input_messages_consumed == 2
+    assert client.batch_calls == 1
+    assert client.commit_calls == 2
+    assert len(client.backing.archives["async-cancelled-commit"][0]["messages"]) == 2
 
 
 @pytest.mark.asyncio

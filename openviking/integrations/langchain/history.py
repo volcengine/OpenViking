@@ -32,6 +32,7 @@ from openviking.integrations.langchain.messages import (
 )
 from openviking.integrations.langchain.recording import (
     OpenVikingPartialWriteError,
+    OpenVikingRecordingCancelledError,
     OpenVikingSessionRecorder,
 )
 
@@ -165,7 +166,7 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
                 peer_id=self._effective_peer_id(),
                 context_parts=self._pending_context_parts,
             )
-        except OpenVikingPartialWriteError as exc:
+        except (OpenVikingPartialWriteError, OpenVikingRecordingCancelledError) as exc:
             if exc.context_attached:
                 self._acknowledge_context_parts()
             raise

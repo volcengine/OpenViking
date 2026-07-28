@@ -34,6 +34,7 @@ from openviking.integrations.langchain.context import (
 )
 from openviking.integrations.langchain.recording import (
     OpenVikingPartialWriteError,
+    OpenVikingRecordingCancelledError,
     OpenVikingSessionRecorder,
 )
 from openviking.integrations.langchain.retrievers import OpenVikingRetriever
@@ -291,7 +292,7 @@ class OpenVikingContextMiddleware(AgentMiddleware):
                 peer_id=plan.peer_id,
                 context_parts=plan.context_parts,
             )
-        except OpenVikingPartialWriteError as exc:
+        except (OpenVikingPartialWriteError, OpenVikingRecordingCancelledError) as exc:
             self._handle_partial_capture(plan, exc)
             raise
 
@@ -336,7 +337,7 @@ class OpenVikingContextMiddleware(AgentMiddleware):
     def _handle_partial_capture(
         self,
         plan: _CapturePlan,
-        error: OpenVikingPartialWriteError,
+        error: OpenVikingPartialWriteError | OpenVikingRecordingCancelledError,
     ) -> None:
         if error.input_messages_consumed:
             consumed_end = plan.start + error.input_messages_consumed

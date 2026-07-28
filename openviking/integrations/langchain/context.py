@@ -6,18 +6,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any, cast
 
 try:
     from langchain_core.messages import SystemMessage
-    from langchain_core.runnables import ConfigurableFieldSpec, RunnableLambda
+    from langchain_core.runnables import ConfigurableFieldSpec, Runnable, RunnableLambda
+    from langchain_core.runnables.config import RunnableConfig
     from langchain_core.runnables.history import RunnableWithMessageHistory
 except ImportError as exc:  # pragma: no cover - exercised by optional import path
     from openviking.integrations.langchain.client import missing_dependency
 
     raise missing_dependency("langchain", "langchain-core") from exc
+from pydantic import PrivateAttr
 
 from openviking.integrations.langchain.client import (
     OpenVikingCommitPolicy,
@@ -49,6 +52,152 @@ class OpenVikingAssembledContext:
     context_parts: list[dict[str, Any]] = field(default_factory=list)
     session_context: dict[str, Any] = field(default_factory=dict)
     recall_documents: list[Any] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class _AsyncSessionLockEntry:
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    users: int = 0
+
+
+class _AsyncSessionLockPool:
+    """Keep active session locks without retaining inactive session ids."""
+
+    def __init__(self) -> None:
+        self._entries: dict[str, _AsyncSessionLockEntry] = {}
+
+    @asynccontextmanager
+    async def acquire(self, session_id: str) -> AsyncIterator[None]:
+        entry = self._entries.get(session_id)
+        if entry is None:
+            entry = _AsyncSessionLockEntry()
+            self._entries[session_id] = entry
+        entry.users += 1
+        acquired = False
+        try:
+            await entry.lock.acquire()
+            acquired = True
+            yield
+        finally:
+            if acquired:
+                entry.lock.release()
+            entry.users -= 1
+            if entry.users == 0 and self._entries.get(session_id) is entry:
+                self._entries.pop(session_id, None)
+
+
+class _OpenVikingRunnableWithMessageHistory(RunnableWithMessageHistory):
+    """Serialize async history lifecycles that target the same session."""
+
+    _async_session_lock_pools: LoopScopedAsyncClientCache = PrivateAttr(
+        default_factory=LoopScopedAsyncClientCache
+    )
+
+    def _lock_pool(self) -> _AsyncSessionLockPool:
+        return self._async_session_lock_pools.get(_AsyncSessionLockPool)
+
+    @staticmethod
+    def _merged_session_id(config: RunnableConfig) -> str:
+        history = config["configurable"]["message_history"]
+        return _validate_session_id(getattr(history, "session_id", None), key="session_id")
+
+    async def _ainvoke_merged(
+        self,
+        input_value: Any,
+        config: RunnableConfig,
+        kwargs: dict[str, Any],
+    ) -> Any:
+        session_id = self._merged_session_id(config)
+        async with self._lock_pool().acquire(session_id):
+            return await self.bound.ainvoke(
+                input_value,
+                config,
+                **{**self.kwargs, **kwargs},
+            )
+
+    async def ainvoke(
+        self,
+        input: Any,
+        config: RunnableConfig | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Invoke while serializing the complete history lifecycle per session."""
+
+        return await self._ainvoke_merged(input, self._merge_configs(config), kwargs)
+
+    async def astream(
+        self,
+        input: Any,
+        config: RunnableConfig | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[Any]:
+        """Stream while serializing the complete history lifecycle per session."""
+
+        merged_config = self._merge_configs(config)
+        session_id = self._merged_session_id(merged_config)
+        async with self._lock_pool().acquire(session_id):
+            async for item in self.bound.astream(
+                input,
+                merged_config,
+                **{**self.kwargs, **kwargs},
+            ):
+                yield item
+
+    async def astream_events(
+        self,
+        input: Any,
+        config: RunnableConfig | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[Any]:
+        """Stream events while serializing the history lifecycle per session."""
+
+        merged_config = self._merge_configs(config)
+        session_id = self._merged_session_id(merged_config)
+        async with self._lock_pool().acquire(session_id):
+            async for item in self.bound.astream_events(
+                input,
+                merged_config,
+                **{**self.kwargs, **kwargs},
+            ):
+                yield item
+
+    async def abatch(
+        self,
+        inputs: list[Any],
+        config: RunnableConfig | list[RunnableConfig] | None = None,
+        *,
+        return_exceptions: bool = False,
+        **kwargs: Any,
+    ) -> list[Any]:
+        """Batch through per-invocation locks so each lifecycle owns its lock."""
+
+        return await Runnable.abatch(
+            self,
+            inputs,
+            config,
+            return_exceptions=return_exceptions,
+            **kwargs,
+        )
+
+    async def abatch_as_completed(
+        self,
+        inputs: Sequence[Any],
+        config: RunnableConfig | Sequence[RunnableConfig] | None = None,
+        *,
+        return_exceptions: bool = False,
+        **kwargs: Any,
+    ) -> AsyncIterator[tuple[int, Any]]:
+        """Yield batch results while preserving per-session serialization."""
+
+        batch_as_completed = cast(Any, Runnable.abatch_as_completed)
+        async for item in batch_as_completed(
+            self,
+            inputs,
+            config,
+            return_exceptions=return_exceptions,
+            **kwargs,
+        ):
+            yield item
 
 
 class OpenVikingSessionContextAssembler:
@@ -379,7 +528,7 @@ def with_openviking_context(
     peer_id_config_key: str = "peer_id",
     inject_context: bool = True,
 ) -> RunnableWithMessageHistory:
-    """Wrap a LangChain runnable with OpenViking context and message history."""
+    """Wrap a runnable and serialize async lifecycles that share a session."""
 
     assembler = OpenVikingSessionContextAssembler(
         client=client,
@@ -527,20 +676,39 @@ def with_openviking_context(
         return apply_injection(input_value, pending_key, assembled)
 
     def clear_pending_on_error(_run: Any, config: dict[str, Any] | None = None) -> None:
-        del config
-        pending_context_parts.clear()
+        try:
+            resolved_session_id = session_id or _session_id_from_config(
+                config,
+                key=session_id_config_key,
+            )
+            resolved_peer_id = _peer_id_from_config(
+                config,
+                key=peer_id_config_key,
+                default=peer_id,
+            )
+        except Exception:
+            logger.debug(
+                "OpenViking pending context cleanup could not resolve the failed session",
+                exc_info=True,
+            )
+            return
+        pending_context_parts.pop(
+            _pending_context_key(resolved_session_id, resolved_peer_id),
+            None,
+        )
 
     bound = (RunnableLambda(inject, afunc=ainject) | runnable).with_listeners(
         on_error=clear_pending_on_error
     )
-    return RunnableWithMessageHistory(
-        bound,
-        session_history_factory,
+    wrapped = _OpenVikingRunnableWithMessageHistory(
+        runnable=bound,
+        get_session_history=session_history_factory,
         input_messages_key=input_messages_key,
         output_messages_key=output_messages_key,
         history_messages_key=history_messages_key,
         history_factory_config=history_factory_config,
     )
+    return wrapped
 
 
 def _session_id_from_config(config: dict[str, Any] | None, *, key: str) -> str:
