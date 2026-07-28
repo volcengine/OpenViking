@@ -407,14 +407,20 @@ export async function fetchRecall(
 ): Promise<RecallResult> {
   try {
     const result = await getOvResult<unknown>(
-      ovClient.instance.post('/api/v1/search/recall', {
-        max_chars: options.maxChars,
-        min_score: options.minScore,
-        peer_scope: options.peerScope,
-        query,
-        quotas: options.quotas,
-        render: options.render,
-      }),
+      ovClient.instance.post(
+        '/api/v1/search/recall',
+        {
+          max_chars: options.maxChars,
+          min_score: options.minScore,
+          peer_scope: options.peerScope,
+          query,
+          quotas: options.quotas,
+          render: options.render,
+        },
+        {
+          baseURL: ovClient.getOptions().baseUrl,
+        },
+      ),
     )
     return normalizeRecallResult(result)
   } catch (error) {

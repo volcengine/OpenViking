@@ -34,6 +34,7 @@ import type {
   RetrievalMode,
   RetrievalRequestOptions,
 } from '../-types/retrieval'
+import { DateRangePicker } from './date-range-picker'
 
 const CONTEXT_TYPES: FindContextType[] = ['resource', 'memory', 'skill']
 const LEVELS = [0, 1, 2] as const
@@ -341,26 +342,12 @@ function SemanticAdvancedControls({
         </ControlGroup>
 
         <ControlGroup label={t('advanced.timeRange')}>
-          <div className="flex gap-2">
-            <Input
-              aria-label={t('advanced.since')}
-              className="h-8"
-              onChange={(event) =>
-                onOptionsChange({ since: event.target.value || undefined })
-              }
-              placeholder={t('advanced.since')}
-              value={options.since ?? ''}
-            />
-            <Input
-              aria-label={t('advanced.until')}
-              className="h-8"
-              onChange={(event) =>
-                onOptionsChange({ until: event.target.value || undefined })
-              }
-              placeholder={t('advanced.until')}
-              value={options.until ?? ''}
-            />
-          </div>
+          <DateRangePicker
+            onChange={onOptionsChange}
+            since={options.since}
+            t={t}
+            until={options.until}
+          />
         </ControlGroup>
 
         <ControlGroup label={t('advanced.timeField')}>

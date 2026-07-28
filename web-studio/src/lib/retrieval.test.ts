@@ -28,7 +28,10 @@ vi.mock('#/lib/ov-client', () => ({
     return rawResponse.data.result
   },
   normalizeOvClientError: (error: unknown) => error,
-  ovClient: { instance: { post: rawPostMock } },
+  ovClient: {
+    getOptions: () => ({ baseUrl: 'http://openviking.test' }),
+    instance: { post: rawPostMock },
+  },
   postSearchFind: postSearchFindMock,
   postSearchGlob: postSearchGlobMock,
   postSearchGrep: postSearchGrepMock,
@@ -116,14 +119,18 @@ describe('pattern retrieval', () => {
       render: true,
     })
 
-    expect(rawPostMock).toHaveBeenCalledWith('/api/v1/search/recall', {
-      max_chars: 6500,
-      min_score: 0.1,
-      peer_scope: 'all',
-      query: 'API preferences',
-      quotas: { experiences: 2 },
-      render: true,
-    })
+    expect(rawPostMock).toHaveBeenCalledWith(
+      '/api/v1/search/recall',
+      {
+        max_chars: 6500,
+        min_score: 0.1,
+        peer_scope: 'all',
+        query: 'API preferences',
+        quotas: { experiences: 2 },
+        render: true,
+      },
+      { baseURL: 'http://openviking.test' },
+    )
     expect(result).toMatchObject({
       entries: [{ type: 'preferences', origin: 'self' }],
       rendered: '<memory />',

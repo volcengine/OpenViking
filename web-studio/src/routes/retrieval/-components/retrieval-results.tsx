@@ -1,4 +1,3 @@
-import { Link } from '@tanstack/react-router'
 import {
   Brain,
   FileText,
@@ -17,32 +16,25 @@ import { cn } from '#/lib/utils'
 import type { FindContextType, FindQueryPlanItem } from '#/lib/retrieval'
 
 import { LoadingHint } from './loading-hint'
-import { MemoryDetailSheet } from './memory-detail-sheet'
-import type { MemoryDetail } from './memory-detail-sheet'
 import { RecallResults } from './recall-results'
+import { RetrievalDetailSheet } from './retrieval-detail-sheet'
+import type { RetrievalDetail } from './retrieval-detail-sheet'
 import type { RetrievalQueryResult } from '../-hooks/use-retrieval-query'
-import {
-  displayName,
-  flattenResults,
-  memoryTypeFromUri,
-  resourceSearchForResult,
-} from '../-lib/results'
+import { displayName, flattenResults, memoryTypeFromUri } from '../-lib/results'
 import type { FlatRetrievalItem } from '../-types/retrieval'
 
 const TYPE_META: Record<
   FindContextType,
-  { icon: typeof Brain; color: string; bgColor: string }
+  { icon: typeof Brain; color: string }
 > = {
   resource: {
     icon: FileText,
     color: 'text-blue-500',
-    bgColor: 'bg-blue-500/15',
   },
-  memory: { icon: Brain, color: 'text-amber-500', bgColor: 'bg-amber-500/15' },
+  memory: { icon: Brain, color: 'text-amber-500' },
   skill: {
     icon: Wrench,
     color: 'text-emerald-500',
-    bgColor: 'bg-emerald-500/15',
   },
 }
 
@@ -67,7 +59,7 @@ export function RetrievalResults({
   resultCount: number
   t: TFunction<'retrieval'>
 }) {
-  const [memoryDetail, setMemoryDetail] = useState<MemoryDetail | null>(null)
+  const [detail, setDetail] = useState<RetrievalDetail | null>(null)
   const flatItems = useMemo(
     () => (data?.kind === 'results' ? flattenResults(data.result) : []),
     [data],
@@ -116,15 +108,11 @@ export function RetrievalResults({
               </p>
             </div>
           ) : data?.kind === 'recall' ? (
-            <RecallResults
-              onSelect={setMemoryDetail}
-              result={data.result}
-              t={t}
-            />
+            <RecallResults onSelect={setDetail} result={data.result} t={t} />
           ) : (
             <ResultList
               flatItems={flatItems}
-              onSelectMemory={setMemoryDetail}
+              onSelect={setDetail}
               queryPlanItems={queryPlanItems}
               t={t}
             />
@@ -132,9 +120,9 @@ export function RetrievalResults({
         </div>
       </div>
 
-      <MemoryDetailSheet
-        detail={memoryDetail}
-        onClose={() => setMemoryDetail(null)}
+      <RetrievalDetailSheet
+        detail={detail}
+        onClose={() => setDetail(null)}
         t={t}
       />
     </>
@@ -193,12 +181,12 @@ function EmptyRetrievalState({
 
 function ResultList({
   flatItems,
-  onSelectMemory,
+  onSelect,
   queryPlanItems,
   t,
 }: {
   flatItems: FlatRetrievalItem[]
-  onSelectMemory: (detail: MemoryDetail) => void
+  onSelect: (detail: RetrievalDetail) => void
   queryPlanItems: FindQueryPlanItem[]
   t: TFunction<'retrieval'>
 }) {
@@ -243,7 +231,7 @@ function ResultList({
         <ResultRow
           item={item}
           key={`${item.item.uri}-${item.flatIndex}`}
-          onSelectMemory={onSelectMemory}
+          onSelect={onSelect}
           t={t}
         />
       ))}
@@ -253,45 +241,35 @@ function ResultList({
 
 function ResultRow({
   item,
-  onSelectMemory,
+  onSelect,
   t,
 }: {
   item: FlatRetrievalItem
-  onSelectMemory: (detail: MemoryDetail) => void
+  onSelect: (detail: RetrievalDetail) => void
   t: TFunction<'retrieval'>
 }) {
   const row = <ResultRowContent item={item} t={t} />
 
-  if (item.type === 'memory') {
-    return (
-      <button
-        className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
-        onClick={() =>
-          onSelectMemory({
-            abstract: item.item.abstract,
-            item: item.item,
-            memoryType: memoryTypeFromUri(item.item.uri) ?? 'MEMORY',
-            score: item.item.score,
-            uri: item.item.uri,
-          })
-        }
-        type="button"
-      >
-        {row}
-      </button>
-    )
-  }
-
   return (
-    <Link
-      className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
-      rel="noreferrer noopener"
-      search={resourceSearchForResult(item.item)}
-      target="_blank"
-      to="/playground"
+    <button
+      className="group w-full px-5 py-4 text-left transition-colors hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+      onClick={() =>
+        onSelect({
+          abstract: item.item.abstract,
+          contextType: item.type,
+          item: item.item,
+          memoryType:
+            item.type === 'memory'
+              ? (memoryTypeFromUri(item.item.uri) ?? 'MEMORY')
+              : undefined,
+          score: item.item.score,
+          uri: item.item.uri,
+        })
+      }
+      type="button"
     >
       {row}
-    </Link>
+    </button>
   )
 }
 
@@ -302,50 +280,86 @@ function ResultRowContent({
   item: FlatRetrievalItem
   t: TFunction<'retrieval'>
 }) {
-  const { name, parent } = displayName(item.item.uri)
+  const { name } = displayName(item.item.uri)
   const meta = TYPE_META[item.type]
   const Icon = meta.icon
   const memoryType =
     item.type === 'memory' ? memoryTypeFromUri(item.item.uri) : undefined
 
   return (
-    <>
-      <div
-        className={cn(
-          'mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold uppercase tracking-wide',
-          meta.bgColor,
-          meta.color,
-        )}
-      >
-        <Icon className="size-3" />
-        <span>{t(`types.${item.type}`)}</span>
-      </div>
-      {memoryType ? (
-        <span className="mt-0.5 rounded-md border bg-background px-2 py-1 font-mono text-[10px] font-medium text-muted-foreground">
-          {memoryType}
-        </span>
-      ) : null}
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-medium">{name}</div>
-        <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground/70">
-          <FolderOpen className="size-3 shrink-0" />
-          <span className="truncate">{parent}</span>
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-5">
+      <div className="min-w-0">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <Icon
+            aria-hidden="true"
+            className={cn('size-3.5 shrink-0', meta.color)}
+          />
+          <h3 className="min-w-0 truncate text-sm font-semibold text-foreground">
+            {name}
+          </h3>
+          <span className="sr-only">{t(`types.${item.type}`)}</span>
+          {memoryType ? (
+            <span className="shrink-0 rounded border border-border/60 px-1.5 py-0.5 font-mono text-[9px] font-medium tracking-wide text-muted-foreground/70">
+              {memoryType}
+            </span>
+          ) : null}
+          <span
+            className="shrink-0 font-mono text-[10px] font-medium tabular-nums text-muted-foreground/45"
+            title={`${t('detail.level')}: L${item.item.level}`}
+          >
+            L{item.item.level}
+          </span>
         </div>
-        {item.item.abstract ? (
-          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground/60">
-            {item.item.abstract}
-          </p>
-        ) : null}
+
+        <dl className="mt-2.5 grid min-w-0 grid-cols-[3.25rem_minmax(0,1fr)] gap-x-2.5 gap-y-1.5">
+          <dt className="pt-px text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground/55">
+            {t('results.uri')}
+          </dt>
+          <dd
+            className="flex min-w-0 items-center gap-1.5 font-mono text-[11px] text-muted-foreground/75"
+            title={item.item.uri}
+          >
+            <FolderOpen className="size-3 shrink-0 text-muted-foreground/45" />
+            <span className="truncate">{item.item.uri}</span>
+          </dd>
+
+          {item.item.abstract ? (
+            <>
+              <dt className="pt-0.5 text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground/55">
+                {t('results.description')}
+              </dt>
+              <dd className="line-clamp-2 text-xs leading-5 text-muted-foreground/70">
+                {item.item.abstract}
+              </dd>
+            </>
+          ) : null}
+        </dl>
       </div>
+
       {item.item.result_kind === 'grep' && item.item.line !== undefined ? (
-        <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
-          {t('results.line', { line: item.item.line })}
-        </span>
+        <ResultMetric
+          label={t('results.lineLabel')}
+          value={String(item.item.line)}
+        />
       ) : item.item.result_kind !== 'glob' ? (
-        <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-muted-foreground">
-          {item.item.score.toFixed(3)}
-        </span>
+        <ResultMetric
+          label={t('results.score')}
+          value={item.item.score.toFixed(3)}
+        />
       ) : null}
-    </>
+    </div>
+  )
+}
+
+function ResultMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-16 self-start rounded-md border border-border/60 bg-muted/35 px-2.5 py-2 text-right transition-colors group-hover:bg-background/70">
+      <div className="text-[9px] font-medium uppercase tracking-[0.1em] text-muted-foreground/50">
+        {label}
+      </div>
+      <div className="mt-0.5 font-mono text-xs font-semibold tabular-nums text-foreground/75">
+        {value}
+      </div>
+    </div>
   )
 }
