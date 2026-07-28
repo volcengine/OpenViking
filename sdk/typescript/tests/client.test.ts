@@ -88,6 +88,29 @@ describe("OpenVikingClient", () => {
     });
   });
 
+  it("sends processing_mode for addResource requests", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok({}));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.addResource("https://example.com/guide.md", {
+      to: "viking://resources/guide",
+      processingMode: "vectors_only",
+      wait: true,
+    });
+
+    const [url, init] = fetcher.mock.calls[0]!;
+    expect(String(url)).toBe("https://example.com/api/v1/resources");
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      path: "https://example.com/guide.md",
+      to: "viking://resources/guide",
+      processing_mode: "vectors_only",
+      wait: true,
+    });
+  });
+
   it("maps response envelopes to typed errors", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(

@@ -7,6 +7,8 @@ export type ClientHeaders =
   Headers | Record<string, string> | [string, string][];
 /** Temporary upload storage mode supported by the OpenViking server. */
 export type UploadMode = "local" | "shared";
+/** Resource post-ingest processing modes accepted by addResource. */
+export type ProcessingMode = "semantic_and_vectors" | "vectors_only";
 /** Conflict policy accepted when importing an OVPack. */
 export type PackConflictPolicy = "fail" | "overwrite" | "skip";
 /** Vector handling strategy accepted when importing an OVPack. */
@@ -83,6 +85,7 @@ export interface AddResourceOptions extends WaitOptions {
   directlyUploadMedia?: boolean;
   preserveStructure?: boolean;
   watchInterval?: number;
+  processingMode?: ProcessingMode;
   args?: JsonObject;
 }
 /** Semantic retrieval options. */
