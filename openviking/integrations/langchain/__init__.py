@@ -13,16 +13,17 @@ from typing import Any
 __all__ = [
     "InMemoryOpenVikingClient",
     "OpenVikingChatMessageHistory",
+    "OpenVikingCancellationProgress",
     "OpenVikingCommitPolicy",
     "OpenVikingContextMiddleware",
     "OpenVikingPartialWriteError",
     "OpenVikingRecordResult",
-    "OpenVikingRecordingCancelledError",
     "OpenVikingRetriever",
     "OpenVikingSessionContextAssembler",
     "OpenVikingSessionRecorder",
     "OpenVikingStore",
     "create_openviking_tools",
+    "get_openviking_cancellation_progress",
     "with_openviking_context",
 ]
 
@@ -60,12 +61,18 @@ def __getattr__(name: str) -> Any:
         from openviking.integrations.langchain.recording import OpenVikingRecordResult
 
         return OpenVikingRecordResult
-    if name == "OpenVikingRecordingCancelledError":
+    if name == "OpenVikingCancellationProgress":
         from openviking.integrations.langchain.recording import (
-            OpenVikingRecordingCancelledError,
+            OpenVikingCancellationProgress,
         )
 
-        return OpenVikingRecordingCancelledError
+        return OpenVikingCancellationProgress
+    if name == "get_openviking_cancellation_progress":
+        from openviking.integrations.langchain.recording import (
+            get_openviking_cancellation_progress,
+        )
+
+        return get_openviking_cancellation_progress
     if name == "OpenVikingCommitPolicy":
         from openviking.integrations.langchain.client import OpenVikingCommitPolicy
 

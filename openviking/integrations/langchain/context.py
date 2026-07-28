@@ -9,18 +9,16 @@ import logging
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Any
 
 try:
-    from langchain_core.messages import SystemMessage
-    from langchain_core.runnables import ConfigurableFieldSpec, Runnable, RunnableLambda
-    from langchain_core.runnables.config import RunnableConfig
+    from langchain_core.messages import BaseMessage, SystemMessage
+    from langchain_core.runnables import ConfigurableFieldSpec, RunnableLambda
     from langchain_core.runnables.history import RunnableWithMessageHistory
 except ImportError as exc:  # pragma: no cover - exercised by optional import path
     from openviking.integrations.langchain.client import missing_dependency
 
     raise missing_dependency("langchain", "langchain-core") from exc
-from pydantic import PrivateAttr
 
 from openviking.integrations.langchain.client import (
     OpenVikingCommitPolicy,
@@ -55,22 +53,22 @@ class OpenVikingAssembledContext:
 
 
 @dataclass(slots=True)
-class _AsyncSessionLockEntry:
+class _AsyncSessionWriteLockEntry:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     users: int = 0
 
 
-class _AsyncSessionLockPool:
-    """Keep active session locks without retaining inactive session ids."""
+class _AsyncSessionWriteLockPool:
+    """Serialize completed writes without retaining inactive session IDs."""
 
     def __init__(self) -> None:
-        self._entries: dict[str, _AsyncSessionLockEntry] = {}
+        self._entries: dict[str, _AsyncSessionWriteLockEntry] = {}
 
     @asynccontextmanager
     async def acquire(self, session_id: str) -> AsyncIterator[None]:
         entry = self._entries.get(session_id)
         if entry is None:
-            entry = _AsyncSessionLockEntry()
+            entry = _AsyncSessionWriteLockEntry()
             self._entries[session_id] = entry
         entry.users += 1
         acquired = False
@@ -86,118 +84,43 @@ class _AsyncSessionLockPool:
                 self._entries.pop(session_id, None)
 
 
-class _OpenVikingRunnableWithMessageHistory(RunnableWithMessageHistory):
-    """Serialize async history lifecycles that target the same session."""
+class _InvocationOpenVikingChatMessageHistory(OpenVikingChatMessageHistory):
+    """Hold the entry history snapshot for one runnable invocation."""
 
-    _async_session_lock_pools: LoopScopedAsyncClientCache = PrivateAttr(
-        default_factory=LoopScopedAsyncClientCache
-    )
-
-    def _lock_pool(self) -> _AsyncSessionLockPool:
-        return self._async_session_lock_pools.get(_AsyncSessionLockPool)
-
-    @staticmethod
-    def _merged_session_id(config: RunnableConfig) -> str:
-        history = config["configurable"]["message_history"]
-        return _validate_session_id(getattr(history, "session_id", None), key="session_id")
-
-    async def _ainvoke_merged(
+    def __init__(
         self,
-        input_value: Any,
-        config: RunnableConfig,
-        kwargs: dict[str, Any],
-    ) -> Any:
-        session_id = self._merged_session_id(config)
-        async with self._lock_pool().acquire(session_id):
-            return await self.bound.ainvoke(
-                input_value,
-                config,
-                **{**self.kwargs, **kwargs},
-            )
-
-    async def ainvoke(
-        self,
-        input: Any,
-        config: RunnableConfig | None = None,
+        *args: Any,
+        async_write_lock_pools: LoopScopedAsyncClientCache,
         **kwargs: Any,
-    ) -> Any:
-        """Invoke while serializing the complete history lifecycle per session."""
+    ):
+        super().__init__(*args, **kwargs)
+        self._entry_snapshot: list[BaseMessage] | None = None
+        self._async_write_lock_pools = async_write_lock_pools
 
-        return await self._ainvoke_merged(input, self._merge_configs(config), kwargs)
+    @property
+    def messages(self) -> list[BaseMessage]:
+        if self._entry_snapshot is None:
+            self._entry_snapshot = list(super().messages)
+        return list(self._entry_snapshot)
 
-    async def astream(
-        self,
-        input: Any,
-        config: RunnableConfig | None = None,
-        **kwargs: Any,
-    ) -> AsyncIterator[Any]:
-        """Stream while serializing the complete history lifecycle per session."""
+    async def aget_messages(self) -> list[BaseMessage]:
+        if self._entry_snapshot is None:
+            self._entry_snapshot = list(await super().aget_messages())
+        return list(self._entry_snapshot)
 
-        merged_config = self._merge_configs(config)
-        session_id = self._merged_session_id(merged_config)
-        async with self._lock_pool().acquire(session_id):
-            async for item in self.bound.astream(
-                input,
-                merged_config,
-                **{**self.kwargs, **kwargs},
-            ):
-                yield item
+    def add_messages(self, messages: Sequence[BaseMessage]) -> None:
+        try:
+            super().add_messages(messages)
+        finally:
+            self._entry_snapshot = None
 
-    async def astream_events(
-        self,
-        input: Any,
-        config: RunnableConfig | None = None,
-        **kwargs: Any,
-    ) -> AsyncIterator[Any]:
-        """Stream events while serializing the history lifecycle per session."""
-
-        merged_config = self._merge_configs(config)
-        session_id = self._merged_session_id(merged_config)
-        async with self._lock_pool().acquire(session_id):
-            async for item in self.bound.astream_events(
-                input,
-                merged_config,
-                **{**self.kwargs, **kwargs},
-            ):
-                yield item
-
-    async def abatch(
-        self,
-        inputs: list[Any],
-        config: RunnableConfig | list[RunnableConfig] | None = None,
-        *,
-        return_exceptions: bool = False,
-        **kwargs: Any,
-    ) -> list[Any]:
-        """Batch through per-invocation locks so each lifecycle owns its lock."""
-
-        return await Runnable.abatch(
-            self,
-            inputs,
-            config,
-            return_exceptions=return_exceptions,
-            **kwargs,
-        )
-
-    async def abatch_as_completed(
-        self,
-        inputs: Sequence[Any],
-        config: RunnableConfig | Sequence[RunnableConfig] | None = None,
-        *,
-        return_exceptions: bool = False,
-        **kwargs: Any,
-    ) -> AsyncIterator[tuple[int, Any]]:
-        """Yield batch results while preserving per-session serialization."""
-
-        batch_as_completed = cast(Any, Runnable.abatch_as_completed)
-        async for item in batch_as_completed(
-            self,
-            inputs,
-            config,
-            return_exceptions=return_exceptions,
-            **kwargs,
-        ):
-            yield item
+    async def aadd_messages(self, messages: Sequence[BaseMessage]) -> None:
+        try:
+            lock_pool = self._async_write_lock_pools.get(_AsyncSessionWriteLockPool)
+            async with lock_pool.acquire(self.session_id):
+                await super().aadd_messages(messages)
+        finally:
+            self._entry_snapshot = None
 
 
 class OpenVikingSessionContextAssembler:
@@ -528,7 +451,7 @@ def with_openviking_context(
     peer_id_config_key: str = "peer_id",
     inject_context: bool = True,
 ) -> RunnableWithMessageHistory:
-    """Wrap a runnable and serialize async lifecycles that share a session."""
+    """Wrap a runnable with invocation-scoped OpenViking history and context."""
 
     assembler = OpenVikingSessionContextAssembler(
         client=client,
@@ -550,29 +473,13 @@ def with_openviking_context(
         include_active_messages=False,
         include_recall=inject_context,
     )
-    pending_context_parts: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    active_peer_ids: dict[str, str | None] = {}
+    async_write_lock_pools = LoopScopedAsyncClientCache()
 
     def make_history(active_session_id: str) -> OpenVikingChatMessageHistory:
-        def pending_key(current_session_id: str) -> tuple[str, str]:
-            return _pending_context_key(
-                current_session_id,
-                active_peer_ids.get(current_session_id, peer_id),
-            )
-
-        def provide_context_parts(current_session_id: str) -> list[dict[str, Any]]:
-            return list(pending_context_parts.get(pending_key(current_session_id), []))
-
-        def acknowledge_context_parts(current_session_id: str) -> None:
-            pending_context_parts.pop(pending_key(current_session_id), None)
-
-        return OpenVikingChatMessageHistory(
+        return _InvocationOpenVikingChatMessageHistory(
             session_id=active_session_id,
+            async_write_lock_pools=async_write_lock_pools,
             peer_id=peer_id,
-            peer_id_provider=lambda current_session_id: active_peer_ids.get(
-                current_session_id,
-                peer_id,
-            ),
             client=client,
             async_client=async_client,
             url=url,
@@ -587,8 +494,6 @@ def with_openviking_context(
             auto_initialize=auto_initialize,
             token_budget=token_budget,
             commit_policy=commit_policy,
-            context_parts_provider=provide_context_parts,
-            context_parts_acknowledger=acknowledge_context_parts,
         )
 
     if session_id is None:
@@ -624,7 +529,7 @@ def with_openviking_context(
     def prepare_injection(
         input_value: Any,
         config: dict[str, Any] | None,
-    ) -> tuple[str, tuple[str, str], str] | None:
+    ) -> tuple[str, _InvocationOpenVikingChatMessageHistory, str] | None:
         resolved_session_id = session_id or _session_id_from_config(
             config,
             key=session_id_config_key,
@@ -634,75 +539,66 @@ def with_openviking_context(
             key=peer_id_config_key,
             default=peer_id,
         )
-        active_peer_ids[resolved_session_id] = resolved_peer_id
+        history = _invocation_history_from_config(config)
+        history._prepare_invocation(peer_id=resolved_peer_id)
         if not inject_context:
             return None
-        pending_key = _pending_context_key(resolved_session_id, resolved_peer_id)
-        pending_context_parts.pop(pending_key, None)
         query = _latest_user_text_from_input(input_value, input_messages_key)
-        return resolved_session_id, pending_key, query
+        return resolved_session_id, history, query
 
     def apply_injection(
         input_value: Any,
-        pending_key: tuple[str, str],
+        history: _InvocationOpenVikingChatMessageHistory,
         assembled: OpenVikingAssembledContext,
     ) -> Any:
         if not assembled.block:
             return input_value
         if assembled.context_parts:
-            pending_context_parts[pending_key] = assembled.context_parts
+            history._prepare_invocation(
+                peer_id=history.peer_id,
+                context_parts=assembled.context_parts,
+            )
         return _inject_system_context(input_value, assembled.block, input_messages_key)
 
     def inject(input_value: Any, config: dict[str, Any] | None = None) -> Any:
         prepared = prepare_injection(input_value, config)
         if prepared is None:
             return input_value
-        resolved_session_id, pending_key, query = prepared
+        resolved_session_id, history, query = prepared
         assembled = assembler.assemble(
             session_id=resolved_session_id,
             query=query,
         )
-        return apply_injection(input_value, pending_key, assembled)
+        return apply_injection(input_value, history, assembled)
 
     async def ainject(input_value: Any, config: dict[str, Any] | None = None) -> Any:
         prepared = prepare_injection(input_value, config)
         if prepared is None:
             return input_value
-        resolved_session_id, pending_key, query = prepared
+        resolved_session_id, history, query = prepared
         assembled = await assembler.aassemble(
             session_id=resolved_session_id,
             query=query,
         )
-        return apply_injection(input_value, pending_key, assembled)
+        return apply_injection(input_value, history, assembled)
 
     def clear_pending_on_error(_run: Any, config: dict[str, Any] | None = None) -> None:
         try:
-            resolved_session_id = session_id or _session_id_from_config(
-                config,
-                key=session_id_config_key,
-            )
-            resolved_peer_id = _peer_id_from_config(
-                config,
-                key=peer_id_config_key,
-                default=peer_id,
-            )
+            history = _invocation_history_from_config(config)
         except Exception:
             logger.debug(
-                "OpenViking pending context cleanup could not resolve the failed session",
+                "OpenViking pending context cleanup could not resolve invocation history",
                 exc_info=True,
             )
             return
-        pending_context_parts.pop(
-            _pending_context_key(resolved_session_id, resolved_peer_id),
-            None,
-        )
+        history._discard_invocation_context()
 
     bound = (RunnableLambda(inject, afunc=ainject) | runnable).with_listeners(
         on_error=clear_pending_on_error
     )
-    wrapped = _OpenVikingRunnableWithMessageHistory(
-        runnable=bound,
-        get_session_history=session_history_factory,
+    wrapped = RunnableWithMessageHistory(
+        bound,
+        session_history_factory,
         input_messages_key=input_messages_key,
         output_messages_key=output_messages_key,
         history_messages_key=history_messages_key,
@@ -741,6 +637,16 @@ def _validate_session_id(value: Any, *, key: str) -> str:
     return session_id
 
 
+def _invocation_history_from_config(
+    config: dict[str, Any] | None,
+) -> _InvocationOpenVikingChatMessageHistory:
+    configurable = (config or {}).get("configurable") or {}
+    history = configurable.get("message_history")
+    if not isinstance(history, _InvocationOpenVikingChatMessageHistory):
+        raise RuntimeError("OpenViking runnable invocation history is unavailable")
+    return history
+
+
 def _retriever_for_session(
     retriever: Any,
     session_id: str,
@@ -752,10 +658,6 @@ def _retriever_for_session(
         }
         return retriever.model_copy(update=update)
     return retriever
-
-
-def _pending_context_key(session_id: str, peer_id: str | None) -> tuple[str, str]:
-    return (session_id, peer_id or "")
 
 
 def _latest_user_text_from_input(input_value: Any, input_messages_key: str | None) -> str:

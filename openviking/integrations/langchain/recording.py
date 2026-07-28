@@ -96,28 +96,13 @@ class OpenVikingPartialWriteError(RuntimeError):
         return self.stage == "commit"
 
 
-class OpenVikingRecordingCancelledError(asyncio.CancelledError):
-    """Preserve cancellation while reporting confirmed recording progress."""
+@dataclass(frozen=True, slots=True)
+class OpenVikingCancellationProgress:
+    """Confirmed recording progress attached to an original cancellation."""
 
-    def __init__(
-        self,
-        *,
-        session_id: str,
-        result: OpenVikingRecordResult,
-        cause: asyncio.CancelledError,
-        stage: Literal["batch", "commit"] = "batch",
-    ):
-        if stage == "batch":
-            detail = "before a later batch was cancelled"
-        else:
-            detail = "before the commit policy was cancelled"
-        super().__init__(
-            f"OpenViking recorded {result.messages_written} messages for session "
-            f"{session_id!r} {detail}: {cause}"
-        )
-        self.session_id = session_id
-        self.result = result
-        self.stage = stage
+    session_id: str
+    result: OpenVikingRecordResult
+    stage: Literal["batch", "commit"] = "batch"
 
     @property
     def messages_written(self) -> int:
@@ -142,6 +127,45 @@ class OpenVikingRecordingCancelledError(asyncio.CancelledError):
         """Return whether only the post-write commit remains incomplete."""
 
         return self.stage == "commit"
+
+
+_CANCELLATION_PROGRESS_ATTRIBUTE = "_openviking_recording_progress"
+
+
+def get_openviking_cancellation_progress(
+    error: BaseException,
+) -> OpenVikingCancellationProgress | None:
+    """Return recording progress from a cancellation or a timeout wrapping it."""
+
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        progress = getattr(current, _CANCELLATION_PROGRESS_ATTRIBUTE, None)
+        if isinstance(progress, OpenVikingCancellationProgress):
+            return progress
+        current = current.__cause__
+    return None
+
+
+def _attach_cancellation_progress(
+    error: asyncio.CancelledError,
+    *,
+    session_id: str,
+    result: OpenVikingRecordResult,
+    stage: Literal["batch", "commit"] = "batch",
+) -> None:
+    """Annotate the original cancellation without changing its identity."""
+
+    setattr(
+        error,
+        _CANCELLATION_PROGRESS_ATTRIBUTE,
+        OpenVikingCancellationProgress(
+            session_id=session_id,
+            result=result,
+            stage=stage,
+        ),
+    )
 
 
 @dataclass(slots=True)
@@ -324,11 +348,12 @@ class OpenVikingSessionRecorder:
                     input_messages_consumed=input_messages_consumed,
                     context_attached=context_attached,
                 )
-                raise OpenVikingRecordingCancelledError(
+                _attach_cancellation_progress(
+                    exc,
                     session_id=session_id,
                     result=result,
-                    cause=exc,
-                ) from exc
+                )
+                raise
             except Exception as exc:
                 if messages_written == 0:
                     raise
@@ -354,12 +379,13 @@ class OpenVikingSessionRecorder:
             await aapply_commit_policy(client, session_id, self.commit_policy)
         except asyncio.CancelledError as exc:
             self._pending_commit_sessions.add(session_id)
-            raise OpenVikingRecordingCancelledError(
+            _attach_cancellation_progress(
+                exc,
                 session_id=session_id,
                 result=result,
-                cause=exc,
                 stage="commit",
-            ) from exc
+            )
+            raise
         except Exception as exc:
             self._pending_commit_sessions.add(session_id)
             raise OpenVikingPartialWriteError(
