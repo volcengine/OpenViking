@@ -14,7 +14,7 @@ class _FakeFindResult:
         self.memories = memories or []
 
 
-def test_memory_target_roots_include_legacy_external_peer_alias():
+def test_memory_target_roots_keep_encoded_peer_isolated_from_legacy_collision():
     ctx = RequestContext(
         user=UserIdentifier.the_default_user("test_user"),
         role=Role.USER,
@@ -24,7 +24,6 @@ def test_memory_target_roots_include_legacy_external_peer_alias():
     assert memory_target_roots(ctx) == [
         "viking://user/test_user/memories",
         "viking://user/test_user/peers/ext-5byg5LiJIEFsaWNl/memories",
-        "viking://user/test_user/peers/Alice/memories",
     ]
 
 

@@ -34,7 +34,7 @@ def _parse_enabled(value: Any, *, key: str) -> bool:
 
     warnings.warn(
         f"memory_policy.{key}.enabled should be a boolean; legacy coercion is deprecated",
-        DeprecationWarning,
+        FutureWarning,
         stacklevel=3,
     )
     if isinstance(value, str):

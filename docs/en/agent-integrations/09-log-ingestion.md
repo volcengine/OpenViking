@@ -96,10 +96,10 @@ Every message carries a peer_id so OpenViking can profile both the human and the
 
 Identifiers containing any non-ASCII characters (for example, a CJK or mixed-script
 username) use a collision-free `ext-<base64>` form that encodes the complete identifier.
-For data imported by older versions, retrieval and memory-extraction reads also include
-the former lossy ASCII peer id as a read-only compatibility alias. New writes always use
-the canonical `ext-` id. Because two old mixed-script names may already have shared one
-lossy alias, the upgrade does not rename or delete existing peer directories.
+New reads and writes use only that canonical id. Older versions may have collapsed multiple
+mixed-script identities—or a mixed-script identity and a real ASCII identity—into the same
+peer directory. OpenViking therefore does not attach those ambiguous directories as automatic
+aliases; operators must decide ownership before migrating existing data.
 
 ## How it works
 

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from openviking.core.identifiers import validate_user_id
-from openviking.core.peer_id import normalize_peer_id, peer_id_aliases
+from openviking.core.peer_id import normalize_peer_id
 from openviking.server.identity import RequestContext
 from openviking_cli.utils.uri import VikingURI
 
@@ -199,10 +199,7 @@ def is_hidden_by_actor_peer_view(uri: str, ctx: RequestContext) -> bool:
     """Return whether uri points to another peer hidden by the actor peer view."""
     suffix = _actor_peer_view_user_suffix(uri, ctx)
     return bool(
-        suffix
-        and len(suffix) >= 2
-        and suffix[0] == "peers"
-        and suffix[1] not in peer_id_aliases(ctx.actor_peer_id)
+        suffix and len(suffix) >= 2 and suffix[0] == "peers" and suffix[1] != ctx.actor_peer_id
     )
 
 

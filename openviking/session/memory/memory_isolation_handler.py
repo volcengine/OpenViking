@@ -5,7 +5,7 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
-from openviking.core.peer_id import peer_id_aliases, safe_peer_id
+from openviking.core.peer_id import safe_peer_id
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperation
 from openviking.session.memory.memory_updater import ExtractContext
@@ -151,8 +151,7 @@ class MemoryIsolationHandler:
             user_spaces.append(user_space)
         if self.allow_peer and getattr(memory_type_schema, "peer_enabled", True):
             for peer_id in sorted(self.allowed_peer_ids):
-                for read_peer_id in peer_id_aliases(peer_id):
-                    user_spaces.append(peer_user_space(user_space, read_peer_id))
+                user_spaces.append(peer_user_space(user_space, peer_id))
 
         directories = []
         for target_user_space in dict.fromkeys(user_spaces):

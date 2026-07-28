@@ -80,8 +80,13 @@ def test_memory_policy_legacy_enabled_compatibility_fixture():
             policy = MemoryPolicy.from_dict({"peer": {"enabled": case["value"]}})
 
         assert policy.peer_enabled is case["expected"]
-        deprecations = [item for item in caught if item.category is DeprecationWarning]
+        deprecations = [item for item in caught if item.category is FutureWarning]
         assert bool(deprecations) is case["deprecated"]
+
+
+def test_memory_policy_legacy_enabled_warning_is_user_visible():
+    with pytest.warns(FutureWarning, match="legacy coercion is deprecated"):
+        MemoryPolicy.from_dict({"peer": {"enabled": "false"}})
 
 
 def test_memory_policy_rejects_invalid_memory_types():

@@ -151,7 +151,7 @@ class TestGetReadScope:
         assert "viking://user/support_bot/peers/__self/memories" not in dirs
         assert "viking://user/support_bot/peers/web-visitor-alice/memories" in dirs
 
-    def test_render_schema_directories_reads_legacy_external_peer_alias(self):
+    def test_render_schema_directories_keep_encoded_peer_isolated(self):
         from openviking.session.memory.dataclass import MemoryTypeSchema
 
         ctx = create_ctx(user_id="support_bot")
@@ -172,7 +172,6 @@ class TestGetReadScope:
 
         assert handler.render_schema_directories(schema) == [
             "viking://user/support_bot/peers/ext-5byg5LiJIEFsaWNl/memories",
-            "viking://user/support_bot/peers/Alice/memories",
         ]
 
     def test_render_schema_directories_peer_enabled_false_uses_self_only(self):

@@ -5,7 +5,6 @@
 import json
 from pathlib import Path
 
-from openviking.core.peer_id import legacy_external_peer_id_alias, peer_id_aliases
 from openviking.ingest.peer import (
     assistant_peer_id,
     resolve_git_human_peer,
@@ -47,11 +46,9 @@ def test_external_peer_compatibility_fixture():
     for case in cases:
         canonical = safe_external_peer(case["raw"])
         assert canonical == case["canonical"]
-        assert legacy_external_peer_id_alias(canonical) == case["legacy_alias"]
-        expected_aliases = [canonical]
-        if case["legacy_alias"]:
-            expected_aliases.append(case["legacy_alias"])
-        assert peer_id_aliases(canonical) == expected_aliases
+
+    canonical_ids = [safe_external_peer(case["raw"]) for case in cases]
+    assert len(canonical_ids) == len(set(canonical_ids))
 
 
 def test_git_human_peer_falls_back_without_repo(tmp_path):

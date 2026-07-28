@@ -12,7 +12,7 @@ from openviking.core.namespace import (
     is_hidden_by_actor_peer_view,
     uri_parts,
 )
-from openviking.core.peer_id import normalize_peer_id, peer_id_aliases
+from openviking.core.peer_id import normalize_peer_id
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.retrieve import ContextType
@@ -65,10 +65,7 @@ def default_target_directories(
             return _dedupe(
                 [
                     f"{user_root}/memories",
-                    *[
-                        f"{user_root}/peers/{peer_id}/memories"
-                        for peer_id in peer_id_aliases(ctx.actor_peer_id)
-                    ],
+                    f"{user_root}/peers/{ctx.actor_peer_id}/memories",
                 ]
             )
         return [user_root]
@@ -78,10 +75,7 @@ def default_target_directories(
                 [
                     "viking://resources",
                     f"{user_root}/resources",
-                    *[
-                        f"{user_root}/peers/{peer_id}/resources"
-                        for peer_id in peer_id_aliases(ctx.actor_peer_id)
-                    ],
+                    f"{user_root}/peers/{ctx.actor_peer_id}/resources",
                 ]
             )
         return ["viking://resources", user_root]
@@ -158,14 +152,10 @@ def _default_skill_targets(ctx: RequestContext) -> List[str]:
 def _actor_peer_targets(ctx: RequestContext) -> List[str]:
     if not ctx.actor_peer_id:
         return []
-    user_root = canonical_user_root(ctx)
+    peer_root = f"{canonical_user_root(ctx)}/peers/{ctx.actor_peer_id}"
     return [
-        target
-        for peer_id in peer_id_aliases(ctx.actor_peer_id)
-        for target in (
-            f"{user_root}/peers/{peer_id}/memories",
-            f"{user_root}/peers/{peer_id}/resources",
-        )
+        f"{peer_root}/memories",
+        f"{peer_root}/resources",
     ]
 def _is_agent_scope_uri(target_uri: str) -> bool:
     parts = target_uri[len("viking://"):].strip("/").split("/")

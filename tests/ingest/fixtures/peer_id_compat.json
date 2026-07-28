@@ -1,27 +1,22 @@
 [
   {
     "raw": "alice",
-    "canonical": "alice",
-    "legacy_alias": null
+    "canonical": "alice"
   },
   {
     "raw": "张三 Alice",
-    "canonical": "ext-5byg5LiJIEFsaWNl",
-    "legacy_alias": "Alice"
+    "canonical": "ext-5byg5LiJIEFsaWNl"
   },
   {
     "raw": "李四 Alice",
-    "canonical": "ext-5p2O5ZubIEFsaWNl",
-    "legacy_alias": "Alice"
+    "canonical": "ext-5p2O5ZubIEFsaWNl"
   },
   {
     "raw": "José",
-    "canonical": "ext-Sm9zw6k",
-    "legacy_alias": "Jos"
+    "canonical": "ext-Sm9zw6k"
   },
   {
     "raw": "杨冠姝",
-    "canonical": "ext-5p2o5Yag5aed",
-    "legacy_alias": null
+    "canonical": "ext-5p2o5Yag5aed"
   }
 ]

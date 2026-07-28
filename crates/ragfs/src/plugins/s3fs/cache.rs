@@ -98,15 +98,20 @@ impl<T: Clone> TtlLruCache<T> {
             return;
         }
 
-        let child_prefix = if prefix == "/" {
+        let normalized_prefix = if prefix == "/" {
+            "/"
+        } else {
+            prefix.trim_end_matches('/')
+        };
+        let child_prefix = if normalized_prefix == "/" {
             "/".to_string()
         } else {
-            format!("{}/", prefix.trim_end_matches('/'))
+            format!("{normalized_prefix}/")
         };
         let to_remove: Vec<String> = inner
             .cache
             .iter()
-            .filter(|(k, _)| *k == prefix || k.starts_with(&child_prefix))
+            .filter(|(k, _)| *k == normalized_prefix || k.starts_with(&child_prefix))
             .map(|(k, _)| k.clone())
             .collect();
 
@@ -315,5 +320,19 @@ mod tests {
         assert!(cache.get("/").await.is_none());
         assert!(cache.get("/a").await.is_none());
         assert!(cache.get("/a/b").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_prefix_invalidation_normalizes_trailing_slash() {
+        let cache = S3ListDirCache::new(10, 60, true);
+        cache.put("/a".to_string(), vec![]).await;
+        cache.put("/a/b".to_string(), vec![]).await;
+        cache.put("/ab".to_string(), vec![]).await;
+
+        cache.invalidate_prefix("/a/").await;
+
+        assert!(cache.get("/a").await.is_none());
+        assert!(cache.get("/a/b").await.is_none());
+        assert!(cache.get("/ab").await.is_some());
     }
 }
