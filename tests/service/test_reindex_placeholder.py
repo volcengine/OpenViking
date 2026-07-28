@@ -15,6 +15,35 @@ from openviking.service.reindex_executor import (
 )
 
 
+class _MinimalExecutor:
+    """Minimal stand-in exposing _is_hidden_meta_file without full construction."""
+
+    def _is_hidden_meta_file(self, uri: str) -> bool:
+        from openviking.service.reindex_executor import SEARCH_TAGS_SIDECAR_FILENAME
+
+        return (
+            uri.endswith("/.abstract.md")
+            or uri.endswith("/.overview.md")
+            or uri.endswith(f"/{SEARCH_TAGS_SIDECAR_FILENAME}")
+        )
+
+
+_minimal = _MinimalExecutor()
+
+
+def test_is_hidden_meta_file_excludes_search_tags_sidecar():
+    """Regression: .search_tags.json must be hidden so it is never indexed as user content."""
+    assert _minimal._is_hidden_meta_file("viking://resources/foo/.search_tags.json")
+    assert _minimal._is_hidden_meta_file("viking://user/alice/resources/bar/.search_tags.json")
+    # Existing hidden files still excluded
+    assert _minimal._is_hidden_meta_file("viking://resources/foo/.abstract.md")
+    assert _minimal._is_hidden_meta_file("viking://resources/foo/.overview.md")
+    # Normal files must NOT be hidden
+    assert not _minimal._is_hidden_meta_file("viking://resources/foo/readme.txt")
+    assert not _minimal._is_hidden_meta_file("viking://resources/foo/.other")
+    assert not _minimal._is_hidden_meta_file("viking://resources/foo/.search_tags")
+
+
 def test_real_abstract_sentinel_is_detected():
     rendered = "# viking://memory/projects/foo [Directory abstract is not ready]"
     assert _is_not_ready_sentinel(rendered, _ABSTRACT_NOT_READY_SUFFIX)
