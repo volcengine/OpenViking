@@ -50,34 +50,120 @@ def _set_mtime(path: Path, dt: datetime) -> None:
     os.utime(path, (ts, ts))
 
 
-def test_scan_resource_files_buckets_by_mtime(script, tmp_path: Path):
+def test_scan_counts_one_per_top_level_entry(script, tmp_path: Path):
     resources = tmp_path / "resources"
-    (resources / "nested").mkdir(parents=True)
+    resources.mkdir()
 
-    first = resources / "a.md"
-    first.write_text("a")
-    _set_mtime(first, datetime(2026, 5, 12, 1, 30, tzinfo=timezone.utc))
+    # Reviewer scenario: one repository import expands to six physical files
+    # (two content files plus four generated sidecars) but must count as one
+    # add_resource, bucketed at the earliest content mtime.
+    repo = resources / "repo"
+    (repo / "src").mkdir(parents=True)
+    readme = repo / "README.md"
+    readme.write_text("readme")
+    _set_mtime(readme, datetime(2026, 5, 12, 1, 30, tzinfo=timezone.utc))
+    main_py = repo / "src" / "main.py"
+    main_py.write_text("main")
+    _set_mtime(main_py, datetime(2026, 5, 12, 2, 10, tzinfo=timezone.utc))
+    for sidecar_dir in (repo, repo / "src"):
+        for name in (".abstract.md", ".overview.md"):
+            sidecar = sidecar_dir / name
+            sidecar.write_text("generated")
+            _set_mtime(sidecar, datetime(2026, 5, 13, 9, 0, tzinfo=timezone.utc))
 
-    second = resources / "nested" / "b.md"
-    second.write_text("b")
-    _set_mtime(second, datetime(2026, 5, 12, 3, 59, tzinfo=timezone.utc))
+    # A standalone top-level file counts once at its own mtime.
+    single = resources / "c.md"
+    single.write_text("c")
+    _set_mtime(single, datetime(2026, 5, 12, 23, 5, tzinfo=timezone.utc))
 
-    third = resources / "c.md"
-    third.write_text("c")
-    _set_mtime(third, datetime(2026, 5, 12, 23, 5, tzinfo=timezone.utc))
-
-    buckets = script.scan_resource_files(resources)
+    buckets = script.scan_resource_entries(resources)
 
     assert buckets == Counter(
         {
-            ("2026-05-12", 0): 2,
+            ("2026-05-12", 0): 1,
             ("2026-05-12", 20): 1,
         }
     )
 
 
-def test_scan_resource_files_missing_dir_returns_empty(script, tmp_path: Path):
-    assert script.scan_resource_files(tmp_path / "does-not-exist") == Counter()
+def test_scan_skips_sidecar_only_entries(script, tmp_path: Path):
+    resources = tmp_path / "resources"
+    (resources / "empty_dir").mkdir(parents=True)
+
+    # Top-level sidecar files and directories containing only sidecars are
+    # not resources and must not count.
+    top_sidecar = resources / ".abstract.md"
+    top_sidecar.write_text("generated")
+    sidecar_dir = resources / "only_sidecars"
+    sidecar_dir.mkdir()
+    (sidecar_dir / ".overview.md").write_text("generated")
+
+    assert script.scan_resource_entries(resources) == Counter()
+
+
+def test_scan_respects_cutoff(script, tmp_path: Path):
+    resources = tmp_path / "resources"
+    resources.mkdir()
+
+    old = resources / "old.md"
+    old.write_text("old")
+    _set_mtime(old, datetime(2026, 5, 12, 1, 30, tzinfo=timezone.utc))
+
+    recent = resources / "recent.md"
+    recent.write_text("recent")
+    _set_mtime(recent, datetime(2026, 6, 1, 10, 0, tzinfo=timezone.utc))
+
+    cutoff = datetime(2026, 6, 1, 0, 0, tzinfo=timezone.utc)
+    buckets = script.scan_resource_entries(resources, cutoff=cutoff)
+
+    # Entries ingested after the live recorder started are already counted
+    # by the request-based metric and must be skipped.
+    assert buckets == Counter({("2026-05-12", 0): 1})
+
+
+def test_scan_resource_entries_missing_dir_returns_empty(script, tmp_path: Path):
+    assert script.scan_resource_entries(tmp_path / "does-not-exist") == Counter()
+
+
+def test_recorder_start_time_from_request_audit(script, tmp_path: Path):
+    db_path = tmp_path / "usage_audit.sqlite3"
+    _create_usage_audit_db(db_path)
+
+    # No live requests recorded yet -> no cutoff.
+    assert script.recorder_start_time(db_path) is None
+
+    conn = sqlite3.connect(db_path)
+    try:
+        for created_at in ("2026-06-02T08:00:00+00:00", "2026-06-01T00:00:00+00:00"):
+            conn.execute(
+                "INSERT INTO request_audit "
+                "(request_id, account_id, user_id, method, route, api_type, "
+                " status_code, duration_ms, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "req",
+                    "acct-1",
+                    "user-1",
+                    "POST",
+                    "/api/v1/resources",
+                    "data",
+                    200,
+                    1.0,
+                    created_at,
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert script.recorder_start_time(db_path) == datetime(2026, 6, 1, 0, 0, tzinfo=timezone.utc)
+
+
+def test_recorder_start_time_missing_table_returns_none(script, tmp_path: Path):
+    db_path = tmp_path / "empty.sqlite3"
+    sqlite3.connect(db_path).close()
+
+    assert script.recorder_start_time(db_path) is None
 
 
 def test_backfill_inserts_and_accumulates(script, tmp_path: Path):
