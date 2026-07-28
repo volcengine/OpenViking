@@ -748,6 +748,7 @@ class ResourceService:
             timeout=timeout,
             build_index=build_index,
             summarize=summarize,
+            processing_mode=processing_mode,
             watch_interval=watch_interval,
             manage_watch=True,
             allow_local_path_resolution=allow_local_path_resolution,
@@ -767,6 +768,7 @@ class ResourceService:
         timeout: Optional[float] = None,
         build_index: bool = True,
         summarize: bool = False,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         watch_interval: float = 0,
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
@@ -784,6 +786,7 @@ class ResourceService:
             timeout=timeout,
             build_index=build_index,
             summarize=summarize,
+            processing_mode=processing_mode,
             watch_interval=watch_interval,
             manage_watch=False,
             allow_local_path_resolution=allow_local_path_resolution,
@@ -804,6 +807,7 @@ class ResourceService:
         timeout: Optional[float] = None,
         build_index: bool = True,
         summarize: bool = False,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         watch_interval: float = 0,
         manage_watch: bool = True,
         allow_local_path_resolution: bool = True,
@@ -823,6 +827,7 @@ class ResourceService:
             timeout: Wait timeout in seconds
             build_index: Whether to build vector index immediately (default: True)
             summarize: Whether to generate summary (default: False)
+            processing_mode: Post-ingest processing mode for semantic/vector work
             watch_interval: Watch interval in minutes for automatic resource monitoring.
                 - watch_interval > 0: Creates or updates a watch task. The resource will be
                   automatically re-processed at the specified interval by the scheduler.
@@ -927,6 +932,7 @@ class ResourceService:
             timeout=timeout,
             build_index=build_index,
             summarize=summarize,
+            processing_mode=processing_mode,
             watch_interval=watch_interval,
             manage_watch=manage_watch,
             allow_local_path_resolution=allow_local_path_resolution,
@@ -948,6 +954,7 @@ class ResourceService:
         timeout: Optional[float] = None,
         build_index: bool = True,
         summarize: bool = False,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         watch_interval: float = 0,
         manage_watch: bool = True,
         allow_local_path_resolution: bool = True,
