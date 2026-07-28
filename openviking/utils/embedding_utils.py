@@ -155,6 +155,8 @@ def get_resource_content_type(file_name: str) -> Optional[ResourceContentType]:
         ".java",
         ".cpp",
         ".c",
+        ".cu",
+        ".cuh",
         ".h",
         ".go",
         ".rs",

@@ -6,7 +6,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from openviking.parse.parsers.constants import FILE_TYPE_CODE
 from openviking.parse.parsers.code.ast import SkeletonExtractionResult
+from openviking.parse.parsers.media.utils import get_media_type
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 
 
@@ -98,14 +100,19 @@ async def test_missing_skeleton_without_vlm_returns_empty_summary():
     config.vlm.get_completion_async.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_typescript_is_dispatched_as_text_not_video():
+def test_cuda_extensions_are_dispatched_as_code():
     processor = SemanticProcessor()
-    processor._generate_text_summary = AsyncMock(return_value={"name": "sample.ts", "summary": ""})
+    assert processor._detect_file_type("kernel.cu") == FILE_TYPE_CODE
+    assert processor._detect_file_type("common.cuh") == FILE_TYPE_CODE
+
+
+@pytest.mark.asyncio
+async def test_ts_extension_is_dispatched_as_video():
+    processor = SemanticProcessor()
+    assert get_media_type("sample.ts", None) == "video"
     with patch(
         "openviking.storage.queuefs.semantic_processor.generate_video_summary",
-        new=AsyncMock(),
+        new=AsyncMock(return_value={"name": "sample.ts", "summary": ""}),
     ) as video_summary:
         await processor._generate_single_file_summary("viking://resources/sample.ts")
-    processor._generate_text_summary.assert_awaited_once()
-    video_summary.assert_not_awaited()
+    video_summary.assert_awaited_once()

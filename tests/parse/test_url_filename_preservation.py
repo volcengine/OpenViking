@@ -72,7 +72,7 @@ class TestURLTypeDetectorCodeExtensions:
         assert url_type == URLType.DOWNLOAD_TXT
 
     @pytest.mark.asyncio
-    async def test_ts_extension_defaults_to_text_when_headers_unavailable(self, monkeypatch):
+    async def test_ts_extension_defaults_to_video_when_headers_unavailable(self, monkeypatch):
         _patch_httpx_client(
             monkeypatch,
             headers={"content-type": "text/plain"},
@@ -81,7 +81,7 @@ class TestURLTypeDetectorCodeExtensions:
 
         url_type, meta = await self.detector.detect("https://example.com/path/index.ts")
 
-        assert url_type == URLType.DOWNLOAD_TXT
+        assert url_type == URLType.DOWNLOAD_VIDEO
         assert meta["detected_by"] == "extension"
         assert meta["extension"] == ".ts"
 
