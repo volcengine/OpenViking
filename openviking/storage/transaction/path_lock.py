@@ -26,10 +26,39 @@ LOCK_TYPE_TREE = "T"
 # Upgrade compatibility: old POINT/SUBTREE tokens are still treated as tree locks.
 _READ_ONLY_TREE_LOCK_TYPES = {"P", "S"}
 
-# Default poll interval when waiting for a lock (seconds)
-_POLL_INTERVAL = 0.1
+# Default poll interval when waiting for a lock (seconds).
+# Prior versions hard-coded 0.1 s here, which caused sustained CPU churn
+# and log floods under contention (see issue #3274). The value below is the
+# lower bound for an exponential-backoff strategy; actual waits grow up to
+# ``_MAX_POLL_INTERVAL`` (see \`_poll_interval_for_attempt\`).
+_MIN_POLL_INTERVAL = 0.1
+_MAX_POLL_INTERVAL = 5.0
+_POLL_BACKOFF_FACTOR = 1.5
+_POLL_JIT = 0.1  # +/- 10 % jitter to avoid lock-step polling
+_POLL_INTERVAL = _MIN_POLL_INTERVAL
 _WAIT_LOG_INTERVAL = 10.0
 _last_timeout_warning_at: dict[str, float] = {}
+
+
+def _poll_interval_for_attempt(attempt: int) -> float:
+    """Return the poll interval (seconds) for a given wait attempt.
+
+    Bounded exponential backoff with jitter to mitigate the CPU/log
+    saturation caused by the previous fixed-interval polling (issue #3274).
+    ``attempt`` is 1-based (the first wait uses the minimum interval).
+    """
+    import random
+
+    attempt = max(1, attempt)
+    interval = _MIN_POLL_INTERVAL * (_POLL_BACKOFF_FACTOR ** (attempt - 1))
+    interval = min(interval, _MAX_POLL_INTERVAL)
+    jitter = interval * _POLL_JIT * (2 * random.random() - 1)
+    return max(_MIN_POLL_INTERVAL / 2.0, interval + jitter)
+
+
+async def _poll_sleep(attempt: int) -> None:
+    """Sleep for the backoff interval corresponding to ``attempt``."""
+    await asyncio.sleep(_poll_interval_for_attempt(attempt))
 
 
 @dataclass
@@ -496,8 +525,10 @@ class PathLockEngine:
         deadline = asyncio.get_running_loop().time() + timeout
         wait_start = asyncio.get_running_loop().time()
         next_wait_log_at = wait_start + _WAIT_LOG_INTERVAL
+        attempt = 0
 
         while True:
+            attempt += 1
             existing_exact_lock = await self._check_exact_path_lock(path, owner_id)
             if existing_exact_lock:
                 if await self._is_lock_stale_async(existing_exact_lock, self._lock_expire):
@@ -514,7 +545,7 @@ class PathLockEngine:
                         f"(waited={now - wait_start:.1f}s)"
                     )
                     next_wait_log_at = now + _WAIT_LOG_INTERVAL
-                await asyncio.sleep(_POLL_INTERVAL)
+                await _poll_sleep(attempt)
                 continue
 
             same_path_lock = self._get_lock_path(path)
@@ -530,7 +561,7 @@ class PathLockEngine:
                         if asyncio.get_running_loop().time() >= deadline:
                             _log_timeout_waiting(f"[EXACT] Timeout waiting for lock: {path}")
                             return False
-                        await asyncio.sleep(_POLL_INTERVAL)
+                        await _poll_sleep(attempt)
                         continue
 
             ancestor_conflict = await self._check_ancestors_for_tree(path, owner_id)
@@ -553,7 +584,7 @@ class PathLockEngine:
                         f"(path={path}, waited={now - wait_start:.1f}s)"
                     )
                     next_wait_log_at = now + _WAIT_LOG_INTERVAL
-                await asyncio.sleep(_POLL_INTERVAL)
+                await _poll_sleep(attempt)
                 continue
 
             parent = self._get_parent_path(path)
@@ -575,7 +606,7 @@ class PathLockEngine:
                 logger.debug(f"[EXACT] Lost lock write race on: {path}")
                 if asyncio.get_running_loop().time() >= deadline:
                     return False
-                await asyncio.sleep(_POLL_INTERVAL)
+                await _poll_sleep(attempt)
                 continue
 
             conflict_after = await self._check_path_lock(path, owner_id)
@@ -606,7 +637,7 @@ class PathLockEngine:
                         f"(waited={now - wait_start:.1f}s)"
                     )
                     next_wait_log_at = now + _WAIT_LOG_INTERVAL
-                await asyncio.sleep(_POLL_INTERVAL)
+                await _poll_sleep(attempt)
                 continue
 
             if not await self._is_lock_owned_by_async(lock_path, owner_id):
@@ -620,7 +651,7 @@ class PathLockEngine:
                         f"(waited={now - wait_start:.1f}s)"
                     )
                     next_wait_log_at = now + _WAIT_LOG_INTERVAL
-                await asyncio.sleep(_POLL_INTERVAL)
+                await _poll_sleep(attempt)
                 continue
 
             owner.add_lock(lock_path)
@@ -650,8 +681,10 @@ class PathLockEngine:
         deadline = asyncio.get_running_loop().time() + timeout
         wait_start = asyncio.get_running_loop().time()
         next_wait_log_at = wait_start + _WAIT_LOG_INTERVAL
+        attempt = 0
 
         while True:
+            attempt += 1
             if await self._is_locked_by_other(lock_path, owner_id):
                 if await self._is_lock_stale_async(lock_path, self._lock_expire):
                     logger.warning(f"[TREE] Removing stale lock: {lock_path}")
@@ -666,7 +699,7 @@ class PathLockEngine:
                         f"[TREE] Still waiting for lock on: {path} (waited={now - wait_start:.1f}s)"
                     )
                     next_wait_log_at = now + _WAIT_LOG_INTERVAL
-                await asyncio.sleep(_POLL_INTERVAL)
+                await _poll_sleep(attempt)
                 continue
 
             # Check ancestor paths for TREE locks held by other owners
@@ -688,7 +721,7 @@ class PathLockEngine:
                         f"(path={path}, waited={now - wait_start:.1f}s)"
                     )
                     next_wait_log_at = now + _WAIT_LOG_INTERVAL
-                await asyncio.sleep(_POLL_INTERVAL)
+                await _poll_sleep(attempt)
                 continue
 
             exact_conflict = await self._check_exact_path_lock(path, owner_id)
@@ -700,7 +733,7 @@ class PathLockEngine:
                 if asyncio.get_running_loop().time() >= deadline:
                     _log_timeout_waiting(f"[TREE] Timeout waiting for exact lock: {exact_conflict}")
                     return False
-                await asyncio.sleep(_POLL_INTERVAL)
+                await _poll_sleep(attempt)
                 continue
 
             desc_conflict = await self._scan_descendants_for_locks(path, owner_id)
@@ -721,7 +754,7 @@ class PathLockEngine:
                         f"(path={path}, waited={now - wait_start:.1f}s)"
                     )
                     next_wait_log_at = now + _WAIT_LOG_INTERVAL
-                await asyncio.sleep(_POLL_INTERVAL)
+                await _poll_sleep(attempt)
                 continue
 
             if not await self._ensure_directory_exists_async(path):
@@ -763,7 +796,7 @@ class PathLockEngine:
                         f"(waited={now - wait_start:.1f}s)"
                     )
                     next_wait_log_at = now + _WAIT_LOG_INTERVAL
-                await asyncio.sleep(_POLL_INTERVAL)
+                await _poll_sleep(attempt)
                 continue
 
             if not await self._is_lock_owned_by_async(lock_path, owner_id):
@@ -777,7 +810,7 @@ class PathLockEngine:
                         f"(waited={now - wait_start:.1f}s)"
                     )
                     next_wait_log_at = now + _WAIT_LOG_INTERVAL
-                await asyncio.sleep(_POLL_INTERVAL)
+                await _poll_sleep(attempt)
                 continue
 
             owner.add_lock(lock_path)
