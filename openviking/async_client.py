@@ -8,6 +8,7 @@ For HTTP mode, use AsyncHTTPClient or SyncHTTPClient.
 
 from __future__ import annotations
 
+import os
 import threading
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
@@ -63,13 +64,31 @@ class AsyncOpenViking:
             path: Local storage path (overrides ov.conf storage path).
             actor_peer_id: Optional view filter for the current user's peer collection.
             agent_id: Legacy alias for actor_peer_id.
+
+        Raises:
+            ValueError: If a singleton is already live with a different path and
+                the caller requests a new workspace without first calling close() or reset().
         """
         # Singleton guard for repeated initialization
         if hasattr(self, "_singleton_initialized") and self._singleton_initialized:
+            # Reconstructing with the same effective path is fine (no-op).
+            # Constructing with a different path while the singleton is live is an error —
+            # the caller must close() or reset() first.
+            normalized_new = os.path.realpath(path) if path else None
+            normalized_old = os.path.realpath(self._path) if self._path else None
+            if normalized_new != normalized_old:
+                raise ValueError(
+                    f"Only one embedded OpenViking workspace can be live per process. "
+                    f"Requested path '{path}' differs from live workspace '{self._path}'. "
+                    f"Close the existing client with `await client.close()` or "
+                    f"reset the singleton with `await AsyncOpenViking.reset()` before "
+                    f"constructing a new workspace."
+                )
             return
 
         self.user = UserIdentifier.the_default_user()
         self._initialized = False
+        self._path = path  # store for singleton path validation
         self._snapshot: Optional["AsyncSnapshotNamespace"] = None
         # Mark initialized only after LocalClient is successfully constructed.
         self._singleton_initialized = False
