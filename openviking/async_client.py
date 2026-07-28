@@ -74,9 +74,18 @@ class AsyncOpenViking:
             # Reconstructing with the same effective path is fine (no-op).
             # Constructing with a different path while the singleton is live is an error —
             # the caller must close() or reset() first.
-            normalized_new = os.path.realpath(path) if path else None
-            normalized_old = os.path.realpath(self._path) if self._path else None
-            if normalized_new != normalized_old:
+            # Compare effective workspaces resolved by the config, not raw arguments.
+            # LocalClient resolves path=None through the shared config, so we must
+            # compare the resolved workspace paths to handle the implicit/explicit case.
+            if path is not None:
+                requested_workspace = os.path.realpath(path)
+            else:
+                requested_workspace = None
+            if self._path is not None:
+                live_workspace = os.path.realpath(self._path)
+            else:
+                live_workspace = None
+            if requested_workspace != live_workspace:
                 raise ValueError(
                     f"Only one embedded OpenViking workspace can be live per process. "
                     f"Requested path '{path}' differs from live workspace '{self._path}'. "
@@ -88,7 +97,6 @@ class AsyncOpenViking:
 
         self.user = UserIdentifier.the_default_user()
         self._initialized = False
-        self._path = path  # store for singleton path validation
         self._snapshot: Optional["AsyncSnapshotNamespace"] = None
         # Mark initialized only after LocalClient is successfully constructed.
         self._singleton_initialized = False
@@ -98,6 +106,11 @@ class AsyncOpenViking:
             actor_peer_id=actor_peer_id,
             agent_id=agent_id,
         )
+        # Store the effective workspace path resolved by LocalClient's config,
+        # not the raw constructor argument. This handles path=None correctly
+        # (it resolves to the config's default workspace) and ensures implicit
+        # and explicit forms of the same path compare equal.
+        self._path = self._client._service._config.storage.workspace
         self._singleton_initialized = True
 
     # ============= Lifecycle methods =============

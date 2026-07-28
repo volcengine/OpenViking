@@ -44,7 +44,11 @@ class TestAsyncOpenVikingSingletonPath:
             assert workspace_a in str(exc_info.value)
 
     async def test_different_path_after_close_is_allowed(self, clean_singleton):
-        """After close(), a different workspace can be constructed."""
+        """After close(), a different workspace can be constructed.
+
+        close() leaves the singleton instance in place (__new__ returns the same
+        object, __init__ reconfigures it). The effective workspace must change.
+        """
         with tempfile.TemporaryDirectory() as root:
             workspace_a = os.path.join(root, "a")
             workspace_b = os.path.join(root, "b")
@@ -53,7 +57,10 @@ class TestAsyncOpenVikingSingletonPath:
             await client_a.close()
 
             client_b = AsyncOpenViking(path=workspace_b)
-            assert client_b is not client_a
+            # Singleton instance is reused; only the effective workspace changes
+            assert client_b is client_a
+            assert client_b._path == workspace_b
+            assert client_a._path == workspace_b
 
     async def test_different_path_after_reset_is_allowed(self, clean_singleton):
         """After reset(), a different workspace can be constructed."""
