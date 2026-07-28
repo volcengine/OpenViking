@@ -89,6 +89,135 @@ def test_get_resource_content_type_keeps_ts_as_text():
     assert embedding_utils.get_resource_content_type("source.ts") == ResourceContentType.TEXT
 
 
+@pytest.mark.parametrize(
+    ("file_name", "text_source", "use_summary", "requires_summary"),
+    [
+        ("notes.md", "content_only", False, False),
+        ("notes.md", "summary_first", False, True),
+        ("notes.md", "summary_only", False, True),
+        ("notes.md", "content_only", True, True),
+        ("photo.png", "content_only", False, True),
+        ("recording.mp3", "content_only", False, True),
+        ("archive.unknown", "content_only", False, True),
+    ],
+)
+def test_resolve_leaf_vectorization_plan_preserves_text_source_semantics(
+    file_name, text_source, use_summary, requires_summary
+):
+    plan = embedding_utils.resolve_leaf_vectorization_plan(
+        file_name,
+        text_source=text_source,
+        use_summary=use_summary,
+    )
+
+    assert plan.requires_summary is requires_summary
+
+
+@pytest.mark.asyncio
+async def test_enqueue_file_metadata_patch_builds_non_leaf_tracker_operation(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+
+    enqueued = await embedding_utils.enqueue_file_metadata_patch(
+        file_path="viking://resources/a.md",
+        summary="generated summary",
+        ctx=DummyReq(),
+        semantic_msg_id="semantic-1",
+    )
+
+    assert enqueued is True
+    assert len(queue.items) == 1
+    msg = queue.items[0]
+    assert msg.operation == "metadata_patch"
+    assert msg.message == ""
+    assert msg.context_data == {
+        "uri": "viking://resources/a.md",
+        "account_id": "default",
+        "level": 2,
+        "is_leaf": False,
+        "abstract": "generated summary",
+    }
+    assert msg.semantic_msg_id == "semantic-1"
+
+
+@pytest.mark.asyncio
+async def test_enqueue_file_metadata_patch_skips_empty_summary(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+
+    enqueued = await embedding_utils.enqueue_file_metadata_patch(
+        file_path="viking://resources/a.md",
+        summary="",
+        ctx=DummyReq(),
+        semantic_msg_id="semantic-1",
+    )
+
+    assert enqueued is False
+    assert queue.items == []
+
+
+@pytest.mark.asyncio
+async def test_vectorize_file_reports_leaf_error_when_content_cannot_be_read(monkeypatch):
+    class UnreadableFS(DummyFS):
+        async def read_file(self, _path, ctx=None):
+            raise OSError("unreadable")
+
+    class RequestTracker:
+        def __init__(self):
+            self.errors = []
+
+        def record_embedding_error(self, telemetry_id, message, *, is_leaf=False):
+            self.errors.append((telemetry_id, message, is_leaf))
+
+    queue = DummyQueue()
+    request_tracker = RequestTracker()
+    decrements = []
+
+    async def _decrement(semantic_msg_id, count, *, is_leaf=False):
+        decrements.append((semantic_msg_id, count, is_leaf))
+
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: UnreadableFS(""))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
+        ),
+    )
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_current_telemetry",
+        lambda: types.SimpleNamespace(telemetry_id="tm-1"),
+    )
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_request_wait_tracker",
+        lambda: request_tracker,
+        raising=False,
+    )
+    monkeypatch.setattr(embedding_utils, "_decrement_embedding_tracker", _decrement)
+
+    result = await embedding_utils.vectorize_file(
+        file_path="viking://resources/unreadable.md",
+        summary_dict={"name": "unreadable.md", "summary": ""},
+        parent_uri="viking://resources",
+        ctx=DummyReq(),
+        semantic_msg_id="semantic-1",
+    )
+
+    assert result is False
+    assert queue.items == []
+    assert decrements == [("semantic-1", 1, True)]
+    assert request_tracker.errors == [
+        (
+            "tm-1",
+            "Failed to enqueue leaf embedding for viking://resources/unreadable.md",
+            True,
+        )
+    ]
+
+
 @pytest.mark.asyncio
 async def test_vectorize_file_uses_summary_first(monkeypatch):
     queue = DummyQueue()
@@ -117,6 +246,43 @@ async def test_vectorize_file_uses_summary_first(monkeypatch):
     assert len(queue.items) == 1
     assert isinstance(queue.items[0], Context)
     assert queue.items[0].get_vectorization_text() == "short summary"
+
+
+@pytest.mark.asyncio
+async def test_vectorize_file_consumes_shared_leaf_plan(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("raw content"))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
+        ),
+    )
+    monkeypatch.setattr(
+        embedding_utils,
+        "resolve_leaf_vectorization_plan",
+        lambda *_args, **_kwargs: embedding_utils.LeafVectorizationPlan(
+            requires_summary=True,
+            effective_text_source="summary_only",
+            reason="test",
+        ),
+    )
+    monkeypatch.setattr(
+        embedding_utils.EmbeddingMsgConverter,
+        "from_context",
+        lambda context: context,
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/test.md",
+        summary_dict={"name": "test.md", "summary": "summary selected by plan"},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+    )
+
+    assert queue.items[0].get_vectorization_text() == "summary selected by plan"
 
 
 @pytest.mark.asyncio

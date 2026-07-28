@@ -455,9 +455,16 @@ class ResourceService:
                 summarize=msg.summarize,
                 build_index=msg.build_index,
             )
+
+            async def _on_leaf_indexed() -> None:
+                stage_result = stage_callback("leaf_indexed")
+                if inspect.isawaitable(stage_result):
+                    await stage_result
+
             await request_wait_tracker.wait_for_request(
                 telemetry_id,
                 timeout=msg.timeout,
+                on_leaf_indexed=_on_leaf_indexed,
             )
             status = request_wait_tracker.build_queue_status(telemetry_id)
             result["queue_status"] = status
@@ -1192,10 +1199,19 @@ class ResourceService:
                 try:
                     with telemetry.measure("resource.wait"):
                         if telemetry_id:
+                            on_leaf_indexed = None
+                            if stage_callback is not None:
+
+                                async def on_leaf_indexed() -> None:
+                                    stage_result = stage_callback("leaf_indexed")
+                                    if inspect.isawaitable(stage_result):
+                                        await stage_result
+
                             await request_wait_tracker.wait_for_request(
                                 telemetry_id,
                                 timeout=timeout,
                                 poll_interval=0.05,
+                                on_leaf_indexed=on_leaf_indexed,
                             )
                             status = request_wait_tracker.build_queue_status(telemetry_id)
                         else:

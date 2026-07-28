@@ -94,7 +94,7 @@ ov task status uuid-xxx
 }
 ```
 
-`stage` is nullable. Git repository resource import tasks may report `queued`, `fetching`, `parsing`, `finalizing`, or `processing_queue`; other task types may leave it as `null`. Live queue counters are intentionally not part of task status; use observer queue APIs for live counts, or read `result.queue_status` after completion.
+`stage` is nullable. Resource import tasks may report `queued`, `fetching`, `parsing`, `finalizing`, `processing_queue`, or `leaf_indexed`. For an `add_resource` task, `leaf_indexed` means every leaf file discovered by that task has been written to the vector index; directory summaries and directory indexes may still be processing, so the task remains `running`. Once reported, this milestone is retained until the task becomes `completed` or `failed`, allowing callers to stop polling when leaf retrieval is sufficient. Other task types may leave `stage` as `null`. Live queue counters are intentionally not part of task status; use observer queue APIs for live counts, or read `result.queue_status` after completion.
 
 **Response Example (completed)**
 

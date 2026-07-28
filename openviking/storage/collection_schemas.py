@@ -207,8 +207,7 @@ def _embedding_metadata_compatible(
     if existing_meta is None:
         return False
     return all(
-        existing_meta.get(key) == current_meta.get(key)
-        for key in _EMBEDDING_COMPATIBILITY_KEYS
+        existing_meta.get(key) == current_meta.get(key) for key in _EMBEDDING_COMPATIBILITY_KEYS
     )
 
 
@@ -437,6 +436,11 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         config = get_openviking_config()
         self._collection_name = config.storage.vectordb.name
         self._vector_dim = config.embedding.dimension
+        self._max_retries = getattr(config.embedding, "max_retries", 3)
+        # Metadata patches can overtake their original embed under concurrent
+        # consumers. Keep this ordering retry separate from provider retries.
+        self._metadata_patch_max_retries = max(self._max_retries, 60)
+        self._metadata_patch_retry_delay = 0.5
         self._initialize_embedder(config)
         breaker_cfg = config.embedding.circuit_breaker
         self._circuit_breaker = CircuitBreaker(
@@ -545,6 +549,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         report_success = False
         report_error_args: Optional[tuple[str, Optional[Dict[str, Any]]]] = None
         request_failed_message: Optional[str] = None
+        tracker_attempt_terminal = True
         try:
             queue_data = json.loads(data["data"])
             # Parse EmbeddingMsg from data
@@ -556,20 +561,106 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             with telemetry_ctx:
                 if self._vikingdb.is_closing:
                     logger.debug("Skip embedding dequeue during shutdown")
+                    tracker_attempt_terminal = False
+                    raise asyncio.CancelledError
+
+                if embedding_msg.operation == "metadata_patch":
+                    uri = inserted_data.get("uri")
+                    account_id = inserted_data.get("account_id", "default")
+                    seed_uri = self._seed_uri_for_id(uri, inserted_data.get("level", 2))
+                    record_id = hashlib.md5(f"{account_id}:{seed_uri}".encode("utf-8")).hexdigest()
+                    user = UserIdentifier(account_id=account_id, user_id="default")
+                    ctx = RequestContext(user=user, role=Role.ROOT)
+                    existing_records = await self._vikingdb.get([record_id], ctx=ctx)
+                    if not existing_records:
+                        if embedding_msg.retry_count < self._metadata_patch_max_retries and getattr(
+                            self._vikingdb, "has_queue_manager", False
+                        ):
+                            if self._metadata_patch_retry_delay > 0:
+                                await asyncio.sleep(self._metadata_patch_retry_delay)
+                            embedding_msg.retry_count += 1
+                            requeued = await self._vikingdb.enqueue_embedding_msg(embedding_msg)
+                            if requeued:
+                                tracker_attempt_terminal = False
+                                self._merge_request_stats(
+                                    embedding_msg.telemetry_id,
+                                    requeue_count=1,
+                                )
+                                get_request_wait_tracker().record_embedding_requeue(
+                                    embedding_msg.telemetry_id
+                                )
+                                self.report_requeue()
+                                report_success = True
+                                return None
+
+                            error_msg = self._embedding_error_msg(
+                                embedding_msg,
+                                "Failed to persist metadata patch retry",
+                            )
+                            self._merge_request_stats(
+                                embedding_msg.telemetry_id,
+                                error_count=1,
+                            )
+                            request_failed_message = error_msg
+                            report_error_args = (error_msg, data)
+                            return None
+
+                        error_msg = self._embedding_error_msg(
+                            embedding_msg,
+                            "Metadata patch target is not indexed",
+                        )
+                        self._merge_request_stats(
+                            embedding_msg.telemetry_id,
+                            error_count=1,
+                        )
+                        request_failed_message = error_msg
+                        report_error_args = (error_msg, data)
+                        return None
+
+                    patch_data = {
+                        "id": record_id,
+                        "uri": uri,
+                        "account_id": account_id,
+                        "abstract": inserted_data.get("abstract", ""),
+                    }
+                    patch_result = await self._vikingdb.upsert(
+                        patch_data,
+                        ctx=ctx,
+                        partial_update=True,
+                    )
+                    if not patch_result:
+                        error_msg = self._embedding_error_msg(
+                            embedding_msg,
+                            "Metadata patch did not update a record",
+                        )
+                        self._merge_request_stats(
+                            embedding_msg.telemetry_id,
+                            error_count=1,
+                        )
+                        request_failed_message = error_msg
+                        report_error_args = (error_msg, data)
+                        return None
+
                     self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
                     self._record_request_success(embedding_msg)
                     report_success = True
-                    return None
+                    patch_data["id"] = patch_result
+                    return patch_data
 
                 # Process string (text) or list (multimodal) messages
                 if not isinstance(embedding_msg.message, (str, list)):
-                    logger.debug(
-                        f"Skipping unsupported message type: {type(embedding_msg.message)}"
+                    error_msg = self._embedding_error_msg(
+                        embedding_msg,
+                        f"Unsupported embedding message type: {type(embedding_msg.message)}",
                     )
-                    self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
-                    self._record_request_success(embedding_msg)
-                    report_success = True
-                    return data
+                    logger.error(error_msg)
+                    self._merge_request_stats(
+                        embedding_msg.telemetry_id,
+                        error_count=1,
+                    )
+                    request_failed_message = error_msg
+                    report_error_args = (error_msg, data)
+                    return None
 
                 # Circuit breaker: if API is known-broken, re-enqueue and wait
                 try:
@@ -582,16 +673,29 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         wait = self._circuit_breaker.retry_after
                         if wait > 0:
                             await asyncio.sleep(wait)
-                        await self._vikingdb.enqueue_embedding_msg(embedding_msg)
+                        requeued = await self._vikingdb.enqueue_embedding_msg(embedding_msg)
+                        if requeued:
+                            tracker_attempt_terminal = False
+                            self._merge_request_stats(
+                                embedding_msg.telemetry_id,
+                                requeue_count=1,
+                            )
+                            get_request_wait_tracker().record_embedding_requeue(
+                                embedding_msg.telemetry_id
+                            )
+                            self.report_requeue()
+                            report_success = True
+                            return None
+                        error_msg = self._embedding_error_msg(
+                            embedding_msg,
+                            "Circuit breaker retry could not be persisted",
+                        )
                         self._merge_request_stats(
                             embedding_msg.telemetry_id,
-                            requeue_count=1,
+                            error_count=1,
                         )
-                        get_request_wait_tracker().record_embedding_requeue(
-                            embedding_msg.telemetry_id
-                        )
-                        self.report_requeue()
-                        report_success = True
+                        request_failed_message = error_msg
+                        report_error_args = (error_msg, data)
                         return None
                     # No queue manager — cannot re-enqueue, drop with error
                     error_msg = self._embedding_error_msg(
@@ -677,7 +781,10 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         self._circuit_breaker.record_failure(embed_err)
                         if getattr(self._vikingdb, "has_queue_manager", False):
                             try:
-                                await self._vikingdb.enqueue_embedding_msg(embedding_msg)
+                                requeued = await self._vikingdb.enqueue_embedding_msg(embedding_msg)
+                                if not requeued:
+                                    raise RuntimeError("embedding retry could not be persisted")
+                                tracker_attempt_terminal = False
                                 self._merge_request_stats(
                                     embedding_msg.telemetry_id,
                                     requeue_count=1,
@@ -769,14 +876,25 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         logger.debug(
                             f"Successfully wrote embedding to database: {record_id} abstract {inserted_data['abstract']} vector {inserted_data['vector'][:5]}"
                         )
+                    else:
+                        error_msg = self._embedding_error_msg(
+                            embedding_msg,
+                            "Vector database write did not persist a record",
+                        )
+                        logger.error(error_msg)
+                        self._merge_request_stats(
+                            embedding_msg.telemetry_id,
+                            error_count=1,
+                        )
+                        request_failed_message = error_msg
+                        report_error_args = (error_msg, data)
+                        return None
                 except CollectionNotFoundError as db_err:
                     # During shutdown, queue workers may finish one dequeued item.
                     if self._vikingdb.is_closing:
                         logger.debug(f"Skip embedding write during shutdown: {db_err}")
-                        self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
-                        self._record_request_success(embedding_msg)
-                        report_success = True
-                        return None
+                        tracker_attempt_terminal = False
+                        raise asyncio.CancelledError
                     error_msg = self._embedding_error_msg(
                         embedding_msg,
                         f"Failed to write to vector database: {db_err}",
@@ -789,10 +907,8 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 except Exception as db_err:
                     if self._vikingdb.is_closing:
                         logger.debug(f"Skip embedding write during shutdown: {db_err}")
-                        self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
-                        self._record_request_success(embedding_msg)
-                        report_success = True
-                        return None
+                        tracker_attempt_terminal = False
+                        raise asyncio.CancelledError
                     error_msg = self._embedding_error_msg(
                         embedding_msg,
                         f"Failed to write to vector database: {db_err}",
@@ -829,12 +945,18 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         finally:
             if embedding_msg is not None and request_failed_message is not None:
                 self._record_request_failure(embedding_msg, request_failed_message)
-            if embedding_msg and embedding_msg.semantic_msg_id:
+            if tracker_attempt_terminal and embedding_msg and embedding_msg.semantic_msg_id:
                 from openviking.storage.queuefs.embedding_tracker import EmbeddingTaskTracker
 
                 tracker = EmbeddingTaskTracker.get_instance()
                 try:
-                    await tracker.decrement(embedding_msg.semantic_msg_id)
+                    await tracker.decrement(
+                        embedding_msg.semantic_msg_id,
+                        is_leaf=bool(
+                            embedding_msg.operation == "embed"
+                            and embedding_msg.context_data.get("is_leaf", False)
+                        ),
+                    )
                 except Exception as tracker_err:
                     logger.warning(f"Failed to decrement embedding tracker: {tracker_err}")
             if report_error_args is not None:
@@ -854,6 +976,13 @@ class TextEmbeddingHandler(DequeueHandlerBase):
     def _record_request_failure(embedding_msg: EmbeddingMsg, message: str) -> None:
         tracker = get_request_wait_tracker()
         if embedding_msg.semantic_msg_id:
-            tracker.record_embedding_error(embedding_msg.telemetry_id, message)
+            tracker.record_embedding_error(
+                embedding_msg.telemetry_id,
+                message,
+                is_leaf=bool(
+                    embedding_msg.operation == "embed"
+                    and embedding_msg.context_data.get("is_leaf", False)
+                ),
+            )
         else:
             tracker.mark_embedding_failed(embedding_msg.telemetry_id, embedding_msg.id, message)

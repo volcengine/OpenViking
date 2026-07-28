@@ -6,6 +6,7 @@ import asyncio
 import threading
 from dataclasses import dataclass, field
 from typing import ClassVar, Dict, List, Optional, Set
+from uuid import uuid4
 from weakref import WeakKeyDictionary
 
 from openviking.server.identity import RequestContext
@@ -13,6 +14,7 @@ from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
 from openviking.storage.transaction import NO_LOCK, LockLease
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+from openviking.utils.embedding_utils import resolve_leaf_vectorization_plan
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.logger import get_logger
 
@@ -63,6 +65,7 @@ class VectorizeTask:
     summary_dict: Optional[Dict[str, str]] = None
     parent_uri: Optional[str] = None
     use_summary: bool = False
+    record_failure: bool = True
     # For directory tasks
     abstract: Optional[str] = None
     overview: Optional[str] = None
@@ -180,6 +183,7 @@ class SemanticDagExecutor:
         self._incremental_update = incremental_update
         self._target_uri = target_uri
         self._semantic_msg_id = semantic_msg_id
+        self._embedding_tracker_id = f"{semantic_msg_id}:{uuid4().hex}" if semantic_msg_id else None
         self._telemetry_id = telemetry_id
         self._recursive = recursive
         self._lock = lock
@@ -203,11 +207,16 @@ class SemanticDagExecutor:
         self._closed = False
         self._failure: Optional[Exception] = None
         self._stats = DagStats()
-        self._vectorize_task_count: int = 0
-        self._pending_vectorize_tasks: List[VectorizeTask] = []
+        self._embedding_tracker: Optional["EmbeddingTaskTracker"] = None
         self._pending_vectorize_work = 0
         self._vectorize_done: Optional[asyncio.Event] = None
         self._vectorize_lock = asyncio.Lock()
+        self._pending_dir_discovery = 0
+        self._pending_leaf_registration = 0
+        self._registered_leaf_paths: Set[str] = set()
+        self._leaf_sealed = False
+        self._leaf_embeddings_terminal = False
+        self._pending_metadata_patches: List[tuple[str, str]] = []
         self._file_change_status: Dict[str, bool] = {}
         self._dir_change_status: Dict[str, bool] = {}
         self._overview_cache: Dict[str, Dict[str, str]] = {}
@@ -217,49 +226,77 @@ class SemanticDagExecutor:
         """Run DAG execution starting from root_uri."""
         self._root_uri = root_uri
         self._root_done = asyncio.Event()
+        self._vectorize_done = asyncio.Event()
         self._scheduler = get_semantic_node_scheduler(self._node_concurrency)
+
+        # Release owned semantic locks after downstream vectorization finishes.
+        async def wrapped_on_complete() -> None:
+            try:
+                if self._telemetry_id and self._semantic_msg_id:
+                    get_request_wait_tracker().mark_semantic_done(
+                        self._telemetry_id, self._semantic_msg_id
+                    )
+            finally:
+                await self._lock.close()
+
+        async def wrapped_on_leaf_complete() -> None:
+            self._leaf_embeddings_terminal = True
+            pending_patches = self._pending_metadata_patches
+            self._pending_metadata_patches = []
+            leaf_failed = bool(
+                self._telemetry_id
+                and get_request_wait_tracker().has_leaf_embedding_errors(self._telemetry_id)
+            )
+            if self._telemetry_id and self._semantic_msg_id:
+                get_request_wait_tracker().mark_semantic_leaf_done(
+                    self._telemetry_id, self._semantic_msg_id
+                )
+            for file_path, summary in pending_patches:
+                if leaf_failed:
+                    await self._discard_registered_metadata_patch()
+                else:
+                    await self._enqueue_registered_metadata_patch(file_path, summary)
 
         try:
             self._register_active()
+            if not self._skip_vectorization and self._embedding_tracker_id:
+                from .embedding_tracker import EmbeddingTaskTracker
+
+                self._embedding_tracker = EmbeddingTaskTracker.get_instance()
+                await self._embedding_tracker.register_open(
+                    semantic_msg_id=self._embedding_tracker_id,
+                    on_complete=wrapped_on_complete,
+                    on_leaf_complete=wrapped_on_leaf_complete,
+                    metadata={
+                        "uri": root_uri,
+                        "semantic_msg_id": self._semantic_msg_id,
+                    },
+                )
+
             self._schedule_dir(root_uri, parent_uri=None)
             await self._root_done.wait()
             if self._failure:
                 raise self._failure
 
-            # Release owned semantic locks after downstream vectorization finishes.
-            async def wrapped_on_complete() -> None:
-                try:
-                    if self._telemetry_id and self._semantic_msg_id:
-                        get_request_wait_tracker().mark_semantic_done(
-                            self._telemetry_id, self._semantic_msg_id
-                        )
-                finally:
-                    await self._lock.close()
-
             async with self._vectorize_lock:
-                task_count = self._vectorize_task_count
-                tasks = list(self._pending_vectorize_tasks)
+                pending_vectorize_work = self._pending_vectorize_work
+            if pending_vectorize_work > 0:
+                await self._vectorize_done.wait()
 
-            if task_count > 0:
-                from .embedding_tracker import EmbeddingTaskTracker
-
-                tracker = EmbeddingTaskTracker.get_instance()
-                await tracker.register(
-                    semantic_msg_id=self._semantic_msg_id,
-                    total_count=task_count,
-                    on_complete=wrapped_on_complete,
-                    metadata={"uri": root_uri},
-                )
-
-                await self._dispatch_vectorize_tasks(tasks)
+            if self._embedding_tracker is not None and self._embedding_tracker_id is not None:
+                await self._embedding_tracker.seal(self._embedding_tracker_id)
             else:
-                # No vectorize tasks — release lock immediately (via wrapped callback)
                 try:
                     await wrapped_on_complete()
                 except Exception as e:
                     logger.error(f"Error in on_complete callback: {e}", exc_info=True)
         except BaseException:
             self._closed = True
+            if self._embedding_tracker is not None and self._embedding_tracker_id is not None:
+                try:
+                    await self._embedding_tracker.discard(self._embedding_tracker_id)
+                except Exception:
+                    pass
             try:
                 await self._lock.close()
             except Exception:
@@ -279,6 +316,7 @@ class SemanticDagExecutor:
     def _schedule_dir(self, dir_uri: str, parent_uri: Optional[str]) -> None:
         if self._closed:
             return
+        self._pending_dir_discovery += 1
         self._stats.total_nodes += 1
         self._stats.pending_nodes += 1
         self._schedule_work(DagWork(kind="dir", dir_uri=dir_uri, parent_uri=parent_uri))
@@ -286,6 +324,7 @@ class SemanticDagExecutor:
     def _schedule_file(self, parent_uri: str, file_path: str) -> None:
         if self._closed:
             return
+        self._pending_leaf_registration += 1
         self._stats.total_nodes += 1
         self._stats.pending_nodes += 1
         self._schedule_work(DagWork(kind="file", dir_uri=parent_uri, file_path=file_path))
@@ -356,13 +395,18 @@ class SemanticDagExecutor:
                     self._mark_node_done()
                 else:
                     self._mark_node_waiting()
+                await self._finish_dir_discovery()
             return
 
         if work.kind == "file":
             if work.file_path is None:
                 self._mark_node_done()
+                await self._finish_leaf_registration("")
                 return
-            await self._file_summary_task(work.dir_uri, work.file_path)
+            try:
+                await self._file_summary_task(work.dir_uri, work.file_path)
+            finally:
+                await self._finish_leaf_registration(work.file_path)
             return
 
         if work.kind == "overview":
@@ -372,23 +416,33 @@ class SemanticDagExecutor:
         self._mark_node_done()
         logger.warning("Unknown semantic DAG work kind: %s", work.kind)
 
-    async def _dispatch_vectorize_tasks(self, tasks: List[VectorizeTask]) -> None:
-        self._vectorize_done = asyncio.Event()
-        self._pending_vectorize_work = len(tasks)
-        for task in tasks:
-            self._schedule_work(
-                DagWork(
-                    kind="vectorize",
-                    dir_uri=task.uri,
-                    vectorize_task=task,
-                )
-            )
-        await self._vectorize_done.wait()
+    async def _finish_dir_discovery(self) -> None:
+        self._pending_dir_discovery = max(0, self._pending_dir_discovery - 1)
+        await self._maybe_seal_leaf()
+
+    async def _finish_leaf_registration(self, file_path: str) -> None:
+        if file_path in self._registered_leaf_paths:
+            return
+        self._registered_leaf_paths.add(file_path)
+        self._pending_leaf_registration = max(0, self._pending_leaf_registration - 1)
+        await self._maybe_seal_leaf()
+
+    async def _maybe_seal_leaf(self) -> None:
+        if (
+            self._leaf_sealed
+            or self._failure is not None
+            or self._pending_dir_discovery > 0
+            or self._pending_leaf_registration > 0
+        ):
+            return
+        self._leaf_sealed = True
+        if self._embedding_tracker is not None and self._embedding_tracker_id is not None:
+            await self._embedding_tracker.seal_leaf(self._embedding_tracker_id)
 
     async def _run_vectorize_work(self, task: Optional[VectorizeTask]) -> None:
         try:
             if task is not None:
-                await self._run_vectorize_task(task)
+                await self._run_vectorize_with_telemetry(task)
         except Exception as exc:
             logger.error("Vectorization dispatch task failed: %s", exc, exc_info=True)
         finally:
@@ -396,9 +450,9 @@ class SemanticDagExecutor:
             if self._pending_vectorize_work == 0 and self._vectorize_done:
                 self._vectorize_done.set()
 
-    async def _run_vectorize_task(self, task: VectorizeTask) -> None:
+    async def _run_vectorize_task(self, task: VectorizeTask) -> bool:
         if task.task_type == "file":
-            await self._processor._vectorize_single_file(
+            return await self._processor._vectorize_single_file(
                 parent_uri=task.parent_uri,
                 context_type=task.context_type,
                 file_path=task.file_path,
@@ -406,8 +460,8 @@ class SemanticDagExecutor:
                 ctx=task.ctx,
                 semantic_msg_id=task.semantic_msg_id,
                 use_summary=task.use_summary,
+                record_failure=task.record_failure,
             )
-            return
 
         await self._processor._vectorize_directory(
             task.uri,
@@ -417,6 +471,25 @@ class SemanticDagExecutor:
             ctx=task.ctx,
             semantic_msg_id=task.semantic_msg_id,
         )
+        return True
+
+    async def _run_vectorize_with_telemetry(self, task: VectorizeTask) -> bool:
+        if not self._telemetry_id:
+            return await self._run_vectorize_task(task)
+
+        from openviking.telemetry import bind_telemetry, resolve_telemetry
+
+        telemetry = resolve_telemetry(self._telemetry_id)
+        if telemetry is None:
+            from openviking.telemetry.operation import OperationTelemetry
+
+            telemetry = OperationTelemetry(
+                operation="semantic_vectorize",
+                enabled=False,
+            )
+            telemetry.telemetry_id = self._telemetry_id
+        with bind_telemetry(telemetry):
+            return await self._run_vectorize_task(task)
 
     async def _dispatch_dir(self, dir_uri: str, parent_uri: Optional[str]) -> bool:
         """Lazy-dispatch tasks for a directory when it is triggered."""
@@ -461,10 +534,7 @@ class SemanticDagExecutor:
             return False
         except Exception as e:
             logger.error(f"Failed to dispatch directory {dir_uri}: {e}", exc_info=True)
-            if parent_uri:
-                await self._on_child_done(parent_uri, dir_uri, "")
-            elif self._root_done:
-                self._root_done.set()
+            self.fail(e)
             return True
 
     async def _list_dir(self, uri: str, from_hint: str) -> tuple[list[str], list[str]]:
@@ -475,7 +545,7 @@ class SemanticDagExecutor:
             logger.warning(
                 f"[SemanticDagExecutor] Failed to list directory {uri}: {e} from {from_hint}"
             )
-            return [], []
+            raise
 
         children_dirs: List[str] = []
         file_paths: List[str] = []
@@ -653,6 +723,7 @@ class SemanticDagExecutor:
 
         file_name = file_path.split("/")[-1]
         need_vectorize = True
+        embedding_first = False
         try:
             summary_dict = None
             if self._incremental_update:
@@ -667,6 +738,31 @@ class SemanticDagExecutor:
                         self._file_change_status[file_path] = True
             else:
                 self._file_change_status[file_path] = True
+
+            use_summary = self._is_code_repo
+            plan = resolve_leaf_vectorization_plan(
+                file_name,
+                use_summary=use_summary,
+            )
+            embedding_first = need_vectorize and not plan.requires_summary
+            if embedding_first:
+                task = VectorizeTask(
+                    task_type="file",
+                    uri=file_path,
+                    context_type=self._context_type,
+                    ctx=self._ctx,
+                    semantic_msg_id=self._embedding_tracker_id,
+                    file_path=file_path,
+                    summary_dict={"name": file_name, "summary": ""},
+                    parent_uri=parent_uri,
+                    record_failure=False,
+                )
+                embedding_first = await self._dispatch_vectorize_task(task)
+                if embedding_first:
+                    await self._finish_leaf_registration(file_path)
+            elif not need_vectorize:
+                await self._finish_leaf_registration(file_path)
+
             if summary_dict is None:
                 summary_dict = await self._processor._generate_single_file_summary(
                     file_path, llm_sem=self._llm_sem, ctx=self._ctx
@@ -679,23 +775,110 @@ class SemanticDagExecutor:
             self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - 1)
 
         try:
-            if need_vectorize:
+            if need_vectorize and not embedding_first:
                 use_summary = self._is_code_repo and bool(summary_dict.get("summary"))
                 task = VectorizeTask(
                     task_type="file",
                     uri=file_path,
                     context_type=self._context_type,
                     ctx=self._ctx,
-                    semantic_msg_id=self._semantic_msg_id,
+                    semantic_msg_id=self._embedding_tracker_id,
                     file_path=file_path,
                     summary_dict=summary_dict,
                     parent_uri=parent_uri,
                     use_summary=use_summary,
                 )
                 await self._add_vectorize_task(task)
+                await self._finish_leaf_registration(file_path)
+            elif embedding_first and summary_dict.get("summary"):
+                await self._add_metadata_patch(file_path, summary_dict["summary"])
         except Exception as e:
             logger.error(f"Failed to schedule vectorization for {file_path}: {e}", exc_info=True)
         await self._on_file_done(parent_uri, file_path, summary_dict)
+
+    async def _add_metadata_patch(self, file_path: str, summary: str) -> None:
+        if self._embedding_tracker is not None and self._embedding_tracker_id is not None:
+            await self._embedding_tracker.add(
+                self._embedding_tracker_id,
+                count=1,
+                leaf_count=0,
+            )
+        else:
+            return
+
+        if not self._leaf_embeddings_terminal:
+            self._pending_metadata_patches.append((file_path, summary))
+            return
+
+        if self._telemetry_id and get_request_wait_tracker().has_leaf_embedding_errors(
+            self._telemetry_id
+        ):
+            await self._discard_registered_metadata_patch()
+            return
+
+        await self._enqueue_registered_metadata_patch(file_path, summary)
+
+    async def _discard_registered_metadata_patch(self) -> None:
+        if self._embedding_tracker is not None and self._embedding_tracker_id is not None:
+            await self._embedding_tracker.decrement(
+                self._embedding_tracker_id,
+                is_leaf=False,
+            )
+
+    async def _enqueue_registered_metadata_patch(self, file_path: str, summary: str) -> None:
+        tracker = self._embedding_tracker
+        semantic_msg_id = self._embedding_tracker_id
+        if tracker is None or semantic_msg_id is None:
+            return
+
+        try:
+            if self._telemetry_id:
+                from openviking.telemetry import bind_telemetry, resolve_telemetry
+                from openviking.telemetry.operation import OperationTelemetry
+
+                telemetry = resolve_telemetry(self._telemetry_id)
+                if telemetry is None:
+                    telemetry = OperationTelemetry(
+                        operation="semantic_metadata_patch",
+                        enabled=False,
+                    )
+                    telemetry.telemetry_id = self._telemetry_id
+                with bind_telemetry(telemetry):
+                    enqueued = await self._processor._patch_file_summary(
+                        file_path=file_path,
+                        summary=summary,
+                        ctx=self._ctx,
+                        semantic_msg_id=semantic_msg_id,
+                    )
+            else:
+                enqueued = await self._processor._patch_file_summary(
+                    file_path=file_path,
+                    summary=summary,
+                    ctx=self._ctx,
+                    semantic_msg_id=semantic_msg_id,
+                )
+        except Exception as exc:
+            logger.error(
+                "Failed to enqueue metadata patch for %s: %s",
+                file_path,
+                exc,
+                exc_info=True,
+            )
+            enqueued = False
+
+        if enqueued:
+            return
+
+        if self._telemetry_id:
+            get_request_wait_tracker().record_embedding_error(
+                self._telemetry_id,
+                f"Failed to enqueue metadata patch for {file_path}",
+                is_leaf=False,
+            )
+        await tracker.decrement(
+            semantic_msg_id,
+            is_leaf=False,
+        )
 
     async def _on_file_done(
         self, parent_uri: str, file_path: str, summary_dict: Dict[str, str]
@@ -792,10 +975,9 @@ class SemanticDagExecutor:
             return
         need_vectorize = True
         children_changed = True
-        abstract = ""
+        overview: Optional[str] = None
+        abstract: Optional[str] = None
         try:
-            overview = None
-            abstract = None
             if self._incremental_update:
                 children_changed = await self._check_dir_children_changed(
                     dir_uri, node.file_paths, node.children_dirs
@@ -829,7 +1011,7 @@ class SemanticDagExecutor:
                         uri=dir_uri,
                         context_type=self._context_type,
                         ctx=self._ctx,
-                        semantic_msg_id=self._semantic_msg_id,
+                        semantic_msg_id=self._embedding_tracker_id,
                         abstract=abstract,
                         overview=overview,
                     )
@@ -852,23 +1034,50 @@ class SemanticDagExecutor:
                 self._root_done.set()
             return
 
-        await self._on_child_done(parent_uri, dir_uri, abstract)
+        await self._on_child_done(parent_uri, dir_uri, abstract or "")
         self._release_dir_node(dir_uri)
 
     async def _add_vectorize_task(self, task: VectorizeTask) -> None:
-        """Add a vectorize task to the pending list."""
+        """Register and immediately dispatch a newly discovered vectorize task."""
+        registered = await self._register_vectorize_task(task)
+        if not registered:
+            return
+
+        async with self._vectorize_lock:
+            self._pending_vectorize_work += 1
+            if self._vectorize_done:
+                self._vectorize_done.clear()
+        self._schedule_work(
+            DagWork(
+                kind="vectorize",
+                dir_uri=task.uri,
+                vectorize_task=task,
+            )
+        )
+
+    async def _dispatch_vectorize_task(self, task: VectorizeTask) -> bool:
+        """Register and persist vectorize work in the current DAG worker."""
+        if await self._register_vectorize_task(task):
+            return await self._run_vectorize_with_telemetry(task)
+        return False
+
+    async def _register_vectorize_task(self, task: VectorizeTask) -> bool:
         if self._skip_vectorization:
             logger.info(
                 "Skipping vectorization task for %s (requested via SemanticMsg)",
                 task.uri,
             )
-            return
-        async with self._vectorize_lock:
-            self._pending_vectorize_tasks.append(task)
-            if task.task_type == "file":
-                self._vectorize_task_count += 1
-            else:  # directory
-                self._vectorize_task_count += 2
+            return False
+
+        task_count = 1 if task.task_type == "file" else 2
+        leaf_count = 1 if task.task_type == "file" else 0
+        if self._embedding_tracker is not None and self._embedding_tracker_id is not None:
+            await self._embedding_tracker.add(
+                self._embedding_tracker_id,
+                count=task_count,
+                leaf_count=leaf_count,
+            )
+        return True
 
     def get_stats(self) -> DagStats:
         return DagStats(
@@ -880,4 +1089,5 @@ class SemanticDagExecutor:
 
 
 if False:  # pragma: no cover - for type checkers only
+    from openviking.storage.queuefs.embedding_tracker import EmbeddingTaskTracker
     from openviking.storage.queuefs.semantic_processor import SemanticProcessor

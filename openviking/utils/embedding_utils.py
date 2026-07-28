@@ -7,6 +7,7 @@ Common logic for creating Context objects and enqueuing them to EmbeddingQueue.
 """
 
 import os
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -16,8 +17,11 @@ from openviking.core.context import Context, ContextLevel, ResourceContentType, 
 from openviking.core.namespace import context_type_for_uri, is_session_uri, owner_space_for_uri
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs import get_queue_manager
+from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
+from openviking.telemetry import get_current_telemetry
+from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.image_search import image_bytes_to_data_uri
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.utils import VikingURI, get_logger
@@ -63,7 +67,12 @@ def _apply_scalar_overrides(embedding_msg, overrides: Optional[Dict[str, Any]]) 
             embedding_msg.context_data[field] = value
 
 
-async def _decrement_embedding_tracker(semantic_msg_id: Optional[str], count: int) -> None:
+async def _decrement_embedding_tracker(
+    semantic_msg_id: Optional[str],
+    count: int,
+    *,
+    is_leaf: bool = False,
+) -> None:
     if not semantic_msg_id or count <= 0:
         return
     try:
@@ -71,12 +80,24 @@ async def _decrement_embedding_tracker(semantic_msg_id: Optional[str], count: in
 
         tracker = EmbeddingTaskTracker.get_instance()
         for _ in range(count):
-            await tracker.decrement(semantic_msg_id)
+            await tracker.decrement(semantic_msg_id, is_leaf=is_leaf)
     except Exception as e:
         logger.error(
             f"Failed to decrement embedding tracker for semantic_msg_id={semantic_msg_id}: {e}",
             exc_info=True,
         )
+
+
+def _record_vectorization_error(uri: str, *, is_leaf: bool) -> None:
+    telemetry_id = get_current_telemetry().telemetry_id
+    if not telemetry_id:
+        return
+    kind = "leaf" if is_leaf else "directory"
+    get_request_wait_tracker().record_embedding_error(
+        telemetry_id,
+        f"Failed to enqueue {kind} embedding for {uri}",
+        is_leaf=is_leaf,
+    )
 
 
 def _coerce_datetime(value: object) -> Optional[datetime]:
@@ -215,6 +236,35 @@ def get_resource_content_type(file_name: str) -> Optional[ResourceContentType]:
         return ResourceContentType.AUDIO
 
     return None
+
+
+@dataclass(frozen=True)
+class LeafVectorizationPlan:
+    requires_summary: bool
+    effective_text_source: str
+    reason: str
+
+
+def resolve_leaf_vectorization_plan(
+    file_name: str,
+    *,
+    text_source: Optional[str] = None,
+    use_summary: bool = False,
+) -> LeafVectorizationPlan:
+    configured_text_source = text_source or getattr(
+        get_openviking_config().embedding,
+        "text_source",
+        "content_only",
+    )
+    effective_text_source = "summary_only" if use_summary else configured_text_source
+
+    if use_summary:
+        return LeafVectorizationPlan(True, effective_text_source, "summary_override")
+    if effective_text_source != "content_only":
+        return LeafVectorizationPlan(True, effective_text_source, "configured_summary")
+    if get_resource_content_type(file_name) != ResourceContentType.TEXT:
+        return LeafVectorizationPlan(True, effective_text_source, "non_text")
+    return LeafVectorizationPlan(False, effective_text_source, "content_only_text")
 
 
 async def _build_image_data_uri(
@@ -409,7 +459,10 @@ async def vectorize_directory_meta(
         )
         raise
     finally:
-        await _decrement_embedding_tracker(semantic_msg_id, expected - enqueued)
+        missing = expected - enqueued
+        if missing > 0:
+            _record_vectorization_error(uri, is_leaf=False)
+        await _decrement_embedding_tracker(semantic_msg_id, missing)
 
 
 async def vectorize_file(
@@ -422,7 +475,8 @@ async def vectorize_file(
     use_summary: bool = False,
     preserve_existing_created_at: bool = False,
     scalar_override: Optional[Dict[str, Any]] = None,
-) -> None:
+    record_failure: bool = True,
+) -> bool:
     """
     Vectorize a single file.
 
@@ -435,7 +489,7 @@ async def vectorize_file(
     try:
         if not ctx:
             logger.warning("No context provided for vectorization")
-            return
+            return False
 
         queue_manager = get_queue_manager()
         embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
@@ -472,7 +526,12 @@ async def vectorize_file(
         content_type = get_resource_content_type(file_name)
         embedding_cfg = get_openviking_config().embedding
         configured_text_source = getattr(embedding_cfg, "text_source", "content_only")
-        effective_text_source = "summary_only" if use_summary else configured_text_source
+        vectorization_plan = resolve_leaf_vectorization_plan(
+            file_name,
+            text_source=configured_text_source,
+            use_summary=use_summary,
+        )
+        effective_text_source = vectorization_plan.effective_text_source
 
         if content_type is None:
             # Unsupported file type: fall back to summary if available
@@ -490,7 +549,7 @@ async def vectorize_file(
                 logger.warning(
                     f"Unsupported file type for {file_path} and no summary available, skipping vectorization"
                 )
-                return
+                return False
         elif content_type == ResourceContentType.TEXT:
             # Known text files use VikingFS' text read path once, then reuse that
             # content for BM25 regardless of whether embedding uses summary or raw text.
@@ -508,7 +567,7 @@ async def vectorize_file(
                     context.set_vectorize(Vectorize(text=summary, full_text=summary))
                 else:
                     logger.warning(f"No summary available for {file_path}, skipping vectorization")
-                    return
+                    return False
             else:
                 if summary and effective_text_source in {"summary_first", "summary_only"}:
                     # Use summary for vectorization, but reuse the single raw text read for BM25.
@@ -527,29 +586,66 @@ async def vectorize_file(
                 logger.debug(
                     f"Skipping image {file_path} (image unreadable and no summary available)"
                 )
-                return
+                return False
         elif summary:
             # For non-text files, use summary
             context.set_vectorize(Vectorize(text=summary, full_text=summary))
         else:
             logger.debug(f"Skipping file {file_path} (no text content or summary)")
-            return
+            return False
 
         embedding_msg = EmbeddingMsgConverter.from_context(context)
         if not embedding_msg:
-            return
+            return False
 
         _apply_scalar_overrides(embedding_msg, scalar_override)
         embedding_msg.semantic_msg_id = semantic_msg_id
         await embedding_queue.enqueue(embedding_msg)
         enqueued = True
         logger.debug(f"Enqueued file for vectorization: {file_path}")
+        return True
 
     except Exception as e:
         logger.error(f"Failed to vectorize file {file_path}: {e}", exc_info=True)
+        return False
     finally:
         if not enqueued:
-            await _decrement_embedding_tracker(semantic_msg_id, 1)
+            if record_failure:
+                _record_vectorization_error(file_path, is_leaf=True)
+            await _decrement_embedding_tracker(
+                semantic_msg_id,
+                1,
+                is_leaf=True,
+            )
+
+
+async def enqueue_file_metadata_patch(
+    file_path: str,
+    summary: str,
+    ctx: RequestContext,
+    semantic_msg_id: Optional[str] = None,
+) -> bool:
+    normalized_summary = _truncate_abstract_bytes(summary)
+    if not normalized_summary:
+        return False
+
+    queue_manager = get_queue_manager()
+    embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
+    message = EmbeddingMsg(
+        message="",
+        context_data={
+            "uri": file_path,
+            "account_id": ctx.account_id,
+            "level": int(ContextLevel.DETAIL.value),
+            "is_leaf": False,
+            "abstract": normalized_summary,
+        },
+        telemetry_id=get_current_telemetry().telemetry_id,
+        semantic_msg_id=semantic_msg_id,
+        operation="metadata_patch",
+    )
+    await embedding_queue.enqueue(message)
+    return True
 
 
 async def index_resource(

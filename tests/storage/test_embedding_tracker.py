@@ -185,3 +185,82 @@ async def test_tracker_clears_zero_task_entry_without_callback():
     await tracker.register("semantic-msg", 0, on_complete=None)
 
     assert await tracker.decrement("semantic-msg") is None
+
+
+@pytest.mark.asyncio
+async def test_open_tracker_seals_leaf_and_full_independently():
+    tracker = EmbeddingTaskTracker.get_instance()
+    callback_calls = []
+
+    await tracker.register_open(
+        "semantic-msg",
+        on_leaf_complete=lambda: callback_calls.append("leaf"),
+        on_complete=lambda: callback_calls.append("full"),
+    )
+    await tracker.add("semantic-msg", count=3, leaf_count=1)
+
+    assert await tracker.decrement("semantic-msg", is_leaf=True) == 2
+    assert callback_calls == []
+
+    await tracker.seal_leaf("semantic-msg")
+    assert callback_calls == ["leaf"]
+
+    assert await tracker.decrement("semantic-msg") == 1
+    await tracker.seal("semantic-msg")
+    assert callback_calls == ["leaf"]
+
+    assert await tracker.decrement("semantic-msg") == 0
+    assert callback_calls == ["leaf", "full"]
+
+
+@pytest.mark.asyncio
+async def test_open_tracker_zero_leaf_callbacks_fire_once_when_sealed():
+    tracker = EmbeddingTaskTracker.get_instance()
+    callback_calls = []
+
+    await tracker.register_open(
+        "semantic-msg",
+        on_leaf_complete=lambda: callback_calls.append("leaf"),
+        on_complete=lambda: callback_calls.append("full"),
+    )
+
+    assert callback_calls == []
+    assert await tracker.seal_leaf("semantic-msg") == 0
+    assert await tracker.seal_leaf("semantic-msg") == 0
+    assert callback_calls == ["leaf"]
+
+    assert await tracker.seal("semantic-msg") == 0
+    assert callback_calls == ["leaf", "full"]
+
+
+@pytest.mark.asyncio
+async def test_open_tracker_rejects_add_after_relevant_seal():
+    tracker = EmbeddingTaskTracker.get_instance()
+
+    await tracker.register_open("semantic-msg")
+    await tracker.seal_leaf("semantic-msg")
+
+    await tracker.add("semantic-msg", count=1)
+    with pytest.raises(RuntimeError, match="Leaf embedding tracker is sealed"):
+        await tracker.add("semantic-msg", count=1, leaf_count=1)
+
+    await tracker.seal("semantic-msg")
+    with pytest.raises(RuntimeError, match="Embedding tracker is sealed"):
+        await tracker.add("semantic-msg", count=1)
+
+
+@pytest.mark.asyncio
+async def test_open_tracker_discard_removes_without_callbacks():
+    tracker = EmbeddingTaskTracker.get_instance()
+    callback_calls = []
+
+    await tracker.register_open(
+        "semantic-msg",
+        on_leaf_complete=lambda: callback_calls.append("leaf"),
+        on_complete=lambda: callback_calls.append("full"),
+    )
+
+    assert await tracker.discard("semantic-msg") is True
+    assert await tracker.discard("semantic-msg") is False
+    assert await tracker.decrement("semantic-msg", is_leaf=True) is None
+    assert callback_calls == []

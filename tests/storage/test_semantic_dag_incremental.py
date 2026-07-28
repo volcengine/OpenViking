@@ -143,6 +143,7 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
         changes={"modified": [f"{root_uri}/a.txt"]},
     )
     monkeypatch.setattr(executor, "_add_vectorize_task", AsyncMock())
+    monkeypatch.setattr(executor, "_dispatch_vectorize_task", AsyncMock())
 
     await executor.run(root_uri)
 

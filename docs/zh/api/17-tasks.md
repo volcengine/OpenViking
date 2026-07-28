@@ -94,7 +94,7 @@ ov task status uuid-xxx
 }
 ```
 
-`stage` 可以为 `null`。Git 仓库资源导入任务可能报告 `queued`、`fetching`、`parsing`、`finalizing`、`processing_queue`；其他任务类型可能将其留空。实时队列计数不会出现在任务状态中；需要实时数量时使用 observer queue，任务完成后可读取 `result.queue_status`。
+`stage` 可以为 `null`。资源导入任务可能报告 `queued`、`fetching`、`parsing`、`finalizing`、`processing_queue` 或 `leaf_indexed`。对于 `add_resource` 任务，`leaf_indexed` 表示本任务发现的所有叶子文件都已写入向量索引；目录摘要和目录索引此时可能仍在后台处理，因此任务状态仍为 `running`。该里程碑一旦出现，会保留到任务进入 `completed` 或 `failed`，调用方只需要叶子检索能力时可以据此停止轮询。其他任务类型可能将其留空。实时队列计数不会出现在任务状态中；需要实时数量时使用 observer queue，任务完成后可读取 `result.queue_status`。
 
 **响应示例（完成）**
 
