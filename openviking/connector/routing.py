@@ -12,7 +12,7 @@ hosting ``http(s)`` URLs).
 
 from __future__ import annotations
 
-from typing import Dict, FrozenSet, Optional, Tuple
+from typing import Dict, FrozenSet, List, Optional, Tuple
 
 from openviking.utils import is_git_repo_url
 
@@ -38,6 +38,22 @@ CONNECTOR_CREDENTIAL_ARGS: Dict[str, FrozenSet[str]] = {
     "tos": frozenset(),
     "git": frozenset({"token", "username"}),
 }
+
+
+# Reserved ``args`` key for source credentials of declared add_types outside
+# the registries above (e.g. add_type="feishu"). OpenViking cannot know each
+# plugin's credential fields, so the caller supplies them as a mapping under
+# this key; it is lifted verbatim into the top-level ``auth_config`` request
+# field and never merged into param_config. All other args keys travel to the
+# plugin wholesale through param_config.
+CONNECTOR_ARGS_AUTH_CONFIG_KEY = "auth_config"
+
+
+def credential_arg_names(add_type: str, args: Optional[Dict[str, object]]) -> List[str]:
+    """Sorted credential-arg keys of *add_type* that are present in *args*."""
+    return sorted(
+        set(args or ()).intersection(CONNECTOR_CREDENTIAL_ARGS.get(add_type, frozenset()))
+    )
 
 
 def is_full_commit_sha(ref: str) -> bool:

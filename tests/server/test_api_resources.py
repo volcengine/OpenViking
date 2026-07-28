@@ -32,6 +32,38 @@ def test_add_resource_request_defaults_processing_mode():
     assert request.processing_mode == "semantic_and_vectors"
 
 
+def test_add_resource_request_accepts_declared_add_type():
+    request = AddResourceRequest(path="https://example.com/space", add_type=" feishu ")
+
+    assert request.add_type == "feishu"
+
+
+def test_add_resource_request_rejects_add_type_with_temp_file_id():
+    import pytest
+
+    with pytest.raises(ValueError, match="temp_file_id"):
+        AddResourceRequest(temp_file_id="upload_abc", add_type="feishu")
+
+
+def test_require_remote_resource_source_allows_declared_add_type():
+    from openviking.server.local_input_guard import require_remote_resource_source
+
+    assert (
+        require_remote_resource_source("space:home", declared_connector_add_type="feishu")
+        == "space:home"
+    )
+
+
+def test_require_remote_resource_source_still_rejects_without_declared_type():
+    import pytest
+
+    from openviking.server.local_input_guard import require_remote_resource_source
+    from openviking_cli.exceptions import PermissionDeniedError
+
+    with pytest.raises(PermissionDeniedError):
+        require_remote_resource_source("/etc/passwd")
+
+
 async def _wait_task_terminal(client: httpx.AsyncClient, task_id: str, timeout: float = 10.0):
     deadline = asyncio.get_running_loop().time() + timeout
     last_result = None

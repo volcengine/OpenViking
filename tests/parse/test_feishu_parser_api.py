@@ -450,7 +450,11 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(monk
         resource_processor=resource_processor,
         skill_processor=SimpleNamespace(),
     )
-    monkeypatch.setattr(service, "_should_use_connector", Mock(return_value=False))
+    monkeypatch.setattr(
+        service,
+        "_connector_delegate",
+        SimpleNamespace(should_delegate=Mock(return_value=False)),
+    )
     monkeypatch.setattr(
         "openviking.service.resource_service.is_git_repo_url",
         Mock(return_value=False),
@@ -527,7 +531,11 @@ async def test_local_prepared_job_uses_add_resource_queue(monkeypatch):
         skill_processor=SimpleNamespace(),
     )
     service._enqueue_add_resource_job = AsyncMock(return_value=SimpleNamespace(task_id="task-1"))
-    monkeypatch.setattr(service, "_should_use_connector", Mock(return_value=False))
+    monkeypatch.setattr(
+        service,
+        "_connector_delegate",
+        SimpleNamespace(should_delegate=Mock(return_value=False)),
+    )
     monkeypatch.setattr(
         "openviking.service.resource_service.is_git_repo_url",
         Mock(return_value=False),
@@ -615,7 +623,11 @@ async def test_uat_producer_cancellation_respects_queue_ownership(
         resource_processor=resource_processor,
         skill_processor=SimpleNamespace(),
     )
-    monkeypatch.setattr(service, "_should_use_connector", Mock(return_value=False))
+    monkeypatch.setattr(
+        service,
+        "_connector_delegate",
+        SimpleNamespace(should_delegate=Mock(return_value=False)),
+    )
     monkeypatch.setattr(
         "openviking.service.resource_service.is_git_repo_url",
         Mock(return_value=False),
