@@ -2429,6 +2429,52 @@ async def test_task_store_restart_marks_nonterminal_without_persisting_connectio
 
 
 @pytest.mark.asyncio
+async def test_task_store_missing_lookups_do_not_retain_locks(tmp_path: Path):
+    store = CompileTaskStore(tmp_path)
+
+    for index in range(2_000):
+        assert await store.get(f"cmp_missing_{index}") is None
+    for invalid in ("missing", "cmp_bad/path", "cmp_bad\\path"):
+        with pytest.raises(ValueError, match="invalid compile task id"):
+            await store.get(invalid)
+
+    assert store._locks == {}
+    assert not list(store.root.iterdir())
+
+
+@pytest.mark.asyncio
+async def test_task_store_releases_lock_after_concurrent_users_finish(tmp_path: Path):
+    store = CompileTaskStore(tmp_path)
+    first_entered = asyncio.Event()
+    release_first = asyncio.Event()
+    second_entered = asyncio.Event()
+
+    async def first_user():
+        async with store._task_lock("cmp_shared"):
+            first_entered.set()
+            await release_first.wait()
+
+    async def second_user():
+        await first_entered.wait()
+        async with store._task_lock("cmp_shared"):
+            second_entered.set()
+
+    first = asyncio.create_task(first_user())
+    second = asyncio.create_task(second_user())
+    await first_entered.wait()
+    await asyncio.sleep(0)
+
+    assert not second_entered.is_set()
+    assert store._locks["cmp_shared"][1] == 2
+
+    release_first.set()
+    await asyncio.gather(first, second)
+
+    assert second_entered.is_set()
+    assert store._locks == {}
+
+
+@pytest.mark.asyncio
 async def test_task_store_prunes_expired_and_excess_terminal_records(tmp_path: Path):
     store = CompileTaskStore(tmp_path)
     request = _sanitized_compile_request()
