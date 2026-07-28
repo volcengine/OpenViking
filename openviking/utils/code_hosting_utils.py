@@ -53,7 +53,9 @@ _KNOWN_PLATFORM_NON_REPO_PATH_SEGMENTS = {
 # Public platforms where ``owner/repo/tree/ref/...`` is an unambiguous browse
 # route. This profile must not be applied to generic configured Git hosts:
 # there, a nested repository can legitimately contain a ``tree`` namespace.
-_KNOWN_PLATFORM_TREE_ROUTE_HOSTS = frozenset({"gitcode.com", "gitee.com"})
+_KNOWN_PLATFORM_TREE_ROUTE_HOSTS = frozenset(
+    {"atomgit.com", "git.sr.ht", "gitcode.com", "gitee.com"}
+)
 
 # Top-level namespaces reserved by each hosting platform. Keeping these rules
 # attached to platform categories prevents generic custom hosts from inheriting
@@ -97,7 +99,8 @@ _PLATFORM_RESERVED_TOP_LEVEL_SEGMENTS = {
 # still be present in one of the configured domain lists before these apply.
 _KNOWN_PLATFORM_RESERVED_TOP_LEVEL_SEGMENTS = {
     "gitcode.com": _COMMON_RESERVED_TOP_LEVEL_SEGMENTS | frozenset({"explore"}),
-    "gitee.com": _COMMON_RESERVED_TOP_LEVEL_SEGMENTS | frozenset({"enterprise", "explore"}),
+    "gitee.com": _COMMON_RESERVED_TOP_LEVEL_SEGMENTS
+    | frozenset({"enterprise", "explore", "organizations"}),
     "bitbucket.org": _COMMON_RESERVED_TOP_LEVEL_SEGMENTS | frozenset({"account", "product"}),
     "codeberg.org": _COMMON_RESERVED_TOP_LEVEL_SEGMENTS | frozenset({"explore"}),
     "gitea.com": _COMMON_RESERVED_TOP_LEVEL_SEGMENTS | frozenset({"explore"}),

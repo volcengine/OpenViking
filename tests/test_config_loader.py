@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for config_loader utilities."""
 
+import json
 import logging
+import re
 from logging.handlers import QueueHandler
+from pathlib import Path
 
 import pytest
 
@@ -130,6 +133,18 @@ def test_generic_code_hosting_domains_include_supported_platforms():
         "atomgit.com",
         "git.sr.ht",
     ]
+
+
+def test_example_code_hosting_domains_match_runtime_defaults():
+    example_path = Path(__file__).resolve().parents[1] / "examples" / "ov.conf.example"
+    example_text = example_path.read_text(encoding="utf-8")
+    domains_match = re.search(
+        r'"code_hosting_domains"\s*:\s*(\[[^\]]*\])',
+        example_text,
+    )
+
+    assert domains_match is not None
+    assert json.loads(domains_match.group(1)) == CodeHostingConfig().code_hosting_domains
 
 
 def test_generic_code_hosting_domains_load_from_config():

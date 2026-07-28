@@ -251,6 +251,9 @@ class TestGitAccessor:
         with pytest.raises(ValueError, match="Unsupported Git repository URL"):
             accessor._parse_repo_source(source)
 
+    def test_gitee_organization_page_is_not_handled(self, accessor: GitAccessor) -> None:
+        assert accessor.can_handle("https://gitee.com/organizations/mindspore") is False
+
     def test_normalize_repo_url_rejects_github_nested_dotgit(self, accessor: GitAccessor) -> None:
         with pytest.raises(ValueError, match="Unsupported Git repository URL"):
             accessor._normalize_repo_url("https://github.com/org/repo/not-a-repo.git")
@@ -275,6 +278,22 @@ class TestGitAccessor:
     def test_gitcode_tree_file_ending_dotgit_is_rejected(self, accessor: GitAccessor) -> None:
         source = "https://gitcode.com/ploc-org/CNPL/tree/master/projects/sample/config.git"
 
+        assert accessor.can_handle(source) is False
+        with pytest.raises(ValueError, match="Unsupported Git repository URL"):
+            accessor._parse_repo_source(source)
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "https://atomgit.com/easyxmen/docs/tree/master/ReleaseNotes/config.git",
+            "https://git.sr.ht/~sircmpwn/aerc/tree/master/item/config.git",
+        ],
+    )
+    def test_default_platform_tree_file_ending_dotgit_is_rejected(
+        self,
+        accessor: GitAccessor,
+        source: str,
+    ) -> None:
         assert accessor.can_handle(source) is False
         with pytest.raises(ValueError, match="Unsupported Git repository URL"):
             accessor._parse_repo_source(source)

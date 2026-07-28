@@ -430,6 +430,13 @@ def test_is_git_repo_url_gitee_tree():
     assert is_git_repo_url("https://gitee.com/mindspore/mindspore/tree/master") is True
 
 
+def test_is_git_repo_url_gitee_organization_page():
+    url = "https://gitee.com/organizations/mindspore"
+
+    assert parse_git_repo_url(url) is None
+    assert is_git_repo_url(url) is False
+
+
 def test_gitee_tree_browse_file_ending_dotgit_is_not_a_repo():
     url = "https://gitee.com/mindspore/mindspore/tree/master/config.git"
 
@@ -633,6 +640,25 @@ def test_is_git_repo_url_gitea_repo():
 
 def test_is_git_repo_url_sourcehut_repo():
     assert is_git_repo_url("https://git.sr.ht/~sircmpwn/aerc") is True
+
+
+@pytest.mark.parametrize(
+    ("url", "repo_path"),
+    [
+        (
+            "https://atomgit.com/easyxmen/docs/tree/master/ReleaseNotes/config.git",
+            "easyxmen/docs",
+        ),
+        (
+            "https://git.sr.ht/~sircmpwn/aerc/tree/master/item/config.git",
+            "_sircmpwn/aerc",
+        ),
+    ],
+)
+def test_tree_browse_file_ending_dotgit_rejected_for_default_platforms(url, repo_path):
+    assert parse_git_repo_url(url) is None
+    assert is_git_repo_url(url) is False
+    assert parse_code_hosting_url(url) == repo_path
 
 
 def test_generic_domain_supports_nested_clone_without_platform_route_semantics():
