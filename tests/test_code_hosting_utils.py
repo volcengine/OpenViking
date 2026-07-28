@@ -413,6 +413,20 @@ def test_is_git_repo_url_reserved_explore():
     assert is_git_repo_url("https://gitee.com/explore/starred") is False
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://gitcode.com/explore/repos",
+        "https://bitbucket.org/product/features",
+        "https://codeberg.org/explore/repos",
+        "https://gitea.com/explore/repos",
+        "https://atomgit.com/explore/repos",
+    ],
+)
+def test_is_git_repo_url_additional_platform_pages(url):
+    assert is_git_repo_url(url) is False
+
+
 def test_generic_host_does_not_inherit_platform_reserved_namespaces():
     config = _mock_config()
     config.code.code_hosting_domains = ["git.example.com"]
@@ -498,6 +512,20 @@ def test_generic_domain_supports_nested_clone_without_platform_route_semantics()
             is_git_repo_url("https://git.example.com/team/repo/src/main.git")
             is True
         )
+
+
+def test_generic_domain_with_configured_port_supports_nested_clone():
+    config = _mock_config()
+    config.code.github_domains = []
+    config.code.gitlab_domains = []
+    config.code.azure_devops_domains = []
+    config.code.code_hosting_domains = ["git.example.com:8443"]
+    url = "https://git.example.com:8443/org/subgroup/repo.git"
+
+    with patch.object(_module, "get_openviking_config", return_value=config):
+        assert is_code_hosting_url(url) is True
+        assert is_git_repo_url(url) is True
+        assert parse_code_hosting_url(url) == "org/subgroup/repo"
 
 
 def test_parse_code_hosting_url_sourcehut_tilde_sanitized():

@@ -89,8 +89,14 @@ _PLATFORM_RESERVED_TOP_LEVEL_SEGMENTS = {
 # Public-platform URL profiles are parsing rules, not an allowlist. A host must
 # still be present in one of the configured domain lists before these apply.
 _KNOWN_PLATFORM_RESERVED_TOP_LEVEL_SEGMENTS = {
+    "gitcode.com": _COMMON_RESERVED_TOP_LEVEL_SEGMENTS | frozenset({"explore"}),
     "gitee.com": _COMMON_RESERVED_TOP_LEVEL_SEGMENTS
     | frozenset({"enterprise", "explore"}),
+    "bitbucket.org": _COMMON_RESERVED_TOP_LEVEL_SEGMENTS
+    | frozenset({"account", "product"}),
+    "codeberg.org": _COMMON_RESERVED_TOP_LEVEL_SEGMENTS | frozenset({"explore"}),
+    "gitea.com": _COMMON_RESERVED_TOP_LEVEL_SEGMENTS | frozenset({"explore"}),
+    "atomgit.com": _COMMON_RESERVED_TOP_LEVEL_SEGMENTS | frozenset({"explore"}),
 }
 
 # Generic Git hosts may use nested namespaces when a clone URL ends in .git.
@@ -124,15 +130,6 @@ def get_configured_code_hosting_domains(code_config=None) -> set[str]:
     return domains
 
 
-def _host_matches_domain_fields(host: str, field_names: Iterable[str]) -> bool:
-    normalized_host = host.lower()
-    code_config = _get_code_config()
-    return any(
-        normalized_host in {domain.lower() for domain in _get_domains_for_field(field, code_config)}
-        for field in field_names
-    )
-
-
 def _matches_domain_field(parsed: ParseResult, field_name: str) -> bool:
     return _domain_matches(parsed, _get_domains_for_field(field_name))
 
@@ -159,14 +156,17 @@ def _get_known_platform_non_repo_segments(parsed: ParseResult) -> frozenset[str]
 
 
 def _supports_nested_repository_host(host: str) -> bool:
-    return not _host_matches_domain_fields(host, ("github_domains",)) and (
-        _host_matches_domain_fields(host, _NESTED_REPOSITORY_DOMAIN_CONFIG_FIELDS)
-    )
+    return _supports_nested_repository_path(urlparse(f"ssh://{host}"))
 
 
 def _supports_nested_repository_path(parsed: ParseResult) -> bool:
     return bool(
-        parsed.hostname and _supports_nested_repository_host(parsed.hostname)
+        parsed.hostname
+        and not _matches_domain_field(parsed, "github_domains")
+        and any(
+            _matches_domain_field(parsed, field_name)
+            for field_name in _NESTED_REPOSITORY_DOMAIN_CONFIG_FIELDS
+        )
     )
 
 
