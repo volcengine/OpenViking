@@ -891,6 +891,7 @@ const zhCN = {
       scoreThreshold: '最低相关度',
       tags: '检索标签',
       tagsPlaceholder: '例如 env=prod, team=search',
+      tagsInvalid: '标签必须使用 key=value 格式，多个标签用逗号分隔',
       timeRange: '时间范围',
       since: '开始时间，如 7d',
       until: '结束时间，如 2026-07-27',
@@ -945,11 +946,7 @@ const zhCN = {
       openPlayground: '在 Playground 打开',
       uri: 'URI',
       summary: '摘要',
-      content: '正文',
-      loading: '正在读取内容…',
-      loadFailed: '内容读取失败',
-      retry: '重试',
-      noContent: '暂无可展示的正文',
+      noSummary: '暂无可展示的摘要',
       matchReason: '匹配原因',
     },
     results: {
@@ -960,6 +957,7 @@ const zhCN = {
       score: '相关度',
       uri: 'URI',
       description: '描述',
+      provenance: '检索过程（{{count}}）',
     },
     types: {
       resource: 'Resources',

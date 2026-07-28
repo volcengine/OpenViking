@@ -1,3 +1,5 @@
+import type { RecallMemoryType } from '#/lib/retrieval'
+
 export const RESULT_COUNT_OPTIONS = [5, 10, 20, 50] as const
 export const DEFAULT_RESULT_COUNT = 10
 
@@ -19,7 +21,7 @@ export const RECALL_MEMORY_TYPES = [
   'entities',
   'preferences',
   'experiences',
-] as const
+] as const satisfies readonly RecallMemoryType[]
 export const DEFAULT_RECALL_QUOTAS = {
   entities: 10,
   events: 10,

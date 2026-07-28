@@ -921,6 +921,7 @@ const en = {
       scoreThreshold: 'Minimum relevance',
       tags: 'Search tags',
       tagsPlaceholder: 'For example env=prod, team=search',
+      tagsInvalid: 'Tags must use key=value format, separated by commas',
       timeRange: 'Time range',
       since: 'Start, e.g. 7d',
       until: 'End, e.g. 2026-07-27',
@@ -975,11 +976,7 @@ const en = {
       openPlayground: 'Open in Playground',
       uri: 'URI',
       summary: 'Summary',
-      content: 'Content',
-      loading: 'Loading content…',
-      loadFailed: 'Failed to load content',
-      retry: 'Retry',
-      noContent: 'No content available',
+      noSummary: 'No summary available',
       matchReason: 'Match reason',
     },
     results: {
@@ -990,6 +987,7 @@ const en = {
       score: 'Score',
       uri: 'URI',
       description: 'Description',
+      provenance: 'Retrieval provenance ({{count}})',
     },
     types: {
       resource: 'Resources',

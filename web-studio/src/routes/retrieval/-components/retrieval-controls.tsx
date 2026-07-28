@@ -35,6 +35,7 @@ import type {
   RetrievalRequestOptions,
 } from '../-types/retrieval'
 import { DateRangePicker } from './date-range-picker'
+import { TagFilterInput } from './tag-filter-input'
 
 const CONTEXT_TYPES: FindContextType[] = ['resource', 'memory', 'skill']
 const LEVELS = [0, 1, 2] as const
@@ -325,19 +326,12 @@ function SemanticAdvancedControls({
         </ControlGroup>
 
         <ControlGroup label={t('advanced.tags')}>
-          <Input
-            aria-label={t('advanced.tags')}
-            className="h-8 font-mono text-xs"
-            onChange={(event) =>
-              onOptionsChange({
-                tags: event.target.value
-                  .split(',')
-                  .map((tag) => tag.trim())
-                  .filter(Boolean),
-              })
-            }
+          <TagFilterInput
+            ariaLabel={t('advanced.tags')}
+            invalidMessage={t('advanced.tagsInvalid')}
+            onChange={(tags) => onOptionsChange({ tags })}
             placeholder={t('advanced.tagsPlaceholder')}
-            value={options.tags.join(', ')}
+            value={options.tags}
           />
         </ControlGroup>
 

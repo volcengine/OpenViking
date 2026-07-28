@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest'
 
 import {
   buildSubmittedSearch,
+  createRetrievalSubmission,
   parseLevels,
   parseRecallQuotas,
   validateRetrievalSearch,
 } from './search-state'
 import { memoryTypeFromUri } from './results'
 import { DEFAULT_RECALL_QUOTAS } from '../-constants/retrieval'
+import type { RetrievalRequestOptions } from '../-types/retrieval'
 
 describe('retrieval search state', () => {
   it('validates advanced parameters from URL search values', () => {
@@ -63,6 +65,33 @@ describe('retrieval search state', () => {
       render: false,
     })
     expect(parseRecallQuotas(search.recallQuotas).experiences).toBe(2)
+  })
+
+  it('builds a new submission for the selected mode', () => {
+    const options: RetrievalRequestOptions = {
+      contextTypes: [],
+      customPathInput: 'resources/',
+      ignoreCase: false,
+      includeProvenance: false,
+      levels: [],
+      recallMaxChars: 6500,
+      recallMinScore: 0.1,
+      recallPeerScope: 'all',
+      recallQuotas: { ...DEFAULT_RECALL_QUOTAS },
+      recallRender: true,
+      resultCount: 10,
+      scope: 'all',
+      tags: [],
+      timeField: 'updated_at',
+    }
+
+    expect(
+      createRetrievalSubmission(' openviking ', 'search', options),
+    ).toEqual({
+      query: 'openviking',
+      search: { mode: 'search', q: 'openviking' },
+    })
+    expect(createRetrievalSubmission('  ', 'recall', options)).toBeUndefined()
   })
 
   it('derives memory type labels without leaking file extensions', () => {

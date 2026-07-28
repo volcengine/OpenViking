@@ -30,18 +30,6 @@ export function displayName(uri: string): { name: string; parent: string } {
 
 const MEMORY_TYPE_PATTERN = /\/memories\/([^/]+)(?:\/|$)/i
 
-export function isDuplicateDisplayContent(
-  first?: string,
-  second?: string,
-): boolean {
-  const normalize = (value?: string) => value?.trim().replace(/\s+/g, ' ')
-  const normalizedFirst = normalize(first)
-  const normalizedSecond = normalize(second)
-  return Boolean(
-    normalizedFirst && normalizedSecond && normalizedFirst === normalizedSecond,
-  )
-}
-
 export function memoryTypeFromUri(uri: string): string | undefined {
   const match = MEMORY_TYPE_PATTERN.exec(uri)
   const type = match?.[1]?.trim().replace(/\.(?:md|json|jsonl)$/i, '')

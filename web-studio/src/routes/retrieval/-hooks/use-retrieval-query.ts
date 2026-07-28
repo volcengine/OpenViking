@@ -32,7 +32,6 @@ export function useRetrievalQuery({
   return useQuery<RetrievalQueryResult>({
     enabled,
     gcTime: 5 * 60_000,
-    placeholderData: (prev) => prev,
     queryFn: () => {
       if (mode === 'search') {
         return fetchSearch(query, {

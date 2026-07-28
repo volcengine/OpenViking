@@ -13,6 +13,7 @@ import type {
   ResultCountOption,
   RetrievalMode,
   RecallPeerScope,
+  RetrievalRequestOptions,
   RetrievalScope,
   RetrievalSearch,
   RetrievalTimeField,
@@ -257,6 +258,54 @@ export function buildSubmittedSearch(params: {
         peerScope: params.recallPeerScope,
       }),
     ...(params.mode === 'recall' && !params.recallRender && { render: false }),
+  }
+}
+
+export function buildSearchFromOptions(
+  q: string,
+  mode: RetrievalMode,
+  options: RetrievalRequestOptions,
+): RetrievalSearch {
+  return buildSubmittedSearch({
+    count: options.resultCount,
+    ignoreCase: options.ignoreCase,
+    includeProvenance: options.includeProvenance,
+    levels: options.levels,
+    mode,
+    path: options.customPathInput,
+    q,
+    recallMaxChars: options.recallMaxChars,
+    recallPeerScope: options.recallPeerScope,
+    recallQuotas: options.recallQuotas,
+    recallRender: options.recallRender,
+    scoreThreshold:
+      mode === 'recall' ? options.recallMinScore : options.scoreThreshold,
+    scope: options.scope,
+    session: options.sessionId ?? '',
+    since: options.since ?? '',
+    tags: options.tags,
+    timeField: options.timeField,
+    types: options.contextTypes,
+    until: options.until ?? '',
+  })
+}
+
+export function createRetrievalSubmission(
+  query: string,
+  mode: RetrievalMode,
+  options: RetrievalRequestOptions,
+):
+  | {
+      query: string
+      search: RetrievalSearch
+    }
+  | undefined {
+  const trimmedQuery = query.trim()
+  if (!trimmedQuery) return undefined
+
+  return {
+    query: trimmedQuery,
+    search: buildSearchFromOptions(trimmedQuery, mode, options),
   }
 }
 

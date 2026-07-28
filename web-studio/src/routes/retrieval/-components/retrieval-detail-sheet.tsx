@@ -1,4 +1,3 @@
-import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { Brain, ExternalLink, FileText, FolderOpen, Wrench } from 'lucide-react'
 import type { TFunction } from 'i18next'
@@ -13,13 +12,8 @@ import {
   SheetTitle,
 } from '#/components/ui/sheet'
 import { cn } from '#/lib/utils'
-import { fetchFileContent } from '#/routes/resources/-lib/api'
 
-import {
-  displayName,
-  isDuplicateDisplayContent,
-  resourceSearchForResult,
-} from '../-lib/results'
+import { displayName, resourceSearchForResult } from '../-lib/results'
 import type { FindContextType, FindResultItem } from '#/lib/retrieval'
 
 const DETAIL_TYPE_META: Record<
@@ -63,17 +57,8 @@ export function RetrievalDetailSheet({
   onClose: () => void
   t: TFunction<'retrieval'>
 }) {
-  const contentQuery = useQuery({
-    enabled: Boolean(detail && !detail.content),
-    queryFn: () => fetchFileContent(detail!.uri),
-    queryKey: ['retrieval-memory-content', detail?.uri],
-    staleTime: 5 * 60_000,
-  })
   const { name, parent } = displayName(detail?.uri ?? '')
-  const content = detail?.content ?? contentQuery.data?.content
   const summary = detail?.summary ?? detail?.abstract
-  const showSummary =
-    Boolean(summary) && !isDuplicateDisplayContent(summary, content)
   const resourceSearch = detail?.item
     ? resourceSearchForResult(detail.item)
     : undefined
@@ -164,42 +149,13 @@ export function RetrievalDetailSheet({
             </code>
           </section>
 
-          {showSummary ? (
-            <section className="mt-5 space-y-2">
-              <h3 className="text-xs font-medium text-muted-foreground">
-                {t('detail.summary')}
-              </h3>
-              <p className="whitespace-pre-wrap text-sm leading-6">{summary}</p>
-            </section>
-          ) : null}
-
           <section className="mt-5 space-y-2">
             <h3 className="text-xs font-medium text-muted-foreground">
-              {t('detail.content')}
+              {t('detail.summary')}
             </h3>
-            {contentQuery.isLoading && !detail?.content ? (
-              <div className="rounded-lg border bg-muted/20 px-4 py-8 text-center text-sm text-muted-foreground">
-                {t('detail.loading')}
-              </div>
-            ) : contentQuery.isError && !detail?.content ? (
-              <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-4 py-6 text-center">
-                <p className="text-sm text-destructive">
-                  {t('detail.loadFailed')}
-                </p>
-                <Button
-                  className="mt-3"
-                  onClick={() => void contentQuery.refetch()}
-                  size="sm"
-                  variant="outline"
-                >
-                  {t('detail.retry')}
-                </Button>
-              </div>
-            ) : (
-              <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-lg border bg-muted/20 p-4 font-mono text-xs leading-6">
-                {content || t('detail.noContent')}
-              </pre>
-            )}
+            <p className="whitespace-pre-wrap text-sm leading-6">
+              {summary || t('detail.noSummary')}
+            </p>
           </section>
 
           {detail?.item?.match_reason ? (

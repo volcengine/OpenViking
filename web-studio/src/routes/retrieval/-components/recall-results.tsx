@@ -27,6 +27,7 @@ export function RecallResults({
 }) {
   const [view, setView] = useState<'entries' | 'rendered'>('entries')
   const [copied, setCopied] = useState(false)
+  const activeView = view === 'rendered' && !result.rendered ? 'entries' : view
 
   const copyRendered = async () => {
     await navigator.clipboard.writeText(result.rendered)
@@ -64,7 +65,7 @@ export function RecallResults({
           <Button
             onClick={() => setView('entries')}
             size="sm"
-            variant={view === 'entries' ? 'secondary' : 'ghost'}
+            variant={activeView === 'entries' ? 'secondary' : 'ghost'}
           >
             {t('recall.entries')} ({result.entries.length})
           </Button>
@@ -72,12 +73,12 @@ export function RecallResults({
             disabled={!result.rendered}
             onClick={() => setView('rendered')}
             size="sm"
-            variant={view === 'rendered' ? 'secondary' : 'ghost'}
+            variant={activeView === 'rendered' ? 'secondary' : 'ghost'}
           >
             {t('recall.rendered')}
           </Button>
         </div>
-        {view === 'rendered' && result.rendered ? (
+        {activeView === 'rendered' && result.rendered ? (
           <Button
             className="gap-1.5"
             onClick={() => void copyRendered()}
@@ -94,7 +95,7 @@ export function RecallResults({
         ) : null}
       </div>
 
-      {view === 'rendered' ? (
+      {activeView === 'rendered' ? (
         <pre className="max-h-[36rem] overflow-auto whitespace-pre-wrap break-words p-5 font-mono text-xs leading-6">
           {result.rendered}
         </pre>

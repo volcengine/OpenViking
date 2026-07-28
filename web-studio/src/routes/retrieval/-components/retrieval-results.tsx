@@ -13,7 +13,11 @@ import type { TFunction } from 'i18next'
 
 import { Button } from '#/components/ui/button'
 import { cn } from '#/lib/utils'
-import type { FindContextType, FindQueryPlanItem } from '#/lib/retrieval'
+import type {
+  FindContextType,
+  FindQueryPlanItem,
+  GroupedFindResult,
+} from '#/lib/retrieval'
 
 import { LoadingHint } from './loading-hint'
 import { RecallResults } from './recall-results'
@@ -66,6 +70,8 @@ export function RetrievalResults({
   )
   const queryPlanItems =
     data?.kind === 'results' ? (data.result.query_plan?.queries ?? []) : []
+  const provenance =
+    data?.kind === 'results' ? (data.result.provenance ?? []) : []
   const total =
     data?.kind === 'recall' ? data.result.entries.length : flatItems.length
   const hasResults = total > 0
@@ -113,6 +119,7 @@ export function RetrievalResults({
             <ResultList
               flatItems={flatItems}
               onSelect={setDetail}
+              provenance={provenance}
               queryPlanItems={queryPlanItems}
               t={t}
             />
@@ -182,11 +189,13 @@ function EmptyRetrievalState({
 function ResultList({
   flatItems,
   onSelect,
+  provenance,
   queryPlanItems,
   t,
 }: {
   flatItems: FlatRetrievalItem[]
   onSelect: (detail: RetrievalDetail) => void
+  provenance: NonNullable<GroupedFindResult['provenance']>
   queryPlanItems: FindQueryPlanItem[]
   t: TFunction<'retrieval'>
 }) {
@@ -226,6 +235,17 @@ function ResultList({
             ) : null}
           </div>
         </div>
+      ) : null}
+      {provenance.length > 0 ? (
+        <details className="border-b bg-muted/10 px-4 py-3">
+          <summary className="flex cursor-pointer items-center gap-2 text-xs font-medium text-muted-foreground">
+            <Workflow className="size-3.5" />
+            {t('results.provenance', { count: provenance.length })}
+          </summary>
+          <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-background/70 p-3 font-mono text-xs leading-5 text-muted-foreground">
+            {JSON.stringify(provenance, null, 2)}
+          </pre>
+        </details>
       ) : null}
       {flatItems.map((item) => (
         <ResultRow

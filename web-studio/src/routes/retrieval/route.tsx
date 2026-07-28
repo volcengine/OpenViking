@@ -18,7 +18,8 @@ import { useResourceContextProbe } from './-hooks/use-resource-context-probe'
 import { useRetrievalQuery } from './-hooks/use-retrieval-query'
 import { resolveScopeTargetUri } from './-lib/scope'
 import {
-  buildSubmittedSearch,
+  buildSearchFromOptions,
+  createRetrievalSubmission,
   hasRetrievalSearch,
   parseCsv,
   parseLevels,
@@ -127,41 +128,33 @@ function RetrievalPage() {
     [],
   )
 
+  const submitQuery = useCallback(
+    (mode: RetrievalMode) => {
+      const submission = createRetrievalSubmission(query, mode, options)
+      if (!submission) return
+
+      setSubmittedMode(mode)
+      setSubmittedOptions(options)
+      setSubmittedQuery(submission.query)
+      writeLastRetrievalSearch(submission.search)
+      void navigate({ replace: true, search: submission.search })
+    },
+    [navigate, options, query],
+  )
+
   const handleSubmit = useCallback(() => {
-    const trimmed = query.trim()
-    if (!trimmed) return
+    submitQuery(retrievalMode)
+  }, [retrievalMode, submitQuery])
 
-    const nextSearch = buildSubmittedSearch({
-      count: options.resultCount,
-      ignoreCase: options.ignoreCase,
-      includeProvenance: options.includeProvenance,
-      levels: options.levels,
-      mode: retrievalMode,
-      path: options.customPathInput,
-      q: trimmed,
-      recallMaxChars: options.recallMaxChars,
-      recallPeerScope: options.recallPeerScope,
-      recallQuotas: options.recallQuotas,
-      recallRender: options.recallRender,
-      scoreThreshold:
-        retrievalMode === 'recall'
-          ? options.recallMinScore
-          : options.scoreThreshold,
-      scope: options.scope,
-      session: options.sessionId ?? '',
-      since: options.since ?? '',
-      tags: options.tags,
-      timeField: options.timeField,
-      types: options.contextTypes,
-      until: options.until ?? '',
-    })
+  const handleModeChange = useCallback(
+    (nextMode: RetrievalMode) => {
+      if (nextMode === retrievalMode) return
 
-    setSubmittedMode(retrievalMode)
-    setSubmittedOptions(options)
-    setSubmittedQuery(trimmed)
-    writeLastRetrievalSearch(nextSearch)
-    void navigate({ replace: true, search: nextSearch })
-  }, [navigate, options, query, retrievalMode])
+      setRetrievalMode(nextMode)
+      submitQuery(nextMode)
+    },
+    [retrievalMode, submitQuery],
+  )
 
   const handleUploadClick = useCallback(() => {
     void navigate({ to: '/playground', search: { upload: true } })
@@ -183,30 +176,11 @@ function RetrievalPage() {
     setOptions(nextOptions)
     setSubmittedOptions(nextOptions)
 
-    const nextSearch = buildSubmittedSearch({
-      count: nextOptions.resultCount,
-      ignoreCase: nextOptions.ignoreCase,
-      includeProvenance: nextOptions.includeProvenance,
-      levels: nextOptions.levels,
-      mode: nextMode,
-      path: nextOptions.customPathInput,
-      q: activeSearch.q,
-      recallMaxChars: nextOptions.recallMaxChars,
-      recallPeerScope: nextOptions.recallPeerScope,
-      recallQuotas: nextOptions.recallQuotas,
-      recallRender: nextOptions.recallRender,
-      scoreThreshold:
-        nextMode === 'recall'
-          ? nextOptions.recallMinScore
-          : nextOptions.scoreThreshold,
-      scope: nextOptions.scope,
-      session: nextOptions.sessionId ?? '',
-      since: nextOptions.since ?? '',
-      tags: nextOptions.tags,
-      timeField: nextOptions.timeField,
-      types: nextOptions.contextTypes,
-      until: nextOptions.until ?? '',
-    })
+    const nextSearch = buildSearchFromOptions(
+      activeSearch.q,
+      nextMode,
+      nextOptions,
+    )
     writeLastRetrievalSearch(nextSearch)
 
     if (!hasUrlSearch) {
@@ -227,7 +201,7 @@ function RetrievalPage() {
 
       <RetrievalControls
         mode={retrievalMode}
-        onModeChange={setRetrievalMode}
+        onModeChange={handleModeChange}
         onOptionsChange={handleOptionsChange}
         options={options}
         t={t}

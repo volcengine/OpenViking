@@ -1,15 +1,18 @@
 import type {
   RESULT_COUNT_OPTIONS,
-  RECALL_MEMORY_TYPES,
   RETRIEVAL_MODES,
   RETRIEVAL_SCOPES,
 } from '../-constants/retrieval'
-import type { FindContextType, FindResultItem } from '#/lib/retrieval'
+import type {
+  FindContextType,
+  FindResultItem,
+  RecallMemoryType as DomainRecallMemoryType,
+} from '#/lib/retrieval'
 
 export type RetrievalMode = (typeof RETRIEVAL_MODES)[number]
 export type RetrievalScope = (typeof RETRIEVAL_SCOPES)[number]
 export type ResultCountOption = (typeof RESULT_COUNT_OPTIONS)[number]
-export type RecallMemoryType = (typeof RECALL_MEMORY_TYPES)[number]
+export type RecallMemoryType = DomainRecallMemoryType
 export type RecallPeerScope = 'actor' | 'all'
 export type RetrievalTimeField = 'created_at' | 'updated_at'
 export type RecallQuotas = Record<RecallMemoryType, number>
