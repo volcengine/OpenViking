@@ -20,8 +20,8 @@ def find_memory_fields_trailer(content: str) -> Optional[Match[str]]:
 
 
 def strip_memory_fields_trailer(content: str) -> str:
-    """Remove one trailing reserved comment and its whitespace separator."""
-    match = find_memory_fields_trailer(content)
-    if match is None:
-        return content
-    return content[: match.start()].rstrip()
+    """Remove all trailing reserved comments and their whitespace separators."""
+    visible = content
+    while match := find_memory_fields_trailer(visible):
+        visible = visible[: match.start()].rstrip()
+    return visible

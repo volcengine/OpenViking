@@ -40,3 +40,13 @@ def test_visible_content_preserves_reserved_comment_outside_memory_namespace():
     raw_content = 'visible <!-- MEMORY_FIELDS {"example":true} -->'
 
     assert visible_content(raw_content, uri="viking://resources/example.md") == raw_content
+
+
+def test_visible_content_strips_repeated_memory_fields_trailers():
+    raw_content = """visible
+<!-- MEMORY_FIELDS {"secret":"old"} -->
+<!-- MEMORY_FIELDS
+{"secret":"new"}
+-->"""
+
+    assert visible_content(raw_content, uri=MEMORY_URI) == "visible"
