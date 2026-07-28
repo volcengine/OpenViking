@@ -34,6 +34,7 @@ from openviking.storage.vectordb_adapters.base import (
 )
 from openviking.storage.vectordb_adapters.local_adapter import LocalCollectionAdapter
 from openviking.storage.viking_vector_index_backend import (
+    UpsertOptions,
     VIKINGDB_CONTENT_MAX_SIZE,
     VikingVectorIndexBackend,
     _SingleAccountBackend,
@@ -391,8 +392,8 @@ async def test_embedding_handler_treats_shutdown_write_lock_as_success(monkeypat
             self.is_closing = False
             self.calls = 0
 
-        async def upsert(self, _data, *, ctx, partial_update=False):
-            assert partial_update is True
+        async def upsert(self, _data, *, ctx, options=UpsertOptions()):
+            assert options.partial_update is True
             self.calls += 1
             self.is_closing = True
             raise RuntimeError("IO error: lock /tmp/LOCK: already held by process")
@@ -427,7 +428,7 @@ async def test_embedding_handler_propagates_account_id_on_success(monkeypatch):
     class _DummyVikingDB:
         is_closing = False
 
-        async def upsert(self, _data, *, ctx):
+        async def upsert(self, _data, *, ctx, options=UpsertOptions()):
             return None
 
     captured: dict[str, object] = {}
@@ -489,7 +490,7 @@ async def test_embedding_handler_truncates_queue_input_before_embed(monkeypatch)
     class _CapturingVikingDB:
         is_closing = False
 
-        async def upsert(self, _data, *, ctx):
+        async def upsert(self, _data, *, ctx, options=UpsertOptions()):
             return "rec-1"
 
     class _CapturingEmbedder(DenseEmbedderBase):
@@ -578,8 +579,8 @@ async def test_embedding_handler_preserves_parent_uri_for_backend_upsert_logic(m
         is_closing = False
         mode = "local"
 
-        async def upsert(self, data, *, ctx, partial_update=False):
-            assert partial_update is True
+        async def upsert(self, data, *, ctx, options=UpsertOptions()):
+            assert options.partial_update is True
             captured["data"] = dict(data)
             return "rec-1"
 
@@ -608,8 +609,8 @@ async def test_embedding_handler_marks_success_only_after_tracker_completion(mon
         is_closing = False
         mode = "local"
 
-        async def upsert(self, _data, *, ctx, partial_update=False):
-            assert partial_update is True
+        async def upsert(self, _data, *, ctx, options=UpsertOptions()):
+            assert options.partial_update is True
             return "rec-1"
 
     embedder = _DummyEmbedder()
@@ -1680,7 +1681,7 @@ async def test_single_account_backend_upsert_partial_update_reads_then_upserts_e
 
     result = await backend.upsert(
         {"id": "rec-1", "abstract": "patched"},
-        partial_update=True,
+        options=UpsertOptions(partial_update=True),
     )
 
     assert result == "rec-1"
@@ -1693,6 +1694,76 @@ async def test_single_account_backend_upsert_partial_update_reads_then_upserts_e
                 "abstract": "patched",
                 "account_id": "acc1",
                 "uri": "viking://resources/old",
+            },
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_single_account_backend_upsert_partial_update_append_merges_search_tags_at_write():
+    calls = []
+
+    class _Collection:
+        def get_meta_data(self):
+            return {
+                "Fields": [
+                    {"FieldName": "id", "FieldType": "string"},
+                    {"FieldName": "uri", "FieldType": "path"},
+                    {"FieldName": "abstract", "FieldType": "string"},
+                    {"FieldName": "search_tags", "FieldType": "list<string>"},
+                    {"FieldName": "account_id", "FieldType": "string"},
+                ]
+            }
+
+    class _Adapter:
+        mode = "local"
+        USE_CONTENT_FIELD = False
+
+        def get_collection(self):
+            return _Collection()
+
+        def get(self, ids):
+            calls.append(("get", ids))
+            return [
+                {
+                    "id": "rec-1",
+                    "abstract": "before",
+                    "account_id": "acc1",
+                    "uri": "viking://resources/demo.md",
+                    "search_tags": ["owner=alice", "env=dev"],
+                }
+            ]
+
+        def upsert(self, data):
+            calls.append(("upsert", data))
+            return ["rec-1"]
+
+    backend = _SingleAccountBackend(
+        config=VectorDBBackendConfig(backend="local", name="context", dimension=2),
+        bound_account_id="acc1",
+        shared_adapter=_Adapter(),
+    )
+
+    result = await backend.upsert(
+        {
+            "id": "rec-1",
+            "abstract": "patched",
+            "search_tags": ["env=prod", "team=search"],
+        },
+        options=UpsertOptions(partial_update=True, search_tag_mode="append"),
+    )
+
+    assert result == "rec-1"
+    assert calls == [
+        ("get", ["rec-1"]),
+        (
+            "upsert",
+            {
+                "id": "rec-1",
+                "abstract": "patched",
+                "account_id": "acc1",
+                "uri": "viking://resources/demo.md",
+                "search_tags": ["owner=alice", "env=prod", "team=search"],
             },
         ),
     ]
@@ -1744,7 +1815,7 @@ async def test_single_account_backend_upsert_partial_update_creates_when_record_
             "abstract": "created",
             "unknown": "ignored",
         },
-        partial_update=True,
+        options=UpsertOptions(partial_update=True),
     )
 
     assert result == "rec-404"
@@ -1784,7 +1855,7 @@ async def test_single_account_backend_upsert_partial_update_returns_empty_when_g
 
     result = await backend.upsert(
         {"id": "rec-1", "abstract": "patched"},
-        partial_update=True,
+        options=UpsertOptions(partial_update=True),
     )
 
     assert result == ""
@@ -1823,8 +1894,8 @@ async def test_viking_vector_index_backend_upsert_partial_update_delegates_to_ac
     calls = []
 
     class _BoundBackend:
-        async def upsert(self, data, partial_update=False):
-            calls.append((data, partial_update))
+        async def upsert(self, data, options=UpsertOptions()):
+            calls.append((data, options))
             return data["id"]
 
     backend._get_backend_for_context = lambda _ctx: _BoundBackend()
@@ -1832,11 +1903,13 @@ async def test_viking_vector_index_backend_upsert_partial_update_delegates_to_ac
     result = await backend.upsert(
         {"id": "rec-1", "abstract": "patched"},
         ctx=ctx,
-        partial_update=True,
+        options=UpsertOptions(partial_update=True, search_tag_mode="append"),
     )
 
     assert result == "rec-1"
-    assert calls == [({"id": "rec-1", "abstract": "patched"}, True)]
+    assert calls == [
+        ({"id": "rec-1", "abstract": "patched"}, UpsertOptions(True, "append"))
+    ]
 
 
 @pytest.mark.asyncio
@@ -1852,10 +1925,10 @@ async def test_vikingdb_manager_proxy_upsert_partial_update_forwards_bound_conte
         has_queue_manager = False
         is_closing = False
 
-        async def upsert(self, data, *, ctx, partial_update=False):
+        async def upsert(self, data, *, ctx, options=UpsertOptions()):
             captured["data"] = data
             captured["ctx"] = ctx
-            captured["partial_update"] = partial_update
+            captured["options"] = options
             return data["id"]
 
     from openviking.storage.vikingdb_manager import VikingDBManagerProxy
@@ -1863,15 +1936,28 @@ async def test_vikingdb_manager_proxy_upsert_partial_update_forwards_bound_conte
     proxy = VikingDBManagerProxy(_Manager(), ctx)
     result = await proxy.upsert(
         {"id": "rec-1", "abstract": "patched"},
-        partial_update=True,
+        options=UpsertOptions(partial_update=True, search_tag_mode="append"),
     )
 
     assert result == "rec-1"
     assert captured == {
         "data": {"id": "rec-1", "abstract": "patched"},
         "ctx": ctx,
-        "partial_update": True,
+        "options": UpsertOptions(True, "append"),
     }
+
+
+def test_storage_upsert_signatures_use_options_instead_of_partial_update():
+    from openviking.storage.vikingdb_manager import VikingDBManagerProxy
+
+    for method in (
+        _SingleAccountBackend.upsert,
+        VikingVectorIndexBackend.upsert,
+        VikingDBManagerProxy.upsert,
+    ):
+        signature = inspect.signature(method)
+        assert "options" in signature.parameters
+        assert "partial_update" not in signature.parameters
 
 
 @pytest.mark.asyncio
@@ -1921,7 +2007,7 @@ async def test_qdrant_backend_upsert_partial_update_reads_then_upserts_existing_
 
     result = await backend.upsert(
         {"id": "doc-1", "uri": "viking://resources/qdrant", "abstract": "patched"},
-        partial_update=True,
+        options=UpsertOptions(partial_update=True),
     )
 
     assert result == "doc-1"
@@ -1985,7 +2071,7 @@ async def test_qdrant_backend_upsert_partial_update_creates_when_record_does_not
 
     result = await backend.upsert(
         {"id": "doc-404", "uri": "viking://resources/qdrant/new", "abstract": "created"},
-        partial_update=True,
+        options=UpsertOptions(partial_update=True),
     )
 
     assert result == "doc-404"
@@ -2051,7 +2137,7 @@ async def test_volcengine_backend_upsert_partial_update_reads_then_upserts_exist
 
     result = await backend.upsert(
         {"id": "doc-1", "uri": "viking://resources/volc", "abstract": "patched"},
-        partial_update=True,
+        options=UpsertOptions(partial_update=True),
     )
 
     assert result == "doc-1"
@@ -2115,7 +2201,7 @@ async def test_volcengine_backend_upsert_partial_update_creates_when_record_does
 
     result = await backend.upsert(
         {"id": "doc-404", "uri": "viking://resources/volc/new", "abstract": "created"},
-        partial_update=True,
+        options=UpsertOptions(partial_update=True),
     )
 
     assert result == "doc-404"
@@ -2150,8 +2236,8 @@ async def test_viking_vector_index_backend_update_search_tags_updates_exact_uri_
         calls["get"].append((list(ids), ctx.account_id))
         return [{"id": "root-id", "uri": resource_uri, "search_tags": ["old=root"]}]
 
-    async def _fake_upsert(data, *, ctx, partial_update=False):
-        del ctx, partial_update
+    async def _fake_upsert(data, *, ctx, options=UpsertOptions()):
+        del ctx, options
         calls["upsert"].append(dict(data))
         return data["id"]
 
@@ -2193,8 +2279,8 @@ async def test_update_search_tags_for_leaf_uri_queries_exact_uri_only(monkeypatc
         calls["get"].append((list(ids), ctx.account_id))
         return [{"id": "overview-id", "uri": overview_uri, "search_tags": ["existing=1"]}]
 
-    async def _fake_upsert(data, *, ctx, partial_update=False):
-        del ctx, partial_update
+    async def _fake_upsert(data, *, ctx, options=UpsertOptions()):
+        del ctx, options
         calls["upsert"].append(dict(data))
         return data["id"]
 
@@ -2241,8 +2327,8 @@ async def test_update_search_tags_with_levels_queries_directory_uri_only():
             {"id": "dir-l1", "uri": directory_uri, "level": 1, "search_tags": ["old=1"]},
         ]
 
-    async def _fake_upsert(data, *, ctx, partial_update=False):
-        del ctx, partial_update
+    async def _fake_upsert(data, *, ctx, options=UpsertOptions()):
+        del ctx, options
         calls["upsert"].append(dict(data))
         return data["id"]
 
@@ -2307,8 +2393,8 @@ async def test_update_search_tags_with_levels_skips_records_without_id_and_priva
             {"id": "r2", "uri": "viking://resources/demo/doc.md", "level": 2, "search_tags": None},
         ]
 
-    async def _fake_upsert(data, *, ctx, partial_update=False):
-        del ctx, partial_update
+    async def _fake_upsert(data, *, ctx, options=UpsertOptions()):
+        del ctx, options
         calls["upsert"].append(dict(data))
         return data["id"]
 

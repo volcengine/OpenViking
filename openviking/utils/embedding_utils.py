@@ -14,19 +14,16 @@ from charset_normalizer import from_bytes
 
 from openviking.core.context import Context, ContextLevel, ResourceContentType, Vectorize
 from openviking.core.namespace import (
-    canonicalize_uri,
     context_type_for_uri,
     is_session_uri,
     owner_space_for_uri,
 )
 from openviking.server.identity import RequestContext
-from openviking.storage.expr import And, Eq, PathScope
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.image_search import image_bytes_to_data_uri
-from openviking.utils.tags import merge_search_tags
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
@@ -40,10 +37,6 @@ logger = get_logger(__name__)
 # not retrievable). Cap it with headroom, mirroring
 # memory_updater._truncate_memory_abstract introduced for the memory path (#2774).
 _ABSTRACT_MAX_BYTES = 50_000
-
-
-class _SearchTagAppendReadError(RuntimeError):
-    """Raised when append mode cannot read existing search tags safely."""
 
 
 def _truncate_abstract_bytes(abstract: str) -> str:
@@ -75,76 +68,15 @@ def _apply_scalar_overrides(embedding_msg, overrides: Optional[Dict[str, Any]]) 
             embedding_msg.context_data[field] = value
 
 
-def _apply_search_tags(embedding_msg, search_tags: Optional[list[str]]) -> None:
+def _apply_search_tags(
+    embedding_msg,
+    search_tags: Optional[list[str]],
+    search_tag_mode: str = "replace",
+) -> None:
     if not embedding_msg or search_tags is None:
         return
     embedding_msg.context_data["search_tags"] = list(search_tags)
-
-
-async def _fetch_existing_search_tags(
-    vikingdb_manager: Any,
-    uri: str,
-    ctx: RequestContext,
-    *,
-    level: Optional[int],
-) -> Optional[list[str]]:
-    if level is None:
-        record = await vikingdb_manager.fetch_by_uri(uri, ctx=ctx)
-    else:
-        filter_contexts = getattr(vikingdb_manager, "filter", None)
-        if not callable(filter_contexts):
-            raise RuntimeError("vector store cannot read existing tags by level")
-        records = await filter_contexts(
-            filter=And(
-                [
-                    PathScope("uri", canonicalize_uri(uri, ctx), depth=0),
-                    Eq("account_id", ctx.account_id),
-                    Eq("level", level),
-                ]
-            ),
-            limit=1,
-            output_fields=["search_tags"],
-            ctx=ctx,
-        )
-        record = records[0] if records else None
-    if not isinstance(record, dict):
-        return None
-    value = record.get("search_tags")
-    return value if isinstance(value, list) else None
-
-
-async def _resolve_search_tags(
-    uri: str,
-    ctx: Optional[RequestContext],
-    *,
-    search_tags: Optional[list[str]],
-    search_tag_mode: str = "replace",
-    level: Optional[int] = None,
-) -> Optional[list[str]]:
-    if search_tags is None:
-        return None
-    if search_tag_mode != "append":
-        return list(search_tags)
-    existing_tags: Optional[list[str]] = None
-    try:
-        from openviking.server.dependencies import get_service
-
-        service = get_service()
-        if not service or not service.vikingdb_manager:
-            raise _SearchTagAppendReadError("vector store is not initialized")
-        existing_tags = await _fetch_existing_search_tags(
-            service.vikingdb_manager,
-            uri,
-            ctx,
-            level=level,
-        )
-    except Exception as exc:
-        if isinstance(exc, _SearchTagAppendReadError):
-            raise
-        raise _SearchTagAppendReadError(
-            f"failed to read existing search tags for append: {uri}"
-        ) from exc
-    return merge_search_tags(existing_tags, search_tags)
+    embedding_msg.context_data["_upsert_options"] = {"search_tag_mode": search_tag_mode}
 
 
 async def _decrement_embedding_tracker(semantic_msg_id: Optional[str], count: int) -> None:
@@ -417,14 +349,6 @@ async def vectorize_directory_meta(
         owner_space = owner_space_for_uri(uri, ctx)
 
         created_at, updated_at = await _resolve_context_timestamps(uri, ctx)
-        effective_search_tags = await _resolve_search_tags(
-            uri,
-            ctx,
-            search_tags=search_tags,
-            search_tag_mode=search_tag_mode,
-            level=int(ContextLevel.ABSTRACT.value),
-        )
-
         # Cap the abstract scalar below the bytes_row 65535-byte limit. #2774
         # added this for the memory path; the resource indexing paths (here and
         # index_resource, which feeds this function) were missed, so an
@@ -451,7 +375,7 @@ async def vectorize_directory_meta(
             msg_abstract,
             (scalar_overrides or {}).get(int(ContextLevel.ABSTRACT.value)),
         )
-        _apply_search_tags(msg_abstract, effective_search_tags)
+        _apply_search_tags(msg_abstract, search_tags, search_tag_mode)
         if msg_abstract:
             msg_abstract.semantic_msg_id = semantic_msg_id
             try:
@@ -481,18 +405,11 @@ async def vectorize_directory_meta(
             )
             context_overview.set_vectorize(Vectorize(text=overview, full_text=overview))
             msg_overview = EmbeddingMsgConverter.from_context(context_overview)
-            overview_search_tags = await _resolve_search_tags(
-                uri,
-                ctx,
-                search_tags=search_tags,
-                search_tag_mode=search_tag_mode,
-                level=int(ContextLevel.OVERVIEW.value),
-            )
             _apply_scalar_overrides(
                 msg_overview,
                 (scalar_overrides or {}).get(int(ContextLevel.OVERVIEW.value)),
             )
-            _apply_search_tags(msg_overview, overview_search_tags)
+            _apply_search_tags(msg_overview, search_tags, search_tag_mode)
             if msg_overview:
                 msg_overview.semantic_msg_id = semantic_msg_id
                 try:
@@ -561,14 +478,6 @@ async def vectorize_file(
             ctx,
             preserve_existing_created_at=preserve_existing_created_at,
         )
-        effective_search_tags = await _resolve_search_tags(
-            file_path,
-            ctx,
-            search_tags=search_tags,
-            search_tag_mode=search_tag_mode,
-            level=int(ContextLevel.DETAIL.value),
-        )
-
         context = Context(
             uri=file_path,
             parent_uri=parent_uri,
@@ -653,7 +562,7 @@ async def vectorize_file(
             return
 
         _apply_scalar_overrides(embedding_msg, scalar_override)
-        _apply_search_tags(embedding_msg, effective_search_tags)
+        _apply_search_tags(embedding_msg, search_tags, search_tag_mode)
         embedding_msg.semantic_msg_id = semantic_msg_id
         if register_request_wait:
             get_request_wait_tracker().register_embedding_root(
@@ -680,8 +589,6 @@ async def vectorize_file(
                 registered_wait_root[1],
                 f"Failed to enqueue file vector for {file_path}: {e}",
             )
-        if isinstance(e, _SearchTagAppendReadError):
-            raise
     finally:
         if not enqueued:
             await _decrement_embedding_tracker(semantic_msg_id, 1)
