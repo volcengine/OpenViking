@@ -313,7 +313,7 @@ export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
 | `bot.gateway.port` | `18790` | Gateway 监听端口 |
 | `bot.sandbox.backend` | `direct` | 执行后端 |
 | `bot.sandbox.mode` | `shared` | 工作区隔离方式 |
-| `bot.sandbox.backends.direct.allow_compile_exec` | `true` | 允许 Compile 通过 `direct` backend 执行宿主机命令 |
+| `bot.sandbox.backends.direct.allow_compile_exec` | `false` | 不安全的显式开关；允许 Compile 通过 `direct` backend 执行宿主机命令 |
 | `bot.heartbeat.enabled` | `true` | 是否周期检查 `HEARTBEAT.md` |
 | `bot.heartbeat.interval_seconds` | `600` | 心跳间隔 |
 | `bot.mode` | `normal` | 可选 `normal`、`readonly`、`debug` |

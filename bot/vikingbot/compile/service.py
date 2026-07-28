@@ -178,11 +178,13 @@ class BotCompileService:
             return
         backends = getattr(sandbox, "backends", None)
         direct = getattr(backends, "direct", None)
-        if getattr(direct, "allow_compile_exec", True):
+        if getattr(direct, "allow_compile_exec", False):
             return
         raise CompileFailure(
             "UNAVAILABLE",
-            "Compile exec is disabled for the direct sandbox backend.",
+            "Compile exec is disabled for the direct sandbox backend. "
+            "Use an isolated backend, or explicitly set "
+            "bot.sandbox.backends.direct.allow_compile_exec=true to accept host execution risk.",
             stage="queued",
         )
 

@@ -105,7 +105,7 @@ def test_compile_limit_defaults_match_the_resource_envelope():
     assert limits.concurrent_tasks == 2
     assert limits.target_inventory_entries == 2000
     assert limits.target_catalog_pages == 10
-    assert DirectBackendConfig().allow_compile_exec is True
+    assert DirectBackendConfig().allow_compile_exec is False
 
 
 def test_wiki_page_requires_exactly_one_body_source():
@@ -2056,16 +2056,21 @@ def _compile_service(
     *,
     auth_mode: str,
     backend: SandboxBackend,
-    allow_compile_exec: bool = True,
+    allow_compile_exec: bool | None = None,
     limits: CompileLimits | None = None,
 ) -> BotCompileService:
+    direct_exec_enabled = (
+        DirectBackendConfig().allow_compile_exec
+        if allow_compile_exec is None
+        else allow_compile_exec
+    )
     config = SimpleNamespace(
         bot_data_path=tmp_path,
         ov_server=SimpleNamespace(effective_auth_mode=auth_mode),
         sandbox=SimpleNamespace(
             backend=backend,
             backends=SimpleNamespace(
-                direct=SimpleNamespace(allow_compile_exec=allow_compile_exec),
+                direct=SimpleNamespace(allow_compile_exec=direct_exec_enabled),
             ),
         ),
     )
@@ -2103,6 +2108,7 @@ async def test_local_dev_compile_uses_config_backed_connection(monkeypatch, tmp_
         tmp_path,
         auth_mode="dev",
         backend=SandboxBackend.DIRECT,
+        allow_compile_exec=True,
     )
     started = asyncio.Event()
     release = asyncio.Event()
@@ -2134,12 +2140,11 @@ async def test_local_dev_compile_uses_config_backed_connection(monkeypatch, tmp_
 
 
 @pytest.mark.asyncio
-async def test_direct_compile_exec_can_be_disabled(tmp_path: Path):
+async def test_direct_compile_exec_is_disabled_by_default(tmp_path: Path):
     service = _compile_service(
         tmp_path,
         auth_mode="api_key",
         backend=SandboxBackend.DIRECT,
-        allow_compile_exec=False,
     )
 
     with pytest.raises(CompileFailure) as raised:
@@ -2149,6 +2154,7 @@ async def test_direct_compile_exec_can_be_disabled(tmp_path: Path):
         )
 
     assert raised.value.code == "UNAVAILABLE"
+    assert "allow_compile_exec=true" in str(raised.value)
     assert not list(service.store.root.glob("cmp_*.json"))
 
 

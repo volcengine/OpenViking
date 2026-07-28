@@ -151,7 +151,7 @@ ov compile \
 
 `--wait` 会轮询状态接口，直到任务进入终态。`--timeout` 只限制本地等待时间，不会取消服务端任务。
 
-`direct` backend 会以 Bot 宿主机权限执行 Compile 的 `exec` 命令。`bot.sandbox.backends.direct.allow_compile_exec` 默认为 `true` 以保持本地兼容；多用户部署应将其设为 `false` 或使用隔离 backend。关闭后创建任务返回 `503 UNAVAILABLE`。超过 admission 上限时返回 `429 RESOURCE_EXHAUSTED`。
+`direct` backend 会以 Bot 宿主机权限执行 Compile 的 `exec` 命令。`bot.sandbox.backends.direct.allow_compile_exec` 默认为 `false`，因此使用 `direct` 的 Compile 请求会返回 `503 UNAVAILABLE`。将其设为 `true` 是明确的不安全 opt-in；推荐使用具备文件系统和网络策略的隔离 backend。超过 admission 上限时返回 `429 RESOURCE_EXHAUSTED`。
 
 **响应示例**
 
