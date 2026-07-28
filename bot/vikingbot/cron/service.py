@@ -103,9 +103,7 @@ class CronService:
                     )
                 self._store = CronStore(jobs=jobs)
             except Exception as e:
-                raise RuntimeError(
-                    f"Failed to load cron store from {self.store_path}: {e}"
-                ) from e
+                raise RuntimeError(f"Failed to load cron store from {self.store_path}: {e}") from e
         else:
             self._store = CronStore()
 
@@ -230,13 +228,12 @@ class CronService:
 
     async def _execute_job(self, job: CronJob) -> None:
         """Execute a single job."""
-        if self.on_job is None:
-            raise RuntimeError("Cron service has no job execution callback")
-
         start_ms = _now_ms()
         logger.info(f"Cron: executing job '{job.name}' ({job.id})")
 
         try:
+            if self.on_job is None:
+                raise RuntimeError("Cron service has no job execution callback")
             await self.on_job(job)
 
             job.state.last_status = "ok"
@@ -351,6 +348,8 @@ class CronService:
             if job.id == job_id:
                 if not force and not job.enabled:
                     return False
+                if self.on_job is None:
+                    raise RuntimeError("Cron service has no job execution callback")
                 await self._execute_job(job)
                 self._save_store()
                 self._arm_timer()

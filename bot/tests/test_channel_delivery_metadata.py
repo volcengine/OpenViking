@@ -257,6 +257,37 @@ async def test_cron_service_without_callback_preserves_one_shot(tmp_path):
     assert path.read_bytes() == original
 
 
+@pytest.mark.asyncio
+async def test_cron_service_without_callback_rearms_recurring_timer(tmp_path, monkeypatch):
+    path = tmp_path / "jobs.json"
+    now_ms = 1_000
+    monkeypatch.setattr("vikingbot.cron.service._now_ms", lambda: now_ms)
+    service = CronService(path)
+    job = service.add_job(
+        "recurring",
+        CronSchedule(kind="every", every_ms=100),
+        "hello",
+        SessionKey(type="cli", channel_id="default", chat_id="default"),
+    )
+    service._running = True
+    rearmed_at = []
+    monkeypatch.setattr(
+        service, "_arm_timer", lambda: rearmed_at.append(service._get_next_wake_ms())
+    )
+    now_ms = 1_100
+
+    await service._on_timer()
+
+    assert job.state.last_status == "error"
+    assert job.state.last_error == "Cron service has no job execution callback"
+    assert job.state.last_run_at_ms == now_ms
+    assert job.state.next_run_at_ms == 1_200
+    assert rearmed_at == [1_200]
+    persisted = CronService(path).list_jobs()
+    assert persisted[0].state.last_status == "error"
+    assert persisted[0].state.next_run_at_ms == 1_200
+
+
 def test_feishu_uses_thread_root_for_scheduled_delivery():
     assert (
         FeishuChannel._reply_to_message_id_from_metadata(

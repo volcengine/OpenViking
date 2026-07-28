@@ -75,9 +75,7 @@ class ChatRequest(BaseModel):
     stream: bool = Field(default=False, description="Whether to stream the response")
     context: Optional[List[ChatMessage]] = Field(
         default=None,
-        description=(
-            "Reserved for wire compatibility; non-empty context messages are not supported"
-        ),
+        description="Non-empty context messages are not supported and are rejected",
     )
     need_reply: bool = True
     channel_id: Optional[str] = Field(

@@ -182,6 +182,20 @@ class TestOpenAPIAuth:
         description = ChatRequest.model_json_schema()["properties"]["context"]["description"]
         assert "not supported" in description
 
+    def test_chat_returns_422_for_unsupported_context(self, message_bus, temp_workspace):
+        channel = OpenAPIChannel(OpenAPIChannelConfig(), message_bus, temp_workspace)
+
+        response = _make_client(channel).post(
+            "/bot/v1/chat",
+            json={
+                "message": "hello",
+                "context": [{"role": "user", "content": "prior"}],
+            },
+        )
+
+        assert response.status_code == 422
+        assert message_bus.inbound_size == 0
+
     def test_chat_rejects_second_in_flight_request(self, message_bus, temp_workspace):
         channel = OpenAPIChannel(OpenAPIChannelConfig(), message_bus, temp_workspace)
         scope = channel._principal_scope("standalone")
