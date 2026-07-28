@@ -1,9 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
+import asyncio
 import importlib
+import threading
+import weakref
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 
 def _load_codex_auth_module():
@@ -42,6 +46,35 @@ class VLMCredential(BaseModel):
         default=None, description="Extra JSON body fields"
     )
     stream: Optional[bool] = Field(default=None, description="Enable streaming mode")
+
+    model_config = {"extra": "forbid"}
+
+
+class VLMMediaConfig(BaseModel):
+    """Runtime controls for audio and video inputs handled by the configured VLM."""
+
+    enabled: bool = Field(default=False, description="Enable VLM audio/video understanding")
+    max_concurrent: int = Field(
+        default=2,
+        ge=1,
+        description="Maximum concurrent audio/video VLM calls",
+    )
+    file_processing_timeout: float = Field(
+        default=1800.0,
+        gt=0.0,
+        description="Maximum provider-side media preprocessing wait in seconds",
+    )
+    file_poll_interval: float = Field(
+        default=3.0,
+        gt=0.0,
+        description="Provider-side media preprocessing poll interval in seconds",
+    )
+    video_fps: float = Field(
+        default=1.0,
+        ge=0.2,
+        le=5.0,
+        description="Video frame sampling rate for providers that support preprocessing",
+    )
 
     model_config = {"extra": "forbid"}
 
@@ -96,6 +129,11 @@ class VLMConfig(BaseModel):
         default=64, description="Maximum number of concurrent LLM calls for semantic processing"
     )
 
+    media: VLMMediaConfig = Field(
+        default_factory=VLMMediaConfig,
+        description="Audio/video runtime controls for the configured VLM",
+    )
+
     api_version: Optional[str] = Field(
         default=None,
         description="API version for Azure OpenAI (e.g., '2025-01-01-preview').",
@@ -131,6 +169,11 @@ class VLMConfig(BaseModel):
     )
 
     _vlm_instance: Optional[Any] = None
+    _media_semaphores: weakref.WeakKeyDictionary[
+        asyncio.AbstractEventLoop,
+        weakref.ReferenceType[asyncio.Semaphore],
+    ] = PrivateAttr(default_factory=weakref.WeakKeyDictionary)
+    _media_semaphore_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid"}
 
@@ -552,6 +595,7 @@ class VLMConfig(BaseModel):
             "max_tokens": self.max_tokens,
             "stream": credential.stream if credential.stream is not None else self.stream,
             "api_version": credential.api_version,
+            "media": self.media.model_dump(),
         }
 
         if credential.api_key:
@@ -586,6 +630,7 @@ class VLMConfig(BaseModel):
             "max_tokens": self.max_tokens,
             "stream": stream,
             "api_version": self.api_version,
+            "media": self.media.model_dump(),
         }
 
         if config:
@@ -663,6 +708,56 @@ class VLMConfig(BaseModel):
             tools=tools,
             messages=messages,
         )
+
+    def _get_media_semaphore(self) -> asyncio.Semaphore:
+        loop = asyncio.get_running_loop()
+        with self._media_semaphore_lock:
+            semaphore_ref = self._media_semaphores.get(loop)
+            semaphore = semaphore_ref() if semaphore_ref is not None else None
+            if semaphore is None:
+                semaphore = asyncio.Semaphore(self.media.max_concurrent)
+                self._media_semaphores[loop] = weakref.ref(semaphore)
+            return semaphore
+
+    def supports_media(
+        self,
+        *,
+        media_type: str,
+        filename: str,
+        size_bytes: int,
+    ) -> bool:
+        """Return whether enabled VLM media processing supports this input."""
+        if not self.media.enabled or not self.is_available():
+            return False
+        return bool(
+            self.get_vlm_instance().supports_media(
+                media_type=media_type,
+                filename=filename,
+                size_bytes=size_bytes,
+            )
+        )
+
+    async def get_media_completion_async(
+        self,
+        *,
+        prompt: str,
+        media_path: Path,
+        filename: str,
+        media_type: str,
+    ) -> str:
+        """Understand audio/video through the configured VLM instance."""
+        from openviking.models.vlm.base import UnsupportedMediaInputError
+
+        if not self.media.enabled:
+            raise UnsupportedMediaInputError("VLM media understanding is disabled")
+
+        async with self._get_media_semaphore():
+            return await self.get_vlm_instance().get_media_completion_async(
+                prompt=prompt,
+                media_path=media_path,
+                filename=filename,
+                media_type=media_type,
+            )
 
     async def get_vision_completion_async(
         self,

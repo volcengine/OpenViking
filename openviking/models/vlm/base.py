@@ -23,6 +23,10 @@ _THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>")
 logger = get_logger(__name__)
 
 
+class UnsupportedMediaInputError(RuntimeError):
+    """Raised when a VLM backend cannot process an audio or video input."""
+
+
 @dataclass
 class ToolCall:
     """Single tool call from LLM."""
@@ -172,6 +176,31 @@ class VLMBase(ABC):
             str if no tools provided, VLMResponse if tools provided
         """
         pass
+
+    def supports_media(
+        self,
+        *,
+        media_type: str,
+        filename: str,
+        size_bytes: int,
+    ) -> bool:
+        """Return whether this backend can process the specified media input."""
+        del media_type, filename, size_bytes
+        return False
+
+    async def get_media_completion_async(
+        self,
+        *,
+        prompt: str,
+        media_path: Path,
+        filename: str,
+        media_type: str,
+    ) -> str:
+        """Understand one audio or video file asynchronously."""
+        del prompt, media_path, filename, media_type
+        raise UnsupportedMediaInputError(
+            f"VLM provider {self.provider!r} does not support audio/video inputs"
+        )
 
     def _clean_response(self, content: str) -> str:
         """Strip reasoning tags (e.g. ``<think>...</think>``) from model output."""
@@ -555,6 +584,74 @@ class FailoverVLM(VLMBase):
             messages=messages,
         )
 
+    def supports_media(
+        self,
+        *,
+        media_type: str,
+        filename: str,
+        size_bytes: int,
+    ) -> bool:
+        return any(
+            vlm.supports_media(
+                media_type=media_type,
+                filename=filename,
+                size_bytes=size_bytes,
+            )
+            for vlm in (self.primary, self.backup)
+        )
+
+    async def get_media_completion_async(
+        self,
+        *,
+        prompt: str,
+        media_path: Path,
+        filename: str,
+        media_type: str,
+    ) -> str:
+        size_bytes = media_path.stat().st_size if media_path.exists() else 0
+        kwargs = {
+            "prompt": prompt,
+            "media_path": media_path,
+            "filename": filename,
+            "media_type": media_type,
+        }
+        primary_supported = self.primary.supports_media(
+            media_type=media_type,
+            filename=filename,
+            size_bytes=size_bytes,
+        )
+        backup_supported = self.backup.supports_media(
+            media_type=media_type,
+            filename=filename,
+            size_bytes=size_bytes,
+        )
+        last_error = None
+
+        if primary_supported and (not backup_supported or self._switcher.should_try_primary()):
+            try:
+                result = await self.primary.get_media_completion_async(**kwargs)
+                self._switcher.record_primary_success()
+                return result
+            except Exception as error:
+                _annotate_vlm_error(error, self.primary)
+                last_error = error
+                if not backup_supported or not self._switcher.record_primary_failure(error):
+                    raise
+
+        if backup_supported:
+            try:
+                self._switcher.record_backup_request()
+                return await self.backup.get_media_completion_async(**kwargs)
+            except Exception as error:
+                _annotate_vlm_error(error, self.backup)
+                raise
+
+        if last_error is not None:
+            raise last_error
+        raise UnsupportedMediaInputError(
+            f"No configured VLM supports {media_type} input {filename!r}"
+        )
+
     @property
     def is_using_backup(self) -> bool:
         """Check if currently using the backup VLM instance."""
@@ -817,6 +914,74 @@ class MultiCredentialVLM(VLMBase):
             tools=tools,
             tool_choice=tool_choice,
             messages=messages,
+        )
+
+    def supports_media(
+        self,
+        *,
+        media_type: str,
+        filename: str,
+        size_bytes: int,
+    ) -> bool:
+        return any(
+            vlm.supports_media(
+                media_type=media_type,
+                filename=filename,
+                size_bytes=size_bytes,
+            )
+            for vlm in self._vlm_instances
+        )
+
+    async def get_media_completion_async(
+        self,
+        *,
+        prompt: str,
+        media_path: Path,
+        filename: str,
+        media_type: str,
+    ) -> str:
+        size_bytes = media_path.stat().st_size if media_path.exists() else 0
+        start = self._switcher.maybe_failback()
+        errors = []
+        attempted = False
+
+        for offset in range(self._switcher.n):
+            idx = (start + offset) % self._switcher.n
+            vlm = self._vlm_instances[idx]
+            if not vlm.supports_media(
+                media_type=media_type,
+                filename=filename,
+                size_bytes=size_bytes,
+            ):
+                continue
+
+            attempted = True
+            credential_id = self._credential_ids[idx]
+            try:
+                result = await vlm.get_media_completion_async(
+                    prompt=prompt,
+                    media_path=media_path,
+                    filename=filename,
+                    media_type=media_type,
+                )
+                self._switcher.commit_success(idx)
+                return result
+            except Exception as error:
+                _annotate_vlm_error(error, vlm)
+                error_class = classify_api_error(error)
+                errors.append((credential_id, error_class, error, idx))
+                if self._switcher.is_fail_fast(error_class):
+                    raise
+                self._logger.warning(
+                    "Credential %s failed media understanding with %s, trying next credential",
+                    credential_id,
+                    error_class,
+                )
+
+        if attempted:
+            raise AllCredentialsFailedError(errors)
+        raise UnsupportedMediaInputError(
+            f"No configured VLM supports {media_type} input {filename!r}"
         )
 
     @property
