@@ -1,0 +1,35 @@
+bot/README.md
+  s_867def0005e64c::t_6f4c5654000003 316
+bot/README_CN.md
+  s_867def0005e64c::t_e5259d654bfeaf 316
+bot/tests/test_compile.py
+  s_867def0005e64c::t_9eba61ee19e3ec 24,95-101,170-171,178,184-190,489-490,535,1594,1597,1610,1708,1935-1936,1967-1971,1982-1984,1997,2015,2043-2071,2086,2089-2090,2152-2254,2284,2293,2299-2300,2302-2305,2307-2324
+bot/vikingbot/agent/tools/compile.py
+  s_867def0005e64c::t_58be3f64a77303 127-131,158,174,189,191,212,214,294,317,328,367,385,401,406,447,468-469,471,494-496,513,556
+bot/vikingbot/compile/service.py
+  s_867def0005e64c::t_0965f24c751a6a 12,62-69,79,83-91,190,192-202,257-259,275-277,294-296,342-344,365-367,370-373,375-377,384-386,395-397,399-401,489,519-521,524,550,565,604,611,788-791,802,840-842,864-866,869-871,966,974-976,981-983,989-991,993-995,997-1028,1032,1092,1197,1221,1236,1239-1240,1272,1284,1286-1296,1302-1303,1337-1338
+docs/design/ov-compile-design.md
+  s_867def0005e64c::t_ae10fbcbf8b1ef 328
+docs/en/api/24-vikingbot.md
+  s_867def0005e64c::t_c2225a78407ec2 154
+docs/zh/api/24-vikingbot.md
+  s_867def0005e64c::t_de6eaed18ccd21 154
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "33208f8ad3128c3d7fde57aca36c3ed85452b9a5",
+  "prompts": {},
+  "sessions": {
+    "s_867def0005e64c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa7f5-8ec7-7ff3-9408-dede23bf79c5",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
