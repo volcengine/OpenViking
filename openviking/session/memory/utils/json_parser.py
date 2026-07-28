@@ -411,8 +411,38 @@ def parse_json_with_stability(
     # Layer 3: Structure tolerance
     # Handle case where model returns [{"xxx": ...}] instead of {"xxx": ...}
     if isinstance(parsed_data, list) and len(parsed_data) > 0:
-        parsed_data = parsed_data[0]
-        tracer.info("Extracted first item from list response")
+        # Attempt to merge all list items into a single dict
+        # (some LLMs, e.g. llama.cpp, emit separate operation objects
+        #  as a JSON array rather than a single compound object).
+        try:
+            merged: Dict[str, Any] = {}
+            for item in parsed_data:
+                if not isinstance(item, dict):
+                    # Skip non-dict items but keep going
+                    tracer.info(f"Skipping non-dict list item: {type(item).__name__}")
+                    continue
+                for k, v in item.items():
+                    if k not in merged:
+                        merged[k] = v
+                    elif isinstance(merged[k], list) and isinstance(v, list):
+                        merged[k] = merged[k] + v
+                    elif isinstance(merged[k], list):
+                        merged[k] = merged[k] + ([v] if not isinstance(v, list) else v)
+                    elif isinstance(v, list) and not isinstance(merged[k], list):
+                        merged[k] = [merged[k]] + v
+                    else:
+                        # Later values win for scalar / overlapping keys
+                        merged[k] = v
+            if merged:
+                parsed_data = merged
+                tracer.info(f"Merged {len(parsed_data)} list items into single dict")
+            else:
+                # Fall back to original single-item behavior
+                parsed_data = parsed_data[0]
+                tracer.info("Extracted first item from list response (merge yielded no dict)")
+        except Exception:
+            parsed_data = parsed_data[0]
+            tracer.info("Extracted first item from list response (merge failed)")
     elif (
         isinstance(parsed_data, list)
         and len(parsed_data) == 0
