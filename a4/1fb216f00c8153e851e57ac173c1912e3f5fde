@@ -1,0 +1,55 @@
+bot/README.md
+  s_cdd38986f8bd9a::t_ed56fef8075b82 316
+bot/README_CN.md
+  s_cdd38986f8bd9a::t_dbc4ee26ab7dab 316
+bot/tests/test_compile.py
+  s_cdd38986f8bd9a::t_97d7403b907008 1,4,26,102-110,1275,1293,1323-1338,1872-1915,2054-2229,2259-2288
+bot/tests/test_openapi_auth.py
+  s_867def0005e64c::t_b6dca9bd322df1 97-176
+bot/vikingbot/channels/openapi.py
+  s_867def0005e64c::t_a6ca08d116946d 987-994
+bot/vikingbot/compile/models.py
+  s_cdd38986f8bd9a::t_6d7529df1be0c6 40-43,45-46
+bot/vikingbot/compile/service.py
+  s_cdd38986f8bd9a::t_6e2c555dbee078 48,91,93-95,105,115-138,140-141,143-159,171-233,287-299,368,370-390,398-417,441-445,1065-1066,1071,1078-1079,1081,1085
+bot/vikingbot/compile/store.py
+  s_cdd38986f8bd9a::t_9777feb15738eb 8,91-120
+bot/vikingbot/config/schema.py
+  s_cdd38986f8bd9a::t_40d5f77ad23680 758
+docs/design/ov-compile-design.md
+  s_cdd38986f8bd9a::t_9f2ed5c9bfd91a 328,533,547,551,553,565,570-571
+docs/en/api/24-vikingbot.md
+  s_cdd38986f8bd9a::t_fd9d9bc66f14b4 154-155
+docs/zh/api/24-vikingbot.md
+  s_cdd38986f8bd9a::t_ea8c4b1a913522 154-155
+openviking/server/routers/bot.py
+  s_cdd38986f8bd9a::t_9ff8949c2e6f3d 102-103,126-127,189-194,224-229
+tests/server/test_bot_proxy_auth.py
+  s_cdd38986f8bd9a::t_6ab9679dd34539 312-371
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "a41fb216f00c8153e851e57ac173c1912e3f5fde",
+  "prompts": {},
+  "sessions": {
+    "s_867def0005e64c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa7f5-8ec7-7ff3-9408-dede23bf79c5",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    },
+    "s_cdd38986f8bd9a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa2df-be1f-73e2-99e6-04aa7cfe807c",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
