@@ -421,7 +421,7 @@ enum Commands {
             short = 'n',
             alias = "limit",
             default_value = "256",
-            value_parser = clap::value_parser!(i32).range(1..),
+            value_parser = clap::value_parser!(i32).range(0..),
             value_name = "n",
             help_heading = "Common options"
         )]
@@ -450,7 +450,7 @@ enum Commands {
             short = 'n',
             alias = "limit",
             default_value = "256",
-            value_parser = clap::value_parser!(i32).range(1..),
+            value_parser = clap::value_parser!(i32).range(0..),
             value_name = "n",
             help_heading = "Common options"
         )]
@@ -629,7 +629,7 @@ enum Commands {
             long = "node-limit",
             alias = "limit",
             default_value = "10",
-            value_parser = clap::value_parser!(i32).range(1..),
+            value_parser = clap::value_parser!(i32).range(0..),
             value_name = "n",
             help_heading = "Common options"
         )]
@@ -698,7 +698,7 @@ enum Commands {
             long = "node-limit",
             alias = "limit",
             default_value = "10",
-            value_parser = clap::value_parser!(i32).range(1..),
+            value_parser = clap::value_parser!(i32).range(0..),
             value_name = "n",
             help_heading = "Common options"
         )]
@@ -768,7 +768,7 @@ enum Commands {
             long = "node-limit",
             alias = "limit",
             default_value = "256",
-            value_parser = clap::value_parser!(i32).range(1..),
+            value_parser = clap::value_parser!(i32).range(0..),
             value_name = "n",
             help_heading = "Common options"
         )]
@@ -803,7 +803,7 @@ enum Commands {
             long = "node-limit",
             alias = "limit",
             default_value = "256",
-            value_parser = clap::value_parser!(i32).range(1..),
+            value_parser = clap::value_parser!(i32).range(0..),
             value_name = "n",
             help_heading = "Common options"
         )]
@@ -1355,7 +1355,7 @@ enum SkillCommands {
             long = "node-limit",
             alias = "limit",
             default_value = "1000",
-            value_parser = clap::value_parser!(i32).range(1..),
+            value_parser = clap::value_parser!(i32).range(0..),
             value_name = "n"
         )]
         node_limit: i32,
@@ -1374,7 +1374,7 @@ enum SkillCommands {
             long = "node-limit",
             alias = "limit",
             default_value = "10",
-            value_parser = clap::value_parser!(i32).range(1..),
+            value_parser = clap::value_parser!(i32).range(0..),
             value_name = "n"
         )]
         node_limit: i32,
@@ -4274,7 +4274,7 @@ mod tests {
     }
 
     #[test]
-    fn all_node_limit_options_require_positive_values() {
+    fn all_node_limit_options_accept_zero_and_reject_negative_values() {
         let command_prefixes = [
             vec!["ov", "ls", "--node-limit"],
             vec!["ov", "tree", "viking://resources", "--node-limit"],
@@ -4287,14 +4287,19 @@ mod tests {
         ];
 
         for prefix in command_prefixes {
-            for invalid in ["0", "-1"] {
-                let mut args = prefix.clone();
-                args.push(invalid);
-                assert!(
-                    Cli::try_parse_from(&args).is_err(),
-                    "{args:?} should reject a non-positive node limit"
-                );
-            }
+            let mut negative_args = prefix.clone();
+            negative_args.push("-1");
+            assert!(
+                Cli::try_parse_from(&negative_args).is_err(),
+                "{negative_args:?} should reject a negative node limit"
+            );
+
+            let mut zero_args = prefix.clone();
+            zero_args.push("0");
+            assert!(
+                Cli::try_parse_from(&zero_args).is_ok(),
+                "{zero_args:?} should preserve the established zero-limit semantics"
+            );
 
             let mut args = prefix;
             args.push("1");

@@ -98,7 +98,7 @@ curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&recursiv
 **CLI**
 
 ```bash
-openviking ls viking://resources/
+openviking ls viking://resources/ [--simple] [--recursive]
 ```
 
 
@@ -553,7 +553,7 @@ curl -X DELETE "http://localhost:1933/api/v1/fs?uri=viking://resources/old-proje
 **CLI**
 
 ```bash
-openviking rm viking://resources/old.md
+openviking rm viking://resources/old.md [--recursive]
 ```
 
 
