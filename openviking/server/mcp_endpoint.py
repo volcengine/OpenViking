@@ -548,6 +548,7 @@ async def _maybe_sitemap_hint(path: str) -> str:
 async def add_resource(
     path: str = "",
     temp_file_id: str = "",
+    add_type: str = "",
     description: str = "",
     watch_interval: float = 0,
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
@@ -568,6 +569,11 @@ async def add_resource(
     Args:
         path: Remote URL or local filesystem path. Required unless ``temp_file_id`` is set.
         temp_file_id: Server-minted upload id from a prior signed local-file upload.
+        add_type: Explicit Connector source type (e.g. "tos", "git"). When set, the
+            request routes through the Connector integration (must be enabled
+            server-side) and ``path`` is sent verbatim — never treated as a local
+            file. Cannot be combined with ``temp_file_id``. Leave empty for the
+            default path-probing behavior.
         description: Optional human-readable reason for adding the resource.
         watch_interval: Auto-refresh cadence in minutes. 0 = no watch. Prefer >=1440 (24h)
             unless the source changes faster — every refresh re-embeds the whole resource.
@@ -591,6 +597,12 @@ async def add_resource(
             "Error: watch_interval must be >= 0. Use 0 for one-shot add (no watch); "
             "use a positive number of minutes (>=1440 recommended) to subscribe to auto-refresh."
         )
+
+    add_type = add_type.strip()
+    if add_type and temp_file_id:
+        return "Error: add_type cannot be combined with temp_file_id."
+    if add_type and not path:
+        return "Error: add_type requires 'path'."
 
     # Branch 1: ingest by temp_file_id. Kept for backward compat / REST-style use — the
     # signed upload now auto-ingests server-side, so agents no longer need this second leg.
@@ -640,13 +652,18 @@ async def add_resource(
             f'Pass it as the temp_file_id kwarg: add_resource(temp_file_id="{path}")'
         )
 
-    # Branch 3: remote URL — same flow as before
-    if is_remote_resource_source(path):
+    # Branch 3: remote URL, or an explicitly declared Connector source type
+    # (declared requests are delegated or rejected server-side, never resolved
+    # as local paths)
+    if add_type or is_remote_resource_source(path):
         try:
-            path = require_remote_resource_source(path)
+            path = require_remote_resource_source(
+                path, declared_connector_add_type=add_type or None
+            )
             result = await service.resources.add_resource(
                 path=path,
                 ctx=ctx,
+                add_type=add_type or None,
                 to=to or None,
                 parent=parent or None,
                 reason=description,
@@ -675,7 +692,8 @@ async def add_resource(
         # Detect-and-suggest: if this single page belongs to a site that exposes a
         # sitemap/RSS feed, hint at whole-site ingestion. Never auto-crawls; the
         # add above is already done, so a slow/failed probe has no functional impact.
-        hint = await _maybe_sitemap_hint(path)
+        # Declared Connector imports ingest the whole source already — no hint.
+        hint = None if add_type else await _maybe_sitemap_hint(path)
         if hint:
             message += "\n" + hint
         return message

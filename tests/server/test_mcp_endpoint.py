@@ -643,6 +643,31 @@ async def test_add_resource_remote_parent_is_forwarded(service, monkeypatch):
     assert captured["to"] is None
 
 
+async def test_add_resource_declared_add_type_is_forwarded(service, monkeypatch):
+    captured = {}
+
+    async def fake_add_resource(*, path, ctx, **kwargs):
+        captured["path"] = path
+        captured.update(kwargs)
+        return {"task_id": "ov-task-123"}
+
+    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
+
+    # A non-URL source: only reaches the service because add_type is declared;
+    # without it this path shape would be treated as a local file.
+    result = await add_resource(path="space:home", add_type="feishu")
+
+    assert "task_id: ov-task-123" in result
+    assert captured["path"] == "space:home"
+    assert captured["add_type"] == "feishu"
+
+
+async def test_add_resource_declared_add_type_rejects_temp_file_id(service):
+    result = await add_resource(temp_file_id="upload_abc.md", add_type="feishu")
+
+    assert result == "Error: add_type cannot be combined with temp_file_id."
+
+
 async def test_add_resource_temp_file_id_branch_resolves_and_ingests(
     service, upload_temp_dir, monkeypatch
 ):

@@ -681,6 +681,7 @@ impl HttpClient {
     pub async fn add_resource(
         &self,
         path: &str,
+        add_type: Option<String>,
         to: Option<String>,
         parent: Option<String>,
         parent_auto_create: Option<String>,
@@ -724,7 +725,9 @@ impl HttpClient {
             body
         };
 
-        if path_obj.exists() {
+        // A declared Connector add_type sends the path verbatim as a remote
+        // source; never interpret it as a local file to upload.
+        if add_type.is_none() && path_obj.exists() {
             if path_obj.is_dir() {
                 let source_name = path_obj
                     .file_name()
@@ -826,6 +829,7 @@ impl HttpClient {
         } else {
             let body = build_body(serde_json::json!({
                 "path": path,
+                "add_type": add_type,
                 "to": to,
                 "parent": effective_parent,
                 "reason": reason,

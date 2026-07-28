@@ -282,6 +282,15 @@ enum Commands {
         /// Local path or URL to import
         #[arg(value_name = "path-or-url")]
         path: String,
+        /// Explicit Connector source type (e.g. "tos", "git"). Routes the import
+        /// through the Connector integration (must be enabled server-side); the
+        /// path is sent verbatim and never treated as a local file
+        #[arg(
+            long = "add-type",
+            value_name = "type",
+            help_heading = "Common options"
+        )]
+        add_type: Option<String>,
         /// Exact target URI (must not exist yet) (cannot be used with --parent)
         #[arg(long, value_name = "uri", help_heading = "Common options")]
         to: Option<String>,
@@ -2787,6 +2796,7 @@ async fn main() {
     let result = match cli.command {
         Commands::AddResource {
             path,
+            add_type,
             to,
             parent,
             parent_auto_create,
@@ -2808,6 +2818,7 @@ async fn main() {
                 ctx.with_upload_options(upload_options.merged_with_legacy(legacy_upload_options));
             handlers::handle_add_resource(
                 path,
+                add_type,
                 to,
                 parent,
                 parent_auto_create,

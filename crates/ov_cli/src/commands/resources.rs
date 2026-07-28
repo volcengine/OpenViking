@@ -6,6 +6,7 @@ use serde_json::{Map, Value};
 pub async fn add_resource(
     client: &HttpClient,
     path: &str,
+    add_type: Option<String>,
     to: Option<String>,
     parent: Option<String>,
     parent_auto_create: Option<String>,
@@ -29,6 +30,7 @@ pub async fn add_resource(
     let result = client
         .add_resource(
             path,
+            add_type,
             to,
             parent,
             parent_auto_create,
