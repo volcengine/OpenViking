@@ -49,12 +49,13 @@ def connector_config(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        "openviking.parse.accessors.git_accessor.get_openviking_config",
+        "openviking.utils.code_hosting_utils.get_openviking_config",
         lambda: SimpleNamespace(
             code=SimpleNamespace(
                 github_domains=["github.com", "git.example"],
                 gitlab_domains=[],
                 azure_devops_domains=[],
+                code_hosting_domains=[],
             )
         ),
     )

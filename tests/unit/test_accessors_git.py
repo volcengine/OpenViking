@@ -183,19 +183,44 @@ class TestGitAccessor:
             None,
         )
 
-    def test_normalize_repo_url_github_nested_dotgit(self, accessor: GitAccessor) -> None:
-        assert (
+    def test_parse_repo_source_gitlab_subgroup_named_tree(self, accessor: GitAccessor) -> None:
+        """A trailing .git keeps every nested namespace and does not imply a branch."""
+        source = "https://gitlab.com/org/subgroup/tree/repo.git"
+
+        assert accessor._parse_repo_source(source) == (source, None, None)
+
+    def test_gitee_tree_browse_file_ending_dotgit_is_rejected(self, accessor: GitAccessor) -> None:
+        source = "https://gitee.com/org/repo/tree/main/config.git"
+
+        assert accessor.can_handle(source) is False
+        with pytest.raises(ValueError, match="Unsupported Git repository URL"):
+            accessor._parse_repo_source(source)
+
+    def test_normalize_repo_url_rejects_github_nested_dotgit(self, accessor: GitAccessor) -> None:
+        with pytest.raises(ValueError, match="Unsupported Git repository URL"):
             accessor._normalize_repo_url("https://github.com/org/repo/not-a-repo.git")
-            == "https://github.com/org/repo"
-        )
 
     def test_normalize_repo_url_gitcode_nested_dotgit(self, accessor: GitAccessor) -> None:
         assert (
-            accessor._normalize_repo_url(
-                "https://gitcode.com/GitHub_Trending/bl/black.git"
-            )
+            accessor._normalize_repo_url("https://gitcode.com/GitHub_Trending/bl/black.git")
             == "https://gitcode.com/GitHub_Trending/bl/black.git"
         )
+
+    def test_normalize_repo_url_uses_final_dotgit_segment(self, accessor: GitAccessor) -> None:
+        config = _mock_config()
+        config.code.github_domains = []
+        config.code.gitlab_domains = []
+        config.code.azure_devops_domains = []
+        config.code.code_hosting_domains = ["git.example.com"]
+        source = "https://git.example.com/org/archive.git/repo.git"
+
+        with patch.object(
+            code_hosting_utils,
+            "get_openviking_config",
+            return_value=config,
+        ):
+            assert accessor._normalize_repo_url(source) == source
+            assert accessor._parse_repo_source(source) == (source, None, None)
 
     @pytest.mark.parametrize(
         ("source", "expected"),

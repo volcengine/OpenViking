@@ -58,6 +58,7 @@ sys.modules["openviking.utils.code_hosting_utils"] = _module
 _spec.loader.exec_module(_module)
 
 parse_code_hosting_url = _module.parse_code_hosting_url
+parse_git_repo_url = _module.parse_git_repo_url
 is_github_url = _module.is_github_url
 is_gitlab_url = _module.is_gitlab_url
 is_code_hosting_url = _module.is_code_hosting_url
@@ -319,8 +320,30 @@ def test_is_git_repo_url_gitee_tree():
     assert is_git_repo_url("https://gitee.com/mindspore/mindspore/tree/master") is True
 
 
+def test_gitee_tree_browse_file_ending_dotgit_is_not_a_repo():
+    url = "https://gitee.com/mindspore/mindspore/tree/master/config.git"
+
+    assert parse_git_repo_url(url) is None
+    assert is_git_repo_url(url) is False
+    assert parse_code_hosting_url(url) == "mindspore/mindspore"
+
+
 def test_is_git_repo_url_gitlab_subgroup_dotgit():
     assert is_git_repo_url("https://gitlab.com/org/subgroup/repo.git") is True
+
+
+def test_parse_git_repo_url_gitlab_subgroup_named_tree():
+    url = "https://gitlab.com/org/subgroup/tree/repo.git"
+
+    parsed = parse_git_repo_url(url)
+
+    assert parsed is not None
+    assert parsed.clone_url == url
+    assert parsed.repo_path == "org/subgroup/tree/repo"
+    assert parsed.route_kind == "clone"
+    assert parsed.branch is None
+    assert parsed.commit is None
+    assert parse_code_hosting_url(url) == "org/subgroup/tree/repo"
 
 
 def test_is_git_repo_url_gitlab_subgroup_without_dotgit_rejected():
@@ -508,10 +531,21 @@ def test_generic_domain_supports_nested_clone_without_platform_route_semantics()
 
     with patch.object(_module, "get_openviking_config", return_value=config):
         assert is_git_repo_url("https://git.example.com/org/subgroup/repo.git") is True
-        assert (
-            is_git_repo_url("https://git.example.com/team/repo/src/main.git")
-            is True
-        )
+        assert is_git_repo_url("https://git.example.com/team/repo/src/main.git") is True
+
+
+def test_generic_domain_keeps_nested_path_through_final_dotgit_segment():
+    config = _mock_config()
+    config.code.code_hosting_domains = ["git.example.com"]
+    url = "https://git.example.com/org/archive.git/repo.git"
+
+    with patch.object(_module, "get_openviking_config", return_value=config):
+        parsed = parse_git_repo_url(url)
+
+        assert parsed is not None
+        assert parsed.clone_url == url
+        assert parsed.repo_path == "org/archive_git/repo"
+        assert parse_code_hosting_url(url) == "org/archive_git/repo"
 
 
 def test_generic_domain_with_configured_port_supports_nested_clone():
@@ -567,3 +601,49 @@ def test_parse_code_hosting_url_blob_file_named_dotgit_not_nested():
 
 def test_parse_code_hosting_url_github_tree_unchanged():
     assert parse_code_hosting_url("https://github.com/org/repo/tree/main") == "org/repo"
+
+
+@pytest.mark.parametrize(
+    ("url", "clone_url", "repo_path", "branch", "commit"),
+    [
+        (
+            "https://github.com/org/repo/tree/main",
+            "https://github.com/org/repo",
+            "org/repo",
+            "main",
+            None,
+        ),
+        (
+            "https://github.com/org/repo/commit/abc1234",
+            "https://github.com/org/repo",
+            "org/repo",
+            None,
+            "abc1234",
+        ),
+        (
+            "https://gitlab.com/org/subgroup/repo/-/tree/main",
+            "https://gitlab.com/org/subgroup/repo",
+            "org/subgroup/repo",
+            "main",
+            None,
+        ),
+        (
+            "git@ssh.dev.azure.com:v3/org/project/repo",
+            "git@ssh.dev.azure.com:v3/org/project/repo",
+            "org/project/repo",
+            None,
+            None,
+        ),
+    ],
+)
+def test_parse_git_repo_url_returns_consistent_clone_metadata(
+    url, clone_url, repo_path, branch, commit
+):
+    parsed = parse_git_repo_url(url)
+
+    assert parsed is not None
+    assert parsed.clone_url == clone_url
+    assert parsed.repo_path == repo_path
+    assert parsed.branch == branch
+    assert parsed.commit == commit
+    assert is_git_repo_url(url) is True

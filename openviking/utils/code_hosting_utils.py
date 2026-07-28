@@ -8,7 +8,8 @@ platforms like GitHub and GitLab.
 """
 
 from collections.abc import Iterable
-from typing import Optional
+from dataclasses import dataclass
+from typing import Literal, Optional
 from urllib.parse import ParseResult, parse_qs, unquote, urlparse
 
 from openviking_cli.utils.config import get_openviking_config
@@ -47,6 +48,11 @@ _KNOWN_PLATFORM_NON_REPO_PATH_SEGMENTS = {
     "codeberg.org": frozenset({"src"}),
     "gitea.com": frozenset({"src"}),
 }
+
+# Public platforms where ``owner/repo/tree/ref/...`` is an unambiguous browse
+# route. This profile must not be applied to generic configured Git hosts:
+# there, a nested repository can legitimately contain a ``tree`` namespace.
+_KNOWN_PLATFORM_TREE_ROUTE_HOSTS = frozenset({"gitee.com"})
 
 # Top-level namespaces reserved by each hosting platform. Keeping these rules
 # attached to platform categories prevents generic custom hosts from inheriting
@@ -90,10 +96,8 @@ _PLATFORM_RESERVED_TOP_LEVEL_SEGMENTS = {
 # still be present in one of the configured domain lists before these apply.
 _KNOWN_PLATFORM_RESERVED_TOP_LEVEL_SEGMENTS = {
     "gitcode.com": _COMMON_RESERVED_TOP_LEVEL_SEGMENTS | frozenset({"explore"}),
-    "gitee.com": _COMMON_RESERVED_TOP_LEVEL_SEGMENTS
-    | frozenset({"enterprise", "explore"}),
-    "bitbucket.org": _COMMON_RESERVED_TOP_LEVEL_SEGMENTS
-    | frozenset({"account", "product"}),
+    "gitee.com": _COMMON_RESERVED_TOP_LEVEL_SEGMENTS | frozenset({"enterprise", "explore"}),
+    "bitbucket.org": _COMMON_RESERVED_TOP_LEVEL_SEGMENTS | frozenset({"account", "product"}),
     "codeberg.org": _COMMON_RESERVED_TOP_LEVEL_SEGMENTS | frozenset({"explore"}),
     "gitea.com": _COMMON_RESERVED_TOP_LEVEL_SEGMENTS | frozenset({"explore"}),
     "atomgit.com": _COMMON_RESERVED_TOP_LEVEL_SEGMENTS | frozenset({"explore"}),
@@ -150,9 +154,7 @@ def _get_reserved_top_level_segments(parsed: ParseResult) -> frozenset[str]:
 
 def _get_known_platform_non_repo_segments(parsed: ParseResult) -> frozenset[str]:
     """Return browse-route markers for a configured public platform."""
-    return _KNOWN_PLATFORM_NON_REPO_PATH_SEGMENTS.get(
-        (parsed.hostname or "").lower(), frozenset()
-    )
+    return _KNOWN_PLATFORM_NON_REPO_PATH_SEGMENTS.get((parsed.hostname or "").lower(), frozenset())
 
 
 def _supports_nested_repository_host(host: str) -> bool:
@@ -258,6 +260,283 @@ def _is_azure_devops_browse_url(query: str) -> bool:
     return "path" in parse_qs(query, keep_blank_values=True)
 
 
+@dataclass(frozen=True)
+class ParsedGitRepoURL:
+    """A validated Git source normalized for cloning and repository metadata."""
+
+    clone_url: str
+    repo_path: str
+    route_kind: Literal["clone", "tree", "commit"]
+    branch: Optional[str] = None
+    commit: Optional[str] = None
+
+
+def _strip_repo_git_suffix(repo_parts: list[str]) -> Optional[list[str]]:
+    """Return repository identity parts with only the final ``.git`` removed."""
+    if len(repo_parts) < 2:
+        return None
+
+    normalized = list(repo_parts)
+    if normalized[-1].endswith(".git"):
+        normalized[-1] = normalized[-1][:-4]
+    if not normalized[-1]:
+        return None
+    return normalized
+
+
+def _repo_path_from_parts(repo_parts: list[str]) -> Optional[str]:
+    normalized = _strip_repo_git_suffix(repo_parts)
+    if normalized is None:
+        return None
+    return "/".join(_sanitize_segment(part) for part in normalized)
+
+
+def _build_url_git_result(
+    parsed: ParseResult,
+    repo_parts: list[str],
+    *,
+    clone_parts: Optional[list[str]] = None,
+    route_kind: Literal["clone", "tree", "commit"] = "clone",
+    branch: Optional[str] = None,
+    commit: Optional[str] = None,
+) -> Optional[ParsedGitRepoURL]:
+    """Build a strict result for URL-style Git sources."""
+    repo_path = _repo_path_from_parts(repo_parts)
+    if repo_path is None:
+        return None
+
+    clone_path = "/" + "/".join(clone_parts or repo_parts)
+    clone_url = parsed._replace(path=clone_path, params="", query="", fragment="").geturl()
+    return ParsedGitRepoURL(
+        clone_url=clone_url,
+        repo_path=repo_path,
+        route_kind=route_kind,
+        branch=branch,
+        commit=commit,
+    )
+
+
+def _build_scp_git_result(
+    url: str,
+    repo_parts: list[str],
+    *,
+    identity_parts: Optional[list[str]] = None,
+) -> Optional[ParsedGitRepoURL]:
+    """Build a strict result for scp-style ``git@host:path`` sources."""
+    repo_path = _repo_path_from_parts(identity_parts or repo_parts)
+    if repo_path is None:
+        return None
+    return ParsedGitRepoURL(clone_url=url, repo_path=repo_path, route_kind="clone")
+
+
+def _parse_scp_git_repo_url(url: str) -> Optional[ParsedGitRepoURL]:
+    """Parse a strict scp-style Git repository URL."""
+    rest = url[4:]
+    if ":" not in rest:
+        return None
+
+    host, path = rest.split(":", 1)
+    host = host.strip().lower()
+    if not host or host not in get_configured_code_hosting_domains():
+        return None
+
+    path_parts = [part for part in path.split("/") if part]
+    if host in _get_azure_devops_domains():
+        azure_repo_parts = _extract_azure_devops_ssh_repo_parts(path_parts)
+        if azure_repo_parts is None:
+            return None
+        return _build_scp_git_result(
+            url,
+            path_parts,
+            identity_parts=azure_repo_parts,
+        )
+
+    if len(path_parts) < 2:
+        return None
+
+    parsed_host = urlparse(f"ssh://{host}")
+    if path_parts[0].lower() in _get_reserved_top_level_segments(parsed_host):
+        return None
+
+    has_git_suffix = path_parts[-1].endswith(".git")
+    if len(path_parts) > 2 and not (has_git_suffix and _supports_nested_repository_host(host)):
+        return None
+    return _build_scp_git_result(url, path_parts)
+
+
+def _is_known_platform_tree_route(parsed: ParseResult, path_parts: list[str]) -> bool:
+    """Return whether the URL uses a known platform's owner/repo tree route."""
+    return (
+        (parsed.hostname or "").lower() in _KNOWN_PLATFORM_TREE_ROUTE_HOSTS
+        and len(path_parts) >= 3
+        and path_parts[2] == "tree"
+    )
+
+
+def parse_git_repo_url(url: str) -> Optional[ParsedGitRepoURL]:
+    """Parse a whitelisted, cloneable Git source URL.
+
+    Unlike :func:`parse_code_hosting_url`, this is a strict ingress parser.
+    Browse pages and ambiguous paths return ``None``. Accepted tree/commit
+    snapshot URLs are normalized to a cloneable base URL with their ref
+    returned separately.
+    """
+    if url.startswith("git@"):
+        return _parse_scp_git_repo_url(url)
+
+    if not url.startswith(("http://", "https://", "git://", "ssh://")):
+        return None
+
+    parsed = urlparse(url)
+    if not _domain_matches(parsed, _get_all_domains()):
+        return None
+
+    path_parts = [part for part in parsed.path.split("/") if part]
+
+    # Azure DevOps has a distinct repository grammar for both HTTPS and SSH.
+    if _domain_matches(parsed, list(_get_azure_devops_domains())):
+        azure_repo_parts = _extract_azure_devops_repo_parts(path_parts)
+        if azure_repo_parts is not None:
+            if _is_azure_devops_browse_url(parsed.query):
+                return None
+            return _build_url_git_result(
+                parsed,
+                azure_repo_parts,
+                clone_parts=path_parts,
+            )
+
+        azure_ssh_repo_parts = _extract_azure_devops_ssh_repo_parts(path_parts)
+        if azure_ssh_repo_parts is not None:
+            return _build_url_git_result(
+                parsed,
+                azure_ssh_repo_parts,
+                clone_parts=path_parts,
+            )
+        return None
+
+    if len(path_parts) < 2:
+        return None
+    if path_parts[0].lower() in _get_reserved_top_level_segments(parsed):
+        return None
+
+    # GitLab's /-/ separator is unambiguous: everything before it is the
+    # possibly nested repository path, and everything after it is a web route.
+    dash_index = (
+        path_parts.index("-")
+        if _matches_domain_field(parsed, "gitlab_domains") and "-" in path_parts
+        else -1
+    )
+    if dash_index >= 2:
+        repo_parts = path_parts[:dash_index]
+        browse_parts = path_parts[dash_index + 1 :]
+        if len(browse_parts) == 2 and browse_parts[0] == "tree":
+            ref = unquote(browse_parts[1])
+            if not ref:
+                return None
+            if _looks_like_commit_sha(ref):
+                return _build_url_git_result(
+                    parsed,
+                    repo_parts,
+                    route_kind="tree",
+                    commit=ref,
+                )
+            return _build_url_git_result(
+                parsed,
+                repo_parts,
+                route_kind="tree",
+                branch=ref,
+            )
+        if (
+            len(browse_parts) == 2
+            and browse_parts[0] == "commit"
+            and _looks_like_commit_sha(browse_parts[1])
+        ):
+            return _build_url_git_result(
+                parsed,
+                repo_parts,
+                route_kind="commit",
+                commit=browse_parts[1],
+            )
+        return None
+
+    # A known platform's owner/repo/tree/ref route takes precedence over a
+    # trailing .git filename. This rejects browse files such as config.git.
+    if _is_known_platform_tree_route(parsed, path_parts):
+        if len(path_parts) != 4:
+            return None
+        ref = unquote(path_parts[3])
+        if not ref:
+            return None
+        if _looks_like_commit_sha(ref):
+            return _build_url_git_result(
+                parsed,
+                path_parts[:2],
+                route_kind="tree",
+                commit=ref,
+            )
+        return _build_url_git_result(
+            parsed,
+            path_parts[:2],
+            route_kind="tree",
+            branch=ref,
+        )
+
+    # Exact commit routes are accepted only when the pin is SHA-shaped.
+    if len(path_parts) == 4 and path_parts[2] == "commit" and _looks_like_commit_sha(path_parts[3]):
+        return _build_url_git_result(
+            parsed,
+            path_parts[:2],
+            route_kind="commit",
+            commit=path_parts[3],
+        )
+
+    known_platform_non_repo_segments = _get_known_platform_non_repo_segments(parsed)
+    if len(path_parts) >= 3 and path_parts[2] in known_platform_non_repo_segments:
+        return None
+
+    has_git_suffix = path_parts[-1].endswith(".git")
+    if (
+        len(path_parts) >= 3
+        and path_parts[2] in _NON_REPO_PATH_SEGMENTS
+        and not (has_git_suffix and len(path_parts) == 3)
+    ):
+        return None
+
+    # A trailing .git is the strong clone signal. It wins over generic route
+    # words on nested-capable hosts, so a subgroup literally named "tree" is
+    # not mistaken for a branch.
+    if has_git_suffix:
+        if len(path_parts) == 2 or (
+            len(path_parts) > 2 and _supports_nested_repository_path(parsed)
+        ):
+            return _build_url_git_result(parsed, path_parts)
+        return None
+
+    if len(path_parts) == 2:
+        return _build_url_git_result(parsed, path_parts)
+
+    # Without the strong .git signal, only an exact single-segment tree ref is
+    # accepted. Longer paths are ambiguous with slashed refs or file browsing.
+    if len(path_parts) == 4 and path_parts[2] == "tree":
+        ref = unquote(path_parts[3])
+        if not ref:
+            return None
+        if _looks_like_commit_sha(ref):
+            return _build_url_git_result(
+                parsed,
+                path_parts[:2],
+                route_kind="tree",
+                commit=ref,
+            )
+        return _build_url_git_result(
+            parsed,
+            path_parts[:2],
+            route_kind="tree",
+            branch=ref,
+        )
+    return None
+
+
 def parse_code_hosting_url(url: str) -> Optional[str]:
     """Parse code hosting platform URL to get org/repo path.
 
@@ -269,6 +548,10 @@ def parse_code_hosting_url(url: str) -> Optional[str]:
         org/repo path like "volcengine/OpenViking" or None if not a valid
         code hosting URL
     """
+    parsed_git_url = parse_git_repo_url(url)
+    if parsed_git_url is not None:
+        return parsed_git_url.repo_path
+
     all_domains = _get_all_domains()
     # Handle git@ SSH URLs: git@host:org/repo.git
     if url.startswith("git@"):
@@ -462,91 +745,4 @@ def is_git_repo_url(url: str) -> bool:
     Returns:
         True if the URL points to a cloneable git repository
     """
-    # git@/ssh://git:// protocols: domain must match and a repo path must exist
-    if url.startswith(("git@", "ssh://", "git://")):
-        if not is_code_hosting_url(url):
-            return False
-        if url.startswith("git@"):
-            rest = url[4:]
-            path = rest.split(":", 1)[1] if ":" in rest else ""
-        else:
-            path = urlparse(url).path
-        return any(p for p in path.split("/") if p)
-
-    if not url.startswith(("http://", "https://")):
-        return False
-
-    all_domains = _get_all_domains()
-    parsed = urlparse(url)
-    if not _domain_matches(parsed, all_domains):
-        return False
-    path_parts = [p for p in parsed.path.split("/") if p]
-
-    # Strip the .git suffix from the last part but remember it: a trailing
-    # .git is a strong clone-URL signal used below.
-    has_git_suffix = bool(path_parts) and path_parts[-1].endswith(".git")
-    if has_git_suffix:
-        path_parts[-1] = path_parts[-1][:-4]
-        if not path_parts[-1]:
-            return False
-
-    # Azure DevOps: only the org/project/_git/repo form is cloneable;
-    # anything else on an Azure domain (e.g. the project page) is not a repo.
-    if _domain_matches(parsed, list(_get_azure_devops_domains())):
-        azure_repo_parts = _extract_azure_devops_repo_parts(path_parts)
-        if not azure_repo_parts:
-            return False
-        return not _is_azure_devops_browse_url(parsed.query)
-
-    # Platform-reserved top-level namespaces are never repositories.
-    if path_parts and path_parts[0].lower() in _get_reserved_top_level_segments(parsed):
-        return False
-
-    # GitLab "/-/" browse separator: group/.../repo/-/<page>/...
-    # Everything before "-" is the (possibly nested) repo path; only the
-    # tree and commit pages still identify a cloneable snapshot.
-    dash_index = (
-        path_parts.index("-")
-        if _matches_domain_field(parsed, "gitlab_domains") and "-" in path_parts
-        else -1
-    )
-    if dash_index >= 2:
-        browse = path_parts[dash_index + 1 :]
-        if len(browse) == 2 and browse[0] == "tree":
-            return True
-        if len(browse) == 2 and browse[0] == "commit" and _looks_like_commit_sha(browse[1]):
-            return True
-        return False
-
-    # owner/repo/commit/<sha> pins the repo to an exact snapshot.
-    if len(path_parts) == 4 and path_parts[2] == "commit" and _looks_like_commit_sha(path_parts[3]):
-        return True
-
-    # Known platform browse routes stay on the web path, even when the selected
-    # file happens to end in ".git".
-    known_platform_non_repo_segments = _get_known_platform_non_repo_segments(parsed)
-    if len(path_parts) >= 3 and path_parts[2] in known_platform_non_repo_segments:
-        return False
-
-    # Common repo browse pages -- unless the matching segment is itself the final
-    # .git-suffixed repo name (a nested repo literally named e.g. "blob").
-    if (
-        len(path_parts) >= 3
-        and path_parts[2] in _NON_REPO_PATH_SEGMENTS
-        and not (has_git_suffix and len(path_parts) == 3)
-    ):
-        return False
-
-    # Clone-style URL: two-segment paths work for every configured host, while
-    # nested group paths are limited to platform categories that support them.
-    if has_git_suffix:
-        return len(path_parts) == 2 or _supports_nested_repository_path(parsed)
-
-    # owner/repo
-    if len(path_parts) == 2:
-        return True
-    # owner/repo/tree/<ref>. Additional segments are ambiguous: they may be
-    # part of a slashed ref or a path within the repository.
-    if len(path_parts) == 4 and path_parts[2] == "tree":
-        return True
-    return False
+    return parse_git_repo_url(url) is not None
