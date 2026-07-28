@@ -375,6 +375,50 @@ func TestAdminEmptySeedPayloadsAreSent(t *testing.T) {
 	}
 }
 
+func TestCreateSessionSendsCreateTimeConfig(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/sessions" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s", r.Method)
+		}
+		body := readJSONBody(t, r)
+		if got := body["session_id"]; got != "session-1" {
+			t.Fatalf("session_id = %#v", got)
+		}
+		config, ok := body["config"].(map[string]any)
+		if !ok {
+			t.Fatalf("config = %#v", body["config"])
+		}
+		policy, ok := config["auto_commit_policy"].(map[string]any)
+		if !ok {
+			t.Fatalf("auto_commit_policy = %#v", config["auto_commit_policy"])
+		}
+		if got := policy["pending_token_threshold"]; got != float64(100) {
+			t.Fatalf("pending_token_threshold = %#v", got)
+		}
+		if got := policy["keep_recent_count"]; got != float64(2) {
+			t.Fatalf("keep_recent_count = %#v", got)
+		}
+		writeOK(t, w, map[string]any{"session_id": "session-1"})
+	}))
+	defer closeServer()
+
+	_, err := client.CreateSession(context.Background(), &CreateSessionOptions{
+		SessionID: "session-1",
+		Config: map[string]any{
+			"auto_commit_policy": map[string]any{
+				"pending_token_threshold": 100,
+				"keep_recent_count":       2,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSearchSendsSessionAndSearchFilters(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/search/search" {

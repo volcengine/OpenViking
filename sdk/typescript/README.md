@@ -20,6 +20,21 @@ const results = await client.search("deployment guide", {
 });
 ```
 
+Create-time session config can enable server-side auto commit for that session:
+
+```ts
+await client.createSession({
+  sessionId: "demo-session",
+  config: {
+    auto_commit_policy: {
+      pending_token_threshold: 10000,
+      message_count_threshold: 50,
+      keep_recent_count: 2,
+    },
+  },
+});
+```
+
 The client follows the same HTTP API, identity headers, response envelope and error codes as `openviking-sdk` for Python and the Go SDK. It supports resources and skills, filesystem/content operations, relations, retrieval, sessions, OVPack files, snapshots, tasks, watches, observer status and tenant administration.
 
 Existing local file paths are uploaded automatically, and local directories are zipped before upload. Other strings are sent to the server as URLs or server-side paths.

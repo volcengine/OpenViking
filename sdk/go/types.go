@@ -239,6 +239,7 @@ type GlobOptions struct {
 type CreateSessionOptions struct {
 	SessionID    string
 	MemoryPolicy map[string]any
+	Config       map[string]any
 	Telemetry    any
 }
 

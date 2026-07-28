@@ -414,7 +414,7 @@ fn url_encode(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_messages, render_session_get_for_table};
+    use super::{message_body, parse_messages, render_session_get_for_table};
     use crate::error::Error;
     use serde_json::json;
 
@@ -512,6 +512,14 @@ mod tests {
         let result = json!({"status": "ok"});
 
         assert!(render_session_get_for_table(&result).is_none());
+    }
+
+    #[test]
+    fn message_body_preserves_message_shape_without_auto_commit_policy() {
+        let body = message_body("user", "hello");
+
+        assert_eq!(body, json!({"role": "user", "content": "hello"}));
+        assert!(body.get("auto_commit_policy").is_none());
     }
 
     fn strip_ansi(input: &str) -> String {

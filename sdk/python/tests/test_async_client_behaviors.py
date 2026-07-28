@@ -65,6 +65,22 @@ async def test_async_http_client_batch_add_messages_posts_batch_payload():
 
 
 @pytest.mark.asyncio
+async def test_async_http_client_add_message_does_not_post_auto_commit_policy():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {"result": {"message_id": "msg-1"}}
+
+    result = await client.add_message("demo-session", role="user", content="hello")
+
+    assert result == {"message_id": "msg-1"}
+    fake_http.post.assert_awaited_once_with(
+        "/api/v1/sessions/demo-session/messages",
+        json={"role": "user", "content": "hello"},
+    )
+
+
+@pytest.mark.asyncio
 async def test_async_http_client_batch_add_messages_url_encodes_session_id():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
@@ -127,6 +143,44 @@ async def test_async_http_client_sends_message_semantics_and_turn_retention():
         "retained_message_token_budget": 12_000,
         "min_raw_tail_steps": 1,
     }
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_batch_add_messages_does_not_post_auto_commit_policy():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {
+        "result": {"session_id": "batch-session", "message_count": 2, "added": 2}
+    }
+
+    messages = [{"role": "user", "content": "hello"}]
+
+    result = await client.batch_add_messages("batch-session", messages)
+
+    assert result == {"session_id": "batch-session", "message_count": 2, "added": 2}
+    fake_http.post.assert_awaited_once_with(
+        "/api/v1/sessions/batch-session/messages/batch",
+        json={"messages": messages},
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_create_session_posts_config():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {"result": {"session_id": "s1"}}
+
+    config = {"auto_commit_policy": {"pending_token_threshold": 100}}
+
+    result = await client.create_session(config=config)
+
+    assert result == {"session_id": "s1"}
+    fake_http.post.assert_awaited_once_with(
+        "/api/v1/sessions",
+        json={"config": config},
+    )
 
 
 @pytest.mark.asyncio
@@ -209,7 +263,10 @@ def test_sync_http_client_batch_add_messages_forwards_to_async_client():
 
     assert result == {"session_id": "batch-session", "message_count": 2, "added": 2}
     assert mock_run.called
-    mock_batch.assert_called_once_with("batch-session", messages)
+    mock_batch.assert_called_once_with(
+        "batch-session",
+        messages,
+    )
 
 
 def test_sync_http_client_session_returns_sync_session_wrapper():

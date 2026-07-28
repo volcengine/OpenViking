@@ -63,6 +63,36 @@ describe("OpenVikingClient", () => {
     });
   });
 
+  it("posts create-time session config", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok({ session_id: "s1" }));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.createSession({
+      sessionId: "s1",
+      config: {
+        auto_commit_policy: {
+          pending_token_threshold: 100,
+          keep_recent_count: 2,
+        },
+      },
+    });
+
+    const [url, init] = fetcher.mock.calls[0]!;
+    expect(String(url)).toBe("https://example.com/api/v1/sessions");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      session_id: "s1",
+      config: {
+        auto_commit_policy: {
+          pending_token_threshold: 100,
+          keep_recent_count: 2,
+        },
+      },
+    });
+  });
+
   it("sends dry_run for prune_orphans reindex requests", async () => {
     const fetcher = vi
       .fn<typeof fetch>()

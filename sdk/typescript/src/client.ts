@@ -549,6 +549,7 @@ export class OpenVikingClient {
       body: compact({
         session_id: options.sessionId,
         memory_policy: options.memoryPolicy,
+        config: options.config,
         telemetry: options.telemetry,
       }),
     });

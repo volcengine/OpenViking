@@ -95,6 +95,22 @@ class TestAddMessage:
 
         assert len(session.messages) == initial_count + 2
 
+    async def test_batch_add_messages_counts_all_pending_tokens(self, session: Session):
+        """Batch append should account every new message, not only the final one."""
+        session.meta.keep_recent_count = 0
+
+        messages = session.add_messages(
+            [
+                {"role": "user", "parts": [TextPart("alpha " * 20)]},
+                {"role": "assistant", "parts": [TextPart("beta " * 20)]},
+                {"role": "user", "parts": [TextPart("gamma " * 20)]},
+            ]
+        )
+
+        expected = sum(int(message.estimated_tokens or 0) for message in messages)
+        assert expected > 0
+        assert session.meta.pending_tokens == expected
+
     async def test_batch_add_messages_preserves_peer_id_created_at_and_parts(
         self, client: AsyncOpenViking
     ):

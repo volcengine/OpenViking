@@ -140,6 +140,7 @@ export interface Message {
 export interface CreateSessionOptions {
   sessionId?: string;
   memoryPolicy?: JsonObject;
+  config?: JsonObject;
   telemetry?: unknown;
 }
 /** Background task filters. */

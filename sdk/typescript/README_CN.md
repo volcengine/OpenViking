@@ -20,6 +20,21 @@ const results = await client.search("部署文档", {
 });
 ```
 
+创建期 session 配置可以为该 session 开启服务端自动 commit：
+
+```ts
+await client.createSession({
+  sessionId: "demo-session",
+  config: {
+    auto_commit_policy: {
+      pending_token_threshold: 10000,
+      message_count_threshold: 50,
+      keep_recent_count: 2,
+    },
+  },
+});
+```
+
 SDK 与 Python `openviking-sdk`、Go SDK 使用相同的 HTTP API、身份请求头、响应信封和错误码，覆盖资源与技能、文件系统与内容、资源关系、检索、会话、OVPack、快照、任务、Watch、Observer 状态和租户管理接口。
 
 Node.js 中存在的本地文件路径会自动上传，目录会先压缩后上传；其他字符串会作为 URL 或服务端路径发送。

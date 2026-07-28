@@ -100,6 +100,13 @@ similarPosters, err := client.Search(ctx, "similar poster", &openviking.SearchOp
 // Work with sessions.
 session, err := client.CreateSession(ctx, &openviking.CreateSessionOptions{
 	SessionID: "demo-session",
+	Config: map[string]any{
+		"auto_commit_policy": map[string]any{
+			"pending_token_threshold": 10000,
+			"message_count_threshold": 50,
+			"keep_recent_count":       2,
+		},
+	},
 })
 _, err = client.AddMessage(ctx, "demo-session", "user", openviking.AddMessageOptions{
 	Content: openviking.String("remember this deployment decision"),

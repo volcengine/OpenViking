@@ -9,8 +9,8 @@
  *
  * Unlike the previous one-shot model (create→add→extract→delete every Stop),
  * this keeps a stable ovSessionId derived from the CC session_id. OV's own
- * auto_commit_threshold (openviking/session/session.py) drives archive + extract.
- * This preserves cross-turn context for the memory extractor, produces archives
+ * session commit policy or explicit commit calls drive archive + extract. This
+ * preserves cross-turn context for the memory extractor, produces archives
  * naturally, and lets resume / PreCompact / SessionEnd reuse the same session.
  *
  * Incremental tracking: state file per CC session_id records capturedTurnCount.
@@ -617,8 +617,7 @@ async function main() {
   log("state_update", { newCapturedTurnCount: allTurns.length });
 
   // Client-driven commit (ported from openclaw-plugin/context-engine.ts:afterTurn).
-  // OV's Session._auto_commit_threshold is not consumed by addMessage, so we
-  // poll pending_tokens ourselves and commit when the threshold is crossed.
+  // Poll pending_tokens and commit when the plugin threshold is crossed.
   let committed = false;
   let pendingTokens = 0;
   let commitCount = 0;

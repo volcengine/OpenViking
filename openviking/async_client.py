@@ -24,10 +24,6 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-if TYPE_CHECKING:
-    from openviking.snapshot_namespace import AsyncSnapshotNamespace
-
-
 class AsyncOpenViking:
     """
     OpenViking main client class (Asynchronous, embedded mode only).
@@ -145,18 +141,23 @@ class AsyncOpenViking:
         session_id: Optional[str] = None,
         telemetry: TelemetryRequest = False,
         memory_policy: Optional[Dict[str, Any]] = None,
+        config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a new session.
 
         Args:
             session_id: Optional session ID. If provided, creates a session with the given ID.
                        If None, creates a new session with auto-generated ID.
+            memory_policy: Optional default extraction policy for future commits.
+            config: Optional create-time session config, e.g.
+                ``{"auto_commit_policy": {...}}``.
         """
         await self._ensure_initialized()
         return await self._client.create_session(
             session_id,
             telemetry=telemetry,
             memory_policy=memory_policy,
+            config=config,
         )
 
     async def list_sessions(self) -> List[Any]:

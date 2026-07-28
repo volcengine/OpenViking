@@ -322,7 +322,7 @@ Claude Code 自带 `MEMORY.md` 文件系统，本插件**与之互补**：
 
 没有 TypeScript 编译步骤，也没有运行时 npm 引导。Hook 都是直接走 HTTP 调 OpenViking 的 `.mjs` 文件；MCP 使用 `servers/mcp-proxy.mjs` 作为零依赖 stdio 桥接，转发到 OpenViking 服务器自身的 `/mcp` endpoint。
 
-首次接触时创建一个持久化的 OpenViking session，整个 Claude Code 会话期间复用。OV session ID 是 `cc-<sha256(cc_session_id)>`，所以 resume / compact / 多 hook 事件都打到同一个 session，OV 的 `auto_commit_threshold` 自然驱动归档与记忆抽取。
+首次接触时创建一个持久化的 OpenViking session，整个 Claude Code 会话期间复用。OV session ID 是 `cc-<sha256(cc_session_id)>`，所以 resume / compact / 多 hook 事件都打到同一个 session；归档与记忆抽取由配置的 session commit policy 或显式 commit 调用触发。
 
 ### 各 hook 职责
 

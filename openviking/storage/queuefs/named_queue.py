@@ -260,6 +260,8 @@ class NamedQueue:
         on the next startup resets the message back to 'pending' for retry.
         """
         await self._ensure_initialized()
+        processing_started = False
+        data: Optional[Dict[str, Any]] = None
         try:
             data = await self._read_queue_message()
             if data is None:
@@ -268,6 +270,7 @@ class NamedQueue:
             msg_id = data.get("id", "") if isinstance(data, dict) else ""
             if self._dequeue_handler:
                 self._on_dequeue_start()
+                processing_started = True
                 data = await self._dequeue_handler.on_dequeue(data)
             # Ack unconditionally after handler returns (success or handled error).
             # If on_dequeue raises, the exception propagates and ack is skipped —
@@ -275,6 +278,8 @@ class NamedQueue:
             await self.ack(msg_id)
             return data
         except Exception as e:
+            if processing_started:
+                self._on_process_error(str(e), data)
             logger.debug(f"[NamedQueue] Dequeue failed for {self.name}: {e}")
             return None
 
