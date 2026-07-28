@@ -650,9 +650,15 @@ class VikingFS:
                     raise mapped from exc
                 raise
             # Path does not exist: clean up any orphan index records and return
+            real_ctx = self._ctx_or_default(ctx)
             uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
             uris_to_delete.append(target_uri)
-            real_ctx = self._ctx_or_default(ctx)
+            orphan_child_uris = await self._collect_child_uris_from_vector_store(
+                target_uri, ctx=ctx
+            )
+            for child_uri in orphan_child_uris:
+                if child_uri not in uris_to_delete:
+                    uris_to_delete.append(child_uri)
             estimated_count = await _estimate_deleted_count(path, real_ctx)
             await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
             logger.info(f"[VikingFS] rm target not found, cleaned orphan index: {uri}")
@@ -3068,6 +3074,57 @@ class VikingFS:
 
         await _collect(path)
         return uris
+
+    async def _collect_child_uris_from_vector_store(
+        self, parent_uri: str, ctx: Optional[RequestContext] = None
+    ) -> List[str]:
+        """Query vector store for all descendant URIs under a parent path.
+
+        Used in the orphan cleanup path when the filesystem entry no longer
+        exists but child vector index records may still be present.
+        """
+        vector_store = self._get_vector_store()
+        if not vector_store:
+            return []
+        real_ctx = self._ctx_or_default(ctx)
+        try:
+            target_canonical_uri = canonicalize_uri(parent_uri, real_ctx)
+        except Exception:
+            target_canonical_uri = parent_uri.rstrip("/")
+
+        child_uris: List[str] = []
+        seen: set = set()
+        filter_expr = PathScope("uri", target_canonical_uri, depth=-1)
+        try:
+            records, next_cursor = await vector_store.scroll(
+                filter=filter_expr,
+                limit=200,
+                output_fields=["uri"],
+                ctx=real_ctx,
+            )
+            for record in records:
+                record_uri = record.get("uri", "")
+                if record_uri and record_uri != target_canonical_uri and record_uri not in seen:
+                    seen.add(record_uri)
+                    child_uris.append(record_uri)
+            while next_cursor:
+                records, next_cursor = await vector_store.scroll(
+                    filter=filter_expr,
+                    limit=200,
+                    cursor=next_cursor,
+                    output_fields=["uri"],
+                    ctx=real_ctx,
+                )
+                for record in records:
+                    record_uri = record.get("uri", "")
+                    if record_uri and record_uri != target_canonical_uri and record_uri not in seen:
+                        seen.add(record_uri)
+                        child_uris.append(record_uri)
+        except Exception as e:
+            logger.warning(
+                f"[VikingFS] Failed to collect child URIs from vector store for orphan cleanup: {e}"
+            )
+        return child_uris
 
     async def _delete_from_vector_store(
         self, uris: List[str], ctx: Optional[RequestContext] = None
