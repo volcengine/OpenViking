@@ -30,9 +30,10 @@ CONNECTOR_SUPPORTED_ARGS: Dict[str, FrozenSet[str]] = {
 # add_resource ``args`` keys carrying source credentials (git: HTTPS PAT as
 # the Basic-Auth password, username defaults to "oauth2" plugin-side). They
 # are stripped out of args and transported in the top-level ``auth_config``
-# request field -- never ``param_config`` -- because only the auth channel
-# is excluded from request logging on every hop (Connector and plugin log
-# param_config verbatim). One-shot use: credentials are never persisted, and
+# request field -- never ``param_config`` -- so Connector and plugin logs
+# redact them while logging param_config verbatim. The incoming OpenViking
+# HTTP body may still be captured when the explicitly unsafe observability
+# body dump is enabled. One-shot use: credentials are never persisted, and
 # requests carrying them must not fall back to a durable native import job.
 CONNECTOR_CREDENTIAL_ARGS: Dict[str, FrozenSet[str]] = {
     "tos": frozenset(),

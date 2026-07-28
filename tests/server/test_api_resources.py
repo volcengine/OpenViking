@@ -33,9 +33,14 @@ def test_add_resource_request_defaults_processing_mode():
 
 
 def test_add_resource_request_accepts_declared_add_type():
-    request = AddResourceRequest(path="https://example.com/space", add_type=" feishu ")
+    request = AddResourceRequest(
+        path="https://example.com/space",
+        add_type=" feishu ",
+        to="viking://resources/feishu",
+    )
 
     assert request.add_type == "feishu"
+    assert request.to == "viking://resources/feishu"
 
 
 def test_add_resource_request_rejects_add_type_with_temp_file_id():
@@ -43,6 +48,25 @@ def test_add_resource_request_rejects_add_type_with_temp_file_id():
 
     with pytest.raises(ValueError, match="temp_file_id"):
         AddResourceRequest(temp_file_id="upload_abc", add_type="feishu")
+
+
+def test_add_resource_request_requires_exact_to_for_declared_add_type():
+    import pytest
+
+    with pytest.raises(ValueError, match="exact 'to'"):
+        AddResourceRequest(path="space:home", add_type="feishu")
+
+
+def test_add_resource_request_rejects_add_type_with_parent():
+    import pytest
+
+    with pytest.raises(ValueError, match="'parent'"):
+        AddResourceRequest(
+            path="space:home",
+            add_type="feishu",
+            to="viking://resources/feishu",
+            parent="viking://resources/imports",
+        )
 
 
 def test_require_remote_resource_source_allows_declared_add_type():

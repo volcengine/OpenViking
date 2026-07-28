@@ -35,11 +35,13 @@ class AddResourceRequest(BaseModel):
             request routes to the Connector integration: the type must be enabled in
             connector.allowed_add_types, and args are forwarded to the source plugin
             (credentials under args.auth_config). Never degrades to the standard
-            pipeline. Requires 'path'; cannot be combined with 'temp_file_id'.
+            pipeline. Requires 'path' and an exact 'to' target; cannot be combined
+            with 'temp_file_id' or 'parent'.
         to: Target URI for the resource (e.g., "viking://resources/my_resource").
-            If not specified, an auto-generated URI will be used.
+            Required when add_type is set. Otherwise, if not specified, an
+            auto-generated URI will be used.
         parent: Parent URI under which the resource will be stored.
-            Cannot be used together with 'to'.
+            Cannot be used together with 'to' or 'add_type'.
         create_parent: Whether to automatically create the parent directory if it doesn't exist.
             Default is False.
         reason: Reason for adding the resource. Used for documentation and monitoring.
@@ -108,6 +110,10 @@ class AddResourceRequest(BaseModel):
             raise ValueError("'add_type' cannot be combined with 'temp_file_id'")
         if self.add_type and not self.path:
             raise ValueError("'add_type' requires 'path'")
+        if self.add_type and self.parent:
+            raise ValueError("'add_type' cannot be combined with 'parent'")
+        if self.add_type and not self.to:
+            raise ValueError("'add_type' requires an exact 'to' target")
         return self
 
 

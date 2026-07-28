@@ -139,9 +139,20 @@ class LocalClient(BaseClient):
         watch_interval: float = 0,
         args: Optional[Dict[str, Any]] = None,
         processing_mode: str = "semantic_and_vectors",
+        add_type: Optional[str] = None,
         **kwargs,
     ) -> Dict[str, Any]:
-        """Add resource to OpenViking."""
+        """Add resource to OpenViking.
+
+        ``add_type`` declares a Connector source and requires an exact ``to``
+        target; it cannot be combined with ``parent``.
+        """
+        if add_type is not None:
+            add_type = add_type.strip() or None
+        if add_type and parent:
+            raise ValueError("'add_type' cannot be combined with 'parent'.")
+        if add_type and not to:
+            raise ValueError("'add_type' requires an exact 'to' target.")
         if to and parent:
             raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
 
@@ -151,6 +162,7 @@ class LocalClient(BaseClient):
             fn=lambda: self._service.resources.add_resource(
                 path=path,
                 ctx=self._ctx,
+                add_type=add_type,
                 to=to,
                 parent=parent,
                 reason=reason,

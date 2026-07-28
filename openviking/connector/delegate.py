@@ -341,9 +341,10 @@ class ConnectorDelegate:
                     "pass create_parent=true to create it."
                 )
 
-        # Credentials travel exclusively in the dedicated auth_config field:
-        # param_config is logged verbatim by the Connector and the plugin,
-        # auth_config is redacted on every hop.
+        # Credentials are separated into the dedicated auth_config field before
+        # forwarding: Connector and plugin logs redact auth_config while logging
+        # param_config verbatim. The incoming OpenViking HTTP body may still be
+        # captured when the explicitly unsafe observability body dump is enabled.
         if add_type in CONNECTOR_SUPPORTED_ARGS:
             forwarded_args = {
                 key: value

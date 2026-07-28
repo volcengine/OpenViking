@@ -330,6 +330,7 @@ class AsyncOpenViking:
         args: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
         processing_mode: str = "semantic_and_vectors",
+        add_type: Optional[str] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -339,6 +340,9 @@ class AsyncOpenViking:
             path: Local file path or URL. A sitemap / RSS / Atom URL ingests the
                 whole site as one resource tree; pass ``args={"site": True}`` to
                 force whole-site ingestion from a bare domain.
+            add_type: Explicit Connector source type. Requires an exact ``to``
+                target and cannot be combined with ``parent``. The source
+                ``path`` is forwarded verbatim.
             reason: Context/reason for adding this resource.
             instruction: Specific instruction for processing.
             wait: If True, wait for processing to complete.
@@ -355,11 +359,18 @@ class AsyncOpenViking:
         """
         await self._ensure_initialized()
 
+        if add_type is not None:
+            add_type = add_type.strip() or None
+        if add_type and parent:
+            raise ValueError("'add_type' cannot be combined with 'parent'.")
+        if add_type and not to:
+            raise ValueError("'add_type' requires an exact 'to' target.")
         if to and parent:
             raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
 
         return await self._client.add_resource(
             path=path,
+            add_type=add_type,
             to=to,
             parent=parent,
             reason=reason,

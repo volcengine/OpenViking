@@ -642,11 +642,19 @@ class AsyncHTTPClient:
         args: Optional[Dict[str, Any]] = None,
         telemetry: Any = False,
         processing_mode: Optional[str] = None,
+        add_type: Optional[str] = None,
     ) -> Dict[str, Any]:
+        if add_type is not None:
+            add_type = add_type.strip() or None
+        if add_type and parent:
+            raise ValueError("'add_type' cannot be combined with 'parent'.")
+        if add_type and not to:
+            raise ValueError("'add_type' requires an exact 'to' target.")
         if to and parent:
             raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
 
         request_data = {
+            "add_type": add_type,
             "to": to,
             "parent": parent,
             "reason": reason,
@@ -668,7 +676,7 @@ class AsyncHTTPClient:
             request_data["preserve_structure"] = preserve_structure
 
         path_obj = Path(path)
-        if path_obj.exists():
+        if not add_type and path_obj.exists():
             if path_obj.is_dir():
                 request_data["source_name"] = path_obj.name
                 zip_path = self._zip_directory(path)
@@ -1842,10 +1850,12 @@ class SyncHTTPClient:
         args: Optional[Dict[str, Any]] = None,
         telemetry: Any = False,
         processing_mode: Optional[str] = None,
+        add_type: Optional[str] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.add_resource(
                 path=path,
+                add_type=add_type,
                 to=to,
                 parent=parent,
                 reason=reason,

@@ -823,9 +823,12 @@ class ResourceService:
             add_type: Explicitly declared Connector source type. Routes the
                 request to the Connector integration without probing the path;
                 the type must be enabled in connector.allowed_add_types. A
-                declared request never degrades to the standard pipeline.
-            to: Target URI (e.g., "viking://resources/my_resource")
-            parent: Parent URI under which the resource will be stored
+                declared request never degrades to the standard pipeline and
+                requires an exact ``to`` target.
+            to: Target URI (e.g., "viking://resources/my_resource"). Required
+                when ``add_type`` is set.
+            parent: Parent URI under which the resource will be stored. Not
+                supported when ``add_type`` is set.
             reason: Reason for adding the resource
             instruction: Processing instruction for semantic extraction
             wait: Whether to wait for semantic extraction and vectorization to complete

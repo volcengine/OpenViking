@@ -655,17 +655,39 @@ async def test_add_resource_declared_add_type_is_forwarded(service, monkeypatch)
 
     # A non-URL source: only reaches the service because add_type is declared;
     # without it this path shape would be treated as a local file.
-    result = await add_resource(path="space:home", add_type="feishu")
+    result = await add_resource(
+        path="space:home",
+        add_type="feishu",
+        to="viking://resources/feishu",
+    )
 
     assert "task_id: ov-task-123" in result
     assert captured["path"] == "space:home"
     assert captured["add_type"] == "feishu"
+    assert captured["to"] == "viking://resources/feishu"
 
 
 async def test_add_resource_declared_add_type_rejects_temp_file_id(service):
     result = await add_resource(temp_file_id="upload_abc.md", add_type="feishu")
 
     assert result == "Error: add_type cannot be combined with temp_file_id."
+
+
+async def test_add_resource_declared_add_type_requires_exact_to(service):
+    result = await add_resource(path="space:home", add_type="feishu")
+
+    assert result == "Error: add_type requires an exact 'to' target."
+
+
+async def test_add_resource_declared_add_type_rejects_parent(service):
+    result = await add_resource(
+        path="space:home",
+        add_type="feishu",
+        to="viking://resources/feishu",
+        parent="viking://resources/imports",
+    )
+
+    assert result == "Error: add_type cannot be combined with parent."
 
 
 async def test_add_resource_temp_file_id_branch_resolves_and_ingests(

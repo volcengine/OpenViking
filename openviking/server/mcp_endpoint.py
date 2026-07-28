@@ -572,8 +572,9 @@ async def add_resource(
         add_type: Explicit Connector source type (e.g. "tos", "git"). When set, the
             request routes through the Connector integration (must be enabled
             server-side) and ``path`` is sent verbatim — never treated as a local
-            file. Cannot be combined with ``temp_file_id``. Leave empty for the
-            default path-probing behavior.
+            file. Requires an exact ``to`` target and cannot be combined with
+            ``temp_file_id`` or ``parent``. Leave empty for the default path-probing
+            behavior.
         description: Optional human-readable reason for adding the resource.
         watch_interval: Auto-refresh cadence in minutes. 0 = no watch. Prefer >=1440 (24h)
             unless the source changes faster — every refresh re-embeds the whole resource.
@@ -581,9 +582,10 @@ async def add_resource(
         processing_mode: "semantic_and_vectors" for normal semantic processing, or
             "vectors_only" to skip semantic understanding and only build vector indexes.
         to: Target URI under viking://resources/ (e.g. "viking://resources/volcengine/OpenViking").
-            Leave empty to derive a URI from the source.
+            Required when ``add_type`` is set; otherwise leave empty to derive a URI
+            from the source.
         parent: Parent URI under viking://resources/ for remote imports. Mutually exclusive
-            with ``to``.
+            with ``to`` and not supported when ``add_type`` is set.
         args: Parser-specific options, e.g. {"feishu_access_token": "..."} for Feishu imports,
             or {"site": true} for whole-site ingestion.
     """
@@ -603,6 +605,10 @@ async def add_resource(
         return "Error: add_type cannot be combined with temp_file_id."
     if add_type and not path:
         return "Error: add_type requires 'path'."
+    if add_type and parent:
+        return "Error: add_type cannot be combined with parent."
+    if add_type and not to:
+        return "Error: add_type requires an exact 'to' target."
 
     # Branch 1: ingest by temp_file_id. Kept for backward compat / REST-style use — the
     # signed upload now auto-ingests server-side, so agents no longer need this second leg.
