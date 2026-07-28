@@ -1141,7 +1141,7 @@ class SemanticProcessor(DequeueHandlerBase):
         """
         file_name = file_path.split("/")[-1]
         llm_sem = llm_sem or asyncio.Semaphore(self.max_concurrent_llm)
-        media_type = get_media_type(file_path, None)
+        media_type = get_media_type(file_name, None)
         if media_type == "image":
             return await generate_image_summary(file_path, file_name, llm_sem, ctx=ctx)
         elif media_type == "audio":
