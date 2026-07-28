@@ -34,6 +34,7 @@ from openviking.integrations.langchain.messages import (
     is_recordable_langchain_message,
     langchain_message_to_openviking,
 )
+from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 
 MAX_RECORDING_BATCH_SIZE = 100
 
@@ -152,10 +153,8 @@ class OpenVikingSessionRecorder:
             auto_initialize=auto_initialize,
         )
         self._owns_client = client is None
-        self._owns_async_client = async_client is None and client is None
         self._client_cache: Any = None
-        self._async_client_cache: Any = None
-        self._async_client_lock = asyncio.Lock()
+        self._async_clients = LoopScopedAsyncClientCache()
         self._pending_commit_sessions: set[str] = set()
         self._closed = False
         self.commit_policy = commit_policy
@@ -365,15 +364,25 @@ class OpenVikingSessionRecorder:
         self._pending_commit_sessions.discard(session_id)
 
     async def get_async_client(self) -> Any:
-        """Return the lazily initialized client used by async recorder methods."""
+        """Return the async client interface used by this recorder.
+
+        Injected clients are returned unchanged and remain caller-owned.
+        HTTP-backed connections return an internally managed, loop-local handle
+        whose method calls support recovery. Direct attributes on that handle
+        are best-effort during recovery; use ``await handle.get()`` only to read
+        raw properties immediately because recovery may replace that snapshot.
+        Embedded ``path=`` connections return an adapter-owned synchronous
+        client whose calls are dispatched through a worker thread.
+        """
 
         self._raise_if_closed()
-        if self._async_client_cache is None:
-            async with self._async_client_lock:
-                self._raise_if_closed()
-                if self._async_client_cache is None:
-                    self._async_client_cache = await ensure_async_client(self._connection)
-        return self._async_client_cache
+        client = await ensure_async_client(
+            self._connection,
+            client_cache=self._async_clients,
+            embedded_client_factory=lambda: self.client,
+        )
+        self._raise_if_closed()
+        return client
 
     async def _get_async_client(self) -> Any:
         return await self.get_async_client()
@@ -389,13 +398,14 @@ class OpenVikingSessionRecorder:
 
         if self._closed:
             return
-        if self._owns_async_client and (
-            self._async_client_cache is not None or self._async_client_lock.locked()
-        ):
+        uses_http_client = bool(self._connection.url) or self._connection.path is None
+        if uses_http_client and self._async_clients.has_clients():
             raise RuntimeError(
                 "OpenVikingSessionRecorder has an active async client; "
                 "use `await recorder.aclose()`"
             )
+        if not uses_http_client:
+            self._async_clients.pop_all()
         self._closed = True
         self._pending_commit_sessions.clear()
         client = self._client_cache
@@ -415,13 +425,11 @@ class OpenVikingSessionRecorder:
         self._pending_commit_sessions.clear()
         sync_client = self._client_cache
         self._client_cache = None
-        async with self._async_client_lock:
-            async_client = self._async_client_cache
-            self._async_client_cache = None
+        async_clients = await asyncio.to_thread(self._async_clients.pop_all)
 
         await aclose_openviking_clients(
             sync_client if self._owns_client else None,
-            async_client if self._owns_async_client else None,
+            *async_clients,
         )
 
     def _raise_if_closed(self) -> None:

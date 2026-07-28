@@ -104,6 +104,7 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             path=path,
             commit_policy=None,
         )
+        self._owns_retriever = retriever is None
         self.retriever = retriever or OpenVikingRetriever(
             client=client,
             async_client=async_client,
@@ -154,7 +155,10 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         """Release all clients internally owned by this middleware."""
 
         first_error: BaseException | None = None
-        for component in (self.recorder, self.assembler, self.retriever):
+        components: list[Any] = [self.recorder, self.assembler]
+        if self._owns_retriever:
+            components.append(self.retriever)
+        for component in components:
             try:
                 await component.aclose()
             except BaseException as exc:
@@ -201,7 +205,7 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             return await handler(request)
         try:
             return await handler(updated_request)
-        except Exception:
+        except BaseException:
             self._pending_context_parts.pop(pending_key, None)
             raise
 

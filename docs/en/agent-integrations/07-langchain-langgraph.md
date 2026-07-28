@@ -1,6 +1,6 @@
 # LangChain and LangGraph
 
-Wire OpenViking into your LangChain or LangGraph agent as the context backend. The SDK provides a retriever, chat history, context wrapper, agent tools, LangGraph store, and middleware — all connecting to a running OpenViking server over HTTP.
+Wire OpenViking into your LangChain or LangGraph agent as the context backend. The SDK provides a retriever, chat history, context wrapper, agent tools, LangGraph store, and middleware for HTTP-backed or embedded OpenViking deployments.
 
 ## Install
 
@@ -21,7 +21,7 @@ tools = create_openviking_tools(
 )
 ```
 
-When `url` is omitted, the adapters load connection settings from the OpenViking CLI config. Embedding and VLM providers are configured in OpenViking, not in your app.
+When both `url` and `path` are omitted, adapters use the HTTP connection settings from the OpenViking CLI config. Pass `path` to use an embedded workspace through OpenViking's synchronous client. Embedding and VLM providers are configured in OpenViking, not in your app.
 
 ### Async applications
 
@@ -37,8 +37,16 @@ result = await chain.ainvoke(
 )
 ```
 
-Long-lived applications can initialize one caller-owned client and reuse it
-across adapters:
+Async adapters support three client modes:
+
+| Configuration | Async interface | Ownership |
+|---------------|-----------------|-----------|
+| `client=` or `async_client=` | The injected client is returned unchanged | Caller |
+| `url=`, or neither `url` nor `path` | One recovery-capable HTTP handle per event loop | Adapter |
+| `path=` | A synchronous embedded client invoked in a worker thread | Adapter |
+
+Long-lived applications can initialize one caller-owned async client and reuse
+it across adapters running on the same event loop:
 
 ```python
 from openviking.client import AsyncHTTPClient
@@ -53,12 +61,24 @@ finally:
     await client.close()
 ```
 
+Injected async clients are bound to the event loop that initializes them. Do
+not share one injected async client across event loops; create and manage one
+client per loop instead. An injected synchronous client remains safe to use
+from async adapter methods because its calls run in a worker thread.
+
+For embedded `path=` adapters, the synchronous fallback is intentional:
+`SyncOpenViking` keeps the stateful embedded engine on OpenViking's shared
+background loop while the application event loop remains non-blocking. To use
+native embedded async methods, construct and initialize `AsyncOpenViking`
+yourself, inject it with `async_client=`, use it from that same event loop, and
+close it yourself. Only one embedded workspace can be live per process; close
+or reset it before selecting another workspace.
+
 `OpenVikingChatMessageHistory` provides `aget_messages()`, `aadd_messages()`,
 and `aclear()`. `OpenVikingSessionRecorder` provides `arecord()`, `aflush()`,
 and `aclose()`. Async LangGraph runs select `awrap_model_call()` and
-`aafter_agent()` automatically. A synchronous injected client remains
-supported; its calls run in a worker thread instead of blocking the event loop.
-Concurrent first use initializes one shared client per adapter.
+`aafter_agent()` automatically. Concurrent first use creates one internal HTTP
+client per adapter and event loop.
 
 Adapters never close an injected client. When an adapter creates its own client,
 release it with `await retriever.aclose()`, `await assembler.aclose()`,
@@ -66,6 +86,12 @@ release it with `await retriever.aclose()`, `await assembler.aclose()`,
 `await recorder.aclose()` as appropriate. Calling synchronous
 `recorder.close()` after an async operation raises and intentionally leaves the
 recorder open so `await recorder.aclose()` can still release every resource.
+When possible, close HTTP-backed adapters before shutting down their event
+loops; cleanup after an originating loop has already ended is best-effort.
+`with_openviking_context()` returns LangChain's standard
+`RunnableWithMessageHistory`, which has no close hook. Long-lived async
+applications using that helper should therefore inject and close a
+caller-owned async client as shown above.
 
 ## Peer Identity
 

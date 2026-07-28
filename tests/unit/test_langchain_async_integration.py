@@ -115,6 +115,37 @@ async def test_injected_async_client_is_initialized_only_once_across_adapters():
 
 
 @pytest.mark.asyncio
+async def test_shared_injected_async_client_initializes_once_across_real_adapters():
+    class SharedAsyncClient:
+        def __init__(self):
+            self.initialize_calls = 0
+            self.closed = False
+
+        async def initialize(self) -> None:
+            await asyncio.sleep(0.01)
+            self.initialize_calls += 1
+
+        async def close(self) -> None:
+            self.closed = True
+
+    client = SharedAsyncClient()
+    recorder = OpenVikingSessionRecorder(async_client=client)
+    retriever = OpenVikingRetriever(async_client=client)
+
+    resolved = await asyncio.gather(
+        recorder.get_async_client(),
+        retriever.get_async_client(),
+    )
+
+    assert resolved == [client, client]
+    assert client.initialize_calls == 1
+
+    await recorder.aclose()
+    await retriever.aclose()
+    assert client.closed is False
+
+
+@pytest.mark.asyncio
 async def test_injected_async_client_respects_disabled_auto_initialize():
     class AsyncClient:
         def __init__(self):
@@ -234,6 +265,140 @@ async def test_async_adapter_client_caches_initialize_once_under_concurrency(mon
     assert all(client.closed for client in instances)
 
 
+def test_async_adapter_clients_are_scoped_per_event_loop(monkeypatch):
+    instances: list[Any] = []
+
+    class LoopBoundAsyncHTTPClient:
+        def __init__(self, **_kwargs: Any):
+            self.loop: asyncio.AbstractEventLoop | None = None
+            self.closed = False
+            self.writes = 0
+            instances.append(self)
+
+        async def initialize(self) -> None:
+            await asyncio.sleep(0.01)
+            self.loop = asyncio.get_running_loop()
+
+        async def batch_add_messages(self, **_kwargs: Any) -> dict[str, Any]:
+            if asyncio.get_running_loop() is not self.loop:
+                raise RuntimeError("client used from a different event loop")
+            self.writes += 1
+            return {}
+
+        async def close(self) -> None:
+            self.closed = True
+
+    import openviking.client as client_module
+
+    monkeypatch.setattr(client_module, "AsyncHTTPClient", LoopBoundAsyncHTTPClient)
+    recorder = OpenVikingSessionRecorder(url="http://localhost:1933")
+
+    async def use_recorder(session_id: str) -> tuple[Any, Any]:
+        handles = await asyncio.gather(*(recorder.get_async_client() for _ in range(8)))
+        assert all(handle is handles[0] for handle in handles)
+        client = await handles[0].get()
+        await recorder.arecord(session_id, [HumanMessage(content=session_id)])
+        return handles[0], client
+
+    loop_a = asyncio.new_event_loop()
+    loop_b = asyncio.new_event_loop()
+    try:
+        handle_a, client_a = loop_a.run_until_complete(use_recorder("loop-a"))
+        handle_b, client_b = loop_b.run_until_complete(use_recorder("loop-b"))
+
+        assert handle_a is not handle_b
+        assert client_a is not client_b
+        assert len(instances) == 2
+        assert [client.writes for client in instances] == [1, 1]
+
+        loop_b.run_until_complete(recorder.aclose())
+        assert all(client.closed for client in instances)
+    finally:
+        loop_a.close()
+        loop_b.close()
+
+
+def test_async_adapter_aclose_after_originating_loop_ends_is_best_effort(monkeypatch):
+    class LoopBoundAsyncHTTPClient:
+        def __init__(self, **_kwargs: Any):
+            pass
+
+        async def initialize(self) -> None:
+            await asyncio.sleep(0.01)
+
+        async def close(self) -> None:
+            raise RuntimeError("event loop is closed")
+
+    import openviking.client as client_module
+
+    monkeypatch.setattr(client_module, "AsyncHTTPClient", LoopBoundAsyncHTTPClient)
+    recorder = OpenVikingSessionRecorder(url="http://localhost:1933")
+
+    async def initialize_with_contention() -> None:
+        await asyncio.gather(*(recorder.get_async_client() for _ in range(4)))
+
+    asyncio.run(initialize_with_contention())
+    asyncio.run(recorder.aclose())
+    assert recorder._closed is True
+
+
+def test_async_adapter_aclose_routes_to_live_originating_loop(monkeypatch):
+    instances: list[Any] = []
+
+    class LoopBoundAsyncHTTPClient:
+        def __init__(self, **_kwargs: Any):
+            self.initialized_loop: asyncio.AbstractEventLoop | None = None
+            self.closed_loop: asyncio.AbstractEventLoop | None = None
+            instances.append(self)
+
+        async def initialize(self) -> None:
+            self.initialized_loop = asyncio.get_running_loop()
+
+        async def close(self) -> None:
+            self.closed_loop = asyncio.get_running_loop()
+
+    import openviking.client as client_module
+
+    monkeypatch.setattr(client_module, "AsyncHTTPClient", LoopBoundAsyncHTTPClient)
+    recorder = OpenVikingSessionRecorder(url="http://localhost:1933")
+    worker_loop = asyncio.new_event_loop()
+    ready = threading.Event()
+    worker_errors: list[BaseException] = []
+
+    async def initialize() -> None:
+        await recorder.get_async_client()
+
+    def run_worker_loop() -> None:
+        asyncio.set_event_loop(worker_loop)
+        try:
+            try:
+                worker_loop.run_until_complete(initialize())
+            except BaseException as exc:
+                worker_errors.append(exc)
+                return
+            ready.set()
+            worker_loop.run_forever()
+        finally:
+            ready.set()
+            asyncio.set_event_loop(None)
+
+    thread = threading.Thread(target=run_worker_loop)
+    thread.start()
+    assert ready.wait(timeout=2)
+    try:
+        assert not worker_errors
+        asyncio.run(recorder.aclose())
+    finally:
+        worker_loop.call_soon_threadsafe(worker_loop.stop)
+        thread.join(timeout=2)
+        worker_loop.close()
+
+    assert not thread.is_alive()
+    assert len(instances) == 1
+    assert instances[0].initialized_loop is worker_loop
+    assert instances[0].closed_loop is worker_loop
+
+
 @pytest.mark.asyncio
 async def test_async_handle_copy_and_missing_attribute_behavior(monkeypatch):
     class FakeAsyncHTTPClient:
@@ -255,16 +420,141 @@ async def test_async_handle_copy_and_missing_attribute_behavior(monkeypatch):
     handle = await retriever.get_async_client()
 
     copied = copy.deepcopy(retriever)
-    copied_handle = copied._async_client_cache
+    assert not copied._async_clients.has_clients()
+    copied_handle = await copied.get_async_client()
 
     assert isinstance(copied_handle, OpenVikingAsyncClientHandle)
     assert copied_handle is not handle
-    assert copied_handle._client is None
     assert (await copied_handle.get()).marker == "async-client"
     assert handle.marker == "async-client"
     assert not hasattr(handle, "definitely_not_an_openviking_client_attribute")
     await copied.aclose()
     await retriever.aclose()
+
+
+@pytest.mark.asyncio
+async def test_async_handle_method_lookup_survives_recovery_reset(monkeypatch):
+    instances: list[Any] = []
+    reset_started = asyncio.Event()
+    release_close = asyncio.Event()
+
+    class RecoveringAsyncHTTPClient:
+        def __init__(self, **_kwargs: Any):
+            self.index = len(instances)
+            instances.append(self)
+
+        async def initialize(self) -> None:
+            return None
+
+        async def find(self, **kwargs: Any) -> dict[str, Any]:
+            if self.index == 0:
+                raise ConnectionError("replace this client")
+            return {"query": kwargs["query"], "client": self.index}
+
+        async def close(self) -> None:
+            if self.index == 0:
+                reset_started.set()
+                await release_close.wait()
+
+    import openviking.client as client_module
+
+    monkeypatch.setattr(client_module, "AsyncHTTPClient", RecoveringAsyncHTTPClient)
+    handle = OpenVikingAsyncClientHandle(OpenVikingConnection(url="http://localhost:1933"))
+    await handle.initialize()
+
+    recovering_call = asyncio.create_task(handle.find(query="first"))
+    await asyncio.wait_for(reset_started.wait(), timeout=1)
+
+    sibling_method = handle.find
+    sibling_call = asyncio.create_task(sibling_method(query="second"))
+    release_close.set()
+
+    first_result, second_result = await asyncio.gather(recovering_call, sibling_call)
+
+    assert {first_result["query"], second_result["query"]} == {"first", "second"}
+    assert first_result["client"] == second_result["client"] == 1
+    assert len(instances) == 2
+    await handle.close()
+
+
+@pytest.mark.asyncio
+async def test_async_handle_stale_failure_does_not_reset_replacement(monkeypatch):
+    instances: list[Any] = []
+    stale_call_started = asyncio.Event()
+    release_stale_failure = asyncio.Event()
+    reset_started = asyncio.Event()
+    release_old_close = asyncio.Event()
+
+    class RecoveringAsyncHTTPClient:
+        def __init__(self, **_kwargs: Any):
+            self.index = len(instances)
+            self.closed = False
+            instances.append(self)
+
+        async def initialize(self) -> None:
+            return None
+
+        async def find(self, *, query: str) -> dict[str, Any]:
+            if self.index != 0:
+                return {"query": query, "client": self.index}
+            if query == "stale":
+                stale_call_started.set()
+                await release_stale_failure.wait()
+            raise ConnectionError(f"{query} failed on the old client")
+
+        async def close(self) -> None:
+            self.closed = True
+            if self.index == 0:
+                reset_started.set()
+                await release_old_close.wait()
+
+    import openviking.client as client_module
+
+    monkeypatch.setattr(client_module, "AsyncHTTPClient", RecoveringAsyncHTTPClient)
+    handle = OpenVikingAsyncClientHandle(OpenVikingConnection(url="http://localhost:1933"))
+    await handle.initialize()
+
+    stale_call = asyncio.create_task(handle.find(query="stale"))
+    await asyncio.wait_for(stale_call_started.wait(), timeout=1)
+
+    recovering_call = asyncio.create_task(handle.find(query="first"))
+    await asyncio.wait_for(reset_started.wait(), timeout=1)
+
+    fresh_result = await handle.find(query="fresh")
+    release_stale_failure.set()
+    stale_result = await stale_call
+    release_old_close.set()
+    recovering_result = await recovering_call
+
+    assert fresh_result["client"] == stale_result["client"] == recovering_result["client"] == 1
+    assert len(instances) == 2
+    assert instances[0].closed is True
+    assert instances[1].closed is False
+    await handle.close()
+
+
+@pytest.mark.asyncio
+async def test_async_handle_missing_method_fails_when_called(monkeypatch):
+    class FakeAsyncHTTPClient:
+        def __init__(self, **_kwargs: Any):
+            pass
+
+        async def initialize(self) -> None:
+            return None
+
+        async def close(self) -> None:
+            return None
+
+    import openviking.client as client_module
+
+    monkeypatch.setattr(client_module, "AsyncHTTPClient", FakeAsyncHTTPClient)
+    handle = OpenVikingAsyncClientHandle(OpenVikingConnection(url="http://localhost:1933"))
+
+    missing_method = handle.definitely_not_an_openviking_client_attribute
+    with pytest.raises(AttributeError, match="definitely_not_an_openviking_client_attribute"):
+        await missing_method()
+
+    await handle.close()
 
 
 @pytest.mark.asyncio
@@ -358,6 +648,23 @@ async def test_async_middleware_does_not_close_injected_client():
 
 
 @pytest.mark.asyncio
+async def test_async_middleware_does_not_close_injected_retriever():
+    client = AsyncInMemoryOpenVikingClient()
+    retriever = OpenVikingRetriever(async_client=client)
+    middleware = OpenVikingContextMiddleware(
+        async_client=client,
+        retriever=retriever,
+    )
+
+    await middleware.aclose()
+
+    assert retriever._closed is False
+    assert await retriever.ainvoke("still usable") == []
+    assert client.closed is False
+    await retriever.aclose()
+
+
+@pytest.mark.asyncio
 async def test_async_client_retries_safe_read_with_fresh_client(monkeypatch):
     instances: list[Any] = []
 
@@ -440,6 +747,70 @@ async def test_sync_client_async_fallback_runs_outside_event_loop_thread():
     assert result["query"] == "fallback"
     assert call_thread_ids
     assert call_thread_ids[0] != main_thread_id
+
+
+@pytest.mark.asyncio
+async def test_embedded_path_async_uses_owned_sync_client_in_worker(monkeypatch, tmp_path):
+    main_thread_id = threading.get_ident()
+    instances: list[Any] = []
+
+    class FakeSyncOpenViking:
+        def __init__(self, *, path: str, actor_peer_id: str | None = None):
+            self.path = path
+            self.actor_peer_id = actor_peer_id
+            self._initialized = False
+            self.initialize_thread_id: int | None = None
+            self.find_thread_id: int | None = None
+            self.closed = False
+            instances.append(self)
+
+        def initialize(self) -> None:
+            self.initialize_thread_id = threading.get_ident()
+            self._initialized = True
+
+        def find(self, **_kwargs: Any) -> dict[str, Any]:
+            self.find_thread_id = threading.get_ident()
+            return {
+                "memories": [
+                    {
+                        "uri": "viking://user/memories/example",
+                        "abstract": "Embedded result.",
+                        "level": 1,
+                    }
+                ],
+                "resources": [],
+                "skills": [],
+            }
+
+        def close(self) -> None:
+            self.closed = True
+
+    import openviking.sync_client as sync_client_module
+
+    monkeypatch.setattr(sync_client_module, "SyncOpenViking", FakeSyncOpenViking)
+    retriever = OpenVikingRetriever(path=str(tmp_path), actor_peer_id="assistant-a")
+
+    documents = await retriever.ainvoke("embedded")
+    client = await retriever.get_async_client()
+
+    assert [document.page_content for document in documents] == ["Embedded result."]
+    assert len(instances) == 1
+    assert client is instances[0]
+    assert client is retriever._get_client()
+    assert client.actor_peer_id == "assistant-a"
+    assert client.initialize_thread_id != main_thread_id
+    assert client.find_thread_id != main_thread_id
+
+    await retriever.aclose()
+    assert client.closed is True
+
+    recorder = OpenVikingSessionRecorder(path=str(tmp_path / "recorder"))
+    recorder_client = await recorder.get_async_client()
+
+    assert recorder_client is recorder.client
+    recorder.close()
+    assert recorder._closed is True
+    assert recorder_client.closed is True
 
 
 @pytest.mark.asyncio
@@ -717,3 +1088,42 @@ async def test_async_middleware_injects_and_captures_context():
     assert "Async middleware prefers teal." in (captured_request["request"].system_message.content)
     assistant_parts = backing.sessions["async-middleware"][1]["parts"]
     assert any(part["type"] == "context" for part in assistant_parts)
+
+
+@pytest.mark.asyncio
+async def test_async_middleware_clears_pending_context_when_model_call_is_cancelled():
+    backing = InMemoryOpenVikingClient(
+        {"viking://user/memories/profile.md": "Cancelled context must not be reused."}
+    )
+    client = AsyncInMemoryOpenVikingClient(backing)
+    middleware = OpenVikingContextMiddleware(
+        async_client=client,
+        target_uri="viking://user/memories",
+        session_id_resolver=lambda _state, _runtime: "async-cancelled-middleware",
+    )
+    handler_started = asyncio.Event()
+
+    class Request:
+        state: dict[str, Any] = {}
+        runtime = None
+        messages = [HumanMessage(content="Find the cancelled context.")]
+        system_message = None
+
+        def override(self, **overrides: Any) -> Request:
+            request = Request()
+            request.system_message = overrides.get("system_message", self.system_message)
+            return request
+
+    async def handler(_request: Any) -> AIMessage:
+        handler_started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    model_call = asyncio.create_task(middleware.awrap_model_call(Request(), handler))
+    await asyncio.wait_for(handler_started.wait(), timeout=1)
+    model_call.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await model_call
+
+    assert middleware._pending_context_parts == {}

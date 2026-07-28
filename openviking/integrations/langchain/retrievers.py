@@ -28,6 +28,7 @@ from openviking.integrations.langchain.client import (
     iter_result_items,
     stringify,
 )
+from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 
 
 class OpenVikingRetriever(BaseRetriever):
@@ -61,10 +62,10 @@ class OpenVikingRetriever(BaseRetriever):
     tags: list[str] | None = Field(default=None, exclude=True)
 
     _client_cache: Any = PrivateAttr(default=None)
-    _async_client_cache: Any = PrivateAttr(default=None)
-    _async_client_lock: asyncio.Lock = PrivateAttr(default_factory=asyncio.Lock)
+    _async_clients: LoopScopedAsyncClientCache = PrivateAttr(
+        default_factory=LoopScopedAsyncClientCache
+    )
     _owns_client_cache: bool = PrivateAttr(default=False)
-    _owns_async_client_cache: bool = PrivateAttr(default=False)
     _closed: bool = PrivateAttr(default=False)
 
     def _get_client(self) -> Any:
@@ -89,33 +90,38 @@ class OpenVikingRetriever(BaseRetriever):
         return self._client_cache
 
     async def get_async_client(self) -> Any:
-        """Return the lazily initialized client used by async retrieval."""
+        """Return the async client interface used by this retriever.
+
+        Injected clients are returned unchanged and remain caller-owned.
+        HTTP-backed connections return an internally managed, loop-local handle
+        whose method calls support recovery. Direct attributes on that handle
+        are best-effort during recovery; use ``await handle.get()`` only to read
+        raw properties immediately because recovery may replace that snapshot.
+        Embedded ``path=`` connections return an adapter-owned synchronous
+        client whose calls are dispatched through a worker thread.
+        """
 
         self._raise_if_closed()
-        if self._async_client_cache is None:
-            async with self._async_client_lock:
-                self._raise_if_closed()
-                if self._async_client_cache is None:
-                    self._owns_async_client_cache = (
-                        self.async_client is None and self.client is None
-                    )
-                    self._async_client_cache = await ensure_async_client(
-                        OpenVikingConnection(
-                            client=self.client,
-                            async_client=self.async_client,
-                            url=self.url,
-                            api_key=self.api_key,
-                            account=self.account,
-                            user=self.user,
-                            user_id=self.user_id,
-                            actor_peer_id=self.actor_peer_id,
-                            path=self.path,
-                            timeout=self.timeout,
-                            extra_headers=self.extra_headers,
-                            auto_initialize=self.auto_initialize,
-                        )
-                    )
-        return self._async_client_cache
+        client = await ensure_async_client(
+            OpenVikingConnection(
+                client=self.client,
+                async_client=self.async_client,
+                url=self.url,
+                api_key=self.api_key,
+                account=self.account,
+                user=self.user,
+                user_id=self.user_id,
+                actor_peer_id=self.actor_peer_id,
+                path=self.path,
+                timeout=self.timeout,
+                extra_headers=self.extra_headers,
+                auto_initialize=self.auto_initialize,
+            ),
+            client_cache=self._async_clients,
+            embedded_client_factory=self._get_client,
+        )
+        self._raise_if_closed()
+        return client
 
     async def _get_async_client(self) -> Any:
         return await self.get_async_client()
@@ -128,13 +134,11 @@ class OpenVikingRetriever(BaseRetriever):
         self._closed = True
         sync_client = self._client_cache
         self._client_cache = None
-        async with self._async_client_lock:
-            async_client = self._async_client_cache
-            self._async_client_cache = None
+        async_clients = await asyncio.to_thread(self._async_clients.pop_all)
 
         await aclose_openviking_clients(
             sync_client if self._owns_client_cache else None,
-            async_client if self._owns_async_client_cache else None,
+            *async_clients,
         )
 
     def _raise_if_closed(self) -> None:

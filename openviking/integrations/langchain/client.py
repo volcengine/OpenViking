@@ -10,7 +10,9 @@ import inspect
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Iterable, Literal
+from typing import Any, Callable, Iterable, Literal
+
+from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +43,7 @@ _RECOVERABLE_RUNTIME_MESSAGE_FRAGMENTS = (
     "attached to a different loop",
     "bound to a different event loop",
 )
-_ASYNC_INITIALIZATION_LOCK_ATTR = "_openviking_integration_initialize_lock"
+_ASYNC_INITIALIZATION_LOCKS_ATTR = "_openviking_integration_initialize_locks"
 
 
 class OptionalDependencyError(ImportError):
@@ -146,12 +148,21 @@ class OpenVikingClientHandle:
 
 
 class OpenVikingAsyncClientHandle:
-    """Lazy async client wrapper with one-shot recovery for safe reads."""
+    """Lazy, loop-local async client wrapper with one-shot recovery for safe reads.
+
+    Method calls through the handle are recovery-safe. Direct client attribute
+    access is best-effort and may be unavailable while recovery replaces the
+    underlying client.
+    """
 
     def __init__(self, connection: OpenVikingConnection):
         self._connection = connection
         self._client: Any = None
         self._client_lock = asyncio.Lock()
+        try:
+            self._loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
 
     @property
     def _initialized(self) -> bool:
@@ -164,12 +175,45 @@ class OpenVikingAsyncClientHandle:
         await self.get()
 
     async def close(self) -> None:
-        await self.reset()
+        owner_loop = self._loop
+        current_loop = asyncio.get_running_loop()
+        if owner_loop is None or owner_loop is current_loop:
+            await self.reset()
+            return
+        if owner_loop.is_running():
+            reset = self.reset()
+            try:
+                future = asyncio.run_coroutine_threadsafe(reset, owner_loop)
+            except RuntimeError:
+                reset.close()
+            else:
+                await asyncio.wrap_future(future)
+                return
+        await self._reset_without_lock()
 
     async def reset(self) -> None:
         async with self._client_lock:
             client = self._client
             self._client = None
+        await self._close_client(client)
+
+    async def _reset_if_current(self, client: Any) -> None:
+        """Reset only when ``client`` is still the active snapshot."""
+
+        async with self._client_lock:
+            if self._client is not client:
+                return
+            self._client = None
+        await self._close_client(client)
+
+    async def _reset_without_lock(self) -> None:
+        """Detach a client after its originating loop has stopped."""
+
+        client = self._client
+        self._client = None
+        await self._close_client(client)
+
+    async def _close_client(self, client: Any) -> None:
         if client is None:
             return
         try:
@@ -178,6 +222,20 @@ class OpenVikingAsyncClientHandle:
             logger.debug("OpenViking async client close during recovery failed", exc_info=True)
 
     async def get(self) -> Any:
+        """Return the current client snapshot, initializing it when necessary.
+
+        Read raw properties immediately and do not retain this client: a later
+        recovery may replace and close it.
+        """
+
+        current_loop = asyncio.get_running_loop()
+        if self._loop is None:
+            self._loop = current_loop
+        elif self._loop is not current_loop:
+            raise RuntimeError(
+                "OpenVikingAsyncClientHandle is loop-local and cannot be reused "
+                "from another event loop"
+            )
         if self._client is None:
             async with self._client_lock:
                 if self._client is None:
@@ -194,9 +252,10 @@ class OpenVikingAsyncClientHandle:
         *args: Any,
         **kwargs: Any,
     ) -> Any:
+        client = await self.get()
         try:
             return await _acall_client_method(
-                await self.get(),
+                client,
                 method_name,
                 *args,
                 **kwargs,
@@ -204,19 +263,20 @@ class OpenVikingAsyncClientHandle:
         except Exception as exc:
             if not _is_recoverable_client_error(exc):
                 raise
-            await self.reset()
+            await self._reset_if_current(client)
             if not _should_retry_method(method_name):
                 raise
+            retry_client = await self.get()
             try:
                 return await _acall_client_method(
-                    await self.get(),
+                    retry_client,
                     method_name,
                     *args,
                     **kwargs,
                 )
             except Exception as retry_exc:
                 if _is_recoverable_client_error(retry_exc):
-                    await self.reset()
+                    await self._reset_if_current(retry_client)
                 raise
 
     def __copy__(self) -> OpenVikingAsyncClientHandle:
@@ -231,11 +291,10 @@ class OpenVikingAsyncClientHandle:
         if name.startswith("__") and name.endswith("__"):
             raise AttributeError(name)
         client = self._client
-        if client is None:
-            raise AttributeError(name)
-        attr = getattr(client, name)
-        if not callable(attr):
-            return attr
+        if client is not None:
+            attr = getattr(client, name)
+            if not callable(attr):
+                return attr
 
         async def recovered_method(*args: Any, **kwargs: Any) -> Any:
             return await self._call_with_recovery(name, *args, **kwargs)
@@ -260,22 +319,42 @@ def ensure_client(connection: OpenVikingConnection) -> Any:
     return client
 
 
-async def ensure_async_client(connection: OpenVikingConnection) -> Any:
+async def ensure_async_client(
+    connection: OpenVikingConnection,
+    *,
+    client_cache: LoopScopedAsyncClientCache | None = None,
+    embedded_client_factory: Callable[[], Any] | None = None,
+) -> Any:
     """Return a client suitable for non-blocking OpenViking calls.
 
     An explicitly supplied async client is preferred. Existing synchronous
     clients remain supported and are dispatched through a worker thread by
-    :func:`acall_openviking`.
+    :func:`acall_openviking`. Internally created HTTP handles can be scoped to
+    the running loop with ``client_cache``. Embedded ``path=`` connections
+    intentionally use the synchronous client so their stateful async internals
+    remain on OpenViking's shared background loop.
     """
 
     client = connection.async_client
     if client is None and connection.client is not None:
         client = connection.client
     if client is None:
-        handle = OpenVikingAsyncClientHandle(connection)
-        if connection.auto_initialize:
-            await handle.get()
-        return handle
+        if _uses_http_client(connection):
+            if client_cache is None:
+                handle = OpenVikingAsyncClientHandle(connection)
+            else:
+                handle = client_cache.get(lambda: OpenVikingAsyncClientHandle(connection))
+            if connection.auto_initialize:
+                await handle.get()
+            return handle
+        if embedded_client_factory is not None:
+            if client_cache is not None:
+                return await asyncio.to_thread(
+                    client_cache.get,
+                    embedded_client_factory,
+                )
+            return await asyncio.to_thread(embedded_client_factory)
+        return await asyncio.to_thread(_create_client_from_connection, connection)
     if connection.auto_initialize and hasattr(client, "initialize"):
         await _ainitialize_client(client)
     return client
@@ -403,24 +482,21 @@ def _create_client_from_connection(connection: OpenVikingConnection) -> Any:
 
 
 async def _create_async_client_from_connection(connection: OpenVikingConnection) -> Any:
-    client: Any
-    if connection.url or connection.path is None:
-        from openviking.client import AsyncHTTPClient
+    if not _uses_http_client(connection):
+        raise ValueError("Native async clients are created automatically only for HTTP connections")
 
-        client = AsyncHTTPClient(
-            url=connection.url,
-            api_key=connection.api_key,
-            account=connection.account,
-            user=connection.user,
-            user_id=connection.user_id,
-            actor_peer_id=connection.actor_peer_id,
-            timeout=connection.timeout,
-            extra_headers=connection.extra_headers,
-        )
-    else:
-        from openviking.async_client import AsyncOpenViking
+    from openviking.client import AsyncHTTPClient
 
-        client = AsyncOpenViking(path=connection.path, actor_peer_id=connection.actor_peer_id)
+    client: Any = AsyncHTTPClient(
+        url=connection.url,
+        api_key=connection.api_key,
+        account=connection.account,
+        user=connection.user,
+        user_id=connection.user_id,
+        actor_peer_id=connection.actor_peer_id,
+        timeout=connection.timeout,
+        extra_headers=connection.extra_headers,
+    )
 
     try:
         if connection.auto_initialize and hasattr(client, "initialize"):
@@ -513,14 +589,26 @@ async def _ainitialize_client(client: Any) -> None:
 
 def _async_client_initialization_lock(client: Any) -> asyncio.Lock:
     try:
-        lock = inspect.getattr_static(client, _ASYNC_INITIALIZATION_LOCK_ATTR)
+        locks = inspect.getattr_static(client, _ASYNC_INITIALIZATION_LOCKS_ATTR)
     except AttributeError:
-        lock = asyncio.Lock()
+        locks = LoopScopedAsyncClientCache()
         try:
-            setattr(client, _ASYNC_INITIALIZATION_LOCK_ATTR, lock)
+            setattr(client, _ASYNC_INITIALIZATION_LOCKS_ATTR, locks)
         except Exception:
-            return lock
-    return lock
+            return asyncio.Lock()
+    if not isinstance(locks, LoopScopedAsyncClientCache):
+        locks = LoopScopedAsyncClientCache()
+        try:
+            setattr(client, _ASYNC_INITIALIZATION_LOCKS_ATTR, locks)
+        except Exception:
+            return asyncio.Lock()
+    return locks.get(asyncio.Lock)
+
+
+def _uses_http_client(connection: OpenVikingConnection) -> bool:
+    """Return whether connection settings select the HTTP transport."""
+
+    return bool(connection.url) or connection.path is None
 
 
 def _async_client_is_initialized(client: Any) -> bool:
