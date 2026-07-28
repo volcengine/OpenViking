@@ -91,6 +91,28 @@ def test_parse_code_hosting_url_git_ssh_single_segment():
     assert parse_code_hosting_url("git@github.com:repo") is None
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "git@git.example.com:repo.git",
+        "git@git.example.com:repo",
+        "ssh://git@git.example.com/repo.git",
+        "ssh://git@git.example.com/repo",
+        "git://git.example.com/repo.git",
+        "git://git.example.com/repo",
+    ],
+)
+def test_parse_code_hosting_url_single_segment_protocol_keeps_legacy_none(url):
+    config = _mock_config()
+    config.code.github_domains = []
+    config.code.gitlab_domains = []
+    config.code.azure_devops_domains = []
+    config.code.code_hosting_domains = ["git.example.com"]
+
+    with patch.object(_module, "get_openviking_config", return_value=config):
+        assert parse_code_hosting_url(url) is None
+
+
 def test_parse_code_hosting_url_https():
     assert parse_code_hosting_url("https://github.com/org/repo") == "org/repo"
 
@@ -305,11 +327,99 @@ def test_is_git_repo_url_single_segment():
     assert is_git_repo_url("https://github.com/org") is False
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "git@git.example.com:repo.git",
+        "git@git.example.com:repo",
+        "ssh://git@git.example.com/repo.git",
+        "ssh://git@git.example.com/repo",
+        "git://git.example.com/repo.git",
+        "git://git.example.com/repo",
+    ],
+)
+def test_is_git_repo_url_single_segment_protocol_repo(url):
+    config = _mock_config()
+    config.code.github_domains = []
+    config.code.gitlab_domains = []
+    config.code.azure_devops_domains = []
+    config.code.code_hosting_domains = ["git.example.com"]
+
+    with patch.object(_module, "get_openviking_config", return_value=config):
+        parsed = parse_git_repo_url(url)
+
+        assert parsed is not None
+        assert parsed.clone_url == url
+        assert parsed.repo_path == "repo"
+        assert parsed.route_kind == "clone"
+        assert is_git_repo_url(url) is True
+
+
+def test_is_git_repo_url_single_segment_https_repo_remains_rejected():
+    config = _mock_config()
+    config.code.github_domains = []
+    config.code.gitlab_domains = []
+    config.code.azure_devops_domains = []
+    config.code.code_hosting_domains = ["git.example.com"]
+
+    with patch.object(_module, "get_openviking_config", return_value=config):
+        assert is_git_repo_url("https://git.example.com/repo.git") is False
+
+
+@pytest.mark.parametrize(
+    ("url", "repo_path"),
+    [
+        ("git@git.example.com:org/subgroup/repo", "org/subgroup/repo"),
+        ("ssh://git@git.example.com/org/subgroup/repo", "org/subgroup/repo"),
+        ("git://git.example.com/org/subgroup/repo", "org/subgroup/repo"),
+        ("ssh://git@git.example.com/org/repo/tree/main", "org/repo/tree/main"),
+    ],
+)
+def test_explicit_git_transport_preserves_nested_path_without_dotgit(url, repo_path):
+    config = _mock_config()
+    config.code.github_domains = []
+    config.code.gitlab_domains = []
+    config.code.azure_devops_domains = []
+    config.code.code_hosting_domains = ["git.example.com"]
+
+    with patch.object(_module, "get_openviking_config", return_value=config):
+        parsed = parse_git_repo_url(url)
+
+        assert parsed is not None
+        assert parsed.clone_url == url
+        assert parsed.repo_path == repo_path
+        assert parsed.route_kind == "clone"
+        assert parsed.branch is None
+        assert parsed.commit is None
+        assert is_git_repo_url(url) is True
+        assert parse_code_hosting_url(url) == repo_path
+
+
 # --- is_git_repo_url: nested groups and .git clone URLs ---
 
 
 def test_is_git_repo_url_gitcode_nested_dotgit():
     assert is_git_repo_url("https://gitcode.com/GitHub_Trending/bl/black.git") is True
+
+
+def test_gitcode_nested_blob_file_ending_dotgit_is_not_a_repo():
+    url = "https://gitcode.com/GitHub_Trending/no/nocobase/blob/bcfdc2/examples/base/config.git"
+
+    assert parse_git_repo_url(url) is None
+    assert is_git_repo_url(url) is False
+    assert parse_code_hosting_url(url) == "GitHub_Trending/no/nocobase"
+
+
+def test_gitcode_tree_browse_file_ending_dotgit_is_not_a_repo():
+    url = "https://gitcode.com/ploc-org/CNPL/tree/master/projects/sample/config.git"
+
+    assert parse_git_repo_url(url) is None
+    assert is_git_repo_url(url) is False
+    assert parse_code_hosting_url(url) == "ploc-org/CNPL"
+
+
+def test_is_git_repo_url_gitcode_tree():
+    assert is_git_repo_url("https://gitcode.com/ploc-org/CNPL/tree/master") is True
 
 
 def test_is_git_repo_url_gitee_repo():
@@ -532,6 +642,7 @@ def test_generic_domain_supports_nested_clone_without_platform_route_semantics()
     with patch.object(_module, "get_openviking_config", return_value=config):
         assert is_git_repo_url("https://git.example.com/org/subgroup/repo.git") is True
         assert is_git_repo_url("https://git.example.com/team/repo/src/main.git") is True
+        assert is_git_repo_url("https://git.example.com/org/subgroup/repo/blob/leaf.git") is True
 
 
 def test_generic_domain_keeps_nested_path_through_final_dotgit_segment():

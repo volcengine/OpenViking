@@ -44,6 +44,7 @@ _NON_REPO_PATH_SEGMENTS = frozenset(
 # category. These are URL parsing profiles, not additional allowlists: the host
 # must still be configured in ``code_hosting_domains`` before they apply.
 _KNOWN_PLATFORM_NON_REPO_PATH_SEGMENTS = {
+    "gitcode.com": frozenset({"blob", "raw"}),
     "bitbucket.org": frozenset({"src"}),
     "codeberg.org": frozenset({"src"}),
     "gitea.com": frozenset({"src"}),
@@ -52,7 +53,7 @@ _KNOWN_PLATFORM_NON_REPO_PATH_SEGMENTS = {
 # Public platforms where ``owner/repo/tree/ref/...`` is an unambiguous browse
 # route. This profile must not be applied to generic configured Git hosts:
 # there, a nested repository can legitimately contain a ``tree`` namespace.
-_KNOWN_PLATFORM_TREE_ROUTE_HOSTS = frozenset({"gitee.com"})
+_KNOWN_PLATFORM_TREE_ROUTE_HOSTS = frozenset({"gitcode.com", "gitee.com"})
 
 # Top-level namespaces reserved by each hosting platform. Keeping these rules
 # attached to platform categories prevents generic custom hosts from inheriting
@@ -155,6 +156,26 @@ def _get_reserved_top_level_segments(parsed: ParseResult) -> frozenset[str]:
 def _get_known_platform_non_repo_segments(parsed: ParseResult) -> frozenset[str]:
     """Return browse-route markers for a configured public platform."""
     return _KNOWN_PLATFORM_NON_REPO_PATH_SEGMENTS.get((parsed.hostname or "").lower(), frozenset())
+
+
+def _find_known_platform_non_repo_segment(
+    parsed: ParseResult,
+    path_parts: list[str],
+) -> Optional[int]:
+    """Return the index of a known platform browse-route marker, if any.
+
+    Known public platforms can support nested repository paths, so their route
+    marker is not necessarily the third path segment. Generic configured hosts
+    intentionally do not use this scan because a nested namespace may
+    legitimately be named ``blob`` or ``src``.
+    """
+    markers = _get_known_platform_non_repo_segments(parsed)
+    if not markers:
+        return None
+    return next(
+        (index for index, part in enumerate(path_parts[2:], start=2) if part in markers),
+        None,
+    )
 
 
 def _supports_nested_repository_host(host: str) -> bool:
@@ -273,7 +294,7 @@ class ParsedGitRepoURL:
 
 def _strip_repo_git_suffix(repo_parts: list[str]) -> Optional[list[str]]:
     """Return repository identity parts with only the final ``.git`` removed."""
-    if len(repo_parts) < 2:
+    if not repo_parts:
         return None
 
     normalized = list(repo_parts)
@@ -351,16 +372,11 @@ def _parse_scp_git_repo_url(url: str) -> Optional[ParsedGitRepoURL]:
             identity_parts=azure_repo_parts,
         )
 
-    if len(path_parts) < 2:
+    if not path_parts:
         return None
 
-    parsed_host = urlparse(f"ssh://{host}")
-    if path_parts[0].lower() in _get_reserved_top_level_segments(parsed_host):
-        return None
-
-    has_git_suffix = path_parts[-1].endswith(".git")
-    if len(path_parts) > 2 and not (has_git_suffix and _supports_nested_repository_host(host)):
-        return None
+    # The scp-style form is an explicit Git transport, not an HTTP browse URL.
+    # Preserve the complete path and let the remote decide whether it exists.
     return _build_scp_git_result(url, path_parts)
 
 
@@ -379,7 +395,8 @@ def parse_git_repo_url(url: str) -> Optional[ParsedGitRepoURL]:
     Unlike :func:`parse_code_hosting_url`, this is a strict ingress parser.
     Browse pages and ambiguous paths return ``None``. Accepted tree/commit
     snapshot URLs are normalized to a cloneable base URL with their ref
-    returned separately.
+    returned separately. Explicit Git transports preserve any non-empty
+    repository path because they do not share HTTP browse-route ambiguity.
     """
     if url.startswith("git@"):
         return _parse_scp_git_repo_url(url)
@@ -414,9 +431,18 @@ def parse_git_repo_url(url: str) -> Optional[ParsedGitRepoURL]:
             )
         return None
 
-    if len(path_parts) < 2:
+    if not path_parts:
         return None
+
+    # Explicit Git transports have no browser-route ambiguity. Preserve their
+    # complete repository path instead of applying HTTP-only tree/blob/reserved
+    # namespace rules. Azure DevOps remains handled by its grammar above.
+    if parsed.scheme in {"git", "ssh"}:
+        return _build_url_git_result(parsed, path_parts)
+
     if path_parts[0].lower() in _get_reserved_top_level_segments(parsed):
+        return None
+    if len(path_parts) == 1:
         return None
 
     # GitLab's /-/ separator is unambiguous: everything before it is the
@@ -490,8 +516,7 @@ def parse_git_repo_url(url: str) -> Optional[ParsedGitRepoURL]:
             commit=path_parts[3],
         )
 
-    known_platform_non_repo_segments = _get_known_platform_non_repo_segments(parsed)
-    if len(path_parts) >= 3 and path_parts[2] in known_platform_non_repo_segments:
+    if _find_known_platform_non_repo_segment(parsed, path_parts) is not None:
         return None
 
     has_git_suffix = path_parts[-1].endswith(".git")
@@ -549,7 +574,11 @@ def parse_code_hosting_url(url: str) -> Optional[str]:
         code hosting URL
     """
     parsed_git_url = parse_git_repo_url(url)
-    if parsed_git_url is not None:
+    # Keep this metadata helper's historical owner/repo contract. The strict
+    # ingress parser accepts single-segment SSH/git repositories for cloning,
+    # while callers that need a namespaced repository identity continue to use
+    # their existing fallback naming.
+    if parsed_git_url is not None and "/" in parsed_git_url.repo_path:
         return parsed_git_url.repo_path
 
     all_domains = _get_all_domains()
@@ -608,12 +637,13 @@ def parse_code_hosting_url(url: str) -> Optional[str]:
     # For code hosting URLs with org/repo structure
     if _domain_matches(parsed, all_domains) and len(path_parts) >= 2:
         has_git_suffix = path_parts[-1].endswith(".git")
+        known_browse_index = _find_known_platform_non_repo_segment(parsed, path_parts)
         # Segments between repo and filename that mark a browse URL
         # (org/repo/blob/main/file.git must not be taken as a nested path).
-        browse_markers = set(path_parts[2:-1]) & (
-            _NON_REPO_PATH_SEGMENTS | _get_known_platform_non_repo_segments(parsed) | {"tree"}
-        )
-        if from_dash_separator or (
+        browse_markers = set(path_parts[2:-1]) & (_NON_REPO_PATH_SEGMENTS | {"tree"})
+        if known_browse_index is not None:
+            repo_parts = path_parts[:known_browse_index]
+        elif from_dash_separator or (
             has_git_suffix and not browse_markers and _supports_nested_repository_path(parsed)
         ):
             repo_parts = list(path_parts)
@@ -734,6 +764,10 @@ def is_git_repo_url(url: str) -> bool:
       owner/repo/tree/<ref> and GitLab-style group/.../repo/-/tree/<ref>
     - commit pins: owner/repo/commit/<sha> and group/.../repo/-/commit/<sha>
     - Azure DevOps org/project/_git/repo (browse URLs with ?path= excluded)
+
+    Explicit git@, ssh://, and git:// transports accept any non-empty path on
+    a configured host. Their complete path is preserved as the repository
+    identity.
 
     Rejected: platform-reserved top-level pages (topics, orgs, groups, ...),
     repo browse pages (issues, pull, blob, ...), and Azure DevOps URLs

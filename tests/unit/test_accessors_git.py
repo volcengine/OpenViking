@@ -122,6 +122,59 @@ class TestGitAccessor:
     @pytest.mark.parametrize(
         "source",
         [
+            "git@git.example.com:repo.git",
+            "git@git.example.com:repo",
+            "ssh://git@git.example.com/repo.git",
+            "ssh://git@git.example.com/repo",
+            "git://git.example.com/repo.git",
+            "git://git.example.com/repo",
+        ],
+    )
+    def test_can_handle_single_segment_protocol_repo(
+        self, accessor: GitAccessor, source: str
+    ) -> None:
+        config = _mock_config()
+        config.code.github_domains = []
+        config.code.gitlab_domains = []
+        config.code.azure_devops_domains = []
+        config.code.code_hosting_domains = ["git.example.com"]
+
+        with patch.object(
+            code_hosting_utils,
+            "get_openviking_config",
+            return_value=config,
+        ):
+            assert accessor.can_handle(source) is True
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "git@git.example.com:org/subgroup/repo",
+            "ssh://git@git.example.com/org/subgroup/repo",
+            "git://git.example.com/org/subgroup/repo",
+        ],
+    )
+    def test_can_handle_nested_protocol_repo_without_dotgit(
+        self, accessor: GitAccessor, source: str
+    ) -> None:
+        config = _mock_config()
+        config.code.github_domains = []
+        config.code.gitlab_domains = []
+        config.code.azure_devops_domains = []
+        config.code.code_hosting_domains = ["git.example.com"]
+
+        with patch.object(
+            code_hosting_utils,
+            "get_openviking_config",
+            return_value=config,
+        ):
+            assert accessor.can_handle(source) is True
+            assert accessor._normalize_repo_url(source) == source
+            assert accessor._get_repo_name(source) == "org/subgroup/repo"
+
+    @pytest.mark.parametrize(
+        "source",
+        [
             "ssh://git@github.com/",
             "git://github.com",
         ],
@@ -131,11 +184,13 @@ class TestGitAccessor:
     ) -> None:
         assert accessor.can_handle(source) is False
 
-    def test_normalize_repo_url_ssh_with_userinfo_and_ref(self, accessor: GitAccessor) -> None:
-        """GitAccessor should normalize ssh URLs with userinfo using the shared host matcher."""
+    def test_ssh_transport_does_not_apply_http_tree_route_rules(
+        self, accessor: GitAccessor
+    ) -> None:
+        """Explicit Git transports preserve paths that resemble HTTP browse routes."""
         assert (
             accessor._normalize_repo_url("ssh://git@github.com:443/volcengine/OpenViking/tree/main")
-            == "ssh://git@github.com:443/volcengine/OpenViking"
+            == "ssh://git@github.com:443/volcengine/OpenViking/tree/main"
         )
 
     @pytest.mark.parametrize(
@@ -205,6 +260,24 @@ class TestGitAccessor:
             accessor._normalize_repo_url("https://gitcode.com/GitHub_Trending/bl/black.git")
             == "https://gitcode.com/GitHub_Trending/bl/black.git"
         )
+
+    def test_gitcode_nested_blob_file_ending_dotgit_is_rejected(
+        self, accessor: GitAccessor
+    ) -> None:
+        source = (
+            "https://gitcode.com/GitHub_Trending/no/nocobase/blob/bcfdc2/examples/base/config.git"
+        )
+
+        assert accessor.can_handle(source) is False
+        with pytest.raises(ValueError, match="Unsupported Git repository URL"):
+            accessor._parse_repo_source(source)
+
+    def test_gitcode_tree_file_ending_dotgit_is_rejected(self, accessor: GitAccessor) -> None:
+        source = "https://gitcode.com/ploc-org/CNPL/tree/master/projects/sample/config.git"
+
+        assert accessor.can_handle(source) is False
+        with pytest.raises(ValueError, match="Unsupported Git repository URL"):
+            accessor._parse_repo_source(source)
 
     def test_normalize_repo_url_uses_final_dotgit_segment(self, accessor: GitAccessor) -> None:
         config = _mock_config()
