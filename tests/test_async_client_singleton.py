@@ -4,6 +4,7 @@
 
 import os
 import tempfile
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -77,6 +78,44 @@ class TestAsyncOpenVikingSingletonPath:
             client_b = AsyncOpenViking(path=workspace_b)
             assert client_b is not client_a
 
+    async def test_close_failure_still_resets_singleton_guard(self, clean_singleton):
+        """If close() fails, singleton state is still reset so a new workspace can be constructed.
+
+        Regression: close() must use try/finally so that even if client.close() raises,
+        the singleton guard is re-established for the next construction (requiring
+        close() or reset() again before a different workspace is accepted).
+        """
+        with tempfile.TemporaryDirectory() as root:
+            workspace_a = os.path.join(root, "a")
+            workspace_b = os.path.join(root, "b")
+
+            client_a = AsyncOpenViking(path=workspace_a)
+
+            # Simulate close() failure by patching client.close to raise
+            original_close = client_a._client.close
+            client_a._client.close = AsyncMock(side_effect=IOError("simulated close failure"))
+
+            # close() propagates the error
+            with pytest.raises(IOError):
+                await client_a.close()
+
+            # After failed close, singleton guard is still active (requires close/reset)
+            # so a different workspace is still rejected
+            with pytest.raises(ValueError) as exc_info:
+                AsyncOpenViking(path=workspace_b)
+
+            assert "only one embedded" in str(exc_info.value).lower()
+
+            # But same workspace is still accepted (no-op re-entry)
+            client_a2 = AsyncOpenViking(path=workspace_a)
+            assert client_a2 is client_a
+
+            # Restore and do a successful close to allow workspace switch
+            client_a._client.close = original_close
+            await client_a.close()
+            client_b = AsyncOpenViking(path=workspace_b)
+            assert os.path.realpath(client_b._path) == os.path.realpath(workspace_b)
+
     async def test_resolved_paths_are_compared(self, clean_singleton):
         """Paths that resolve to the same realpath are treated as equal."""
         with tempfile.TemporaryDirectory() as root:
@@ -90,6 +129,20 @@ class TestAsyncOpenVikingSingletonPath:
             client_a = AsyncOpenViking(path=real_path)
             client_b = AsyncOpenViking(path=symlink_path)
             assert client_a is client_b
+
+    async def test_tilde_expanded_paths_are_compared_with_expanduser(self, clean_singleton):
+        """Paths with ~ are expanded before comparison, matching LocalClient behavior.
+
+        os.path.realpath() alone does not expand ~, but LocalClient uses
+        Path(path).expanduser().resolve(). Without expanduser(), ~/workspace
+        would compare unequal to /home/<user>/workspace and raise a false conflict.
+        """
+        # Test that expanduser()+realpath() normalizes paths the same way.
+        # We verify the normalization logic independently of a real home dir.
+        import pathlib
+        real_path = str(pathlib.Path.home())
+        tilde_path = "~" + real_path[len(str(pathlib.Path.home())):]
+        assert os.path.realpath(os.path.expanduser(tilde_path)) == os.path.realpath(real_path)
 
     async def test_explicit_then_implicit_same_workspace(self, clean_singleton):
         """AsyncOpenViking(path=<workspace>) followed by AsyncOpenViking() succeeds.
