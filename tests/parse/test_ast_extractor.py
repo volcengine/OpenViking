@@ -7,7 +7,11 @@ import pytest
 
 from openviking.parse.parsers.code.ast import extract_skeleton_result
 from openviking.parse.parsers.code.ast.providers import is_skeleton_useful
-from openviking.parse.parsers.code.ast.aider_repomap import _clean_repromap_rendered
+from openviking.parse.parsers.code.ast.aider_repomap import (
+    _clean_repromap_rendered,
+    _definition_lines,
+    _query_captures,
+)
 from openviking.parse.parsers.code.ast.languages.process_engine import (
     extract_process_skeleton,
     supports_process_skeleton,
@@ -161,6 +165,29 @@ static void run(void) {
     process.assert_not_called()
 
 
+@pytest.mark.parametrize("file_name", ["sample.cpp", "kernel.cu"])
+def test_cpp_tags_capture_top_level_function_template_declarations_only(file_name):
+    content = """#include <vector>
+
+template <class T>
+void reduce(int size, T *input, T *output);
+
+int block_size;
+
+void configure() {
+    std::vector<int> buffer(block_size);
+}
+"""
+
+    _, captures = _query_captures(file_name, content)
+    lines = _definition_lines(captures)
+    one_based_lines = {line + 1 for line in lines}
+
+    assert 4 in one_based_lines
+    assert 6 not in one_based_lines
+    assert 9 not in one_based_lines
+
+
 def test_ocaml_interface_tags_capture_interface_structures(monkeypatch):
     process = Mock()
     monkeypatch.setattr(
@@ -219,4 +246,43 @@ def test_process_smoke(file_name, content, symbol):
 
 @pytest.mark.parametrize("file_name", ["README.md", "config.yaml", "data.json"])
 def test_process_denylist(file_name):
+    assert not supports_process_skeleton(file_name)
+
+
+@pytest.mark.parametrize(
+    "file_name",
+    [
+        "sample.py",
+        "sample.ts",
+        "sample.cpp",
+        "sample.rs",
+        "sample.go",
+        "component.svelte",
+        "schema.graphql",
+        "schema.prisma",
+        "main.tf",
+        "query.sql",
+        "service.proto",
+    ],
+)
+def test_process_supported_code_languages(file_name):
+    assert supports_process_skeleton(file_name)
+
+
+@pytest.mark.parametrize(
+    "file_name",
+    [
+        "README.md",
+        "config.yaml",
+        "data.json",
+        "page.html",
+        "style.css",
+        "paper.tex",
+        "chart.mmd",
+        "diagram.dot",
+        "request.http",
+        "request.hurl",
+    ],
+)
+def test_process_rejects_non_code_structured_formats(file_name):
     assert not supports_process_skeleton(file_name)

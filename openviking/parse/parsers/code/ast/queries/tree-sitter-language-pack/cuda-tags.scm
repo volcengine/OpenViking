@@ -50,6 +50,18 @@
   declarator: (function_declarator
     declarator: (destructor_name) @name.definition.method)) @definition.method
 
+(template_declaration
+  (declaration
+    declarator: (function_declarator
+      declarator: (identifier) @name.definition.function))) @definition.function
+
+(template_declaration
+  (declaration
+    declarator: (function_declarator
+      declarator: (qualified_identifier
+        scope: (_) @local.scope
+        name: (identifier) @name.definition.method)))) @definition.method
+
 (declaration_list
   (declaration
     declarator: (function_declarator
