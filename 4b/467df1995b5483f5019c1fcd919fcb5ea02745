@@ -1,0 +1,31 @@
+docs/en/api/01-overview.md
+  s_cdd38986f8bd9a::t_158c9f7c027591 439,567-568
+docs/en/api/12-content.md
+  s_cdd38986f8bd9a::t_08d545073f3379 329-432
+docs/en/api/24-vikingbot.md
+  s_cdd38986f8bd9a::t_581e28cacc21d3 112-220,265
+docs/zh/api/01-overview.md
+  s_cdd38986f8bd9a::t_03acf63c939918 434,562-563
+docs/zh/api/12-content.md
+  s_cdd38986f8bd9a::t_dc04cd9b321a3d 329-432
+docs/zh/api/24-vikingbot.md
+  s_cdd38986f8bd9a::t_9d73a249c5d407 112-220,265
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "4b467df1995b5483f5019c1fcd919fcb5ea02745",
+  "prompts": {},
+  "sessions": {
+    "s_cdd38986f8bd9a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa2df-be1f-73e2-99e6-04aa7cfe807c",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
