@@ -2824,42 +2824,48 @@ class Session:
     # ============= Internal methods =============
 
     async def _collect_session_context_components(self) -> Dict[str, Any]:
-        """Collect the latest summary archive and merged pending/live messages."""
+        """Collect overview from the newest terminal archive and merged messages.
+
+        Walk archives newest → oldest and stop at the first terminal state
+        (``completed`` or ``failed``):
+
+        - ``completed``: inject that archive's overview when readable/non-empty;
+          do not fall back to older overviews when it is empty or unreadable;
+        - ``failed``: stop without injecting an overview.
+
+        Pending archives are skipped for overview selection. Messages still use
+        coverage / uncovered raw / live / checkpoint assembly from archive
+        directory state (RFC #3330), independent of this overview cut-off.
+        Public ``pre_archive_abstracts`` stay empty; abstracts are not read.
+        """
         archive_states = await self._scan_archive_states()
-        completed_archives = [
-            state for state in reversed(archive_states) if state.state == "completed"
-        ]
         latest_archive = None
-        pre_archive_abstracts: List[Dict[str, Any]] = []
         covered_archive_ids = self._covered_archive_ids(archive_states)
         failed_archives = sum(
             state.state == "failed" and state.archive_id not in covered_archive_ids
             for state in archive_states
         )
 
-        for archive in completed_archives:
-            # ``.done`` is the authoritative completion marker. A completed
-            # archive may intentionally have no overview when Working Memory is
-            # disabled, so keep looking for the newest completed archive that
-            # actually has a readable overview.
-            if latest_archive is None and archive.overview.strip():
+        for state in reversed(archive_states):
+            if state.state == "pending":
+                continue
+            if state.state == "failed":
+                # Newest terminal is failed: stop and do not inject overview.
+                break
+            # completed — use this archive only; never probe older overviews.
+            overview = state.overview.strip()
+            if not overview:
+                overview = (await self._read_archive_overview(state.archive_uri)).strip()
+            if overview:
                 latest_archive = {
-                    "archive_id": archive.archive_id,
-                    "archive_uri": archive.archive_uri,
-                    "overview": archive.overview,
+                    "archive_id": state.archive_id,
+                    "archive_uri": state.archive_uri,
+                    "overview": overview,
                     "overview_tokens": await self._read_archive_overview_tokens(
-                        archive.archive_uri, archive.overview
+                        state.archive_uri, overview
                     ),
                 }
-            abstract = await self._read_archive_abstract(archive.archive_uri, archive.overview)
-            if abstract:
-                pre_archive_abstracts.append(
-                    {
-                        "archive_id": archive.archive_id,
-                        "abstract": abstract,
-                        "tokens": estimate_text_tokens(abstract),
-                    }
-                )
+            break
 
         uncovered = await self._get_uncovered_archive_messages(archive_states)
         merged_messages = self._stable_deduplicate_messages(uncovered + list(self._messages))
@@ -2870,7 +2876,7 @@ class Session:
 
         return {
             "latest_archive": latest_archive,
-            "pre_archive_abstracts": pre_archive_abstracts,
+            "pre_archive_abstracts": [],
             "total_archives": len(archive_states),
             "failed_archives": failed_archives,
             "messages": merged_messages,
@@ -2931,30 +2937,35 @@ class Session:
                     )
 
             if done_exists:
-                overview = await self._read_archive_overview(archive["archive_uri"])
-                if done.get("working_memory_enabled") is True and not overview.strip():
-                    # New markers distinguish an intentionally overview-less
-                    # working_memory=false commit from a missing/corrupt
-                    # required overview. The latter remains logically live and
-                    # can be rolled forward by a later successful archive.
-                    logger.warning(
-                        "Completed archive has no readable required overview: %s",
-                        archive["archive_uri"],
-                    )
-                    states.append(
-                        ArchiveState(
-                            archive_id=archive["archive_id"],
-                            archive_uri=archive["archive_uri"],
-                            index=archive["index"],
-                            state="failed",
-                            done=done,
-                            failed={
-                                "stage": "archive_overview",
-                                "error": "required overview is missing or unreadable",
-                            },
+                # Only validate overview when Working Memory required one.
+                # Otherwise leave overview empty here and let context assembly
+                # lazy-load the newest terminal completed archive's overview.
+                overview = ""
+                if done.get("working_memory_enabled") is True:
+                    overview = await self._read_archive_overview(archive["archive_uri"])
+                    if not overview.strip():
+                        # New markers distinguish an intentionally overview-less
+                        # working_memory=false commit from a missing/corrupt
+                        # required overview. The latter remains logically live and
+                        # can be rolled forward by a later successful archive.
+                        logger.warning(
+                            "Completed archive has no readable required overview: %s",
+                            archive["archive_uri"],
                         )
-                    )
-                    continue
+                        states.append(
+                            ArchiveState(
+                                archive_id=archive["archive_id"],
+                                archive_uri=archive["archive_uri"],
+                                index=archive["index"],
+                                state="failed",
+                                done=done,
+                                failed={
+                                    "stage": "archive_overview",
+                                    "error": "required overview is missing or unreadable",
+                                },
+                            )
+                        )
+                        continue
 
                 # working_memory=false legitimately writes .done without an
                 # overview. Legacy markers lack the explicit flag, so retain
