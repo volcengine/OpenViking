@@ -94,18 +94,31 @@ class _CompletingTracker:
         self.total = 0
         self.on_complete = None
         self.completed = False
+        self.active_id = None
+        self.aborted_ids = []
 
-    async def register(self, *, total_count, on_complete, **_kwargs):
+    async def register(self, *, semantic_msg_id, total_count, on_complete, **_kwargs):
+        self.active_id = semantic_msg_id
         self.remaining = total_count
         self.total = total_count
         self.on_complete = on_complete
 
-    async def decrement(self, _semantic_msg_id):
+    async def decrement(self, semantic_msg_id):
+        if semantic_msg_id != self.active_id:
+            return None
         self.remaining -= 1
         if self.remaining == 0:
             self.completed = True
+            self.active_id = None
             await self.on_complete()
         return self.remaining
+
+    async def abort(self, semantic_msg_id):
+        if semantic_msg_id != self.active_id:
+            return False
+        self.aborted_ids.append(semantic_msg_id)
+        self.active_id = None
+        return True
 
 
 class _FailingVectorizeProcessor(_FakeProcessor):
@@ -135,6 +148,15 @@ class _FailingVectorizeProcessor(_FakeProcessor):
         self.vectorized_dirs.append(uri)
         await self._tracker.decrement(semantic_msg_id)
         await self._tracker.decrement(semantic_msg_id)
+
+
+class _StalledEmbeddingProcessor(_FailingVectorizeProcessor):
+    async def _vectorize_directory(
+        self, uri, context_type, abstract, overview, ctx=None, semantic_msg_id=None
+    ):
+        self.vectorized_dirs.append(uri)
+        # Both directory messages were accepted, but the embedding worker is
+        # unavailable and therefore never decrements their tracker slots.
 
 
 @pytest.mark.asyncio
@@ -167,6 +189,45 @@ async def test_semantic_dag_propagates_vectorization_failure_after_tracker_drain
     assert tracker.total == 3
     assert tracker.remaining == 0
     assert tracker.completed is True
+
+
+@pytest.mark.asyncio
+async def test_semantic_dag_aborts_stalled_embedding_attempt_after_dispatch_failure(monkeypatch):
+    root_uri = "viking://resources/root"
+    tree = {root_uri: [{"name": "a.txt", "isDir": False}]}
+    fake_fs = _FakeVikingFS(tree)
+    tracker = _CompletingTracker()
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
+        lambda: tracker,
+    )
+
+    processor = _StalledEmbeddingProcessor(tracker)
+    lock = MagicMock()
+    lock.close = AsyncMock()
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=ctx,
+        semantic_msg_id="semantic-root",
+        lock=lock,
+    )
+
+    with pytest.raises(RuntimeError, match="embedding enqueue unavailable"):
+        await asyncio.wait_for(executor.run(root_uri), timeout=0.5)
+
+    assert processor.vectorized_files == [f"{root_uri}/a.txt"]
+    assert processor.vectorized_dirs == [root_uri]
+    assert tracker.remaining == 2
+    assert tracker.completed is False
+    assert len(tracker.aborted_ids) == 1
+    aborted_id = tracker.aborted_ids[0]
+    assert aborted_id.startswith("semantic-root:")
+    assert await tracker.decrement(aborted_id) is None
+    lock.close.assert_awaited_once()
 
 
 @pytest.mark.asyncio

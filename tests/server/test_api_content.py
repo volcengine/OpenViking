@@ -61,6 +61,32 @@ async def test_read_memory_strips_metadata_before_slicing(monkeypatch):
     assert calls[-1] == (4, 1)
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        'visible\n<!-- MEMORY_FIELDS\n{"secret":"hidden"}\n-->',
+        'visible\n\n<!-- MEMORY_FIELDS {"secret":"hidden"} -->',
+        'visible <!-- MEMORY_FIELDS {"secret":"hidden"} -->',
+    ],
+)
+async def test_read_memory_strips_supported_metadata_trailers(monkeypatch, raw):
+    ctx = RequestContext(user=UserIdentifier.the_default_user("test_user"), role=Role.USER)
+    uri = "viking://user/test_user/memories/notes/private.md"
+
+    async def fake_read(_uri, *, ctx, offset, limit):
+        return raw
+
+    monkeypatch.setattr(
+        content_router,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(read=fake_read)),
+    )
+
+    response = await content_router.read(uri=uri, offset=0, limit=-1, raw=False, _ctx=ctx)
+
+    assert response.result == "visible"
+
+
 async def test_read_directory_uri_returns_invalid_argument(client_with_resource):
     client, uri = client_with_resource
 

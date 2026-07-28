@@ -6,6 +6,7 @@ import asyncio
 import threading
 from dataclasses import dataclass, field
 from typing import ClassVar, Dict, List, Optional, Set
+from uuid import uuid4
 from weakref import WeakKeyDictionary
 
 from openviking.server.identity import RequestContext
@@ -210,6 +211,10 @@ class SemanticDagExecutor:
         self._vectorize_failure: Optional[Exception] = None
         self._vectorize_dispatch_complete = False
         self._embedding_tracker_done: Optional[asyncio.Event] = None
+        self._embedding_tracker = None
+        # Retries preserve the logical SemanticMsg ID, so each execution needs
+        # a distinct tracker key to quarantine late decrements from old attempts.
+        self._embedding_tracker_id = f"{self._semantic_msg_id or 'semantic'}:{uuid4()}"
         self._vectorize_finalized = False
         self._vectorize_finalize_lock = asyncio.Lock()
         self._vectorize_lock = asyncio.Lock()
@@ -242,22 +247,20 @@ class SemanticDagExecutor:
                 embedding_tracker_done = asyncio.Event()
                 self._embedding_tracker_done = embedding_tracker_done
                 tracker = EmbeddingTaskTracker.get_instance()
+                self._embedding_tracker = tracker
                 await tracker.register(
-                    semantic_msg_id=self._semantic_msg_id,
+                    semantic_msg_id=self._embedding_tracker_id,
                     total_count=task_count,
                     on_complete=self._on_embedding_tasks_complete,
-                    metadata={"uri": root_uri},
+                    metadata={
+                        "uri": root_uri,
+                        "semantic_msg_id": self._semantic_msg_id,
+                    },
                 )
 
                 await self._dispatch_vectorize_tasks(tasks)
                 self._vectorize_dispatch_complete = True
 
-                if self._vectorize_failure is not None:
-                    # A retry reuses the SemanticMsg id. Wait until every task
-                    # registered by this attempt has either enqueued or
-                    # decremented its slot so a retry cannot overwrite an
-                    # active tracker record and receive stale decrements.
-                    await embedding_tracker_done.wait()
                 if embedding_tracker_done.is_set():
                     await self._finalize_vectorization()
                 if self._vectorize_failure is not None:
@@ -270,6 +273,17 @@ class SemanticDagExecutor:
                     logger.error(f"Error in on_complete callback: {e}", exc_info=True)
         except BaseException:
             self._closed = True
+            if self._embedding_tracker is not None:
+                try:
+                    # Pending embedding messages may still finish, but their
+                    # attempt-specific decrements become harmless after abort.
+                    await self._embedding_tracker.abort(self._embedding_tracker_id)
+                except Exception:
+                    logger.warning(
+                        "Failed to abort embedding tracker %s",
+                        self._embedding_tracker_id,
+                        exc_info=True,
+                    )
             try:
                 await self._lock.close()
             except Exception:
@@ -715,7 +729,7 @@ class SemanticDagExecutor:
                     uri=file_path,
                     context_type=self._context_type,
                     ctx=self._ctx,
-                    semantic_msg_id=self._semantic_msg_id,
+                    semantic_msg_id=self._embedding_tracker_id,
                     file_path=file_path,
                     summary_dict=summary_dict,
                     parent_uri=parent_uri,
@@ -858,7 +872,7 @@ class SemanticDagExecutor:
                         uri=dir_uri,
                         context_type=self._context_type,
                         ctx=self._ctx,
-                        semantic_msg_id=self._semantic_msg_id,
+                        semantic_msg_id=self._embedding_tracker_id,
                         abstract=abstract,
                         overview=overview,
                     )

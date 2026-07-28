@@ -185,3 +185,29 @@ async def test_tracker_clears_zero_task_entry_without_callback():
     await tracker.register("semantic-msg", 0, on_complete=None)
 
     assert await tracker.decrement("semantic-msg") is None
+
+
+@pytest.mark.asyncio
+async def test_tracker_abort_ignores_late_decrements_without_completing():
+    tracker = EmbeddingTaskTracker.get_instance()
+    callback_calls = []
+
+    await tracker.register(
+        "semantic-msg:attempt-1",
+        2,
+        on_complete=lambda: callback_calls.append("attempt-1"),
+    )
+
+    assert await tracker.abort("semantic-msg:attempt-1") is True
+    assert await tracker.abort("semantic-msg:attempt-1") is False
+
+    await tracker.register(
+        "semantic-msg:attempt-2",
+        1,
+        on_complete=lambda: callback_calls.append("attempt-2"),
+    )
+
+    assert await tracker.decrement("semantic-msg:attempt-1") is None
+    assert callback_calls == []
+    assert await tracker.decrement("semantic-msg:attempt-2") == 0
+    assert callback_calls == ["attempt-2"]

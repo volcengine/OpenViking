@@ -2,19 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Public-content projection for persisted memory files."""
 
-from __future__ import annotations
-
-import re
-
 from openviking.core.namespace import classify_uri
-
-_MEMORY_FIELDS_TRAILER = re.compile(
-    r"(?P<separator>(?:\r?\n){2}|^)"
-    r"<!--[ \t]*MEMORY_FIELDS[ \t]*\r?\n"
-    r".*?"
-    r"\r?\n-->[ \t]*(?:\r?\n)?\Z",
-    re.DOTALL,
-)
+from openviking.session.memory.utils.memory_fields import strip_memory_fields_trailer
 
 
 def visible_content(
@@ -32,9 +21,7 @@ def visible_content(
     """
     content = raw_content
     if classify_uri(uri).is_memory:
-        match = _MEMORY_FIELDS_TRAILER.search(content)
-        if match is not None:
-            content = content[: match.start("separator")]
+        content = strip_memory_fields_trailer(content)
 
     if offset == 0 and limit == -1:
         return content
