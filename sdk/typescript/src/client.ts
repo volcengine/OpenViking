@@ -119,6 +119,7 @@ export class OpenVikingClient {
       directly_upload_media: options.directlyUploadMedia ?? true,
       preserve_structure: options.preserveStructure,
       watch_interval: options.watchInterval ?? 0,
+      processing_mode: options.processingMode,
       args:
         options.args && Object.keys(options.args).length
           ? options.args

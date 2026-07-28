@@ -29,6 +29,8 @@ import time
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
+from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
+
 _TOKEN_ALPHABET = string.ascii_letters + string.digits  # base62
 _TOKEN_LENGTH = 6
 
@@ -44,6 +46,7 @@ class _TokenInfo:
     to: str
     reason: str
     actor_peer_id: str
+    processing_mode: ProcessingMode
     expires_at: float
 
 
@@ -56,6 +59,7 @@ class ConsumedUploadToken:
     to: str
     reason: str
     actor_peer_id: str
+    processing_mode: ProcessingMode
 
 
 class UploadTokenStore:
@@ -71,6 +75,7 @@ class UploadTokenStore:
         to: str = "",
         reason: str = "",
         actor_peer_id: str = "",
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
     ) -> Tuple[str, float]:
         """Mint a fresh token bound to (account, user) plus ``to``/``reason``/``actor_peer_id``.
 
@@ -81,7 +86,15 @@ class UploadTokenStore:
         """
         self._purge_expired()
         expires_at = time.time() + max(1, ttl_seconds)
-        info = _TokenInfo(account_id, user_id, to, reason, actor_peer_id, expires_at)
+        info = _TokenInfo(
+            account_id,
+            user_id,
+            to,
+            reason,
+            actor_peer_id,
+            processing_mode,
+            expires_at,
+        )
         for _ in range(8):
             token = "".join(secrets.choice(_TOKEN_ALPHABET) for _ in range(_TOKEN_LENGTH))
             if token not in self._store:
@@ -99,7 +112,12 @@ class UploadTokenStore:
         if info.expires_at < time.time():
             raise UploadTokenError("upload token expired")
         return ConsumedUploadToken(
-            info.account_id, info.user_id, info.to, info.reason, info.actor_peer_id
+            info.account_id,
+            info.user_id,
+            info.to,
+            info.reason,
+            info.actor_peer_id,
+            info.processing_mode,
         )
 
     def peek(self, token: str) -> Optional[_TokenInfo]:

@@ -641,6 +641,7 @@ class AsyncHTTPClient:
         watch_interval: float = 0,
         args: Optional[Dict[str, Any]] = None,
         telemetry: Any = False,
+        processing_mode: Optional[str] = None,
     ) -> Dict[str, Any]:
         if to and parent:
             raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
@@ -661,6 +662,8 @@ class AsyncHTTPClient:
             "args": args or {},
             "telemetry": telemetry,
         }
+        if processing_mode is not None:
+            request_data["processing_mode"] = processing_mode
         if preserve_structure is not None:
             request_data["preserve_structure"] = preserve_structure
 
@@ -1786,6 +1789,7 @@ class SyncHTTPClient:
         watch_interval: float = 0,
         args: Optional[Dict[str, Any]] = None,
         telemetry: Any = False,
+        processing_mode: Optional[str] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.add_resource(
@@ -1803,6 +1807,7 @@ class SyncHTTPClient:
                 directly_upload_media=directly_upload_media,
                 preserve_structure=preserve_structure,
                 watch_interval=watch_interval,
+                processing_mode=processing_mode,
                 args=args,
                 telemetry=telemetry,
             )

@@ -7,6 +7,7 @@ from typing import Any, Dict, Literal, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.server.auth import get_request_context, get_upload_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
@@ -85,6 +86,7 @@ class AddResourceRequest(BaseModel):
     args: Dict[str, Any] = Field(default_factory=dict)
     telemetry: TelemetryRequest = False
     watch_interval: float = 0
+    processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
 
     @model_validator(mode="after")
     def check_path_or_temp_file_id(self):
@@ -148,7 +150,12 @@ async def temp_upload(
         if signed is None:
             return {"temp_file_id": temp_file_id}
         return await ingest_temp_upload(
-            store, temp_file_id, _ctx, to=signed.to, reason=signed.reason
+            store,
+            temp_file_id,
+            _ctx,
+            to=signed.to,
+            reason=signed.reason,
+            processing_mode=signed.processing_mode,
         )
 
     try:
@@ -207,6 +214,7 @@ async def add_resource(
         "exclude": request.exclude,
         "directly_upload_media": request.directly_upload_media,
         "watch_interval": request.watch_interval,
+        "processing_mode": request.processing_mode,
     }
     # Connector routing needs to distinguish an omitted create_parent from an
     # explicit false.  Standard imports still observe false when the field is

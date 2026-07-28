@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.temp_upload_store import TempUploadStore
@@ -25,6 +26,7 @@ async def ingest_temp_upload(
     to: str = "",
     reason: str = "",
     args: Optional[dict[str, Any]] = None,
+    processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
 ) -> dict[str, Any]:
     """Resolve a temp upload and ingest it as a resource; return the raw add_resource result.
 
@@ -47,6 +49,7 @@ async def ingest_temp_upload(
                 reason=reason,
                 source_name=resolved.original_filename,
                 wait=False,
+                processing_mode=processing_mode,
                 allow_local_path_resolution=True,
                 enforce_public_remote_targets=True,
                 args=args,

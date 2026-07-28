@@ -329,6 +329,7 @@ class AsyncOpenViking:
         watch_interval: float = 0,
         args: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
+        processing_mode: str = "semantic_and_vectors",
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -345,6 +346,8 @@ class AsyncOpenViking:
             parent: Target parent URI (must already exist).
             build_index: Whether to build vector index immediately (default: True).
             summarize: Whether to generate summary (default: False).
+            processing_mode: "semantic_and_vectors" for normal semantic processing,
+                or "vectors_only" to only build vector indexes.
             watch_interval: Auto-refresh interval in minutes (>0 enables a watch).
                 On a sitemap/feed URL this keeps the whole site refreshed.
             args: Parser/accessor-specific options (e.g. ``site``, ``max_pages``).
@@ -365,6 +368,7 @@ class AsyncOpenViking:
             timeout=timeout,
             build_index=build_index,
             summarize=summarize,
+            processing_mode=processing_mode,
             telemetry=telemetry,
             watch_interval=watch_interval,
             args=args,

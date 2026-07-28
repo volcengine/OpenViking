@@ -15,6 +15,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.resource.watch_storage import (
     WATCH_TASK_STORAGE_BAK_URI,
     WATCH_TASK_STORAGE_TMP_URI,
@@ -67,6 +68,10 @@ class WatchTask(BaseModel):
     watch_interval: float = Field(default=60.0, description="Monitoring interval in minutes")
     build_index: bool = Field(default=True, description="Whether to build vector index")
     summarize: bool = Field(default=False, description="Whether to generate summary")
+    processing_mode: ProcessingMode = Field(
+        default=DEFAULT_PROCESSING_MODE,
+        description="Post-ingest processing mode for scheduled add_resource runs",
+    )
     processor_kwargs: Dict[str, Any] = Field(
         default_factory=dict, description="Extra kwargs forwarded to processor"
     )
@@ -97,6 +102,7 @@ class WatchTask(BaseModel):
             "watch_interval": self.watch_interval,
             "build_index": self.build_index,
             "summarize": self.summarize,
+            "processing_mode": self.processing_mode,
             "processor_kwargs": self.processor_kwargs,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "last_execution_time": self.last_execution_time.isoformat()
@@ -384,6 +390,7 @@ class WatchManager:
         watch_interval: float = 60.0,
         build_index: bool = True,
         summarize: bool = False,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         processor_kwargs: Optional[Dict[str, Any]] = None,
         auth_state: Optional[Dict[str, Any]] = None,
     ) -> WatchTask:
@@ -427,6 +434,7 @@ class WatchManager:
                 watch_interval=watch_interval,
                 build_index=build_index,
                 summarize=summarize,
+                processing_mode=processing_mode,
                 processor_kwargs=processor_kwargs or {},
                 auth_state=auth_state,
                 account_id=account_id,
@@ -461,6 +469,7 @@ class WatchManager:
         watch_interval: Optional[float] = None,
         build_index: Optional[bool] = None,
         summarize: Optional[bool] = None,
+        processing_mode: Optional[ProcessingMode] = None,
         processor_kwargs: Optional[Dict[str, Any]] = None,
         auth_state: Any = _UNSET,
         is_active: Optional[bool] = None,
@@ -531,6 +540,8 @@ class WatchManager:
                 task.build_index = build_index
             if summarize is not None:
                 task.summarize = summarize
+            if processing_mode is not None:
+                task.processing_mode = processing_mode
             if processor_kwargs is not None:
                 task.processor_kwargs = processor_kwargs
             if auth_state is not _UNSET:

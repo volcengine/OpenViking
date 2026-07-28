@@ -291,6 +291,7 @@ class WatchScheduler:
                         instruction=task.instruction,
                         build_index=getattr(task, "build_index", True),
                         summarize=getattr(task, "summarize", False),
+                        processing_mode=getattr(task, "processing_mode", "semantic_and_vectors"),
                         watch_interval=task.watch_interval,
                         **processor_kwargs,
                     )

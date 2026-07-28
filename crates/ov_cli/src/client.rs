@@ -31,6 +31,9 @@ fn compact_request_body(body: &mut Value) {
                 return !map.is_empty();
             }
         }
+        if key == "processing_mode" {
+            return value != "semantic_and_vectors";
+        }
         true
     });
 }
@@ -616,6 +619,7 @@ impl HttpClient {
         exclude: Option<String>,
         directly_upload_media: bool,
         watch_interval: f64,
+        processing_mode: String,
         resource_args: Option<Map<String, Value>>,
         show_progress: bool,
         verbose: bool,
@@ -678,6 +682,7 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
+                    "processing_mode": processing_mode.as_str(),
                     "args": args.clone(),
                 }));
 
@@ -713,6 +718,7 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
+                    "processing_mode": processing_mode.as_str(),
                     "args": args.clone(),
                 }));
 
@@ -736,6 +742,7 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
+                    "processing_mode": processing_mode.as_str(),
                     "args": args.clone(),
                 }));
 
@@ -756,6 +763,7 @@ impl HttpClient {
                 "exclude": exclude,
                 "directly_upload_media": directly_upload_media,
                 "watch_interval": watch_interval,
+                "processing_mode": processing_mode.as_str(),
                 "args": args,
             }));
 
@@ -1750,6 +1758,26 @@ mod tests {
         let mut body = json!({"path": "x", "args": {"feishu_access_token": "u-x"}});
         super::compact_request_body(&mut body);
         assert!(body.as_object().unwrap().contains_key("args"));
+    }
+
+    #[test]
+    fn compact_request_body_drops_default_processing_mode_for_legacy_servers() {
+        let mut body = json!({
+            "path": "https://example.com/guide.md",
+            "processing_mode": "semantic_and_vectors",
+        });
+        super::compact_request_body(&mut body);
+        assert!(!body.as_object().unwrap().contains_key("processing_mode"));
+    }
+
+    #[test]
+    fn compact_request_body_keeps_non_default_processing_mode() {
+        let mut body = json!({
+            "path": "https://example.com/guide.md",
+            "processing_mode": "vectors_only",
+        });
+        super::compact_request_body(&mut body);
+        assert_eq!(body["processing_mode"], "vectors_only");
     }
 
     #[test]

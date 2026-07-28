@@ -12,11 +12,20 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from openviking.core.context import ContextLevel
+from openviking.core.namespace import context_type_for_uri
 from openviking.parse.image_rewrite import rewrite_image_uris
 from openviking.parse.tree_builder import TreeBuilder
+from openviking.resource.processing_mode import (
+    DEFAULT_PROCESSING_MODE,
+    VECTORS_ONLY,
+    ProcessingMode,
+    normalize_processing_mode,
+)
 from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
 from openviking.storage.errors import LockAcquisitionError
+from openviking.storage.expr import And, Eq, PathScope
 from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
 from openviking.storage.transaction import (
     LOCK_TIMEOUT_DEFAULT,
@@ -24,12 +33,13 @@ from openviking.storage.transaction import (
     LockLease,
     OwnedLockLease,
 )
+from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry import get_current_telemetry
-from openviking.utils.embedding_utils import index_resource
+from openviking.utils.embedding_utils import index_resource, vectorize_file
 from openviking.utils.summarizer import Summarizer
 from openviking_cli.exceptions import OpenVikingError
-from openviking_cli.utils import get_logger
+from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.storage import StoragePath
 
 if TYPE_CHECKING:
@@ -37,6 +47,7 @@ if TYPE_CHECKING:
     from openviking.parse.vlm import VLMProcessor
 
 logger = get_logger(__name__)
+VECTORDB_MAX_QUERY_LIMIT = 100_000
 
 
 class ResourceProcessor:
@@ -427,6 +438,7 @@ class ResourceProcessor:
         ctx: RequestContext,
         resource_lock: LockLease = NO_LOCK,
         summarize: bool = False,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Run the queue-producing phase for a resource already stored in VikingFS."""
@@ -438,7 +450,9 @@ class ResourceProcessor:
         source_committed = bool(prepared.get("source_committed"))
         target_preexisting = bool(prepared.get("target_preexisting"))
         build_index = bool(kwargs.get("build_index", True))
-        should_summarize = summarize or build_index
+        processing_mode = normalize_processing_mode(processing_mode)
+        vectors_only = processing_mode == VECTORS_ONLY
+        should_summarize = not vectors_only and (summarize or build_index)
         result: Dict[str, Any] = {"status": "success", "root_uri": root_uri}
 
         if should_summarize:
@@ -480,9 +494,21 @@ class ResourceProcessor:
 
         if resource_lock.active:
             try:
+                sync_deleted_files: list[str] = []
+                sync_deleted_dirs: list[str] = []
                 if not should_summarize and temp_uri and not source_committed:
                     viking_fs = get_viking_fs()
-                    await viking_fs.persist_temp_tree(temp_uri, root_uri, ctx=ctx)
+                    if vectors_only and target_preexisting:
+                        diff = await SemanticProcessor()._sync_topdown_recursive(
+                            temp_uri,
+                            root_uri,
+                            ctx=ctx,
+                            lock=resource_lock,
+                        )
+                        sync_deleted_files = list(getattr(diff, "deleted_files", []))
+                        sync_deleted_dirs = list(getattr(diff, "deleted_dirs", []))
+                    else:
+                        await viking_fs.persist_temp_tree(temp_uri, root_uri, ctx=ctx)
                     await rewrite_image_uris(
                         root_uri,
                         ctx=ctx,
@@ -490,9 +516,83 @@ class ResourceProcessor:
                     )
                     if temp_dir_path:
                         await viking_fs.delete_temp(temp_dir_path, ctx=ctx)
+                if vectors_only:
+                    if sync_deleted_files or sync_deleted_dirs:
+                        await self._delete_removed_resource_vectors(
+                            files=sync_deleted_files,
+                            dirs=sync_deleted_dirs,
+                            ctx=ctx,
+                        )
+                if vectors_only and build_index:
+                    await self._vectorize_resource_files(root_uri, ctx=ctx)
             finally:
                 await resource_lock.close()
+        elif vectors_only:
+            if not build_index:
+                return result
+            await self._vectorize_resource_files(root_uri, ctx=ctx)
         return result
+
+    async def _delete_removed_resource_vectors(
+        self,
+        *,
+        files: list[str],
+        dirs: list[str],
+        ctx: RequestContext,
+    ) -> None:
+        for uri in dict.fromkeys(files):
+            records = await self.vikingdb.get_context_by_uri(
+                uri=uri,
+                level=int(ContextLevel.DETAIL),
+                limit=100,
+                ctx=ctx,
+            )
+            ids = [str(record["id"]) for record in records if record.get("id")]
+            if ids:
+                await self.vikingdb.delete(ids, ctx=ctx)
+        for uri in dict.fromkeys(dirs):
+            records = await self.vikingdb.filter(
+                filter=And(
+                    [
+                        PathScope("uri", uri, depth=-1),
+                        Eq("level", int(ContextLevel.DETAIL)),
+                        Eq("account_id", ctx.account_id),
+                    ]
+                ),
+                limit=VECTORDB_MAX_QUERY_LIMIT,
+                output_fields=["id"],
+                ctx=ctx,
+            )
+            ids = [str(record["id"]) for record in records if record.get("id")]
+            if ids:
+                await self.vikingdb.delete(ids, ctx=ctx)
+
+    async def _vectorize_resource_files(self, root_uri: str, *, ctx: RequestContext) -> None:
+        viking_fs = get_viking_fs()
+        entries = await viking_fs.tree(
+            root_uri,
+            node_limit=None,
+            level_limit=None,
+            ctx=ctx,
+        )
+        for entry in entries:
+            entry_uri = entry.get("uri") if isinstance(entry, dict) else None
+            if not entry_uri or entry.get("isDir"):
+                continue
+            name = entry.get("name") or entry_uri.rsplit("/", 1)[-1]
+            if str(name).startswith("."):
+                continue
+            parent = VikingURI(entry_uri).parent
+            if parent is None:
+                continue
+            await vectorize_file(
+                file_path=entry_uri,
+                summary_dict={"name": name, "summary": ""},
+                parent_uri=parent.uri,
+                context_type=context_type_for_uri(entry_uri),
+                ctx=ctx,
+                register_request_wait=True,
+            )
 
     async def reserve_unique_candidate(
         self,

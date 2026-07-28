@@ -349,6 +349,14 @@ enum Commands {
             help_heading = "Advanced options"
         )]
         watch_interval: f64,
+        /// Resource processing mode
+        #[arg(
+            long = "processing-mode",
+            default_value = "semantic_and_vectors",
+            value_parser = ["semantic_and_vectors", "vectors_only"],
+            help_heading = "Advanced options"
+        )]
+        processing_mode: String,
         /// Parser-specific import options, e.g. --args feishu_access_token:u-xxx
         #[arg(long = "args")]
         resource_args: Option<String>,
@@ -2766,6 +2774,7 @@ async fn main() {
             exclude,
             no_directly_upload_media,
             watch_interval,
+            processing_mode,
             resource_args,
             upload_options,
         } => {
@@ -2786,6 +2795,7 @@ async fn main() {
                 exclude,
                 no_directly_upload_media,
                 watch_interval,
+                processing_mode,
                 resource_args,
                 ctx,
             )
