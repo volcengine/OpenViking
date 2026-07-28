@@ -235,9 +235,9 @@ class SyncOpenViking:
         timeout: float = None,
         build_index: bool = True,
         summarize: bool = False,
-        processing_mode: str = "semantic_and_vectors",
         args: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
+        processing_mode: str = "semantic_and_vectors",
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (resources scope only)

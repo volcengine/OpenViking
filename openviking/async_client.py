@@ -326,10 +326,10 @@ class AsyncOpenViking:
         timeout: float = None,
         build_index: bool = True,
         summarize: bool = False,
-        processing_mode: str = "semantic_and_vectors",
         watch_interval: float = 0,
         args: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
+        processing_mode: str = "semantic_and_vectors",
         **kwargs,
     ) -> Dict[str, Any]:
         """

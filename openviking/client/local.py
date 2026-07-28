@@ -135,10 +135,10 @@ class LocalClient(BaseClient):
         timeout: Optional[float] = None,
         build_index: bool = True,
         summarize: bool = False,
-        processing_mode: str = "semantic_and_vectors",
         telemetry: TelemetryRequest = False,
         watch_interval: float = 0,
         args: Optional[Dict[str, Any]] = None,
+        processing_mode: str = "semantic_and_vectors",
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""

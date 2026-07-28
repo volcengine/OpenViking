@@ -31,6 +31,9 @@ fn compact_request_body(body: &mut Value) {
                 return !map.is_empty();
             }
         }
+        if key == "processing_mode" {
+            return value != "semantic_and_vectors";
+        }
         true
     });
 }
@@ -1755,6 +1758,26 @@ mod tests {
         let mut body = json!({"path": "x", "args": {"feishu_access_token": "u-x"}});
         super::compact_request_body(&mut body);
         assert!(body.as_object().unwrap().contains_key("args"));
+    }
+
+    #[test]
+    fn compact_request_body_drops_default_processing_mode_for_legacy_servers() {
+        let mut body = json!({
+            "path": "https://example.com/guide.md",
+            "processing_mode": "semantic_and_vectors",
+        });
+        super::compact_request_body(&mut body);
+        assert!(!body.as_object().unwrap().contains_key("processing_mode"));
+    }
+
+    #[test]
+    fn compact_request_body_keeps_non_default_processing_mode() {
+        let mut body = json!({
+            "path": "https://example.com/guide.md",
+            "processing_mode": "vectors_only",
+        });
+        super::compact_request_body(&mut body);
+        assert_eq!(body["processing_mode"], "vectors_only");
     }
 
     #[test]
