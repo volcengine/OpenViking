@@ -95,9 +95,11 @@ openviking-server ingest status
 - user 消息：单用户开发型 harness（claude_code / codex / opencode）取会话 cwd 所在仓库的 git 身份（`user.email` / `user.name`），无 git 仓库时回退为配置的 `ingest.user`；群聊 harness（hermes / openclaw）取日志里的原始用户名（由 `user_field` 指定）。
 
 任何包含非 ASCII 字符的标识（例如中文或混合文字用户名）都会将完整标识编码为无碰撞的
-`ext-<base64>` 形式，新的读取和写入只使用该规范 id。旧版本可能把多个混合文字身份，
-或一个混合文字身份与真实 ASCII 身份，折叠到同一个 peer 目录中。OpenViking 不会把这些
-归属不明确的目录自动附加为别名；迁移既有数据前，运维人员必须先确认其真实归属。
+`ext-<base64>` 形式。`ext-` 命名空间为编码身份保留；如果 ASCII 身份清理后会成为
+`ext-` id，系统也会对其编码，避免它冒充已有编码身份。新的读取和写入只使用规范 id。
+旧版本可能把多个混合文字身份，或一个混合文字身份与真实 ASCII 身份，折叠到同一个 peer
+目录中。OpenViking 不会把这些归属不明确的目录自动附加为别名；迁移既有数据前，
+运维人员必须先确认其真实归属。
 
 ## 工作原理
 

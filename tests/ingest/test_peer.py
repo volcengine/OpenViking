@@ -39,6 +39,17 @@ def test_external_peer_mixed_unicode_encodes_full_value_without_collisions():
     assert second is not None and second.startswith("ext-")
 
 
+def test_external_peer_encoded_namespace_cannot_be_impersonated_by_ascii_name():
+    mixed_script = safe_external_peer("张三 Alice")
+    ascii_lookalike = safe_external_peer("ext-5byg5LiJIEFsaWNl")
+    sanitized_lookalike = safe_external_peer("ext 5byg5LiJIEFsaWNl")
+
+    assert mixed_script == "ext-5byg5LiJIEFsaWNl"
+    assert ascii_lookalike == "ext-ZXh0LTVieWc1TGlKSUVGc2FXTmw"
+    assert sanitized_lookalike == "ext-ZXh0IDVieWc1TGlKSUVGc2FXTmw"
+    assert len({mixed_script, ascii_lookalike, sanitized_lookalike}) == 3
+
+
 def test_external_peer_compatibility_fixture():
     fixture_path = Path(__file__).parent / "fixtures" / "peer_id_compat.json"
     cases = json.loads(fixture_path.read_text(encoding="utf-8"))
