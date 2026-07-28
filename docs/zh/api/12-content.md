@@ -354,6 +354,7 @@ openviking write viking://resources/docs/api.md \
 
 - 单次请求最多包含 128 个 operation，单文件不超过 8 MiB，总内容不超过 16 MiB。
 - 所有目标必须是 `root_uri` 下的文件、属于同一 context type，且 canonical URI 不能重复。
+- Resource 目标允许任意安全文件扩展名；Memory 目标仍使用文本扩展名白名单，且不接受二进制内容。
 - 系统会在目标 tree lock 内、首次产生新写入之前检查所有非幂等前置条件；不满足时返回 `409 Conflict`。
 - 如果目标已经包含期望字节，则归入 `unchanged`；因此刷新失败后可以安全重试，而不会重复写入相同内容。
 - API 能保证前置条件冲突不会产生新写入，但底层 I/O 中途失败时，本批次较早完成的写入仍可能已经可见。

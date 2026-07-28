@@ -19,7 +19,6 @@ from openviking.core.namespace import (
     relative_uri_path,
     uri_parts,
 )
-from openviking.parse.parsers.media.constants import IMAGE_EXTENSIONS
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
 from openviking.session.memory.memory_updater import MemoryUpdater
@@ -59,7 +58,6 @@ _DERIVED_FILENAMES = frozenset({".abstract.md", ".overview.md", ".relations.json
 _CREATE_ALLOWED_EXTENSIONS = frozenset(
     {".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".py", ".js", ".ts"}
 )
-_BATCH_CREATE_ALLOWED_EXTENSIONS = _CREATE_ALLOWED_EXTENSIONS | frozenset(IMAGE_EXTENSIONS)
 _BATCH_MAX_OPERATIONS = 128
 _BATCH_MAX_FILE_BYTES = 8 * 1024 * 1024
 _BATCH_MAX_TOTAL_BYTES = 16 * 1024 * 1024
@@ -403,9 +401,8 @@ class ContentWriteCoordinator:
             if kind == "create_if_absent":
                 if set(precondition) != {"kind"}:
                     raise InvalidArgumentError(f"invalid create_if_absent precondition: {uri}")
-                self._validate_create_extension(
-                    uri, allowed_extensions=_BATCH_CREATE_ALLOWED_EXTENSIONS
-                )
+                if context_type == "memory":
+                    self._validate_create_extension(uri)
                 normalized_precondition = {"kind": kind}
             elif kind == "replace_if_hash":
                 if set(precondition) != {"kind", "base_hash"}:
@@ -828,14 +825,9 @@ class ContentWriteCoordinator:
                 raise NotFoundError(uri, "file") from exc
             raise NotFoundError(uri, "file") from exc
 
-    def _validate_create_extension(
-        self,
-        uri: str,
-        *,
-        allowed_extensions: frozenset[str] = _CREATE_ALLOWED_EXTENSIONS,
-    ) -> None:
+    def _validate_create_extension(self, uri: str) -> None:
         _, ext = os.path.splitext(uri)
-        if ext.lower() not in allowed_extensions:
+        if ext.lower() not in _CREATE_ALLOWED_EXTENSIONS:
             raise InvalidArgumentError(f"create mode does not allow extension '{ext}': {uri}")
 
     async def _create_and_write(

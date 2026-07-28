@@ -354,6 +354,7 @@ Each operation contains:
 
 - A request supports at most 128 operations, 8 MiB per file, and 16 MiB total.
 - All targets must be files below `root_uri`, use the same context type, and have unique canonical URIs.
+- Resource targets may use any safe file extension; Memory targets retain the text extension allowlist and do not accept binary content.
 - Every non-idempotent precondition is checked under the target tree lock before the first new write. A mismatch returns `409 Conflict`.
 - If a target already contains the requested bytes, it is reported as `unchanged`; retrying the same request can therefore repeat a failed refresh without rewriting matching content.
 - The API prevents precondition conflicts from causing new writes, but an underlying I/O failure can still leave writes completed earlier in the batch visible.

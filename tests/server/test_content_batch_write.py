@@ -405,10 +405,16 @@ async def test_batch_write_api_updates_and_retries_by_final_hash(client_with_res
 
 
 @pytest.mark.asyncio
-async def test_batch_write_api_creates_binary_file(client_with_resource):
+@pytest.mark.parametrize(
+    ("filename", "content"),
+    [
+        ("compile-figure.png", b"\x89PNG\r\n\x1a\ncompile"),
+        ("compile-report.pdf", b"%PDF-1.7\ncompile"),
+    ],
+)
+async def test_batch_write_api_creates_binary_file(client_with_resource, filename, content):
     client, root = client_with_resource
-    image = f"{root}/compile-figure.png"
-    content = b"\x89PNG\r\n\x1a\ncompile"
+    artifact = f"{root}/{filename}"
     response = await client.post(
         "/api/v1/content/batch-write",
         json={
@@ -416,7 +422,7 @@ async def test_batch_write_api_creates_binary_file(client_with_resource):
             "wait": False,
             "operations": [
                 {
-                    "uri": image,
+                    "uri": artifact,
                     "content_base64": base64.b64encode(content).decode(),
                     "precondition": {"kind": "create_if_absent"},
                 }
@@ -424,8 +430,8 @@ async def test_batch_write_api_creates_binary_file(client_with_resource):
         },
     )
     assert response.status_code == 200
-    assert response.json()["result"]["created"] == [image]
-    downloaded = await client.get("/api/v1/content/download", params={"uri": image})
+    assert response.json()["result"]["created"] == [artifact]
+    downloaded = await client.get("/api/v1/content/download", params={"uri": artifact})
     assert downloaded.status_code == 200
     assert downloaded.content == content
 
