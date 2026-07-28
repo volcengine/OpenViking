@@ -1,0 +1,23 @@
+bot/tests/test_compile.py
+  s_867def0005e64c::t_c7d7f04a2f4363 2431-2476
+bot/vikingbot/compile/store.py
+  s_867def0005e64c::t_cfc3f8ad1bea7d 8-9,25,28-29,31-44,52-53,59-62,72-75,129-131
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "16e48e1525ae1cf9047fc2ebeca5d50e8aa54714",
+  "prompts": {},
+  "sessions": {
+    "s_867def0005e64c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa7f5-8ec7-7ff3-9408-dede23bf79c5",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
