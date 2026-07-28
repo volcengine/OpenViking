@@ -39,6 +39,15 @@ def parse_args() -> argparse.Namespace:
         default=150,
         help="Concurrent OpenViking session.commit submissions during train (default: 150)",
     )
+    parser.add_argument(
+        "--commit-case-spec",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Prepend the structured CaseSpec system message during training commit. "
+            "When omitted, use rollout metadata and otherwise default to enabled."
+        ),
+    )
     parser.add_argument("--config", default=None, help="ov.conf path (optional)")
     parser.add_argument(
         "--server-url", default=None, help="OpenViking server URL. Defaults to ov.conf/ovcli.conf"
@@ -263,6 +272,7 @@ async def main_async() -> int:
             batch_size=args.batch_size,
             concurrency=args.concurrency,
             commit_concurrency=args.commit_concurrency,
+            commit_case_spec_enabled=args.commit_case_spec,
             config_path=str(Path(args.config).expanduser()) if args.config else None,
             server_url=args.server_url,
             api_key=args.api_key,

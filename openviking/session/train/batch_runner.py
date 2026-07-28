@@ -77,6 +77,7 @@ class BatchTrainEvalConfig:
     commit_poll_interval_seconds: float = 2.0
     commit_timeout_seconds: float | None = None
     commit_concurrency: int = 150
+    commit_case_spec_enabled: bool | None = None
     train_split: str = "train"
     train_index: int | str | list[int] | tuple[int, ...] | None = None
     eval_index: int | str | list[int] | tuple[int, ...] | None = None
@@ -232,6 +233,7 @@ class BatchTrainEvalReport:
     batch_size: int | None
     concurrency: int
     commit_concurrency: int
+    commit_case_spec_enabled: bool | None
     train_split: str
     train_index: int | list[int] | None
     eval_index: int | list[int] | None
@@ -274,6 +276,7 @@ class BatchTrainEvalReport:
             "batch_size": self.batch_size,
             "concurrency": self.concurrency,
             "commit_concurrency": self.commit_concurrency,
+            "commit_case_spec_enabled": self.commit_case_spec_enabled,
             "train_split": self.train_split,
             "train_index": self.train_index,
             "eval_index": self.eval_index,
@@ -347,6 +350,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             epochs=config.epochs,
             concurrency=config.concurrency,
             commit_concurrency=config.commit_concurrency,
+            commit_case_spec_enabled=config.commit_case_spec_enabled,
             train_split=config.train_split,
             train_index=_index_payload(config.train_index),
             eval_index=_index_payload(config.eval_index),
@@ -375,6 +379,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             poll_interval_seconds=config.commit_poll_interval_seconds,
             timeout_seconds=config.commit_timeout_seconds,
             commit_concurrency=config.commit_concurrency,
+            commit_case_spec_enabled=config.commit_case_spec_enabled,
             show_progress=True,
             progress_label="train",
         )
@@ -385,6 +390,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             run_dir=run_dir,
             client=client,
             latest_pointer_path=_latest_rollouts_path(config),
+            commit_case_spec_enabled=config.commit_case_spec_enabled,
         )
         remote_executor = getattr(pipeline, "rollout_executor", None)
         if isinstance(
@@ -562,6 +568,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             batch_size=config.batch_size,
             concurrency=config.concurrency,
             commit_concurrency=config.commit_concurrency,
+            commit_case_spec_enabled=config.commit_case_spec_enabled,
             train_split=config.train_split,
             train_index=_index_payload(config.train_index),
             eval_index=_index_payload(effective_eval_index),
@@ -622,6 +629,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
                 "train_split": config.train_split,
                 "trials": config.trials,
                 "train_trials": config.train_trials,
+                "commit_case_spec_enabled": config.commit_case_spec_enabled,
                 "reuse_train_rollout_cache": config.reuse_train_rollout_cache,
                 "run_id": policy_trainer.run_id,
                 "trace_id": report.trace_id,
@@ -1174,6 +1182,7 @@ def _write_run_metadata(
         "run_timestamp": config.run_timestamp,
         "result_dir_name": config.result_dir_name,
         "train_split": config.train_split,
+        "commit_case_spec_enabled": config.commit_case_spec_enabled,
         "git": git_metadata,
     }
     (run_dir / "run_metadata.json").write_text(

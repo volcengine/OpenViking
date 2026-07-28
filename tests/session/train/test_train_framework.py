@@ -921,9 +921,10 @@ async def test_streaming_policy_trainer_flushes_on_gradient_count():
     assert second.metadata["flush_reason"] == "count"
     assert second.metadata["gradient_count"] == 1
     assert second.metadata["batch_gradient_count"] == 2
-    # Each source trajectory is optimized in its own chunk, so two accepted
-    # updates advance the shared policy set twice.
-    assert second.apply_result.updated_policy_set.policies[0].version == 3
+    # Accepted gradients for the same target share one patch-merge call.
+    assert second.batch_result.metadata["chunk_gradient_counts"] == [2]
+    assert second.batch_result.metadata["chunk_target_counts"] == [1]
+    assert second.apply_result.updated_policy_set.policies[0].version == 2
     assert await trainer.get_buffered_gradient_count() == 0
     assert trainer.last_apply_result is second.batch_result.apply_result
 
@@ -1060,6 +1061,148 @@ async def test_streaming_policy_trainer_scopes_concurrent_submit_results_by_sour
 
 
 @pytest.mark.asyncio
+async def test_streaming_policy_trainer_merges_same_target_across_cases_once():
+    from openviking.session.train import (
+        PolicyPlanItem,
+        StreamingPolicyTrainer,
+        StreamingPolicyTrainerConfig,
+    )
+
+    class CaseAwareAnalyzer:
+        async def analyze(self, rollout, context):
+            del context
+            return RolloutAnalysis(
+                evaluation=RubricEvaluation(
+                    passed=True,
+                    score=1.0,
+                    criterion_results=[],
+                    feedback=[],
+                ),
+                trajectories=[
+                    Trajectory(
+                        name=rollout.case.name,
+                        uri=f"viking://user/u/memories/trajectories/{rollout.case.name}.md",
+                        content=f"trajectory {rollout.case.name}",
+                        outcome="success",
+                        retrieval_anchor="",
+                    )
+                ],
+            )
+
+    class SharedTargetEstimator:
+        async def estimate(self, analysis, experience_set, context):
+            del context
+            trajectory = analysis.trajectories[0]
+            target_uri = experience_set.policies[0].uri
+            return [
+                DummyGradient(
+                    target_name="booking_duplicate_handling",
+                    target_uri=target_uri,
+                    base_version=experience_set.policies[0].version,
+                    rationale=f"gradient from {trajectory.name}",
+                    links=[
+                        StoredLink(
+                            from_uri=target_uri,
+                            to_uri=trajectory.uri,
+                            link_type="derived_from",
+                            weight=1.0,
+                        )
+                    ],
+                    confidence=0.9,
+                )
+            ]
+
+    class MergingOptimizer:
+        def __init__(self):
+            self.calls = []
+
+        async def plan(self, gradients, policy_set, context):
+            del context
+            self.calls.append(
+                [
+                    link.to_uri
+                    for gradient in gradients
+                    for link in gradient.links
+                    if link.link_type == "derived_from"
+                ]
+            )
+            target_uri = policy_set.policies[0].uri
+            return PolicyUpdatePlan(
+                items=[
+                    PolicyPlanItem(
+                        kind="upsert",
+                        memory_type="experiences",
+                        target_name="booking_duplicate_handling",
+                        target_uri=target_uri,
+                        before_content=policy_set.policies[0].content,
+                        after_content="merged content",
+                        links=[
+                            link
+                            for gradient in gradients
+                            for link in gradient.links
+                            if link.link_type == "derived_from"
+                        ],
+                    )
+                ],
+                metadata={"gradient_count": len(gradients)},
+            )
+
+    def make_case(name: str) -> Case:
+        case = _case()
+        return Case(
+            name=name,
+            task_signature=case.task_signature,
+            input=case.input,
+            rubric=case.rubric,
+        )
+
+    optimizer = MergingOptimizer()
+    trainer = StreamingPolicyTrainer(
+        policy_set=_policy_set(),
+        rollout_analyzer=CaseAwareAnalyzer(),
+        gradient_estimator=SharedTargetEstimator(),
+        policy_optimizer=optimizer,
+        policy_updater=DummyUpdater(),
+        context=PipelineContext(),
+        config=StreamingPolicyTrainerConfig(
+            max_gradients_per_update=2,
+            max_wait_seconds=60.0,
+            timer_check_interval_seconds=60.0,
+        ),
+    )
+    rollout_a = Rollout(
+        case=make_case("case_a"),
+        messages=[Message(id="a", role="user", parts=[TextPart(text="a")])],
+        policy_snapshot_id="snapshot-1",
+    )
+    rollout_b = Rollout(
+        case=make_case("case_b"),
+        messages=[Message(id="b", role="user", parts=[TextPart(text="b")])],
+        policy_snapshot_id="snapshot-1",
+    )
+
+    first, second = await asyncio.gather(
+        trainer.submit_rollout(rollout_a),
+        trainer.submit_rollout(rollout_b),
+    )
+
+    assert optimizer.calls == [
+        [
+            "viking://user/u/memories/trajectories/case_a.md",
+            "viking://user/u/memories/trajectories/case_b.md",
+        ]
+    ]
+    assert len(first.batch_result.plan.items) == 1
+    assert [item.target_name for item in first.plan.items] == ["booking_duplicate_handling"]
+    assert [item.target_name for item in second.plan.items] == ["booking_duplicate_handling"]
+    assert first.batch_result.metadata["chunk_gradient_counts"] == [2]
+    assert first.batch_result.metadata["chunk_target_counts"] == [1]
+    assert first.apply_result.updated_policy_set.policies[0].version == 2
+
+    assert await trainer.close() is None
+
+
+@pytest.mark.asyncio
 async def test_streaming_policy_trainer_splits_flush_by_gradient_count():
     from openviking.session.train import StreamingPolicyTrainer, StreamingPolicyTrainerConfig
 
@@ -1129,6 +1272,71 @@ async def test_streaming_policy_trainer_splits_flush_by_gradient_count():
 
 
 @pytest.mark.asyncio
+async def test_streaming_policy_trainer_keeps_target_groups_intact_at_chunk_boundary():
+    from openviking.session.train import StreamingPolicyTrainer, StreamingPolicyTrainerConfig
+
+    class GroupedTargetEstimator:
+        async def estimate(self, analysis, experience_set, context):
+            del context
+            trajectory = analysis.trajectories[0]
+            targets = ["target_a", "target_a", "target_b", "target_b"]
+            return [
+                DummyGradient(
+                    target_name=target,
+                    target_uri=f"{experience_set.root_uri}/{target}.md",
+                    base_version=None,
+                    rationale=f"gradient {idx}",
+                    links=[
+                        StoredLink(
+                            from_uri=f"{experience_set.root_uri}/{target}.md",
+                            to_uri=trajectory.uri,
+                            link_type="derived_from",
+                            weight=1.0,
+                        )
+                    ],
+                    confidence=0.9,
+                )
+                for idx, target in enumerate(targets)
+            ]
+
+    class RecordingOptimizer:
+        def __init__(self):
+            self.targets = []
+
+        async def plan(self, gradients, policy_set, context):
+            del policy_set, context
+            self.targets.append([gradient.target_name for gradient in gradients])
+            return PolicyUpdatePlan(metadata={"gradient_count": len(gradients)})
+
+    optimizer = RecordingOptimizer()
+    trainer = StreamingPolicyTrainer(
+        policy_set=_policy_set(),
+        rollout_analyzer=DummyAnalyzer(),
+        gradient_estimator=GroupedTargetEstimator(),
+        policy_optimizer=optimizer,
+        policy_updater=DummyUpdater(),
+        context=PipelineContext(),
+        config=StreamingPolicyTrainerConfig(
+            max_gradients_per_update=3,
+            max_wait_seconds=0.01,
+            timer_check_interval_seconds=0.01,
+        ),
+    )
+    rollout = Rollout(
+        case=_case(),
+        messages=[Message(id="group-targets", role="user", parts=[TextPart(text="group")])],
+        policy_snapshot_id="snapshot-1",
+    )
+
+    result = await trainer.submit_rollout(rollout)
+
+    assert optimizer.targets == [["target_a", "target_a"], ["target_b", "target_b"]]
+    assert result.metadata["chunk_gradient_counts"] == [2, 2]
+    assert result.metadata["chunk_target_counts"] == [1, 1]
+    assert await trainer.close() is None
+
+
+@pytest.mark.asyncio
 async def test_streaming_policy_trainer_chunks_multiple_target_gradients_by_count():
     """Gradients from different targets share the same chunk pool — split only by count."""
     from openviking.session.train import StreamingPolicyTrainer, StreamingPolicyTrainerConfig
@@ -1187,10 +1395,10 @@ async def test_streaming_policy_trainer_chunks_multiple_target_gradients_by_coun
 
     result = await trainer.submit_rollout(rollout)
 
-    # gradients are chunked purely by count, target boundaries don't affect chunking
+    # Independent target groups share chunks until the configured capacity.
     assert optimizer.gradient_counts == [3, 2]
     assert result.metadata["chunk_gradient_counts"] == [3, 2]
-    assert "chunk_target_counts" not in result.metadata
+    assert result.metadata["chunk_target_counts"] == [3, 2]
     assert await trainer.close() is None
 
 
@@ -1257,7 +1465,7 @@ async def test_streaming_policy_trainer_mixes_categories_in_chunks():
         ["category_b"],
     ]
     assert result.metadata["chunk_gradient_counts"] == [3, 1]
-    assert "chunk_categories" not in result.metadata
+    assert result.metadata["chunk_target_counts"] == [3, 1]
     assert await trainer.close() is None
 
 
@@ -2603,6 +2811,78 @@ async def test_session_commit_policy_trainer_filters_legacy_embedded_evaluation_
     )
     assert "evaluation report:" not in visible_text
     assert visible_text.count("# OpenViking OutcomeEvaluation") == 1
+
+
+@pytest.mark.asyncio
+async def test_session_commit_policy_trainer_can_disable_case_spec_from_rollout_metadata():
+    from openviking.session.train import SessionCommitPolicyTrainer
+
+    client = FakeSessionCommitClient()
+    trainer = SessionCommitPolicyTrainer(
+        client=client,
+        run_id="run1",
+        poll_interval_seconds=0.01,
+    )
+    rollout = Rollout(
+        case=_case(),
+        messages=[Message(id="m1", role="user", parts=[TextPart(text="hello")])],
+        policy_snapshot_id="snapshot-1",
+        evaluation=RubricEvaluation(
+            passed=False,
+            score=0.0,
+            criterion_results=[],
+            feedback=[],
+        ),
+        metadata={
+            "data_split": "unit",
+            "task_no": 7,
+            "commit_case_spec_enabled": False,
+        },
+    )
+
+    result = await trainer.train_rollouts([rollout], _policy_set())
+
+    commit_result = result.apply_result.metadata["commit_results"][0]
+    committed_messages = client.messages[commit_result["session_id"]]
+    visible_text = "\n".join(
+        part.get("text", "") for message in committed_messages for part in message.get("parts", [])
+    )
+    assert "# OpenViking Batch Training CaseSpec" not in visible_text
+    assert "# OpenViking OutcomeEvaluation" in visible_text
+    assert commit_result["commit_case_spec_enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_session_commit_policy_trainer_case_spec_override_wins_over_rollout_metadata():
+    from openviking.session.train import SessionCommitPolicyTrainer
+
+    client = FakeSessionCommitClient()
+    trainer = SessionCommitPolicyTrainer(
+        client=client,
+        run_id="run1",
+        poll_interval_seconds=0.01,
+        commit_case_spec_enabled=True,
+    )
+    rollout = Rollout(
+        case=_case(),
+        messages=[Message(id="m1", role="user", parts=[TextPart(text="hello")])],
+        policy_snapshot_id="snapshot-1",
+        evaluation=RubricEvaluation(
+            passed=False,
+            score=0.0,
+            criterion_results=[],
+            feedback=[],
+        ),
+        metadata={"commit_case_spec_enabled": False},
+    )
+
+    result = await trainer.train_rollouts([rollout], _policy_set())
+
+    commit_result = result.apply_result.metadata["commit_results"][0]
+    committed_messages = client.messages[commit_result["session_id"]]
+    assert committed_messages[0]["role"] == "system"
+    assert "# OpenViking Batch Training CaseSpec" in committed_messages[0]["parts"][0]["text"]
+    assert commit_result["commit_case_spec_enabled"] is True
 
 
 @pytest.mark.asyncio

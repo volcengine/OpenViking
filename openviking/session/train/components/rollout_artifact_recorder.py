@@ -60,6 +60,7 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
         run_dir: Path,
         client: Any | None = None,
         latest_pointer_path: Path | None = None,
+        commit_case_spec_enabled: bool | None = None,
     ) -> None:
         self.run_dir = run_dir.expanduser().resolve()
         self.rollouts_root = self.run_dir / "rollouts"
@@ -67,6 +68,7 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
         self.latest_pointer_path = (
             latest_pointer_path.expanduser().resolve() if latest_pointer_path else None
         )
+        self.commit_case_spec_enabled = commit_case_spec_enabled
         self._case_groups: dict[str, dict[str, Any]] = {}
         self._latest_failed_rollout: Path | None = None
 
@@ -351,7 +353,10 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
             )
         (rollout_dir / "prompt_for_llm.md").write_text(_prompt_for_llm(record), encoding="utf-8")
         # Full commit messages (as sent to session.commit)
-        commit_msgs = _build_commit_messages(rollout)
+        commit_msgs = _build_commit_messages(
+            rollout,
+            commit_case_spec_enabled=self.commit_case_spec_enabled,
+        )
         _write_json(rollout_dir / "commit_messages.json", commit_msgs)
         (rollout_dir / "commit_messages.md").write_text(
             _format_commit_messages_markdown(commit_msgs), encoding="utf-8"
@@ -857,7 +862,11 @@ def _safe_fragment(value: Any) -> str:
     return text or "unknown"
 
 
-def _build_commit_messages(rollout: Rollout) -> list[dict[str, Any]]:
+def _build_commit_messages(
+    rollout: Rollout,
+    *,
+    commit_case_spec_enabled: bool | None = None,
+) -> list[dict[str, Any]]:
     """Build the full message list as sent to session.commit.
 
     Matches the message assembly in session_commit._commit_one:
@@ -865,12 +874,15 @@ def _build_commit_messages(rollout: Rollout) -> list[dict[str, Any]]:
     """
     from openviking.session.train.components.session_commit import (
         _case_spec_message_to_request,
+        _commit_case_spec_enabled,
         _evaluation_message_to_request,
         _is_embedded_rollout_evaluation_message,
         _message_to_request,
     )
 
-    messages: list[dict[str, Any]] = [_case_spec_message_to_request(rollout)]
+    messages: list[dict[str, Any]] = []
+    if _commit_case_spec_enabled(rollout, override=commit_case_spec_enabled):
+        messages.append(_case_spec_message_to_request(rollout))
     for msg in rollout.messages:
         if not _is_embedded_rollout_evaluation_message(msg):
             messages.append(_message_to_request(msg))

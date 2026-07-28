@@ -53,6 +53,7 @@ class SessionCommitPolicyTrainer:
     poll_interval_seconds: float = 2.0
     timeout_seconds: float | None = None
     commit_concurrency: int = 20
+    commit_case_spec_enabled: bool | None = None
     show_progress: bool = False
     progress_label: str = "session-commit"
     event_recorder: Any | None = None
@@ -142,8 +143,12 @@ class SessionCommitPolicyTrainer:
         )
         stage = "prepare_messages"
         try:
+            case_spec_enabled = _commit_case_spec_enabled(
+                rollout,
+                override=self.commit_case_spec_enabled,
+            )
             messages = (
-                [_case_spec_message_to_request(rollout)]
+                ([_case_spec_message_to_request(rollout)] if case_spec_enabled else [])
                 + [
                     _message_to_request(message)
                     for message in rollout.messages
@@ -176,6 +181,7 @@ class SessionCommitPolicyTrainer:
                 trace_id=trace_id,
                 telemetry_id=telemetry_id,
                 score=_rollout_score(rollout),
+                commit_case_spec_enabled=case_spec_enabled,
             )
             stage = "wait_task"
             task = await self._wait_task(task_id) if task_id else None
@@ -202,6 +208,7 @@ class SessionCommitPolicyTrainer:
                 telemetry_id=telemetry_id,
                 task_status=task.get("status") if isinstance(task, dict) else None,
                 score=_rollout_score(rollout),
+                commit_case_spec_enabled=case_spec_enabled,
                 error=task_error,
             )
             return {
@@ -214,6 +221,7 @@ class SessionCommitPolicyTrainer:
                 "telemetry_id": telemetry_id,
                 "task_status": task.get("status") if isinstance(task, dict) else None,
                 "score": _rollout_score(rollout),
+                "commit_case_spec_enabled": case_spec_enabled,
                 "error": task_error,
             }
         except Exception as exc:
@@ -611,6 +619,22 @@ def _safe_session_fragment(value: str) -> str:
 
 def _new_run_id() -> str:
     return f"{int(time.time())}_{uuid4().hex[:8]}"
+
+
+def _commit_case_spec_enabled(
+    rollout: Rollout,
+    *,
+    override: bool | None = None,
+) -> bool:
+    """Resolve the CaseSpec control-message setting for one training rollout."""
+    if override is not None:
+        return bool(override)
+    raw = (rollout.metadata or {}).get("commit_case_spec_enabled")
+    if isinstance(raw, bool):
+        return raw
+    if raw is None:
+        return True
+    return str(raw).strip().lower() not in {"0", "false", "no", "off", "disabled"}
 
 
 def _case_spec_message_to_request(rollout: Rollout) -> dict[str, Any]:

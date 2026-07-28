@@ -420,6 +420,10 @@ class StreamingPolicyTrainer:
         self.policy_set = apply_result.updated_policy_set
         self._last_apply_result = apply_result
         chunk_gradient_counts = [len(chunk.gradients) for chunk in chunks]
+        chunk_target_counts = [
+            len({_gradient_target_key(gradient) for gradient in chunk.gradients})
+            for chunk in chunks
+        ]
         gradient_gate_reports = [
             item.gate_report for item in items if getattr(item, "gate_report", None) is not None
         ]
@@ -449,6 +453,7 @@ class StreamingPolicyTrainer:
                 "gradient_count": len(gradients),
                 "chunk_count": len(chunk_gradient_counts),
                 "chunk_gradient_counts": chunk_gradient_counts,
+                "chunk_target_counts": chunk_target_counts,
                 "score": average_score(analyses),
                 "source": "streaming_rollouts",
                 "flush_reason": reason,
@@ -543,22 +548,68 @@ def _chunks_buffered_items_by_gradient_count(
     if size <= 0:
         raise ValueError("chunk size must be > 0")
 
+    grouped: dict[tuple[str, str], list[_OwnedGradient]] = {}
+    fallback_index = 0
     chunks: list[_BufferedRolloutTrainingChunk] = []
     for item in items:
-        item_gradients = list(item.gradients)
-        if not item_gradients:
-            continue
-        item_analyses = [item.analysis] if item.analysis is not None else []
-        for start in range(0, len(item_gradients), size):
-            chunks.append(
-                _BufferedRolloutTrainingChunk(
-                    gradients=item_gradients[start : start + size],
-                    analyses=item_analyses,
+        for gradient in item.gradients:
+            key = _gradient_target_key(gradient)
+            if key == ("unknown", ""):
+                key = ("unknown", str(fallback_index))
+                fallback_index += 1
+            grouped.setdefault(key, []).append(
+                _OwnedGradient(
+                    gradient=gradient,
+                    analysis=item.analysis,
                 )
             )
+
+    pending: list[_OwnedGradient] = []
+
+    def flush_pending() -> None:
+        if not pending:
+            return
+        chunks.append(_chunk_from_owned_gradients(pending))
+        pending.clear()
+
+    for target_gradients in grouped.values():
+        # Keep all updates for one target in the same merge whenever the group
+        # fits. Oversized target groups are split only to honor the configured
+        # upper bound.
+        if len(target_gradients) > size:
+            flush_pending()
+            for start in range(0, len(target_gradients), size):
+                chunks.append(_chunk_from_owned_gradients(target_gradients[start : start + size]))
+            continue
+        if pending and len(pending) + len(target_gradients) > size:
+            flush_pending()
+        pending.extend(target_gradients)
+
+    flush_pending()
     if not chunks:
         return [_BufferedRolloutTrainingChunk(gradients=[], analyses=[])]
     return chunks
+
+
+def _chunk_from_owned_gradients(
+    owned_gradients: list["_OwnedGradient"],
+) -> "_BufferedRolloutTrainingChunk":
+    return _BufferedRolloutTrainingChunk(
+        gradients=[owned.gradient for owned in owned_gradients],
+        analyses=_unique_by_identity(
+            [owned.analysis for owned in owned_gradients if owned.analysis is not None]
+        ),
+    )
+
+
+def _gradient_target_key(gradient: SemanticGradient) -> tuple[str, str]:
+    target_uri = str(getattr(gradient, "target_uri", "") or "").strip()
+    if target_uri:
+        return ("uri", target_uri)
+    target_name = str(getattr(gradient, "target_name", "") or "").strip()
+    if target_name:
+        return ("name", target_name)
+    return ("unknown", "")
 
 
 def _combine_update_plans(plans: list[PolicyUpdatePlan]) -> PolicyUpdatePlan:
@@ -830,6 +881,12 @@ class _BufferedRolloutTraining:
     analysis: RolloutAnalysis | None = None
     rollout: Rollout | None = None
     gate_report: dict[str, Any] | None = None
+
+
+@dataclass(slots=True)
+class _OwnedGradient:
+    gradient: SemanticGradient
+    analysis: RolloutAnalysis | None = None
 
 
 @dataclass(slots=True)
