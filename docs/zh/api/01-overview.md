@@ -431,6 +431,7 @@ JSON 输出 - 错误：
 | GET | `/api/v1/content/overview` | 读取概览（L1） |
 | GET | `/api/v1/content/download` | 下载原始文件字节 |
 | POST | `/api/v1/content/write` | 写入内容并刷新语义索引 |
+| POST | `/api/v1/content/batch-write` | 执行带前置条件的多文件写入 |
 | POST | `/api/v1/content/set_tags` | 设置检索标签 |
 | POST | `/api/v1/content/reindex` | 重建语义或向量索引 |
 
@@ -558,6 +559,8 @@ JSON 输出 - 错误：
 | POST | `/bot/v1/chat` | VikingBot 非流式对话 |
 | POST | `/bot/v1/chat/stream` | VikingBot 流式对话 |
 | POST | `/bot/v1/feedback` | 提交 VikingBot 回答反馈 |
+| POST | `/bot/v1/compile` | 启动 Skill 驱动的 Compile 任务 |
+| GET | `/bot/v1/compile/{task_id}` | 获取 Compile 任务状态 |
 
 ---
 

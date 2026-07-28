@@ -436,6 +436,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | GET | `/api/v1/content/overview` | Read an overview (L1) |
 | GET | `/api/v1/content/download` | Download original file bytes |
 | POST | `/api/v1/content/write` | Write content and refresh semantic indexes |
+| POST | `/api/v1/content/batch-write` | Apply preconditioned multi-file writes |
 | POST | `/api/v1/content/set_tags` | Set retrieval tags |
 | POST | `/api/v1/content/reindex` | Rebuild semantic or vector indexes |
 
@@ -563,6 +564,8 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/bot/v1/chat` | Non-streaming VikingBot chat |
 | POST | `/bot/v1/chat/stream` | Streaming VikingBot chat |
 | POST | `/bot/v1/feedback` | Submit feedback for a VikingBot answer |
+| POST | `/bot/v1/compile` | Start a Skill-driven Compile task |
+| GET | `/bot/v1/compile/{task_id}` | Get Compile task status |
 
 ---
 

@@ -109,6 +109,117 @@ data: {"event":"response","data":{"content":"当前知识库包含……","respo
 
 `event` 可能为 `reasoning`、`reasoning_delta`、`tool_call`、`tool_result`、`content_delta`、`iteration` 或 `response`。
 
+### compile()
+
+启动一个异步、由 Skill 驱动的 Compile 任务。VikingBot 会加载指定 Skill，使用当前认证用户身份读取来源目录，在任务独立的 AgentLoop 中执行，并将通过校验的产物提交到目标 URI 下。
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `from` | string[] | 是 | - | 一个或多个来源目录 |
+| `to` | string | 是 | - | 目标 Resource 或 Memory 目录，或受支持的 Skill namespace |
+| `skill` | string | 是 | - | Skill 目录或其 `SKILL.md` URI |
+| `reason` | string | 否 | Skill 驱动的默认值 | 本次 Compile 的补充指令 |
+
+**HTTP API**
+
+```
+POST /bot/v1/compile
+```
+
+```bash
+curl -X POST http://localhost:1933/bot/v1/compile \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "from": ["viking://resources/research"],
+    "to": "viking://resources/research-wiki",
+    "skill": "viking://user/default/skills/research-compiler",
+    "reason": "追踪历史进展，并保留支撑证据。"
+  }'
+```
+
+**CLI**
+
+```bash
+ov compile \
+  --from viking://resources/research \
+  --to viking://resources/research-wiki \
+  --skill viking://user/default/skills/research-compiler \
+  --reason "追踪历史进展，并保留支撑证据。" \
+  --wait
+```
+
+`--wait` 会轮询状态接口，直到任务进入终态。`--timeout` 只限制本地等待时间，不会取消服务端任务。
+
+`direct` backend 会以 Bot 宿主机权限执行 Compile 的 `exec` 命令。`bot.sandbox.backends.direct.allow_compile_exec` 默认为 `false`，此时 Compile 不会暴露 `exec`，但普通 Wiki 和产物文件整理仍可通过文件工具运行。声明了 `requires.bins` 或 `requires.env` 的 Skill 会在执行任何命令探测前以 `SKILL_CAPABILITY_UNAVAILABLE` 失败。将该选项设为 `true` 是明确的不安全 opt-in；依赖 CLI 的 Skill 推荐使用具备文件系统和网络策略的隔离 backend。超过 admission 上限时返回 `429 RESOURCE_EXHAUSTED`。
+
+**响应示例**
+
+HTTP 接口返回 `202 Accepted`：
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "task_id": "cmp_01abc",
+    "status": "accepted",
+    "to": "viking://resources/research-wiki"
+  }
+}
+```
+
+### compile_status()
+
+获取任务当前状态；任务进入终态后还会返回结果或错误。任务仅对创建它的 principal 可见；任务不存在或属于其他 principal 时均返回 `404`。
+
+**HTTP API**
+
+```
+GET /bot/v1/compile/{task_id}
+```
+
+```bash
+curl http://localhost:1933/bot/v1/compile/cmp_01abc \
+  -H "X-API-Key: your-key"
+```
+
+**响应示例**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "task_id": "cmp_01abc",
+    "status": "completed",
+    "stage": "completed",
+    "created_at": "2026-07-28T08:00:00Z",
+    "updated_at": "2026-07-28T08:02:30Z",
+    "result": {
+      "from": ["viking://resources/research"],
+      "to": "viking://resources/research-wiki",
+      "skill": "viking://user/default/skills/research-compiler",
+      "okf_version": "0.1",
+      "created": ["viking://resources/research-wiki/Progress.md"],
+      "updated": [],
+      "unchanged": [],
+      "page_count": 1,
+      "link_count": 0,
+      "warnings": []
+    }
+  }
+}
+```
+
+任务生命周期如下：
+
+| Status | 常见 Stage |
+|--------|------------|
+| `accepted` | `queued` |
+| `running` | `loading_skill`、`collecting_context`、`agent`、`rendering` |
+| `committing` | `writing`、`refreshing` |
+| `completed` | `completed` |
+| `failed` | 失败发生时的 Stage；响应包含 `error.code` 和 `error.message` |
+
 ### feedback()
 
 对已经生成的回复提交显式反馈。
@@ -153,7 +264,7 @@ curl -X POST http://localhost:1933/bot/v1/feedback \
 
 ## 客户端范围
 
-标准 OpenViking Python、TypeScript 和 Go SDK 当前不封装 Bot 代理接口；聊天入口由 `ov chat` CLI 和 HTTP 提供。VikingBot Gateway 自身还提供 Session 和 Channel API，详见 [VikingBot 文档](https://github.com/volcengine/OpenViking/blob/main/bot/README_CN.md#http-api)。
+标准 OpenViking Python、TypeScript 和 Go SDK 当前不封装 Bot 代理接口；Chat 和 Compile 可通过 `ov` CLI 与 HTTP 使用。VikingBot Gateway 自身还提供 Session 和 Channel API，详见 [VikingBot 文档](https://github.com/volcengine/OpenViking/blob/main/bot/README_CN.md#http-api)。
 
 ## 相关文档
 

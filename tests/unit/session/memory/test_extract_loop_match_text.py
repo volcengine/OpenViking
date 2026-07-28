@@ -76,7 +76,7 @@ class TestResolveOperations:
         assert operation.memory_fields["content"] == "new content"
         isolation_handler.calculate_memory_uris.assert_not_called()
 
-    def test_unresolved_page_ids_logs_at_info(self):
+    def test_unresolved_page_ids_are_ignored(self):
         loop = ExtractLoop(vlm=Mock(model="test-model"), viking_fs=Mock(), context_provider=Mock())
         loop._extract_context = Mock()
         loop._extract_context.page_id_map = Mock()
@@ -90,19 +90,9 @@ class TestResolveOperations:
 
         raw_links = [WikiLink(f=100, t=102, match_text="trip")]
 
-        with (
-            patch("openviking.session.memory.extract_loop.tracer.info") as mock_info,
-            patch("openviking.session.memory.extract_loop.tracer.error") as mock_error,
-        ):
-            resolved = loop._resolve_links(raw_links, upsert_operations=[])
+        resolved = loop._resolve_links(raw_links, upsert_operations=[])
 
         assert resolved == []
-        mock_error.assert_not_called()
-        mock_info.assert_any_call(
-            "Skipping link with unresolved page_ids: f=100, t=102, "
-            "from_uri=viking://user/user_sample_0/memories/trajectories/a.md, to_uri=None, "
-            "op_page_map_keys=[]"
-        )
 
 
 class TestResolveLinksMultiUri:
@@ -148,6 +138,28 @@ class TestResolveLinksMultiUri:
                 "viking://user/b/memories/experiences/target.md",
             ),
         }
+
+    def test_shared_page_id_self_link_is_ignored(self):
+        loop = ExtractLoop(vlm=Mock(model="test-model"), viking_fs=Mock(), context_provider=Mock())
+        loop._extract_context = Mock()
+        loop._extract_context.page_id_map = Mock()
+        loop._extract_context.page_id_map._id_to_uri = {}
+        loop._extract_context.page_id_map.resolve.return_value = None
+
+        raw_links = [WikiLink(f=100, t=100, match_text="trip")]
+        upsert_operations = [
+            ResolvedOperation(
+                memory_fields={},
+                memory_type="experiences",
+                uris=[
+                    "viking://user/a/memories/experiences/source.md",
+                    "viking://user/b/memories/experiences/source.md",
+                ],
+                page_id=100,
+            )
+        ]
+
+        assert loop._resolve_links(raw_links, upsert_operations=upsert_operations) == []
 
 
 class TestPageIdInstruction:
