@@ -249,6 +249,10 @@
   background: transparent;
 }
 
+pre code.hljs {
+  padding: 0;
+}
+
 /* highlight.js: dark mode token colors (github-dark) */
 .dark .hljs { color: #c9d1d9; }
 .dark .hljs-doctag,

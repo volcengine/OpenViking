@@ -102,9 +102,13 @@ export function useVikingFilePreview(
   const autoRead = useMemo(
     () =>
       entry
-        ? shouldAutoRead(entry, maxAutoReadBytes)
+        ? shouldAutoRead(
+            entry,
+            maxAutoReadBytes,
+            policy.requireKnownSize ?? false,
+          )
         : { shouldRead: false as const },
-    [entry, maxAutoReadBytes],
+    [entry, maxAutoReadBytes, policy.requireKnownSize],
   )
 
   const readQuery = useQuery({
@@ -131,10 +135,10 @@ export function useVikingFilePreview(
         fileType,
         shouldAutoRead: false,
         reason: autoRead.reason,
-        content: '',
-        offset: effectiveReadOptions.offset,
-        limit: effectiveReadOptions.limit,
-        truncated: true,
+        content: readQuery.data?.content || '',
+        offset: readQuery.data?.offset ?? effectiveReadOptions.offset,
+        limit: readQuery.data?.limit ?? effectiveReadOptions.limit,
+        truncated: readQuery.data?.truncated ?? true,
       }
     }
 

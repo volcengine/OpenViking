@@ -67,6 +67,7 @@ export interface VikingReadResult {
 export interface VikingPreviewPolicy {
   maxAutoReadBytes?: number
   defaultReadLimit?: number
+  requireKnownSize?: boolean
 }
 
 export interface VikingPreviewResult {

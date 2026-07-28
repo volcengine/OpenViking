@@ -31,6 +31,7 @@ import { copyTextToClipboard } from '#/lib/clipboard'
 import {
   useInvalidateVikingFs,
   useVikingFsList,
+  useVikingFsStat,
 } from '#/routes/resources/-hooks/viking-fm'
 import { fetchFsStat } from '#/routes/resources/-lib/api'
 import {
@@ -117,6 +118,13 @@ function PlaygroundWorkbench() {
     search.file && !isDirectoryLevelFile(search.file)
       ? createEntryFromUri(search.file, false)
       : createEntryFromUri(initialCurrentUri, true),
+  )
+  const selectedFileStat = useVikingFsStat(
+    selectedFile &&
+      !selectedFile.isDir &&
+      (selectedFile.sizeBytes === null || !selectedFile.modTime)
+      ? selectedFile.uri
+      : undefined,
   )
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(() =>
     mergeExpanded(
@@ -211,13 +219,23 @@ function PlaygroundWorkbench() {
       ? normalizeDirUri(parentUri(search.file))
       : normalizeDirUri(search.uri || ROOT_URI)
     setCurrentUri(normalized)
-    setSelectedFile(
-      search.file && !isDirectoryLevelFile(search.file)
-        ? createEntryFromUri(search.file, false)
-        : createEntryFromUri(normalized, true),
-    )
+    setSelectedFile((current) => {
+      const next =
+        search.file && !isDirectoryLevelFile(search.file)
+          ? createEntryFromUri(search.file, false)
+          : createEntryFromUri(normalized, true)
+      return current?.uri === next.uri && current.isDir === next.isDir
+        ? current
+        : next
+    })
     setExpandedKeys((prev) => mergeExpanded(prev, getAncestorUris(normalized)))
   }, [search.file, search.uri])
+
+  useEffect(() => {
+    const stat = selectedFileStat.data
+    if (!stat) return
+    setSelectedFile((current) => (current?.uri === stat.uri ? stat : current))
+  }, [selectedFileStat.data])
 
   const handleExpandedKeysChange = useCallback(
     (next: Set<string>) => {
