@@ -43,37 +43,18 @@ class AsyncOpenViking:
 
     _instance: Optional["AsyncOpenViking"] = None
     _lock = threading.Lock()
+    # Serializes the LocalClient construction inside __init__.
+    # Python releases __new__'s lock before type.__call__ invokes __init__,
+    # so a lock inside __new__ does not prevent concurrent __init__ races.
+    _construct_lock = threading.Lock()
 
-    def __new__(cls, path: Optional[str] = None, actor_peer_id: Optional[str] = None, agent_id: Optional[str] = None):
-        """Construct the singleton. Holds _lock to serialize __init__ and prevent concurrent races."""
-        with cls._lock:
-            # Already have a singleton — check workspace unless it hasn't been __init__'d yet.
-            if cls._instance is not None:
-                inst = cls._instance
-                if hasattr(inst, "_singleton_initialized") and inst._singleton_initialized:
-                    # Already fully initialized — compare workspaces before returning.
-                    if path is not None:
-                        requested_workspace = os.path.realpath(os.path.expanduser(path))
-                    else:
-                        requested_workspace = os.path.realpath(
-                            inst._client._service._config.storage.workspace
-                        )
-                    live_workspace = os.path.realpath(inst._path)
-                    if requested_workspace != live_workspace:
-                        raise ValueError(
-                            f"Only one embedded OpenViking workspace can be live per process. "
-                            f"Requested path '{path}' differs from live workspace '{inst._path}'. "
-                            f"Close the existing client with `await client.close()` or "
-                            f"reset the singleton with `await AsyncOpenViking.reset()` before "
-                            f"constructing a new workspace."
-                        )
-                    return inst
-                # Instance exists but not yet __init__'d — another thread is mid-construction.
-                # Fall through to let __init__ run (still under lock) with this thread's args.
-            # Create uninitialized instance; __init__ will run after __new__ returns
-            # (still under the lock, so serialization is guaranteed).
-            if cls._instance is None:
-                cls._instance = object.__new__(cls)
+    def __new__(cls, *args, **kwargs):
+        # Simple double-check to create the singleton instance.
+        # Workspace comparison is done inside __init__ under _construct_lock.
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = object.__new__(cls)
         return cls._instance
 
     def __init__(
@@ -82,8 +63,7 @@ class AsyncOpenViking:
         actor_peer_id: Optional[str] = None,
         agent_id: Optional[str] = None,
     ):
-        """
-        Initialize OpenViking client (embedded mode).
+        """Initialize OpenViking client (embedded mode).
 
         Args:
             path: Local storage path (overrides ov.conf storage path).
@@ -94,26 +74,45 @@ class AsyncOpenViking:
             ValueError: If a singleton is already live with a different path and
                 the caller requests a new workspace without first calling close() or reset().
         """
-        # __new__ guarantees that at most one __init__ runs at a time (holds _lock).
-        # If the singleton is already fully initialized, __new__ returned the live
-        # instance without calling __init__ again.
-        if hasattr(self, "_singleton_initialized") and self._singleton_initialized:
-            return
+        # Hold _construct_lock so at most one thread constructs LocalClient.
+        # This is the true serialization point — __new__ only creates the raw
+        # object; Python's type.__call__ invokes __init__ separately.
+        with self._construct_lock:
+            if hasattr(self, "_singleton_initialized") and self._singleton_initialized:
+                # Re-entry: singleton is already live. Same workspace is a no-op;
+                # different workspace is a ValueError (caller must close()/reset()).
+                if path is not None:
+                    requested_workspace = os.path.realpath(os.path.expanduser(path))
+                else:
+                    requested_workspace = os.path.realpath(
+                        self._client._service._config.storage.workspace
+                    )
+                live_workspace = os.path.realpath(self._path)
+                if requested_workspace != live_workspace:
+                    raise ValueError(
+                        f"Only one embedded OpenViking workspace can be live per process. "
+                        f"Requested path '{path}' differs from live workspace '{self._path}'. "
+                        f"Close the existing client with `await client.close()` or "
+                        f"reset the singleton with `await AsyncOpenViking.reset()` before "
+                        f"constructing a new workspace."
+                    )
+                return
 
-        self.user = UserIdentifier.the_default_user()
-        self._initialized = False
-        self._snapshot: Optional["AsyncSnapshotNamespace"] = None
-        self._singleton_initialized = False
+            # First construction — serialized by _construct_lock.
+            self.user = UserIdentifier.the_default_user()
+            self._initialized = False
+            self._snapshot: Optional["AsyncSnapshotNamespace"] = None
+            self._singleton_initialized = False
 
-        self._client: BaseClient = LocalClient(
-            path=path,
-            actor_peer_id=actor_peer_id,
-            agent_id=agent_id,
-        )
-        self._path = os.path.realpath(
-            os.path.expanduser(self._client._service._config.storage.workspace)
-        )
-        self._singleton_initialized = True
+            self._client: BaseClient = LocalClient(
+                path=path,
+                actor_peer_id=actor_peer_id,
+                agent_id=agent_id,
+            )
+            self._path = os.path.realpath(
+                os.path.expanduser(self._client._service._config.storage.workspace)
+            )
+            self._singleton_initialized = True
 
     # ============= Lifecycle methods =============
 
@@ -130,17 +129,14 @@ class AsyncOpenViking:
     async def close(self) -> None:
         """Close OpenViking and release resources.
 
-        Raises the close error if client.close() fails but still resets singleton
-        state so a new workspace can be constructed (or re-raises if cancellation
-        is required to propagate).
+        Only clears the singleton guard on success. On failure or cancellation
+        the guard stays active so a different workspace cannot be accepted.
         """
         client = getattr(self, "_client", None)
-        try:
-            if client is not None:
-                await client.close()
-        finally:
-            self._initialized = False
-            self._singleton_initialized = False
+        if client is not None:
+            await client.close()
+        self._initialized = False
+        self._singleton_initialized = False
 
     @classmethod
     async def reset(cls) -> None:

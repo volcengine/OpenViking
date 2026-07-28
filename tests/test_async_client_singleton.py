@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for AsyncOpenViking singleton path enforcement (issue #3546)."""
 
+import asyncio
+import concurrent.futures
 import os
 import tempfile
 from unittest.mock import AsyncMock
@@ -10,6 +12,7 @@ import pytest
 import pytest_asyncio
 
 from openviking import AsyncOpenViking, SyncOpenViking
+from openviking.client import LocalClient
 
 
 @pytest_asyncio.fixture
@@ -78,12 +81,12 @@ class TestAsyncOpenVikingSingletonPath:
             client_b = AsyncOpenViking(path=workspace_b)
             assert client_b is not client_a
 
-    async def test_close_failure_still_resets_singleton_guard(self, clean_singleton):
-        """If close() fails, singleton state is still reset so a new workspace can be constructed.
+    async def test_close_failure_preserves_singleton_guard(self, clean_singleton):
+        """If close() fails, the singleton guard stays active.
 
-        Regression: close() must use try/finally so that even if client.close() raises,
-        the singleton guard is re-established for the next construction (requiring
-        close() or reset() again before a different workspace is accepted).
+        Only a successful close clears _singleton_initialized, so a failed close
+        leaves the guard in place — same workspace re-entry is a no-op and a
+        different workspace is still rejected.
         """
         with tempfile.TemporaryDirectory() as root:
             workspace_a = os.path.join(root, "a")
@@ -130,19 +133,84 @@ class TestAsyncOpenVikingSingletonPath:
             client_b = AsyncOpenViking(path=symlink_path)
             assert client_a is client_b
 
-    async def test_tilde_expanded_paths_are_compared_with_expanduser(self, clean_singleton):
-        """Paths with ~ are expanded before comparison, matching LocalClient behavior.
+    async def test_tilde_re_entry_with_expanduser(self, clean_singleton):
+        """AsyncOpenViking re-entry with ~ and absolute paths is treated as equal.
 
-        os.path.realpath() alone does not expand ~, but LocalClient uses
-        Path(path).expanduser().resolve(). Without expanduser(), ~/workspace
-        would compare unequal to /home/<user>/workspace and raise a false conflict.
+        Exercises the actual guard: first construction with the absolute path,
+        then re-entry with the tilde form. Without expanduser(), the two forms
+        compare unequal and raise a false ValueError.
         """
-        # Test that expanduser()+realpath() normalizes paths the same way.
-        # We verify the normalization logic independently of a real home dir.
         import pathlib
-        real_path = str(pathlib.Path.home())
-        tilde_path = "~" + real_path[len(str(pathlib.Path.home())):]
-        assert os.path.realpath(os.path.expanduser(tilde_path)) == os.path.realpath(real_path)
+
+        home = str(pathlib.Path.home())
+        with tempfile.TemporaryDirectory(dir=home) as tmpdir:
+            workspace = os.path.realpath(os.path.join(tmpdir, "tilde_ws"))
+            os.makedirs(workspace)
+            tilde_form = "~" + workspace[len(home) :]
+
+            # First construction with absolute path
+            client_a = AsyncOpenViking(path=workspace)
+            # Re-entry with tilde form — must be treated as equal
+            client_b = AsyncOpenViking(path=tilde_form)
+            assert client_b is client_a
+
+    async def test_close_cancelled_preserves_singleton_guard(self, clean_singleton):
+        """Cancelled close() preserves the singleton guard.
+
+        CancelledError propagates up but _singleton_initialized stays True,
+        so the guard is still active afterward.
+        """
+        with tempfile.TemporaryDirectory() as root:
+            workspace_a = os.path.join(root, "a")
+            workspace_b = os.path.join(root, "b")
+
+            client_a = AsyncOpenViking(path=workspace_a)
+            client_a._client.close = AsyncMock(
+                side_effect=asyncio.CancelledError("simulated cancellation")
+            )
+
+            with pytest.raises(asyncio.CancelledError):
+                await client_a.close()
+
+            # Guard still active — different workspace rejected
+            with pytest.raises(ValueError):
+                AsyncOpenViking(path=workspace_b)
+
+            # Same workspace still accepted
+            client_a2 = AsyncOpenViking(path=workspace_a)
+            assert client_a2 is client_a
+
+    async def test_concurrent_first_construction_is_serialized(self, clean_singleton):
+        """Two threads racing to construct the singleton produce exactly one workspace.
+
+        Regression: Python releases __new__'s lock before type.__call__ invokes
+        __init__, so a lock inside __new__ does NOT serialize concurrent first
+        construction. The _construct_lock inside __init__ guarantees single-flight
+        initialization.
+        """
+        run_count = 0
+        original_init = LocalClient.__init__
+
+        def counting_init(self, *args, **kwargs):
+            nonlocal run_count
+            run_count += 1
+            return original_init(self, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as root:
+            workspace = os.path.join(root, "ws")
+            os.makedirs(workspace)
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [
+                    pool.submit(AsyncOpenViking, path=workspace),
+                    pool.submit(AsyncOpenViking, path=workspace),
+                ]
+                results = [f.result() for f in concurrent.futures.as_completed(futures)]
+
+            # Both calls return the same singleton
+            assert results[0] is results[1]
+            # _path is set exactly once with the correct workspace
+            assert os.path.realpath(results[0]._path) == os.path.realpath(workspace)
 
     async def test_explicit_then_implicit_same_workspace(self, clean_singleton):
         """AsyncOpenViking(path=<workspace>) followed by AsyncOpenViking() succeeds.
