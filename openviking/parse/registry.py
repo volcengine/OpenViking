@@ -93,8 +93,11 @@ class ParserRegistry:
         """
         path = Path(path)
         ext = path.suffix.lower()
-        if ext == TYPESCRIPT_MPEG_TS_EXTENSION and not is_mpeg_ts(read_mpeg_ts_probe(path)):
-            return None
+        if ext == TYPESCRIPT_MPEG_TS_EXTENSION:
+            if not path.is_file():
+                return None
+            if not is_mpeg_ts(read_mpeg_ts_probe(path)):
+                return None
 
         parser_name = self._extension_map.get(ext)
 

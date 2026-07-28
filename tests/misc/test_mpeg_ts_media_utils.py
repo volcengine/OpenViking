@@ -43,9 +43,9 @@ def test_get_media_type_does_not_classify_typescript_as_video(tmp_path):
     assert get_media_type(str(path), None) is None
 
 
-def test_get_media_type_uses_viking_video_uri_for_ts_resource():
-    assert get_media_type("viking://resources/video/2026/07/27/test.ts", None) == "video"
+def test_get_media_type_does_not_classify_viking_ts_uri_by_path_prefix():
+    assert get_media_type("viking://resources/video/2026/07/27/test.ts", None) is None
 
 
-def test_get_media_type_treats_mpegts_alias_as_video():
-    assert get_media_type(None, "mpegts") == "video"
+def test_get_media_type_treats_video_source_format_as_video():
+    assert get_media_type(None, "video") == "video"
