@@ -35,6 +35,23 @@ function stripRemoteSuffix(p) {
   return s;
 }
 
+// Scheme default ports. Only these are stripped from the authority; any other
+// explicit port is significant and distinguishes distinct repositories served
+// from the same host/path (issue #3516 requires different repos not collide).
+const DEFAULT_PORTS = { ssh: 22, http: 80, https: 443, git: 9418, rsync: 873 };
+
+/**
+ * Strip the scheme-default port from a lowercased "host" or "host:port"
+ * authority. Non-default ports are preserved so two services at the same
+ * host/path on different non-default ports produce different peer ids.
+ */
+function stripDefaultPort(hostPort, scheme) {
+  const m = hostPort.match(/^(.+):(\d+)$/);
+  if (!m) return hostPort;
+  const def = DEFAULT_PORTS[scheme];
+  return def !== undefined && Number(m[2]) === def ? m[1] : hostPort;
+}
+
 /**
  * Normalize a git remote URL to a canonical "host/owner/repo" string.
  *
@@ -54,6 +71,7 @@ export function normalizeGitRemoteUrl(raw) {
   // Scheme URL: ssh://, https://, http://, git://, file://, ...
   const schemeMatch = url.match(/^([A-Za-z][A-Za-z0-9+.\-]*):\/\/(.+)$/);
   if (schemeMatch) {
+    const scheme = schemeMatch[1].toLowerCase();
     let rest = schemeMatch[2];
     // Strip query / fragment first (they apply to the whole URL).
     rest = rest.split(/[?#]/)[0];
@@ -66,9 +84,10 @@ export function normalizeGitRemoteUrl(raw) {
     const at = authority.lastIndexOf("@");
     const hostPort = (at === -1 ? authority : authority.slice(at + 1)).toLowerCase();
     if (!hostPort) return "";
-    // Drop ANY explicit port — host identity is host-only; a team using ssh:2222
-    // vs the default port is still the same repository and must share a peer id.
-    const host = hostPort.replace(/:\d+$/, "");
+    // Strip ONLY the scheme-default port. Non-default ports are significant:
+    // distinct services on the same host/path (e.g. an https host on :8443 vs
+    // :9443) are different repositories and must NOT collide (issue #3516).
+    const host = stripDefaultPort(hostPort, scheme);
     const cleanPath = stripRemoteSuffix(path);
     if (!host || !cleanPath) return "";
     return `${host}/${cleanPath}`;

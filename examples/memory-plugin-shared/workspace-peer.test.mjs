@@ -290,23 +290,53 @@ test("integration: main checkout and a linked worktree without remote share loca
 
 
 // ---------------------------------------------------------------------------
-// Adversarial-review regression: non-default port + "@" in path (issue #3516).
+// Port handling + "@" in path regressions (issue #3516).
 // ---------------------------------------------------------------------------
 
-test("normalizeGitRemoteUrl: non-default port collapses with default port", () => {
-  // Enterprise GitLab/Gitea commonly run ssh on 2222 / 3000. Same repo, different
-  // port config must NOT split peers.
-  const a = normalizeGitRemoteUrl("ssh://git@gitlab.mycompany.com:2222/team/repo.git");
-  const b = normalizeGitRemoteUrl("git@gitlab.mycompany.com:team/repo.git");
-  assert.equal(a, b);
-  assert.equal(a, "gitlab.mycompany.com/team/repo");
+test("normalizeGitRemoteUrl: scheme-default port is stripped", () => {
+  // Default ports carry no identity; stripping them keeps ssh://host:22 and
+  // https://host:443 aligned with their port-less forms and with each other.
+  assert.equal(
+    normalizeGitRemoteUrl("ssh://git@github.com:22/volcengine/OpenViking.git"),
+    "github.com/volcengine/OpenViking",
+  );
+  assert.equal(
+    normalizeGitRemoteUrl("https://github.com:443/volcengine/OpenViking.git"),
+    "github.com/volcengine/OpenViking",
+  );
+  assert.equal(
+    normalizeGitRemoteUrl("http://github.com:80/volcengine/OpenViking.git"),
+    "github.com/volcengine/OpenViking",
+  );
+  assert.equal(
+    normalizeGitRemoteUrl("git://github.com:9418/volcengine/OpenViking.git"),
+    "github.com/volcengine/OpenViking",
+  );
 });
 
-test("normalizeGitRemoteUrl: https with non-default https port collapses", () => {
+test("normalizeGitRemoteUrl: non-default port is preserved and distinguishes repos", () => {
+  // #3516: distinct services at the same host/path on different non-default
+  // ports are DIFFERENT repositories and must NOT collide.
   const a = normalizeGitRemoteUrl("https://git.example.com:8443/org/repo.git");
-  const b = normalizeGitRemoteUrl("https://git.example.com/org/repo.git");
-  assert.equal(a, b);
-  assert.equal(a, "git.example.com/org/repo");
+  const b = normalizeGitRemoteUrl("https://git.example.com:9443/org/repo.git");
+  assert.notEqual(a, b);
+  assert.equal(a, "git.example.com:8443/org/repo");
+  assert.equal(b, "git.example.com:9443/org/repo");
+  // Neither collapses with the port-less form either.
+  const c = normalizeGitRemoteUrl("https://git.example.com/org/repo.git");
+  assert.notEqual(a, c);
+  assert.equal(c, "git.example.com/org/repo");
+});
+
+test("normalizeGitRemoteUrl: ssh non-default port is preserved", () => {
+  // Enterprise GitLab/Gitea commonly run ssh on 2222. That port is significant:
+  // it is a different endpoint from default-port ssh on the same host. (To pin
+  // a non-default ssh port, git requires the ssh://host:port form — the
+  // scp-like host:path syntax has no port field.)
+  const a = normalizeGitRemoteUrl("ssh://git@gitlab.mycompany.com:2222/team/repo.git");
+  assert.equal(a, "gitlab.mycompany.com:2222/team/repo");
+  const b = normalizeGitRemoteUrl("ssh://git@gitlab.mycompany.com/team/repo.git");
+  assert.notEqual(a, b);
 });
 
 test("normalizeGitRemoteUrl: @ in path is not treated as userinfo", () => {

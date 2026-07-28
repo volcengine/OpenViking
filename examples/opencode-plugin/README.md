@@ -142,7 +142,7 @@ machines, fresh checkouts, and linked worktrees. Inside a Git repo with an
 (`git@github.com:volcengine/OpenViking.git` ≡
 `https://github.com/volcengine/OpenViking.git`) and the main checkout plus
 every linked worktree resolve to the same peer
-(e.g. `git-github-com-volcengine-openviking-982dfa85`). A Git repo without a
+(e.g. `git-github-com-volcengine-openviking-b44f5292`). A Git repo without a
 usable remote falls back to a stable local-repo identity shared across linked
 worktrees, and a non-Git directory falls back to the absolute-path slug
 (`/Users/x/Dev/OpenViking` → `-Users-x-Dev-OpenViking`). Credentials are
@@ -152,6 +152,8 @@ Data-plane memory/resource requests send the effective peer as
 `peer_id`. Configure `peerId` or `OPENVIKING_PEER_ID` to override the
 workspace-derived peer, or set `workspacePeer=false` /
 `OPENVIKING_WORKSPACE_PEER=0` to turn workspace-derived peers off.
+
+> **Migrating from a path-derived peer**: this default changed from the absolute workspace path to the Git-repo identity. If you have existing path-derived memories — especially under actor-scoped recall, which only sees the current peer — pin the old peer via `OPENVIKING_PEER_ID` / `peerId` before upgrading to avoid stranding data. See the migration steps in [`examples/memory-plugin-shared/README.md`](../memory-plugin-shared/README.md#migrating-from-path-derived-peers).
 
 Recall defaults to the broad mode: global memory, the current workspace, and
 other workspace memories can all be recalled, with other workspaces penalized

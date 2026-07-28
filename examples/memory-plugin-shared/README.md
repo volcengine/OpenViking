@@ -24,7 +24,7 @@ Resolution order is:
    formed, so secrets never appear in it. The main checkout and every linked
    worktree of the same remote resolve to the same peer. The id has the shape
    `git-<host-owner-repo-slug>-<8-hex-hash>` (e.g.
-   `git-github-com-volcengine-openviking-982dfa85`).
+   `git-github-com-volcengine-openviking-b44f5292`).
 3. **Stable local-repo identity**: inside a Git repo with no usable remote
    (e.g. a freshly `git init`-ed repo, or a remote that points at a local
    path), the peer is derived from the Git common dir shared by the main
@@ -37,12 +37,34 @@ Resolution order is:
 When `workspacePeer` is `false` (or `OPENVIKING_WORKSPACE_PEER=0`), no peer is
 derived and only an explicit peer (if any) is used.
 
-> **Behavior change**: previously the default peer was always derived from the
-> absolute workspace path. Workspaces inside a Git repo now get a stable
-> remote-derived peer instead. If you relied on the path-derived peer (for
-> example to keep memories pinned to one machine), set an explicit peer via
-> `actor_peer_id` / `OPENVIKING_PEER_ID`, or set `workspacePeer=false` and
-> provide your own peer.
+### Migrating from path-derived peers
+
+Previously the default peer was always derived from the absolute workspace
+path; a workspace inside a Git repo now gets a stable remote-derived peer
+instead. **Actor-scoped recall** (`recallPeerScope: "actor"`) is the case most
+at risk: isolation mode only recalls global memory plus the *current* peer, so
+a peer change silently strands everything written under the old path-derived
+peer. To avoid stranding existing data, pin the old peer explicitly **before**
+upgrading and keep it pinned:
+
+1. Compute the legacy path-derived peer for the workspace — every non-letter
+   or non-digit character in the absolute path becomes `-`:
+   ```sh
+   # e.g. /Users/x/Dev/OpenViking -> -Users-x-Dev-OpenViking
+   printf '%s' "$(pwd)" | LC_ALL=C tr -c 'A-Za-z0-9' '-'
+   ```
+2. Set it as the explicit peer (highest priority, overrides derivation):
+   - env: `export OPENVIKING_PEER_ID=-Users-x-Dev-OpenViking`, or
+   - `ovcli.conf`: `actor_peer_id = -Users-x-Dev-OpenViking` (harness legacy:
+     `peer_id` / the harness-specific peer field).
+3. Alternatively opt out of derivation entirely with `workspacePeer=false` (or
+   `OPENVIKING_WORKSPACE_PEER=0`) and supply your own peer.
+
+To consolidate under the new remote-derived peer instead, copy the memories
+written under the old peer to the new one (the new peer id for a given remote
+is produced by `deriveWorkspacePeerId` in `lib/workspace-peer.mjs`), verify
+recall, then drop the override. Until verified, keep the explicit peer so
+recall keeps hitting the old data.
 
 ## Recall Peer Scope
 
