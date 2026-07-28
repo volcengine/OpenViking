@@ -113,6 +113,74 @@ class FeishuDocument:
     media_download_extras: _MediaDownloadExtras = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class ExpandedDoc:
+    """A single document expanded from a (possibly batch) Feishu URL.
+
+    Carries the *source kind* so the importer can distinguish a genuine batch
+    child from a single-document passthrough even when a wiki space or
+    directory contains exactly one importable document (issue #3120 review):
+    ``len(expanded) == 1`` is not a reliable signal on its own, because both a
+    passthrough single-doc URL and a one-document space yield a length of one.
+
+    ``rel_path`` is the document's *directory* path relative to the batch
+    parent (e.g. ``"team/handbook"``), preserving the Feishu wiki hierarchy so
+    imported children land under ``<batch_parent>/<rel_path>/<doc_name>``
+    rather than being flattened into the parent (issue #3120 review).
+    """
+
+    url: str
+    title: str = ""
+    # "single_doc_passthrough" — the original URL is itself a single document.
+    # "batch_child" — this doc came from expanding a space/directory URL.
+    source_kind: str = "single_doc_passthrough"
+    rel_path: str = ""
+
+    def __post_init__(self) -> None:
+        if self.source_kind not in ("single_doc_passthrough", "batch_child"):
+            raise ValueError(
+                f"Unknown ExpandedDoc.source_kind={self.source_kind!r}; "
+                "expected 'single_doc_passthrough' or 'batch_child'."
+            )
+
+
+def _sanitize_rel_segment(name: str) -> str:
+    """Sanitize one wiki-node title into a single URI path segment.
+
+    Uses the canonical segment sanitizer when available so the relative path
+    composes identically to a normally-resolved target URI; falls back to a
+    conservative alphanumeric/CJK cleanup if the core URI helper is not
+    importable in this context.
+    """
+    cleaned = (name or "").strip()
+    if not cleaned:
+        return ""
+    try:
+        from openviking.core.uri import VikingURI
+
+        return VikingURI.sanitize_segment(cleaned)
+    except Exception:
+        return re.sub(r"[^\w.\-]+", "_", cleaned, flags=re.UNICODE).strip("._") or "_"
+
+
+def _child_rel_dir(parent_rel: str, node: "FeishuAccessor._WikiNode") -> str:
+    """Build the relative directory for ``node``'s children under ``parent_rel``.
+
+    A directory node contributes its sanitized title (falling back to its
+    node token when the title is empty) as one path segment. Empty segments
+    are dropped at join time by the caller, so this never produces a leading
+    or trailing slash.
+    """
+    seg = (
+        _sanitize_rel_segment(node.title)
+        or _sanitize_rel_segment(node.node_token)
+        or node.node_token
+    )
+    if not seg:
+        return parent_rel
+    return f"{parent_rel}/{seg}" if parent_rel else seg
+
+
 class FeishuAccessor(DataAccessor):
     """
     Accessor for Feishu/Lark cloud documents.
@@ -605,8 +673,7 @@ class FeishuAccessor(DataAccessor):
             _raise_from_lark_response(
                 response,
                 operation=(
-                    f"list wiki nodes space={space_id} "
-                    f"parent={parent_node_token or '<root>'}"
+                    f"list wiki nodes space={space_id} parent={parent_node_token or '<root>'}"
                 ),
                 resource=space_id,
             )
@@ -634,6 +701,7 @@ class FeishuAccessor(DataAccessor):
     @dataclass
     class _WikiNode:
         """Resolved view of a wiki node used during subtree traversal."""
+
         node_token: str
         obj_token: str
         obj_type: str  # raw API type: docx/doc/sheet/bitable/wiki/...
@@ -680,8 +748,12 @@ class FeishuAccessor(DataAccessor):
         feishu_access_token: Optional[str] = None,
         max_depth: int = WIKI_BATCH_DEFAULT_MAX_DEPTH,
         max_nodes: int = WIKI_BATCH_DEFAULT_MAX_NODES,
-    ) -> List[Tuple[str, str]]:
-        """Walk a Feishu wiki subtree and return ``(doc_url, title)`` tuples.
+    ) -> List[ExpandedDoc]:
+        """Walk a Feishu wiki subtree and return :class:`ExpandedDoc` entries.
+
+        Each entry carries its directory ``rel_path`` relative to the subtree
+        root so importers can preserve the Feishu wiki hierarchy under
+        ``<batch_parent>/<rel_path>/<doc_name>`` (issue #3120 review).
 
         Exactly one of ``space_id`` (whole space) or ``root_node_token`` (a single
         wiki node + its descendants) must be provided. ``space_id`` lists every
@@ -697,7 +769,7 @@ class FeishuAccessor(DataAccessor):
                 "list_wiki_subtree requires exactly one of space_id or root_node_token."
             )
 
-        results: List[Tuple[str, str]] = []
+        results: List[ExpandedDoc] = []
         # ``seen_tokens`` (obj_token) dedupes *emitted results* across shared subtrees.
         seen_tokens: set[str] = set()
         # ``seen_node_tokens`` (node_token) breaks *recursion cycles* — without it,
@@ -706,8 +778,11 @@ class FeishuAccessor(DataAccessor):
         seen_node_tokens: set[str] = set()
         truncated = False
 
-        def _record(node: "FeishuAccessor._WikiNode") -> bool:
+        def _record(node: "FeishuAccessor._WikiNode", rel_dir: str) -> bool:
             """Append a node's doc URL. Return False if the cap is hit.
+
+            ``rel_dir`` is the directory path (relative to the batch parent)
+            where this document should land, preserving the wiki hierarchy.
 
             Nodes whose ``obj_type`` is not a parseable document type are skipped
             for emission (their URL would be unparseable), but the caller still
@@ -729,13 +804,21 @@ class FeishuAccessor(DataAccessor):
                 truncated = True
                 return False
             seen_tokens.add(node.obj_token)
-            results.append((doc_url, node.title or ""))
+            results.append(
+                ExpandedDoc(
+                    url=doc_url,
+                    title=node.title or "",
+                    source_kind="batch_child",
+                    rel_path=rel_dir,
+                )
+            )
             return True
 
         async def _walk(
             space: str,
             parent_node_token: Optional[str],
             depth: int,
+            rel_dir: str,
         ) -> None:
             nonlocal truncated
             if depth >= max_depth:
@@ -772,10 +855,15 @@ class FeishuAccessor(DataAccessor):
                     page_token=page_token,
                 )
                 for node in nodes:
-                    if not _record(node):
+                    if not _record(node, rel_dir):
                         return
                     if node.has_child and node.node_token:
-                        await _walk(space, node.node_token, depth + 1)
+                        await _walk(
+                            space,
+                            node.node_token,
+                            depth + 1,
+                            _child_rel_dir(rel_dir, node),
+                        )
                         if truncated:
                             return
                 if not has_more or not next_page_token:
@@ -788,7 +876,7 @@ class FeishuAccessor(DataAccessor):
                 page_token = next_page_token
 
         if space_id:
-            await _walk(space_id, None, 0)
+            await _walk(space_id, None, 0, "")
         else:
             assert root_node_token is not None
             root = await asyncio.to_thread(
@@ -796,15 +884,19 @@ class FeishuAccessor(DataAccessor):
                 root_node_token,
                 feishu_access_token=feishu_access_token,
             )
-            _record(root)
+            _record(root, "")
             if root.has_child and root.node_token and not truncated:
                 # ``space_id`` from the node so child listings use the right space.
-                await _walk(root.space_id or "", root.node_token, 1)
+                await _walk(
+                    root.space_id or "",
+                    root.node_token,
+                    1,
+                    _child_rel_dir("", root),
+                )
 
         if truncated:
             logger.warning(
-                "[FeishuAccessor] wiki subtree truncated at max_nodes=%d "
-                "(space=%s root=%s).",
+                "[FeishuAccessor] wiki subtree truncated at max_nodes=%d (space=%s root=%s).",
                 max_nodes,
                 space_id,
                 root_node_token,
@@ -836,13 +928,14 @@ class FeishuAccessor(DataAccessor):
         feishu_access_token: Optional[str] = None,
         max_depth: int = WIKI_BATCH_DEFAULT_MAX_DEPTH,
         max_nodes: int = WIKI_BATCH_DEFAULT_MAX_NODES,
-    ) -> List[Tuple[str, str]]:
+    ) -> List[ExpandedDoc]:
         """Expand a Feishu URL into the list of documents to import.
 
-        Returns a list of ``(doc_url, title)`` tuples:
+        Returns a list of :class:`ExpandedDoc` entries:
 
         * Single-document URLs (``/docx/<t>``, ``/sheets/<t>``, ``/base/<t>``)
-          always return ``[(url, "")]`` — single-doc imports are unchanged.
+          always return a ``single_doc_passthrough`` entry — single-doc imports
+          are unchanged.
         * ``/wiki/settings/<space_id>`` returns every document in the space;
           an empty list means the space has no importable documents.
         * ``/wiki/<token>`` resolves the node: if it has children, returns the
@@ -860,10 +953,10 @@ class FeishuAccessor(DataAccessor):
         classified = self.classify_url(url)
         if classified is None:
             # Not a Feishu URL — let the caller handle it (existing path).
-            return [(url, "")]
+            return [ExpandedDoc(url=url)]
         kind, primary, _secondary = classified
         if kind == "single_doc":
-            return [(url, "")]
+            return [ExpandedDoc(url=url)]
         if kind == "wiki_space_root":
             children = await self.list_wiki_subtree(
                 space_id=primary,
@@ -881,7 +974,7 @@ class FeishuAccessor(DataAccessor):
                 feishu_access_token=feishu_access_token,
             )
             if not node.has_child:
-                return [(url, "")]
+                return [ExpandedDoc(url=url)]
             children = await self.list_wiki_subtree(
                 root_node_token=primary,
                 feishu_access_token=feishu_access_token,
@@ -893,7 +986,7 @@ class FeishuAccessor(DataAccessor):
             # it as "no documents" rather than re-importing the wiki URL.
             return children
         # Defensive — classify_url only returns the kinds above.
-        return [(url, "")]
+        return [ExpandedDoc(url=url)]
 
     # ========== Docx Parsing ==========
 

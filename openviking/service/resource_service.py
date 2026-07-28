@@ -13,6 +13,7 @@ import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
@@ -1124,21 +1125,31 @@ class ResourceService:
         """Expand a Feishu wiki space / directory URL into per-doc imports.
 
         Returns ``None`` to signal "fall through to the single-doc path" — this
-        happens for ordinary ``/wiki/<token>`` URLs whose node has no children
-        and for any single-document URL that the expander returns unchanged.
+        happens when the URL is a passthrough single document (``/docx/<t>``,
+        ``/sheets/<t>``, or a leaf ``/wiki/<token>``). Dispatch is driven by the
+        expanded entries' ``source_kind`` (issue #3120 review), **not** by
+        ``len(expanded) == 1``, so a space or directory that contains exactly
+        one importable document still takes the batch path rather than trying
+        to ingest the original ``/wiki/settings/<id>`` URL as a single doc.
 
-        When the URL expands to multiple documents, each child document is
-        enqueued as its own ``add_resource(wait=False)`` background task and a
-        summary payload is returned immediately. The original ``to`` becomes the
-        parent for the batch (every child gets an auto-generated URI under it).
+        Each batch child is enqueued through the *real* ``add_resource(wait=False)``
+        path, which persists an ``AddResourceMsg`` into the crash-recoverable
+        QueueFS ``AddResource`` queue and registers a durable ``TaskTracker``
+        record. A provider-neutral manifest (``batch_manifest_store``) is written
+        atomically before fan-out so the batch survives a crash; the batch id is
+        derived from the source URL + parent, so re-submission is idempotent
+        (children that already have a task_id are not re-enqueued). The explicit
+        ``to``/``parent`` becomes the batch parent directory (created up front,
+        with ``create_parent`` forwarded per child so the wiki hierarchy carried
+        in each child's ``rel_path`` is preserved under the real target path).
         """
         from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+        from openviking.service import batch_manifest_store as batch_store
 
         kwargs = kwargs or {}
         parser_args = parser_args or {}
-        feishu_token = (
-            kwargs.get(FEISHU_ACCESS_TOKEN_ARG)
-            or parser_args.get(FEISHU_ACCESS_TOKEN_ARG)
+        feishu_token = kwargs.get(FEISHU_ACCESS_TOKEN_ARG) or parser_args.get(
+            FEISHU_ACCESS_TOKEN_ARG
         )
 
         accessor = FeishuAccessor()
@@ -1162,44 +1173,120 @@ class ResourceService:
             # through to ``_execute_resource_ingestion`` would treat the
             # ``/wiki/settings/<id>`` (or directory) URL as a single doc and
             # fail in a confusing way, so surface the real cause instead.
-            raise InvalidArgumentError(
-                f"Feishu wiki URL has no importable documents: {path!r}"
-            )
-        if len(expanded) == 1:
-            # Single doc (wiki leaf or single-doc passthrough) — preserve the
-            # original single-doc behavior. Caller proceeds to
-            # ``_execute_resource_ingestion`` with the original ``path``.
+            raise InvalidArgumentError(f"Feishu wiki URL has no importable documents: {path!r}")
+
+        # source-kind-aware dispatch (issue #3120 review, blocking #1): only
+        # genuine batch children take the batch path. A passthrough single-doc
+        # entry (incl. a /wiki/<leaf>) falls through to _execute_resource_ingestion.
+        batch_children = [d for d in expanded if d.source_kind == "batch_child"]
+        if not batch_children:
             return None
 
-        # Convert an explicit ``to`` into a parent so each child gets its own
-        # auto-generated URI underneath (a batch cannot share a single target).
-        batch_parent = parent
-        if to:
-            batch_parent = to
+        # Resolve the batch parent (blocking #2): the explicit to/parent becomes
+        # the directory under which every child lands; fall back to the default
+        # resource target when neither is supplied.
+        batch_parent = to or parent
+        if not batch_parent:
+            from openviking.server.dependencies import get_server_config
 
-        children_summary: List[Dict[str, Any]] = []
-        for idx, (doc_url, title) in enumerate(expanded):
-            children_summary.append(
-                {"url": doc_url, "title": title, "index": idx}
+            batch_parent = await effective_resource_add_target(
+                viking_fs=self._viking_fs,
+                ctx=ctx,
+                server_config=get_server_config(),
+            )
+        # Create the batch parent through the real FS so each child's
+        # resolve_target_uri succeeds (create_parent is also forwarded per child
+        # so each rel_path sub-directory is created the same way).
+        if batch_parent and self._viking_fs is not None:
+            try:
+                await self._viking_fs.mkdir(batch_parent, exist_ok=True, ctx=ctx)
+            except Exception as exc:
+                logger.warning(
+                    "[ResourceService] batch_parent mkdir failed for %s: %s",
+                    batch_parent,
+                    exc,
+                )
+
+        def _child_parent(rel_path: str) -> Optional[str]:
+            if not batch_parent:
+                return None
+            rel = (rel_path or "").strip("/")
+            return f"{batch_parent}/{rel}" if rel else batch_parent
+
+        classified = FeishuAccessor.classify_url(path)
+        source_kind_label = {
+            "wiki_space_root": "feishu_wiki_space",
+            "wiki_node": "feishu_wiki_node",
+        }.get(classified[0] if classified else "", "feishu_wiki")
+
+        batch_id = batch_store.derive_batch_id(path, batch_parent or "")
+        now = datetime.now().isoformat()
+
+        # Idempotent resume (issue #3120 review, blocking #3): load any prior
+        # manifest and reuse task_ids for children already enqueued (by url).
+        prior_task_by_url: Dict[str, Dict[str, Any]] = {}
+        if self._viking_fs is not None:
+            existing = await batch_store.load_manifest(batch_id, self._viking_fs, ctx=ctx)
+            if existing:
+                for item in existing.get("items", []):
+                    if item.get("task_id"):
+                        prior_task_by_url[item["url"]] = item
+
+        items: List[Dict[str, Any]] = []
+        for doc in batch_children:
+            prior = prior_task_by_url.get(doc.url)
+            items.append(
+                {
+                    "url": doc.url,
+                    "title": doc.title,
+                    "rel_path": doc.rel_path,
+                    "parent_uri": _child_parent(doc.rel_path) or "",
+                    "task_id": prior.get("task_id") if prior else None,
+                    "to_uri": prior.get("to_uri") if prior else None,
+                    "status": "queued" if prior else "pending",
+                }
             )
 
-        # Spawn one background ingestion per child document. Each child is a
-        # guaranteed single-doc URL (expand_feishu_url emits direct docx/sheets/
-        # base URLs), so it will not re-enter the batch branch.
-        #
-        # Throttle concurrency: a wiki space can contain hundreds of docs, and
-        # firing one Feishu fetch per doc simultaneously would hammer the Feishu
-        # API and risk rate-limiting /风控. Bound the in-flight imports.
-        batch_semaphore = asyncio.Semaphore(_FEISHU_BATCH_CONCURRENCY)
+        # Persist *before* fan-out so a crash mid-batch still leaves a durable
+        # record of what was planned (and what was already done on a prior run).
+        manifest = batch_store.build_manifest(
+            batch_id=batch_id,
+            source_url=path,
+            source_kind=source_kind_label,
+            parent_uri=batch_parent or "",
+            created_at=now,
+            items=items,
+        )
+        if self._viking_fs is not None:
+            try:
+                await batch_store.save_manifest(manifest, self._viking_fs, ctx=ctx)
+            except Exception as exc:
+                logger.warning("[ResourceService] initial batch manifest save failed: %s", exc)
 
-        async def _import_child(doc_url: str) -> None:
-            async with batch_semaphore:
+        # Fan out through the real add_resource path (blocking #2/#3): each
+        # child is a guaranteed single-doc URL (expand_feishu_url emits direct
+        # docx/sheets/base URLs), so it will not re-enter the batch branch. It
+        # enqueues a durable AddResourceMsg + TaskTracker record. create_parent
+        # is forwarded so each child's rel_path directory is created through the
+        # real target-resolution path rather than a mocked one.
+        #
+        # Concurrency is bounded (a space can hold hundreds of docs); we gather
+        # rather than fire-and-forget so the returned manifest carries every
+        # child's task_id (durable per-item state) by the time we respond.
+        semaphore = asyncio.Semaphore(_FEISHU_BATCH_CONCURRENCY)
+
+        async def _import_child(idx: int) -> None:
+            item = items[idx]
+            if item.get("task_id"):
+                return  # already enqueued on a prior run (idempotent resume)
+            doc = batch_children[idx]
+            async with semaphore:
                 try:
-                    await self.add_resource(
-                        path=doc_url,
+                    result = await self.add_resource(
+                        path=doc.url,
                         ctx=ctx,
                         to=None,
-                        parent=batch_parent,
+                        parent=_child_parent(doc.rel_path),
                         reason=reason,
                         instruction=instruction,
                         wait=False,
@@ -1211,33 +1298,86 @@ class ResourceService:
                         allow_local_path_resolution=allow_local_path_resolution,
                         enforce_public_remote_targets=enforce_public_remote_targets,
                         args=parser_args,
+                        create_parent=True,
                     )
-                except Exception:
+                    item["task_id"] = result.get("task_id")
+                    item["to_uri"] = result.get("root_uri")
+                    item["status"] = "queued" if result.get("task_id") else "failed"
+                    item.pop("error", None)
+                except Exception as exc:
                     logger.exception(
                         "[ResourceService] Feishu batch child import failed: %s",
-                        doc_url,
+                        doc.url,
                     )
+                    item["status"] = "failed"
+                    item["error"] = f"{type(exc).__name__}: {exc}"
 
-        for doc_url, _title in expanded:
-            background = asyncio.create_task(_import_child(doc_url))
-            self._background_tasks.add(background)
-            background.add_done_callback(self._background_tasks.discard)
+        await asyncio.gather(*(_import_child(i) for i in range(len(batch_children))))
 
-        first_url = expanded[0][0] if expanded else ""
+        # Persist the learned task_ids / per-item statuses (durable state).
+        manifest["items"] = items
+        manifest["updated_at"] = datetime.now().isoformat()
+        if self._viking_fs is not None:
+            try:
+                await batch_store.save_manifest(manifest, self._viking_fs, ctx=ctx)
+            except Exception as exc:
+                logger.warning("[ResourceService] final batch manifest save failed: %s", exc)
+
+        queued = sum(1 for it in items if it.get("task_id"))
+        telemetry.set("resource.feishu_batch.count", len(batch_children))
+        telemetry.set("resource.feishu_batch.queued", queued)
         logger.info(
-            "[ResourceService] Feishu wiki batch import: %d documents under %s "
-            "(first=%s)",
-            len(expanded),
+            "[ResourceService] Feishu wiki batch %s: %d/%d children enqueued under %s",
+            batch_id,
+            queued,
+            len(batch_children),
             batch_parent or "<auto>",
-            first_url,
         )
-        telemetry.set("resource.feishu_batch.count", len(expanded))
         return {
-            "status": "queued_batch",
+            "status": "batch_queued",
+            "batch_id": batch_id,
             "root_uri": batch_parent or "",
-            "batch_count": len(expanded),
-            "children": children_summary,
+            "batch_count": len(batch_children),
+            "queued_count": queued,
+            "items": items,
         }
+
+    async def get_batch_status(
+        self,
+        batch_id: str,
+        *,
+        ctx: RequestContext,
+    ) -> Optional[Dict[str, Any]]:
+        """Return a batch manifest with live per-item status from TaskTracker.
+
+        The manifest stores the batch -> child task_id mapping durably; each
+        item's current ``status`` is read from the (also durable) TaskTracker so
+        partial failures and progress are visible without writing back to the
+        manifest on every transition.
+        """
+        from openviking.service import batch_manifest_store as batch_store
+        from openviking.service.task_tracker import get_task_tracker
+
+        if self._viking_fs is None:
+            return None
+        manifest = await batch_store.load_manifest(batch_id, self._viking_fs, ctx=ctx)
+        if manifest is None:
+            return None
+        tracker = get_task_tracker()
+        for item in manifest.get("items", []):
+            task_id = item.get("task_id")
+            if not task_id:
+                continue
+            try:
+                record = await tracker.get(task_id)
+            except Exception:
+                record = None
+            if record is not None:
+                status = record.status
+                item["status"] = getattr(status, "value", str(status))
+                if record.error:
+                    item["error"] = record.error
+        return manifest
 
     async def _execute_resource_ingestion(
         self,

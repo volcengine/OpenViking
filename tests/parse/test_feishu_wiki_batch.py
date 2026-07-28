@@ -15,8 +15,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from openviking.parse.accessors.feishu_accessor import FeishuAccessor
-
+from openviking.parse.accessors.feishu_accessor import ExpandedDoc, FeishuAccessor
 
 # ---------------------------------------------------------------------------
 # Mock plumbing — mirrors the pattern in tests/parse/test_feishu_accessor.py.
@@ -221,9 +220,7 @@ def test_classify_url_rejects_unrecognized(url):
 
 
 def test_is_batch_url_only_true_for_space_root():
-    assert FeishuAccessor.is_batch_url(
-        "https://x.feishu.cn/wiki/settings/space1"
-    ) is True
+    assert FeishuAccessor.is_batch_url("https://x.feishu.cn/wiki/settings/space1") is True
     # Wiki node URLs need an API check, so is_batch_url returns False here.
     assert FeishuAccessor.is_batch_url("https://x.feishu.cn/wiki/node1") is False
     assert FeishuAccessor.is_batch_url("https://x.feishu.cn/docx/d1") is False
@@ -237,10 +234,7 @@ def test_is_batch_url_only_true_for_space_root():
 
 def test_build_doc_url_emits_direct_url_for_known_types():
     node = _make_node(node_token="n1", obj_type="docx", obj_token="doxcnA", title="A")
-    assert (
-        FeishuAccessor._build_doc_url(node)
-        == "https://feishu.cn/docx/doxcnA"
-    )
+    assert FeishuAccessor._build_doc_url(node) == "https://feishu.cn/docx/doxcnA"
 
 
 def test_build_doc_url_normalizes_short_api_type_names():
@@ -274,19 +268,19 @@ def test_expand_single_docx_url_returns_unchanged(monkeypatch):
     _install_fake_lark_wiki(monkeypatch)
     accessor = FeishuAccessor()
     # No client is wired up — the test fails if any API call is attempted.
-    result = asyncio.run(
-        accessor.expand_feishu_url("https://x.feishu.cn/docx/doxcnABC")
-    )
-    assert result == [("https://x.feishu.cn/docx/doxcnABC", "")]
+    result = asyncio.run(accessor.expand_feishu_url("https://x.feishu.cn/docx/doxcnABC"))
+    assert result == [ExpandedDoc(url="https://x.feishu.cn/docx/doxcnABC")]
+    # Passthrough single-doc entries keep the original single-doc behaviour
+    # (issue #3120 review): source_kind disambiguates them from batch children.
+    assert result[0].source_kind == "single_doc_passthrough"
 
 
 def test_expand_single_sheets_url_returns_unchanged(monkeypatch):
     _install_fake_lark_wiki(monkeypatch)
     accessor = FeishuAccessor()
-    result = asyncio.run(
-        accessor.expand_feishu_url("https://x.feishu.cn/sheets/stok1")
-    )
-    assert result == [("https://x.feishu.cn/sheets/stok1", "")]
+    result = asyncio.run(accessor.expand_feishu_url("https://x.feishu.cn/sheets/stok1"))
+    assert result == [ExpandedDoc(url="https://x.feishu.cn/sheets/stok1")]
+    assert result[0].source_kind == "single_doc_passthrough"
 
 
 # ---------------------------------------------------------------------------
@@ -313,11 +307,11 @@ def test_expand_wiki_node_without_children_returns_single_url(monkeypatch):
     accessor._user_token_client = _make_client(get_node=get_node)
 
     result = asyncio.run(
-        accessor.expand_feishu_url(
-            "https://x.feishu.cn/wiki/leaf1", feishu_access_token="u-test"
-        )
+        accessor.expand_feishu_url("https://x.feishu.cn/wiki/leaf1", feishu_access_token="u-test")
     )
-    assert result == [("https://x.feishu.cn/wiki/leaf1", "")]
+    assert result == [ExpandedDoc(url="https://x.feishu.cn/wiki/leaf1")]
+    # A wiki node with no children is a passthrough, not a batch child.
+    assert result[0].source_kind == "single_doc_passthrough"
     # Verify get_node was called with the right token + user-token option.
     request, option = get_node.call_args.args
     assert request.token == "leaf1"
@@ -368,18 +362,16 @@ def test_expand_wiki_node_with_children_returns_subtree(monkeypatch):
     accessor._user_token_client = _make_client(space_list=space_list, get_node=get_node)
 
     result = asyncio.run(
-        accessor.expand_feishu_url(
-            "https://x.feishu.cn/wiki/dir1", feishu_access_token="u-test"
-        )
+        accessor.expand_feishu_url("https://x.feishu.cn/wiki/dir1", feishu_access_token="u-test")
     )
     # Three docs: the directory root itself + two children.
-    urls = [url for url, _title in result]
+    urls = [d.url for d in result]
     assert urls == [
         "https://feishu.cn/docx/doxcnDir",
         "https://feishu.cn/docx/doxcnC1",
         "https://feishu.cn/docx/doxcnC2",
     ]
-    titles = [title for _url, title in result]
+    titles = [d.title for d in result]
     assert titles == ["Directory Root", "Child 1", "Child 2"]
     # space.list was called with the directory's node_token as parent.
     list_request = space_list.call_args.args[0]
@@ -419,12 +411,8 @@ def test_expand_space_root_url_returns_all_nodes(monkeypatch):
     accessor = FeishuAccessor()
     accessor._client = _make_client(space_list=space_list)
 
-    result = asyncio.run(
-        accessor.expand_feishu_url(
-            "https://x.feishu.cn/wiki/settings/space_42"
-        )
-    )
-    urls = [url for url, _title in result]
+    result = asyncio.run(accessor.expand_feishu_url("https://x.feishu.cn/wiki/settings/space_42"))
+    urls = [d.url for d in result]
     assert urls == [
         "https://feishu.cn/docx/doxcnT1",
         "https://feishu.cn/docx/doxcnT2",
@@ -486,10 +474,8 @@ def test_expand_space_root_url_recurses_into_subdirectories(monkeypatch):
     accessor = FeishuAccessor()
     accessor._client = _make_client(space_list=space_list)
 
-    result = asyncio.run(
-        accessor.expand_feishu_url("https://x.feishu.cn/wiki/settings/space_1")
-    )
-    urls = [url for url, _title in result]
+    result = asyncio.run(accessor.expand_feishu_url("https://x.feishu.cn/wiki/settings/space_1"))
+    urls = [d.url for d in result]
     # Top-level doc + folder doc + 2 folder children.
     assert urls == [
         "https://feishu.cn/docx/doxcnTop",
@@ -497,6 +483,17 @@ def test_expand_space_root_url_recurses_into_subdirectories(monkeypatch):
         "https://feishu.cn/docx/doxcnFC1",
         "https://feishu.cn/sheets/shtFC2",
     ]
+    # Hierarchy preserved (issue #3120 review, blocking #3): top-level docs
+    # have an empty rel_path; the folder's children carry the folder as their
+    # relative directory so they import under <batch_parent>/<folder>/<doc>
+    # instead of being flattened into the parent.
+    rel_paths = [d.rel_path for d in result]
+    assert rel_paths[0] == ""  # top doc
+    assert rel_paths[1] == ""  # folder itself (also a top-level node)
+    assert rel_paths[2] == rel_paths[3]  # both folder children share the folder dir
+    assert rel_paths[2] != ""  # nested under the folder
+    # Everything expanded from a space root is a batch child.
+    assert all(d.source_kind == "batch_child" for d in result)
     # Two space.list calls: one at root, one with parent_node_token=folder1.
     assert space_list.call_count == 2
     second_request = space_list.call_args_list[1].args[0]
@@ -542,10 +539,8 @@ def test_expand_space_root_url_follows_pagination(monkeypatch):
     accessor = FeishuAccessor()
     accessor._client = _make_client(space_list=space_list)
 
-    result = asyncio.run(
-        accessor.expand_feishu_url("https://x.feishu.cn/wiki/settings/space_1")
-    )
-    urls = [url for url, _title in result]
+    result = asyncio.run(accessor.expand_feishu_url("https://x.feishu.cn/wiki/settings/space_1"))
+    urls = [d.url for d in result]
     assert urls == ["https://feishu.cn/docx/doxcnP1A", "https://feishu.cn/docx/doxcnP2A"]
     # The second list call must carry the page_token from page 1.
     second_request = space_list.call_args_list[1].args[0]
@@ -559,6 +554,7 @@ def test_expand_space_root_url_follows_pagination(monkeypatch):
 
 def test_list_wiki_subtree_respects_max_depth(monkeypatch):
     _install_fake_lark_wiki(monkeypatch)
+
     # A chain of nested folders: root → folderA → folderB → doc.
     def _list(space_id, parent_node_token, **_):
         if parent_node_token is None:
@@ -612,18 +608,16 @@ def test_list_wiki_subtree_respects_max_depth(monkeypatch):
             )
         return _SuccessResponse(SimpleNamespace(items=[], has_more=False, page_token=None))
 
-    space_list = MagicMock(side_effect=lambda req, *a, **kw: _list(
-        req.space_id, req.parent_node_token
-    ))
+    space_list = MagicMock(
+        side_effect=lambda req, *a, **kw: _list(req.space_id, req.parent_node_token)
+    )
     accessor = FeishuAccessor()
     accessor._client = _make_client(space_list=space_list)
 
     # max_depth=1 → only the root level (folderA is recorded, but its children
     # are NOT walked because depth would exceed 1).
-    result = asyncio.run(
-        accessor.list_wiki_subtree(space_id="space_1", max_depth=1)
-    )
-    urls = [url for url, _title in result]
+    result = asyncio.run(accessor.list_wiki_subtree(space_id="space_1", max_depth=1))
+    urls = [d.url for d in result]
     assert urls == ["https://feishu.cn/docx/doxcnA"]
 
 
@@ -640,18 +634,14 @@ def test_list_wiki_subtree_respects_max_nodes(monkeypatch):
         for i in range(5)
     ]
     space_list = MagicMock(
-        return_value=_SuccessResponse(
-            SimpleNamespace(items=items, has_more=False, page_token=None)
-        )
+        return_value=_SuccessResponse(SimpleNamespace(items=items, has_more=False, page_token=None))
     )
     accessor = FeishuAccessor()
     accessor._client = _make_client(space_list=space_list)
 
-    result = asyncio.run(
-        accessor.list_wiki_subtree(space_id="space_1", max_nodes=2)
-    )
+    result = asyncio.run(accessor.list_wiki_subtree(space_id="space_1", max_nodes=2))
     assert len(result) == 2
-    assert [url for url, _ in result] == [
+    assert [d.url for d in result] == [
         "https://feishu.cn/docx/doxcn0",
         "https://feishu.cn/docx/doxcn1",
     ]
@@ -660,9 +650,7 @@ def test_list_wiki_subtree_respects_max_nodes(monkeypatch):
 def test_list_wiki_subtree_empty_space_returns_empty_list(monkeypatch):
     _install_fake_lark_wiki(monkeypatch)
     space_list = MagicMock(
-        return_value=_SuccessResponse(
-            SimpleNamespace(items=[], has_more=False, page_token=None)
-        )
+        return_value=_SuccessResponse(SimpleNamespace(items=[], has_more=False, page_token=None))
     )
     accessor = FeishuAccessor()
     accessor._client = _make_client(space_list=space_list)
@@ -690,7 +678,12 @@ def test_list_wiki_subtree_dedupes_shared_obj_tokens(monkeypatch):
     accessor._client = _make_client(space_list=space_list)
 
     result = asyncio.run(accessor.list_wiki_subtree(space_id="space_1"))
-    assert result == [("https://feishu.cn/docx/doxcnShared", "Shared")]
+    assert len(result) == 1
+    assert result[0].url == "https://feishu.cn/docx/doxcnShared"
+    assert result[0].title == "Shared"
+    # Expanded from a space root → batch_child, top-level → empty rel_path.
+    assert result[0].source_kind == "batch_child"
+    assert result[0].rel_path == ""
 
 
 def test_list_wiki_subtree_skips_unsupported_obj_type_but_recurses(monkeypatch):
@@ -713,12 +706,8 @@ def test_list_wiki_subtree_skips_unsupported_obj_type_but_recurses(monkeypatch):
     )
     space_list = MagicMock(
         side_effect=[
-            _SuccessResponse(
-                SimpleNamespace(items=[folder], has_more=False, page_token=None)
-            ),
-            _SuccessResponse(
-                SimpleNamespace(items=[child], has_more=False, page_token=None)
-            ),
+            _SuccessResponse(SimpleNamespace(items=[folder], has_more=False, page_token=None)),
+            _SuccessResponse(SimpleNamespace(items=[child], has_more=False, page_token=None)),
         ]
     )
     accessor = FeishuAccessor()
@@ -726,7 +715,10 @@ def test_list_wiki_subtree_skips_unsupported_obj_type_but_recurses(monkeypatch):
 
     result = asyncio.run(accessor.list_wiki_subtree(space_id="space_1"))
     # Only the supported child doc is emitted.
-    assert result == [("https://feishu.cn/docx/doxcnChild", "Child")]
+    assert len(result) == 1
+    assert result[0].url == "https://feishu.cn/docx/doxcnChild"
+    assert result[0].title == "Child"
+    assert result[0].source_kind == "batch_child"
 
 
 # ---------------------------------------------------------------------------
@@ -737,10 +729,9 @@ def test_list_wiki_subtree_skips_unsupported_obj_type_but_recurses(monkeypatch):
 def test_expand_non_feishu_url_returns_unchanged(monkeypatch):
     _install_fake_lark_wiki(monkeypatch)
     accessor = FeishuAccessor()
-    result = asyncio.run(
-        accessor.expand_feishu_url("https://github.com/org/repo")
-    )
-    assert result == [("https://github.com/org/repo", "")]
+    result = asyncio.run(accessor.expand_feishu_url("https://github.com/org/repo"))
+    assert result == [ExpandedDoc(url="https://github.com/org/repo")]
+    assert result[0].source_kind == "single_doc_passthrough"
 
 
 def test_expand_space_root_api_failure_propagates(monkeypatch):
@@ -751,10 +742,10 @@ def test_expand_space_root_api_failure_propagates(monkeypatch):
     accessor = FeishuAccessor()
     accessor._client = _make_client(space_list=space_list)
 
-    with pytest.raises(Exception):  # OpenVikingError raised by _raise_from_lark_response
-        asyncio.run(
-            accessor.expand_feishu_url("https://x.feishu.cn/wiki/settings/space_1")
-        )
+    from openviking_cli.exceptions import OpenVikingError
+
+    with pytest.raises(OpenVikingError, match="list wiki nodes"):
+        asyncio.run(accessor.expand_feishu_url("https://x.feishu.cn/wiki/settings/space_1"))
 
 
 # ---------------------------------------------------------------------------
@@ -773,7 +764,9 @@ def test_list_wiki_subtree_breaks_node_token_cycle(monkeypatch):
     children = {
         None: [_make_node(node_token="A", obj_type="docx", obj_token="docA", has_child=True)],
         "A": [_make_node(node_token="B", obj_type="docx", obj_token="docB", has_child=True)],
-        "B": [_make_node(node_token="A", obj_type="docx", obj_token="docA", has_child=True)],  # cycle
+        "B": [
+            _make_node(node_token="A", obj_type="docx", obj_token="docA", has_child=True)
+        ],  # cycle
     }
     calls = {"n": 0}
 
@@ -790,7 +783,7 @@ def test_list_wiki_subtree_breaks_node_token_cycle(monkeypatch):
     )
     # Each node_token expanded at most once: root listing + A + B = 3 calls.
     assert calls["n"] == 3, calls
-    urls = [u for u, _t in result]
+    urls = [d.url for d in result]
     assert sorted(urls) == ["https://feishu.cn/docx/docA", "https://feishu.cn/docx/docB"]
     assert len(urls) == 2  # no duplication from the cycle
 
@@ -814,7 +807,7 @@ def test_list_wiki_subtree_breaks_page_token_cycle(monkeypatch):
 
     accessor = FeishuAccessor()
     accessor._list_wiki_child_nodes = fake_list
-    result = asyncio.run(
+    asyncio.run(
         accessor.list_wiki_subtree(
             space_id="space_1", feishu_access_token="u", max_depth=1, max_nodes=1000
         )
