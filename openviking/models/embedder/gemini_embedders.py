@@ -119,6 +119,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         self,
         model_name: str = "gemini-embedding-2-preview",
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
         dimension: Optional[int] = None,
         task_type: Optional[str] = None,
         query_param: Optional[str] = None,
@@ -136,20 +137,35 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
             )
         if dimension is not None and not (1 <= dimension <= 3072):
             raise ValueError(f"dimension must be between 1 and 3072, got {dimension}")
+
+        if api_base:
+            logger.warning(
+                "Gemini embedder using custom api_base: %s", api_base
+            )
+
+        http_options = None
         if _HTTP_RETRY_AVAILABLE:
-            self.client = genai.Client(
-                api_key=api_key,
-                http_options=HttpOptions(
-                    retry_options=HttpRetryOptions(
-                        attempts=max(self.max_retries + 1, 1),
-                        initial_delay=0.5,
-                        max_delay=8.0,
-                        exp_base=2.0,
-                    )
+            http_options = HttpOptions(
+                base_url=api_base,
+                retry_options=HttpRetryOptions(
+                    attempts=max(self.max_retries + 1, 1),
+                    initial_delay=0.5,
+                    max_delay=8.0,
+                    exp_base=2.0,
                 ),
             )
+            self.client = genai.Client(
+                api_key=api_key,
+                http_options=http_options,
+            )
         else:
-            self.client = genai.Client(api_key=api_key)
+            if api_base:
+                self.client = genai.Client(
+                    api_key=api_key,
+                    http_options=HttpOptions(base_url=api_base),
+                )
+            else:
+                self.client = genai.Client(api_key=api_key)
         self.task_type = task_type
         self.query_param = query_param
         self.document_param = document_param
