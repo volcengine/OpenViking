@@ -9,7 +9,7 @@ Provides session management operations: session, sessions, add_message, commit, 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.namespace import canonical_session_uri
-from openviking.server.config import ToolOutputExternalizationConfig
+from openviking.server.config import AgentEvolutionConfig, ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
@@ -44,6 +44,10 @@ class SessionService:
         self._viking_fs = viking_fs
         self._session_compressor = session_compressor
         self._tool_output_externalization_config = ToolOutputExternalizationConfig()
+        # Embedded clients do not load ServerConfig. Preserve their historical
+        # Agent memory behavior; HTTP servers always override this from
+        # server.agent_evolution during app setup.
+        self._agent_evolution_enabled = True
         self._usage_reporter: Optional["UsageReporter"] = None
 
     def set_dependencies(
@@ -62,6 +66,10 @@ class SessionService:
     ) -> None:
         """Set tool output externalization controls for newly created sessions."""
         self._tool_output_externalization_config = config.model_copy(deep=True)
+
+    def set_agent_evolution_config(self, config: AgentEvolutionConfig) -> None:
+        """Set the instance-wide Agent Evolution switch."""
+        self._agent_evolution_enabled = config.enabled
 
     def set_usage_reporter(self, usage_reporter: Optional["UsageReporter"]) -> None:
         """Set the usage reporter for newly created sessions."""
@@ -126,6 +134,7 @@ class SessionService:
             session_id=session_id,
             session_uri=session_uri,
             tool_output_externalization_config=self._tool_output_externalization_config,
+            agent_evolution_enabled=self._agent_evolution_enabled,
             usage_reporter=self._usage_reporter,
         )
 
@@ -268,6 +277,11 @@ class SessionService:
         session_id: str,
         ctx: RequestContext,
         keep_recent_count: int = 0,
+        *,
+        retention_mode: Optional[str] = None,
+        keep_recent_turn_count: Optional[int] = None,
+        retained_message_token_budget: Optional[int] = None,
+        min_raw_tail_steps: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive messages and extract memories).
 
@@ -284,6 +298,10 @@ class SessionService:
             session_id,
             ctx,
             keep_recent_count=keep_recent_count,
+            retention_mode=retention_mode,
+            keep_recent_turn_count=keep_recent_turn_count,
+            retained_message_token_budget=retained_message_token_budget,
+            min_raw_tail_steps=min_raw_tail_steps,
         )
 
     async def commit_async(
@@ -291,6 +309,11 @@ class SessionService:
         session_id: str,
         ctx: RequestContext,
         keep_recent_count: int = 0,
+        *,
+        retention_mode: Optional[str] = None,
+        keep_recent_turn_count: Optional[int] = None,
+        retained_message_token_budget: Optional[int] = None,
+        min_raw_tail_steps: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Async commit a session.
 
@@ -308,7 +331,17 @@ class SessionService:
         """
         self._ensure_initialized()
         session = await self.get(session_id, ctx)
-        result = await session.commit_async(keep_recent_count=keep_recent_count)
+        commit_kwargs: Dict[str, Any] = {"keep_recent_count": keep_recent_count}
+        optional_retention = {
+            "retention_mode": retention_mode,
+            "keep_recent_turn_count": keep_recent_turn_count,
+            "retained_message_token_budget": retained_message_token_budget,
+            "min_raw_tail_steps": min_raw_tail_steps,
+        }
+        commit_kwargs.update(
+            {key: value for key, value in optional_retention.items() if value is not None}
+        )
+        result = await session.commit_async(**commit_kwargs)
         self._record_lifecycle_metric("commit", "ok" if result.get("status") else "error")
         self._record_archive_metric("ok" if result.get("archived") else "skip")
         return result
@@ -344,6 +377,7 @@ class SessionService:
             session_id=session_id,
             ctx=ctx,
             archive_uri=archive_uri,
+            agent_evolution_enabled=self._agent_evolution_enabled,
         )
         self._record_lifecycle_metric("extract", "ok")
         return memories

@@ -7,12 +7,10 @@ Routing is controlled by ov.conf (OpenVikingConfig.parser_api).
 """
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Union
+from typing import Union
 from urllib.parse import urlparse
 
-if TYPE_CHECKING:
-    from openviking.parse.accessors.base import LocalResource
-
+from openviking.parse.accessors.base import LocalResource, SourceType
 from openviking.parse.base import ParseResult
 from openviking.parse.registry import ParserRegistry
 from openviking_cli.utils.logger import get_logger
@@ -34,10 +32,28 @@ class ParserRouter:
         self._parser_registry = parser_registry
         self._understanding_api = None
 
-    def should_use_understanding_api(self, source_path: Union[str, Path]) -> bool:
+    def understanding_api_enabled(self) -> bool:
+        """Return whether the external parser is enabled."""
+        try:
+            from openviking_cli.utils.config.open_viking_config import get_openviking_config
+
+            parser_api = getattr(get_openviking_config(), "parser_api", None)
+        except Exception:
+            return False
+        return bool(parser_api and getattr(parser_api, "enable", False))
+
+    def should_use_understanding_api(
+        self,
+        source: Union[str, Path, LocalResource],
+        resolved_extension: str = "",
+    ) -> bool:
         """
         Decide whether to use UnderstandingAPI.
         """
+        # FeishuAccessor has already normalized proprietary content to Markdown.
+        if isinstance(source, LocalResource) and source.source_type == SourceType.FEISHU:
+            return False
+
         try:
             from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
@@ -45,21 +61,33 @@ class ParserRouter:
         except Exception:
             return False
 
-        parser_api = ov_config.parser_api
-        if not parser_api.enable:
+        parser_api = getattr(ov_config, "parser_api", None)
+        if not parser_api or not getattr(parser_api, "enable", False):
             return False
 
-        if parser_api.enable_feishu_url:
-            try:
-                from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+        source_path = self._extract_source_path(source)
+        try:
+            from openviking.parse.accessors.feishu_accessor import FeishuAccessor
 
-                if FeishuAccessor._is_feishu_url(str(source_path)):
-                    return True
-            except Exception:
-                pass
+            if FeishuAccessor._is_feishu_url(str(source_path)):
+                return bool(getattr(parser_api, "enable_feishu_url", False))
+        except Exception:
+            pass
 
-        ext = self._extract_extension(source_path)
-        return ext in parser_api.extensions
+        ext = self._normalize_extension(resolved_extension) or self._extract_extension(source_path)
+        extensions = getattr(parser_api, "extensions", None) or []
+        return ext in extensions
+
+    def should_use_understanding_directly(self, source: str, **kwargs) -> bool:
+        forced = kwargs.get("parser_backend") == "understanding"
+        return bool(
+            (forced or self.should_use_understanding_api(source))
+            and self._get_understanding_api().can_submit_url_directly(source, **kwargs)
+        )
+
+    @staticmethod
+    def _normalize_extension(extension: str) -> str:
+        return str(extension or "").lower().lstrip(".")
 
     def _extract_extension(self, source_path: Union[str, Path]) -> str:
         source = str(source_path)
@@ -74,7 +102,25 @@ class ParserRouter:
         """
         source_path = self._extract_source_path(source)
 
-        if self.should_use_understanding_api(source_path):
+        parser_backend = kwargs.pop("parser_backend", None)
+        if parser_backend not in {None, "internal", "understanding"}:
+            raise ValueError(f"Unknown parser backend: {parser_backend}")
+
+        normalized_feishu = (
+            isinstance(source, LocalResource) and source.source_type == SourceType.FEISHU
+        )
+        use_understanding = not normalized_feishu and (
+            parser_backend == "understanding"
+            or (
+                parser_backend is None
+                and self.should_use_understanding_api(
+                    source,
+                    resolved_extension=str(kwargs.get("resolved_extension") or ""),
+                )
+            )
+        )
+
+        if use_understanding:
             display = source_path
             if isinstance(source_path, str) and source_path.startswith(("http://", "https://")):
                 display = "<url>"
@@ -93,12 +139,15 @@ class ParserRouter:
             logger.info(f"[ParserRouter] Using internal ParserRegistry for {display}")
             return await self._parser_registry.parse(source_path, **kwargs)
 
-    async def submit_url(self, source: str, **kwargs) -> str:
-        if not self.should_use_understanding_api(source):
+    async def submit(self, source: Union[str, Path, LocalResource], **kwargs) -> str:
+        source_path = self._extract_source_path(source)
+        if Path(source_path).is_file():
+            return await self._get_understanding_api().submit_file(source_path)
+        if not self.should_use_understanding_api(str(source_path)):
             raise ValueError("source is not routed to UnderstandingAPI")
-        return await self._get_understanding_api().submit_url(source, **kwargs)
+        return await self._get_understanding_api().submit_url(str(source_path), **kwargs)
 
-    def _extract_source_path(self, source: Union[str, Path, "LocalResource"]) -> Union[str, Path]:
+    def _extract_source_path(self, source: Union[str, Path, LocalResource]) -> Union[str, Path]:
         """Extract a filesystem path from the source."""
         if hasattr(source, "path"):
             return source.path

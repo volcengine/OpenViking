@@ -291,6 +291,32 @@ def test_telemetry_summary_includes_cuvs_route_and_stage_timings():
     }
 
 
+def test_telemetry_summary_includes_cuvs_micro_batching_fields():
+    telemetry = MemoryOperationTelemetry(operation="search.find", enabled=True)
+    for batch_size, batch_wait_ms in ((4, 0.8), (4, 0.7), (1, 1.0)):
+        telemetry.record_cuvs_search(
+            {
+                "algorithm": "brute_force",
+                "dtype": "float32",
+                "route_reason": "cuvs",
+                "filter_kind": "none",
+                "micro_batching_enabled": True,
+                "micro_batching_warm_fast_path": batch_size == 4,
+                "batch_size": batch_size,
+                "batch_wait_ms": batch_wait_ms,
+            }
+        )
+
+    cuvs = telemetry.finish().summary["vector"]["cuvs"]
+
+    assert cuvs["micro_batching_searches"] == 3
+    assert cuvs["micro_batched_searches"] == 2
+    assert cuvs["micro_batching_warm_fast_path_searches"] == 2
+    assert cuvs["batch_size_max"] == 4
+    assert cuvs["searches_by_batch_size"] == {"1": 1, "4": 2}
+    assert cuvs["timings_ms"]["batch_wait"] == {"sum": 2.5, "max": 1.0}
+
+
 def test_cuvs_telemetry_aggregation_is_completion_order_independent():
     samples = [
         {

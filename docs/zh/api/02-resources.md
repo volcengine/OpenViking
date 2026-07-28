@@ -138,9 +138,10 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 2. 解析目标 URI
 3. 调用对应 Parser 解析内容
 4. 构建目录树并写入 AGFS
-5. `wait=true` 时等待语义处理完成；`wait=false` 时返回 `task_id` 用于队列跟踪
-6. 如果 `reason` 非空，将其追加到固定的资源 reason session 并 commit，复用常规记忆抽取链路，让合适的用户记忆引用该资源 URI
-7. 如指定 `--watch-interval`，设置定时更新任务
+5. 按 `processing_mode` 执行入库后的处理：`semantic_and_vectors` 生成语义产物和向量；`vectors_only` 跳过语义理解，只提交文件向量化
+6. `wait=true` 时等待语义处理/向量化完成；`wait=false` 时返回 `task_id` 用于队列跟踪
+7. 如果 `reason` 非空，将其追加到固定的资源 reason session 并 commit，复用常规记忆抽取链路，让合适的用户记忆引用该资源 URI
+8. 如指定 `--watch-interval`，设置定时更新任务
 
 **代码入口**：
 - `openviking/client/local.py:LocalClient.add_resource` - SDK 入口（嵌入式）
@@ -172,6 +173,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 | preserve_structure | bool | 否 | None | 是否保留目录结构 |
 | args | object | 否 | `{}` | 传给特定 parser/accessor 的导入参数。例如 `args.site=true/false` 强制/禁用整站（sitemap/RSS）导入，`args.max_pages` 等可覆盖 `webfeed` 配置；递归网页爬虫支持 `args.depth`、`args.max_pages`、`args.include_paths`、`args.exclude_paths`、`args.allow_external_links`、`args.skip_download_links`；飞书用户 token 导入传 `args.feishu_access_token`。`path`、`to`、`watch_interval`、`include`、`exclude` 等 `add_resource` 核心字段不能放入 `args` |
 | watch_interval | float | 否 | 0 | 定时更新间隔（分钟）。>0 为 URL/sitemap/RSS 等可重新读取的来源创建任务；通过 `temp_file_id` 上传的内容是一次性快照，变化后需重新添加。≤0 取消任务；显式 `to` 优先，否则绑定本次导入的 `root_uri` |
+| processing_mode | string | 否 | `semantic_and_vectors` | 入库后的处理模式。`semantic_and_vectors` 是默认流程：生成语义产物（`.abstract.md`、`.overview.md`）并生成向量。`vectors_only` 跳过语义理解/VLM 总结，只对当前资源文件生成向量 |
 | telemetry | TelemetryRequest | 否 | False | 是否返回遥测数据 |
 
 **补充说明**：
@@ -184,6 +186,8 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 - `reason` 触发的记忆生成复用 `session.commit` 的抽取链路，只使用 `reason`、资源 URI、可用的资源名称和目录摘要，不会读取或展开完整资源正文；系统会写入 `entities`、`events`、`preferences` 等已有记忆类型，不创建独立的资源记忆目录。
 - 删除资源时，系统会在删除前扫描本次上下文对应的 self 或 peer 记忆中的 `resource_refs`，清理对应资源 URI 和由该 `reason` 引入的内容，并重新刷新相关记忆的语义索引。
 - 其他来源在 `wait=false` 时会在响应前完成来源解析、目标解析和 AGFS 写入，仅 semantic 与 embedding 队列继续异步处理。
+- `processing_mode=vectors_only` 不调用 VLM 语义理解阶段，也不会生成或刷新 `.abstract.md` / `.overview.md`。对已存在目标，它会保留旧的语义产物和旧的语义向量；仍会更新资源树，在 `build_index=true` 时向量化当前非隐藏文件，并清理由本次刷新删除的文件 detail 向量。
+- `processing_mode` 只属于 `add_resource`。管理员维护已有数据时，`reindex` API/CLI 仍使用 `mode`（`vectors_only`、`semantic_and_vectors`、`prune_orphans`）。
 - `watch_interval > 0` 时，如果指定了 `to`，监控任务绑定该目标；如果未指定 `to`，监控任务绑定本次导入返回的 `root_uri`。如果无法得到稳定 `root_uri`，请求会报错并要求显式传 `to`。
 - 飞书/Lark 应用 token 导入不传 `args.feishu_access_token`。OpenViking 保持原有应用凭证流程，由 SDK 使用 `app_id` 和 `app_secret` 自动获取 app/tenant token。该模式支持一次性导入和 `watch_interval > 0`。
 - 飞书/Lark 一次性用户 token 导入通过 `args={"feishu_access_token": "u-..."}` 传入，且 `watch_interval <= 0`。OpenViking 只在本次导入使用该用户 token，不保存。
@@ -210,6 +214,17 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -d '{
     "path": "https://example.com/guide.md",
     "reason": "User guide documentation",
+    "wait": true
+  }'
+
+# 添加资源但只生成向量，不走 VLM 语义理解
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://example.com/guide.md",
+    "to": "viking://resources/guide",
+    "processing_mode": "vectors_only",
     "wait": true
   }'
 
@@ -528,310 +543,9 @@ task_id      uuid-xxx
 
 ---
 
-### Watch Management（监控任务管理）
+<a id="watch-management监控任务管理"></a>
 
-列出、查看、更新和触发通过 [`add_resource`](#add_resource) 配合 `watch_interval > 0` 创建的监控任务。控制面在 REST（`/api/v1/watches`）、`ov task watch` CLI 子命令组以及面向 Agent 的最小闭包 MCP 接口（`list_watches` / `cancel_watch`）三处镜像。
-
-#### 1. API 实现介绍
-
-此控制面封装了 `WatchManager` 原语，未改动任何服务端行为。每个端点和 CLI 命令都支持通过 `task_id`（路径）或 `to_uri`（查询参数）定位目标任务，两种键可以互换；如果同时提供，二者必须指向同一任务，否则返回 400。
-
-**操作**：
-- **列出**（`GET /api/v1/watches`）— 返回 `{tasks, total}`；可传 `?active_only=true` 过滤；传 `?to_uri=...` 时降级为单任务查找
-- **查看**（`GET /api/v1/watches/{task_id}`）— 查看单个任务；可选 `?to_uri=` 做跨键一致性校验
-- **更新**（`PATCH /api/v1/watches/{task_id}` 或 `PATCH /api/v1/watches?to_uri=...`）— 部分更新 `watch_interval`、`is_active`、`reason`、`instruction`。`is_active` 与 `watch_interval` 正交：翻转 `is_active` 可在不丢失配置周期的前提下暂停/恢复任务。
-- **删除**（`DELETE /api/v1/watches/{task_id}` 或 `DELETE /api/v1/watches?to_uri=...`）
-- **触发**（`POST /api/v1/watches/{task_id}/trigger` 或 `POST /api/v1/watches/trigger?to_uri=...`）— 触发即返回（fire-and-forget），重新摄取在后台异步执行
-
-**代码入口**：
-- `openviking/server/routers/watches.py` — `/api/v1/watches` REST 路由
-- `crates/ov_cli/src/commands/watch.rs` — `ov task watch` CLI 子命令组
-- `openviking/server/mcp_endpoint.py` — MCP `list_watches` / `cancel_watch` 工具，以及 `add_resource` 上的 `watch_interval` / `to` 参数
-- `openviking/resource/watch_manager.py:WatchManager` — 任务持久化与调度原语
-
-#### 2. 接口和参数说明
-
-对每个单任务端点，路径中的 `{task_id}` 都可用查询参数 `?to_uri=` 替代。CLI 的 `<key>` 参数会自动分类：任何以 `viking://` 开头的值走 by-URI 路径，其他值视为 task_id（其它 scheme 如 `http://` 会在本地直接报错，避免静默 404）。
-
-**`PATCH /watches` 请求体**（字段均可选，至少需提供一个）
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| watch_interval | float | 新的检查周期（分钟），必须 `> 0`；如需暂停而保留周期请改用 `is_active=false`。 |
-| is_active | bool | 切换激活状态而保留配置周期（暂停 / 恢复）。 |
-| reason | string | 更新该监控任务的记录原因。 |
-| instruction | string | 更新语义处理指令。 |
-
-未识别字段会被 422 拒绝（`extra="forbid"`）。未传字段保留原值。
-
-#### 3. 使用示例
-
-**HTTP API**
-
-```bash
-# 列出活跃监控任务（去掉 ?active_only 可同时包含已暂停的任务）
-curl -s "http://localhost:1933/api/v1/watches?active_only=true" \
-  -H "X-API-Key: your-key"
-
-# 暂停一个监控任务而保留其检查周期
-curl -X PATCH "http://localhost:1933/api/v1/watches/<task_id>" \
-  -H "X-API-Key: your-key" -H "Content-Type: application/json" \
-  -d '{"is_active": false}'
-
-# 触发一次立即刷新（fire-and-forget，立即返回，再次摄取在后台执行）
-curl -X POST "http://localhost:1933/api/v1/watches/<task_id>/trigger" \
-  -H "X-API-Key: your-key"
-
-# 按 URI 而非 task_id 定位任务
-curl -X DELETE "http://localhost:1933/api/v1/watches?to_uri=viking://resources/guide.md" \
-  -H "X-API-Key: your-key"
-```
-
-**Python SDK**
-
-```python
-watches = client.list_watches(active_only=True)
-client.update_watch(to_uri="viking://resources/guide.md", is_active=False)
-client.trigger_watch(to_uri="viking://resources/guide.md")
-client.delete_watch(to_uri="viking://resources/guide.md")
-```
-
-**Go SDK**
-
-```go
-watches, err := client.ListWatches(ctx, &openviking.ListWatchesOptions{
-    ActiveOnly: true,
-})
-updated, err := client.UpdateWatch(ctx, openviking.UpdateWatchOptions{
-    ToURI:    "viking://resources/guide.md",
-    IsActive: openviking.Bool(false),
-})
-triggered, err := client.TriggerWatch(ctx, openviking.WatchRef{
-    ToURI: "viking://resources/guide.md",
-})
-deleted, err := client.DeleteWatch(ctx, openviking.WatchRef{
-    ToURI: "viking://resources/guide.md",
-})
-_, _, _, _ = watches, updated, triggered, deleted
-```
-
-**CLI**（`ov task watch` 子命令）
-
-```bash
-# 列出活跃监控任务（去掉 --active-only 可同时包含已暂停的任务）
-ov task watch ls --active-only
-
-# 查看单个监控任务（key 可以是 viking:// URI 或 task_id）
-ov task watch show viking://resources/guide.md
-
-# 暂停 / 恢复，不丢失配置周期
-ov task watch pause viking://resources/guide.md
-ov task watch resume viking://resources/guide.md
-
-# 更新周期（或 --active / --reason / --instruction 的任意组合）
-ov task watch update viking://resources/guide.md --interval 30
-
-# 触发一次立即刷新（fire-and-forget）
-ov task watch trigger viking://resources/guide.md
-
-# 删除监控任务
-ov task watch rm viking://resources/guide.md
-```
-
-**MCP**（Agent 控制面——仅最小闭包）
-
-```text
-list_watches()                                            # 每个任务一行；只暴露 URI，不暴露 task_id
-cancel_watch(to_uri="viking://resources/guide.md")        # 按 URI 幂等删除
-```
-
-暂停 / 恢复 / 触发 / 更新故意不通过 MCP 暴露——这些 power-user 操作放在 CLI/REST 一侧，以保持 Agent 系统提示词的紧凑。Agent 侧若需创建监控任务或调整周期，仍走 [`add_resource`](#add_resource) 配合 `watch_interval`；可显式传 `to`，也可让系统绑定本次导入返回的 `root_uri`。
-
----
-
-### add_skill
-
-向知识库添加技能。
-
-#### 1. API 实现介绍
-
-技能是一种特殊的资源，用于定义智能体可以执行的操作或工具。
-
-**处理流程**：
-1. 接收技能数据或上传的临时文件
-2. 解析技能定义
-3. 存储到技能目录
-4. 如指定 `wait=true`，等待技能处理完成
-
-**代码入口**：
-- `openviking/client/local.py:LocalClient.add_skill` - SDK 入口（嵌入式）
-- `openviking_cli/client/http.py:AsyncHTTPClient.add_skill` - SDK 入口（HTTP）
-- `openviking/server/routers/resources.py:add_skill` - HTTP 路由
-- `openviking/service/resource_service.py` - 核心服务实现
-- `crates/ov_cli/src/handlers.rs:handle_add_skill` - CLI 处理
-
-#### 2. 接口和参数说明
-
-**参数**
-
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| data | Any | 否 | - | 内联技能内容或结构化数据。与 `temp_file_id` 二选一 |
-| temp_file_id | string | 否 | - | 临时上传文件 ID（通过 [temp_upload](#temp_upload) 获取）。与 `data` 二选一 |
-| target_uri | string | 否 | - | 技能添加根目录覆盖值。显式值优先于用户默认值和部署默认值 |
-| wait | bool | 否 | False | 是否等待技能处理完成 |
-| timeout | float | 否 | None | 超时时间（秒），仅 `wait=true` 时生效 |
-| telemetry | TelemetryRequest | 否 | False | 是否返回遥测数据 |
-
-未传 `target_uri` 时，服务端会先尝试使用当前用户的 `add_targets.skill_uri` 覆盖配置，
-再使用 `server.user_config_defaults.add_targets.skill_uri`。两者都没有配置时，保持旧行为，
-安装到当前用户的 skills 根。公共短写 `viking://user/skills` 会解析为
-`viking://user/{user_id}/skills`。v1 API 只允许 `viking://user/skills` 和
-`viking://agent/skills` 作为技能添加根目录。
-
-#### 3. 使用示例
-
-**HTTP API**
-
-```
-POST /api/v1/skills
-Content-Type: application/json
-```
-
-```bash
-# 使用内联数据
-curl -X POST http://localhost:1933/api/v1/skills \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "data": {
-      "name": "my-skill",
-      "description": "My custom skill",
-      "steps": []
-    }
-  }'
-
-# 使用本地文件（需先使用 temp_upload 上传）
-TEMP_FILE_ID=$(
-  curl -s -X POST http://localhost:1933/api/v1/resources/temp_upload \
-    -H "X-API-Key: your-key" \
-    -F "file=@./skills/my-skill.json" \
-  | jq -r '.result.temp_file_id'
-)
-
-curl -X POST http://localhost:1933/api/v1/skills \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d "{
-    \"temp_file_id\": \"$TEMP_FILE_ID\"
-  }"
-```
-
-**Python SDK**
-
-```python
-import openviking as ov
-
-client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-client.initialize()
-
-# 从本地文件添加技能
-result = client.add_skill("./skills/my-skill.json")
-
-# 等待处理完成
-client.wait_processed()
-```
-
-**TypeScript SDK**
-
-```typescript
-const task = await client.addSkill("./my-skill", { wait: true });
-console.log(task);
-```
-
-**Go SDK**
-
-```go
-result, err := client.AddSkill(ctx, "./skills/my-skill.json", &openviking.AddSkillOptions{
-    Wait: true,
-})
-if err != nil {
-    return err
-}
-fmt.Println(result["uri"])
-```
-
-**CLI**
-
-```bash
-# 添加技能
-ov add-skill ./skills/my-skill.json
-
-# 等待处理完成
-ov add-skill ./skills/my-skill.json --wait
-```
-
-#### 4. 响应示例
-
-**HTTP API 响应 (JSON)**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "status": "success",
-    "root_uri": "viking://user/alice/skills/my-skill",
-    "uri": "viking://user/alice/skills/my-skill",
-    "name": "my-skill",
-    "auxiliary_files": 2,
-    "queue_status": {
-      "pending": 0,
-      "processing": 0,
-      "completed": 1
-    }
-  },
-  "telemetry": {
-    "operation_id": "550e8400-e29b-41d4-a716-446655440000"
-  }
-}
-```
-
-**CLI 响应 (默认表格格式)**
-
-```
-Note: Skill is being processed in the background.
-Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.
-status          success
-root_uri        viking://user/alice/skills/my-skill
-uri             viking://user/alice/skills/my-skill
-name            my-skill
-auxiliary_files 2
-```
-
-**CLI 响应 (JSON 格式，使用 -o json)**
-
-```json
-{
-  "status": "success",
-  "root_uri": "viking://user/alice/skills/my-skill",
-  "uri": "viking://user/alice/skills/my-skill",
-  "name": "my-skill",
-  "auxiliary_files": 2
-}
-```
-
-**字段说明**
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `status` | string | 处理状态："success" 成功，"error" 失败 |
-| `root_uri` | string | 技能在 OpenViking 中的 canonical 最终 URI（同 `uri`） |
-| `uri` | string | 技能在 OpenViking 中的 canonical 最终 URI（同 `root_uri`） |
-| `name` | string | 技能名称 |
-| `auxiliary_files` | number | 技能附带的辅助文件数量 |
-| `queue_status` | object | （可选，仅当 `wait=true` 时）队列处理状态，包含 `pending`、`processing`、`completed` 计数 |
-
----
+<a id="add_skill"></a>
 
 ### temp_upload
 

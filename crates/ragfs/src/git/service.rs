@@ -762,6 +762,15 @@ impl GitService {
     /// Missing ref → `GitError::RefStore(RefStoreError::NotFound)`.
     /// Missing commit object → `GitError::ObjectStore(ObjectStoreError::NotFound)`.
     pub async fn show(&self, req: ShowRequest) -> Result<ShowResponse, GitError> {
+        self.show_with_limit(req, None).await
+    }
+
+    /// Same as [`GitService::show`], with an optional maximum blob payload size.
+    pub async fn show_with_limit(
+        &self,
+        req: ShowRequest,
+        max_blob_bytes: Option<u64>,
+    ) -> Result<ShowResponse, GitError> {
         let ShowRequest {
             account,
             target_ref,
@@ -804,14 +813,40 @@ impl GitService {
                 if mode.is_tree() {
                     return Err(GitError::PathIsDirectory(p));
                 }
-                let raw =
-                    crate::git::util::read_object(self.object_store.as_ref(), &account, &blob_oid)
-                        .await?;
+                let raw = match max_blob_bytes {
+                    Some(limit) => crate::git::util::read_object_limited(
+                        self.object_store.as_ref(),
+                        &account,
+                        &blob_oid,
+                        limit,
+                    )
+                    .await
+                    .map_err(|err| match err {
+                        ObjectStoreError::ReadLimitExceeded { size, .. } => {
+                            GitError::BlobTooLarge { size, limit }
+                        }
+                        other => GitError::ObjectStore(other),
+                    })?,
+                    None => crate::git::util::read_object(
+                        self.object_store.as_ref(),
+                        &account,
+                        &blob_oid,
+                    )
+                    .await?,
+                };
                 let (kind, payload_size, hdr) = crate::git::util::parse_object_header(&raw)?;
                 if kind != gix_object::Kind::Blob {
                     return Err(GitError::CorruptedObject(format!(
                         "expected blob at {p}, got {kind:?}"
                     )));
+                }
+                if let Some(limit) = max_blob_bytes {
+                    if payload_size > limit {
+                        return Err(GitError::BlobTooLarge {
+                            size: payload_size,
+                            limit,
+                        });
+                    }
                 }
                 // `raw` is already a `Bytes`; `slice` is O(1) and shares the
                 // backing buffer instead of allocating a fresh payload copy.
@@ -3539,6 +3574,55 @@ mod tests {
             }
             other => panic!("expected Blob, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_show_blob_limit_rejects_before_returning_payload() {
+        let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct");
+        vfs.put("resources/a.md", b"payload exceeds limit");
+        let _ = make_commit(&svc, "acct", "main", "first").await;
+
+        let err = svc
+            .show_with_limit(
+                ShowRequest {
+                    account: "acct".into(),
+                    target_ref: "main".into(),
+                    path: Some("resources/a.md".into()),
+                },
+                Some(4),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, GitError::BlobTooLarge { size: 21, limit: 4 }));
+    }
+
+    #[tokio::test]
+    async fn test_show_blob_limit_allows_payload_at_limit() {
+        let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct");
+        vfs.put("resources/a.md", b"payload");
+        let _ = make_commit(&svc, "acct", "main", "first").await;
+
+        let response = svc
+            .show_with_limit(
+                ShowRequest {
+                    account: "acct".into(),
+                    target_ref: "main".into(),
+                    path: Some("resources/a.md".into()),
+                },
+                Some(7),
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            response,
+            ShowResponse::Blob {
+                bytes,
+                size: 7,
+                ..
+            } if bytes.as_ref() == b"payload"
+        ));
     }
 
     // ── 12 ─────────────────────────────────────────────────────────────

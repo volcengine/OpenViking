@@ -51,6 +51,7 @@ function makeHeaders() {
   if (cfg.sendIdentityHeaders && cfg.account) headers["X-OpenViking-Account"] = cfg.account;
   if (cfg.sendIdentityHeaders && cfg.user) headers["X-OpenViking-User"] = cfg.user;
   if (activePeerId) headers["X-OpenViking-Actor-Peer"] = activePeerId;
+  if (cfg.userAgent) headers["User-Agent"] = cfg.userAgent;
   return headers;
 }
 

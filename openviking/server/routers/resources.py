@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Resource endpoints for OpenViking HTTP Server."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.server.auth import get_request_context, get_upload_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
@@ -85,6 +86,7 @@ class AddResourceRequest(BaseModel):
     args: Dict[str, Any] = Field(default_factory=dict)
     telemetry: TelemetryRequest = False
     watch_interval: float = 0
+    processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
 
     @model_validator(mode="after")
     def check_path_or_temp_file_id(self):
@@ -126,7 +128,7 @@ async def temp_upload(
     request: Request,
     file: UploadFile = File(...),
     telemetry: bool = Form(False),
-    upload_mode: str = Form("local"),
+    upload_mode: Optional[Literal["local", "shared"]] = Form(None),
     _ctx: RequestContext = Depends(get_upload_request_context),
 ):
     """Upload a temporary file for add_resource or import_ovpack.
@@ -140,14 +142,20 @@ async def temp_upload(
     dependency.
     """
     signed = getattr(request.state, "signed_upload", None)
+    effective_upload_mode = upload_mode or request.app.state.config.temp_upload.default_mode
 
     async def _upload() -> dict[str, Any]:
         store = TempUploadStore.build(request.app.state.config)
-        temp_file_id = await store.save_upload(file, upload_mode, _ctx)
+        temp_file_id = await store.save_upload(file, effective_upload_mode, _ctx)
         if signed is None:
             return {"temp_file_id": temp_file_id}
         return await ingest_temp_upload(
-            store, temp_file_id, _ctx, to=signed.to, reason=signed.reason
+            store,
+            temp_file_id,
+            _ctx,
+            to=signed.to,
+            reason=signed.reason,
+            processing_mode=signed.processing_mode,
         )
 
     try:
@@ -206,8 +214,13 @@ async def add_resource(
         "exclude": request.exclude,
         "directly_upload_media": request.directly_upload_media,
         "watch_interval": request.watch_interval,
-        "create_parent": request.create_parent,
+        "processing_mode": request.processing_mode,
     }
+    # Connector routing needs to distinguish an omitted create_parent from an
+    # explicit false.  Standard imports still observe false when the field is
+    # omitted because ResourceService reads it with kwargs.get(..., False).
+    if "create_parent" in request.model_fields_set:
+        kwargs["create_parent"] = request.create_parent
     if request.temp_file_id:
         kwargs["temp_file_id"] = request.temp_file_id
     if request.preserve_structure is not None:

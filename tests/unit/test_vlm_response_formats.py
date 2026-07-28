@@ -111,3 +111,49 @@ async def test_openai_async_completion_from_str_with_tools(monkeypatch):
     assert response.content == "plain string response"
     assert response.tool_calls == []
     assert response.finish_reason == "stop"
+
+
+@pytest.mark.asyncio
+async def test_openai_async_completion_with_empty_tools_preserves_usage(monkeypatch):
+    usage = SimpleNamespace(
+        prompt_tokens=11,
+        completion_tokens=4,
+        total_tokens=15,
+        prompt_tokens_details=None,
+        completion_tokens_details=None,
+    )
+    raw_response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="plain response", tool_calls=None),
+                finish_reason="stop",
+            )
+        ],
+        usage=usage,
+    )
+
+    async def create(**kwargs):
+        assert "tools" not in kwargs
+        return raw_response
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create)),
+    )
+    vlm = OpenAIVLM({"provider": "openai", "model": "gpt-5.6-terra"})
+    monkeypatch.setattr(vlm, "get_async_client", lambda: client)
+
+    response = await vlm.get_completion_async(
+        messages=[{"role": "user", "content": "hello"}],
+        tools=[],
+    )
+
+    assert isinstance(response, VLMResponse)
+    assert response.content == "plain response"
+    assert response.tool_calls == []
+    assert response.finish_reason == "stop"
+    assert response.usage == {
+        "prompt_tokens": 11,
+        "completion_tokens": 4,
+        "total_tokens": 15,
+        "prompt_tokens_details": None,
+    }

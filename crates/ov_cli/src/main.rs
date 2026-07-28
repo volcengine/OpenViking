@@ -349,6 +349,14 @@ enum Commands {
             help_heading = "Advanced options"
         )]
         watch_interval: f64,
+        /// Resource processing mode
+        #[arg(
+            long = "processing-mode",
+            default_value = "semantic_and_vectors",
+            value_parser = ["semantic_and_vectors", "vectors_only"],
+            help_heading = "Advanced options"
+        )]
+        processing_mode: String,
         /// Parser-specific import options, e.g. --args feishu_access_token:u-xxx
         #[arg(long = "args")]
         resource_args: Option<String>,
@@ -940,6 +948,32 @@ enum Commands {
         #[arg(long, help_heading = "Advanced options")]
         no_history: bool,
     },
+    /// [Interactive] Compile source materials with a VikingBot Skill
+    Compile {
+        /// Source directory; repeat the flag or separate directories with commas
+        #[arg(
+            long = "from",
+            required = true,
+            value_delimiter = ',',
+            value_name = "uri"
+        )]
+        from_uris: Vec<String>,
+        /// Target Wiki directory or skills namespace
+        #[arg(long, value_name = "uri")]
+        to: String,
+        /// Skill directory or SKILL.md Viking URI
+        #[arg(long, value_name = "uri")]
+        skill: String,
+        /// Description of this organization task
+        #[arg(long, value_name = "text")]
+        reason: Option<String>,
+        /// Wait for the Compile task to finish
+        #[arg(long)]
+        wait: bool,
+        /// Local wait timeout in seconds; does not cancel the task
+        #[arg(long, requires = "wait", value_name = "seconds")]
+        timeout: Option<f64>,
+    },
 
     // --- Status & Observability ---
     /// [Status] Wait for queued async processing to complete
@@ -953,7 +987,7 @@ enum Commands {
         #[command(subcommand)]
         action: TaskCommands,
     },
-    /// [Version] Manage workspace snapshots (commit, restore, show, log)
+    /// [Version] Manage workspace snapshots (commit, restore, show, diff, log)
     Snapshot {
         #[command(subcommand)]
         cmd: SnapshotCmd,
@@ -1133,6 +1167,17 @@ pub(crate) enum SnapshotCmd {
         /// Show only commits touching any of these viking:// URIs (comma-separated); accepts files and directories.
         #[arg(long, value_delimiter = ',')]
         paths: Option<Vec<String>>,
+    },
+    /// Compare one file between two snapshots
+    Diff {
+        /// viking:// URI of the file to compare
+        path: String,
+        /// Older commit oid, branch, or tag; omit to compare an empty file
+        #[arg(long = "from")]
+        from_ref: Option<String>,
+        /// Newer commit oid, branch, or tag
+        #[arg(long = "to")]
+        to_ref: String,
     },
     /// Get the account .ovgitignore content
     IgnoreGet,
@@ -2755,6 +2800,7 @@ async fn main() {
             exclude,
             no_directly_upload_media,
             watch_interval,
+            processing_mode,
             resource_args,
             upload_options,
         } => {
@@ -2775,6 +2821,7 @@ async fn main() {
                 exclude,
                 no_directly_upload_media,
                 watch_interval,
+                processing_mode,
                 resource_args,
                 ctx,
             )
@@ -3098,6 +3145,28 @@ async fn main() {
             };
             cmd.run().await
         }
+        Commands::Compile {
+            from_uris,
+            to,
+            skill,
+            reason,
+            wait,
+            timeout,
+        } => {
+            let client = ctx.get_client();
+            commands::compile::run(
+                &client,
+                from_uris,
+                to,
+                skill,
+                reason,
+                wait,
+                timeout,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
         Commands::Config { action } => handlers::handle_config(action, ctx).await,
         Commands::Language { .. } => unreachable!("language command is handled before config load"),
         Commands::Version => {
@@ -3261,11 +3330,11 @@ async fn main() {
 mod tests {
     use super::{
         Cli, CliContext, Commands, ConfigAddTarget, ConfigCommands, LanguageGateAction,
-        PrivacyCommands, SkillCommands, UploadCliOptions, find_command_index, first_command_token,
-        is_language_command_request, language_command_can_run_picker, language_gate_action,
-        language_required_message, legacy_upload_option_error, plain_help_misuse,
-        pre_parse_output_options, pre_parse_requires_cli_config_file, preprocess_cli_args,
-        preprocess_privacy_args,
+        PrivacyCommands, SkillCommands, SnapshotCmd, UploadCliOptions, find_command_index,
+        first_command_token, is_language_command_request, language_command_can_run_picker,
+        language_gate_action, language_required_message, legacy_upload_option_error,
+        plain_help_misuse, pre_parse_output_options, pre_parse_requires_cli_config_file,
+        preprocess_cli_args, preprocess_privacy_args,
     };
     use crate::config::{Config, DEFAULT_CUSTOM_URL};
     use crate::output::OutputFormat;
@@ -3294,6 +3363,37 @@ mod tests {
         assert_eq!(cli.account.as_deref(), Some("acme"));
         assert_eq!(cli.user.as_deref(), Some("alice"));
         assert_eq!(cli.actor_peer_id.as_deref(), Some("peer-a"));
+    }
+
+    #[test]
+    fn cli_parses_snapshot_diff_refs() {
+        let cli = Cli::try_parse_from([
+            "ov",
+            "snapshot",
+            "diff",
+            "viking://resources/a.md",
+            "--from",
+            "old",
+            "--to",
+            "new",
+        ])
+        .expect("snapshot diff should parse");
+
+        match cli.command {
+            Commands::Snapshot {
+                cmd:
+                    SnapshotCmd::Diff {
+                        path,
+                        from_ref,
+                        to_ref,
+                    },
+            } => {
+                assert_eq!(path, "viking://resources/a.md");
+                assert_eq!(from_ref.as_deref(), Some("old"));
+                assert_eq!(to_ref, "new");
+            }
+            _ => panic!("expected snapshot diff"),
+        }
     }
 
     #[test]
@@ -3421,6 +3521,70 @@ mod tests {
             }
             _ => panic!("expected chat command"),
         }
+    }
+
+    #[test]
+    fn cli_compile_requires_skill_and_expands_source_flags() {
+        let cli = Cli::try_parse_from([
+            "ov",
+            "compile",
+            "--from",
+            "viking://resources/a,viking://resources/b",
+            "--from",
+            "viking://resources/c",
+            "--to",
+            "viking://resources/wiki",
+            "--skill",
+            "viking://agent/skills/wiki",
+            "--wait",
+            "--timeout",
+            "10",
+        ])
+        .expect("compile flags should parse");
+        match cli.command {
+            Commands::Compile {
+                from_uris,
+                skill,
+                reason,
+                wait,
+                timeout,
+                ..
+            } => {
+                assert_eq!(from_uris.len(), 3);
+                assert_eq!(skill, "viking://agent/skills/wiki");
+                assert!(reason.is_none());
+                assert!(wait);
+                assert_eq!(timeout, Some(10.0));
+            }
+            _ => panic!("expected compile command"),
+        }
+
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "compile",
+                "--from",
+                "viking://resources/a",
+                "--to",
+                "viking://resources/wiki",
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "compile",
+                "--from",
+                "viking://resources/a",
+                "--to",
+                "viking://resources/wiki",
+                "--skill",
+                "viking://agent/skills/wiki",
+                "--timeout",
+                "10",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

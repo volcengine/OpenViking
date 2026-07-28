@@ -10,10 +10,13 @@
 //!
 //! The free functions are invoked from thin `#[pymethods]` wrappers in `lib.rs`.
 
+use std::io::{self, Write};
 use std::sync::Arc;
+use std::time::Duration;
 
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
+use similar::{Algorithm, TextDiff};
 
 use ragfs::core::FileSystem;
 use ragfs::git::{
@@ -174,7 +177,7 @@ fn classify_git_error(e: &ragfs::git::GitError) -> GitErrorMapping {
         GitError::ConcurrentCommit { .. } => {
             GitErrorMapping::PythonException("GitConcurrentCommitError")
         }
-        GitError::PathNotFound(_) => GitErrorMapping::PythonException("AGFSNotFoundError"),
+        GitError::PathNotFound(_) => GitErrorMapping::PythonException("AGFSPathNotFoundError"),
         GitError::PathIsDirectory(_) => {
             GitErrorMapping::PythonException("AGFSInvalidOperationError")
         }
@@ -184,8 +187,10 @@ fn classify_git_error(e: &ragfs::git::GitError) -> GitErrorMapping {
         GitError::InvalidAccountId(_)
         | GitError::InvalidProjectDir(_)
         | GitError::InvalidPath(_) => GitErrorMapping::PythonException("AGFSInvalidPathError"),
-        GitError::BlobTooLarge { .. }
-        | GitError::TooManyFiles { .. }
+        GitError::BlobTooLarge { .. } => {
+            GitErrorMapping::PythonException("AGFSResourceExhaustedError")
+        }
+        GitError::TooManyFiles { .. }
         | GitError::TooManyLogPaths { .. }
         | GitError::LogPathTooDeep { .. }
         | GitError::LogScanLimitExceeded { .. }
@@ -202,6 +207,9 @@ fn classify_git_error(e: &ragfs::git::GitError) -> GitErrorMapping {
         }
         GitError::RefStore(RefStoreError::Conflict { .. }) => {
             GitErrorMapping::PythonException("GitConcurrentCommitError")
+        }
+        GitError::RefStore(RefStoreError::InvalidName(_)) => {
+            GitErrorMapping::PythonException("AGFSInvalidOperationError")
         }
         GitError::RestoreWritebackPartial(_) => GitErrorMapping::RestoreWritebackPartial,
         GitError::ObjectStore(_)
@@ -297,6 +305,71 @@ use ragfs::git::{
     RestoreResponse, RestoreWritebackPartial, ShowRequest, ShowResponse,
 };
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum BoundedDiffError {
+    OutputTooLarge { limit: usize },
+    Render(String),
+}
+
+struct LimitedWriter {
+    bytes: Vec<u8>,
+    limit: usize,
+    exceeded: bool,
+}
+
+impl LimitedWriter {
+    fn new(limit: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            limit,
+            exceeded: false,
+        }
+    }
+}
+
+impl Write for LimitedWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if buf.len() > self.limit.saturating_sub(self.bytes.len()) {
+            self.exceeded = true;
+            return Err(io::Error::other("snapshot diff output size limit exceeded"));
+        }
+        self.bytes.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+pub fn build_bounded_unified_diff(
+    before: &str,
+    after: &str,
+    fromfile: &str,
+    tofile: &str,
+    timeout_ms: u64,
+    max_output_bytes: usize,
+) -> Result<String, BoundedDiffError> {
+    let mut config = TextDiff::configure();
+    config
+        .algorithm(Algorithm::Myers)
+        .timeout(Duration::from_millis(timeout_ms));
+    let diff = config.diff_lines(before, after);
+    let mut writer = LimitedWriter::new(max_output_bytes);
+    let result = diff
+        .unified_diff()
+        .header(fromfile, tofile)
+        .to_writer(&mut writer);
+
+    if writer.exceeded {
+        return Err(BoundedDiffError::OutputTooLarge {
+            limit: max_output_bytes,
+        });
+    }
+    result.map_err(|err| BoundedDiffError::Render(err.to_string()))?;
+    String::from_utf8(writer.bytes).map_err(|err| BoundedDiffError::Render(err.to_string()))
+}
+
 // ---------- request parsers ----------
 
 fn require_str(kwargs: &Bound<PyDict>, key: &str) -> PyResult<String> {
@@ -345,6 +418,26 @@ fn optional_string_list(kwargs: &Bound<PyDict>, key: &str) -> PyResult<Option<Ve
     }
 }
 
+pub struct DiffTextRequest {
+    pub before: String,
+    pub after: String,
+    pub fromfile: String,
+    pub tofile: String,
+    pub timeout_ms: u64,
+    pub max_output_bytes: usize,
+}
+
+pub fn parse_diff_text_request(kwargs: &Bound<PyDict>) -> PyResult<DiffTextRequest> {
+    Ok(DiffTextRequest {
+        before: require_str(kwargs, "before")?,
+        after: require_str(kwargs, "after")?,
+        fromfile: require_str(kwargs, "fromfile")?,
+        tofile: require_str(kwargs, "tofile")?,
+        timeout_ms: optional_usize(kwargs, "timeout_ms", 500)? as u64,
+        max_output_bytes: optional_usize(kwargs, "max_output_bytes", 20 * 1024 * 1024)?,
+    })
+}
+
 pub fn parse_commit_request(kwargs: &Bound<PyDict>) -> PyResult<CommitRequest> {
     Ok(CommitRequest {
         account: require_str(kwargs, "account")?,
@@ -375,6 +468,15 @@ pub fn parse_show_request(kwargs: &Bound<PyDict>) -> PyResult<ShowRequest> {
         target_ref: require_str(kwargs, "target_ref")?,
         path: optional_str(kwargs, "path")?,
     })
+}
+
+pub fn parse_show_max_blob_bytes(kwargs: &Bound<PyDict>) -> PyResult<Option<u64>> {
+    match kwargs.get_item("max_blob_bytes")? {
+        Some(value) if !value.is_none() => value.extract::<u64>().map(Some).map_err(|_| {
+            PyValueError::new_err("kwarg max_blob_bytes must be a non-negative integer")
+        }),
+        _ => Ok(None),
+    }
 }
 
 pub fn parse_log_request(kwargs: &Bound<PyDict>) -> PyResult<LogRequest> {
@@ -533,7 +635,7 @@ pub fn log_entries_to_pylist(py: Python<'_>, entries: Vec<LogEntry>) -> PyResult
 mod tests {
     use super::*;
     use ragfs::core::MountableFS;
-    use ragfs::git::GitError;
+    use ragfs::git::{GitError, RefStoreError};
     use std::sync::Arc;
 
     fn local_cfg(base_dir: &str) -> ragfs::git::GitConfig {
@@ -674,6 +776,71 @@ mod tests {
     }
 
     #[test]
+    fn path_and_object_not_found_have_distinct_python_mappings() {
+        let oid = gix_hash::ObjectId::null(gix_hash::Kind::Sha1);
+        assert_eq!(
+            classify_git_error(&GitError::PathNotFound("foo/bar".into())),
+            GitErrorMapping::PythonException("AGFSPathNotFoundError")
+        );
+        assert_eq!(
+            classify_git_error(&GitError::ObjectStore(
+                ragfs::git::ObjectStoreError::NotFound(oid),
+            )),
+            GitErrorMapping::PythonException("AGFSNotFoundError")
+        );
+    }
+
+    #[test]
+    fn bounded_unified_diff_returns_valid_output_for_adversarial_input() {
+        let before = (0..20_000)
+            .map(|i| format!("before-{i}\n"))
+            .collect::<String>();
+        let after = (0..20_000)
+            .map(|i| format!("after-{i}\n"))
+            .collect::<String>();
+
+        let output = build_bounded_unified_diff(
+            &before,
+            &after,
+            "file@old",
+            "file@new",
+            5,
+            2 * 1024 * 1024,
+        )
+        .expect("deadline should produce an approximate diff");
+
+        assert!(output.starts_with("--- file@old\n+++ file@new\n"));
+        assert!(output.contains("-before-0\n"));
+        assert!(output.contains("+after-0\n"));
+    }
+
+    #[test]
+    fn bounded_unified_diff_enforces_output_limit() {
+        assert_eq!(
+            build_bounded_unified_diff("old\n", "new\n", "old", "new", 500, 8),
+            Err(BoundedDiffError::OutputTooLarge { limit: 8 })
+        );
+    }
+
+    #[test]
+    fn bounded_unified_diff_marks_missing_final_newline() {
+        let output = build_bounded_unified_diff(
+            "old without newline",
+            "new without newline",
+            "old",
+            "new",
+            500,
+            1024,
+        )
+        .expect("small text diff should succeed");
+
+        assert_eq!(
+            output.matches("\\ No newline at end of file").count(),
+            2
+        );
+    }
+
+    #[test]
     fn map_git_error_invalid_account() {
         pyo3::prepare_freethreaded_python();
         Python::attach(|py| {
@@ -695,6 +862,18 @@ mod tests {
             );
             assert!(err.to_string().contains("200"));
         });
+    }
+
+    #[test]
+    fn blob_too_large_maps_to_resource_exhausted() {
+        let error = GitError::BlobTooLarge {
+            size: 200,
+            limit: 100,
+        };
+        assert_eq!(
+            classify_git_error(&error),
+            GitErrorMapping::PythonException("AGFSResourceExhaustedError")
+        );
     }
 
     #[test]
@@ -760,6 +939,15 @@ mod tests {
             matched: 3,
             requested: 10,
         };
+        assert_eq!(
+            classify_git_error(&error),
+            GitErrorMapping::PythonException("AGFSInvalidOperationError")
+        );
+    }
+
+    #[test]
+    fn map_git_error_invalid_ref_name_classification() {
+        let error = GitError::RefStore(RefStoreError::InvalidName("bad ref".into()));
         assert_eq!(
             classify_git_error(&error),
             GitErrorMapping::PythonException("AGFSInvalidOperationError")

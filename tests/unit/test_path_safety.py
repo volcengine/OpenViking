@@ -20,6 +20,24 @@ def test_sanitize_relative_viking_path_preserves_posix_separators():
     )
 
 
+def test_sanitize_relative_viking_path_preserves_literal_current_directory_segment():
+    assert sanitize_relative_viking_path("./scripts/check.py") == "./scripts/check.py"
+
+
+@pytest.mark.parametrize(
+    "rel_path",
+    [
+        "%2e/scripts/check.py",
+        "%2e%2e/outside.py",
+        "scripts%2fcheck.py",
+        "scripts%5ccheck.py",
+    ],
+)
+def test_sanitize_relative_viking_path_rejects_encoded_path_escape(rel_path):
+    with pytest.raises(ValueError):
+        sanitize_relative_viking_path(rel_path)
+
+
 @pytest.mark.parametrize(
     "rel_path",
     [

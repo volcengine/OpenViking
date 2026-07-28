@@ -68,8 +68,21 @@ pub async fn dispatch(
             limit,
             paths,
         } => {
-            let value = client.snapshot_log(&branch, limit, paths.as_deref()).await?;
+            let value = client
+                .snapshot_log(&branch, limit, paths.as_deref())
+                .await?;
             print_log(&value, output_format, compact);
+            Ok(())
+        }
+        SnapshotCmd::Diff {
+            path,
+            from_ref,
+            to_ref,
+        } => {
+            let value = client
+                .snapshot_diff(&path, from_ref.as_deref(), &to_ref)
+                .await?;
+            print_diff(&value, output_format, compact);
             Ok(())
         }
         SnapshotCmd::IgnoreGet => {
@@ -89,6 +102,17 @@ pub async fn dispatch(
             Ok(())
         }
     }
+}
+
+fn print_diff(value: &Value, output_format: OutputFormat, compact: bool) {
+    if matches!(output_format, OutputFormat::Json) {
+        output_success(value, output_format, compact);
+        return;
+    }
+    let diff = value.get("diff_text").and_then(Value::as_str).unwrap_or("");
+    let mut stdout = std::io::stdout();
+    let _ = stdout.write_all(diff.as_bytes());
+    let _ = stdout.flush();
 }
 
 /// Resolve `.ovgitignore` content: `--file` takes precedence over `--content`;

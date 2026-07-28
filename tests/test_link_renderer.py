@@ -9,7 +9,7 @@ class TestRelativePath:
             "viking://user/Caroline/memories/profile.md",
             "viking://user/Caroline/memories/identity.md",
         )
-        assert result == "identity.md"
+        assert result == "./identity.md"
 
     def test_target_in_subdirectory(self):
         result = LinkRenderer.relative_path(
@@ -551,7 +551,7 @@ class TestRoundTrip:
 
         assert memory_file.plain_content() == "Worked with Frank Ocean."
 
-    def test_memory_file_utils_write_keeps_plain_text_body_and_preserves_links_metadata(self):
+    def test_memory_file_utils_write_renders_links_and_preserves_links_metadata(self):
         memory_file = MemoryFile(
             uri="viking://user/Caroline/memories/profile.md",
             content="她喜欢角色扮演游戏，也喜欢开放世界游戏。",
@@ -568,11 +568,10 @@ class TestRoundTrip:
 
         written = MemoryFileUtils.write(memory_file)
 
-        assert "她喜欢角色扮演游戏，也喜欢开放世界游戏。" in written
-        assert "她喜欢[角色扮演游戏](entities/games/rpg.md)，也喜欢开放世界游戏。" not in written
+        assert "她喜欢[角色扮演游戏](entities/games/rpg.md)，也喜欢开放世界游戏。" in written
         assert '"match_text": "角色扮演游戏"' in written
 
-    def test_repeated_memory_file_utils_write_does_not_persist_nested_links(self):
+    def test_repeated_memory_file_utils_write_does_not_nest_links(self):
         memory_file = MemoryFile(
             uri="viking://user/Gina/memories/profile.md",
             content="Gina",
@@ -591,9 +590,7 @@ class TestRoundTrip:
         reparsed = MemoryFileUtils.read(first_write, uri=memory_file.uri)
         second_write = MemoryFileUtils.write(reparsed)
 
-        assert "[Gina](events/2023/02/08/Gina与Jon的日常交流.md)" not in first_write
-        assert (
-            "[[Gina](events/2023/02/08/Gina与Jon的日常交流.md)](events/2023/02/08/Gina与Jon的日常交流.md)"
-            not in second_write
-        )
-        assert "Gina" in second_write
+        rendered_link = "[Gina](events/2023/02/08/Gina与Jon的日常交流.md)"
+        assert first_write.count(rendered_link) == 1
+        assert second_write.count(rendered_link) == 1
+        assert '"memory_type": "profile"' in second_write

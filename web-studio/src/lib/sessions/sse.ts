@@ -2,6 +2,7 @@ import type {
   ChatStreamEvent,
   ChatStreamEventType,
 } from '@ov-server/bot/v1/chat'
+import type { SseMessage } from '#/lib/sse'
 
 const VALID_EVENT_TYPES = new Set<string>([
   'response',
@@ -40,15 +41,9 @@ export function streamEventDataToText(data: unknown): string {
   }
 }
 
-function parseSseLine(line: string): ChatStreamEvent | null {
-  const trimmed = line.trim()
-  if (!trimmed || !trimmed.startsWith('data:')) return null
-
-  const jsonStr = trimmed.slice(5).trim()
-  if (!jsonStr) return null
-
+function parseSseMessage(message: SseMessage): ChatStreamEvent | null {
   try {
-    const parsed = JSON.parse(jsonStr) as Record<string, unknown>
+    const parsed = JSON.parse(message.data) as Record<string, unknown>
     if (
       typeof parsed.event !== 'string' ||
       !VALID_EVENT_TYPES.has(parsed.event)
@@ -69,53 +64,18 @@ function parseSseLine(line: string): ChatStreamEvent | null {
 }
 
 /**
- * Parse an SSE response body into an async generator of ChatStreamEvents.
+ * Validate standard SSE messages as chat protocol events.
  *
  * Backend format (from openapi.py):
  *   data: {"event":"response","data":"...","timestamp":"..."}\n\n
  *
- * All events use `data:` prefix. Event type is inside the JSON payload.
- * The OpenViking bot proxy currently forwards non-empty SSE lines, so the
- * browser may receive `data:` lines without the blank separator. Parse each
- * complete data line immediately to keep the chat UI live during streaming.
+ * Event type is inside the JSON payload.
  */
 export async function* parseSseStream(
-  response: Response,
+  messages: AsyncIterable<SseMessage>,
 ): AsyncGenerator<ChatStreamEvent> {
-  const body = response.body
-  if (!body) return
-
-  const reader = body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-
-  try {
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-
-      buffer += decoder.decode(value, { stream: true })
-
-      let newlineIndex = buffer.indexOf('\n')
-      while (newlineIndex >= 0) {
-        const line = buffer.slice(0, newlineIndex)
-        buffer = buffer.slice(newlineIndex + 1)
-
-        const event = parseSseLine(line)
-        if (event) yield event
-
-        newlineIndex = buffer.indexOf('\n')
-      }
-    }
-
-    // Process any remaining buffer
-    if (buffer.trim()) {
-      for (const line of buffer.split('\n')) {
-        const event = parseSseLine(line)
-        if (event) yield event
-      }
-    }
-  } finally {
-    reader.releaseLock()
+  for await (const message of messages) {
+    const event = parseSseMessage(message)
+    if (event) yield event
   }
 }

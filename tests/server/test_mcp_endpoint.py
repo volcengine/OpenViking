@@ -455,13 +455,13 @@ async def test_store_does_not_autofill_peer_id_from_ctx(service, monkeypatch):
     from openviking.session.session import Session
 
     captured: list[tuple[str, str | None]] = []
-    original = Session.add_message
+    original = Session.add_message_async
 
-    def _spy(self, role, parts, peer_id=None, created_at=None):
+    async def _spy(self, role, parts, peer_id=None, created_at=None):
         captured.append((role, peer_id))
-        return original(self, role, parts, peer_id=peer_id, created_at=created_at)
+        return await original(self, role, parts, peer_id=peer_id, created_at=created_at)
 
-    monkeypatch.setattr(Session, "add_message", _spy)
+    monkeypatch.setattr(Session, "add_message_async", _spy)
 
     await remember(
         messages=[
@@ -877,3 +877,80 @@ def test_mcp_route_registered(app):
     """Verify the /mcp route exists in the app."""
     mcp_routes = [r for r in app.routes if hasattr(r, "path") and r.path == "/mcp"]
     assert len(mcp_routes) == 1
+
+
+def test_mcp_route_sets_scope_route(app):
+    """The /mcp route must resolve ``scope["route"]`` on match so the
+    observability middleware's route-template lookup attributes MCP traffic
+    to ``/mcp`` instead of falling back to ``/__unmatched__``."""
+    from starlette.routing import Match
+
+    mcp_route = next(r for r in app.routes if getattr(r, "path", None) == "/mcp")
+
+    scope = {"type": "http", "method": "POST", "path": "/mcp", "headers": []}
+    match, child_scope = mcp_route.matches(scope)
+
+    assert match != Match.NONE
+    assert child_scope["route"] is mcp_route
+
+
+def test_mcp_route_unmatched_paths_keep_falling_back(app):
+    """Non-matching paths must not gain ``scope["route"]`` — the 404 fallback
+    to ``/__unmatched__`` (low-cardinality protection) stays intact."""
+    from starlette.routing import Match
+
+    mcp_route = next(r for r in app.routes if getattr(r, "path", None) == "/mcp")
+
+    scope = {"type": "http", "method": "POST", "path": "/mcp-does-not-exist", "headers": []}
+    match, child_scope = mcp_route.matches(scope)
+
+    assert match == Match.NONE
+    assert "route" not in child_scope
+
+
+async def test_mcp_middleware_stamps_root_span_identity():
+    """Identity resolved from the auth headers must be stamped onto the outer
+    request's root span attributes, so MCP traffic is audited under the real
+    account/user instead of ``__unknown__``."""
+    from openviking.telemetry.span_models import RootSpanAttributes
+
+    root_attrs = RootSpanAttributes(
+        http_method="POST",
+        http_route="/mcp",
+        request_id="req-test",
+    )
+
+    async def downstream(scope, receive, send):
+        response = httpx.Response(200, json={"ok": True})
+        await send(
+            {
+                "type": "http.response.start",
+                "status": response.status_code,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send({"type": "http.response.body", "body": response.content})
+
+    app = FastAPI()
+    app.state.config = SimpleNamespace(get_effective_auth_mode=lambda: AuthMode.DEV)
+    app.state.auth_plugin = DevAuthPlugin()
+    app.routes.append(Route("/mcp", endpoint=_IdentityASGIMiddleware(downstream), methods=["POST"]))
+
+    async def seed_root_span(scope, receive, send):
+        # Mirrors the outer observability middleware attaching root_span_attrs
+        # to scope["state"] before routing.
+        if scope["type"] == "http":
+            scope.setdefault("state", {})["root_span_attrs"] = root_attrs
+        await app(scope, receive, send)
+
+    transport = httpx.ASGITransport(app=seed_root_span)
+    async with httpx.AsyncClient(transport=transport, base_url="http://ov.test") as client:
+        response = await client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
+            headers={"X-OpenViking-Account": "acct-1", "X-OpenViking-User": "user-1"},
+        )
+
+    assert response.status_code == 200
+    assert root_attrs.account_id == "acct-1"
+    assert root_attrs.user_id == "user-1"

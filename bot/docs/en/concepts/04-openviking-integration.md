@@ -188,8 +188,22 @@ The `message.compact` Hook performs this synchronization. Important settings inc
 | Setting | Purpose |
 |---------|---------|
 | `agents.commit_token_threshold` | Commit when pending tokens reach this value |
-| `agents.commit_keep_recent_count` | Number of recent messages retained after commit |
+| `agents.commit_keep_recent_turn_count` | Maximum number of recent logical Turns retained after commit; default: `3` |
+| `agents.commit_retained_message_token_budget` | Token budget for retained messages and the checkpoint after commit; default: `6000` |
+| `agents.commit_min_raw_tail_steps` | Minimum number of trailing assistant Steps kept verbatim when the newest Turn exceeds the budget; default: `1` |
+| `agents.commit_keep_recent_count` | Deprecated physical-message setting, retained only for compatibility with existing configuration files |
 | `agents.memory_window` | Local history window, also used as a message-count commit threshold |
+
+A logical Turn starts with a real user query and includes every assistant Step before the next real user query. Each Step keeps the assistant text, tool calls, and corresponding tool results as an indivisible unit. The system first selects recent Turns using `commit_keep_recent_turn_count`, then applies `commit_retained_message_token_budget` to the retained content. If the newest Turn alone exceeds the budget, its user query and at least `commit_min_raw_tail_steps` latest Steps remain verbatim while earlier Steps are represented by the checkpoint generated during the same archive operation.
+
+For migration, `commit_keep_recent_count` is not automatically converted from a physical-message count to a Turn count, and the current VikingBot Turn-aware commit path no longer reads it. The configuration model still accepts the field, so an existing `ov.conf` does not fail because of an unknown setting. If only the deprecated field is present, the three new settings use their defaults. Configure the new fields explicitly to preserve a customized retention policy:
+
+```yaml
+agents:
+  commit_keep_recent_turn_count: 3
+  commit_retained_message_token_budget: 6000
+  commit_min_raw_tail_steps: 1
+```
 
 Messages use local indexes for incremental synchronization, avoiding repeated appends on every turn. A synchronization failure is stored in metadata and logged, but optional memory functionality does not block basic chat.
 

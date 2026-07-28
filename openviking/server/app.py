@@ -15,6 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.exceptions import ExceptionMiddleware
 
 from openviking.server.config import (
     ServerConfig,
@@ -27,6 +28,7 @@ from openviking.server.error_mapping import map_exception
 from openviking.server.identity import Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.server.profile_middleware import create_profile_http_middleware
+from openviking.server.request_id import REQUEST_ID_HEADER, RequestIdMiddleware
 from openviking.server.routers import (
     admin_router,
     bot_router,
@@ -61,6 +63,20 @@ from openviking_cli.utils.logger import init_otel_log_handler_from_server_config
 
 logger = get_logger(__name__)
 
+WORKER_WITH_BOT_ENV = "OPENVIKING_WORKER_WITH_BOT"
+WORKER_BOT_API_URL_ENV = "OPENVIKING_WORKER_BOT_API_URL"
+
+
+def create_worker_app() -> FastAPI:
+    """Load file config and replay parent-process Bot CLI overrides."""
+    config = load_server_config()
+    with_bot = os.environ.get(WORKER_WITH_BOT_ENV)
+    if with_bot is not None:
+        config.with_bot = with_bot == "1"
+    bot_api_url = os.environ.get(WORKER_BOT_API_URL_ENV)
+    if bot_api_url is not None:
+        config.bot_api_url = bot_api_url
+    return create_app(config)
 
 
 async def _initialize_auth_plugin(
@@ -223,6 +239,10 @@ def create_app(
         if callable(usage_reporter_setter):
             usage_reporter_setter(_get_usage_reporter())
 
+        agent_evolution_setter = getattr(sessions, "set_agent_evolution_config", None)
+        if callable(agent_evolution_setter):
+            agent_evolution_setter(config.agent_evolution)
+
     if service is not None:
         _configure_session_runtime(service)
 
@@ -329,15 +349,6 @@ def create_app(
     app.state.config = config
     app.state.api_key_manager = None
     set_server_config(config)
-
-    # Add CORS middleware
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=config.cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
 
     # Body dump middleware must be registered BEFORE observability so it ends up
     # nested inside the trace span (in Starlette, middleware added later wraps
@@ -474,8 +485,7 @@ def create_app(
         )
 
     # Catch-all for unhandled exceptions so clients always get JSON
-    @app.exception_handler(Exception)
-    async def general_error_handler(request: Request, exc: Exception):
+    async def general_error_handler(_request: Request, exc: Exception):
         mapped = map_exception(exc)
         if mapped is not None:
             http_status = ERROR_CODE_TO_HTTP_STATUS.get(mapped.code, 500)
@@ -507,6 +517,19 @@ def create_app(
                 ),
             ).model_dump(),
         )
+
+    # Keep exception rendering inside the request-ID and CORS layers. This lets
+    # those middleware own their response headers without special error paths.
+    app.add_middleware(ExceptionMiddleware, handlers={Exception: general_error_handler})
+    app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=config.cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=[REQUEST_ID_HEADER],
+    )
 
     # Configure Bot API if --with-bot is enabled
     if config.with_bot:
@@ -711,10 +734,23 @@ def create_app(
 
     # MCP endpoint — serves 5 tools (search, read, store, forget, health)
     # via streamable HTTP for Claude Code and other MCP clients.
-    from starlette.routing import Route
+    from starlette.routing import Match, Route
 
     from openviking.server.mcp_endpoint import create_mcp_app
 
-    app.routes.append(Route("/mcp", endpoint=create_mcp_app(), methods=["GET", "POST", "DELETE"]))
+    class _ScopedRoute(Route):
+        """Expose the selected route through ``scope["route"]``, matching
+        ``APIRoute.matches``, so outer observability can resolve the static
+        ``/mcp`` route template."""
+
+        def matches(self, scope):
+            match, child_scope = super().matches(scope)
+            if match != Match.NONE:
+                child_scope["route"] = self
+            return match, child_scope
+
+    app.routes.append(
+        _ScopedRoute("/mcp", endpoint=create_mcp_app(), methods=["GET", "POST", "DELETE"])
+    )
 
     return app

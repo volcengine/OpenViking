@@ -47,6 +47,7 @@ SDK 支持三种配置方式，优先级从高到低如下：
 - `user_id`：`user` 的兼容旧别名
 - `actor_peer_id`：可选的 actor peer 覆盖
 - `agent_id`：`actor_peer_id` 的兼容旧别名
+- `event_hooks`：可选的 `httpx.AsyncClient` 事件钩子，例如异步 request 或 response hook
 
 兼容性说明：
 
@@ -86,6 +87,7 @@ client = SyncHTTPClient(
     url="http://127.0.0.1:1933",
     api_key="your-user-key",
 )
+client.initialize()
 
 healthy = client.health()
 print("health:", healthy)
@@ -96,6 +98,8 @@ print("session:", session)
 client.session("demo-session").add_message("user", "hello from sdk")
 context = client.session("demo-session").get_session_context(token_budget=4096)
 print("context:", context)
+
+client.close()
 ```
 
 ## 快速开始：异步客户端
@@ -111,6 +115,7 @@ async def main() -> None:
         url="http://127.0.0.1:1933",
         api_key="your-user-key",
     )
+    await client.initialize()
 
     healthy = await client.health()
     print("health:", healthy)
@@ -137,6 +142,7 @@ asyncio.run(main())
 from openviking_sdk import SyncHTTPClient
 
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
+client.initialize()
 result = client.create_session("demo-session")
 print(result)
 ```
@@ -149,6 +155,7 @@ print(result)
 from openviking_sdk import SyncHTTPClient
 
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
+client.initialize()
 
 result = client.add_resource(
     "/path/to/notes.md",
@@ -159,12 +166,25 @@ result = client.add_resource(
 print(result)
 ```
 
+如果只希望入库并生成向量、不走 VLM 语义理解，可以传 `processing_mode="vectors_only"`。
+该模式会写入/同步资源树并向量化当前文件，但不会生成或刷新 `.abstract.md` / `.overview.md`。
+
+```python
+result = client.add_resource(
+    "/path/to/notes.md",
+    to="viking://resources/demo-notes",
+    processing_mode="vectors_only",
+    wait=True,
+)
+```
+
 ### 文件系统操作
 
 ```python
 from openviking_sdk import SyncHTTPClient
 
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
+client.initialize()
 
 client.mkdir("viking://resources/demo-dir")
 print(client.ls("viking://resources"))
@@ -177,6 +197,7 @@ print(client.read("viking://resources/demo-dir/example.md"))
 from openviking_sdk import SyncHTTPClient
 
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
+client.initialize()
 
 result = client.find("hello", limit=5)
 print(result)
@@ -209,6 +230,7 @@ root_client = SyncHTTPClient(
     url="http://127.0.0.1:1933",
     api_key="your-root-key",
 )
+root_client.initialize()
 
 result = root_client.admin_create_account(
     account_id="demo-account",
@@ -248,6 +270,7 @@ SDK 会把服务端错误码映射为 Python 异常。
 from openviking_sdk import OpenVikingError, SyncHTTPClient
 
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
+client.initialize()
 
 try:
     print(client.read("viking://resources/not-exists.md"))

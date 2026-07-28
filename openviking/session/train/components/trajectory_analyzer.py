@@ -139,17 +139,20 @@ class TrajectoryRolloutAnalyzer:
         ctx: RequestContext | None,
         strict_extract_errors: bool = False,
         latest_archive_overview: str = "",
+        include_trajectories: bool = True,
         include_session_skills: bool = False,
         case_name: str = "",
         source_archive_uri: str = "",
     ) -> dict[str, list[Any]]:
-        """Extract and persist trajectory memories from rollout messages.
+        """Extract trajectory and/or reusable skill operations from rollout messages.
 
         When ``include_session_skills`` is True, session skill patches are
         co-extracted in the same ExtractLoop pass and returned as
         ``PatchSemanticGradient`` instances in the ``"skill_gradients"`` key.
         Skill patches are *not* applied to disk by this method — they are
-        returned as gradient signals for downstream policy training.
+        returned as gradient signals for downstream policy training. Setting
+        ``include_trajectories`` to False keeps the pass skill-only and prevents
+        trajectory operations from being persisted.
         """
         empty_result: dict[str, list[Any]] = {"contexts": [], "skill_gradients": []}
         if not messages or ctx is None:
@@ -158,7 +161,7 @@ class TrajectoryRolloutAnalyzer:
         provider = AgentTrajectoryContextProvider(
             messages=messages,
             latest_archive_overview=latest_archive_overview,
-            include_trajectories=True,
+            include_trajectories=include_trajectories,
             include_session_skills=include_session_skills,
         )
         phase_result = await self._run_trajectory_extract_phase(
@@ -166,6 +169,7 @@ class TrajectoryRolloutAnalyzer:
             messages=messages,
             ctx=ctx,
             strict_extract_errors=strict_extract_errors,
+            include_trajectories=include_trajectories,
             include_session_skills=include_session_skills,
             case_name=case_name,
             source_archive_uri=source_archive_uri,
@@ -183,6 +187,7 @@ class TrajectoryRolloutAnalyzer:
         messages: list[Message],
         ctx: RequestContext,
         strict_extract_errors: bool,
+        include_trajectories: bool = True,
         include_session_skills: bool = False,
         case_name: str = "",
         source_archive_uri: str = "",
@@ -194,7 +199,9 @@ class TrajectoryRolloutAnalyzer:
             raise RuntimeError("VikingFS is required to extract trajectory memories")
 
         extract_context = provider.get_extract_context()
-        allowed_types: set[str] = {_TRAJECTORY_MEMORY_TYPE}
+        allowed_types: set[str] = set()
+        if include_trajectories:
+            allowed_types.add(_TRAJECTORY_MEMORY_TYPE)
         if include_session_skills:
             allowed_types.add(SESSION_SKILL_MEMORY_TYPE)
         isolation_handler = MemoryIsolationHandler(
@@ -242,13 +249,15 @@ class TrajectoryRolloutAnalyzer:
             _ensure_trajectory_case_name(traj_ops, case_name=case_name)
             _apply_trajectory_source_archive_uri(traj_ops, source_archive_uri)
 
-            memory_result = await self._apply_trajectory_operations(
-                operations=traj_ops,
-                provider=provider,
-                ctx=ctx,
-                extract_context=extract_context,
-                isolation_handler=isolation_handler,
-            )
+            memory_result = MemoryUpdateResult()
+            if include_trajectories:
+                memory_result = await self._apply_trajectory_operations(
+                    operations=traj_ops,
+                    provider=provider,
+                    ctx=ctx,
+                    extract_context=extract_context,
+                    isolation_handler=isolation_handler,
+                )
             tracer.info(
                 "[trajectory] Applied memory ops: "
                 f"written={len(memory_result.written_uris)}, "

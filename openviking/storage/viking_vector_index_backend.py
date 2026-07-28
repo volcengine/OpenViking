@@ -463,7 +463,7 @@ class _SingleAccountBackend:
             return await self._async_adapter.call("delete", filter=filter)
         except Exception as e:
             logger.error("Error deleting by filter: %s", e)
-            return 0
+            raise
 
     async def exists(self, id: str) -> bool:
         try:

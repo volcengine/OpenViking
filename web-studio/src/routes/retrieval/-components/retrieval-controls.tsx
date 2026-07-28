@@ -1,6 +1,7 @@
 import { FolderOpen } from 'lucide-react'
 import type { TFunction } from 'i18next'
 
+import { Checkbox } from '#/components/ui/checkbox'
 import { Input } from '#/components/ui/input'
 import {
   Select,
@@ -19,8 +20,10 @@ import type { RetrievalMode, RetrievalScope } from '../-types/retrieval'
 
 export function RetrievalControls({
   customPathInput,
+  ignoreCase,
   mode,
   onCustomPathInputChange,
+  onIgnoreCaseChange,
   onModeChange,
   onResultCountChange,
   onScopeChange,
@@ -32,8 +35,10 @@ export function RetrievalControls({
   targetUri,
 }: {
   customPathInput: string
+  ignoreCase: boolean
   mode: RetrievalMode
   onCustomPathInputChange: (value: string) => void
+  onIgnoreCaseChange: (value: boolean) => void
   onModeChange: (value: RetrievalMode) => void
   onResultCountChange: (value: number) => void
   onScopeChange: (value: RetrievalScope) => void
@@ -122,6 +127,13 @@ export function RetrievalControls({
           aria-label={t('controls.sessionId')}
           className="h-8 w-52 font-mono text-sm"
         />
+      )}
+
+      {mode === 'grep' && (
+        <label className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md border bg-muted/20 px-2.5 text-xs text-foreground">
+          <Checkbox checked={ignoreCase} onCheckedChange={onIgnoreCaseChange} />
+          {t('controls.ignoreCase')}
+        </label>
       )}
     </div>
   )

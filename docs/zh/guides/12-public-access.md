@@ -11,6 +11,8 @@ OpenViking 默认在 1933 端口对外提供 REST API、MCP、OAuth、`.well-kno
 
 前提：有公网域名、80 + 443 端口可达、DNS 已指向。
 
+<a id="添加-https公网访问"></a>
+
 ## 方式 A：用自带 Caddy 自动签发 Let's Encrypt 证书（推荐）
 
 `docker compose up` 默认带一个 Caddy 反代容器。给它追加一个域名块即可让

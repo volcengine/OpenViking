@@ -109,20 +109,23 @@ source "$TEMP_ENV"
 
 # ── 校验必要字段 ──────────────────────────────────────────────────────────────
 # 只拒绝明确的占位符值，不误伤真实 AK（Volcengine 真实 AK 本身就以 AKLT 开头）
-PLACEHOLDERS=("AKLTxxxxxxxxxx" "xxxxxxxxxx" "ccxxxxxxxxxx")
+storage_type="${storage_type:-local}"
+PLACEHOLDERS=("AKLTxxxxxxxxxx" "xxxxxxxxxx")
 missing=()
-for field in volcengine_access_key volcengine_secret_key vke_cluster_id; do
-    val="${!field:-}"
-    rejected=false
-    if [[ -z "$val" ]]; then
-        rejected=true
-    else
-        for ph in "${PLACEHOLDERS[@]}"; do
-            [[ "$val" == "$ph" ]] && rejected=true && break
-        done
-    fi
-    $rejected && missing+=("$field")
-done
+if [[ "$SKIP_DEPLOY" == false && "$storage_type" == "tos" ]]; then
+    for field in volcengine_access_key volcengine_secret_key; do
+        val="${!field:-}"
+        rejected=false
+        if [[ -z "$val" ]]; then
+            rejected=true
+        else
+            for ph in "${PLACEHOLDERS[@]}"; do
+                [[ "$val" == "$ph" ]] && rejected=true && break
+            done
+        fi
+        $rejected && missing+=("$field")
+    done
+fi
 
 if [[ ${#missing[@]} -gt 0 ]]; then
     log_error "Config validation failed! Missing or placeholder fields:"
@@ -145,7 +148,6 @@ k8s_deployment_name="${k8s_deployment_name:-vikingbot}"
 k8s_replicas="${k8s_replicas:-1}"
 k8s_manifest_path="${k8s_manifest_path:-deploy/vke/k8s/deployment.yaml}"
 kubeconfig_path="${kubeconfig_path:-}"
-storage_type="${storage_type:-local}"
 tos_bucket="${tos_bucket:-vikingbot_data}"
 tos_path="${tos_path:-/.vikingbot/}"
 tos_region="${tos_region:-cn-beijing}"
@@ -182,7 +184,6 @@ log_info "=================================================="
 cat <<EOF
 Config:        ${CONFIG_FILE}
 Region:        ${volcengine_region:-cn-beijing}
-Cluster ID:    ${vke_cluster_id}
 Image:         ${full_image_name}
 Timestamp tag: ${use_timestamp_tag}
 Dockerfile:    ${dockerfile_path}

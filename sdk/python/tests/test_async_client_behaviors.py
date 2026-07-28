@@ -9,6 +9,34 @@ from openviking_sdk.errors import NotFoundError
 
 
 @pytest.mark.asyncio
+async def test_async_http_client_initialize_forwards_event_hooks():
+    async def request_hook(_request):
+        return None
+
+    async def later_hook(_request):
+        return None
+
+    event_hooks = {"request": [request_hook]}
+    fake_http = SimpleNamespace(aclose=AsyncMock())
+
+    with patch(
+        "openviking_sdk.client.httpx.AsyncClient",
+        return_value=fake_http,
+    ) as mock_async_client:
+        client = AsyncHTTPClient(
+            url="http://localhost:1933",
+            event_hooks=event_hooks,
+        )
+        await client.initialize()
+    event_hooks["request"].append(later_hook)
+
+    assert mock_async_client.call_args.kwargs["event_hooks"] == {
+        "request": [request_hook]
+    }
+    await client.close()
+
+
+@pytest.mark.asyncio
 async def test_async_http_client_batch_add_messages_posts_batch_payload():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
@@ -62,6 +90,46 @@ async def test_async_http_client_batch_add_messages_url_encodes_session_id():
 
 
 @pytest.mark.asyncio
+async def test_async_http_client_sends_message_semantics_and_turn_retention():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {"result": {"status": "ok"}}
+
+    await client.add_message(
+        "demo-session",
+        "assistant",
+        parts=[{"type": "text", "text": "checking"}],
+        turn_id="turn-1",
+        message_kind="assistant_step",
+        source_message_ids=["u1"],
+    )
+    await client.commit_session(
+        "demo-session",
+        retention_mode="turn_budget",
+        keep_recent_turn_count=3,
+        retained_message_token_budget=12_000,
+        min_raw_tail_steps=1,
+    )
+
+    assert fake_http.post.await_args_list[0].kwargs["json"] == {
+        "role": "assistant",
+        "parts": [{"type": "text", "text": "checking"}],
+        "turn_id": "turn-1",
+        "message_kind": "assistant_step",
+        "source_message_ids": ["u1"],
+    }
+    assert fake_http.post.await_args_list[1].kwargs["json"] == {
+        "keep_recent_count": 0,
+        "telemetry": False,
+        "retention_mode": "turn_budget",
+        "keep_recent_turn_count": 3,
+        "retained_message_token_budget": 12_000,
+        "min_raw_tail_steps": 1,
+    }
+
+
+@pytest.mark.asyncio
 async def test_async_http_client_reindex_posts_content_reindex():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
@@ -84,6 +152,19 @@ async def test_async_http_client_reindex_posts_content_reindex():
             "wait": False,
             "dry_run": True,
         },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("cleanup", "action"), [(False, "migrate"), (True, "cleanup")])
+async def test_async_http_client_admin_migrate_posts_action_payload(cleanup, action):
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=object())
+    client._handle_response = lambda _response: {"status": "accepted"}
+
+    assert await client.admin_migrate(cleanup=cleanup) == {"status": "accepted"}
+    client._request.assert_awaited_once_with(
+        "POST", "/api/v1/admin/migrate", json={"action": action}
     )
 
 
@@ -370,6 +451,77 @@ async def test_add_resource_uploads_local_file_even_when_url_is_localhost(tmp_pa
     assert payload["temp_file_id"] == "upload_resource.md"
     assert payload["watch_interval"] == 60
     assert "path" not in payload
+
+
+@pytest.mark.asyncio
+async def test_add_resource_forwards_processing_mode():
+    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {
+        "result": {"root_uri": "viking://resources/demo"}
+    }
+
+    await client.add_resource(
+        "https://example.com/demo.md",
+        processing_mode="vectors_only",
+    )
+
+    fake_http.post.assert_awaited_once()
+    payload = fake_http.post.await_args.kwargs["json"]
+    assert payload["processing_mode"] == "vectors_only"
+
+
+@pytest.mark.asyncio
+async def test_add_resource_omits_default_processing_mode_for_legacy_servers():
+    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {
+        "result": {"root_uri": "viking://resources/demo"}
+    }
+
+    await client.add_resource("https://example.com/demo.md")
+
+    fake_http.post.assert_awaited_once()
+    payload = fake_http.post.await_args.kwargs["json"]
+    assert "processing_mode" not in payload
+
+
+@pytest.mark.asyncio
+async def test_add_resource_preserves_positional_watch_args_for_legacy_callers():
+    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {
+        "result": {"root_uri": "viking://resources/demo"}
+    }
+
+    await client.add_resource(
+        "https://example.com/demo.md",
+        None,
+        None,
+        "",
+        "",
+        False,
+        None,
+        False,
+        None,
+        None,
+        None,
+        True,
+        None,
+        1440,
+        {"site": True},
+        False,
+    )
+
+    fake_http.post.assert_awaited_once()
+    payload = fake_http.post.await_args.kwargs["json"]
+    assert payload["watch_interval"] == 1440
+    assert payload["args"] == {"site": True}
+    assert payload["telemetry"] is False
+    assert "processing_mode" not in payload
 
 
 @pytest.mark.asyncio
@@ -737,16 +889,12 @@ async def test_export_and_backup_ovpack_append_default_suffixes(tmp_path):
 async def test_backup_ovpack_preserves_existing_file_when_replace_fails(tmp_path):
     client = AsyncHTTPClient(url="http://localhost:1933")
     client._http = SimpleNamespace(
-        post=AsyncMock(
-            return_value=SimpleNamespace(is_success=True, content=b"new-backup")
-        )
+        post=AsyncMock(return_value=SimpleNamespace(is_success=True, content=b"new-backup"))
     )
     output = tmp_path / "backup.ovpack"
     output.write_bytes(b"known-good-backup")
 
-    with patch(
-        "openviking_sdk.client.os.replace", side_effect=OSError("replace failed")
-    ):
+    with patch("openviking_sdk.client.os.replace", side_effect=OSError("replace failed")):
         with pytest.raises(OSError, match="replace failed"):
             await client.backup_ovpack(str(output))
 

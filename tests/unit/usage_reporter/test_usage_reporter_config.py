@@ -11,6 +11,7 @@ from openviking.server.app import create_app
 from openviking.server.config import ServerConfig, UsageReporterConfig
 from openviking.usage_reporter import UsageContext, UsageEvent
 from openviking.usage_reporter.config import build_usage_reporter
+from openviking.usage_reporter.http_sink import HttpUsageSink
 
 
 @pytest.mark.asyncio
@@ -79,9 +80,35 @@ class CustomUsageSink:
     assert "source" not in payload
 
 
+def test_builtin_http_sink_is_built_from_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("OV_RESOURCE_ID", "ov-test")
+
+    reporter = build_usage_reporter(
+        UsageReporterConfig(
+            enabled=True,
+            extractors=["memory_usage"],
+            sinks=[
+                {
+                    "type": "http",
+                    "config": {
+                        "endpoint": "http://127.0.0.1:1/usage",
+                        "outbox_dir": str(tmp_path / ".usage_outbox"),
+                    },
+                }
+            ],
+        )
+    )
+
+    assert reporter is not None
+    assert len(reporter.sinks) == 1
+    assert isinstance(reporter.sinks[0], HttpUsageSink)
+    reporter.sinks[0].close()
+
+
 async def test_app_reuses_and_closes_usage_reporter(monkeypatch):
     built_reporters = []
     assigned_reporters = []
+    assigned_agent_evolution_configs = []
 
     class Reporter:
         closed = False
@@ -102,6 +129,9 @@ async def test_app_reuses_and_closes_usage_reporter(monkeypatch):
 
         def set_usage_reporter(self, value):
             assigned_reporters.append(value)
+
+        def set_agent_evolution_config(self, config):
+            assigned_agent_evolution_configs.append(config)
 
     class Service:
         sessions = Sessions()
@@ -131,10 +161,12 @@ async def test_app_reuses_and_closes_usage_reporter(monkeypatch):
     monkeypatch.setattr("openviking.server.app.get_task_tracker", lambda: TaskTracker())
     monkeypatch.setattr("openviking.server.mcp_endpoint.mcp_lifespan", mcp_lifespan)
 
-    app = create_app(config=ServerConfig(), service=Service())
+    config = ServerConfig.model_validate({"agent_evolution": {"enabled": True}})
+    app = create_app(config=config, service=Service())
     async with app.router.lifespan_context(app):
         pass
 
     assert built_reporters == [reporter]
     assert assigned_reporters == [reporter, reporter]
+    assert [config.enabled for config in assigned_agent_evolution_configs] == [True, True]
     assert reporter.closed is True

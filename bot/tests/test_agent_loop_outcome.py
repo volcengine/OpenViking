@@ -550,6 +550,71 @@ async def test_agent_loop_build_prompt_history_enforces_token_budget_for_live_to
 
 
 @pytest.mark.asyncio
+async def test_agent_loop_build_prompt_history_preserves_anchor_when_final_needs_truncation(
+    temp_dir: Path, monkeypatch
+):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    fake_ov_client = _FakeOVClient(
+        context_payload={
+            "messages": [
+                {"role": "user", "parts": [{"type": "text", "text": "u" * 400}]},
+                {"role": "assistant", "parts": [{"type": "text", "text": "a" * 7600}]},
+            ]
+        }
+    )
+
+    async def fake_get_ov_client(self, session_key, openviking_connection=None, actor_peer_id=None):
+        del self, session_key, openviking_connection, actor_peer_id
+        return fake_ov_client
+
+    monkeypatch.setattr(AgentLoop, "_get_ov_client", fake_get_ov_client)
+
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_FakeProvider(),
+        workspace=temp_dir / "workspace",
+        config=Config(
+            storage_workspace=str(temp_dir),
+            ov_server={"server_url": "http://127.0.0.1:1933"},
+            agents={"session_context_enabled": True, "session_context_token_budget": 3000},
+        ),
+    )
+    session = loop.sessions.get_or_create(
+        SessionKey(type="cli", channel_id="default", chat_id="session-long-final"),
+        skip_heartbeat=True,
+    )
+    session.metadata["openviking"] = {
+        "session_id": "ov-session-long-final",
+        "last_synced_local_index": -1,
+    }
+
+    history = await loop._build_prompt_history(session)
+
+    assert fake_ov_client.context_calls == [("ov-session-long-final", 3000)]
+    assert [message["role"] for message in history] == ["user", "assistant"]
+    assert history[0]["content"] == "u" * 400
+    assert "History truncated" in history[1]["content"]
+    assert sum(loop._history_message_tokens(message) for message in history) <= 3000
+
+
+def test_agent_loop_turn_aware_trim_reserves_space_for_short_final():
+    history = [
+        {"role": "user", "content": "u" * 20},
+        {"role": "assistant", "content": "a"},
+    ]
+
+    trimmed = AgentLoop._trim_history_to_token_budget(history, 10)
+
+    assert [message["role"] for message in trimmed] == ["user", "assistant"]
+    assert trimmed[0]["content"]
+    assert trimmed[1]["content"] == "a"
+    assert sum(AgentLoop._history_message_tokens(message) for message in trimmed) <= 10
+
+
+@pytest.mark.asyncio
 async def test_agent_loop_submits_openviking_session_through_compact_hook(
     temp_dir: Path, monkeypatch
 ):

@@ -15,18 +15,19 @@ import tempfile
 import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
-from typing import Any, Optional, Tuple, Union
-from urllib.parse import quote, unquote, urlparse
+from typing import Optional, Tuple, Union
+from urllib.parse import quote, urlparse
 
-from openviking.utils import is_github_url, is_gitlab_url, parse_code_hosting_url
+from openviking.utils import (
+    is_github_url,
+    is_gitlab_url,
+    parse_code_hosting_url,
+    parse_git_repo_url,
+)
 from openviking.utils.code_hosting_utils import (
-    _domain_matches,
-    _extract_azure_devops_repo_parts,
-    is_code_hosting_url,
     is_git_repo_url,
     validate_git_ssh_uri,
 )
-from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
 from .base import DataAccessor, LocalResource, SourceType
@@ -58,7 +59,7 @@ class GitAccessor(DataAccessor):
         Handles:
         - git@ SSH URLs
         - git://, ssh:// URLs
-        - GitHub/GitLab repository URLs (http/https)
+        - Configured code-hosting repository URLs (http/https)
         - Local paths ending with .git (NOT .zip - those go to ZipParser)
         """
         source_str = str(source)
@@ -68,7 +69,7 @@ class GitAccessor(DataAccessor):
             try:
                 if source_str.startswith("git@"):
                     validate_git_ssh_uri(source_str)
-                return is_code_hosting_url(source_str)
+                return is_git_repo_url(source_str)
             except ValueError:
                 return False
 
@@ -146,7 +147,7 @@ class GitAccessor(DataAccessor):
                             branch=branch,
                             commit=commit,
                         )
-                elif self._is_gitlab_url(repo_url):
+                elif self._can_use_gitlab_zip(repo_url):
                     # Try GitLab ZIP API first, fall back to git clone
                     try:
                         local_dir, repo_name = await self._gitlab_zip_download(
@@ -173,7 +174,7 @@ class GitAccessor(DataAccessor):
                             commit=commit,
                         )
                 else:
-                    # Non-GitHub/GitLab URL: use git clone
+                    # Other configured code-hosting URLs: use git clone
                     repo_name = await self._git_clone(
                         repo_url,
                         temp_local_dir,
@@ -216,77 +217,31 @@ class GitAccessor(DataAccessor):
         """Parse repository source URL to extract branch/commit info."""
         branch = kwargs.get("branch") or kwargs.get("ref")
         commit = kwargs.get("commit")
-        repo_url = source
-        if source.startswith(("http://", "https://", "git://", "ssh://")):
-            parsed = urlparse(source)
-            repo_url = parsed._replace(query="", fragment="").geturl()
-            if commit is None or branch is None:
-                branch, commit = self._extract_ref_from_url(parsed, branch, commit)
-        repo_url = self._normalize_repo_url(repo_url)
-        return repo_url, branch, commit
+        parsed_source = parse_git_repo_url(source)
+        if parsed_source is None:
+            if source.startswith(("git@", "http://", "https://", "git://", "ssh://")):
+                raise ValueError(f"Unsupported Git repository URL: {source}")
+            return source, branch, commit
 
-    def _extract_ref_from_url(
-        self,
-        parsed: Any,
-        branch: Optional[str],
-        commit: Optional[str],
-    ) -> Tuple[Optional[str], Optional[str]]:
-        """Extract branch/commit from URL path."""
-        if parsed.path:
-            path_branch, path_commit = self._parse_ref_from_path(parsed.path)
-            commit = path_commit or commit
-            # If commit is present in path, ignore branch entirely
+        if commit is None or branch is None:
+            commit = parsed_source.commit or commit
+            # Preserve the existing precedence: a commit encoded in the URL
+            # overrides branch selection, while an explicit branch overrides a
+            # branch encoded in the URL.
             if commit:
                 branch = None
             else:
-                branch = branch or path_branch
-        return branch, commit
-
-    def _parse_ref_from_path(self, path: str) -> Tuple[Optional[str], Optional[str]]:
-        """Parse ref from URL path components."""
-        parts = [p for p in path.split("/") if p]
-        branch = None
-        commit = None
-        if "commit" in parts:
-            idx = parts.index("commit")
-            if idx + 1 < len(parts):
-                commit = parts[idx + 1]
-        if "tree" in parts:
-            idx = parts.index("tree")
-            if idx + 1 < len(parts):
-                ref = unquote(parts[idx + 1])
-                if self._looks_like_sha(ref):
-                    commit = ref
-                else:
-                    branch = ref
-        return branch, commit
-
-    @staticmethod
-    def _looks_like_sha(ref: str) -> bool:
-        """Return True if ref looks like a git commit SHA (7-40 hex chars)."""
-        return 7 <= len(ref) <= 40 and all(c in "0123456789abcdefABCDEF" for c in ref)
+                branch = branch or parsed_source.branch
+        return parsed_source.clone_url, branch, commit
 
     def _normalize_repo_url(self, url: str) -> str:
-        """Normalize repository URL to base form."""
-        if url.startswith(("http://", "https://", "git://", "ssh://")):
-            parsed = urlparse(url)
-            path_parts = [p for p in parsed.path.split("/") if p]
-            base_parts = path_parts
-            git_index = next((i for i, p in enumerate(path_parts) if p.endswith(".git")), None)
-            if git_index is not None:
-                base_parts = path_parts[: git_index + 1]
-
-            config = get_openviking_config()
-            if _domain_matches(parsed, getattr(config.code, "azure_devops_domains", [])):
-                azure_repo_parts = _extract_azure_devops_repo_parts(path_parts)
-                if azure_repo_parts:
-                    base_parts = path_parts[: len(azure_repo_parts) + 1]
-
-            if _domain_matches(parsed, config.code.github_domains + config.code.gitlab_domains):
-                base_parts = path_parts[:2]
-            base_path = "/" + "/".join(base_parts)
-            return parsed._replace(path=base_path, query="", fragment="").geturl()
-        return url
+        """Normalize a validated repository URL to a cloneable base form."""
+        parsed_source = parse_git_repo_url(url)
+        if parsed_source is not None:
+            return parsed_source.clone_url
+        if not url.startswith(("git@", "http://", "https://", "git://", "ssh://")):
+            return url
+        raise ValueError(f"Unsupported Git repository URL: {url}")
 
     def _get_repo_name(self, url: str) -> str:
         """Get repository name with organization for GitHub/GitLab URLs.
@@ -358,6 +313,13 @@ class GitAccessor(DataAccessor):
     def _is_gitlab_url(url: str) -> bool:
         """Return True for gitlab.com URLs (supports ZIP archive API)."""
         return is_gitlab_url(url)
+
+    def _can_use_gitlab_zip(self, url: str) -> bool:
+        """Return True when the URL fits the two-segment GitLab ZIP helper."""
+        if not self._is_gitlab_url(url):
+            return False
+        path_parts = [p for p in urlparse(url).path.split("/") if p]
+        return len(path_parts) == 2
 
     async def _git_clone(
         self,

@@ -308,7 +308,7 @@ class OpenAIVLM(VLMBase):
             t0 = time.perf_counter()
             response = client.chat.completions.create(**kwargs)
             elapsed = time.perf_counter() - t0
-            if tools:
+            if tools is not None:
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)
                 return self._build_vlm_response(response, has_tools=True)
             return self._extract_completion_content(response, elapsed)
@@ -338,7 +338,7 @@ class OpenAIVLM(VLMBase):
             t0 = time.perf_counter()
             response = await client.chat.completions.create(**kwargs)
             elapsed = time.perf_counter() - t0
-            if tools:
+            if tools is not None:
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)
                 return self._build_vlm_response(response, has_tools=True)
             return await self._extract_completion_content_async(response, elapsed)
@@ -424,7 +424,7 @@ class OpenAIVLM(VLMBase):
             t0 = time.perf_counter()
             response = client.chat.completions.create(**kwargs)
             elapsed = time.perf_counter() - t0
-            if tools:
+            if tools is not None:
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)
                 return self._build_vlm_response(response, has_tools=True)
             return self._extract_completion_content(response, elapsed)
@@ -456,7 +456,7 @@ class OpenAIVLM(VLMBase):
             t0 = time.perf_counter()
             response = await client.chat.completions.create(**kwargs)
             elapsed = time.perf_counter() - t0
-            if tools:
+            if tools is not None:
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)
                 return self._build_vlm_response(response, has_tools=True)
             return await self._extract_completion_content_async(response, elapsed)

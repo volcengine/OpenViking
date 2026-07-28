@@ -46,6 +46,7 @@ function readProxyConfig() {
     account: cfg.account || "",
     user: cfg.user || "",
     peerId: effectivePeer.peerId,
+    userAgent: cfg.userAgent || "",
     timeoutMs: Math.max(1000, Number(cfg.timeoutMs) || DEFAULT_TIMEOUT_MS),
     debug: cfg.debug === true,
     debugLogPath: cfg.debugLogPath,

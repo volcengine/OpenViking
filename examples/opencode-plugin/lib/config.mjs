@@ -1,8 +1,13 @@
 import fs from "fs"
 import path from "path"
 import { homedir } from "os"
-import { resolveOpenVikingCredentials } from "./shared/credentials.mjs"
+import { buildUserAgent, readManifestVersion, resolveOpenVikingCredentials } from "./shared/credentials.mjs"
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs"
+
+const USER_AGENT = buildUserAgent(
+  "opencode",
+  readManifestVersion(new URL("../package.json", import.meta.url)),
+)
 
 const DEFAULT_CONFIG = {
   endpoint: "http://127.0.0.1:1933",
@@ -216,6 +221,7 @@ function normalizeConfig(config) {
   config.baseUrl = config.endpoint
   config.accountId = config.account
   config.userId = config.user
+  config.userAgent = USER_AGENT
   config.timeoutMs = normalizeNumber(config.timeoutMs, DEFAULT_CONFIG.timeoutMs, 1000, 300000)
   config.repoContext.cacheTtlMs = normalizeNumber(
     config.repoContext.cacheTtlMs,

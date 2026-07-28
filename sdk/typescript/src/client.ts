@@ -119,6 +119,7 @@ export class OpenVikingClient {
       directly_upload_media: options.directlyUploadMedia ?? true,
       preserve_structure: options.preserveStructure,
       watch_interval: options.watchInterval ?? 0,
+      processing_mode: options.processingMode,
       args:
         options.args && Object.keys(options.args).length
           ? options.args
@@ -861,6 +862,16 @@ export class OpenVikingClient {
   gitLog(branch = "main", limit = 20, paths?: string[]): Promise<JsonObject[]> {
     return this.request("GET", "/api/v1/snapshot/log", {
       query: { branch, limit, paths },
+    });
+  }
+  /** Compare one file between two snapshot refs. */
+  gitDiff(path: string, toRef: string, fromRef?: string): Promise<JsonObject> {
+    return this.request("GET", "/api/v1/snapshot/diff", {
+      query: {
+        path: normalizeURI(path),
+        from: fromRef,
+        to: toRef,
+      },
     });
   }
   /** Return the account `.ovgitignore` content. */

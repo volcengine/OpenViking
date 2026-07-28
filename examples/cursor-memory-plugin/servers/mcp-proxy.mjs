@@ -15,6 +15,7 @@ function readConfig() {
     account: cfg.account,
     user: cfg.user,
     peerId: cfg.peerId,
+    userAgent: cfg.userAgent,
     timeoutMs: cfg.timeoutMs,
     debug: cfg.debug,
     debugLogPath: cfg.debugLogPath,

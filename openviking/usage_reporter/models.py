@@ -48,8 +48,7 @@ class UsageEvent:
             self.account_id,
             self.user_id,
             self.session_id,
-            self.task_id or "",
-            str(self.evidence.get("archive_uri") or ""),
+            str(self.evidence.get("message_id") or ""),
             str(self.evidence.get("tool_call_id") or ""),
             self.resource_uri,
         ]

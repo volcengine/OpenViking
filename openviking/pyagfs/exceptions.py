@@ -39,6 +39,12 @@ class AGFSNotFoundError(AGFSClientError):
     pass
 
 
+class AGFSPathNotFoundError(AGFSNotFoundError):
+    """Path not found inside a snapshot tree"""
+
+    pass
+
+
 class AGFSAlreadyExistsError(AGFSClientError):
     """File or directory already exists"""
 
@@ -83,6 +89,12 @@ class AGFSDirectoryNotEmptyError(AGFSClientError):
 
 class AGFSInvalidOperationError(AGFSClientError):
     """Invalid operation"""
+
+    pass
+
+
+class AGFSResourceExhaustedError(AGFSClientError):
+    """Operation exceeded a configured resource limit"""
 
     pass
 

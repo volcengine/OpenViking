@@ -27,6 +27,7 @@ Start with exact brute-force search:
         "algorithm": "brute_force",
         "dtype": "float32",
         "max_concurrent_gpu_searches": 1,
+        "micro_batching_enabled": false,
         "fallback_to_native": true,
         "filter_cache_size": 16
       }
@@ -167,16 +168,16 @@ design because OpenViking uses a per-vector scale that cuVS brute-force does
 not accept directly. CAGRA int8 or PQ compression must likewise be evaluated
 as approximate modes with an explicit recall/latency/memory frontier.
 
-The integration uses immutable GPU snapshots. Warmed searches use per-thread
-cuVS resources/CUDA streams, while mutation and snapshot commit use a
-cross-backend writer lock. Host-side filter and snapshot work can proceed in
-parallel, but `max_concurrent_gpu_searches` defaults to 1 because concurrent
-single-query brute-force kernels can contend for memory bandwidth and reduce
-throughput. Increase it only after measuring the target GPU and workload. By
-default, the first query after an upsert or delete rebuilds synchronously;
-optional background rebuild changes dirty queries to native fallback until the
-new snapshot is ready. On each rebuild it registers the cuVS label order with
-the native engine once.
+The integration uses immutable GPU snapshots and reusable cuVS resources/CUDA
+streams, while mutation and snapshot commit use a cross-backend writer lock.
+Host-side filter and snapshot work can proceed in parallel, but
+`max_concurrent_gpu_searches` defaults to 1 because concurrent single-query
+brute-force kernels can contend for memory bandwidth and reduce throughput.
+Increase it only after measuring the target GPU and workload. By default, the
+first query after an upsert or delete rebuilds synchronously; optional
+background rebuild changes dirty queries to native fallback until the new
+snapshot is ready. On each rebuild it registers the cuVS label order with the
+native engine once.
 The first use of a scalar or URI filter then reuses OpenViking's native
 scalar/path index and projects its bitmap into cuVS row order; it does not scan
 all host-side records in Python. `filter_cache_size` retains the resulting
@@ -186,6 +187,68 @@ Different unseen filters can use the native engine's shared-read path in
 parallel, while cached native routing decisions go directly to the native
 index. A record-generation check prevents a result computed across a mutation
 from entering the route cache.
+
+### Opt-in request micro-batching
+
+Exact brute-force search can coalesce compatible concurrent requests into one
+cuVS matrix-query call:
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "backend": "cuvs",
+      "cuvs": {
+        "algorithm": "brute_force",
+        "max_concurrent_gpu_searches": 1,
+        "micro_batching_enabled": true,
+        "micro_batching_max_batch_size": 8,
+        "micro_batching_max_wait_ms": 1.0
+      }
+    }
+  }
+}
+```
+
+The scheduler batches only requests using the same immutable GPU snapshot,
+prepared filter, and effective top-k. Each result row is mapped back to its
+original request, so scalar/path filtering and result limits retain their
+existing semantics.
+
+A request over a clean, current-generation snapshot can take the warm
+admission fast path when it has no filter or its prepared device filter is
+already cached. That path pins the immutable snapshot and filter, then enqueues
+without the caller acquiring the device-search gate. Dirty, cold, or stale
+snapshots, device-filter cache misses or evictions, rebuilds, and device-filter
+materialization use the gated preparation path. After preparation, the caller
+enqueues and releases the gate before waiting. The micro-batch worker is the
+only component that executes matrix search while holding the device-search
+gate, so a caller never holds that gate while waiting for the worker.
+
+The collection window is a latency-throughput tradeoff. It bounds the
+scheduler's deliberate collection delay to at most the configured value from
+the oldest compatible request; it does not bound total enqueue-to-dispatch
+latency. Worker scheduling, a preceding GPU call, or gated device preparation
+can make dispatch occur later. Under sufficient concurrency up to the
+configured maximum number of queries share one GPU call.
+
+The options are validated as follows:
+
+- `micro_batching_max_batch_size` must be from 1 through 8.
+- `micro_batching_max_wait_ms` must be from 0 through 100 ms. A value of `0`
+  disables deliberate collection delay but can still opportunistically combine
+  compatible requests already queued together.
+- Micro-batching supports only `algorithm: "brute_force"` and requires
+  `max_concurrent_gpu_searches: 1`.
+
+This OpenViking micro-batcher is disabled by default and is distinct from the
+cuVS feature named Dynamic Batching. Its first version supports
+exact brute-force; CAGRA and multiple concurrent batch dispatches are rejected
+until separately validated. Auto mode can use the same options, but requests
+routed to the native CPU path never enter the GPU batch queue. Near-tie
+neighbor ordering may differ between single-row and matrix-query calls;
+validate set overlap and scores when tuning for a workload.
+
 Sparse/hybrid queries fall back to OpenViking's native local index when
 `fallback_to_native` is enabled. The canonical vectors remain in the local
 store and repopulate cuVS after restart.

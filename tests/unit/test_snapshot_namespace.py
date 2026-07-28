@@ -20,6 +20,15 @@ def fake_async_client():
     parent._client.git_restore = AsyncMock(return_value={"result": "applied", "commit_oid": "b" * 40})
     parent._client.git_show = AsyncMock(return_value={"oid": "c" * 40, "parents": []})
     parent._client.git_log = AsyncMock(return_value=[{"oid": "c" * 40}])
+    parent._client.git_diff = AsyncMock(
+        return_value={
+            "path": "viking://resources/a.md",
+            "from_commit": "a" * 40,
+            "to_commit": "b" * 40,
+            "change_type": "modified",
+            "diff_text": "@@ -1 +1 @@\n-old\n+new\n",
+        }
+    )
     return parent
 
 
@@ -120,6 +129,21 @@ async def test_async_log_overrides(async_ns, fake_async_client):
 
 
 @pytest.mark.asyncio
+async def test_async_diff_forwards(async_ns, fake_async_client):
+    out = await async_ns.diff(
+        "viking://resources/a.md",
+        from_ref="a" * 40,
+        to_ref="b" * 40,
+    )
+    fake_async_client._client.git_diff.assert_awaited_once_with(
+        "viking://resources/a.md",
+        from_ref="a" * 40,
+        to_ref="b" * 40,
+    )
+    assert out["change_type"] == "modified"
+
+
+@pytest.mark.asyncio
 async def test_async_ensures_initialized_before_every_call(async_ns, fake_async_client):
     await async_ns.commit(message="m")
     await async_ns.show("main")
@@ -139,6 +163,7 @@ def test_sync_namespace_delegates_through_async(monkeypatch):
     inner_async_ns.restore = AsyncMock(return_value={"result": "applied"})
     inner_async_ns.show = AsyncMock(return_value=b"blob")
     inner_async_ns.log = AsyncMock(return_value=[])
+    inner_async_ns.diff = AsyncMock(return_value={"change_type": "modified"})
     sync_parent._async_client.snapshot = inner_async_ns
 
     sync_ns = SyncSnapshotNamespace(sync_parent)
@@ -155,6 +180,11 @@ def test_sync_namespace_delegates_through_async(monkeypatch):
 
     sync_ns.log(branch="dev", limit=3)
     inner_async_ns.log.assert_awaited_once_with(branch="dev", limit=3, paths=None)
+
+    sync_ns.diff("viking://x/a", from_ref="old", to_ref="new")
+    inner_async_ns.diff.assert_awaited_once_with(
+        "viking://x/a", from_ref="old", to_ref="new"
+    )
 
 
 def test_async_client_snapshot_property_is_lazy_and_cached():

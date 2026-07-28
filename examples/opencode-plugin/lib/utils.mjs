@@ -213,6 +213,7 @@ function makeAuthHeaders(config, headers = {}, actorPeerId = "") {
   if (config.user) result["X-OpenViking-User"] = config.user
   const peerId = String(actorPeerId || "").trim()
   if (peerId) result["X-OpenViking-Actor-Peer"] = peerId
+  if (config.userAgent) result["User-Agent"] = config.userAgent
   return result
 }
 

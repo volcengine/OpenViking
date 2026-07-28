@@ -43,8 +43,14 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 
+import { buildUserAgent, readManifestVersion } from "./shared/credentials.mjs";
+
 const DEFAULT_OV_CONF_PATH = join(homedir(), ".openviking", "ov.conf");
 const DEFAULT_OVCLI_CONF_PATH = join(homedir(), ".openviking", "ovcli.conf");
+const USER_AGENT = buildUserAgent(
+  "claude-code",
+  readManifestVersion(new URL("../.claude-plugin/plugin.json", import.meta.url)),
+);
 
 function num(val, fallback) {
   if (typeof val === "number" && Number.isFinite(val)) return val;
@@ -218,6 +224,7 @@ export function loadConfig() {
     peerId,
     workspacePeer,
     timeoutMs,
+    userAgent: USER_AGENT,
 
     // Recall
     autoRecall: envBool("OPENVIKING_AUTO_RECALL") ?? (cc.autoRecall !== false),

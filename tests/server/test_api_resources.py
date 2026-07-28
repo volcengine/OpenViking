@@ -5,11 +5,31 @@
 
 import asyncio
 import zipfile
+from types import SimpleNamespace
 
 import httpx
 
+from openviking.server.identity import RequestContext, Role
+from openviking.server.routers import resources as resources_router
+from openviking.server.routers.resources import AddResourceRequest
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
+from openviking_cli.session.user_id import UserIdentifier
+
+
+def test_add_resource_request_accepts_processing_mode():
+    request = AddResourceRequest(
+        path="https://example.com/demo.md",
+        processing_mode="vectors_only",
+    )
+
+    assert request.processing_mode == "vectors_only"
+
+
+def test_add_resource_request_defaults_processing_mode():
+    request = AddResourceRequest(path="https://example.com/demo.md")
+
+    assert request.processing_mode == "semantic_and_vectors"
 
 
 async def _wait_task_terminal(client: httpx.AsyncClient, task_id: str, timeout: float = 10.0):
@@ -95,6 +115,67 @@ async def test_add_resource_forwards_args_to_service(
 
     assert resp.status_code == 200
     assert seen["args"] == {"feishu_access_token": "u-test"}
+
+
+async def test_add_resource_forwards_processing_mode_to_service(monkeypatch):
+    seen = {}
+
+    async def fake_add_resource(**kwargs):
+        seen.update(kwargs)
+        return {
+            "status": "success",
+            "root_uri": "viking://resources/demo",
+        }
+
+    service = SimpleNamespace(resources=SimpleNamespace(add_resource=fake_add_resource))
+    monkeypatch.setattr(resources_router, "get_service", lambda: service)
+
+    response = await resources_router.add_resource(
+        SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(config=None))),
+        AddResourceRequest(
+            path="https://example.com/demo.md",
+            processing_mode="vectors_only",
+        ),
+        RequestContext(
+            user=UserIdentifier("account-1", "user-1"),
+            role=Role.USER,
+        ),
+    )
+
+    assert response["status"] == "ok"
+    assert seen["processing_mode"] == "vectors_only"
+
+
+async def test_add_resource_preserves_create_parent_field_presence(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    calls = []
+
+    async def fake_add_resource(**kwargs):
+        calls.append(kwargs)
+        return {"status": "success", "root_uri": "viking://resources/demo"}
+
+    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
+
+    omitted = await client.post(
+        "/api/v1/resources",
+        json={"path": "https://example.com/demo.md", "to": "viking://resources/demo.md"},
+    )
+    explicit_false = await client.post(
+        "/api/v1/resources",
+        json={
+            "path": "https://example.com/demo.md",
+            "to": "viking://resources/demo.md",
+            "create_parent": False,
+        },
+    )
+
+    assert omitted.status_code == 200
+    assert explicit_false.status_code == 200
+    assert "create_parent" not in calls[0]
+    assert calls[1]["create_parent"] is False
 
 
 async def test_add_resource_with_telemetry_wait(
@@ -594,6 +675,37 @@ async def test_temp_upload_success(client: httpx.AsyncClient, upload_temp_dir):
     assert "telemetry" not in body
     assert body["result"]["temp_file_id"].endswith(".md")
     assert "/" not in body["result"]["temp_file_id"]
+
+
+async def test_temp_upload_uses_configured_shared_default(monkeypatch):
+    saved_modes = []
+
+    class Store:
+        async def save_upload(self, file, upload_mode, ctx):
+            saved_modes.append(upload_mode)
+            return "shared_123"
+
+    async def run_immediately(*, fn, **kwargs):
+        return SimpleNamespace(result=await fn(), telemetry=None)
+
+    config = SimpleNamespace(temp_upload=SimpleNamespace(default_mode="shared"))
+    request = SimpleNamespace(
+        state=SimpleNamespace(signed_upload=None),
+        app=SimpleNamespace(state=SimpleNamespace(config=config)),
+    )
+    monkeypatch.setattr(resources_router.TempUploadStore, "build", lambda _: Store())
+    monkeypatch.setattr(resources_router, "run_operation", run_immediately)
+
+    response = await resources_router.temp_upload(
+        request=request,
+        file=object(),
+        telemetry=False,
+        upload_mode=None,
+        _ctx=object(),
+    )
+
+    assert saved_modes == ["shared"]
+    assert response["result"]["temp_file_id"] == "shared_123"
 
 
 async def test_temp_upload_with_telemetry_returns_summary(

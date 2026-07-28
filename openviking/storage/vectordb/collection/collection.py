@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 import importlib
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Type, cast
 
 from openviking.storage.vectordb.collection.result import AggregateResult, SearchResult
 from openviking.storage.vectordb.index.index import IIndex
@@ -475,6 +475,7 @@ class Collection:
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        raise_on_error: bool = False,
     ):
         """Retrieve random documents from the index.
 
@@ -485,6 +486,7 @@ class Collection:
             filters (Optional[Dict[str, Any]]): Query filters to narrow down results. Defaults to None.
             output_fields (Optional[List[str]]): List of field names to include in results.
                 If None, returns all fields. Defaults to None.
+            raise_on_error (bool): Propagate HTTP errors for deletion lookups. Defaults to False.
 
         Returns:
             SearchResult: Random documents from the index with field values (scores are not meaningful).
@@ -494,6 +496,15 @@ class Collection:
         """
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
+        if raise_on_error:
+            return cast(Any, self.__collection).search_by_random(
+                index_name,
+                limit,
+                offset,
+                filters,
+                output_fields,
+                raise_on_error=True,
+            )
         return self.__collection.search_by_random(index_name, limit, offset, filters, output_fields)
 
     def search_by_scalar(

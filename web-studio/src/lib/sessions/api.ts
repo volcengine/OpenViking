@@ -1,5 +1,6 @@
 import {
   deleteSessionBySessionId,
+  getContentRead,
   getSessionIdArchiveByArchiveId,
   getSessions,
   getSessionBySessionId,
@@ -17,14 +18,18 @@ import {
   OvClientError,
   ovClient,
 } from '#/lib/ov-client'
+import { fetchSse } from '#/lib/sse'
 
+import { parseSessionMemoryDiff } from './memory-diff'
 import type { BotChatRequest, BotChatResponse } from '@ov-server/bot/v1/chat'
+import type { SessionMemoryDiff } from './memory-diff'
 import type { Message, MessagePart } from './types/message'
 import type {
   AddMessageResult,
   CommitSessionResult,
   CreateSessionResult,
   DeleteSessionResult,
+  SessionArchiveResult,
   SessionContextResult,
   SessionListItem,
   SessionMeta,
@@ -74,8 +79,8 @@ export async function fetchSessionContext(
 export async function fetchSessionArchive(
   sessionId: string,
   archiveId: string,
-): Promise<unknown> {
-  return getOvResult<unknown>(
+): Promise<SessionArchiveResult> {
+  return getOvResult<SessionArchiveResult>(
     getSessionIdArchiveByArchiveId({
       path: { archive_id: archiveId, session_id: sessionId },
     }),
@@ -96,26 +101,150 @@ export async function deleteSession(
 // Session Messages
 // ---------------------------------------------------------------------------
 
-/** Fetch message history for a session via the /context endpoint. */
+function isMessage(value: unknown): value is Message {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'id' in value &&
+    'role' in value &&
+    'parts' in value
+  )
+}
+
+function getMessages(value: unknown): Message[] {
+  return Array.isArray(value) ? value.filter(isMessage) : []
+}
+
+function deduplicateMessages(messages: Message[]): Message[] {
+  const seen = new Set<string>()
+  return messages.filter((message) => {
+    if (seen.has(message.id)) return false
+    seen.add(message.id)
+    return true
+  })
+}
+
+const SESSION_ARCHIVE_CONCURRENCY = 4
+
+async function mapWithConcurrency<T, TResult>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<TResult>,
+): Promise<TResult[]> {
+  const results = new Array<TResult>(items.length)
+  let nextIndex = 0
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex
+      nextIndex += 1
+      results[index] = await mapper(items[index], index)
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, () => worker()),
+  )
+  return results
+}
+
+function isMissingArchive(error: unknown): boolean {
+  const normalized = normalizeOvClientError(error)
+  return normalized.statusCode === 404 || normalized.code === 'NOT_FOUND'
+}
+
+/**
+ * Fetch the complete message history.
+ *
+ * `/context` only contains messages after the latest completed archive, so
+ * archived messages must be loaded separately and prepended in archive order.
+ */
 export async function fetchSessionMessages(
   sessionId: string,
+  sessionMeta?: SessionMeta,
 ): Promise<Message[]> {
-  const result = await getOvResult<SessionContextResult>(
+  const context = await getOvResult<SessionContextResult>(
     getSessionIdContext({
       path: { session_id: sessionId },
     }),
   )
-  const raw = result.messages
-  if (!Array.isArray(raw)) return []
-  // Each item is Message.to_dict() — { id, role, parts, created_at }
-  return raw.filter(
-    (m): m is Message =>
-      typeof m === 'object' &&
-      m !== null &&
-      'id' in m &&
-      'role' in m &&
-      'parts' in m,
+
+  let commitCount = 0
+  try {
+    const session = sessionMeta ?? (await fetchSession(sessionId))
+    commitCount = Math.max(0, Math.floor(session.commit_count || 0))
+  } catch {
+    // Older servers may not expose session details. Current context is still
+    // useful, so preserve the previous behavior as a fallback.
+  }
+
+  const archiveIds = Array.from(
+    { length: commitCount },
+    (_, index) => `archive_${String(index + 1).padStart(3, '0')}`,
   )
+  const archives = await mapWithConcurrency(
+    archiveIds,
+    SESSION_ARCHIVE_CONCURRENCY,
+    async (archiveId) => {
+      try {
+        return await fetchSessionArchive(sessionId, archiveId)
+      } catch (error) {
+        if (isMissingArchive(error)) return null
+        throw error
+      }
+    },
+  )
+  const archivedMessages = archives.flatMap((archive) =>
+    archive ? getMessages(archive.messages) : [],
+  )
+
+  return deduplicateMessages([
+    ...archivedMessages,
+    ...getMessages(context.messages),
+  ])
+}
+
+export async function fetchSessionMemoryDiffs(
+  session: SessionMeta,
+): Promise<SessionMemoryDiff[]> {
+  const commitCount = Math.max(0, Math.floor(session.commit_count || 0))
+  if (commitCount === 0) return []
+
+  const sessionUri =
+    session.uri?.replace(/\/+$/, '') ||
+    `viking://user/${session.user.user_id}/sessions/${session.session_id}`
+  const archiveIds = Array.from(
+    { length: commitCount },
+    (_, index) => `archive_${String(index + 1).padStart(3, '0')}`,
+  )
+  const results = await mapWithConcurrency(
+    archiveIds,
+    SESSION_ARCHIVE_CONCURRENCY,
+    async (archiveId) => {
+      try {
+        const result = await getOvResult<unknown>(
+          getContentRead({
+            query: {
+              limit: -1,
+              offset: 0,
+              raw: true,
+              uri: `${sessionUri}/history/${archiveId}/memory_diff.json`,
+            } as Parameters<typeof getContentRead>[0]['query'] & {
+              raw?: boolean
+            },
+          }),
+        )
+        return parseSessionMemoryDiff(result, archiveId)
+      } catch (error) {
+        if (isMissingArchive(error)) return null
+        throw error
+      }
+    },
+  )
+
+  return results
+    .flatMap((result) => (result ? [result] : []))
+    .sort((left, right) => right.archiveId.localeCompare(left.archiveId))
 }
 
 export async function addMessage(
@@ -288,18 +417,20 @@ export async function fetchBotHealth(): Promise<unknown> {
 }
 
 /**
- * Send a streaming chat request. Returns the raw Response for SSE parsing.
- * Use parseSseStream() from ./sse.ts to iterate over events.
+ * Send a streaming chat request and return standards-compliant SSE messages.
  */
 export async function sendChatStream(
   request: BotChatRequest,
   signal?: AbortSignal,
-): Promise<Response> {
+): Promise<ReturnType<typeof fetchSse>> {
   const baseUrl = ovClient.getOptions().baseUrl
   const conn = ovClient.getConnection()
-  const response = await fetch(`${baseUrl}/bot/v1/chat/stream`, {
+  return fetchSse(`${baseUrl}/bot/v1/chat/stream`, {
     method: 'POST',
-    headers: buildFetchHeaders(),
+    headers: {
+      ...buildFetchHeaders(),
+      Accept: 'text/event-stream',
+    },
     body: JSON.stringify({
       ...request,
       user_id: request.user_id || conn.userId || undefined,
@@ -307,15 +438,6 @@ export async function sendChatStream(
     }),
     signal,
   })
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => '')
-    throw normalizeOvClientError(
-      new Error(`Chat stream request failed (${response.status}): ${text}`),
-    )
-  }
-
-  return response
 }
 
 /** Send a non-streaming chat request. */
@@ -341,18 +463,27 @@ export async function sendChat(
 export function serializeParts(
   parts: MessagePart[],
 ): Array<Record<string, unknown>> {
-  return parts.map((part) => {
+  return parts.flatMap((part) => {
     if (part.type === 'text') {
-      return { type: 'text', text: part.text }
+      return [{ type: 'text', text: part.text }]
     }
     if (part.type === 'context') {
-      return {
-        type: 'context',
-        uri: part.uri,
-        context_type: part.context_type,
-        abstract: part.abstract,
-      }
+      return [
+        {
+          type: 'context',
+          uri: part.uri,
+          context_type: part.context_type,
+          abstract: part.abstract,
+        },
+      ]
     }
+    if (
+      part.type === 'reasoning' ||
+      part.type === 'iteration' ||
+      part.type === 'tool_result'
+    )
+      return []
+
     // tool
     const d: Record<string, unknown> = {
       type: 'tool',
@@ -368,6 +499,6 @@ export function serializeParts(
     if (part.prompt_tokens != null) d.prompt_tokens = part.prompt_tokens
     if (part.completion_tokens != null)
       d.completion_tokens = part.completion_tokens
-    return d
+    return [d]
   })
 }

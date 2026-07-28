@@ -5,9 +5,11 @@ import type {
   Message,
   MessagePart,
   ContextPart,
+  IterationPart,
   ReasoningPart,
   TextPart,
   ToolPart,
+  ToolResultPart,
 } from './types/message'
 import { addMessage, sendChatStream, serializeParts } from './api'
 import { parseSseStream, streamEventDataToText } from './sse'
@@ -58,11 +60,15 @@ function clonePart(part: MessagePart): MessagePart {
       return { ...part } satisfies TextPart
     case 'reasoning':
       return { ...part } satisfies ReasoningPart
+    case 'iteration':
+      return { ...part } satisfies IterationPart
     case 'tool':
       return {
         ...part,
         tool_input: part.tool_input ? { ...part.tool_input } : undefined,
       } satisfies ToolPart
+    case 'tool_result':
+      return { ...part } satisfies ToolResultPart
     case 'context':
       return { ...part } satisfies ContextPart
   }
@@ -131,6 +137,7 @@ function buildAssistantMessage(
 }
 
 export interface UseChatOptions {
+  identityScopeKey: string
   sessionId: string
   /** Initial messages to populate the chat. */
   initialMessages?: Message[]
@@ -154,7 +161,12 @@ export interface UseChatReturn {
 }
 
 export function useChat(options: UseChatOptions): UseChatReturn {
-  const { sessionId, initialMessages, persistMessages = true } = options
+  const {
+    identityScopeKey,
+    sessionId,
+    initialMessages,
+    persistMessages = true,
+  } = options
 
   const [messages, setMessages] = useState<Message[]>(initialMessages ?? [])
   const [status, setStatus] = useState<ChatStatus>('idle')
@@ -253,6 +265,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       const accParts: MessagePart[] = []
       let lastToolCall: StreamToolCall | null = null
       let currentReasoningPart: ReasoningPart | null = null
+      let currentReasoningHasDelta = false
       let currentTextPart: TextPart | null = null
       let currentIteration = 0
       let lastPaintAt = 0
@@ -286,7 +299,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         await waitForNextFrame()
       }
 
-      const appendReasoning = (text: string, replaceIfEmpty: boolean) => {
+      const appendReasoning = (text: string) => {
         if (!text) return
         if (!currentReasoningPart || accParts.at(-1) !== currentReasoningPart) {
           currentReasoningPart = {
@@ -296,33 +309,37 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           }
           accParts.push(currentReasoningPart)
         }
-        currentReasoningPart.reasoning =
-          replaceIfEmpty && !currentReasoningPart.reasoning
-            ? text
-            : currentReasoningPart.reasoning + text
+        currentReasoningPart.reasoning += text
         publishStreamingParts()
+      }
+
+      const finishCurrentReasoning = () => {
+        if (!currentReasoningPart) return
+        currentReasoningPart.is_running = false
+        currentReasoningPart = null
+        currentReasoningHasDelta = false
       }
 
       const appendText = (text: string) => {
         if (!text) return
+        finishCurrentReasoning()
         if (!currentTextPart || accParts.at(-1) !== currentTextPart) {
           currentTextPart = { type: 'text', text: '' }
           accParts.push(currentTextPart)
         }
         currentTextPart.text += text
-        currentReasoningPart = null
         publishStreamingParts()
       }
 
       const setFinalText = (text: string) => {
         if (!text) return
+        finishCurrentReasoning()
         if (currentTextPart) {
           currentTextPart.text = text
         } else {
           currentTextPart = { type: 'text', text }
           accParts.push(currentTextPart)
         }
-        currentReasoningPart = null
         publishStreamingPartsNow()
       }
 
@@ -332,7 +349,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           controller.signal,
         )
 
-        for await (const event of parseSseStream(response)) {
+        stream: for await (const event of parseSseStream(response)) {
           if (controller.signal.aborted) break
 
           switch (event.event) {
@@ -342,6 +359,20 @@ export function useChat(options: UseChatOptions): UseChatReturn {
               if (match) {
                 currentIteration = Number(match[1])
                 setIteration(currentIteration)
+                finishCurrentReasoning()
+                currentTextPart = null
+                const previousPart = accParts.at(-1)
+                if (
+                  previousPart?.type !== 'iteration' ||
+                  previousPart.iteration !== currentIteration
+                ) {
+                  accParts.push({
+                    type: 'iteration',
+                    iteration: currentIteration,
+                  })
+                  publishStreamingParts()
+                  await yieldToRenderer()
+                }
               }
               break
             }
@@ -359,17 +390,21 @@ export function useChat(options: UseChatOptions): UseChatReturn {
               const delta = streamEventDataToText(event.data)
               accReasoning += delta
               setStreamingReasoning(accReasoning)
-              appendReasoning(delta, false)
+              appendReasoning(delta)
+              currentReasoningHasDelta = true
               await yieldToRenderer()
               break
             }
 
             case 'reasoning': {
               // Complete reasoning block (fallback if no deltas were sent)
-              if (!accReasoning) {
-                accReasoning = streamEventDataToText(event.data)
+              if (!currentReasoningHasDelta) {
+                const reasoning = streamEventDataToText(event.data)
+                accReasoning += reasoning
                 setStreamingReasoning(accReasoning)
-                appendReasoning(accReasoning, true)
+                appendReasoning(reasoning)
+                finishCurrentReasoning()
+                publishStreamingPartsNow()
                 await yieldToRenderer()
               }
               break
@@ -386,7 +421,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                   tc.iteration === currentIteration &&
                   tc.name === name &&
                   tc.arguments === args &&
-                  !tc.result,
+                  tc.result === undefined,
               )
               if (duplicate) {
                 lastToolCall = duplicate
@@ -408,12 +443,15 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                 tool_status: 'running',
               }
               try {
-                toolPart.tool_input = JSON.parse(args) as Record<string, unknown>
+                toolPart.tool_input = JSON.parse(args) as Record<
+                  string,
+                  unknown
+                >
               } catch {
                 if (args) toolPart.tool_input = { raw: args }
               }
+              finishCurrentReasoning()
               accParts.push(toolPart)
-              currentReasoningPart = null
               currentTextPart = null
               setStreamingToolCalls(dedupeToolCalls(accToolCalls))
               publishStreamingParts()
@@ -422,21 +460,32 @@ export function useChat(options: UseChatOptions): UseChatReturn {
             }
 
             case 'tool_result': {
-              const pendingToolCall = accToolCalls.find((tc) => !tc.result)
+              finishCurrentReasoning()
+              const pendingToolCall = accToolCalls.find(
+                (tc) => tc.result === undefined,
+              )
               const pendingToolPart = accParts.find(
                 (part): part is ToolPart =>
                   part.type === 'tool' &&
-                  (part.tool_status === 'running' || part.tool_status === 'pending'),
+                  (part.tool_status === 'running' ||
+                    part.tool_status === 'pending'),
               )
               if (pendingToolCall) {
                 const result = streamEventDataToText(event.data)
+                const isError = isToolErrorResult(result)
                 pendingToolCall.result = result
                 if (pendingToolPart) {
                   pendingToolPart.tool_output = result
-                  pendingToolPart.tool_status = isToolErrorResult(result)
-                    ? 'error'
-                    : 'completed'
+                  pendingToolPart.tool_status = isError ? 'error' : 'completed'
+                  accParts.push({
+                    type: 'tool_result',
+                    tool_id: pendingToolPart.tool_id,
+                    tool_name: pendingToolPart.tool_name,
+                    tool_output: result,
+                    is_error: isError,
+                  })
                 }
+                currentTextPart = null
                 setStreamingToolCalls(dedupeToolCalls(accToolCalls))
                 publishStreamingParts()
                 await yieldToRenderer()
@@ -449,12 +498,13 @@ export function useChat(options: UseChatOptions): UseChatReturn {
               accContent = streamEventDataToText(event.data)
               setStreamingContent(accContent)
               setFinalText(accContent)
-              break
+              break stream
             }
           }
         }
 
         // Build assistant message and finalize
+        finishCurrentReasoning()
         const assistantMsg = buildAssistantMessage(
           accContent,
           dedupeToolCalls(accToolCalls),
@@ -486,12 +536,17 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         // Generate session title on first exchange
         if (sessionId && isFirstExchange) {
           // Immediate: use first user message as temp title
-          setSessionTitle(sessionId, displayMessage.slice(0, 20))
+          setSessionTitle(
+            identityScopeKey,
+            sessionId,
+            displayMessage.slice(0, 20),
+          )
         }
       } catch (err) {
         if (controller.signal.aborted) {
           // Aborted intentionally — still finalize any partial content
-          if (accContent) {
+          if (accContent || accParts.length > 0) {
+            finishCurrentReasoning()
             const partialMsg = buildAssistantMessage(
               accContent,
               dedupeToolCalls(accToolCalls),
@@ -502,6 +557,11 @@ export function useChat(options: UseChatOptions): UseChatReturn {
             setStreamingReasoning('')
             setStreamingParts([])
             setMessages((prev) => [...prev, partialMsg])
+          } else {
+            setStreamingContent('')
+            setStreamingToolCalls([])
+            setStreamingReasoning('')
+            setStreamingParts([])
           }
           setStatus('idle')
         } else {
@@ -513,7 +573,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         abortRef.current = null
       }
     },
-    [status, sessionId, persistMessages],
+    [identityScopeKey, persistMessages, sessionId, status],
   )
 
   return {

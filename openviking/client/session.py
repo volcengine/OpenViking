@@ -42,6 +42,9 @@ class Session:
         parts: Optional[List[Part]] = None,
         created_at: Optional[str] = None,
         peer_id: Optional[str] = None,
+        turn_id: Optional[str] = None,
+        message_kind: Optional[str] = None,
+        source_message_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Add a message to the session.
 
@@ -57,6 +60,15 @@ class Session:
         Returns:
             Result dict with session_id and message_count
         """
+        semantic_kwargs = {
+            key: value
+            for key, value in {
+                "turn_id": turn_id,
+                "message_kind": message_kind,
+                "source_message_ids": source_message_ids,
+            }.items()
+            if value is not None
+        }
         if parts is not None:
             parts_dicts = [asdict(p) for p in parts]
             return await self._client.add_message(
@@ -65,6 +77,7 @@ class Session:
                 parts=parts_dicts,
                 created_at=created_at,
                 peer_id=peer_id,
+                **semantic_kwargs,
             )
         return await self._client.add_message(
             self.session_id,
@@ -72,6 +85,7 @@ class Session:
             content=content,
             created_at=created_at,
             peer_id=peer_id,
+            **semantic_kwargs,
         )
 
     async def batch_add_messages(
@@ -97,23 +111,38 @@ class Session:
         telemetry: TelemetryRequest = False,
         *,
         keep_recent_count: int = 0,
+        retention_mode: Optional[str] = None,
+        keep_recent_turn_count: Optional[int] = None,
+        retained_message_token_budget: Optional[int] = None,
+        min_raw_tail_steps: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Commit the session (archive messages and extract memories).
 
         Returns:
             Commit result
         """
-        return await self._client.commit_session(
-            self.session_id,
-            telemetry=telemetry,
-            keep_recent_count=keep_recent_count,
-        )
+        kwargs: Dict[str, Any] = {
+            "telemetry": telemetry,
+            "keep_recent_count": keep_recent_count,
+        }
+        optional = {
+            "retention_mode": retention_mode,
+            "keep_recent_turn_count": keep_recent_turn_count,
+            "retained_message_token_budget": retained_message_token_budget,
+            "min_raw_tail_steps": min_raw_tail_steps,
+        }
+        kwargs.update({key: value for key, value in optional.items() if value is not None})
+        return await self._client.commit_session(self.session_id, **kwargs)
 
     async def commit_async(
         self,
         telemetry: TelemetryRequest = False,
         *,
         keep_recent_count: int = 0,
+        retention_mode: Optional[str] = None,
+        keep_recent_turn_count: Optional[int] = None,
+        retained_message_token_budget: Optional[int] = None,
+        min_raw_tail_steps: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Commit the session asynchronously (archive messages and extract memories).
            Used in viking bot for committing.
@@ -124,6 +153,10 @@ class Session:
         return await self.commit(
             telemetry=telemetry,
             keep_recent_count=keep_recent_count,
+            retention_mode=retention_mode,
+            keep_recent_turn_count=keep_recent_turn_count,
+            retained_message_token_budget=retained_message_token_budget,
+            min_raw_tail_steps=min_raw_tail_steps,
         )
 
     async def delete(self) -> None:

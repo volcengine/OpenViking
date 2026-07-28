@@ -174,27 +174,57 @@ const apiReferenceSidebar = {
     overview: 'Overview',
     groups: [
       {
-        text: 'Core Capabilities',
+        text: 'Core Data',
         items: [
           ['02-resources.md', 'Resources'],
+          ['12-content.md', 'Content'],
           ['03-filesystem.md', 'File System'],
           ['04-skills.md', 'Skills'],
-          ['05-sessions.md', 'Sessions & Memory'],
-          ['06-retrieval.md', 'Retrieval']
+          ['05-sessions.md', 'Sessions'],
+          ['16-memory.md', 'Memory']
         ]
       },
       {
-        text: 'Operations & Governance',
+        text: 'Retrieval & Relations',
         items: [
-          ['07-system.md', 'System'],
-          ['08-admin.md', 'Multi-Tenancy'],
-          ['09-metrics.md', 'Metrics'],
-          ['10-privacy.md', 'Privacy'],
-          ['11-snapshot.md', 'Snapshots']
+          ['06-retrieval.md', 'Retrieval'],
+          ['13-relations.md', 'Relations'],
+          ['21-code.md', 'Code Navigation']
         ]
       },
       {
-        text: 'Contributing',
+        text: 'Data Lifecycle',
+        items: [
+          ['15-watches.md', 'Resource Watches'],
+          ['11-snapshot.md', 'Snapshots'],
+          ['14-ovpack.md', 'OVPack']
+        ]
+      },
+      {
+        text: 'Operations & Observability',
+        items: [
+          ['07-system.md', 'System Status'],
+          ['17-tasks.md', 'Background Tasks'],
+          ['18-observer.md', 'Runtime Observability'],
+          ['09-metrics.md', 'Metrics']
+        ]
+      },
+      {
+        text: 'Identity & Governance',
+        items: [
+          ['08-admin.md', 'Multi-Tenancy'],
+          ['10-privacy.md', 'Privacy']
+        ]
+      },
+      {
+        text: 'Protocols & Extensions',
+        items: [
+          ['20-webdav.md', 'WebDAV'],
+          ['24-vikingbot.md', 'VikingBot API']
+        ]
+      },
+      {
+        text: 'Documentation Maintenance',
         items: [['99-api-doc-writing-guide.md', 'API Docs Guide']]
       }
     ]
@@ -203,27 +233,57 @@ const apiReferenceSidebar = {
     overview: '概览',
     groups: [
       {
-        text: '核心能力',
+        text: '核心数据',
         items: [
           ['02-resources.md', '资源'],
+          ['12-content.md', '内容'],
           ['03-filesystem.md', '文件系统'],
           ['04-skills.md', '技能'],
-          ['05-sessions.md', '会话与记忆'],
-          ['06-retrieval.md', '检索']
+          ['05-sessions.md', '会话'],
+          ['16-memory.md', '记忆']
         ]
       },
       {
-        text: '运维与治理',
+        text: '检索与关系',
         items: [
-          ['07-system.md', '系统管理'],
-          ['08-admin.md', '多租户'],
-          ['09-metrics.md', '监控指标'],
-          ['10-privacy.md', '隐私配置'],
-          ['11-snapshot.md', '快照管理']
+          ['06-retrieval.md', '检索'],
+          ['13-relations.md', '关系'],
+          ['21-code.md', '代码导航']
         ]
       },
       {
-        text: '文档贡献',
+        text: '数据生命周期',
+        items: [
+          ['15-watches.md', '资源 Watch'],
+          ['11-snapshot.md', '快照'],
+          ['14-ovpack.md', 'OVPack']
+        ]
+      },
+      {
+        text: '运维与观测',
+        items: [
+          ['07-system.md', '系统状态'],
+          ['17-tasks.md', '后台任务'],
+          ['18-observer.md', '运行观测'],
+          ['09-metrics.md', '监控指标']
+        ]
+      },
+      {
+        text: '身份与治理',
+        items: [
+          ['08-admin.md', '多租户'],
+          ['10-privacy.md', '隐私配置']
+        ]
+      },
+      {
+        text: '协议与扩展',
+        items: [
+          ['20-webdav.md', 'WebDAV'],
+          ['24-vikingbot.md', 'VikingBot API']
+        ]
+      },
+      {
+        text: '文档维护',
         items: [['99-api-doc-writing-guide.md', 'API 文档规范']]
       }
     ]

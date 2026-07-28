@@ -197,6 +197,7 @@ async function fetchJSON(path, init = {}) {
     if (cfg.apiKey) headers["Authorization"] = `Bearer ${cfg.apiKey}`;
     if (cfg.accountId) headers["X-OpenViking-Account"] = cfg.accountId;
     if (cfg.userId) headers["X-OpenViking-User"] = cfg.userId;
+    if (cfg.userAgent) headers["User-Agent"] = cfg.userAgent;
     const res = await fetch(url, { ...init, headers, signal: controller.signal });
     const body = await res.json();
     dim(`  ${init.method || "GET"} ${path} -> ${res.status}`);

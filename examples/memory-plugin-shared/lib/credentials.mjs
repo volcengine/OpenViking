@@ -29,6 +29,27 @@ function tryLoadJson(path) {
   }
 }
 
+/**
+ * Build the User-Agent every harness plugin sends on OpenViking-bound requests.
+ * Shape is `name/semver` so downstream stats layers can parse it as one token.
+ */
+export function buildUserAgent(harness, version) {
+  return `openviking-memory-${harness}/${str(version, "") || "0.0.0"}`;
+}
+
+/**
+ * Read a plugin manifest's `version` field. Accepts a path or a URL (so callers
+ * can resolve relative to import.meta.url). Returns "" when unreadable so the
+ * User-Agent falls back to 0.0.0 instead of throwing inside a short-lived hook.
+ */
+export function readManifestVersion(manifest) {
+  try {
+    return str(JSON.parse(readFileSync(manifest, "utf-8")).version, "");
+  } catch {
+    return "";
+  }
+}
+
 function looksLikeOvcli(obj) {
   if (!obj || typeof obj !== "object") return false;
   if (obj.server && typeof obj.server === "object") return false;

@@ -282,6 +282,38 @@ pub(crate) fn report_for_runtime_error(command: impl Into<String>, error: &Error
             ErrorAction::new("ov health", copy(language, "Run a quick server health check", "快速检查服务器健康状态")),
             ErrorAction::new("ov config switch", copy(language, "Switch to another config", "切换到其他配置")),
         ]),
+        Error::Api {
+            message, details, ..
+        } if error.code() == "REFRESH_FAILED" => {
+            let retry_command = command.clone();
+            let mut report = ErrorReport::new(
+                copy(language, "Compile Refresh Failed", "Compile 刷新失败"),
+                api_error_message(error.code(), message),
+            )
+            .with_command(command)
+            .with_actions(vec![
+                ErrorAction::new(
+                    retry_command,
+                    copy(
+                        language,
+                        "Retry safely; matching files stay unchanged and refresh runs again",
+                        "安全重试；相同内容不会重复写入，并会重新执行刷新",
+                    ),
+                ),
+                ErrorAction::new(
+                    "ov status",
+                    copy(
+                        language,
+                        "Check OpenViking service status",
+                        "检查 OpenViking 服务状态",
+                    ),
+                ),
+            ]);
+            if let Some(details) = details {
+                report = report.with_detail(details.to_string());
+            }
+            report
+        }
         Error::Api { message, .. } if error.code() == "UNAUTHENTICATED" => ErrorReport::new(
             copy(language, "Authentication Error", "认证错误"),
             api_error_message(error.code(), message),
@@ -1084,6 +1116,27 @@ Usage: ov config [OPTIONS] [COMMAND]
             serde_json::from_str(&render_json_error(&error, true)).unwrap();
         assert_eq!(json["error"]["code"], "FAILED_PRECONDITION");
         assert_eq!(json["error"]["details"]["feishu_code"], 99991672);
+    }
+
+    #[test]
+    fn compile_refresh_failure_explains_safe_retry() {
+        let command = "ov compile --from viking://resources/source --to viking://resources/wiki --skill viking://agent/skills/wiki --wait";
+        let error = Error::api_response(
+            Some("REFRESH_FAILED".to_string()),
+            "Content is already at the requested state, but semantic/index refresh failed: injected overview failure. Re-run the same batch-write or ov compile command; matching files will remain unchanged and refresh will be retried.",
+            Some(serde_json::json!({"root_uri": "viking://resources/wiki"})),
+            500,
+        );
+        let report = report_for_runtime_error(command, &error);
+        let normal = strip_ansi(&render_report(&report, false));
+
+        assert!(normal.contains("Compile Refresh Failed"));
+        assert!(normal.contains("injected"));
+        assert!(normal.contains("overview"));
+        assert!(normal.contains("matching files"));
+        assert!(normal.contains("unchanged"));
+        assert!(normal.contains(command));
+        assert!(!normal.contains("ov config validate"));
     }
 
     #[test]

@@ -40,6 +40,12 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { resolveOpenVikingCredentials } from "./ov-credentials.mjs";
+import { buildUserAgent, readManifestVersion } from "./shared/credentials.mjs";
+
+const USER_AGENT = buildUserAgent(
+  "codex",
+  readManifestVersion(new URL("../.codex-plugin/plugin.json", import.meta.url)),
+);
 
 function num(val, fallback) {
   if (typeof val === "number" && Number.isFinite(val)) return val;
@@ -141,6 +147,7 @@ export function loadConfig() {
     user: creds.user,
     peerId: creds.peerId,
     workspacePeer,
+    userAgent: USER_AGENT,
     timeoutMs,
     recallTimeoutMs,
 

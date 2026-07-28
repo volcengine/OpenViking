@@ -25,6 +25,7 @@ class FakeCuVSRuntime:
     def __init__(self, metric):
         self.metric = metric
         self.search_count = 0
+        self.search_batch_sizes = []
 
     def build(self, dataset):
         return [list(vector) for vector in dataset]
@@ -48,8 +49,28 @@ class FakeCuVSRuntime:
         rows = rows[:limit]
         return [row[1] for row in rows], [row[2] for row in rows]
 
+    def search_batch(self, index, queries, limit, mask):
+        self.search_batch_sizes.append(len(queries))
+        results = [self.search(index, query, limit, mask) for query in queries]
+        return [result[0] for result in results], [result[1] for result in results]
+
     def close(self):
         pass
+
+
+class BlockingFakeCuVSRuntime(FakeCuVSRuntime):
+    def __init__(self, metric):
+        super().__init__(metric)
+        self.block_next_batch = False
+        self.search_started = threading.Event()
+        self.release_search = threading.Event()
+
+    def search_batch(self, index, queries, limit, mask):
+        if self.block_next_batch:
+            self.block_next_batch = False
+            self.search_started.set()
+            assert self.release_search.wait(timeout=5)
+        return super().search_batch(index, queries, limit, mask)
 
 
 class MemoryAwareFakeCuVSRuntime(FakeCuVSRuntime):
@@ -326,6 +347,188 @@ def test_local_collection_allows_concurrent_warmed_cuvs_searches(monkeypatch):
 
         assert runtime.peak_active == 4
     finally:
+        collection.close()
+
+
+def test_local_collection_micro_batches_compatible_offset_and_projection_requests(monkeypatch):
+    runtime = FakeCuVSRuntime("inner_product")
+    monkeypatch.setattr(
+        cuvs_index,
+        "_CuVSRuntime",
+        lambda _algorithm, _metric, _build_params, _search_params, _dtype: runtime,
+    )
+    collection = get_or_create_local_collection(
+        meta_data={
+            "CollectionName": "cuvs_micro_batch_projection",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+                {"FieldName": "account_id", "FieldType": "string"},
+                {"FieldName": "rank", "FieldType": "int64"},
+            ],
+        },
+        config={
+            "dense_search": {
+                "backend": "cuvs",
+                "algorithm": "brute_force",
+                "micro_batching_enabled": True,
+                "micro_batching_max_batch_size": 2,
+                "micro_batching_max_wait_ms": 50.0,
+            }
+        },
+    )
+    try:
+        collection.create_index(
+            "default",
+            {
+                "IndexName": "default",
+                "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
+            },
+        )
+        collection.upsert_data(
+            [
+                {
+                    "id": "first",
+                    "vector": [1.0, 0.0, 0.0, 0.0],
+                    "account_id": "a",
+                    "rank": 1,
+                },
+                {
+                    "id": "second",
+                    "vector": [0.8, 0.2, 0.0, 0.0],
+                    "account_id": "b",
+                    "rank": 2,
+                },
+                {
+                    "id": "third",
+                    "vector": [0.0, 1.0, 0.0, 0.0],
+                    "account_id": "c",
+                    "rank": 3,
+                },
+            ]
+        )
+        # Warm the immutable snapshot, then isolate the concurrent measurement.
+        assert (
+            collection.search_by_vector("default", dense_vector=[1.0, 0.0, 0.0, 0.0], limit=1)
+            .data[0]
+            .id
+            == "first"
+        )
+        runtime.search_batch_sizes.clear()
+        barrier = threading.Barrier(3)
+
+        def search_with_offset():
+            barrier.wait(timeout=5)
+            return collection.search_by_vector(
+                "default",
+                dense_vector=[1.0, 0.0, 0.0, 0.0],
+                limit=1,
+                offset=1,
+                output_fields=["rank"],
+            )
+
+        def search_two():
+            barrier.wait(timeout=5)
+            return collection.search_by_vector(
+                "default",
+                dense_vector=[1.0, 0.0, 0.0, 0.0],
+                limit=2,
+                output_fields=["account_id"],
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            offset_future = executor.submit(search_with_offset)
+            two_future = executor.submit(search_two)
+            barrier.wait(timeout=5)
+            offset_result = offset_future.result(timeout=5)
+            two_result = two_future.result(timeout=5)
+
+        assert runtime.search_batch_sizes == [2]
+        assert [(item.id, item.fields) for item in offset_result.data] == [("second", {"rank": 2})]
+        assert [(item.id, item.fields) for item in two_result.data] == [
+            ("first", {"account_id": "a"}),
+            ("second", {"account_id": "b"}),
+        ]
+    finally:
+        collection.close()
+
+
+def test_local_collection_no_filter_requests_fill_warm_micro_batch(monkeypatch):
+    runtime = BlockingFakeCuVSRuntime("inner_product")
+    monkeypatch.setattr(
+        cuvs_index,
+        "_CuVSRuntime",
+        lambda _algorithm, _metric, _build_params, _search_params, _dtype: runtime,
+    )
+    collection = get_or_create_local_collection(
+        meta_data={
+            "CollectionName": "cuvs_micro_batch_no_filter",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+            ],
+        },
+        config={
+            "dense_search": {
+                "backend": "cuvs",
+                "algorithm": "brute_force",
+                "micro_batching_enabled": True,
+                "micro_batching_max_batch_size": 2,
+                "micro_batching_max_wait_ms": 100.0,
+            }
+        },
+    )
+    try:
+        local_index = collection.create_index(
+            "default",
+            {
+                "IndexName": "default",
+                "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
+            },
+        )
+        collection.upsert_data(
+            [
+                {"id": "first", "vector": [1.0, 0.0, 0.0, 0.0]},
+                {"id": "second", "vector": [0.0, 1.0, 0.0, 0.0]},
+            ]
+        )
+        assert (
+            collection.search_by_vector("default", dense_vector=[1.0, 0.0, 0.0, 0.0], limit=1)
+            .data[0]
+            .id
+            == "first"
+        )
+        runtime.search_batch_sizes.clear()
+        runtime.block_next_batch = True
+
+        def search(vector):
+            return collection.search_by_vector("default", dense_vector=vector, limit=1)
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            active = executor.submit(search, [1.0, 0.0, 0.0, 0.0])
+            assert runtime.search_started.wait(timeout=5)
+            queued = [
+                executor.submit(search, [0.0, 1.0, 0.0, 0.0]),
+                executor.submit(search, [1.0, 0.0, 0.0, 0.0]),
+            ]
+            with local_index.dense_search._micro_batch_condition:
+                assert local_index.dense_search._micro_batch_condition.wait_for(
+                    lambda: local_index.dense_search._micro_batch_warm_lookahead == 2,
+                    timeout=5,
+                )
+            assert all(not future.done() for future in queued)
+
+            runtime.release_search.set()
+            assert active.result(timeout=5).data[0].id == "first"
+            assert [future.result(timeout=5).data[0].id for future in queued] == [
+                "second",
+                "first",
+            ]
+
+        assert runtime.search_batch_sizes == [1, 2]
+        assert local_index.dense_search._micro_batch_warm_lookahead == 0
+    finally:
+        runtime.release_search.set()
         collection.close()
 
 

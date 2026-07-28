@@ -493,7 +493,10 @@ class AgentLoop:
         # Very small budgets may not fit the marker. Preserve as much raw text
         # as possible while still honoring the hard limit.
         if not best:
-            low = 0
+            # Empty content is not a valid candidate and breaks the monotonic
+            # assumption of this binary search: "" is rejected while a
+            # one-character prefix may fit.
+            low = 1
             high = len(content)
             while low <= high:
                 mid = (low + high) // 2
@@ -521,7 +524,7 @@ class AgentLoop:
         messages: list[dict[str, Any]],
         token_budget: int,
     ) -> list[dict[str, Any]]:
-        """Keep the newest contiguous history tail within a hard token budget."""
+        """Fit history to a hard budget without dropping the latest User anchor."""
         if token_budget <= 0 or not messages:
             return []
 
@@ -529,21 +532,152 @@ class AgentLoop:
         if total_tokens <= token_budget:
             return messages
 
-        remaining = token_budget
-        retained_reversed: list[dict[str, Any]] = []
-        for message in reversed(messages):
+        latest_anchor_index = next(
+            (
+                index
+                for index in range(len(messages) - 1, -1, -1)
+                if messages[index].get("role") == "user"
+            ),
+            None,
+        )
+        if latest_anchor_index is None:
+            # Legacy assistant-only history has no Turn boundary to preserve.
+            remaining = token_budget
+            retained_reversed: list[dict[str, Any]] = []
+            for message in reversed(messages):
+                message_tokens = cls._history_message_tokens(message)
+                if message_tokens <= remaining:
+                    retained_reversed.append(message)
+                    remaining -= message_tokens
+                    continue
+
+                clipped = cls._truncate_history_message(message, remaining)
+                if clipped is not None:
+                    retained_reversed.append(clipped)
+                break
+            return list(reversed(retained_reversed))
+
+        final_index = next(
+            (
+                index
+                for index in range(len(messages) - 1, latest_anchor_index, -1)
+                if messages[index].get("role") == "assistant"
+            ),
+            None,
+        )
+
+        selected: dict[int, dict[str, Any]] = {}
+        used_tokens = 0
+
+        def _select_message(
+            index: int,
+            *,
+            allow_truncate: bool,
+            max_budget: int | None = None,
+        ) -> tuple[bool, bool]:
+            nonlocal used_tokens
+            remaining = max(0, token_budget - used_tokens)
+            if max_budget is not None:
+                remaining = min(remaining, max(0, int(max_budget)))
+
+            message = messages[index]
             message_tokens = cls._history_message_tokens(message)
-            if message_tokens <= remaining:
-                retained_reversed.append(message)
-                remaining -= message_tokens
-                continue
+            chosen = message
+            truncated = False
+            if message_tokens > remaining:
+                if not allow_truncate or remaining <= 0:
+                    return False, False
+                clipped = cls._truncate_history_message(message, remaining)
+                if clipped is None:
+                    return False, False
+                chosen = clipped
+                truncated = True
 
-            clipped = cls._truncate_history_message(message, remaining)
-            if clipped is not None:
-                retained_reversed.append(clipped)
-            break
+            selected[index] = chosen
+            used_tokens += cls._history_message_tokens(chosen)
+            return True, truncated
 
-        return list(reversed(retained_reversed))
+        def _minimum_message_budget(index: int) -> int | None:
+            message = messages[index]
+            message_tokens = cls._history_message_tokens(message)
+            if message_tokens == 0:
+                return 0
+
+            low = 1
+            high = min(message_tokens, token_budget)
+            minimum: int | None = None
+            while low <= high:
+                candidate = (low + high) // 2
+                if cls._truncate_history_message(message, candidate) is not None:
+                    minimum = candidate
+                    high = candidate - 1
+                else:
+                    low = candidate + 1
+            return minimum
+
+        # OpenViking already returns Turn-aware context, but VikingBot applies a
+        # second budget with a different estimator after adding the local tail.
+        # Jointly reserve room for the latest User anchor and final Assistant so
+        # this final boundary cannot turn the prompt back into a half Turn.
+        final_reserve = 0
+        if final_index is not None:
+            anchor_minimum = _minimum_message_budget(latest_anchor_index)
+            final_minimum = _minimum_message_budget(final_index)
+            if (
+                anchor_minimum is not None
+                and final_minimum is not None
+                and anchor_minimum + final_minimum <= token_budget
+            ):
+                final_reserve = min(
+                    cls._history_message_tokens(messages[final_index]),
+                    max(final_minimum, token_budget // 2),
+                    token_budget - anchor_minimum,
+                )
+
+        _select_message(
+            latest_anchor_index,
+            allow_truncate=True,
+            max_budget=token_budget - final_reserve,
+        )
+        if final_index is not None:
+            _select_message(final_index, allow_truncate=True)
+
+        # Prefer the newest remaining Steps in the latest Turn. At most one Step
+        # is clipped; older material is useful only while this suffix remains
+        # lossless.
+        latest_turn_end = final_index if final_index is not None else len(messages)
+        for index in range(latest_turn_end - 1, latest_anchor_index, -1):
+            kept, truncated = _select_message(index, allow_truncate=True)
+            if not kept or truncated:
+                break
+
+        # Add older Turns only as complete units so the final prompt never starts
+        # from the assistant half of an earlier Turn. An assistant-only prefix
+        # such as the archive overview is treated as one conservative unit.
+        older_turns: list[list[int]] = []
+        current_turn: list[int] = []
+        for index in range(latest_anchor_index):
+            if messages[index].get("role") == "user" and current_turn:
+                older_turns.append(current_turn)
+                current_turn = []
+            current_turn.append(index)
+        if current_turn:
+            older_turns.append(current_turn)
+
+        remaining = token_budget
+        remaining -= used_tokens
+        for turn_indexes in reversed(older_turns):
+            turn_tokens = sum(
+                cls._history_message_tokens(messages[index]) for index in turn_indexes
+            )
+            if turn_tokens > remaining:
+                break
+            for index in turn_indexes:
+                selected[index] = messages[index]
+            used_tokens += turn_tokens
+            remaining -= turn_tokens
+
+        return [selected[index] for index in sorted(selected)]
 
     async def _build_prompt_history(
         self,
@@ -616,7 +750,7 @@ class AgentLoop:
         session: Session,
         *,
         force_commit: bool = False,
-        keep_recent_count: int | None = None,
+        keep_recent_turn_count: int | None = None,
         commit_message_threshold: int | None = None,
         openviking_connection: dict[str, Any] | None = None,
     ) -> bool:
@@ -629,8 +763,8 @@ class AgentLoop:
             "session": session,
             "force_commit": force_commit,
         }
-        if keep_recent_count is not None:
-            kwargs["keep_recent_count"] = keep_recent_count
+        if keep_recent_turn_count is not None:
+            kwargs["keep_recent_turn_count"] = keep_recent_turn_count
         if commit_message_threshold is not None:
             kwargs["commit_message_threshold"] = commit_message_threshold
         if openviking_connection:
@@ -655,14 +789,14 @@ class AgentLoop:
         session: Session,
         *,
         force_commit: bool = False,
-        keep_recent_count: int | None = None,
+        keep_recent_turn_count: int | None = None,
         commit_message_threshold: int | None = None,
         openviking_connection: dict[str, Any] | None = None,
     ) -> bool:
         success = await self._submit_openviking_session(
             session,
             force_commit=force_commit,
-            keep_recent_count=keep_recent_count,
+            keep_recent_turn_count=keep_recent_turn_count,
             commit_message_threshold=commit_message_threshold,
             openviking_connection=openviking_connection,
         )
@@ -708,7 +842,9 @@ class AgentLoop:
         await self._submit_openviking_session_and_clear_if_committed(
             session,
             force_commit=True,
-            keep_recent_count=int(getattr(agents_config, "commit_keep_recent_count", 10) or 0),
+            keep_recent_turn_count=int(
+                getattr(agents_config, "commit_keep_recent_turn_count", 3) or 0
+            ),
             commit_message_threshold=self.memory_window,
             openviking_connection=getattr(msg, "openviking_connection", None),
         )
@@ -717,7 +853,7 @@ class AgentLoop:
         self,
         session: Session,
         *,
-        keep_recent_count: int = 0,
+        keep_recent_turn_count: int = 0,
         clear_local_session: bool = False,
         rotate_session_id: bool = False,
         openviking_connection: dict[str, Any] | None = None,
@@ -725,7 +861,7 @@ class AgentLoop:
         success = await self._submit_openviking_session(
             session,
             force_commit=True,
-            keep_recent_count=keep_recent_count,
+            keep_recent_turn_count=keep_recent_turn_count,
             openviking_connection=openviking_connection,
         )
         if not success:
@@ -788,6 +924,10 @@ class AgentLoop:
         on_plain_text: Any | None = None,
         channel_metadata: dict[str, Any] | None = None,
         captured_turns: list[dict[str, Any]] | None = None,
+        tool_registry: ToolRegistry | None = None,
+        openviking_tool_names: list[str] | set[str] | None = None,
+        allow_final_fallback: bool = True,
+        inject_write_experience: bool = True,
     ) -> tuple[str | None, str | None, list[dict], dict[str, int], int]:
         """
         Run the core agent loop: call LLM, execute tools, repeat until done.
@@ -796,6 +936,7 @@ class AgentLoop:
             messages: Initial message list
             session_key: Session key for tool execution context
             publish_events: Whether to publish ITERATION/REASONING/TOOL_CALL events to the bus
+            sender_id: Sender identity forwarded to the tool execution context
             actor_peer_id: Authenticated OpenViking peer identity for tools
             ov_tools_enable: Whether to enable OpenViking tools for this session
             memory_peer_ids: List of peer IDs for memory retrieval
@@ -814,11 +955,24 @@ class AgentLoop:
             captured_turns: Optional mutable list populated with each intermediate assistant
                 turn and the tool calls/results produced by that same model response. Reasoning
                 content is intentionally excluded.
+            tool_registry: Optional request-scoped registry used for tool definitions and
+                execution. Defaults to the agent's shared tool registry.
+            openviking_tool_names: Optional collection of tool names allowed to receive the
+                request-scoped OpenViking connection. None preserves the legacy behavior of
+                forwarding the connection to all tools; an empty collection forwards it to none.
+            allow_final_fallback: Whether to make a final tool-free LLM call after the
+                tool-use iteration limit is reached.
+            inject_write_experience: Whether to retrieve and inject relevant agent experience
+                before executing configured write tools.
 
         Returns:
             tuple of (final_content, final_reasoning_content, tools_used, token_usage, iteration)
         """
         iteration = 0
+        active_tools = tool_registry or self.tools
+        scoped_openviking_tools = (
+            set(openviking_tool_names) if openviking_tool_names is not None else None
+        )
         final_content = None
         final_reasoning_content = None
         tools_used: list[dict] = []
@@ -850,7 +1004,7 @@ class AgentLoop:
                     )
                 )
 
-            tool_definitions = self.tools.get_definitions(
+            tool_definitions = active_tools.get_definitions(
                 ov_tools_enable=ov_tools_enable,
                 disabled_tools=disabled_tools,
             )
@@ -873,7 +1027,7 @@ class AgentLoop:
 
             if response.has_tool_calls:
                 # Inject experience memory before write-related tool calls (once per session)
-                if not write_exp_injected:
+                if inject_write_experience and not write_exp_injected:
                     _ov_cfg = self.config.ov_server
                     _write_tools = set(_ov_cfg.exp_write_tools)
                     if any(tc.name in _write_tools for tc in response.tool_calls):
@@ -934,7 +1088,13 @@ class AgentLoop:
                 async def execute_single_tool(idx: int, tool_call):
                     """Execute a single tool and track execution time."""
                     tool_execute_start_time = time.time()
-                    result = await self.tools.execute(
+                    tool_connection = (
+                        openviking_connection
+                        if scoped_openviking_tools is None
+                        or tool_call.name in scoped_openviking_tools
+                        else None
+                    )
+                    result = await active_tools.execute(
                         tool_call.name,
                         tool_call.arguments,
                         session_key=session_key,
@@ -943,7 +1103,7 @@ class AgentLoop:
                         actor_peer_id=actor_peer_id or sender_id,
                         memory_peer_ids=memory_peer_ids,
                         memory_owner_user_ids=memory_owner_user_ids,
-                        openviking_connection=openviking_connection,
+                        openviking_connection=tool_connection,
                         channel_metadata=channel_metadata,
                     )
                     tool_execute_duration = (time.time() - tool_execute_start_time) * 1000
@@ -1009,7 +1169,8 @@ class AgentLoop:
                     )
 
                 if any(
-                    tool_call.name in stop_tools for _idx, tool_call, _result, _duration in results
+                    tool_call.name in stop_tools and _is_tool_result_success(_result)
+                    for _idx, tool_call, _result, _duration in results
                 ):
                     final_content = ""
                     break
@@ -1029,7 +1190,7 @@ class AgentLoop:
                                 text=text,
                                 reasoning_content=response.reasoning_content,
                                 iteration=iteration,
-                                tools=self.tools,
+                                tools=active_tools,
                                 sandbox_manager=self.sandbox_manager,
                                 sender_id=sender_id,
                                 memory_peer_ids=memory_peer_ids,
@@ -1081,7 +1242,7 @@ class AgentLoop:
         elif final_content is None or (
             isinstance(final_content, str) and not final_content.strip()
         ):
-            if iteration >= self.max_iterations:
+            if iteration >= self.max_iterations and allow_final_fallback:
                 messages.append(
                     {
                         "role": "user",
@@ -1127,6 +1288,55 @@ class AgentLoop:
                 final_content = "I've completed processing but have no response to give."
 
         return final_content, final_reasoning_content, tools_used, token_usage, iteration
+
+    async def run_structured_task(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        session_key: SessionKey,
+        tool_registry: ToolRegistry,
+        openviking_tool_names: list[str] | set[str],
+        stop_tool_names: list[str],
+        openviking_connection: dict[str, Any] | None,
+    ) -> tuple[Any, list[dict], dict[str, int], int]:
+        """Run a tool-terminated structured task through the existing agent loop."""
+
+        async def require_submission(context: _PlainTextContext) -> _PlainTextDelivered:
+            messages = self.context.add_assistant_message(context.messages, context.text, [])
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Your response was not submitted. Continue the task and call "
+                        "submit_wiki_bundle with the complete final bundle."
+                    ),
+                }
+            )
+            return _PlainTextDelivered(messages=messages, tools_used=[])
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        _content, _reasoning, tools_used, token_usage, iteration = await self._run_agent_loop(
+            messages=messages,
+            session_key=session_key,
+            publish_events=False,
+            ov_tools_enable=True,
+            openviking_connection=openviking_connection,
+            stop_tool_names=stop_tool_names,
+            on_plain_text=require_submission,
+            tool_registry=tool_registry,
+            openviking_tool_names=openviking_tool_names,
+            allow_final_fallback=False,
+            inject_write_experience=False,
+        )
+        submit_tool = tool_registry.get("submit_wiki_bundle")
+        bundle = getattr(submit_tool, "bundle", None)
+        if bundle is None:
+            raise ValueError("AGENT_OUTPUT_INVALID: Agent did not submit a valid Wiki bundle")
+        return bundle, tools_used, token_usage, iteration
 
     @trace(
         name="process_message",
@@ -1252,7 +1462,7 @@ class AgentLoop:
                 if self._ov_session_context_enabled():
                     committed = await self._commit_openviking_session(
                         session,
-                        keep_recent_count=0,
+                        keep_recent_turn_count=0,
                         clear_local_session=True,
                         openviking_connection=openviking_connection,
                     )
@@ -1287,7 +1497,7 @@ class AgentLoop:
                 if self._ov_session_context_enabled():
                     remembered = await self._commit_openviking_session(
                         session,
-                        keep_recent_count=self.config.agents.commit_keep_recent_count,
+                        keep_recent_turn_count=self.config.agents.commit_keep_recent_turn_count,
                         openviking_connection=openviking_connection,
                     )
                     if not remembered:

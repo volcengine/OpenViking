@@ -82,13 +82,16 @@ class VLMProviderAdapter(LLMProvider):
 
             # --- Call VLM backend ---
             attempt = 1
+            # An explicit empty list asks VLM backends for a structured response
+            # without exposing tools, so per-response usage is preserved.
+            response_tools = tools if tools is not None else []
             while True:
                 try:
                     result = await self._vlm.get_completion_async(
                         messages=messages,
                         thinking=getattr(self._vlm, "thinking", None),
-                        tools=tools,
-                        tool_choice="auto" if tools else None,
+                        tools=response_tools,
+                        tool_choice="auto" if response_tools else None,
                     )
                     break
                 except Exception as e:
@@ -129,7 +132,13 @@ class VLMProviderAdapter(LLMProvider):
         temperature: float = 0.7,
         session_id: str | None = None,
     ) -> AsyncIterator[LLMStreamEvent]:
-        if getattr(self._vlm, "provider", None) != "volcengine":
+        # Failover wrappers expose the primary provider name but intentionally
+        # do not expose a single provider client. Route them through chat() so
+        # get_completion_async() can select the active credential safely.
+        supports_native_volcengine_stream = getattr(
+            self._vlm, "provider", None
+        ) == "volcengine" and callable(getattr(self._vlm, "get_async_client", None))
+        if not supports_native_volcengine_stream:
             async for event in super().chat_stream(
                 messages=messages,
                 tools=tools,

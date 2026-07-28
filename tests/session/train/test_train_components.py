@@ -28,6 +28,7 @@ class FakeVikingFS:
     def __init__(self, files: dict[str, str]):
         self.files = files
         self.rm_lock_handles = []
+        self.write_lock_handles = []
 
     async def ls(self, uri: str, output: str = "original", ctx=None, **kwargs):
         del kwargs
@@ -46,7 +47,8 @@ class FakeVikingFS:
     async def read_file(self, uri: str, ctx=None):
         return self.files[uri]
 
-    async def write_file(self, uri: str, content: str, ctx=None):
+    async def write_file(self, uri: str, content: str, ctx=None, lock_handle=None):
+        self.write_lock_handles.append((uri, lock_handle))
         self.files[uri] = content
 
     async def rm(self, uri: str, recursive: bool = False, ctx=None, lock_handle=None):
@@ -304,6 +306,30 @@ async def test_memory_file_policy_updater_writes_experience_files():
     assert '"memory_type": "experiences"' in written
     assert '"experience_name": "booking_duplicate_handling"' in written
     assert '"version": 2' in written
+
+
+@pytest.mark.asyncio
+async def test_memory_file_policy_updater_reuses_transaction_lock_for_experience_writes():
+    policy_set = _experience_set()
+    fs = FakeVikingFS({})
+    lock_handle = object()
+    gradient = _patch_gradient(
+        uri=policy_set.policies[0].uri,
+        before="content",
+        after="new content",
+    )
+    plan = _plan_from_gradient(gradient)
+
+    result = await MemoryFilePolicyUpdater(viking_fs=fs).apply(
+        plan,
+        policy_set,
+        fake_request_context(),
+        transaction_handle=lock_handle,
+    )
+
+    assert result.errors == []
+    assert result.written_uris == [policy_set.policies[0].uri]
+    assert (policy_set.policies[0].uri, lock_handle) in fs.write_lock_handles
 
 
 @pytest.mark.asyncio

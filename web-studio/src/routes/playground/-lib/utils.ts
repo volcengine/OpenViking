@@ -9,7 +9,11 @@ import type { FindResultItem, GroupedFindResult } from '#/lib/retrieval'
 
 import { cleanVikingUri } from '#/lib/viking-uri'
 
-import { ROOT_URI, PLAYGROUND_AGENT_SESSIONS_STORAGE_KEY } from './constants'
+import {
+  ROOT_URI,
+  PLAYGROUND_AGENT_SESSIONS_STORAGE_KEY,
+  PLAYGROUND_EXPANDED_URIS_STORAGE_KEY,
+} from './constants'
 import type { ResourceRef } from './types'
 
 export { cleanVikingUri }
@@ -98,9 +102,21 @@ export function removeStoredValue(key: string): void {
   }
 }
 
-export function readPlaygroundAgentSessionIds(): string[] {
+export function createIdentityStorageKey(
+  key: string,
+  identityScopeKey: string,
+): string {
+  return `${key}.${encodeURIComponent(identityScopeKey)}`
+}
+
+export function readPlaygroundAgentSessionIds(
+  identityScopeKey: string,
+): string[] {
   return readStoredJsonArray(
-    PLAYGROUND_AGENT_SESSIONS_STORAGE_KEY,
+    createIdentityStorageKey(
+      PLAYGROUND_AGENT_SESSIONS_STORAGE_KEY,
+      identityScopeKey,
+    ),
     (sessionId) =>
       typeof sessionId === 'string' && sessionId.length > 0
         ? sessionId
@@ -108,19 +124,57 @@ export function readPlaygroundAgentSessionIds(): string[] {
   )
 }
 
-export function registerPlaygroundAgentSessionId(sessionId: string): string[] {
+export function registerPlaygroundAgentSessionId(
+  sessionId: string,
+  identityScopeKey: string,
+): string[] {
   const trimmed = sessionId.trim()
   if (typeof window === 'undefined') return trimmed ? [trimmed] : []
-  if (!trimmed) return readPlaygroundAgentSessionIds()
+  if (!trimmed) return readPlaygroundAgentSessionIds(identityScopeKey)
 
   const next = [
     trimmed,
-    ...readPlaygroundAgentSessionIds().filter((item) => item !== trimmed),
+    ...readPlaygroundAgentSessionIds(identityScopeKey).filter(
+      (item) => item !== trimmed,
+    ),
   ].slice(0, 50)
 
-  writeStoredJson(PLAYGROUND_AGENT_SESSIONS_STORAGE_KEY, next)
+  writeStoredJson(
+    createIdentityStorageKey(
+      PLAYGROUND_AGENT_SESSIONS_STORAGE_KEY,
+      identityScopeKey,
+    ),
+    next,
+  )
 
   return next
+}
+
+export function readPlaygroundExpandedUris(identityScopeKey: string): string[] {
+  return readStoredJsonArray(
+    createIdentityStorageKey(
+      PLAYGROUND_EXPANDED_URIS_STORAGE_KEY,
+      identityScopeKey,
+    ),
+    (uri) =>
+      typeof uri === 'string' && uri.startsWith(ROOT_URI)
+        ? normalizeDirUri(uri)
+        : undefined,
+    500,
+  )
+}
+
+export function writePlaygroundExpandedUris(
+  identityScopeKey: string,
+  uris: Iterable<string>,
+): void {
+  writeStoredJson(
+    createIdentityStorageKey(
+      PLAYGROUND_EXPANDED_URIS_STORAGE_KEY,
+      identityScopeKey,
+    ),
+    [...uris],
+  )
 }
 
 export function createEntryFromUri(uri: string, isDir: boolean): VikingFsEntry {

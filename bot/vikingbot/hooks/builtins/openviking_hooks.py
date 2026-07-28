@@ -83,7 +83,9 @@ class OpenVikingCompactHook(Hook):
         admin_user_id: str,
         *,
         force_commit: bool,
-        keep_recent_count: int,
+        keep_recent_turn_count: int,
+        retained_message_token_budget: int,
+        min_raw_tail_steps: int,
         commit_message_threshold: int | None,
     ) -> dict[str, Any]:
         state = get_openviking_state(session)
@@ -139,7 +141,11 @@ class OpenVikingCompactHook(Hook):
         if should_commit:
             admin_commit_result = await client.commit_session(
                 session_id=session_id,
-                keep_recent_count=keep_recent_count,
+                keep_recent_count=0,
+                retention_mode="turn_budget",
+                keep_recent_turn_count=keep_recent_turn_count,
+                retained_message_token_budget=retained_message_token_budget,
+                min_raw_tail_steps=min_raw_tail_steps,
                 user_id=session_user_id,
             )
             logger.info(
@@ -182,10 +188,24 @@ class OpenVikingCompactHook(Hook):
         if not isinstance(openviking_connection, dict):
             openviking_connection = None
         force_commit = bool(kwargs.get("force_commit", False))
-        keep_recent_count = int(
+        keep_recent_turn_count = int(
             kwargs.get(
-                "keep_recent_count",
-                getattr(agents_config, "commit_keep_recent_count", 10),
+                "keep_recent_turn_count",
+                getattr(agents_config, "commit_keep_recent_turn_count", 3),
+            )
+            or 0
+        )
+        retained_message_token_budget = int(
+            kwargs.get(
+                "retained_message_token_budget",
+                getattr(agents_config, "commit_retained_message_token_budget", 6_000),
+            )
+            or 6_000
+        )
+        min_raw_tail_steps = int(
+            kwargs.get(
+                "min_raw_tail_steps",
+                getattr(agents_config, "commit_min_raw_tail_steps", 1),
             )
             or 0
         )
@@ -226,7 +246,9 @@ class OpenVikingCompactHook(Hook):
                     agents_config,
                     admin_user_id,
                     force_commit=force_commit,
-                    keep_recent_count=keep_recent_count,
+                    keep_recent_turn_count=keep_recent_turn_count,
+                    retained_message_token_budget=retained_message_token_budget,
+                    min_raw_tail_steps=min_raw_tail_steps,
                     commit_message_threshold=commit_message_threshold,
                 )
 

@@ -89,6 +89,7 @@ const IMPORT_EXPORT_SESSIONS: &[HelpCommand] = help_commands![
 const INTERACTIVE_ADMIN: &[HelpCommand] = help_commands![
     "tui",
     "chat",
+    "compile",
     "admin",
     "system",
     "reindex",
@@ -527,7 +528,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     },
     CommandHelpSpec {
         path: &["snapshot"],
-        purpose: "Manage workspace snapshots: commit, restore, show, and walk history.",
+        purpose: "Manage workspace snapshots: commit, restore, show, diff, and walk history.",
         examples: &[
             HelpItem {
                 label: "ov snapshot commit -m \"checkpoint before refactor\"",
@@ -536,6 +537,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov snapshot log --branch main",
                 description: "Walk commit history, newest first.",
+            },
+            HelpItem {
+                label: "ov snapshot diff viking://docs/spec.md --from <old> --to <new>",
+                description: "Compare one file between two snapshots.",
             },
             HelpItem {
                 label: "ov snapshot restore viking://projects/acme <commit> --dry-run",
@@ -623,6 +628,24 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         next_steps: &[HelpItem {
             label: "ov snapshot show <commit>",
             description: "Inspect a commit from the log.",
+        }],
+    },
+    CommandHelpSpec {
+        path: &["snapshot", "diff"],
+        purpose: "Compare one file between two snapshots as a unified diff.",
+        examples: &[
+            HelpItem {
+                label: "ov snapshot diff viking://docs/spec.md --from <old> --to <new>",
+                description: "Compare the file contents at two commits.",
+            },
+            HelpItem {
+                label: "ov snapshot diff viking://docs/spec.md --to <commit>",
+                description: "Compare an empty file with the file at a commit.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov snapshot log --paths viking://docs/spec.md",
+            description: "Find commits that changed this file.",
         }],
     },
     CommandHelpSpec {
@@ -839,6 +862,24 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         next_steps: &[HelpItem {
             label: "ov find \"topic\"",
             description: "Search context directly.",
+        }],
+    },
+    CommandHelpSpec {
+        path: &["compile"],
+        purpose: "Use a required VikingBot Skill to compile OpenViking materials into Wiki pages or a Skill package.",
+        examples: &[
+            HelpItem {
+                label: "ov compile --from viking://resources/weekly --to viking://resources/wiki --skill viking://agent/skills/monthly_wiki --wait",
+                description: "Compile one source directory into Wiki pages.",
+            },
+            HelpItem {
+                label: "ov compile --from viking://resources/weekly --to viking://agent/skills --skill viking://agent/skills/skill-creator --wait",
+                description: "Generate or update one shared Skill package.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov tree <target-uri>",
+            description: "Inspect the generated output.",
         }],
     },
     CommandHelpSpec {
@@ -1865,11 +1906,12 @@ fn localized_command_purpose(spec: &CommandHelpSpec, language: Language) -> &str
         ["health"] => "快速检查服务器是否可连接。",
         ["status"] => "查看 OpenViking 服务器诊断状态。",
         ["language"] => "选择 OpenViking CLI 显示语言。",
-        ["snapshot"] => "管理工作区快照：提交、恢复、查看，以及遍历历史。",
+        ["snapshot"] => "管理工作区快照：提交、恢复、查看、对比，以及遍历历史。",
         ["snapshot", "commit"] => "将当前工作区状态提交为新的快照。",
         ["snapshot", "restore"] => "通过一次前向提交，将项目目录恢复到历史快照。",
         ["snapshot", "show"] => "查看某次提交的元数据，或指定路径下的单个文件内容。",
         ["snapshot", "log"] => "按分支遍历提交历史，最新的在前。",
+        ["snapshot", "diff"] => "对比指定文件在两个快照中的内容差异。",
         _ => spec.purpose,
     }
 }

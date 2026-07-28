@@ -587,13 +587,95 @@ class VikingClient:
         return result
 
     async def list_resources(
-        self, path: Optional[str] = None, recursive: bool = False
+        self,
+        path: Optional[str] = None,
+        recursive: bool = False,
+        node_limit: int = 1000,
     ) -> List[Dict[str, Any]]:
         """列出资源"""
         if path is None or path == "":
             path = viking_resource_prefix
-        entries = await self.client.ls(path, recursive=recursive)
+        entries = await self.client.ls(path, recursive=recursive, node_limit=node_limit)
         return entries
+
+    async def stat(self, uri: str) -> Dict[str, Any]:
+        return await self.client.stat(uri)
+
+    async def attrs(self, uri: str) -> Dict[str, Any]:
+        return await self.client.attrs(uri)
+
+    async def mkdir(self, uri: str) -> None:
+        await self.client.mkdir(uri)
+
+    async def tree(self, uri: str, *, node_limit: int = 1000) -> List[Dict[str, Any]]:
+        return await self.client.tree(uri, node_limit=node_limit)
+
+    async def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+        return await self.client.read_raw(uri, offset=offset, limit=limit)
+
+    async def download_bytes(self, uri: str) -> bytes:
+        return await self.client.download_bytes(uri)
+
+    async def get_skill(
+        self,
+        skill_name: str,
+        *,
+        target_uri: str,
+    ) -> Dict[str, Any]:
+        return await self.client.get_skill(
+            skill_name,
+            include_content=True,
+            include_files=True,
+            include_source=False,
+            target_uri=target_uri,
+        )
+
+    async def add_skill(
+        self,
+        path: str,
+        *,
+        target_uri: str,
+        wait: bool = True,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        return await self.client.add_skill(
+            path,
+            target_uri=target_uri,
+            wait=wait,
+            timeout=timeout,
+        )
+
+    async def update_skill(
+        self,
+        skill_name: str,
+        path: str,
+        *,
+        target_uri: str,
+        wait: bool = True,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        return await self.client.update_skill(
+            skill_name,
+            path,
+            target_uri=target_uri,
+            wait=wait,
+            timeout=timeout,
+        )
+
+    async def batch_write(
+        self,
+        *,
+        root_uri: str,
+        operations: List[Dict[str, Any]],
+        wait: bool = True,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        return await self.client.batch_write(
+            root_uri=root_uri,
+            operations=operations,
+            wait=wait,
+            timeout=timeout,
+        )
 
     async def read_content(
         self,
@@ -1124,6 +1206,10 @@ class VikingClient:
         keep_recent_count: int = 0,
         user_id: Optional[str] = None,
         memory_policy: Optional[Dict[str, Any]] = None,
+        retention_mode: Optional[str] = None,
+        keep_recent_turn_count: Optional[int] = None,
+        retained_message_token_budget: Optional[int] = None,
+        min_raw_tail_steps: Optional[int] = None,
     ) -> Dict[str, Any]:
         await self.ensure_session(
             session_id,
@@ -1133,9 +1219,20 @@ class VikingClient:
             else self.default_memory_policy(),
         )
         client = await self._session_client_for_user(user_id)
+        retention_kwargs = {
+            key: value
+            for key, value in {
+                "retention_mode": retention_mode,
+                "keep_recent_turn_count": keep_recent_turn_count,
+                "retained_message_token_budget": retained_message_token_budget,
+                "min_raw_tail_steps": min_raw_tail_steps,
+            }.items()
+            if value is not None
+        }
         return await client.commit_session(
             session_id,
             keep_recent_count=keep_recent_count,
+            **retention_kwargs,
         )
 
     async def commit(
@@ -1146,6 +1243,10 @@ class VikingClient:
         keep_recent_count: int = 0,
         peer_id: Optional[str] = None,
         memory_policy: Optional[Dict[str, Any]] = None,
+        retention_mode: Optional[str] = None,
+        keep_recent_turn_count: Optional[int] = None,
+        retained_message_token_budget: Optional[int] = None,
+        min_raw_tail_steps: Optional[int] = None,
     ):
         """Append messages to a stable session and commit it."""
         session_user_id = self._effective_session_user_id(user_id)
@@ -1163,11 +1264,22 @@ class VikingClient:
             default_user_peer_id=self._peer_id(peer_id),
             session_user_id=session_user_id,
         )
+        retention_kwargs = {
+            key: value
+            for key, value in {
+                "retention_mode": retention_mode,
+                "keep_recent_turn_count": keep_recent_turn_count,
+                "retained_message_token_budget": retained_message_token_budget,
+                "min_raw_tail_steps": min_raw_tail_steps,
+            }.items()
+            if value is not None
+        }
         commit_result = await self.commit_session(
             session_id,
             keep_recent_count=keep_recent_count,
             user_id=session_user_id,
             memory_policy=session_memory_policy,
+            **retention_kwargs,
         )
         logger.debug(
             f"Committed OpenViking session {session_id}, "

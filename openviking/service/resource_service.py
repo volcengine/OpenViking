@@ -28,6 +28,12 @@ from openviking.resource.feishu_watch_auth import (
     create_feishu_auth_state,
     load_feishu_app_credentials,
 )
+from openviking.resource.processing_mode import (
+    DEFAULT_PROCESSING_MODE,
+    VECTORS_ONLY,
+    ProcessingMode,
+    normalize_processing_mode,
+)
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
     is_remote_resource_source,
@@ -64,6 +70,7 @@ from openviking_cli.exceptions import (
 from openviking_cli.utils import get_logger
 
 if TYPE_CHECKING:
+    from openviking.parse.accessors.base import LocalResource
     from openviking.resource.watch_manager import WatchManager
     from openviking.resource.watch_scheduler import WatchScheduler
     from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
@@ -83,6 +90,7 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "timeout",
         "build_index",
         "summarize",
+        "processing_mode",
         "watch_interval",
         "skip_watch_management",
         "allow_local_path_resolution",
@@ -101,7 +109,24 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "telemetry",
         "request_validator",
         "understanding_response_id",
+        "parser_backend",
+        "resolved_extension",
         "defer_post_processing",
+    }
+)
+
+_INTERNAL_INGESTION_FIELDS = frozenset(
+    {
+        "manage_watch",
+        "parser_args",
+        "resource_lock",
+        "route_source",
+        "skip_watch_management",
+        "stage_callback",
+        "watch_auth_state",
+        "understanding_response_id",
+        "parser_backend",
+        "resolved_extension",
     }
 )
 
@@ -161,14 +186,6 @@ class ResourceService:
             return None
         return self._watch_scheduler.watch_manager
 
-    def _get_parser_router(self):
-        if not hasattr(self, "_parser_router"):
-            from openviking.parse.parser_router import ParserRouter
-            from openviking.parse.registry import get_registry
-
-            self._parser_router = ParserRouter(get_registry())
-        return self._parser_router
-
     def _sanitize_watch_processor_kwargs(self, processor_kwargs: Dict[str, Any]) -> Dict[str, Any]:
         sanitized: Dict[str, Any] = {}
         for key, value in processor_kwargs.items():
@@ -183,7 +200,7 @@ class ResourceService:
         self,
         *,
         watch_manager: Optional["WatchManager"],
-        skip_watch_management: bool,
+        manage_watch: bool,
         watch_interval: float,
         target: ContentTargetSpec,
         root_uri: str,
@@ -192,11 +209,12 @@ class ResourceService:
         instruction: str,
         build_index: bool,
         summarize: bool,
+        processing_mode: ProcessingMode,
         processor_kwargs: Dict[str, Any],
         watch_auth_state: Optional[Dict[str, Any]],
         ctx: RequestContext,
     ) -> None:
-        if not watch_manager or skip_watch_management:
+        if not watch_manager or not manage_watch:
             return
         telemetry = get_current_telemetry()
         with telemetry.measure("resource.watch"):
@@ -242,6 +260,7 @@ class ResourceService:
                         watch_interval=watch_interval,
                         build_index=build_index,
                         summarize=summarize,
+                        processing_mode=processing_mode,
                         processor_kwargs=sanitized,
                         auth_state=watch_auth_state,
                         ctx=ctx,
@@ -384,6 +403,15 @@ class ResourceService:
             target_uri = msg.root_uri
             parent_uri = None
             internal_kwargs: Dict[str, Any] = {}
+            queued_args = dict(msg.args)
+            for key in ("parser_backend", "resolved_extension"):
+                if key in queued_args:
+                    internal_kwargs[key] = queued_args.pop(key)
+            normalized_args = self._normalize_add_resource_args(
+                queued_args,
+                watch_interval=msg.watch_interval,
+            )
+            internal_kwargs.update(normalized_args.processor_kwargs)
             if msg.defer_target_resolution:
                 from openviking_cli.utils.uri import VikingURI
 
@@ -393,7 +421,7 @@ class ResourceService:
                 from openviking.parse.understanding_api import PREPARED_RESPONSE_ID_ARG
 
                 internal_kwargs[PREPARED_RESPONSE_ID_ARG] = msg.understanding_response_id
-            return await self.add_resource(
+            return await self._execute_resource_ingestion(
                 path=msg.path,
                 ctx=ctx,
                 to=target_uri,
@@ -404,12 +432,14 @@ class ResourceService:
                 timeout=msg.timeout,
                 build_index=msg.build_index,
                 summarize=msg.summarize,
+                processing_mode=msg.processing_mode,
                 watch_interval=msg.watch_interval,
-                skip_watch_management=msg.skip_watch_management,
+                manage_watch=not msg.skip_watch_management,
                 allow_local_path_resolution=msg.allow_local_path_resolution,
                 enforce_public_remote_targets=msg.enforce_public_remote_targets,
                 resource_lock=resource_lock,
                 stage_callback=stage_callback,
+                watch_auth_state=normalized_args.watch_auth_state,
                 strict=msg.strict,
                 source_name=msg.source_name,
                 ignore_dirs=msg.ignore_dirs,
@@ -418,7 +448,6 @@ class ResourceService:
                 directly_upload_media=msg.directly_upload_media,
                 preserve_structure=msg.preserve_structure,
                 create_parent=msg.create_parent,
-                args=msg.args,
                 **internal_kwargs,
             )
 
@@ -435,6 +464,7 @@ class ResourceService:
                 resource_lock=resource_lock,
                 summarize=msg.summarize,
                 build_index=msg.build_index,
+                processing_mode=msg.processing_mode,
             )
             await request_wait_tracker.wait_for_request(
                 telemetry_id,
@@ -485,8 +515,9 @@ class ResourceService:
         timeout: Optional[float] = None,
         build_index: bool = True,
         summarize: bool = False,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         watch_interval: float = 0,
-        skip_watch_management: bool = False,
+        manage_watch: bool = True,
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
         args: Optional[Dict[str, Any]] = None,
@@ -494,8 +525,21 @@ class ResourceService:
     ) -> Dict[str, Any]:
         """Start background ingestion for Git repositories while reserving the target URI."""
         self._ensure_initialized()
+        processing_mode = normalize_processing_mode(processing_mode)
         normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
         kwargs.update(normalized_args.processor_kwargs)
+        from openviking.connector.routing import CONNECTOR_CREDENTIAL_ARGS
+
+        credential_args = sorted(
+            set(kwargs).intersection(CONNECTOR_CREDENTIAL_ARGS.get("git", frozenset()))
+        )
+        if credential_args:
+            raise InvalidArgumentError(
+                "Git credential args "
+                f"{credential_args} cannot be used with the native asynchronous import "
+                "pipeline because it persists job parameters. Use a Connector-compatible "
+                "request instead."
+            )
 
         target = ContentTargetSpec.from_fields(
             ctx=ctx,
@@ -547,8 +591,9 @@ class ResourceService:
                 timeout=timeout,
                 build_index=build_index,
                 summarize=summarize,
+                processing_mode=processing_mode,
                 watch_interval=watch_interval,
-                skip_watch_management=skip_watch_management,
+                skip_watch_management=not manage_watch,
                 allow_local_path_resolution=allow_local_path_resolution,
                 enforce_public_remote_targets=enforce_public_remote_targets,
                 strict=bool(kwargs.get("strict", False)),
@@ -617,18 +662,6 @@ class ResourceService:
         )
         return root_uri, resource_lock
 
-    def _should_use_understanding_api(self, path: str) -> bool:
-        return self._get_parser_router().should_use_understanding_api(path)
-
-    @staticmethod
-    def _is_feishu_url(path: str) -> bool:
-        try:
-            from openviking.parse.accessors.feishu_accessor import FeishuAccessor
-
-            return FeishuAccessor._is_feishu_url(path)
-        except Exception:
-            return False
-
     @staticmethod
     def _target_doc_name(
         path: str,
@@ -690,16 +723,99 @@ class ResourceService:
         timeout: Optional[float] = None,
         build_index: bool = True,
         summarize: bool = False,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         watch_interval: float = 0,
-        skip_watch_management: bool = False,
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
-        resource_lock: Optional[LockLease] = None,
-        stage_callback: Optional[Callable[[str], Any]] = None,
         args: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
-        """Add resource to OpenViking (only supports resources scope).
+        """Accept and route a new resource-add request."""
+        internal_fields = sorted(set(kwargs).intersection(_INTERNAL_INGESTION_FIELDS))
+        if internal_fields:
+            raise InvalidArgumentError(
+                "add_resource does not accept internal execution fields: "
+                + ", ".join(internal_fields)
+            )
+        return await self._submit_resource_ingestion(
+            path=path,
+            ctx=ctx,
+            to=to,
+            parent=parent,
+            reason=reason,
+            instruction=instruction,
+            wait=wait,
+            timeout=timeout,
+            build_index=build_index,
+            summarize=summarize,
+            processing_mode=processing_mode,
+            watch_interval=watch_interval,
+            manage_watch=True,
+            allow_local_path_resolution=allow_local_path_resolution,
+            enforce_public_remote_targets=enforce_public_remote_targets,
+            args=args,
+            **kwargs,
+        )
+
+    async def refresh_resource(
+        self,
+        path: str,
+        ctx: RequestContext,
+        to: Optional[str] = None,
+        parent: Optional[str] = None,
+        reason: str = "",
+        instruction: str = "",
+        timeout: Optional[float] = None,
+        build_index: bool = True,
+        summarize: bool = False,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
+        watch_interval: float = 0,
+        allow_local_path_resolution: bool = True,
+        enforce_public_remote_targets: bool = False,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """Submit a scheduled refresh without changing its watch task."""
+        return await self._submit_resource_ingestion(
+            path=path,
+            ctx=ctx,
+            to=to,
+            parent=parent,
+            reason=reason,
+            instruction=instruction,
+            wait=False,
+            timeout=timeout,
+            build_index=build_index,
+            summarize=summarize,
+            processing_mode=processing_mode,
+            watch_interval=watch_interval,
+            manage_watch=False,
+            allow_local_path_resolution=allow_local_path_resolution,
+            enforce_public_remote_targets=enforce_public_remote_targets,
+            args=None,
+            **kwargs,
+        )
+
+    async def _submit_resource_ingestion(
+        self,
+        path: str,
+        ctx: RequestContext,
+        to: Optional[str] = None,
+        parent: Optional[str] = None,
+        reason: str = "",
+        instruction: str = "",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        build_index: bool = True,
+        summarize: bool = False,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
+        watch_interval: float = 0,
+        manage_watch: bool = True,
+        allow_local_path_resolution: bool = True,
+        enforce_public_remote_targets: bool = False,
+        args: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """Validate and route one resource ingestion request.
 
         Args:
             path: Resource path (local file or URL)
@@ -711,6 +827,7 @@ class ResourceService:
             timeout: Wait timeout in seconds
             build_index: Whether to build vector index immediately (default: True)
             summarize: Whether to generate summary (default: False)
+            processing_mode: Post-ingest processing mode for semantic/vector work
             watch_interval: Watch interval in minutes for automatic resource monitoring.
                 - watch_interval > 0: Creates or updates a watch task. The resource will be
                   automatically re-processed at the specified interval by the scheduler.
@@ -722,8 +839,6 @@ class ResourceService:
                 Note: If the target URI already has an active watch task, a ConflictError will be
                 raised. You must first cancel the existing watch (set watch_interval <= 0) before
                 creating a new one.
-            skip_watch_management: If True, skip watch task management (used by scheduler to
-                avoid recursive watch task creation during scheduled execution)
             enforce_public_remote_targets: When True, reject non-public remote hosts and
                 validate each outbound HTTP request URL during fetch.
             args: Parser/accessor-specific options forwarded to the processing chain.
@@ -737,6 +852,7 @@ class ResourceService:
             InvalidArgumentError: If the URI scope is not 'resources'
         """
         self._ensure_initialized()
+        processing_mode = normalize_processing_mode(processing_mode)
         normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
         kwargs.update(normalized_args.processor_kwargs)
         if watch_interval > 0 and kwargs.get("temp_file_id"):
@@ -769,10 +885,10 @@ class ResourceService:
             to=to,
             parent=parent,
             wait=wait,
-            reason=reason,
             instruction=instruction,
             build_index=build_index,
             summarize=summarize,
+            processing_mode=processing_mode,
             watch_interval=watch_interval,
             connector_args=args or {},
             kwargs=kwargs,
@@ -780,7 +896,9 @@ class ResourceService:
             return await self._add_resource_via_connector(
                 path=path,
                 ctx=ctx,
-                parent=parent,
+                to=to,
+                reason=reason,
+                connector_args=args or {},
                 **kwargs,
             )
 
@@ -795,13 +913,60 @@ class ResourceService:
                 timeout=timeout,
                 build_index=build_index,
                 summarize=summarize,
+                processing_mode=processing_mode,
                 watch_interval=watch_interval,
-                skip_watch_management=skip_watch_management,
+                manage_watch=manage_watch,
                 allow_local_path_resolution=allow_local_path_resolution,
                 enforce_public_remote_targets=enforce_public_remote_targets,
                 **kwargs,
             )
 
+        return await self._execute_resource_ingestion(
+            path=path,
+            ctx=ctx,
+            to=to,
+            parent=parent,
+            reason=reason,
+            instruction=instruction,
+            wait=wait,
+            timeout=timeout,
+            build_index=build_index,
+            summarize=summarize,
+            processing_mode=processing_mode,
+            watch_interval=watch_interval,
+            manage_watch=manage_watch,
+            allow_local_path_resolution=allow_local_path_resolution,
+            enforce_public_remote_targets=enforce_public_remote_targets,
+            watch_auth_state=normalized_args.watch_auth_state,
+            parser_args=normalized_args.processor_kwargs,
+            **kwargs,
+        )
+
+    async def _execute_resource_ingestion(
+        self,
+        path: str,
+        ctx: RequestContext,
+        to: Optional[str] = None,
+        parent: Optional[str] = None,
+        reason: str = "",
+        instruction: str = "",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        build_index: bool = True,
+        summarize: bool = False,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
+        watch_interval: float = 0,
+        manage_watch: bool = True,
+        allow_local_path_resolution: bool = True,
+        enforce_public_remote_targets: bool = False,
+        watch_auth_state: Optional[Dict[str, Any]] = None,
+        parser_args: Optional[Dict[str, Any]] = None,
+        resource_lock: Optional[LockLease] = None,
+        stage_callback: Optional[Callable[[str], Any]] = None,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """Execute an already-routed resource ingestion."""
+        self._ensure_initialized()
         request_start = time.perf_counter()
         telemetry = get_current_telemetry()
         telemetry_id = register_wait_telemetry(wait)
@@ -811,13 +976,14 @@ class ResourceService:
         if telemetry_id:
             request_wait_tracker.register_request(telemetry_id)
         watch_manager = self._get_watch_manager()
-        watch_enabled = bool(watch_manager and not skip_watch_management and watch_interval > 0)
+        watch_enabled = bool(watch_manager and manage_watch and watch_interval > 0)
 
         telemetry.set("resource.flags.wait", wait)
         telemetry.set("resource.flags.build_index", build_index)
         telemetry.set("resource.flags.summarize", summarize)
         telemetry.set("resource.flags.watch_enabled", watch_enabled)
 
+        prepared_resource: Optional["LocalResource"] = None
         try:
             target = ContentTargetSpec.from_fields(
                 ctx=ctx,
@@ -832,20 +998,57 @@ class ResourceService:
             if resource_lock is not None:
                 kwargs["resource_lock"] = resource_lock
 
-            if (
+            async_understanding_candidate = (
                 not wait
                 and not is_git_repo_url(path)
-                and self._should_use_understanding_api(path)
                 and not allow_local_path_resolution
                 and self._resource_processor is not None
+            )
+            direct_understanding = bool(
+                async_understanding_candidate
+                and self._resource_processor.should_use_understanding_directly(path, **kwargs)
+            )
+
+            if (
+                async_understanding_candidate
+                and not direct_understanding
+                and self._resource_processor.understanding_api_enabled()
             ):
+                prepared_resource = await self._resource_processor.prepare_resource(
+                    path,
+                    ctx,
+                    allow_local_path_resolution=allow_local_path_resolution,
+                    **kwargs,
+                )
+
+            if (
+                prepared_resource is not None
+                and self._resource_processor is not None
+                and self._resource_processor.should_use_understanding_api(prepared_resource)
+            ):
+                understanding_source = prepared_resource
+            elif direct_understanding:
+                understanding_source = path
+            else:
+                understanding_source = None
+
+            if understanding_source is not None:
                 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 
-                source_name = kwargs.get("source_name")
+                if prepared_resource is not None:
+                    resolved_extension = str(prepared_resource.meta.get("resolved_extension") or "")
+                    source_name = (
+                        kwargs.get("source_name")
+                        or prepared_resource.meta.get("original_filename")
+                        or prepared_resource.meta.get("resolved_name")
+                    )
+                else:
+                    resolved_extension = ""
+                    source_name = kwargs.get("source_name")
                 source_info = _ResourceSourceInfo(
                     source_name=source_name,
                     source_path=path,
-                    source_format="file",
+                    source_format=resolved_extension.lstrip(".") or "file",
                 )
                 doc_name = self._target_doc_name(path, source_name, source_info)
                 source_path = source_info.source_path or source_name or path
@@ -863,10 +1066,7 @@ class ResourceService:
                     create_parent=target.create_parent,
                 )
                 defer_target_resolution = bool(
-                    candidate_uri
-                    and not source_name
-                    and not watch_enabled
-                    and self._is_feishu_url(path)
+                    candidate_uri and not source_name and not watch_enabled and direct_understanding
                 )
                 if self._viking_fs is None:
                     raise NotInitializedError("VikingFS")
@@ -900,14 +1100,20 @@ class ResourceService:
 
                 enqueue_started = False
                 try:
-                    queued_args = dict(normalized_args.processor_kwargs)
-                    feishu_access_token = queued_args.pop(FEISHU_ACCESS_TOKEN_ARG, None)
-                    understanding_response_id = None
-                    if self._is_feishu_url(path) and feishu_access_token:
-                        understanding_response_id = await self._get_parser_router().submit_url(
-                            path,
-                            feishu_access_token=feishu_access_token,
-                        )
+                    queued_args = dict(parser_args or {})
+                    understanding_response_id = await self._resource_processor.submit_understanding(
+                        understanding_source,
+                        **queued_args,
+                    )
+                    queued_args.pop(FEISHU_ACCESS_TOKEN_ARG, None)
+                    if prepared_resource is not None:
+                        prepared_resource.cleanup()
+                        prepared_resource = None
+
+                    processor_args = self._sanitize_watch_processor_kwargs(queued_args)
+                    processor_args["parser_backend"] = "understanding"
+                    if resolved_extension:
+                        processor_args["resolved_extension"] = resolved_extension
 
                     lock_handoff = lock_lease.to_handoff()
                     msg = AddResourceMsg(
@@ -924,6 +1130,7 @@ class ResourceService:
                         timeout=timeout,
                         build_index=build_index,
                         summarize=summarize,
+                        processing_mode=processing_mode,
                         strict=bool(kwargs.get("strict", False)),
                         ignore_dirs=kwargs.get("ignore_dirs"),
                         include=kwargs.get("include"),
@@ -933,7 +1140,7 @@ class ResourceService:
                         create_parent=bool(kwargs.get("create_parent", False)),
                         allow_local_path_resolution=allow_local_path_resolution,
                         enforce_public_remote_targets=enforce_public_remote_targets,
-                        args=self._sanitize_watch_processor_kwargs(queued_args),
+                        args=processor_args,
                         source_name=source_name,
                         lock_handoff=lock_handoff.to_dict() if lock_handoff else None,
                         skip_watch_management=True,
@@ -959,7 +1166,7 @@ class ResourceService:
                 )
                 await self._manage_watch_if_needed(
                     watch_manager=watch_manager,
-                    skip_watch_management=skip_watch_management,
+                    manage_watch=manage_watch,
                     watch_interval=watch_interval,
                     target=target,
                     root_uri=root_uri,
@@ -968,8 +1175,9 @@ class ResourceService:
                     instruction=instruction,
                     build_index=build_index,
                     summarize=summarize,
+                    processing_mode=processing_mode,
                     processor_kwargs=kwargs,
-                    watch_auth_state=normalized_args.watch_auth_state,
+                    watch_auth_state=watch_auth_state,
                     ctx=ctx,
                 )
                 response = {
@@ -990,11 +1198,14 @@ class ResourceService:
                 parent=target.parent,
                 build_index=build_index,
                 summarize=summarize,
+                processing_mode=processing_mode,
                 stage_callback=stage_callback,
                 allow_local_path_resolution=allow_local_path_resolution,
+                prepared_resource=prepared_resource,
                 defer_post_processing=not wait,
                 **kwargs,
             )
+            prepared_resource = None
 
             if result.get("status") == "error":
                 return result
@@ -1069,6 +1280,7 @@ class ResourceService:
                     timeout=timeout,
                     build_index=build_index,
                     summarize=summarize,
+                    processing_mode=processing_mode,
                     strict=bool(kwargs.get("strict", False)),
                     ignore_dirs=kwargs.get("ignore_dirs"),
                     include=kwargs.get("include"),
@@ -1091,7 +1303,7 @@ class ResourceService:
                 job_enqueued = True
             await self._manage_watch_if_needed(
                 watch_manager=watch_manager,
-                skip_watch_management=skip_watch_management,
+                manage_watch=manage_watch,
                 watch_interval=watch_interval,
                 target=target,
                 root_uri=str(result.get("root_uri") or ""),
@@ -1100,8 +1312,9 @@ class ResourceService:
                 instruction=instruction,
                 build_index=build_index,
                 summarize=summarize,
+                processing_mode=processing_mode,
                 processor_kwargs=kwargs,
-                watch_auth_state=normalized_args.watch_auth_state,
+                watch_auth_state=watch_auth_state,
                 ctx=ctx,
             )
             if wait:
@@ -1121,6 +1334,8 @@ class ResourceService:
             )
             raise
         finally:
+            if prepared_resource is not None:
+                prepared_resource.cleanup()
             telemetry.set(
                 "resource.request.duration_ms",
                 round((time.perf_counter() - request_start) * 1000, 3),
@@ -1198,11 +1413,6 @@ class ResourceService:
 
     # ── Connector routing ──
 
-    # Schemes only the external Connector can import; the standard pipeline
-    # has no accessor for them, so degrading to it would only fail later with
-    # a misleading parse error.
-    _CONNECTOR_ONLY_SCHEMES = ("tos://",)
-
     def _should_use_connector(
         self,
         path: str,
@@ -1211,10 +1421,10 @@ class ResourceService:
         to: Optional[str] = None,
         parent: Optional[str] = None,
         wait: bool = False,
-        reason: str = "",
         instruction: str = "",
         build_index: bool = True,
         summarize: bool = False,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         watch_interval: float = 0,
         connector_args: Optional[Dict[str, Any]] = None,
         kwargs: Optional[Dict[str, Any]] = None,
@@ -1222,30 +1432,66 @@ class ResourceService:
         """Decide whether a top-level resource path belongs to Connector.
 
         Returns True to delegate to the Connector, False to route to the
-        standard pipeline. A source type only the Connector can import
-        (tos://) raises InvalidArgumentError when the Connector is disabled,
-        does not allow the type, or cannot honor the request parameters —
+        standard pipeline. Source types are detected the same way the
+        standard pipeline routes them (see connector.routing), not by raw
+        URL scheme. A source type only the Connector can import (tos)
+        raises InvalidArgumentError when the Connector is disabled, does
+        not allow the type, or cannot honor the request parameters —
         degrading such a request would only fail later with a misleading
         parse error. Source types the standard pipeline can also handle
-        degrade to it instead when parameters are unsupported.
+        degrade to it instead when parameters are unsupported, unless the
+        request carries Connector-only credentials; credentialed requests
+        fail closed so secrets never enter a durable native job.
         """
+        from openviking.connector.routing import (
+            CONNECTOR_CREDENTIAL_ARGS,
+            detect_connector_add_type,
+            is_full_commit_sha,
+        )
         from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
-        if not isinstance(path, str):
+        detected = detect_connector_add_type(path)
+        if detected is None:
             return False
-        connector_only = path.startswith(self._CONNECTOR_ONLY_SCHEMES)
+        add_type, connector_only = detected
+        connector_args = connector_args or {}
+        credential_args = sorted(
+            set(connector_args).intersection(CONNECTOR_CREDENTIAL_ARGS.get(add_type, frozenset()))
+        )
 
         config = get_openviking_config().connector
-        # Match full URL schemes, not bare prefixes: "tos" must not capture
-        # paths like "tostring://..." or a local file named "tos_notes.md".
-        allowed_schemes = tuple(f"{add_type}://" for add_type in config.allowed_add_types)
-        if not config.enable or not path.startswith(allowed_schemes):
+        if not config.enable or add_type not in config.allowed_add_types:
+            if credential_args:
+                raise InvalidArgumentError(
+                    f"Credential args {credential_args} for '{add_type}' require Connector "
+                    "import, but the Connector is disabled or does not allow this source type."
+                )
             if connector_only:
                 raise InvalidArgumentError(
                     f"'{path}' can only be imported through the Connector integration, "
                     "which is disabled or does not allow this source type."
                 )
             return False
+
+        if add_type == "git":
+            from openviking.parse.accessors.git_accessor import GitAccessor
+
+            _, _, commit = GitAccessor()._parse_repo_source(path, **connector_args)
+            if commit and not is_full_commit_sha(str(commit)):
+                # The plugin fetches pinned commits by SHA over the wire and
+                # cannot resolve abbreviated forms; the standard pipeline
+                # resolves them locally after a full clone.
+                if credential_args:
+                    raise InvalidArgumentError(
+                        f"Credential args {credential_args} for 'git' cannot fall back to the "
+                        "standard import pipeline; pass a full 40-character commit SHA."
+                    )
+                logger.info(
+                    "Connector git import degrades to the standard pipeline: "
+                    "abbreviated commit SHA %r needs a local clone to resolve.",
+                    commit,
+                )
+                return False
 
         if ctx is not None and (to or parent):
             target = ContentTargetSpec.from_fields(
@@ -1259,13 +1505,14 @@ class ResourceService:
             parent = target.parent
 
         unsupported = self._unsupported_connector_params(
+            add_type=add_type,
             wait=wait,
-            reason=reason,
             instruction=instruction,
             build_index=build_index,
             summarize=summarize,
+            processing_mode=processing_mode,
             watch_interval=watch_interval,
-            connector_args=connector_args or {},
+            connector_args=connector_args,
             kwargs=kwargs or {},
             to=to,
             parent=parent,
@@ -1275,6 +1522,11 @@ class ResourceService:
         detail = "; ".join(unsupported)
         if connector_only:
             raise InvalidArgumentError(f"Connector import does not support: {detail}")
+        if credential_args:
+            raise InvalidArgumentError(
+                f"Credential args {credential_args} for '{add_type}' cannot fall back to the "
+                f"standard import pipeline. Connector import does not support: {detail}"
+            )
         logger.info(
             f"[ResourceService] Connector does not support {detail} for path {path}; "
             "falling back to the standard import pipeline"
@@ -1284,11 +1536,12 @@ class ResourceService:
     @staticmethod
     def _unsupported_connector_params(
         *,
+        add_type: str,
         wait: bool,
-        reason: str,
         instruction: str,
         build_index: bool,
         summarize: bool,
+        processing_mode: ProcessingMode,
         watch_interval: float,
         connector_args: Dict[str, Any],
         kwargs: Dict[str, Any],
@@ -1299,38 +1552,35 @@ class ResourceService:
 
         Returns an empty list when the request is fully supported.
         """
+        from openviking.connector.routing import (
+            CONNECTOR_CREDENTIAL_ARGS,
+            CONNECTOR_SUPPORTED_ARGS,
+        )
+
         unsupported: List[str] = []
-        if to:
-            unsupported.append(
-                "exact 'to' targets (Connector imports require a parent destination)"
-            )
-        if (
-            parent
-            and parent != "viking://resources"
-            and not parent.startswith("viking://resources/")
-        ):
-            unsupported.append("parent outside the public resources root (viking://resources/...)")
+        if wait:
+            unsupported.append("wait=true (Connector imports run asynchronously)")
+        if parent:
+            unsupported.append("parent targets (Connector imports require an exact 'to' target)")
+        if not to:
+            unsupported.append("missing exact 'to' target")
+        elif to != "viking://resources" and not to.startswith("viking://resources/"):
+            unsupported.append("to outside the public resources root (viking://resources/...)")
         if watch_interval > 0:
             unsupported.append("watch_interval>0 (Connector imports cannot be watched yet)")
-        if wait:
-            unsupported.append(
-                "wait=true (Connector imports run asynchronously; poll the returned task_id)"
-            )
-        if reason:
-            unsupported.append(
-                "reason (Connector imports cannot preserve resource-reason semantics)"
-            )
         if instruction:
             unsupported.append("instruction")
         if not build_index:
             unsupported.append("build_index=false")
         if summarize:
             unsupported.append("summarize=true")
+        if processing_mode == VECTORS_ONLY:
+            unsupported.append("processing_mode=vectors_only")
         if kwargs.get("strict"):
             unsupported.append("strict=true (Connector imports fail per file, not all-or-nothing)")
         for field in ("ignore_dirs", "include", "exclude"):
             if kwargs.get(field):
-                unsupported.append(f"{field} (scope TOS imports with the tos:// path prefix)")
+                unsupported.append(f"{field} (Connector imports cannot filter the source tree)")
         if kwargs.get("preserve_structure") is False:
             unsupported.append(
                 "preserve_structure=false (Connector always mirrors the source directory tree)"
@@ -1339,42 +1589,32 @@ class ResourceService:
             unsupported.append("directly_upload_media=false")
         if kwargs.get("source_name"):
             unsupported.append("source_name")
-        if connector_args:
-            unsupported.append(
-                "args (Connector imports derive path_prefix from parent; "
-                "args keys are not forwarded)"
+        supported_args = CONNECTOR_SUPPORTED_ARGS.get(
+            add_type, frozenset()
+        ) | CONNECTOR_CREDENTIAL_ARGS.get(add_type, frozenset())
+        unknown_args = sorted(set(connector_args) - supported_args)
+        if unknown_args:
+            supported_hint = (
+                f"supported: {sorted(supported_args)}" if supported_args else "no args supported"
             )
+            unsupported.append(f"args keys {unknown_args} ({supported_hint} for '{add_type}')")
         return unsupported
-
-    @staticmethod
-    def _connector_path_prefix(target_uri: Optional[str]) -> Optional[List[str]]:
-        """Map the resolved parent target onto the Connector's path_prefix.
-
-        The TOS plugin composes final URIs as
-        viking://resources/<path_prefix>/<source path>/<doc name>, so only
-        parent targets under the public resources root can be honored.
-        """
-        if not target_uri:
-            return None
-        root = "viking://resources"
-        if target_uri == root:
-            return None
-        if not target_uri.startswith(root + "/"):
-            raise InvalidArgumentError(
-                "Connector imports can only target the public resources root "
-                f"(viking://resources/...), got '{target_uri}'."
-            )
-        segments = [seg for seg in target_uri[len(root) + 1 :].split("/") if seg]
-        return segments or None
 
     async def _add_resource_via_connector(
         self,
         path: str,
         ctx: RequestContext,
-        parent: Optional[str],
+        to: Optional[str],
+        reason: str = "",
+        connector_args: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Route add_resource to the external Connector service."""
+        from openviking.connector.routing import (
+            CONNECTOR_CREDENTIAL_ARGS,
+            CONNECTOR_SUPPORTED_ARGS,
+            detect_connector_add_type,
+        )
         from openviking.service.task_tracker import get_task_tracker
         from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
@@ -1382,27 +1622,81 @@ class ResourceService:
         if not ctx.api_key:
             raise InvalidArgumentError("Connector import requires an API key in the request.")
 
+        detected = detect_connector_add_type(path)
+        if detected is None:
+            raise InvalidArgumentError(f"'{path}' does not match any Connector source type.")
+        add_type, _ = detected
+
         target = ContentTargetSpec.from_fields(
             ctx=ctx,
             kind="resource",
-            parent=parent,
+            to=to,
             create_parent=bool(kwargs.get("create_parent", False)),
         )
-        task_resource_id = target.parent or None
-        path_prefix = self._connector_path_prefix(task_resource_id)
+        if not target.to:
+            raise InvalidArgumentError("Connector import requires an exact 'to' target.")
+        task_resource_id = target.to
+
+        if not kwargs.get("create_parent", False):
+            # Match the native pipeline default: unless create_parent=true is
+            # given, the parent of the exact target must pre-exist.
+            parent_uri, _, _ = task_resource_id.rpartition("/")
+            if parent_uri.startswith("viking://") and not await self._viking_fs.exists(
+                parent_uri, ctx
+            ):
+                raise InvalidArgumentError(
+                    f"Parent directory '{parent_uri}' does not exist; "
+                    "pass create_parent=true to create it."
+                )
+
+        forwarded_args = {
+            key: value
+            for key, value in (connector_args or {}).items()
+            if key in CONNECTOR_SUPPORTED_ARGS.get(add_type, frozenset()) and value
+        }
+        # Credentials travel exclusively in the dedicated auth_config field:
+        # param_config is logged verbatim by the Connector and the plugin,
+        # auth_config is redacted on every hop.
+        auth_config = {
+            key: str(value)
+            for key, value in (connector_args or {}).items()
+            if key in CONNECTOR_CREDENTIAL_ARGS.get(add_type, frozenset()) and value
+        }
+
+        tos_path: Optional[str] = None
+        param_config: Optional[Dict[str, Any]] = None
+        if add_type == "tos":
+            source_path = path[len("tos://") :].strip()
+            if not source_path:
+                raise InvalidArgumentError(
+                    "Connector TOS import requires path='tos://<bucket>/<path>'."
+                )
+            tos_path = source_path
+        elif add_type == "git":
+            from openviking.parse.accessors.git_accessor import GitAccessor
+
+            # Source-specific settings stay in param_config. The exact target
+            # is transported separately as the top-level ``to`` field.
+            repo_url, branch, commit = GitAccessor()._parse_repo_source(
+                path.strip(), **forwarded_args
+            )
+            param_config = {"repo_url": repo_url}
+            if commit:
+                # Routing already degraded abbreviated SHAs to the standard
+                # pipeline. Preserve the native accessor's historical precedence:
+                # when both commit and branch/ref are present, send only the full
+                # commit SHA so the plugin receives an unambiguous pinned request.
+                param_config["commit"] = str(commit)
+            elif branch:
+                param_config["branch"] = str(branch)
+        else:  # pragma: no cover - detection only yields tos/git today
+            raise InvalidArgumentError(f"Connector add_type '{add_type}' is not supported.")
 
         client = ConnectorClient(
             doc_add_url=config.connector,
             task_info_url=config.tracker,
             account_id=ctx.account_id,
         )
-
-        add_type, separator, source_path = path.partition("://")
-        source_path = source_path.strip()
-        if not separator or not add_type or not source_path:
-            raise InvalidArgumentError(
-                "Connector import requires path='<add_type>://<source path>'."
-            )
 
         task_tracker = get_task_tracker()
         task = await task_tracker.create(
@@ -1415,9 +1709,11 @@ class ResourceService:
             result = await client.submit_doc_add(
                 add_type=add_type,
                 api_key=ctx.api_key,
-                tos_path=source_path,
-                path_prefix=path_prefix,
+                tos_path=tos_path,
+                to=task_resource_id,
                 include_child=True,
+                param_config=param_config,
+                auth_config=auth_config or None,
                 extra_params=None,
             )
 
@@ -1443,16 +1739,18 @@ class ResourceService:
             )
             raise
 
-        background = asyncio.create_task(
-            self._monitor_connector_task(
-                client=client,
-                connector_task_key=connector_task_key,
-                ov_task_id=task.task_id,
-                poll_interval_ms=config.poll_interval_ms,
-                timeout_seconds=config.timeout_seconds,
-                ctx=ctx,
-            )
+        monitor = self._monitor_connector_task(
+            client=client,
+            connector_task_key=connector_task_key,
+            ov_task_id=task.task_id,
+            poll_interval_ms=config.poll_interval_ms,
+            timeout_seconds=config.timeout_seconds,
+            ctx=ctx,
+            reason=reason,
+            link_root_uri=task_resource_id or "viking://resources",
         )
+
+        background = asyncio.create_task(monitor)
         self._background_tasks.add(background)
         background.add_done_callback(self._background_tasks.discard)
 
@@ -1473,8 +1771,17 @@ class ResourceService:
         poll_interval_ms: int,
         timeout_seconds: int,
         ctx: RequestContext,
-    ) -> None:
-        """Poll the Connector task until terminal state, then update OV TaskRecord."""
+        reason: str = "",
+        link_root_uri: str = "",
+    ) -> Dict[str, Any]:
+        """Poll the Connector task until terminal state, then update OV TaskRecord.
+
+        Returns a terminal payload: ``{"status": "completed", ...}`` on
+        success, ``{"status": "failed", "error": ...}`` otherwise. When
+        *reason* is set, a successful import links one reason memory to
+        *link_root_uri* (the import root), matching the native add_resource
+        reason semantics of one reason entry referencing the resource root.
+        """
         from openviking.service.task_tracker import get_task_tracker
 
         task_tracker = get_task_tracker()
@@ -1519,28 +1826,47 @@ class ResourceService:
 
                 if status in terminal_statuses:
                     if status == "succeeded":
+                        completion: Dict[str, Any] = {
+                            "connector_status": status,
+                            "connector_task_key": connector_task_key,
+                        }
+                        if (reason or "").strip() and link_root_uri:
+                            link_result: Dict[str, Any] = {"root_uri": link_root_uri}
+                            await self._link_resource_reason_memory(
+                                result=link_result,
+                                ctx=ctx,
+                                reason=reason,
+                                source_name=None,
+                                timeout=None,
+                            )
+                            for key in ("memory_linking", "warnings"):
+                                if key in link_result:
+                                    completion[key] = link_result[key]
                         await task_tracker.complete(
                             ov_task_id,
-                            {"connector_status": status, "connector_task_key": connector_task_key},
+                            completion,
                             account_id=ctx.account_id,
                             user_id=ctx.user.user_id,
                         )
-                    else:
-                        error_msg = info.get("ErrorMessage") or info.get("error_message") or status
-                        await task_tracker.fail(
-                            ov_task_id,
-                            f"connector task {status}: {error_msg}",
-                            account_id=ctx.account_id,
-                            user_id=ctx.user.user_id,
-                        )
-                    return
+                        return {"status": "completed", **completion}
+                    error_msg = info.get("ErrorMessage") or info.get("error_message") or status
+                    failure = f"connector task {status}: {error_msg}"
+                    await task_tracker.fail(
+                        ov_task_id,
+                        failure,
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                    )
+                    return {"status": "failed", "error": failure}
 
+            timeout_msg = f"connector task timed out after {timeout_seconds}s"
             await task_tracker.fail(
                 ov_task_id,
-                f"connector task timed out after {timeout_seconds}s",
+                timeout_msg,
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
             )
+            return {"status": "failed", "error": timeout_msg}
         except asyncio.CancelledError:
             await task_tracker.fail(
                 ov_task_id,
@@ -1557,6 +1883,7 @@ class ResourceService:
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
             )
+            return {"status": "failed", "error": str(exc)}
 
     async def _handle_watch_task_creation(
         self,
@@ -1568,6 +1895,7 @@ class ResourceService:
         watch_interval: float,
         build_index: bool,
         summarize: bool,
+        processing_mode: ProcessingMode,
         processor_kwargs: Dict[str, Any],
         auth_state: Optional[Dict[str, Any]],
         ctx: RequestContext,
@@ -1616,6 +1944,7 @@ class ResourceService:
                 watch_interval=watch_interval,
                 build_index=build_index,
                 summarize=summarize,
+                processing_mode=processing_mode,
                 processor_kwargs=processor_kwargs,
                 auth_state=auth_state,
                 is_active=True,
@@ -1636,6 +1965,7 @@ class ResourceService:
                 watch_interval=watch_interval,
                 build_index=build_index,
                 summarize=summarize,
+                processing_mode=processing_mode,
                 processor_kwargs=processor_kwargs,
                 auth_state=auth_state,
             )

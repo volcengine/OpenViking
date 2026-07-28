@@ -1,11 +1,22 @@
 const zhCN = {
   appShell: {
     footer: {
-      connection: '连接与身份',
+      agentIntegrations: 'Agent 接入',
+      connection: '连接设置',
       docs: '文档站',
       github: 'GitHub',
+      sdkApi: 'SDK 与 API',
+      users: '用户管理',
     },
     header: {
+      currentUser: {
+        account: 'Account',
+        accountSummary: 'Account · {{account}}',
+        openMenu: '查看当前用户 {{user}}',
+        signedInAs: '当前数据访问身份',
+        unset: '未设置',
+        user: 'User',
+      },
       defaultTitle: 'OpenViking Studio',
     },
     navigation: {
@@ -21,6 +32,15 @@ const zhCN = {
       requestLogs: {
         title: '请求日志',
       },
+      monitoring: {
+        title: '监控',
+      },
+      skills: {
+        title: '技能',
+      },
+      tasks: {
+        title: '任务中心',
+      },
       retrieval: {
         title: '检索',
       },
@@ -32,10 +52,206 @@ const zhCN = {
       },
     },
     sidebar: {
+      groups: {
+        operations: '活动',
+        resources: '资源',
+        settings: '设置',
+        workspace: '工作区',
+      },
       loadingSessions: '加载中...',
       noSessions: '暂无会话',
       workspaceGroupLabel: 'OpenViking Studio',
     },
+  },
+  monitoringPage: {
+    title: '监控',
+    description: '查看 OpenViking 各组件的实时健康状态。',
+    version: 'v{{version}}',
+    refresh: '刷新',
+    updatedAt: '更新于 {{time}}',
+    loading: '正在加载监控数据...',
+    loadFailed: '监控数据加载失败',
+    health: {
+      healthy: '正常',
+      unhealthy: '异常',
+    },
+    summary: {
+      healthy: '所有组件运行正常',
+      unhealthy: '部分组件需要关注',
+      components: '{{healthy}} / {{total}} 个组件正常',
+    },
+    tabs: {
+      label: '监控类型',
+      overview: '总览',
+      queue: '任务队列',
+      vikingdb: 'VectorDB',
+      models: '模型',
+      filesystem: '文件系统',
+      lock: '锁',
+      retrieval: '检索',
+    },
+    detail: {
+      noData: '暂无监控数据',
+      descriptions: {
+        queue: '资源处理、语义生成和会话提交队列。',
+        vikingdb: '向量数据存储与索引服务。',
+        models: 'VLM、Embedding 和 Rerank 模型服务。',
+        filesystem: 'OpenViking 文件系统与挂载点。',
+        lock: '事务锁与并发控制服务。',
+        retrieval: '上下文检索与召回服务。',
+      },
+    },
+    offline: {
+      title: '尚未连接 OpenViking 服务',
+      description: '配置服务地址和访问凭证后即可查看监控数据。',
+      action: '打开连接设置',
+    },
+  },
+  skillsPage: {
+    title: '技能',
+    description: '查看当前用户和当前空间可用的 Agent 技能。',
+    refresh: '刷新',
+    loading: '正在加载技能...',
+    empty: '暂无可用技能',
+    emptyDescription: '添加技能后，会在这里按用户技能和共享技能统一展示。',
+    loadFailed: '技能加载失败',
+    networkError: '无法连接 OpenViking 服务，请检查服务地址和连接状态。',
+    connectionSettings: '打开连接设置',
+    detail: '详情',
+    viewDetail: '查看 {{name}} 详情',
+    detailLoading: '正在加载技能详情...',
+    detailLoadFailed: '技能详情加载失败',
+    directory: '目录',
+    none: '无',
+    metrics: {
+      files: '文件',
+      scope: '作用域',
+    },
+    sections: {
+      allowedTools: '允许工具',
+      content: 'SKILL.md',
+      description: '简介',
+      files: '文件',
+      overview: 'Overview',
+      tags: '标签',
+    },
+    scopes: {
+      user: '用户技能',
+      agent: '共享技能',
+    },
+  },
+  tasksPage: {
+    title: '任务中心',
+    description: '集中查看资源处理、会话提交和 Reindex 等后台任务。',
+    refresh: '刷新',
+    loading: '正在加载任务...',
+    empty: '暂无后台任务',
+    emptyDescription: '异步任务启动后，会在这里显示执行状态和更新时间。',
+    emptyFiltered: '没有匹配的任务',
+    emptyFilteredDescription: '可以调整或清除筛选条件后重新查看。',
+    loadFailed: '任务加载失败',
+    detail: {
+      title: '任务详情',
+      loading: '正在加载任务详情...',
+      loadFailed: '任务详情加载失败',
+      retry: '重试',
+      openLabel: '查看任务 {{taskId}} 的详情',
+      fields: {
+        status: '任务状态',
+        type: '任务类型',
+        stage: '当前阶段',
+        resource: '关联资源',
+        createdAt: '创建时间',
+        updatedAt: '更新时间',
+      },
+      error: '失败原因',
+      result: '执行结果',
+      noResult: '暂无执行结果',
+      noResultDescription: '任务完成后，接口返回的结果会显示在这里。',
+      noResultFailedDescription: '该任务未返回结果，请查看上方失败原因。',
+    },
+    filters: {
+      label: '筛选',
+      type: '任务类型',
+      status: '任务状态',
+      allTypes: '全部类型',
+      allStatuses: '全部状态',
+      clear: '清除筛选',
+    },
+    pagination: {
+      next: '下一页',
+      page: '第 {{page}} 页',
+      pageSize: '每页条数',
+      pageSizeValue: '每页 {{count}} 条',
+      previous: '上一页',
+      scope: '当前展示最近 {{count}} 条任务（接口最多返回 {{limit}} 条）',
+    },
+    table: {
+      task: '任务',
+      type: '类型',
+      resource: '关联资源',
+      createdAt: '创建时间',
+      status: '状态',
+    },
+    status: {
+      completed: '已完成',
+      failed: '失败',
+      pending: '等待中',
+      running: '进行中',
+      unknown: '未知',
+    },
+    types: {
+      session_commit: '会话提交',
+      add_resource: '资源处理',
+      add_skill: '技能导入',
+      connector_import: '连接器导入',
+      admin_reindex: 'Reindex',
+      snapshot_restore_reindex: '快照恢复索引',
+      legacy_migration: '旧数据迁移',
+      legacy_cleanup: '旧数据清理',
+    },
+  },
+  accountSwitcher: {
+    create: '新建 Account',
+    dialog: {
+      accountLabel: 'Account',
+      accountPlaceholder: 'team-account',
+      adminLabel: '初始 Admin user',
+      cancel: '取消',
+      description:
+        '创建一个新的空间和首个管理员。创建完成后将自动切换到该空间。',
+      submit: '创建并切换',
+      title: '新建 Account',
+    },
+    empty: '没有匹配的 Account',
+    errors: {
+      loadAccounts: '加载 Account 失败',
+      noCreatedKey: 'Account 已创建，但服务端没有返回可用于切换的数据凭证。',
+      noUsableKey: '该 Account 没有可用于数据访问的明文 User API Key。',
+      noUsers: '该 Account 下没有可用用户。',
+    },
+    loading: '正在加载 Accounts...',
+    manualSwitch: {
+      description:
+        '服务端没有返回 {{account}} 下的明文凭证。请输入该 Account 中任意用户的 User API Key。',
+      hint: 'API Key 只用于校验并切换当前数据身份，不会修改或重新生成服务端凭证。',
+      keyLabel: 'User API Key',
+      keyPlaceholder: '粘贴目标 Account 的 User API Key',
+      manageOnly: '仅管理该 Account',
+      submit: '验证并切换',
+      title: '输入 User API Key',
+    },
+    memberCount: '{{count}} 个用户',
+    searchPlaceholder: '搜索 Account',
+    toast: {
+      created: '已创建并切换到 {{account}}',
+      createdSwitchFailed:
+        '{{account}} 已创建，但数据身份切换失败：{{error}}。仍可进入该 Account 管理用户。',
+      managementSwitched:
+        '管理空间已切换到 {{account}}。访问租户数据前，请先选择或创建 User Key。',
+      switched: '已切换到 {{account}}',
+    },
+    unset: '未选择 Account',
   },
   common: {
     action: {
@@ -106,12 +322,17 @@ const zhCN = {
       addAccount: '新增 account',
       addUser: '新增 user',
       cancel: '取消',
+      changeRole: '修改 {{user}} 的角色',
+      confirmRemoveUser: '删除用户',
+      confirmRoleChange: '确认修改',
       copy: '复制',
+      currentIdentity: '当前身份',
       refresh: '刷新',
       regenerate: '重新生成',
+      removeUser: '删除 {{user}}',
       save: '保存',
+      switchIdentity: '切换身份',
       use: '使用',
-      useForData: '用作 User API Key',
     },
     connection: {
       accountListLimited:
@@ -120,11 +341,43 @@ const zhCN = {
       description:
         '租户数据 API 使用 User API Key；控制 API 可单独使用 Root 或 account-admin key。',
       devMode: '当前为开发模式 — 身份自动确定，无需 API key。',
-      noKey:
-        '填入 Root API Key 即可管理 account / user 并生成 user key。仅凭 User API Key 即可使用 Playground 和数据 API。',
+      keyGuide: {
+        control: {
+          primary:
+            '当前 User API Key 已可用于 Playground 和数据访问，普通用户无需配置控制凭证。',
+          secondary:
+            '如需切换 Account 或管理用户，请向部署管理员索取 Root Key，或向当前 Account 管理员索取 Admin Key。Root Key 位于服务端 ov.conf 的 server.root_api_key。',
+          title: '需要管理 Account 或用户？',
+        },
+        data: {
+          primary:
+            'Root/Admin API Key 主要用于管理操作，Playground 和租户数据访问需要绑定用户身份的 User API Key。',
+          secondary:
+            '请在「用户管理」中选择、创建用户或重新生成 User Key，然后将它用作 User API Key。',
+          title: '还缺少 User API Key',
+        },
+        empty: {
+          primary: '普通用户：请向当前 Account 管理员索取 User API Key。',
+          secondary:
+            '部署管理员：Root API Key 位于服务端 ov.conf 的 server.root_api_key；填入后可在「用户管理」中创建或重新生成 User Key。',
+          title: '还没有 OpenViking API Key？',
+        },
+        learnMore: '查看 API Key 获取方式',
+        trusted: {
+          primary:
+            '当前 Trusted 服务启用了 Root Key 校验，浏览器需要配置同一 Root API Key 才能访问管理和租户数据接口。',
+          secondary:
+            '请向部署管理员索取 Root Key；它位于服务端 ov.conf 的 server.root_api_key。Trusted 模式的数据身份由 Account/User 断言确定，不需要 User API Key。',
+          title: 'Trusted 服务需要 Root API Key',
+        },
+      },
       rootHint: '用于列出 account / user，以及生成或轮换 key。',
       title: '连接设置',
       userHint: '供 Playground 和租户数据 API 使用。',
+    },
+    connectionPage: {
+      description: '配置 OpenViking 服务连接、控制面凭证和当前数据访问凭证。',
+      title: '连接设置',
     },
     dialogs: {
       addAccount: {
@@ -133,14 +386,26 @@ const zhCN = {
         title: '新增 account',
       },
       addUser: {
+        currentAccountDescription:
+          '在 {{accountId}} 空间下创建用户。生成的 key 只会在创建后展示一次。',
         description:
           '在已有 account 下注册 user。生成的 key 只会在创建后展示一次。',
         title: '新增 user',
+      },
+      changeRole: {
+        description:
+          '将 {{account}} / {{user}} 的角色修改为 {{role}}。新的权限会立即生效。',
+        title: '修改用户角色？',
       },
       regenerate: {
         description:
           '要重新生成 {{account}} / {{user}} 的 API key 吗？当前 key 会立即失效。',
         title: '重新生成 API key？',
+      },
+      removeUser: {
+        description:
+          '确定从 {{account}} 空间移除 {{user}} 吗？该用户的 API Key 会立即失效，此操作不可撤销。',
+        title: '删除用户？',
       },
     },
     empty: {
@@ -181,8 +446,21 @@ const zhCN = {
     loading: '正在加载身份...',
     management: {
       accountFilter: 'Accounts',
+      accessDeniedDescription:
+        '只有配置并通过校验的 Root 或 Account Admin API Key 才能管理用户。',
+      accessDeniedTitle: '无用户管理权限',
+      currentAccountDescription: '管理 {{account}} 空间下的用户和访问凭证。',
       description:
         '查看选中 accounts 下的 users 和凭证，并在网页端新增 user 或轮换 key。',
+      memberListDescription:
+        '“切换身份”会将该用户设为 Playground、检索等数据页面的访问身份，不会改变当前 Root/Admin 管理凭证。',
+      memberListDescriptionRoot:
+        '可直接修改成员角色；“切换身份”只会改变 Playground、检索等数据页面的访问身份，不会改变当前 Root 管理凭证。',
+      memberListTitle: '空间成员',
+      cannotRemoveCurrentIdentity: '不能删除当前正在使用的身份。',
+      cannotRemoveLastManager: '不能删除空间内最后一个管理员。',
+      noUsableKey: '该用户没有可用于数据访问的明文 API Key。',
+      openConnection: '打开连接设置',
       title: '用户管理',
     },
     page: {
@@ -203,6 +481,7 @@ const zhCN = {
     },
     roles: {
       admin: 'Admin',
+      root: 'Root',
       user: 'User',
     },
     serverMode: {
@@ -229,9 +508,11 @@ const zhCN = {
       connectionSaved: '连接已保存',
       copyFailed: '复制失败',
       copied: '已复制',
-      dataKeySelected: '已选择 User API key',
+      dataKeySelected: '已切换数据访问身份',
       keyRegenerated: 'API key 已重新生成',
+      roleUpdated: '{{user}} 的角色已修改为 {{role}}',
       userCreated: 'User 已创建',
+      userRemoved: '{{user}} 已删除',
     },
   },
   home: {
@@ -563,13 +844,22 @@ const zhCN = {
   retrieval: {
     title: '检索',
     searchPlaceholder: '输入检索内容',
+    placeholders: {
+      find: '输入语义检索内容',
+      search: '输入需要结合会话理解的问题',
+      grep: '输入正则表达式或精确文本',
+      glob: '输入文件模式，例如 **/*.md',
+    },
     send: '检索',
     controls: {
       function: '检索函数',
       modes: {
         find: 'find',
         search: 'search',
+        grep: 'grep',
+        glob: 'glob',
       },
+      ignoreCase: '忽略大小写',
       resultCount: '返回数量',
       path: '路径',
       pathPlaceholder: '/',
@@ -595,6 +885,7 @@ const zhCN = {
     results: {
       title: '检索结果',
       topN: '检索结果（Top{{count}}）',
+      line: '第 {{line}} 行',
     },
     types: {
       resource: 'Resources',
@@ -632,6 +923,20 @@ const zhCN = {
     threadList: {
       title: '会话',
       newSession: '新建会话',
+      count: '{{count}} 个会话',
+      loading: '正在加载会话...',
+      emptyTitle: '还没有会话',
+      emptyDescription: '点击右上角的加号开始一段新对话。',
+      deleteSession: '删除“{{title}}”',
+      deleteConfirmTitle: '删除会话？',
+      deleteConfirmDescription:
+        '“{{title}}”及其对话记录将被永久删除，此操作无法撤销。',
+      cancel: '取消',
+      confirmDelete: '删除',
+      deleting: '正在删除...',
+      deleteSuccess: '会话已删除',
+      deleteFailed: '会话删除失败：{{error}}',
+      shortcut: '⌘ N 新建会话',
     },
     chat: {
       copy: '复制',
@@ -659,8 +964,29 @@ const zhCN = {
       send: '发送',
       cancel: '停止',
     },
+    impact: {
+      title: '记忆影响',
+      open: '查看本次会话造成的记忆影响',
+      description: '由 {{commits}} 次提交产生 {{changes}} 项记忆变更',
+      kinds: {
+        add: '新增',
+        update: '更新',
+        delete: '删除',
+      },
+      allTypes: '全部',
+      filterByType: '按记忆分类筛选',
+      before: '变更前',
+      after: '变更后',
+      addedContent: '新增内容',
+      deletedContent: '删除内容',
+      emptyContent: '没有可展示的内容',
+      loading: '正在加载记忆变更...',
+      loadFailed: '记忆变更加载失败',
+      retry: '重试',
+      empty: '本次会话提交没有产生记忆变更。',
+    },
     empty: {
-      description: '从侧边栏选择一个会话，或创建新会话。',
+      description: '从左侧选择一个会话，或创建新会话。',
       title: '未选择会话',
     },
   },
@@ -742,13 +1068,12 @@ const zhCN = {
       search: '搜索上下文',
       refresh: '刷新目录',
       namespaces: {
+        agent: 'Agent 的能力、工具和经验',
         user: '用户个性化记忆',
-        session: '用户与 Agent 的原始会话',
         resources: 'Agent 可引用的外部资源',
       },
     },
     agent: {
-      autoRetrieve: 'Agent 会根据消息和工具自主检索',
       history: '历史会话',
       newSession: '新建会话',
       creating: '正在创建 Playground 会话...',
@@ -781,6 +1106,12 @@ const zhCN = {
       },
     },
     terminal: {
+      header: '终端',
+      history: '命令历史',
+      historyTitle: '命令历史',
+      historyDescription: '查看当前浏览器中执行过的命令。',
+      clearHistory: '清空命令历史',
+      noHistory: '暂无命令历史',
       welcomeTitle: 'Terminal 已连接上下文目录',
       welcomeBody:
         '可执行 /status、/ls、/search、/read、/add-resource。/search 默认全局检索，可通过 --scope . 使用当前目录，或通过 --scope viking://resources/... 指定目录。',

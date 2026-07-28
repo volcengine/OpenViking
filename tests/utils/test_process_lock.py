@@ -1,53 +1,92 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-"""Tests for process_lock.py signal handling."""
+"""Tests for process-lock interaction with host signal handling."""
 
+import os
 import signal
+import subprocess
+import sys
+import textwrap
+import time
+
+import pytest
+
+from openviking.utils.process_lock import acquire_data_dir_lock
 
 
-def test_sigterm_handler_calls_sys_exit():
-    """SIGTERM handler 应该调用 sys.exit(0) 干净退出。
+def test_acquire_does_not_override_sigterm_handler(tmp_path):
+    """Uvicorn must retain ownership of SIGTERM for graceful lifespan shutdown."""
+    original_handler = signal.getsignal(signal.SIGTERM)
 
-    验证修复后的 lambda 调用 sys.exit(0) 而非 signal.default_int_handler。
-    signal.default_int_handler 会抛出 KeyboardInterrupt（SIGINT handler），
-    语义错误。sys.exit(0) 触发 atexit cleanup 并正常退出。
-    """
-    exit_calls = []
+    acquire_data_dir_lock(str(tmp_path))
 
-    def fake_exit(code=0):
-        exit_calls.append(code)
-
-    # 模拟修复后的 handler（与 process_lock.py:119-120 一致）
-    def handler(sig, frame):
-        (None, fake_exit(0))
-
-    handler(signal.SIGTERM, None)
-
-    assert exit_calls == [0]
+    assert signal.getsignal(signal.SIGTERM) is original_handler
 
 
-def test_sigterm_handler_calls_cleanup_before_exit():
-    """SIGTERM handler 应该在退出前调用 _cleanup。
+@pytest.mark.skipif(sys.platform == "win32", reason="SIGTERM lifecycle is POSIX-specific")
+def test_uvicorn_sigterm_runs_lifespan_and_releases_process_lock(tmp_path):
+    """A real Uvicorn SIGTERM must reach lifespan cleanup without tracebacks."""
+    workspace = tmp_path / "workspace"
+    ready_file = tmp_path / "ready"
+    script = textwrap.dedent(
+        """
+        from contextlib import asynccontextmanager
+        from pathlib import Path
+        import sys
 
-    _cleanup 负责移除 PID 锁文件，即使在 SIGTERM 强制关闭时也应执行，
-    避免残留锁文件阻止后续进程启动。lambda 中的元组按顺序执行：
-    先 _cleanup()，再 sys.exit(0)。
-    """
-    cleanup_called = []
-    exit_calls = []
+        import uvicorn
+        from fastapi import FastAPI
 
-    def fake_cleanup():
-        cleanup_called.append(True)
+        from openviking.utils.process_lock import (
+            acquire_data_dir_lock,
+            release_data_dir_lock,
+        )
 
-    def fake_exit(code=0):
-        exit_calls.append(code)
+        workspace = sys.argv[1]
+        ready_file = Path(sys.argv[2])
 
-    # 模拟修复后的 handler（与 process_lock.py:119-120 一致）
-    def handler(sig, frame):
-        (fake_cleanup(), fake_exit(0))
+        @asynccontextmanager
+        async def lifespan(_app):
+            lock_path = acquire_data_dir_lock(workspace)
+            ready_file.write_text("ready")
+            try:
+                yield
+            finally:
+                release_data_dir_lock(lock_path)
 
-    handler(signal.SIGTERM, None)
+        app = FastAPI(lifespan=lifespan)
+        uvicorn.run(app, host="127.0.0.1", port=0, log_level="info")
+        """
+    )
+    process = subprocess.Popen(
+        [sys.executable, "-c", script, str(workspace), str(ready_file)],
+        cwd=os.getcwd(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 20
+        while not ready_file.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert ready_file.exists(), "Uvicorn child did not enter application lifespan"
 
-    assert cleanup_called == [True], "_cleanup 应在 exit 前被调用"
-    assert exit_calls == [0]
+        process.send_signal(signal.SIGTERM)
+        output, _ = process.communicate(timeout=20)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+
+    # Current Uvicorn restores and re-raises the captured POSIX signal after
+    # its graceful shutdown completes, so both a clean return and -SIGTERM are
+    # valid host-level terminal statuses.  The lifecycle evidence below is the
+    # regression contract: lifespan completed and no exception traceback was
+    # emitted by a process-lock handler.
+    assert process.returncode in {0, -signal.SIGTERM}, output
+    assert "Application shutdown complete" in output
+    assert "Finished server process" in output
+    assert not (workspace / ".openviking.pid").exists()
+    assert "SystemExit" not in output
+    assert "CancelledError" not in output

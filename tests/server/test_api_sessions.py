@@ -14,7 +14,11 @@ from starlette.requests import Request
 
 from openviking.message import ImagePart, Message, TextPart
 from openviking.server.app import create_app
-from openviking.server.config import ServerConfig, ToolOutputExternalizationConfig
+from openviking.server.config import (
+    AgentEvolutionConfig,
+    ServerConfig,
+    ToolOutputExternalizationConfig,
+)
 from openviking.server.dependencies import set_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import sessions as sessions_router
@@ -272,6 +276,8 @@ async def test_tool_result_externalization_read_and_search(client: httpx.AsyncCl
 
 
 async def test_tool_result_externalization_respects_server_config_disabled(service):
+    from openviking.server.auth.plugins import DevAuthPlugin
+
     app = create_app(
         config=ServerConfig(
             tool_output_externalization=ToolOutputExternalizationConfig(enabled=False)
@@ -279,6 +285,9 @@ async def test_tool_result_externalization_respects_server_config_disabled(servi
         service=service,
     )
     set_service(service)
+    # ASGITransport does not run the application lifespan that normally
+    # initializes the configured auth plugin.
+    app.state.auth_plugin = DevAuthPlugin()
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -355,13 +364,14 @@ async def test_get_session_context_includes_incomplete_archive_messages(
     assert resp.status_code == 200
     body = resp.json()
     assert [m["parts"][0]["text"] for m in body["result"]["messages"]] == [
+        "Archived seed",
         "Pending user message",
         "Pending assistant response",
         "Current live message",
     ]
 
 
-async def test_get_session_context_skips_failed_archive_messages(
+async def test_get_session_context_restores_failed_archive_messages(
     client: httpx.AsyncClient, service
 ):
     create_resp = await client.post("/api/v1/sessions", json={})
@@ -406,6 +416,8 @@ async def test_get_session_context_skips_failed_archive_messages(
     assert resp.status_code == 200
     body = resp.json()
     assert [m["parts"][0]["text"] for m in body["result"]["messages"]] == [
+        "Archived seed",
+        "Failed archive message",
         "Current live message",
     ]
 
@@ -903,16 +915,25 @@ async def test_get_session_context_endpoint_returns_trimmed_latest_archive_and_m
     result = body["result"]
     assert result["latest_archive_overview"] == ""
     assert result["pre_archive_abstracts"] == []
-    assert len(result["messages"]) == 1
-    assert result["messages"][0]["role"] == "assistant"
-    assert any(
-        part["type"] == "tool" and part["tool_id"] == "tool_123"
-        for part in result["messages"][0]["parts"]
-    )
+    assert result["messages"] == []
+    assert result["estimatedTokens"] <= 1
+    assert result["stats"]["activeTokens"] <= 1
     assert result["stats"]["totalArchives"] == 1
     assert result["stats"]["includedArchives"] == 0
     assert result["stats"]["droppedArchives"] == 1
     assert result["stats"]["failedArchives"] == 0
+
+    # Budget fitting is a virtual view and must not mutate the durable live row.
+    full_resp = await client.get(
+        f"/api/v1/sessions/{session_id}/context?token_budget=128000"
+    )
+    full_result = full_resp.json()["result"]
+    assert len(full_result["messages"]) == 1
+    assert full_result["messages"][0]["role"] == "assistant"
+    assert any(
+        part["type"] == "tool" and part["tool_id"] == "tool_123"
+        for part in full_result["messages"][0]["parts"]
+    )
 
 
 async def test_get_session_archive_endpoint_returns_archive_details(
@@ -1018,6 +1039,8 @@ async def test_commit_failed_when_execution_extraction_fails_does_not_block_next
     retries), the whole archive is marked .failed.json and skipped — there is
     no partial state — but a failed archive must not block the next commit.
     """
+    service.sessions.set_agent_evolution_config(AgentEvolutionConfig(enabled=True))
+
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
 

@@ -73,6 +73,7 @@ async function fetchJSON(path, init = {}, options = {}) {
     if (cfg.userId) headers["X-OpenViking-User"] = cfg.userId;
     const actorPeerId = options.actorPeerId ?? "";
     if (actorPeerId) headers["X-OpenViking-Actor-Peer"] = actorPeerId;
+    if (cfg.userAgent) headers["User-Agent"] = cfg.userAgent;
     const res = await fetch(url, { ...init, headers, signal: controller.signal });
     const body = await res.json();
     if (!res.ok || body.status === "error") {

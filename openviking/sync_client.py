@@ -102,6 +102,9 @@ class SyncOpenViking:
         created_at: str | None = None,
         peer_id: str | None = None,
         telemetry: TelemetryRequest = False,
+        turn_id: str | None = None,
+        message_kind: str | None = None,
+        source_message_ids: list[str] | None = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -115,6 +118,15 @@ class SyncOpenViking:
 
         If both content and parts are provided, parts takes precedence.
         """
+        semantic_kwargs = {
+            key: value
+            for key, value in {
+                "turn_id": turn_id,
+                "message_kind": message_kind,
+                "source_message_ids": source_message_ids,
+            }.items()
+            if value is not None
+        }
         return run_async(
             self._async_client.add_message(
                 session_id=session_id,
@@ -124,6 +136,7 @@ class SyncOpenViking:
                 created_at=created_at,
                 peer_id=peer_id,
                 telemetry=telemetry,
+                **semantic_kwargs,
             )
         )
 
@@ -148,13 +161,28 @@ class SyncOpenViking:
         telemetry: TelemetryRequest = False,
         *,
         keep_recent_count: int = 0,
+        retention_mode: str | None = None,
+        keep_recent_turn_count: int | None = None,
+        retained_message_token_budget: int | None = None,
+        min_raw_tail_steps: int | None = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
+        optional_retention = {
+            key: value
+            for key, value in {
+                "retention_mode": retention_mode,
+                "keep_recent_turn_count": keep_recent_turn_count,
+                "retained_message_token_budget": retained_message_token_budget,
+                "min_raw_tail_steps": min_raw_tail_steps,
+            }.items()
+            if value is not None
+        }
         return run_async(
             self._async_client.commit_session(
                 session_id,
                 telemetry=telemetry,
                 keep_recent_count=keep_recent_count,
+                **optional_retention,
             )
         )
 
@@ -209,6 +237,7 @@ class SyncOpenViking:
         summarize: bool = False,
         args: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
+        processing_mode: str = "semantic_and_vectors",
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (resources scope only)
@@ -239,6 +268,7 @@ class SyncOpenViking:
                 timeout=timeout,
                 build_index=build_index,
                 summarize=summarize,
+                processing_mode=processing_mode,
                 args=args,
                 telemetry=telemetry,
                 **kwargs,

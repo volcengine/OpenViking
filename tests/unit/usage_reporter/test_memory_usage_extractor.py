@@ -301,10 +301,21 @@ async def test_memory_usage_extractor_replay_uses_stable_event_id():
     extractor = MemoryUsageExtractor()
 
     first = await extractor.extract(messages=messages, context=_context())
-    replay = await extractor.extract(messages=messages, context=_context())
+    replay = await extractor.extract(
+        messages=messages,
+        context=UsageContext(
+            account_id="new",
+            user_id="test",
+            session_id="session-1",
+            archive_uri="viking://user/test/sessions/session-1/history/archive_002",
+            task_id="task-2",
+        ),
+    )
 
     assert first[0].event_id
     assert replay[0].event_id == first[0].event_id
+    assert replay[0].task_id == "task-2"
+    assert replay[0].evidence["archive_uri"].endswith("archive_002")
 
 
 @pytest.mark.asyncio

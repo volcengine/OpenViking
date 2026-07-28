@@ -29,7 +29,11 @@ type Phase =
  * footer's verify dialog, so it carries its own chrome-free layout and the host
  * (Card or Dialog) supplies the title/footer.
  */
-export function CrossDeviceVerifyForm() {
+export function CrossDeviceVerifyForm({
+  secondaryAction,
+}: {
+  secondaryAction?: React.ReactNode
+} = {}) {
   const { t } = useTranslation(['oauth', 'common'])
   const {
     connection,
@@ -229,7 +233,8 @@ export function CrossDeviceVerifyForm() {
         </p>
       ) : null}
 
-      <div className="flex justify-end">
+      <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+        {secondaryAction}
         <Button
           type="submit"
           disabled={
