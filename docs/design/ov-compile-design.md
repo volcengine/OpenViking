@@ -325,7 +325,7 @@ request_tools = compile_tools + submit_wiki_bundle
 
 Compile 不使用 Skill 的 `allowed-tools` 推导、授权或限制工具，也不为 Skill 连接 MCP。该字段可作为其他 Skill 宿主的兼容 metadata 保留。Skill 需要飞书、方舟等外部能力时，通过 `exec` 调用 task sandbox 中预装的 CLI；可选的 `requires.bins/env` 只用于提前检查运行条件，不负责安装 CLI 或依赖。
 
-固定 allowlist 已排除 `message`、`cron`、`spawn`、Web、image、MCP 和 OpenViking 写入/提交工具，无需维护额外 blocklist。`exec` 仍可能产生外部副作用；现有 `direct` sandbox 只提供 task cwd，不是 OS 级隔离。`bot.sandbox.backends.direct.allow_compile_exec` 默认为 `false`，使用 `direct` 的 Compile 会在接收任务前返回 `UNAVAILABLE`。将其设为 `true` 是明确的不安全 opt-in；生产或多用户部署应使用配置了文件系统和网络 policy 的隔离 backend。
+固定 allowlist 已排除 `message`、`cron`、`spawn`、Web、image、MCP 和 OpenViking 写入/提交工具，无需维护额外 blocklist。`exec` 仍可能产生外部副作用；现有 `direct` sandbox 只提供 task cwd，不是 OS 级隔离。`bot.sandbox.backends.direct.allow_compile_exec` 默认为 `false`，使用 `direct` 时 Compile 仍可通过文件工具完成普通整理，但工具集中不会注册 `exec`；声明 `requires.bins` 或 `requires.env` 的 Skill 会在执行任何命令探测前返回 `SKILL_CAPABILITY_UNAVAILABLE`。将该选项设为 `true` 是明确的不安全 opt-in；生产或多用户部署应使用配置了文件系统和网络 policy 的隔离 backend。
 
 ## 7. AgentLoop 输出协议
 

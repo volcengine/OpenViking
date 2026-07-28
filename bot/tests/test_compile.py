@@ -21,7 +21,7 @@ from vikingbot.compile.models import (
     utc_now,
 )
 from vikingbot.compile.renderer import WikiRenderer, content_hash, wiki_page_path_from_title
-from vikingbot.compile.service import BotCompileService
+from vikingbot.compile.service import BotCompileService, CompileCapabilities
 from vikingbot.compile.store import CompileTaskStore
 from vikingbot.config.schema import DirectBackendConfig, SandboxBackend, SessionKey
 
@@ -92,8 +92,13 @@ def test_compile_bundle_schema_distinguishes_wiki_pages_and_artifact_files():
     assert "Markdown, YAML, JSON" in properties["files"]["description"]
     assert "generated Wiki pages only" in properties["links"]["description"]
     assert "known source URIs" in page_properties["body_markdown"]["description"]
-    assert "generated UTF-8 Markdown Wiki body" in page_properties["body_workspace_path"]["description"]
-    assert "__compile_staging__/wiki_pages/" in page_properties["body_workspace_path"]["description"]
+    assert (
+        "generated UTF-8 Markdown Wiki body"
+        in page_properties["body_workspace_path"]["description"]
+    )
+    assert (
+        "__compile_staging__/wiki_pages/" in page_properties["body_workspace_path"]["description"]
+    )
     assert "filename derives from title" in page_properties["path_hint"]["description"]
     assert "supplied source roots" in page_properties["source_ids"]["description"]
     assert "preserve every required path and format" in properties["files"]["description"]
@@ -162,20 +167,27 @@ def test_submit_tool_schema_requires_workspace_page_bodies_when_available():
     "target_uri",
     ["viking://resources/wiki", "viking://agent/skills"],
 )
-def test_submit_tool_schema_requires_workspace_artifacts_when_available(target_uri):
+@pytest.mark.parametrize("exec_enabled", [True, False])
+def test_submit_tool_schema_requires_workspace_artifacts_when_available(target_uri, exec_enabled):
     tool = SubmitWikiBundleTool(
         source_ids={"src_1"},
         catalog_uris=set(),
         target_uri=target_uri,
         limits=CompileLimits(),
         require_workspace_files=True,
+        exec_enabled=exec_enabled,
     )
 
     file_schema = tool.parameters["$defs"]["CompileFileDraft"]
     assert "content" not in file_schema["properties"]
     assert "workspace_path" in file_schema["required"]
-    assert "write_file or exec" in tool.description
-    assert "workspace_path instead of inline content" in tool.validate_params({"raw": "{}"})[0]
+    hint = tool.validate_params({"raw": "{}"})[0]
+    assert ("write_file or exec" in tool.description) is exec_enabled
+    assert ("write_file or exec" in hint) is exec_enabled
+    assert "workspace_path instead of inline content" in hint
+    if not exec_enabled:
+        assert "with write_file," in tool.description
+        assert "with write_file and submit" in hint
 
 
 @pytest.mark.asyncio
@@ -474,9 +486,8 @@ async def test_compile_collects_all_wiki_search_tag_failures():
         "viking://resources/wiki/a.md": "tag service unavailable",
         "viking://resources/wiki/b.md": "indexed record was not found",
     }
-    assert (
-        "ov --sudo reindex viking://resources/wiki --mode vectors_only --wait true"
-        in str(exc.value)
+    assert "ov --sudo reindex viking://resources/wiki --mode vectors_only --wait true" in str(
+        exc.value
     )
 
 
@@ -521,9 +532,7 @@ def test_renderer_checks_size_before_parsing_okf_artifact():
 
 
 def test_renderer_rejects_page_path_colliding_with_artifact():
-    bundle = WikiBundleDraft.model_validate(
-        {"pages": [_page(1, "PAPER", path_hint="PAPER.md")]}
-    )
+    bundle = WikiBundleDraft.model_validate({"pages": [_page(1, "PAPER", path_hint="PAPER.md")]})
 
     with pytest.raises(ValueError, match="already exists"):
         WikiRenderer().render(
@@ -1582,8 +1591,10 @@ async def test_execute_skill_target_skips_recursive_catalog_and_completes(
         file_catalog_uris,
         workspace_baseline,
         wiki_uri_resolver,
+        capabilities,
     ):
         del request_loop, roots, source_ids
+        assert capabilities == CompileCapabilities(exec_enabled=False)
         assert catalog_uris == set()
         assert file_catalog_uris == set()
         assert workspace_baseline is None
@@ -1596,6 +1607,7 @@ async def test_execute_skill_target_skips_recursive_catalog_and_completes(
                 file_catalog_uris=set(),
                 target_uri=target_uri,
                 limits=CompileLimits(),
+                exec_enabled=capabilities.exec_enabled,
             )
         )
         return registry, set()
@@ -1693,9 +1705,7 @@ async def test_source_context_builds_bounded_compact_recursive_catalog():
 
     service = object.__new__(BotCompileService)
     service.limits = CompileLimits(source_catalog_entries=3)
-    sources = await service._build_sources(
-        Client(), ["viking://resources/source"]
-    )
+    sources = await service._build_sources(Client(), ["viking://resources/source"])
 
     assert sources == [
         {
@@ -1922,7 +1932,8 @@ class _NamedTool(_EchoTool):
         return self._name
 
 
-def test_compile_registry_has_a_fixed_ara_compatible_tool_set():
+@pytest.mark.parametrize("exec_enabled", [True, False])
+def test_compile_registry_has_a_fixed_ara_compatible_tool_set(exec_enabled):
     available = ToolRegistry()
     for name in (
         "read_file",
@@ -1953,12 +1964,14 @@ def test_compile_registry_has_a_fixed_ara_compatible_tool_set():
         "catalog_uris": set(),
     }
 
-    registry, ov_names = service._build_compile_registry(**common)
-    assert set(registry.tool_names) == {
+    registry, ov_names = service._build_compile_registry(
+        **common,
+        capabilities=CompileCapabilities(exec_enabled=exec_enabled),
+    )
+    expected_tools = {
         "read_file",
         "write_file",
         "edit_file",
-        "exec",
         "openviking_list",
         "openviking_search",
         "openviking_grep",
@@ -1966,6 +1979,9 @@ def test_compile_registry_has_a_fixed_ara_compatible_tool_set():
         "openviking_multi_read",
         "submit_wiki_bundle",
     }
+    if exec_enabled:
+        expected_tools.add("exec")
+    assert set(registry.tool_names) == expected_tools
     assert ov_names == {
         "openviking_list",
         "openviking_search",
@@ -1978,6 +1994,7 @@ def test_compile_registry_has_a_fixed_ara_compatible_tool_set():
     submit = registry.get("submit_wiki_bundle")
     assert submit.require_workspace_files is True
     assert submit.require_workspace_pages is True
+    assert submit.exec_enabled is exec_enabled
 
 
 def test_compile_prompt_routes_skill_cli_commands_through_exec():
@@ -1995,6 +2012,7 @@ def test_compile_prompt_routes_skill_cli_commands_through_exec():
         skill_content="Follow the ARA method.",
         sources=[],
         catalog=[],
+        capabilities=CompileCapabilities(exec_enabled=True),
     )
 
     assert "When the Skill asks to run Bash, shell commands, or a CLI, use the exec tool." in system
@@ -2022,7 +2040,35 @@ def test_compile_prompt_routes_skill_cli_commands_through_exec():
         assert implementation_name not in user
 
 
-def test_compile_prompt_requires_one_complete_skill_package_for_skill_target():
+def test_compile_prompt_omits_exec_when_capability_is_disabled():
+    request = SanitizedCompileRequest.model_validate(
+        {
+            "from": ["viking://resources/source"],
+            "to": "viking://resources/wiki",
+            "skill": "viking://agent/skills/wiki",
+            "reason": "Compile the research",
+        }
+    )
+
+    system, _user = BotCompileService._build_prompts(
+        request=request,
+        skill_content="Write two Wiki pages.",
+        sources=[],
+        catalog=[],
+        capabilities=CompileCapabilities(exec_enabled=False),
+    )
+
+    assert "Command execution is unavailable." in system
+    assert "Do not attempt Bash, shell commands, or CLI commands" in system
+    assert "use write_file or edit_file" in system
+    assert (
+        "Generate every artifact file in the task workspace with write_file, then submit" in system
+    )
+    assert "write_file or exec" not in system
+    assert "use the exec tool" not in system
+
+
+def test_compile_prompt_requires_one_complete_skill_package_without_exec():
     request = SanitizedCompileRequest.model_validate(
         {
             "from": ["viking://resources/weekly"],
@@ -2037,10 +2083,11 @@ def test_compile_prompt_requires_one_complete_skill_package_for_skill_target():
         skill_content="Create a standards-compliant Skill.",
         sources=[],
         catalog=[],
+        capabilities=CompileCapabilities(exec_enabled=False),
     )
 
-    assert "When the Skill asks to run Bash, shell commands, or a CLI, use the exec tool." in system
-    assert "Generate every artifact file in the task workspace with write_file or exec" in system
+    assert "Command execution is unavailable." in system
+    assert "write_file or exec" not in system
     assert "submit_wiki_bundle using workspace_path" in system
     assert "exactly one complete Skill package as artifact files" in system
     assert "<skill-name>/SKILL.md" in system
@@ -2102,13 +2149,115 @@ def _sanitized_compile_request() -> SanitizedCompileRequest:
     )
 
 
+@pytest.mark.parametrize(
+    ("backend", "allow_compile_exec", "expected"),
+    [
+        (SandboxBackend.DIRECT, False, False),
+        (SandboxBackend.DIRECT, True, True),
+        (SandboxBackend.SRT, False, True),
+        (SandboxBackend.DOCKER, False, True),
+        (SandboxBackend.OPENSANDBOX, False, True),
+        (SandboxBackend.AIOSANDBOX, False, True),
+    ],
+)
+def test_compile_exec_capability_depends_on_backend(
+    tmp_path: Path,
+    backend: SandboxBackend,
+    allow_compile_exec: bool,
+    expected: bool,
+):
+    service = _compile_service(
+        tmp_path,
+        auth_mode="dev",
+        backend=backend,
+        allow_compile_exec=allow_compile_exec,
+    )
+
+    assert service._compile_capabilities().exec_enabled is expected
+
+
+def test_compile_exec_capability_fails_closed_for_unknown_backend(tmp_path: Path):
+    service = _compile_service(
+        tmp_path,
+        auth_mode="dev",
+        backend=SandboxBackend.DIRECT,
+        allow_compile_exec=True,
+    )
+    service.config.sandbox.backend = "future-backend"
+
+    assert service._compile_capabilities() == CompileCapabilities(exec_enabled=False)
+
+
+@pytest.mark.asyncio
+async def test_compile_without_exec_rejects_cli_skill_before_sandbox_access(
+    tmp_path: Path,
+):
+    service = object.__new__(BotCompileService)
+
+    class SandboxManager:
+        async def get_sandbox(self, session_key):
+            raise AssertionError(f"sandbox must not be accessed: {session_key}")
+
+    with pytest.raises(CompileFailure) as raised:
+        await service._check_requirements(
+            {"requires": {"bins": ["python3"], "env": ["API_TOKEN"]}},
+            capabilities=CompileCapabilities(exec_enabled=False),
+            sandbox_manager=SandboxManager(),
+            session_key=SessionKey(type="compile", channel_id="task", chat_id="task"),
+            workspace=tmp_path,
+            skill_name="cli-skill",
+        )
+
+    assert raised.value.code == "SKILL_CAPABILITY_UNAVAILABLE"
+    assert "bin:python3" in str(raised.value)
+    assert "env:API_TOKEN" in str(raised.value)
+    assert "allow_compile_exec=true" in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_compile_without_exec_syncs_ordinary_skill_without_running_commands(
+    tmp_path: Path,
+):
+    service = object.__new__(BotCompileService)
+    skill_dir = tmp_path / "skills" / "wiki"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("Write Wiki pages.", encoding="utf-8")
+
+    class Sandbox:
+        def __init__(self):
+            self.files = {}
+
+        async def write_file(self, path, content):
+            self.files[path] = content
+
+        async def execute(self, command):
+            raise AssertionError(f"command must not run: {command}")
+
+    sandbox = Sandbox()
+
+    class SandboxManager:
+        async def get_sandbox(self, session_key):
+            assert session_key.type == "compile"
+            return sandbox
+
+    await service._check_requirements(
+        {},
+        capabilities=CompileCapabilities(exec_enabled=False),
+        sandbox_manager=SandboxManager(),
+        session_key=SessionKey(type="compile", channel_id="task", chat_id="task"),
+        workspace=tmp_path,
+        skill_name="wiki",
+    )
+
+    assert sandbox.files == {"skills/wiki/SKILL.md": "Write Wiki pages."}
+
+
 @pytest.mark.asyncio
 async def test_local_dev_compile_uses_config_backed_connection(monkeypatch, tmp_path: Path):
     service = _compile_service(
         tmp_path,
         auth_mode="dev",
         backend=SandboxBackend.DIRECT,
-        allow_compile_exec=True,
     )
     started = asyncio.Event()
     release = asyncio.Event()
@@ -2132,6 +2281,7 @@ async def test_local_dev_compile_uses_config_backed_connection(monkeypatch, tmp_
     await started.wait()
 
     assert accepted.status == "accepted"
+    assert service._compile_capabilities().exec_enabled is False
     assert observed == {"connection": {}, "runner_connection": {}}
     runners = list(service._tasks)
     release.set()
@@ -2140,22 +2290,38 @@ async def test_local_dev_compile_uses_config_backed_connection(monkeypatch, tmp_
 
 
 @pytest.mark.asyncio
-async def test_direct_compile_exec_is_disabled_by_default(tmp_path: Path):
+async def test_direct_compile_without_exec_is_accepted_by_default(monkeypatch, tmp_path: Path):
     service = _compile_service(
         tmp_path,
         auth_mode="api_key",
         backend=SandboxBackend.DIRECT,
     )
+    started = asyncio.Event()
+    release = asyncio.Event()
 
-    with pytest.raises(CompileFailure) as raised:
-        await service.create_task(
-            _compile_request(connection=True),
-            principal_scope="owner",
-        )
+    async def normalize(request, *, connection):
+        del request
+        assert connection == {"api_key": "secret"}
+        return _sanitized_compile_request()
 
-    assert raised.value.code == "UNAVAILABLE"
-    assert "allow_compile_exec=true" in str(raised.value)
-    assert not list(service.store.root.glob("cmp_*.json"))
+    async def run_task(*args):
+        del args
+        started.set()
+        await release.wait()
+
+    monkeypatch.setattr(service, "_normalize_request", normalize)
+    monkeypatch.setattr(service, "_run_task", run_task)
+
+    accepted = await service.create_task(
+        _compile_request(connection=True),
+        principal_scope="owner",
+    )
+    await started.wait()
+
+    assert accepted.status == "accepted"
+    assert service._compile_capabilities().exec_enabled is False
+    release.set()
+    await asyncio.gather(*service._tasks)
 
 
 @pytest.mark.asyncio

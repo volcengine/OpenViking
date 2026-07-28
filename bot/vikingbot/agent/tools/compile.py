@@ -124,7 +124,11 @@ class CompileScopedTool(Tool):
                 return f"Error: URI is outside the Compile task scope: {uri}"
 
         result = await self._tool.execute(tool_context, **kwargs)
-        if isinstance(result, str) and result.startswith("Error") and not result.startswith("Error:"):
+        if (
+            isinstance(result, str)
+            and result.startswith("Error")
+            and not result.startswith("Error:")
+        ):
             result = "Error: " + result[len("Error") :].lstrip(" :")
         rendered = str(result)
         size = len(rendered.encode("utf-8"))
@@ -151,6 +155,7 @@ class SubmitWikiBundleTool(Tool):
         require_workspace_pages: bool = False,
         workspace_baseline: set[str] | None = None,
         wiki_uri_resolver: Callable[[str], Awaitable[bool]] | None = None,
+        exec_enabled: bool = True,
     ):
         self.source_ids = source_ids
         self.catalog_uris = catalog_uris
@@ -166,6 +171,7 @@ class SubmitWikiBundleTool(Tool):
             else {_normalize_workspace_path(path) for path in workspace_baseline}
         )
         self.wiki_uri_resolver = wiki_uri_resolver
+        self.exec_enabled = exec_enabled
         self.bundle: WikiBundleDraft | None = None
         self.file_payloads: list[bytes | None] = []
         self.skill_name: str | None = None
@@ -180,8 +186,9 @@ class SubmitWikiBundleTool(Tool):
 
     @property
     def description(self) -> str:
+        artifact_writers = "write_file or exec" if self.exec_enabled else "write_file"
         workspace_notice = (
-            " Generate artifact files with write_file or exec, then reference them with "
+            f" Generate artifact files with {artifact_writers}, then reference them with "
             "workspace_path; do not inline file content."
             if self.require_workspace_files
             else ""
@@ -202,8 +209,9 @@ class SubmitWikiBundleTool(Tool):
         if "raw" in params:
             message = "use the tool schema directly; do not wrap the payload in a JSON string"
             if self.require_workspace_files:
+                artifact_writers = "write_file or exec" if self.exec_enabled else "write_file"
                 message += (
-                    "; generate artifact files with write_file or exec and submit them using "
+                    f"; generate artifact files with {artifact_writers} and submit them using "
                     "workspace_path instead of inline content"
                 )
             return [message]
@@ -283,9 +291,7 @@ class SubmitWikiBundleTool(Tool):
                 bundle,
                 tool_context=tool_context,
             )
-            bundle = await self._materialize_page_bodies(
-                bundle, tool_context=tool_context
-            )
+            bundle = await self._materialize_page_bodies(bundle, tool_context=tool_context)
             payloads = await self._validate_bundle(bundle, tool_context=tool_context)
         except (ValidationError, ValueError) as exc:
             kind = "Skill" if self._is_skill_target else "Wiki"
@@ -308,9 +314,7 @@ class SubmitWikiBundleTool(Tool):
     ) -> set[str]:
         if tool_context.sandbox_manager is None:
             raise ValueError("task sandbox is unavailable")
-        sandbox = await tool_context.sandbox_manager.get_sandbox(
-            tool_context.session_key
-        )
+        sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
         files: set[str] = set()
         pending = [""]
         visited = 0
@@ -321,9 +325,7 @@ class SubmitWikiBundleTool(Tool):
             except Exception as exc:
                 raise ValueError("task workspace could not be inspected") from exc
             for name, is_dir in entries:
-                relative = _normalize_workspace_path(
-                    f"{directory}/{name}" if directory else name
-                )
+                relative = _normalize_workspace_path(f"{directory}/{name}" if directory else name)
                 visited += 1
                 if visited > self.limits.target_inventory_entries:
                     raise ValueError("task workspace inventory limit exceeded")
@@ -362,8 +364,7 @@ class SubmitWikiBundleTool(Tool):
         if self.require_workspace_pages and invalid_pages:
             errors.append(
                 "Wiki page body workspace paths must be temporary files under "
-                f"{COMPILE_WIKI_PAGE_ROOT}/, not Skill artifact paths: "
-                + ", ".join(invalid_pages)
+                f"{COMPILE_WIKI_PAGE_ROOT}/, not Skill artifact paths: " + ", ".join(invalid_pages)
             )
         invalid_artifacts = sorted(
             path for path in artifact_paths if _path_is_within(path, COMPILE_STAGING_ROOT)
@@ -381,8 +382,7 @@ class SubmitWikiBundleTool(Tool):
             if missing_artifacts:
                 errors.append(
                     "generated Skill artifacts are missing from files; preserve their "
-                    "required paths and submit them unchanged: "
-                    + ", ".join(missing_artifacts)
+                    "required paths and submit them unchanged: " + ", ".join(missing_artifacts)
                 )
         if errors:
             raise ValueError("; ".join(errors))
@@ -398,16 +398,12 @@ class SubmitWikiBundleTool(Tool):
             relative = _normalize_workspace_path(workspace_path)
             if tool_context.sandbox_manager is None:
                 raise ValueError("task sandbox is unavailable")
-            sandbox = await tool_context.sandbox_manager.get_sandbox(
-                tool_context.session_key
-            )
+            sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
             return await sandbox.read_file_bytes(relative)
         except ValueError:
             raise
         except Exception as exc:
-            raise ValueError(
-                f"{label} workspace path could not be read: {workspace_path}"
-            ) from exc
+            raise ValueError(f"{label} workspace path could not be read: {workspace_path}") from exc
 
     async def _materialize_page_bodies(
         self,
@@ -448,9 +444,7 @@ class SubmitWikiBundleTool(Tool):
                     f"page {page.page_id} body_workspace_path must contain UTF-8 Markdown"
                 ) from exc
             pages.append(
-                page.model_copy(
-                    update={"body_markdown": body, "body_workspace_path": None}
-                )
+                page.model_copy(update={"body_markdown": body, "body_workspace_path": None})
             )
         return bundle.model_copy(update={"pages": pages})
 
@@ -471,11 +465,10 @@ class SubmitWikiBundleTool(Tool):
                 "raw artifact files are only supported for Resource targets or exact "
                 "Skill namespace targets; re-run ov compile with a supported target"
             )
-        if self.require_workspace_files and any(
-            file.content is not None for file in bundle.files
-        ):
+        if self.require_workspace_files and any(file.content is not None for file in bundle.files):
+            artifact_writers = "write_file or exec" if self.exec_enabled else "write_file"
             raise ValueError(
-                "artifact files must be generated with write_file or exec and submitted "
+                f"artifact files must be generated with {artifact_writers} and submitted "
                 "using workspace_path instead of inline content"
             )
         page_ids: set[int] = set()
@@ -498,7 +491,9 @@ class SubmitWikiBundleTool(Tool):
                     f"it through files and create a separate Wiki body under "
                     f"{COMPILE_WIKI_PAGE_ROOT}/"
                 )
-            if not page.source_ids or any(source_id not in self.source_ids for source_id in page.source_ids):
+            if not page.source_ids or any(
+                source_id not in self.source_ids for source_id in page.source_ids
+            ):
                 raise ValueError(f"page {page.page_id} has invalid source_ids")
             if page.update_uri:
                 final_uri = page.update_uri.rstrip("/")
@@ -515,9 +510,7 @@ class SubmitWikiBundleTool(Tool):
                 relative = validate_relative_page_path(hint)
                 final_uri = safe_join_viking_uri(self.target_uri, relative).rstrip("/")
                 if final_uri in self.file_catalog_uris:
-                    raise ValueError(
-                        f"page {page.page_id} path exists; use its update_uri"
-                    )
+                    raise ValueError(f"page {page.page_id} path exists; use its update_uri")
             if final_uri in final_uris:
                 raise ValueError(f"duplicate final Wiki path: {final_uri}")
             final_uris.add(final_uri)
@@ -560,9 +553,7 @@ class SubmitWikiBundleTool(Tool):
                 raise ValueError("draft content size limit exceeded")
             if target_type == "resource":
                 page_type = validate_declared_okf_markdown(final_uri, content_bytes)
-                existing_wiki = bool(
-                    file.update_uri and await self._is_wiki_uri(final_uri)
-                )
+                existing_wiki = bool(file.update_uri and await self._is_wiki_uri(final_uri))
                 if existing_wiki and page_type is None:
                     raise ValueError(
                         f"file {index} updates an existing Wiki page and must retain "

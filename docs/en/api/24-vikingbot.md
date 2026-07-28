@@ -151,7 +151,7 @@ ov compile \
 
 `--wait` polls the status endpoint until the task reaches a terminal state. `--timeout` limits only the local wait and does not cancel the server task.
 
-The `direct` backend runs Compile `exec` commands with the Bot host's permissions. `bot.sandbox.backends.direct.allow_compile_exec` defaults to `false`, so Compile requests using `direct` return `503 UNAVAILABLE`. Setting it to `true` is an explicit unsafe opt-in; isolated backends with filesystem and network policies are recommended. Admission overflow returns `429 RESOURCE_EXHAUSTED`.
+The `direct` backend runs Compile `exec` commands with the Bot host's permissions. `bot.sandbox.backends.direct.allow_compile_exec` defaults to `false`, so Compile omits `exec` while ordinary Wiki and artifact generation can still run through file tools. A Skill that declares `requires.bins` or `requires.env` fails with `SKILL_CAPABILITY_UNAVAILABLE` before any command probe runs. Setting the option to `true` is an explicit unsafe opt-in; isolated backends with filesystem and network policies are recommended for CLI-dependent Skills. Admission overflow returns `429 RESOURCE_EXHAUSTED`.
 
 **Response Example**
 
