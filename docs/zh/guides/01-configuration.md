@@ -804,7 +804,7 @@ AST 提取支持：Python、JavaScript/TypeScript、Java、C/C++、Rust、Go、C
 | `github_domains` | list[str] | 允许的 GitHub 主机（在此添加你的 GitHub Enterprise 主机） | `["github.com", "www.github.com"]` |
 | `gitlab_domains` | list[str] | 允许的 GitLab 主机（在此添加你的自建 GitLab 主机） | `["gitlab.com", "www.gitlab.com"]` |
 | `azure_devops_domains` | list[str] | 允许的 Azure DevOps 主机 | `["dev.azure.com", "ssh.dev.azure.com", "vs-ssh.visualstudio.com"]` |
-| `code_hosting_domains` | list[str] | 额外的通用代码托管主机 | `["github.com", "gitlab.com"]` |
+| `code_hosting_domains` | list[str] | 允许的通用代码托管主机 | `["github.com", "gitlab.com", "gitcode.com", "gitee.com", "bitbucket.org", "codeberg.org", "gitea.com", "atomgit.com", "git.sr.ht"]` |
 
 要从私有/内网地址（例如内部镜像）拉取，请将顶层的 `allow_private_networks` 设为 `true`（默认关闭，因此仅允许公网地址）：
 
@@ -817,7 +817,8 @@ AST 提取支持：Python、JavaScript/TypeScript、Java、C/C++、Rust、Go、C
 }
 ```
 
-`PermissionDeniedError` 的报错信息会指明针对被拦截主机应添加的具体配置键。
+需要 GitHub、GitLab 或 Azure DevOps 专属 URL 语义时，应配置到对应的平台字段；
+其他 Git 主机统一添加到 `code_hosting_domains`。
 
 ### rerank
 

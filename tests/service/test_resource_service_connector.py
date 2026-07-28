@@ -50,12 +50,13 @@ def connector_config(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        "openviking.parse.accessors.git_accessor.get_openviking_config",
+        "openviking.utils.code_hosting_utils.get_openviking_config",
         lambda: SimpleNamespace(
             code=SimpleNamespace(
                 github_domains=["github.com", "git.example"],
                 gitlab_domains=[],
                 azure_devops_domains=[],
+                code_hosting_domains=[],
             )
         ),
     )
@@ -499,6 +500,60 @@ def test_git_route_degrades_when_disabled_or_type_not_allowed(connector_config, 
     connector_config.allowed_add_types = ["tos", "git"]
     connector_config.enable = False
     assert service._should_use_connector("https://git.example/org/repo.git") is False
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "git@git.example.com:repo.git",
+        "git@git.example.com:repo",
+        "ssh://git@git.example.com/repo.git",
+        "ssh://git@git.example.com/repo",
+        "git://git.example.com/repo.git",
+        "git://git.example.com/repo",
+        "git@git.example.com:org/subgroup/repo",
+        "ssh://git@git.example.com/org/subgroup/repo",
+        "git://git.example.com/org/subgroup/repo",
+    ],
+)
+def test_git_connector_detection_accepts_explicit_protocol_repo(monkeypatch, path):
+    from openviking.connector.routing import detect_connector_add_type
+    from openviking.utils import code_hosting_utils
+
+    config = SimpleNamespace(
+        code=SimpleNamespace(
+            github_domains=[],
+            gitlab_domains=[],
+            azure_devops_domains=[],
+            code_hosting_domains=["git.example.com"],
+        )
+    )
+    monkeypatch.setattr(code_hosting_utils, "get_openviking_config", lambda: config)
+
+    assert detect_connector_add_type(path) == ("git", False)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "https://gitcode.com/GitHub_Trending/no/nocobase/blob/bcfdc2/examples/base/config.git",
+        "https://gitcode.com/ploc-org/CNPL/tree/master/projects/sample/config.git",
+    ],
+)
+def test_git_connector_detection_rejects_gitcode_browse_file(monkeypatch, path):
+    from openviking.connector.routing import detect_connector_add_type
+    from openviking.utils import code_hosting_utils
+
+    config = SimpleNamespace(
+        code=SimpleNamespace(
+            github_domains=[],
+            gitlab_domains=[],
+            azure_devops_domains=[],
+            code_hosting_domains=["gitcode.com"],
+        )
+    )
+    monkeypatch.setattr(code_hosting_utils, "get_openviking_config", lambda: config)
+    assert detect_connector_add_type(path) is None
 
 
 def test_git_source_falls_back_for_parent_target(

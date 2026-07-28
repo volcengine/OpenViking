@@ -836,7 +836,7 @@ When ingesting a resource from a URL, OpenViking rejects loopback, link-local, p
 | `github_domains` | list[str] | Allowed GitHub hosts (add your GitHub Enterprise host here) | `["github.com", "www.github.com"]` |
 | `gitlab_domains` | list[str] | Allowed GitLab hosts (add your self-hosted GitLab host here) | `["gitlab.com", "www.gitlab.com"]` |
 | `azure_devops_domains` | list[str] | Allowed Azure DevOps hosts | `["dev.azure.com", "ssh.dev.azure.com", "vs-ssh.visualstudio.com"]` |
-| `code_hosting_domains` | list[str] | Additional generic code-hosting hosts | `["github.com", "gitlab.com"]` |
+| `code_hosting_domains` | list[str] | Allowed generic code-hosting hosts | `["github.com", "gitlab.com", "gitcode.com", "gitee.com", "bitbucket.org", "codeberg.org", "gitea.com", "atomgit.com", "git.sr.ht"]` |
 
 To ingest from private/internal network addresses (e.g. an internal mirror), set the top-level `allow_private_networks` to `true` (disabled by default, so only public addresses are allowed):
 
@@ -849,7 +849,9 @@ To ingest from private/internal network addresses (e.g. an internal mirror), set
 }
 ```
 
-The `PermissionDeniedError` message names the exact key to add for the blocked host.
+Use `github_domains`, `gitlab_domains`, or `azure_devops_domains` when the host
+needs those platform-specific URL semantics. Add other Git hosts to
+`code_hosting_domains`.
 
 ### rerank
 
