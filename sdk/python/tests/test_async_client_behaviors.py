@@ -321,7 +321,6 @@ def test_sync_http_client_declares_common_sync_methods_explicitly():
         "update_skill",
         "delete_skill",
         "get_task",
-        "cancel_task",
         "list_tasks",
         "admin_list_accounts",
     ]:

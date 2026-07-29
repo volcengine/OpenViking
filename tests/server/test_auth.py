@@ -417,8 +417,6 @@ async def test_task_endpoints_require_auth():
         for url in ("/api/v1/tasks", "/api/v1/tasks/nonexistent-id"):
             resp = await client.get(url)
             assert resp.status_code == 401
-        resp = await client.post("/api/v1/tasks/nonexistent-id/cancel")
-        assert resp.status_code == 401
     set_task_tracker(None)
 
 
@@ -461,18 +459,11 @@ async def test_task_endpoints_are_user_scoped():
         assert alice_list.status_code == 200
         assert {task["task_id"] for task in alice_list.json()["result"]} == {alice_task.task_id}
 
-        alice_cancel = await alice_client.post(f"/api/v1/tasks/{alice_task.task_id}/cancel")
-        assert alice_cancel.status_code == 200
-        assert alice_cancel.json()["result"]["status"] == "cancelled"
-
     async with httpx.AsyncClient(
         transport=bob_transport, base_url="http://testserver"
     ) as bob_client:
         bob_get_other = await bob_client.get(f"/api/v1/tasks/{alice_task.task_id}")
         assert bob_get_other.status_code == 404
-
-        bob_cancel_other = await bob_client.post(f"/api/v1/tasks/{alice_task.task_id}/cancel")
-        assert bob_cancel_other.status_code == 404
 
         bob_list = await bob_client.get("/api/v1/tasks")
         assert bob_list.status_code == 200

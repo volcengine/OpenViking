@@ -20,7 +20,7 @@ class _FakeVikingFS:
         del node_limit
         return self._tree.get(uri, [])
 
-    async def write_file(self, path, content, ctx=None, lock_handle=None):
+    async def write_file(self, path, content, ctx=None):
         self.writes.append((path, content))
 
     def _uri_to_path(self, uri, ctx=None):
@@ -76,18 +76,6 @@ class _TrackingProcessor(_FakeProcessor):
             return {"name": file_path.split("/")[-1], "summary": "summary"}
         finally:
             self.active_summaries -= 1
-
-
-class _BlockingProcessor(_FakeProcessor):
-    def __init__(self):
-        super().__init__()
-        self.started = asyncio.Event()
-        self.release = asyncio.Event()
-
-    async def _generate_single_file_summary(self, file_path, llm_sem=None, ctx=None):
-        self.started.set()
-        await self.release.wait()
-        return await super()._generate_single_file_summary(file_path, llm_sem=llm_sem, ctx=ctx)
 
 
 class _DummyTracker:
@@ -233,34 +221,6 @@ async def test_semantic_dag_shares_node_scheduler_across_roots(monkeypatch):
     assert processor.max_active_summaries <= 4
     assert executor_a.get_stats().done_nodes == 21
     assert executor_b.get_stats().done_nodes == 21
-
-
-@pytest.mark.asyncio
-async def test_semantic_dag_cancellation_waits_for_its_active_work(monkeypatch):
-    root_uri = "viking://resources/root"
-    fake_fs = _FakeVikingFS(
-        {root_uri: [{"name": "file.txt", "isDir": False}]},
-    )
-    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
-    processor = _BlockingProcessor()
-    executor = SemanticDagExecutor(
-        processor=processor,
-        context_type="resource",
-        max_concurrent_llm=1,
-        ctx=RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER),
-        skip_vectorization=True,
-    )
-
-    run_task = asyncio.create_task(executor.run(root_uri))
-    await processor.started.wait()
-    run_task.cancel()
-    await asyncio.sleep(0)
-
-    assert not run_task.done()
-    processor.release.set()
-    with pytest.raises(asyncio.CancelledError):
-        await run_task
-    assert fake_fs.writes == []
 
 
 @pytest.mark.asyncio

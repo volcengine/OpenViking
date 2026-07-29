@@ -9,12 +9,9 @@ worker binds the committing account/user (so tokens are not attributed to
 """
 
 import asyncio
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
 
 from openviking.observability.context import get_root_observability_context
 from openviking.server.identity import RequestContext, Role
-from openviking.service.task_tracker import TaskStatus
 from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
 from openviking.storage.queuefs.session_commit_processor import SessionCommitProcessor
 from openviking_cli.session.user_id import UserIdentifier
@@ -54,21 +51,8 @@ def _make_msg() -> SessionCommitMsg:
     )
 
 
-def _task_tracker():
-    return SimpleNamespace(
-        create=AsyncMock(return_value=SimpleNamespace(status=TaskStatus.PENDING)),
-        register_running_task=Mock(),
-        unregister_running_task=Mock(),
-        fail=AsyncMock(),
-    )
-
-
-async def test_process_binds_committing_identity_to_root_context(monkeypatch):
+async def test_process_binds_committing_identity_to_root_context():
     captured: dict = {}
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.session_commit_processor.get_task_tracker",
-        Mock(return_value=_task_tracker()),
-    )
     processor = SessionCommitProcessor(
         _FakeSessionService(captured),
         asyncio.get_running_loop(),
@@ -81,11 +65,7 @@ async def test_process_binds_committing_identity_to_root_context(monkeypatch):
     assert captured["user_id"] == "alice"
 
 
-async def test_process_resets_root_context_after_completion(monkeypatch):
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.session_commit_processor.get_task_tracker",
-        Mock(return_value=_task_tracker()),
-    )
+async def test_process_resets_root_context_after_completion():
     processor = SessionCommitProcessor(
         _FakeSessionService({}),
         asyncio.get_running_loop(),

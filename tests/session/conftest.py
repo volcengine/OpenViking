@@ -24,7 +24,7 @@ async def _drain_background_tasks(client: AsyncOpenViking):
         pending = [
             t
             for t in await tracker.list_tasks()
-            if t.status in (TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.CANCELLING)
+            if t.status in (TaskStatus.PENDING, TaskStatus.RUNNING)
         ]
         if not pending:
             break

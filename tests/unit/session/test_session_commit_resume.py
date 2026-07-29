@@ -1,7 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-import asyncio
 import json
 from unittest.mock import AsyncMock
 
@@ -210,38 +209,3 @@ def test_session_commit_message_ignores_unknown_fields():
 
     assert message.task_id == "task-1"
     assert "future_field" not in message.to_dict()
-
-
-@pytest.mark.asyncio
-async def test_cancelled_commit_writes_terminal_archive_marker(monkeypatch):
-    session_uri = "viking://user/sessions/session-1"
-    archive_uri = f"{session_uri}/history/archive_001"
-    files = {}
-    session = Session(
-        viking_fs=_MemoryVikingFS(files),
-        session_id="session-1",
-        session_uri=session_uri,
-    )
-    set_task_tracker(TaskTracker(_TaskStore()))
-    monkeypatch.setattr(
-        session,
-        "_wait_for_previous_archive_done",
-        AsyncMock(side_effect=asyncio.CancelledError),
-    )
-
-    try:
-        with pytest.raises(asyncio.CancelledError):
-            await session._run_memory_extraction(
-                task_id="task-1",
-                archive_uri=archive_uri,
-                messages=[],
-                usage_records=[],
-                first_message_id="first",
-                last_message_id="last",
-                memory_policy=None,
-            )
-    finally:
-        set_task_tracker(None)
-
-    marker = json.loads(files[f"{archive_uri}/.failed.json"])
-    assert marker["stage"] == "cancelled"
