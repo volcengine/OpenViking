@@ -5,8 +5,17 @@ import pytest
 
 from openviking.parse.accessors.base import LocalResource, SourceType
 from openviking.parse.parser_router import ParserRouter
+from openviking.parse.parsers.media.utils import MPEG_TS_PACKET_SIZE, MPEG_TS_PROBE_BYTES
+from openviking.parse.registry import ParserRegistry
 from openviking.parse.understanding_api import PREPARED_RESPONSE_ID_ARG
 from openviking.utils.media_processor import UnifiedResourceProcessor
+
+
+def mpeg_ts_probe() -> bytes:
+    content = bytearray(MPEG_TS_PROBE_BYTES)
+    for offset in range(0, MPEG_TS_PROBE_BYTES, MPEG_TS_PACKET_SIZE):
+        content[offset] = 0x47
+    return bytes(content)
 
 
 def test_should_use_understanding_api_for_signed_video_url(monkeypatch):
@@ -56,6 +65,114 @@ def test_resolved_extension_routes_extensionless_download(monkeypatch, tmp_path)
 
     assert resource.meta["resolved_extension"] == ".pdf"
     assert processor.should_use_understanding_api(resource)
+
+
+def test_should_use_understanding_api_for_local_mpeg_ts(monkeypatch, tmp_path):
+    config = SimpleNamespace(
+        parser_api=SimpleNamespace(
+            enable=True,
+            enable_feishu_url=False,
+            extensions=["mpegts"],
+        ),
+    )
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.open_viking_config.get_openviking_config",
+        lambda: config,
+    )
+    path = tmp_path / "video.ts"
+    path.write_bytes(mpeg_ts_probe())
+    resource = LocalResource(
+        path=path,
+        source_type=SourceType.HTTP,
+        original_source="https://example.com/video.ts",
+        meta={"extension": ".ts"},
+        is_temporary=False,
+    )
+    processor = UnifiedResourceProcessor()
+
+    processor._set_resolved_identity(resource, source_name=None)
+
+    assert resource.meta["resolved_extension"] == "mpegts"
+    assert processor.should_use_understanding_api(resource)
+
+
+def test_should_use_understanding_api_for_typescript_when_ts_configured(monkeypatch, tmp_path):
+    config = SimpleNamespace(
+        parser_api=SimpleNamespace(
+            enable=True,
+            enable_feishu_url=False,
+            extensions=["ts"],
+        ),
+    )
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.open_viking_config.get_openviking_config",
+        lambda: config,
+    )
+    path = tmp_path / "source.ts"
+    path.write_text("export const answer: number = 42;\n")
+
+    router = ParserRouter(parser_registry=object())
+
+    assert router.should_use_understanding_api(path)
+
+
+def test_should_not_use_understanding_api_for_typescript_source(monkeypatch, tmp_path):
+    config = SimpleNamespace(
+        parser_api=SimpleNamespace(
+            enable=True,
+            enable_feishu_url=False,
+            extensions=["mpegts"],
+        ),
+    )
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.open_viking_config.get_openviking_config",
+        lambda: config,
+    )
+    path = tmp_path / "source.ts"
+    path.write_text("export const answer: number = 42;\n")
+
+    router = ParserRouter(parser_registry=object())
+
+    assert not router.should_use_understanding_api(path)
+
+
+def test_should_not_use_understanding_api_for_mpeg_ts_when_extension_disabled(
+    monkeypatch,
+    tmp_path,
+):
+    config = SimpleNamespace(
+        parser_api=SimpleNamespace(
+            enable=True,
+            enable_feishu_url=False,
+            extensions=["mp4"],
+        ),
+    )
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.open_viking_config.get_openviking_config",
+        lambda: config,
+    )
+    path = tmp_path / "video.ts"
+    path.write_bytes(mpeg_ts_probe())
+    resource = LocalResource(
+        path=path,
+        source_type=SourceType.HTTP,
+        original_source="https://example.com/video.ts",
+        meta={"extension": ".ts"},
+        is_temporary=False,
+    )
+    processor = UnifiedResourceProcessor()
+
+    processor._set_resolved_identity(resource, source_name=None)
+
+    assert resource.meta["resolved_extension"] == "mpegts"
+    assert not processor.should_use_understanding_api(resource)
+
+
+def test_parser_registry_keeps_typescript_ts_on_text_fallback(tmp_path):
+    path = tmp_path / "source.ts"
+    path.write_text("export const answer: number = 42;\n")
+
+    assert ParserRegistry().get_parser_for_file(path) is None
 
 
 def test_should_use_understanding_api_for_feishu_url(monkeypatch):

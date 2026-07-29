@@ -527,6 +527,7 @@ JSON 输出 - 错误：
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| GET | `/api/v1/admin/agent-evolution` | 获取实例级 Agent 进化开关的实时状态 |
 | POST | `/api/v1/admin/accounts` | 创建账号及首个管理员 |
 | GET | `/api/v1/admin/accounts` | 列出账号 |
 | POST | `/api/v1/admin/migrate` | 迁移旧版身份数据 |

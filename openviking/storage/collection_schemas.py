@@ -25,7 +25,10 @@ from openviking.storage.errors import (
 )
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
-from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
+from openviking.storage.viking_vector_index_backend import (
+    VikingVectorIndexBackend,
+    normalize_upsert_options,
+)
 from openviking.telemetry import bind_telemetry, resolve_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.circuit_breaker import (
@@ -746,6 +749,10 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
                 # Write to vector database
                 try:
+                    raw_upsert_options = inserted_data.pop("_upsert_options", {})
+                    upsert_options = normalize_upsert_options(
+                        {**raw_upsert_options, "partial_update": True}
+                    )
                     # Ensure vector DB has deterministic IDs per semantic layer.
                     uri = inserted_data.get("uri")
                     account_id = inserted_data.get("account_id", "default")
@@ -762,7 +769,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     result = await self._vikingdb.upsert(
                         inserted_data,
                         ctx=ctx,
-                        partial_update=True,
+                        options=upsert_options,
                     )
                     record_id = result
                     if record_id:

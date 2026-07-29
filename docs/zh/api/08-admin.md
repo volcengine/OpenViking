@@ -57,6 +57,41 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 
 ## API 参考
 
+### get_agent_evolution_status
+
+返回实例级 Agent 进化开关的实时状态和已配置的默认 account ID。该接口仅限
+ROOT 调用。
+
+**HTTP API**
+
+```
+GET /api/v1/admin/agent-evolution
+```
+
+```bash
+curl http://localhost:1933/api/v1/admin/agent-evolution \
+  -H "X-API-Key: <root-key>"
+```
+
+**响应示例**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "enabled": false,
+    "account_id": "default"
+  },
+  "time": 0.1
+}
+```
+
+`enabled` 来自 session commit 实际使用的
+`server.agent_evolution.enabled` 实时值；`account_id` 是部署配置的默认
+account。
+
+---
+
 ### create_account
 
 #### 1. API 实现介绍

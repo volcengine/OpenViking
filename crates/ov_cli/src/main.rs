@@ -282,6 +282,18 @@ enum Commands {
         /// Local path or URL to import
         #[arg(value_name = "path-or-url")]
         path: String,
+        /// Explicit Connector source type (e.g. "tos", "git"). Routes the import
+        /// through the Connector integration (must be enabled server-side); the
+        /// path is sent verbatim and never treated as a local file. Requires --to
+        /// and cannot be combined with --parent or --parent-auto-create
+        #[arg(
+            long = "add-type",
+            value_name = "type",
+            requires = "to",
+            conflicts_with_all = ["parent", "parent_auto_create"],
+            help_heading = "Common options"
+        )]
+        add_type: Option<String>,
         /// Exact target URI (must not exist yet) (cannot be used with --parent)
         #[arg(long, value_name = "uri", help_heading = "Common options")]
         to: Option<String>,
@@ -360,6 +372,17 @@ enum Commands {
         /// Parser-specific import options, e.g. --args feishu_access_token:u-xxx
         #[arg(long = "args")]
         resource_args: Option<String>,
+        /// Explicit k=v retrieval tag to apply after import. Can be repeated.
+        #[arg(long = "tag", value_name = "k=v", help_heading = "Common options")]
+        tags: Vec<String>,
+        /// Tag update mode when --tag is provided
+        #[arg(
+            long = "tag-mode",
+            default_value = "replace",
+            value_parser = ["replace", "append"],
+            help_heading = "Common options"
+        )]
+        tag_mode: String,
         #[command(flatten)]
         upload_options: UploadCliOptions,
     },
@@ -2793,6 +2816,7 @@ async fn main() {
     let result = match cli.command {
         Commands::AddResource {
             path,
+            add_type,
             to,
             parent,
             parent_auto_create,
@@ -2808,12 +2832,15 @@ async fn main() {
             watch_interval,
             processing_mode,
             resource_args,
+            tags,
+            tag_mode,
             upload_options,
         } => {
             let ctx =
                 ctx.with_upload_options(upload_options.merged_with_legacy(legacy_upload_options));
             handlers::handle_add_resource(
                 path,
+                add_type,
                 to,
                 parent,
                 parent_auto_create,
@@ -2829,6 +2856,8 @@ async fn main() {
                 watch_interval,
                 processing_mode,
                 resource_args,
+                tags,
+                tag_mode,
                 ctx,
             )
             .await
@@ -3965,6 +3994,17 @@ mod tests {
     }
 
     #[test]
+    fn cli_add_resource_help_shows_tag_flags() {
+        let err = Cli::command()
+            .try_get_matches_from(["ov", "add-resource", "--help"])
+            .expect_err("help should exit through clap error");
+        let help = err.to_string();
+
+        assert!(help.contains("--tag"));
+        assert!(help.contains("--tag-mode"));
+    }
+
+    #[test]
     fn cli_add_skill_help_shows_upload_flags() {
         let err = Cli::command()
             .try_get_matches_from(["ov", "add-skill", "--help"])
@@ -4020,6 +4060,85 @@ mod tests {
 
         assert!(Cli::try_parse_from(["ov", "skills", "add", "./skill", "--progress"]).is_err());
         assert!(Cli::try_parse_from(["ov", "skills", "update", "--progress"]).is_err());
+    }
+
+    #[test]
+    fn cli_add_resource_add_type_requires_exact_to() {
+        assert!(
+            Cli::try_parse_from(["ov", "add-resource", "space:home", "--add-type", "feishu"])
+                .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "add-resource",
+                "space:home",
+                "--add-type",
+                "feishu",
+                "--to",
+                "viking://resources/feishu",
+                "--parent",
+                "viking://resources/imports",
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "add-resource",
+                "space:home",
+                "--add-type",
+                "feishu",
+                "--to",
+                "viking://resources/feishu",
+                "--parent-auto-create",
+                "viking://resources/imports",
+            ])
+            .is_err()
+        );
+
+        let cli = Cli::try_parse_from([
+            "ov",
+            "add-resource",
+            "space:home",
+            "--add-type",
+            "feishu",
+            "--to",
+            "viking://resources/feishu",
+        ])
+        .expect("declared add type with an exact target should parse");
+
+        match cli.command {
+            Commands::AddResource { add_type, to, .. } => {
+                assert_eq!(add_type.as_deref(), Some("feishu"));
+                assert_eq!(to.as_deref(), Some("viking://resources/feishu"));
+            }
+            _ => panic!("expected add-resource command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_add_resource_tags() {
+        let cli = Cli::try_parse_from([
+            "ov",
+            "add-resource",
+            "./README.md",
+            "--tag",
+            "team=search",
+            "--tag",
+            "env=test",
+            "--tag-mode",
+            "append",
+        ])
+        .expect("add-resource tag flags should parse");
+
+        match cli.command {
+            Commands::AddResource { tags, tag_mode, .. } => {
+                assert_eq!(tags, vec!["team=search", "env=test"]);
+                assert_eq!(tag_mode, "append");
+            }
+            _ => panic!("expected add-resource command"),
+        }
     }
 
     #[test]

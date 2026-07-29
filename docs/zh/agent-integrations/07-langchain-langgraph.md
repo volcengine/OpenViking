@@ -75,7 +75,17 @@ workspace；切换 workspace 前应先关闭或 reset 当前 client。
 `aclear()`；`OpenVikingSessionRecorder` 提供 `arecord()`、`aflush()` 和
 `aclose()`。异步 LangGraph 运行会自动选择 `awrap_model_call()` 和
 `aafter_agent()`。同一 adapter 首次被并发调用时，每个 event loop 只会创建一个内部
-HTTP client。
+HTTP client。每次 `with_openviking_context()` 调用都独立持有本次写入所需的 history
+快照、peer 身份和召回上下文引用。因此，同一 session 的调用可以并发执行，不会因为
+退出时再次读取实时 history 而丢失消息；未消费完的 stream 也不会占用 session 级
+lifecycle lock。只有最终的 append-and-commit 步骤会在同一个 event loop 中按 session
+串行执行。
+
+如果 recorder 已确认部分写入后任务被取消，`arecord()` 会重新抛出原始
+`asyncio.CancelledError`。可将该异常或外层的 `asyncio.TimeoutError` 传给
+`get_openviking_cancellation_progress()`，在重试前读取已确认写入的消息前缀或待
+commit 状态，避免重复写入。保留原始取消异常也会保留 `asyncio.wait_for()` 和
+`asyncio.timeout()` 的标准超时行为。
 
 Adapter 不会关闭调用方注入的 client。对于 adapter 自行创建的 client，应按实际使用的组件调用
 `await retriever.aclose()`、`await assembler.aclose()`、

@@ -12,7 +12,10 @@ from openviking.parse.parsers.constants import (
     CODE_EXTENSIONS,
     DOCUMENTATION_EXTENSIONS,
     IGNORE_EXTENSIONS,
+    MPEG_TS_EXTENSION_ALIAS,
+    TYPESCRIPT_MPEG_TS_EXTENSION,
 )
+from openviking.parse.parsers.media.utils import is_mpeg_ts, read_mpeg_ts_probe
 from openviking.parse.registry import parse
 from openviking.server.local_input_guard import (
     is_remote_resource_source,
@@ -133,7 +136,15 @@ class UnifiedResourceProcessor:
             extension = Path(source_name).suffix if source_name else ""
             extension = extension or str(meta.get("extension") or resource.path.suffix)
 
-        meta["resolved_extension"] = extension.lower()
+        extension = extension.lower()
+        if (
+            extension == TYPESCRIPT_MPEG_TS_EXTENSION
+            and resource.path.is_file()
+            and is_mpeg_ts(read_mpeg_ts_probe(resource.path))
+        ):
+            extension = MPEG_TS_EXTENSION_ALIAS
+
+        meta["resolved_extension"] = extension
         meta["resolved_name"] = source_name or meta.get("original_filename") or resource.path.name
 
     async def prepare(

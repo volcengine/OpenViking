@@ -630,6 +630,31 @@ func TestAddResourceSendsArgsWhenProvided(t *testing.T) {
 	}
 }
 
+func TestAddResourceSendsTagsAndTagMode(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/resources" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		body := readJSONBody(t, r)
+		tags, ok := body["tags"].([]any)
+		if !ok || len(tags) != 1 || tags[0] != "team=search" {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
+		if body["tag_mode"] != "append" {
+			t.Fatalf("tag_mode = %#v", body["tag_mode"])
+		}
+		writeOK(t, w, map[string]any{"uri": "viking://resources/demo.md"})
+	}))
+	defer closeServer()
+
+	if _, err := client.AddResource(context.Background(), "https://example.com/demo.md", &AddResourceOptions{
+		Tags:    []string{"team=search"},
+		TagMode: "append",
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // An explicitly-provided but empty Args map is treated the same as no args: the
 // key is omitted so the request stays compatible with pre-#2549 instances. The
 // resources create route defaults args to {} server-side, so "absent" and

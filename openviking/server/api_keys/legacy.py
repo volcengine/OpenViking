@@ -14,10 +14,10 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 
 from openviking.pyagfs import AGFSAlreadyExistsError, AGFSNotFoundError, AsyncAGFSClient
+from openviking.pyagfs.async_client import fs_ctx_from_agfs_path
 from openviking.server.api_keys.models import AccountInfo, UserKeyEntry
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
-from openviking.storage.transaction import LockContext, get_lock_manager
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import (
     AlreadyExistsError,
@@ -383,7 +383,9 @@ class LegacyAPIKeyManager:
 
         await self._save_users_json(account_id)
 
-    async def regenerate_key(self, account_id: str, user_id: str, seed: Optional[str] = None) -> str:
+    async def regenerate_key(
+        self, account_id: str, user_id: str, seed: Optional[str] = None
+    ) -> str:
         """Regenerate a user's API key. Old key is immediately invalidated."""
         account = self._accounts.get(account_id)
         if account is None:
@@ -635,14 +637,34 @@ class LegacyAPIKeyManager:
         except AGFSNotFoundError:
             return None
 
-    async def _write_json(self, path: str, data: dict) -> None:
+    @staticmethod
+    def _fs_ctx_with_lease(path: str, lease_ref: object | None) -> Dict[str, str] | None:
+        """Build an AGFS fs_ctx that preserves account_id and an optional lease_ref."""
+        if lease_ref is None:
+            return None
+        ref = None
+        if isinstance(lease_ref, dict):
+            ref = lease_ref.get("lease_ref")
+        else:
+            ref = getattr(lease_ref, "lease_ref", None) or getattr(lease_ref, "id", None)
+        if not isinstance(ref, str) or not ref:
+            return None
+        fs_ctx = fs_ctx_from_agfs_path(path)
+        fs_ctx["lease_ref"] = ref
+        return fs_ctx
+
+    async def _write_json(self, path: str, data: dict, lease_ref: object | None = None) -> None:
         """Write a JSON file to AGFS with encryption support."""
         content = json.dumps(data, ensure_ascii=False, indent=2)
         if isinstance(content, str):
             content = content.encode("utf-8")
 
         await self._ensure_parent_dirs_async(path)
-        await self._async_agfs.write(path, content)
+        await self._async_agfs.write(
+            path,
+            content,
+            fs_ctx=self._fs_ctx_with_lease(path, lease_ref),
+        )
 
     async def _ensure_parent_dirs_async(self, path: str) -> None:
         """Recursively create all parent directories for a file path."""
@@ -654,37 +676,38 @@ class LegacyAPIKeyManager:
     async def _save_accounts_json(self) -> None:
         """Persist the global accounts list."""
         try:
-            async with LockContext(
-                get_lock_manager(), [ACCOUNTS_PATH], lock_mode="exact", timeout=10.0
-            ):
-                data = {
-                    "accounts": {
-                        aid: {"created_at": info.created_at}
-                        for aid, info in self._accounts.items()
-                    }
-                }
-                await self._write_json(ACCOUNTS_PATH, data)
+            lease = await self._async_agfs.pathlock_acquire_exact(ACCOUNTS_PATH, timeout_secs=10.0)
         except LockAcquisitionError as exc:
             raise ResourceBusyError(
                 "Another account operation is in progress. Please retry.",
                 uri=ACCOUNTS_PATH,
                 conflict_type="account_registry_busy",
             ) from exc
+        try:
+            data = {
+                "accounts": {
+                    aid: {"created_at": info.created_at} for aid, info in self._accounts.items()
+                }
+            }
+            await self._write_json(ACCOUNTS_PATH, data, lease_ref=lease)
+        finally:
+            await self._async_agfs.pathlock_release(lease)
 
     async def _save_users_json(self, account_id: str) -> None:
         """Persist a single account's user registry."""
         path = USERS_PATH_TEMPLATE.format(account_id=account_id)
         try:
-            async with LockContext(
-                get_lock_manager(), [path], lock_mode="exact", timeout=10.0
-            ):
-                account = self._accounts.get(account_id)
-                if account is None:
-                    return
-                await self._write_json(path, {"users": account.users})
+            lease = await self._async_agfs.pathlock_acquire_exact(path, timeout_secs=10.0)
         except LockAcquisitionError as exc:
             raise ResourceBusyError(
                 "Another user operation is in progress for this account. Please retry.",
                 uri=path,
                 conflict_type="user_registry_busy",
             ) from exc
+        try:
+            account = self._accounts.get(account_id)
+            if account is None:
+                return
+            await self._write_json(path, {"users": account.users}, lease_ref=lease)
+        finally:
+            await self._async_agfs.pathlock_release(lease)

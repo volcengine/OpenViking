@@ -532,6 +532,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 
 | Method | Path | Description |
 |--------|------|-------------|
+| GET | `/api/v1/admin/agent-evolution` | Get the live instance-wide Agent Evolution status |
 | POST | `/api/v1/admin/accounts` | Create an account and its first administrator |
 | GET | `/api/v1/admin/accounts` | List accounts |
 | POST | `/api/v1/admin/migrate` | Migrate legacy identity data |

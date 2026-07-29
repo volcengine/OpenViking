@@ -15,21 +15,18 @@ from openviking_cli.exceptions import (
 from openviking_cli.session.user_id import UserIdentifier
 
 
-class _LockManager:
+class _PathLockClient:
     def __init__(self):
         self.held = False
         self.releases = 0
 
-    def create_handle(self):
-        return object()
-
-    async def acquire_tree(self, handle, path):
-        del handle, path
+    async def pathlock_acquire_tree(self, path):
+        del path
         self.held = True
-        return True
+        return {"lease_ref": "lock-1"}
 
-    async def release(self, handle):
-        del handle
+    async def pathlock_release(self, lease):
+        assert lease == {"lease_ref": "lock-1"}
         self.held = False
         self.releases += 1
 
@@ -40,6 +37,7 @@ class _VFS:
         self.files = dict(files or {})
         self.fail_uri = fail_uri
         self.writes = []
+        self._async_agfs = _PathLockClient()
 
     def _ensure_mutable_access(self, uri, ctx):
         del uri, ctx
@@ -66,9 +64,9 @@ class _VFS:
         value = await self.read_file(uri, ctx=ctx)
         return value.encode() if isinstance(value, str) else value
 
-    async def write_file(self, uri, content, ctx=None, lock_handle=None):
+    async def write_file(self, uri, content, ctx=None, lease_ref=None):
         del ctx
-        assert lock_handle is not None
+        assert lease_ref is not None
         if uri == self.fail_uri:
             raise OSError("injected write failure")
         self.files[uri] = content
@@ -88,10 +86,9 @@ async def test_batch_checks_all_preconditions_before_any_write(monkeypatch):
     root = "viking://resources/wiki"
     existing = f"{root}/existing.md"
     created = f"{root}/new.md"
-    locks = _LockManager()
     vfs = _VFS(root, {existing: "newer"})
+    locks = vfs._async_agfs
     coordinator = ContentWriteCoordinator(vfs)
-    monkeypatch.setattr(content_write_module, "get_lock_manager", lambda: locks)
     refreshed = []
 
     async def refresh(**kwargs):
@@ -130,10 +127,9 @@ async def test_batch_releases_tree_lock_before_one_aggregated_refresh(monkeypatc
     root = "viking://resources/wiki"
     a = f"{root}/a.md"
     b = f"{root}/b.md"
-    locks = _LockManager()
     vfs = _VFS(root)
+    locks = vfs._async_agfs
     coordinator = ContentWriteCoordinator(vfs)
-    monkeypatch.setattr(content_write_module, "get_lock_manager", lambda: locks)
     calls = []
 
     async def refresh(**kwargs):
@@ -162,12 +158,10 @@ async def test_batch_releases_tree_lock_before_one_aggregated_refresh(monkeypatc
 async def test_batch_writes_and_hashes_binary_content(monkeypatch):
     root = "viking://resources/wiki"
     image = f"{root}/figure.png"
-    locks = _LockManager()
     original = b"\x89PNG\r\n\x1a\nold"
     replacement = b"\x89PNG\r\n\x1a\nnew"
     vfs = _VFS(root, {image: original})
     coordinator = ContentWriteCoordinator(vfs)
-    monkeypatch.setattr(content_write_module, "get_lock_manager", lambda: locks)
 
     async def refresh(**kwargs):
         return None
@@ -235,10 +229,9 @@ async def test_batch_partial_failure_refreshes_successful_files_and_retry_is_saf
     root = "viking://resources/wiki"
     a = f"{root}/a.md"
     b = f"{root}/b.md"
-    locks = _LockManager()
     vfs = _VFS(root, fail_uri=b)
+    locks = vfs._async_agfs
     coordinator = ContentWriteCoordinator(vfs)
-    monkeypatch.setattr(content_write_module, "get_lock_manager", lambda: locks)
     calls = []
 
     async def refresh(**kwargs):
@@ -270,10 +263,8 @@ async def test_batch_partial_failure_refreshes_successful_files_and_retry_is_saf
 async def test_batch_refresh_failure_retry_skips_landed_write_and_refreshes(monkeypatch):
     root = "viking://resources/wiki"
     page = f"{root}/page.md"
-    locks = _LockManager()
     vfs = _VFS(root)
     coordinator = ContentWriteCoordinator(vfs)
-    monkeypatch.setattr(content_write_module, "get_lock_manager", lambda: locks)
     calls = []
 
     async def refresh(**kwargs):

@@ -2,6 +2,7 @@ import types
 
 import pytest
 
+from openviking.utils.ingest_options import IngestOptions
 from openviking.core.context import Context, ResourceContentType
 from openviking.utils import embedding_utils
 
@@ -233,6 +234,144 @@ async def test_vectorize_unknown_text_file_embeds_summary_but_indexes_raw_conten
     msg = queue.items[0]
     assert msg.message == "VLM generated build file summary"
     assert msg.context_data["content"] == raw_makefile
+
+
+@pytest.mark.asyncio
+async def test_vectorize_file_writes_search_tags_into_embedding_context(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("deployment guide"))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
+        ),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/demo.md",
+        summary_dict={"name": "demo.md", "summary": "deployment summary"},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+        ingest_options=IngestOptions.from_search_tags(["team=search", "env=test"]),
+    )
+
+    assert len(queue.items) == 1
+    msg = queue.items[0]
+    assert msg.context_data["search_tags"] == ["team=search", "env=test"]
+
+
+@pytest.mark.asyncio
+async def test_vectorize_file_appends_search_tags_to_existing_record_tags(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("deployment guide"))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
+        ),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/demo.md",
+        summary_dict={"name": "demo.md", "summary": "deployment summary"},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+        ingest_options=IngestOptions.from_search_tags(
+            ["env=prod", "team=search"],
+            mode="append",
+        ),
+    )
+
+    assert len(queue.items) == 1
+    msg = queue.items[0]
+    assert msg.context_data["search_tags"] == ["env=prod", "team=search"]
+    assert msg.context_data["_upsert_options"] == {"search_tag_mode": "append"}
+
+
+@pytest.mark.asyncio
+async def test_vectorize_file_append_does_not_read_existing_tags(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("deployment guide"))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
+        ),
+    )
+
+    class DummyVikingDB:
+        async def filter(self, **_kwargs):
+            raise AssertionError("vectorize must not read existing tags")
+
+    monkeypatch.setattr(
+        "openviking.server.dependencies.get_service",
+        lambda: types.SimpleNamespace(vikingdb_manager=DummyVikingDB()),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/demo.md",
+        summary_dict={"name": "demo.md", "summary": "deployment summary"},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+        ingest_options=IngestOptions.from_search_tags(
+            ["env=prod", "team=search"],
+            mode="append",
+        ),
+    )
+
+    assert queue.items[0].context_data["search_tags"] == ["env=prod", "team=search"]
+    assert queue.items[0].context_data["_upsert_options"] == {"search_tag_mode": "append"}
+
+
+@pytest.mark.asyncio
+async def test_vectorize_directory_meta_writes_search_tags_into_embedding_context(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("ignored"))
+
+    await embedding_utils.vectorize_directory_meta(
+        uri="viking://user/default/resources/demo",
+        abstract="demo abstract",
+        overview="demo overview",
+        ctx=DummyReq(),
+        ingest_options=IngestOptions.from_search_tags(["team=search", "env=test"]),
+    )
+
+    assert len(queue.items) == 2
+    for msg in queue.items:
+        assert msg.context_data["search_tags"] == ["team=search", "env=test"]
+
+
+@pytest.mark.asyncio
+async def test_vectorize_directory_meta_appends_search_tags_by_level(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("ignored"))
+
+    await embedding_utils.vectorize_directory_meta(
+        uri="viking://user/default/resources/demo",
+        abstract="demo abstract",
+        overview="demo overview",
+        ctx=DummyReq(),
+        ingest_options=IngestOptions.from_search_tags(
+            ["env=prod", "team=search"],
+            mode="append",
+        ),
+    )
+
+    assert len(queue.items) == 2
+    assert queue.items[0].context_data["level"] == 0
+    assert queue.items[0].context_data["search_tags"] == ["env=prod", "team=search"]
+    assert queue.items[0].context_data["_upsert_options"] == {"search_tag_mode": "append"}
+    assert queue.items[1].context_data["level"] == 1
+    assert queue.items[1].context_data["search_tags"] == ["env=prod", "team=search"]
+    assert queue.items[1].context_data["_upsert_options"] == {"search_tag_mode": "append"}
 
 
 @pytest.mark.asyncio

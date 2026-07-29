@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { fetchFindAllTypes, fetchGlob, fetchGrep } from './retrieval'
+import { fetchFind, fetchFindAllTypes, fetchGlob, fetchGrep } from './retrieval'
 
 const { postSearchFindMock, postSearchGlobMock, postSearchGrepMock } =
   vi.hoisted(() => ({
@@ -36,6 +36,36 @@ describe('pattern retrieval', () => {
     postSearchFindMock.mockReset()
     postSearchGlobMock.mockReset()
     postSearchGrepMock.mockReset()
+  })
+
+  it('passes advanced semantic filters through one find request', async () => {
+    postSearchFindMock.mockReturnValue(response({ total: 0 }))
+
+    await fetchFind('authentication', {
+      contextTypes: ['memory', 'resource'],
+      includeProvenance: true,
+      levels: [0, 1],
+      limit: 20,
+      scoreThreshold: 0.25,
+      since: '7d',
+      tags: ['env=prod', 'team=search'],
+      timeField: 'created_at',
+      until: '2026-07-27',
+    })
+
+    expect(postSearchFindMock).toHaveBeenCalledWith({
+      body: expect.objectContaining({
+        context_type: ['memory', 'resource'],
+        include_provenance: true,
+        level: [0, 1],
+        limit: 20,
+        score_threshold: 0.25,
+        since: '7d',
+        tags: ['env=prod', 'team=search'],
+        time_field: 'created_at',
+        until: '2026-07-27',
+      }),
+    })
   })
 
   it('uses one find request for the server-grouped result types', async () => {
