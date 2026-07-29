@@ -30,7 +30,10 @@ from openviking.parse.parsers.media.constants import (
     VIDEO_EXTENSIONS,
 )
 from openviking.utils import is_code_hosting_blob_url
-from openviking.utils.network_guard import build_httpx_request_validation_hooks
+from openviking.utils.network_guard import (
+    build_httpx_request_validation_hooks,
+    build_httpx_secure_transport,
+)
 from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.utils.logger import get_logger
 
@@ -204,6 +207,7 @@ class URLTypeDetector:
             event_hooks = build_httpx_request_validation_hooks(request_validator)
             if event_hooks:
                 client_kwargs["event_hooks"] = event_hooks
+                client_kwargs["transport"] = build_httpx_secure_transport(request_validator)
                 client_kwargs["trust_env"] = False
 
             async with httpx.AsyncClient(**client_kwargs) as client:
@@ -566,6 +570,7 @@ class HTTPAccessor(DataAccessor):
             event_hooks = build_httpx_request_validation_hooks(request_validator)
             if event_hooks:
                 client_kwargs["event_hooks"] = event_hooks
+                client_kwargs["transport"] = build_httpx_secure_transport(request_validator)
                 client_kwargs["trust_env"] = False
 
             async with httpx.AsyncClient(**client_kwargs) as client:

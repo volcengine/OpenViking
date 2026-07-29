@@ -7,14 +7,17 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 
 from openviking.utils.network_guard import (
+    ValidatedAsyncHTTPTransport,
     _get_allowed_code_hosting_domains,
     _is_public_ip,
     _normalize_host,
     _resolve_host_addresses,
     build_httpx_request_validation_hooks,
+    build_httpx_secure_transport,
     ensure_public_remote_target,
     extract_remote_host,
 )
@@ -258,28 +261,31 @@ class TestEnsurePublicRemoteTarget:
     @patch("openviking.utils.network_guard._resolve_host_addresses")
     def test_allows_public_http_url(self, mock_resolve) -> None:
         mock_resolve.return_value = {"151.101.1.67"}
-        ensure_public_remote_target("https://github.com/repo.git")  # should not raise
+        assert ensure_public_remote_target("https://github.com/repo.git") == "151.101.1.67"
 
     @patch("openviking.utils.network_guard._resolve_host_addresses")
     def test_allows_public_git_ssh(self, mock_resolve) -> None:
         mock_resolve.return_value = {"140.82.121.4"}
-        ensure_public_remote_target("git@github.com:user/repo.git")  # should not raise
+        assert ensure_public_remote_target("git@github.com:user/repo.git") == "140.82.121.4"
 
     @patch("openviking.utils.network_guard._resolve_host_addresses")
-    def test_allows_azure_devops_domain_from_platform_specific_config(self, mock_resolve) -> None:
+    def test_configured_code_hosting_domain_does_not_bypass_address_check(
+        self, mock_resolve
+    ) -> None:
         mock_resolve.return_value = {"127.0.0.1"}
-        ensure_public_remote_target("git@ssh.dev.azure.com:v3/org/project/repo")  # should not raise
+        with pytest.raises(PermissionDeniedError, match="non-public address"):
+            ensure_public_remote_target("git@ssh.dev.azure.com:v3/org/project/repo")
 
     @patch("openviking.utils.network_guard._resolve_host_addresses")
-    def test_allows_when_dns_returns_empty(self, mock_resolve) -> None:
-        """Unresolvable host is allowed through (fail-open for DNS)."""
+    def test_rejects_when_dns_returns_empty(self, mock_resolve) -> None:
         mock_resolve.return_value = set()
-        ensure_public_remote_target("http://new-host.example.com/path")  # should not raise
+        with pytest.raises(PermissionDeniedError, match="could not resolve"):
+            ensure_public_remote_target("http://new-host.example.com/path")
 
     @patch("openviking.utils.network_guard._resolve_host_addresses")
     def test_allows_multiple_public_addresses(self, mock_resolve) -> None:
         mock_resolve.return_value = {"8.8.8.8", "8.8.4.4"}
-        ensure_public_remote_target("http://dns-rr.example.com/path")  # should not raise
+        assert ensure_public_remote_target("http://dns-rr.example.com/path") == "8.8.4.4"
 
 
 # ── build_httpx_request_validation_hooks ─────────────────────────────────────
@@ -331,3 +337,124 @@ class TestBuildHttpxRequestValidationHooks:
 
         with pytest.raises(PermissionDeniedError, match="blocked"):
             await hooks["request"][0](mock_request)
+
+
+class _RecordingTransport(httpx.AsyncBaseTransport):
+    def __init__(self) -> None:
+        self.requests: list[dict[str, object]] = []
+        self.closed = False
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(
+            {
+                "url": str(request.url),
+                "host": request.headers["host"],
+                "sni_hostname": request.extensions.get("sni_hostname"),
+            }
+        )
+        return httpx.Response(200, request=request, content=b"ok")
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class TestValidatedAsyncHTTPTransport:
+    def test_builder_returns_none_without_validator(self) -> None:
+        assert build_httpx_secure_transport(None) is None
+
+    @pytest.mark.asyncio
+    async def test_connects_to_the_exact_address_returned_by_validation(self) -> None:
+        inner = _RecordingTransport()
+        transport = ValidatedAsyncHTTPTransport(
+            lambda _url: "8.8.8.8",
+            transport=inner,
+        )
+        request = httpx.Request("GET", "https://example.com/private")
+
+        await transport.handle_async_request(request)
+
+        assert inner.requests == [
+            {
+                "url": "https://8.8.8.8/private",
+                "host": "example.com",
+                "sni_hostname": "example.com",
+            }
+        ]
+        assert str(request.url) == "https://example.com/private"
+
+    @pytest.mark.asyncio
+    async def test_validates_and_pins_each_redirect_request_independently(self) -> None:
+        inner = _RecordingTransport()
+        validated = []
+
+        def validator(url: str) -> str:
+            validated.append(url)
+            return "8.8.8.8" if "first.example" in url else "1.1.1.1"
+
+        transport = ValidatedAsyncHTTPTransport(validator, transport=inner)
+        await transport.handle_async_request(httpx.Request("GET", "https://first.example/"))
+        await transport.handle_async_request(httpx.Request("GET", "https://second.example/next"))
+
+        assert validated == ["https://first.example/", "https://second.example/next"]
+        assert [request["url"] for request in inner.requests] == [
+            "https://8.8.8.8/",
+            "https://1.1.1.1/next",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_httpx_redirects_keep_original_urls_while_each_hop_is_pinned(self) -> None:
+        connected_urls: list[str] = []
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            connected_urls.append(str(request.url))
+            if request.url.host == "8.8.8.8":
+                return httpx.Response(
+                    302,
+                    headers={"location": "https://second.example/final"},
+                )
+            return httpx.Response(200, content=b"ok")
+
+        def validator(url: str) -> str:
+            return "8.8.8.8" if "first.example" in url else "1.1.1.1"
+
+        transport = ValidatedAsyncHTTPTransport(
+            validator,
+            transport=httpx.MockTransport(handler),
+        )
+        async with httpx.AsyncClient(
+            transport=transport,
+            follow_redirects=True,
+        ) as client:
+            response = await client.get("https://first.example/start")
+
+        assert connected_urls == [
+            "https://8.8.8.8/start",
+            "https://1.1.1.1/final",
+        ]
+        assert str(response.url) == "https://second.example/final"
+
+    @pytest.mark.asyncio
+    @patch("openviking.utils.network_guard._resolve_host_addresses")
+    async def test_rejects_private_redirect_target_before_delegating(self, mock_resolve) -> None:
+        mock_resolve.return_value = {"169.254.169.254"}
+        inner = _RecordingTransport()
+        transport = ValidatedAsyncHTTPTransport(
+            ensure_public_remote_target,
+            transport=inner,
+        )
+
+        with pytest.raises(PermissionDeniedError, match="non-public address"):
+            await transport.handle_async_request(
+                httpx.Request("GET", "http://redirected.example/latest/meta-data/")
+            )
+
+        assert inner.requests == []
+
+    @pytest.mark.asyncio
+    async def test_closes_wrapped_transport(self) -> None:
+        inner = _RecordingTransport()
+        transport = ValidatedAsyncHTTPTransport(lambda _url: "8.8.8.8", transport=inner)
+
+        await transport.aclose()
+
+        assert inner.closed is True
