@@ -1336,7 +1336,7 @@ class ResourceService:
                 stage_callback=stage_callback,
                 allow_local_path_resolution=allow_local_path_resolution,
                 prepared_resource=prepared_resource,
-                defer_post_processing=defer_post_processing,
+                defer_post_processing=True,
                 **ingest_tag_kwargs,
                 **kwargs,
             )
@@ -1346,57 +1346,108 @@ class ResourceService:
                 return result
             prepared = result.pop("_post_process", None)
             deferred_lock = result.pop("_resource_lock", None)
-            if defer_post_processing:
-                from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
+            from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 
-                root_uri = result.get("root_uri", "")
-                if not isinstance(prepared, dict):
-                    raise InternalError("Deferred resource processing payload is missing")
-                lock_handoff = await self._lock_to_handoff_payload(deferred_lock)
-                msg = AddResourceMsg(
-                    task_id=str(uuid4()),
-                    root_uri=root_uri,
-                    prepared=prepared,
-                    source_path=str(
-                        (kwargs.get("source_name") or "")
-                        if kwargs.get("temp_file_id")
-                        else result.get("source_path") or ""
-                    ),
-                    telemetry_id=telemetry_id or None,
-                    account_id=ctx.account_id,
-                    user_id=ctx.user.user_id,
-                    role=str(ctx.role),
-                    actor_peer_id=ctx.actor_peer_id,
-                    lock_handoff=lock_handoff,
-                    reason=reason,
-                    instruction=instruction,
-                    timeout=timeout,
-                    build_index=build_index,
-                    summarize=summarize,
-                    processing_mode=processing_mode,
-                    strict=bool(kwargs.get("strict", False)),
-                    ignore_dirs=kwargs.get("ignore_dirs"),
-                    include=kwargs.get("include"),
-                    exclude=kwargs.get("exclude"),
-                    directly_upload_media=bool(kwargs.get("directly_upload_media", True)),
-                    preserve_structure=kwargs.get("preserve_structure"),
-                    create_parent=bool(kwargs.get("create_parent", False)),
-                    allow_local_path_resolution=allow_local_path_resolution,
-                    enforce_public_remote_targets=enforce_public_remote_targets,
-                    source_name=kwargs.get("source_name"),
-                    skip_watch_management=True,
-                    tags=tags,
-                    tag_mode=tag_mode,
+            root_uri = result.get("root_uri", "")
+            if not isinstance(prepared, dict):
+                raise InternalError("Deferred resource processing payload is missing")
+            lock_handoff = await self._lock_to_handoff_payload(deferred_lock)
+            msg = AddResourceMsg(
+                task_id=str(uuid4()),
+                root_uri=root_uri,
+                prepared=prepared,
+                source_path=str(
+                    (kwargs.get("source_name") or "")
+                    if kwargs.get("temp_file_id")
+                    else result.get("source_path") or ""
+                ),
+                telemetry_id=telemetry_id or None,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+                role=str(ctx.role),
+                actor_peer_id=ctx.actor_peer_id,
+                lock_handoff=lock_handoff,
+                reason=reason,
+                instruction=instruction,
+                timeout=timeout,
+                build_index=build_index,
+                summarize=summarize,
+                processing_mode=processing_mode,
+                strict=bool(kwargs.get("strict", False)),
+                ignore_dirs=kwargs.get("ignore_dirs"),
+                include=kwargs.get("include"),
+                exclude=kwargs.get("exclude"),
+                directly_upload_media=bool(kwargs.get("directly_upload_media", True)),
+                preserve_structure=kwargs.get("preserve_structure"),
+                create_parent=bool(kwargs.get("create_parent", False)),
+                allow_local_path_resolution=allow_local_path_resolution,
+                enforce_public_remote_targets=enforce_public_remote_targets,
+                source_name=kwargs.get("source_name"),
+                skip_watch_management=True,
+                tags=tags,
+                tag_mode=tag_mode,
+            )
+            enqueue_lock = deferred_lock
+            deferred_lock = None
+            task = await self._enqueue_add_resource_job(
+                msg,
+                queue_name=QueueManager.ADD_RESOURCE,
+                resource_lock=enqueue_lock,
+            )
+            result["task_id"] = task.task_id
+            job_enqueued = True
+            if wait:
+                if stage_callback is not None:
+                    stage_result = stage_callback("processing_queue")
+                    if inspect.isawaitable(stage_result):
+                        await stage_result
+                wait_start = time.perf_counter()
+                try:
+                    with telemetry.measure("resource.wait"):
+                        if telemetry_id:
+                            await request_wait_tracker.wait_for_request(
+                                telemetry_id,
+                                timeout=timeout,
+                                poll_interval=0.05,
+                            )
+                            status = request_wait_tracker.build_queue_status(telemetry_id)
+                        else:
+                            qm = get_queue_manager()
+                            status = build_queue_status_payload(
+                                await qm.wait_complete(timeout=timeout)
+                            )
+                except TimeoutError as exc:
+                    telemetry.set_error(
+                        "resource_service.wait_complete",
+                        "DEADLINE_EXCEEDED",
+                        str(exc),
+                    )
+                    raise DeadlineExceededError(
+                        "queue processing",
+                        timeout,
+                        task_id=task.task_id,
+                        root_uri=root_uri,
+                    ) from exc
+                queue_wait_duration_ms = round((time.perf_counter() - wait_start) * 1000, 3)
+                try:
+                    from openviking.metrics.datasources.resource import (
+                        ResourceIngestionEventDataSource,
+                    )
+
+                    ResourceIngestionEventDataSource.record_wait(
+                        operation="queue_processing",
+                        duration_seconds=float(queue_wait_duration_ms) / 1000.0,
+                        account_id=getattr(ctx, "account_id", None),
+                    )
+                except Exception:
+                    pass
+                result["queue_status"] = status
+                record_resource_wait_metrics(
+                    telemetry_id=telemetry_id,
+                    queue_status=status,
+                    root_uri=result.get("root_uri"),
                 )
-                enqueue_lock = deferred_lock
-                deferred_lock = None
-                task = await self._enqueue_add_resource_job(
-                    msg,
-                    queue_name=QueueManager.ADD_RESOURCE,
-                    resource_lock=enqueue_lock,
-                )
-                result["task_id"] = task.task_id
-                job_enqueued = True
+                telemetry.set("queue.wait.duration_ms", queue_wait_duration_ms)
             await self._manage_watch_if_needed(
                 watch_manager=watch_manager,
                 manage_watch=manage_watch,
