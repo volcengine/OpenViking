@@ -133,9 +133,10 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
                 session_id=self.session_id,
                 token_budget=self.token_budget,
             )
-        except Exception:
+        except Exception as exc:
             logger.debug("OpenViking chat history context fetch failed", exc_info=True)
-            await self._aensure_session(client)
+            if is_not_found_error(exc):
+                await self._aensure_session(client)
             return []
 
         return restore_openviking_messages(context.get("messages") or [])

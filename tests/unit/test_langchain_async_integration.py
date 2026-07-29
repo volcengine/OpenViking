@@ -1208,6 +1208,62 @@ async def test_async_context_assembler_combines_session_and_recall():
 
 
 @pytest.mark.asyncio
+async def test_async_assemble_skips_create_for_existing_session():
+    """The async path must get the same per-turn call reduction as the sync one."""
+    backing = InMemoryOpenVikingClient()
+    backing.add_message("async-existing", "user", content="Existing async turn.")
+    client = AsyncInMemoryOpenVikingClient(backing)
+    assembler = OpenVikingSessionContextAssembler(
+        async_client=client,
+        target_uri="viking://resources",
+        include_recall=False,
+    )
+
+    await assembler.aassemble(session_id="async-existing")
+    await assembler.aassemble(session_id="async-existing")
+
+    assert client.calls == ["get_session_context", "get_session_context"]
+
+
+@pytest.mark.asyncio
+async def test_async_assemble_creates_session_only_on_not_found():
+    """A missing session is still materialized, without a second context read."""
+    backing = InMemoryOpenVikingClient()
+    client = AsyncInMemoryOpenVikingClient(backing)
+    assembler = OpenVikingSessionContextAssembler(
+        async_client=client,
+        target_uri="viking://resources",
+        include_recall=False,
+    )
+
+    await assembler.aassemble(session_id="async-missing")
+
+    assert client.calls == ["get_session_context", "create_session"]
+    assert "async-missing" in backing.sessions
+
+
+@pytest.mark.asyncio
+async def test_async_history_does_not_create_session_on_non_not_found_error():
+    """Only NOT_FOUND may trigger a create, matching the sync error semantics."""
+    backing = InMemoryOpenVikingClient()
+    backing.add_message("async-flaky", "user", content="Existing turn.")
+    client = AsyncInMemoryOpenVikingClient(backing)
+
+    async def failing_get_session_context(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        client.calls.append("get_session_context")
+        raise RuntimeError("upstream 503")
+
+    client.get_session_context = failing_get_session_context
+    history = OpenVikingChatMessageHistory(
+        session_id="async-flaky",
+        async_client=client,
+    )
+
+    assert await history.aget_messages() == []
+    assert "create_session" not in client.calls
+
+
+@pytest.mark.asyncio
 async def test_async_middleware_injects_and_captures_context():
     backing = InMemoryOpenVikingClient(
         {"viking://user/memories/profile.md": "Async middleware prefers teal."}
