@@ -522,11 +522,13 @@ class VikingFS:
         # (when configured); the plaintext stack reads bytes directly. Either way, pass the
         # offset/size through and let the Rust layer return the requested slice.
         last_not_found: Optional[Exception] = None
+        found_path: Optional[str] = None
         for path in self._read_paths(uri, ctx=ctx):
             if not await self._read_path_visible(uri, path, primary_path, real_ctx):
                 continue
             try:
-                result = await self._async_agfs.read(path, offset, size)
+                stat = await self._async_agfs.stat(path)
+                found_path = path
                 break
             except Exception as exc:
                 if is_not_found_error(exc):
@@ -535,12 +537,22 @@ class VikingFS:
                 raise
         else:
             raise NotFoundError(uri, "file") from last_not_found
-        if isinstance(result, bytes):
-            raw = result
-        elif result is not None and hasattr(result, "content"):
-            raw = result.content
+        if isinstance(stat, dict) and stat.get("isDir", False):
+            text = await self._degrade_directory_read_text(uri, ctx=ctx)
+            raw = text.encode("utf-8")
         else:
-            raw = b""
+            try:
+                result = await self._async_agfs.read(found_path, offset, size)
+            except Exception as exc:
+                if is_not_found_error(exc):
+                    raise NotFoundError(uri, "file") from exc
+                raise
+            if isinstance(result, bytes):
+                raw = result
+            elif result is not None and hasattr(result, "content"):
+                raw = result.content
+            else:
+                raw = b""
 
         return raw
 
@@ -3214,6 +3226,57 @@ class VikingFS:
 
         await self._async_agfs.write(path, content, fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref))
 
+    async def _format_directory_listing(
+        self,
+        uri: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> str:
+        """Format a directory's children as a readable text listing."""
+        children = await self.ls(uri, output="agent", ctx=ctx)
+        lines: List[str] = [f"# Directory: {uri}", ""]
+        for child in children:
+            child_uri = child.get("uri", "")
+            name = child_uri.rsplit("/", 1)[-1] or child_uri
+            is_dir = child.get("isDir", False)
+            prefix = "[DIR] " if is_dir else "[FILE]"
+            size = child.get("size", 0)
+            mod_time = child.get("modTime", "")
+            abs_text = child.get("abstract", "")
+            line = f"{prefix}  {name}"
+            if size:
+                line += f"  ({size} bytes)"
+            if mod_time:
+                line += f"  modified={mod_time}"
+            if abs_text:
+                line += f"  - {abs_text[:200]}"
+            lines.append(line)
+        if not children:
+            lines.append("(empty directory)")
+        return "\n".join(lines)
+
+    async def _degrade_directory_read_text(
+        self,
+        uri: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> str:
+        """Degrade a directory read: try .overview.md first, then children listing."""
+        logger.warning(
+            "[VikingFS] Directory read degraded for %s: attempting .overview.md / children listing",
+            uri,
+        )
+        overview_uri = f"{uri.rstrip('/')}/.overview.md"
+        try:
+            return await self.read_file(overview_uri, ctx=ctx)
+        except NotFoundError:
+            pass
+        except Exception:
+            logger.debug(
+                "[VikingFS] .overview.md fallback failed for %s",
+                uri,
+                exc_info=True,
+            )
+        return await self._format_directory_listing(uri, ctx=ctx)
+
     async def read_file(
         self,
         uri: str,
@@ -3234,8 +3297,6 @@ class VikingFS:
         self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         primary_path = self._uri_to_path(uri, ctx=ctx)
-        # Verify the file exists before reading, because AGFS read returns
-        # empty bytes for non-existent files instead of raising an error.
         last_not_found: Optional[Exception] = None
         for path in self._read_paths(uri, ctx=ctx):
             if not await self._read_path_visible(uri, path, primary_path, real_ctx):
@@ -3251,10 +3312,7 @@ class VikingFS:
         else:
             raise NotFoundError(uri, "file") from last_not_found
         if isinstance(stat, dict) and stat.get("isDir", False):
-            raise InvalidArgumentError(
-                f"Cannot read directory as file: {uri}",
-                details={"resource": uri, "expected": "file", "actual": "directory"},
-            )
+            return await self._degrade_directory_read_text(uri, ctx=ctx)
         try:
             content = await self._async_agfs.read(path)
             if isinstance(content, bytes):
@@ -3298,10 +3356,8 @@ class VikingFS:
         else:
             raise NotFoundError(uri, "file") from last_not_found
         if isinstance(stat, dict) and stat.get("isDir", False):
-            raise InvalidArgumentError(
-                f"Cannot read directory as file: {uri}",
-                details={"resource": uri, "expected": "file", "actual": "directory"},
-            )
+            text = await self._degrade_directory_read_text(uri, ctx=ctx)
+            return text.encode("utf-8")
         try:
             raw = self._handle_agfs_read(await self._async_agfs.read(path))
             return raw
