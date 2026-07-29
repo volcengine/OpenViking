@@ -10,6 +10,7 @@ import pytest
 
 from openviking.parse.parsers.media import utils as media_utils
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
 @pytest.fixture(autouse=True)
@@ -100,7 +101,16 @@ class _CapturingPathClient(_MediaVLM):
         self.path_calls = 0
         self.content = None
 
-    async def get_media_completion_async(self, *, media_path, filename, **_kwargs):
+    async def get_media_completion_async(
+        self,
+        *,
+        media_path,
+        filename,
+        prepare_media=None,
+        **_kwargs,
+    ):
+        if prepare_media is not None:
+            await prepare_media()
         self.path_calls += 1
         self.content = media_path.read_bytes()
         return f"# Clip\n\nUseful summary.\n\n### {filename}\n\nDetails."
@@ -124,7 +134,9 @@ def _config(model_config, *, max_chars=4000):
 
 
 def _lazy_client(*, return_value=None, side_effect=None):
-    async def invoke(**_kwargs):
+    async def invoke(prepare_media=None, **_kwargs):
+        if prepare_media is not None:
+            await prepare_media()
         if side_effect is not None:
             raise side_effect
         return return_value
@@ -157,10 +169,21 @@ def test_media_utils_imports_in_a_clean_process_without_a_cycle():
 async def test_media_concurrency_bounds_vikingfs_reads_and_inference(monkeypatch):
     fs = _BlockingReadFS()
     client = _BlockingMediaClient()
-    model_config = SimpleNamespace(get_client_instance=lambda: client)
+    config_vlm = VLMConfig(
+        provider="volcengine",
+        api_key="test-key",
+        model="media-model",
+        media={"enabled": True, "max_concurrent": 2},
+    )
+    config_vlm._vlm_instance = client
+    config = SimpleNamespace(
+        vlm=config_vlm,
+        semantic=SimpleNamespace(overview_max_chars=4000, abstract_max_chars=256),
+        output_language_override="en",
+    )
     monkeypatch.setattr(media_utils, "get_viking_fs", lambda: fs)
-    monkeypatch.setattr(media_utils, "get_openviking_config", lambda: _config(model_config))
-    llm_sem = asyncio.Semaphore(2)
+    monkeypatch.setattr(media_utils, "get_openviking_config", lambda: config)
+    llm_sem = asyncio.Semaphore(64)
 
     tasks = [
         asyncio.create_task(
@@ -264,7 +287,9 @@ async def test_media_helper_logs_structured_metadata_without_provider_message(mo
         code = "ServiceUnavailable"
         request_id = "request-safe"
 
-    async def fail_after_write(**_kwargs):
+    async def fail_after_write(prepare_media=None, **_kwargs):
+        if prepare_media is not None:
+            await prepare_media()
         raise ProviderError("SECRET_API_KEY SECRET_PROMPT SECRET_RESPONSE")
 
     client = _MediaVLM()

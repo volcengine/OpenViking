@@ -438,7 +438,8 @@ async def _generate_media_summary(
             delete=False,
         ) as temporary:
             temporary_path = Path(temporary.name)
-        async with llm_sem or asyncio.Semaphore(1):
+
+        async def prepare_media() -> None:
             await _write_media_to_path(
                 temporary_path,
                 media_uri,
@@ -446,11 +447,14 @@ async def _generate_media_summary(
                 ctx,
                 expected_size=size_bytes,
             )
+
+        async with llm_sem or asyncio.Semaphore(1):
             raw = await vlm.get_media_completion_async(
                 prompt=prompt,
                 media_path=temporary_path,
                 filename=original_filename,
                 media_type=media_type,
+                prepare_media=prepare_media,
             )
     except (_InvalidMediaContentError, _MediaTooLargeError):
         return result

@@ -5,7 +5,7 @@ import importlib
 import threading
 import weakref
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
@@ -744,14 +744,17 @@ class VLMConfig(BaseModel):
         media_path: Path,
         filename: str,
         media_type: str,
+        prepare_media: Optional[Callable[[], Awaitable[None]]] = None,
     ) -> str:
-        """Understand audio/video through the configured VLM instance."""
+        """Stage and understand audio/video under the configured media limit."""
         from openviking.models.vlm.base import UnsupportedMediaInputError
 
         if not self.media.enabled:
             raise UnsupportedMediaInputError("VLM media understanding is disabled")
 
         async with self._get_media_semaphore():
+            if prepare_media is not None:
+                await prepare_media()
             return await self.get_vlm_instance().get_media_completion_async(
                 prompt=prompt,
                 media_path=media_path,

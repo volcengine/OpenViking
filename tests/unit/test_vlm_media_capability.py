@@ -120,6 +120,48 @@ async def test_vlm_config_delegates_media_and_limits_concurrency(tmp_path):
     assert backend.max_active == 1
 
 
+async def test_vlm_config_media_limit_covers_preparation_and_inference(tmp_path):
+    backend = RecordingMediaVLM()
+    config = VLMConfig(
+        provider="volcengine",
+        api_key="test-key",
+        model="media-model",
+        media={"enabled": True, "max_concurrent": 1},
+    )
+    config._vlm_instance = backend
+    preparation_active = 0
+    max_preparation_active = 0
+
+    def make_preparation(index):
+        async def prepare():
+            nonlocal preparation_active, max_preparation_active
+            preparation_active += 1
+            max_preparation_active = max(max_preparation_active, preparation_active)
+            await asyncio.sleep(0.01)
+            (tmp_path / f"meeting-{index}.mp3").write_bytes(b"media")
+            preparation_active -= 1
+
+        return prepare
+
+    results = await asyncio.gather(
+        *[
+            config.get_media_completion_async(
+                prompt=f"summarize-{index}",
+                media_path=tmp_path / f"meeting-{index}.mp3",
+                filename=f"meeting-{index}.mp3",
+                media_type="audio",
+                prepare_media=make_preparation(index),
+            )
+            for index in range(2)
+        ]
+    )
+
+    assert results == ["media summary", "media summary"]
+    assert max_preparation_active == 1
+    assert backend.max_active == 1
+    assert all(call[1].read_bytes() == b"media" for call in backend.calls)
+
+
 async def test_failover_vlm_routes_media_to_capable_backup(tmp_path):
     primary = DummyVLM({"provider": "text-only", "model": "primary"})
     backup = RecordingMediaVLM(provider="media-backup")
