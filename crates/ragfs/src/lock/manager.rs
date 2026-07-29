@@ -355,6 +355,23 @@ impl PathLockManager {
         PathLockError::Io(format!("lock path '{lock_path}' changed while releasing"))
     }
 
+    /// Remove one owned token while treating an already-missing token as released.
+    ///
+    /// A tree lock is stored inside the directory it protects. A successful
+    /// recursive delete therefore removes both the directory and its lock token
+    /// before the outer lease is released. Keep wrong-owner/CAS changes strict,
+    /// but make release idempotent when the token no longer exists.
+    async fn remove_owned_token(&self, lock_path: &str, owner_id: &str) -> PathLockResult<()> {
+        match self.provider.remove_token(lock_path, owner_id).await {
+            Ok(true) => Ok(()),
+            Ok(false) => match self.provider.read_token(lock_path).await? {
+                None => Ok(()),
+                Some(_) => Err(Self::release_changed_error(lock_path)),
+            },
+            Err(error) => Err(error),
+        }
+    }
+
     /// Current nanosecond timestamp.
     fn now_ns() -> u128 {
         SystemTime::now()
@@ -1075,23 +1092,13 @@ impl PathLockManager {
             let mut failed_paths = Vec::new();
             let mut first_error = None;
             for lock_path in release_paths {
-                match self
-                    .provider
-                    .remove_token(&lock_path, &entry.lease.owner_id)
+                if let Err(error) = self
+                    .remove_owned_token(&lock_path, &entry.lease.owner_id)
                     .await
                 {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        failed_paths.push(lock_path.clone());
-                        if first_error.is_none() {
-                            first_error = Some(Self::release_changed_error(&lock_path));
-                        }
-                    }
-                    Err(error) => {
-                        failed_paths.push(lock_path);
-                        if first_error.is_none() {
-                            first_error = Some(error);
-                        }
+                    failed_paths.push(lock_path);
+                    if first_error.is_none() {
+                        first_error = Some(error);
                     }
                 }
             }
@@ -1152,19 +1159,10 @@ impl PathLockManager {
             let mut failed_paths = Vec::new();
             let mut first_error = None;
             for lock_path in release_paths {
-                match self.provider.remove_token(&lock_path, &owner_id).await {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        failed_paths.push(lock_path.clone());
-                        if first_error.is_none() {
-                            first_error = Some(Self::release_changed_error(&lock_path));
-                        }
-                    }
-                    Err(error) => {
-                        failed_paths.push(lock_path);
-                        if first_error.is_none() {
-                            first_error = Some(error);
-                        }
+                if let Err(error) = self.remove_owned_token(&lock_path, &owner_id).await {
+                    failed_paths.push(lock_path);
+                    if first_error.is_none() {
+                        first_error = Some(error);
                     }
                 }
             }
@@ -1628,6 +1626,30 @@ mod tests {
             PathLockManager::new(fs.clone(), provider, PathLockConfig::default()),
             fs,
         )
+    }
+
+    #[tokio::test]
+    async fn release_tree_lease_succeeds_after_locked_directory_is_deleted() {
+        let fs = Arc::new(MemFileSystem::new());
+        fs.mkdir("/data", 0o755).await.unwrap();
+        fs.mkdir("/data/delete-me", 0o755).await.unwrap();
+        let provider = Arc::new(crate::lock::provider::FilesystemPathLockProvider::new(
+            fs.clone(),
+        ));
+        let mgr = PathLockManager::new(fs.clone(), provider, PathLockConfig::default());
+        let lease = mgr
+            .acquire_tree("/data/delete-me", Duration::ZERO, None)
+            .await
+            .unwrap();
+
+        fs.remove_all("/data/delete-me").await.unwrap();
+
+        mgr.release(&lease).await.unwrap();
+        assert!(mgr
+            .get_owned_lease_by_ref(&lease.lease.lease_ref)
+            .await
+            .is_none());
+        assert_eq!(mgr.metrics_snapshot().await.active_lock_count, 0);
     }
 
     #[tokio::test]
