@@ -75,7 +75,9 @@ class RecordingVLM:
             and 0 <= size_bytes <= 512 * 1024 * 1024
         )
 
-    async def get_media_completion_async(self, **_kwargs):
+    async def get_media_completion_async(self, prepare_media=None, **_kwargs):
+        if prepare_media is not None:
+            await prepare_media()
         self.media_backend.calls += 1
         if isinstance(self.media_backend.result, Exception):
             raise self.media_backend.result

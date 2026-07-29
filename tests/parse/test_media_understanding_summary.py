@@ -269,7 +269,7 @@ async def test_media_summary_rejects_unknown_size_past_hard_limit(monkeypatch):
     client = _CapturingPathClient()
     model_config = SimpleNamespace(get_client_instance=lambda: client)
     monkeypatch.setattr(media_utils, "_MEDIA_READ_CHUNK_BYTES", 4)
-    monkeypatch.setattr(media_utils, "MAX_MEDIA_FILE_BYTES", 8, raising=False)
+    monkeypatch.setattr(media_utils, "MAX_MEDIA_FILE_BYTES", 8)
     monkeypatch.setattr(media_utils, "get_viking_fs", lambda: fs)
     monkeypatch.setattr(media_utils, "get_openviking_config", lambda: _config(model_config))
 
