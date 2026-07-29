@@ -68,6 +68,29 @@ class OpenVikingRetriever(BaseRetriever):
     _owns_client_cache: bool = PrivateAttr(default=False)
     _closed: bool = PrivateAttr(default=False)
 
+    def __deepcopy__(
+        self,
+        memo: dict[int, Any] | None = None,
+    ) -> OpenVikingRetriever:
+        """Copy configuration without cloning clients or cached runtime state."""
+
+        memo = {} if memo is None else memo
+        for client in (self.client, self.async_client):
+            if client is not None:
+                memo[id(client)] = client
+
+        sync_client_cache = getattr(self, "_client_cache", None)
+        if getattr(self, "_owns_client_cache", False) and sync_client_cache is not None:
+            memo[id(sync_client_cache)] = None
+
+        copied = super().__deepcopy__(memo)
+        private_attributes = getattr(type(copied), "__private_attributes__", {})
+        private_state = copied.__pydantic_private__
+        if private_state is not None and "_client_cache" in private_attributes:
+            private_state["_client_cache"] = None
+            private_state["_owns_client_cache"] = False
+        return copied
+
     def _get_client(self) -> Any:
         self._raise_if_closed()
         if self._client_cache is None:

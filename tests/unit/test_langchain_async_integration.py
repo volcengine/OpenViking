@@ -63,6 +63,94 @@ class AsyncInMemoryOpenVikingClient:
         return call
 
 
+def test_connection_handle_and_retriever_deepcopy_preserve_injected_clients():
+    class NonCopyableClient:
+        def __deepcopy__(self, _memo: dict[int, Any]) -> None:
+            raise AssertionError("live clients must not be deep-copied")
+
+    client = NonCopyableClient()
+    async_client = NonCopyableClient()
+    connection = OpenVikingConnection(
+        client=client,
+        async_client=async_client,
+        url="http://localhost:1933",
+        extra_headers={"X-Tenant": "tenant-a"},
+    )
+
+    copied_connection = copy.deepcopy(connection)
+
+    assert copied_connection is not connection
+    assert copied_connection.client is client
+    assert copied_connection.async_client is async_client
+    assert copied_connection.extra_headers == connection.extra_headers
+    assert copied_connection.extra_headers is not connection.extra_headers
+
+    async_handle = OpenVikingAsyncClientHandle(connection)
+    async_handle._client = async_client
+    copied_async_handle = copy.deepcopy(async_handle)
+
+    assert copied_async_handle is not async_handle
+    assert copied_async_handle._connection.async_client is async_client
+    assert copied_async_handle._client is None
+
+    retriever = OpenVikingRetriever(
+        client=client,
+        async_client=async_client,
+        extra_headers={"X-Tenant": "tenant-a"},
+        target_uri=["viking://resources"],
+        filter={"category": ["guide"]},
+        tags=["stable"],
+    )
+    copied_retriever = copy.deepcopy(retriever)
+
+    assert copied_retriever is not retriever
+    assert copied_retriever.client is client
+    assert copied_retriever.async_client is async_client
+    assert copied_retriever.extra_headers == retriever.extra_headers
+    assert copied_retriever.extra_headers is not retriever.extra_headers
+    assert copied_retriever.target_uri == retriever.target_uri
+    assert copied_retriever.target_uri is not retriever.target_uri
+    assert copied_retriever.filter == retriever.filter
+    assert copied_retriever.filter is not retriever.filter
+    assert copied_retriever.tags == retriever.tags
+    assert copied_retriever.tags is not retriever.tags
+
+
+def test_retriever_deepcopy_discards_owned_sync_client(monkeypatch):
+    instances: list[Any] = []
+
+    class NonCopyableSyncHTTPClient:
+        def __init__(self, **_kwargs: Any):
+            self.closed = False
+            instances.append(self)
+
+        def __deepcopy__(self, _memo: dict[int, Any]) -> None:
+            raise AssertionError("owned live clients must not be deep-copied")
+
+        def initialize(self) -> None:
+            return None
+
+        def close(self) -> None:
+            self.closed = True
+
+        def find(self, **_kwargs: Any) -> dict[str, Any]:
+            return {"memories": [], "resources": [], "skills": []}
+
+    import openviking.client as client_module
+
+    monkeypatch.setattr(client_module, "SyncHTTPClient", NonCopyableSyncHTTPClient)
+    retriever = OpenVikingRetriever(url="http://localhost:1933")
+
+    assert retriever.invoke("original") == []
+    copied = copy.deepcopy(retriever)
+    assert copied.invoke("copied") == []
+
+    assert len(instances) == 2
+    asyncio.run(copied.aclose())
+    asyncio.run(retriever.aclose())
+    assert all(client.closed for client in instances)
+
+
 @pytest.mark.asyncio
 async def test_ensure_async_client_defaults_to_native_http_client(monkeypatch):
     created: dict[str, Any] = {}

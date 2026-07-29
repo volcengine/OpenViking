@@ -75,6 +75,26 @@ class OpenVikingConnection:
     auto_initialize: bool = True
     async_client: Any = None
 
+    def __deepcopy__(self, memo: dict[int, Any]) -> OpenVikingConnection:
+        """Copy configuration while preserving caller-owned client identities."""
+
+        copied = type(self)(
+            client=self.client,
+            async_client=self.async_client,
+            url=self.url,
+            api_key=self.api_key,
+            account=self.account,
+            user=self.user,
+            user_id=self.user_id,
+            actor_peer_id=self.actor_peer_id,
+            path=self.path,
+            timeout=self.timeout,
+            extra_headers=copy.deepcopy(self.extra_headers, memo),
+            auto_initialize=self.auto_initialize,
+        )
+        memo[id(self)] = copied
+        return copied
+
 
 @dataclass(slots=True)
 class OpenVikingCommitPolicy:
