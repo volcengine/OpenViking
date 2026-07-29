@@ -3,6 +3,7 @@
 
 """Unit tests for TaskTracker."""
 
+import asyncio
 import json
 import time
 
@@ -109,6 +110,17 @@ class _FakeAgfsExistingDir(_FakeAgfs):
             raise AGFSAlreadyExistsError(f"already exists: {path}")
         self.dirs.add(normalized)
         return {"message": "created", "mode": mode}
+
+
+class _FakeAgfsCamelCase(_FakeAgfs):
+    """Emulates the production AsyncAGFSClient/VikingFS shape: ls entries
+    carry ``isDir`` (camelCase) rather than ``is_dir``."""
+
+    def ls(self, path: str = "/"):
+        entries = super().ls(path)
+        for entry in entries:
+            entry["isDir"] = entry.pop("is_dir")
+        return entries
 
 
 # ── Basic CRUD ──
@@ -561,3 +573,215 @@ async def test_session_service_get_commit_task_also_filters_account():
     )
 
     assert other_account_result is None
+
+
+# ── Live task references (issue #3396) ──
+
+
+async def test_register_live_task_holds_reference_until_done(tracker: TaskTracker):
+    record = await tracker.create("admin_reindex", resource_id="r1", **_owner_kwargs())
+
+    background = asyncio.create_task(asyncio.sleep(3600))
+    tracker.register_live_task(record.task_id, background)
+    assert tracker.has_live_task(record.task_id) is True
+
+    background.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await background
+    await asyncio.sleep(0)  # let the done callback run
+
+    assert tracker.has_live_task(record.task_id) is False
+
+
+async def test_register_live_task_discards_reference_after_completion(tracker: TaskTracker):
+    record = await tracker.create("admin_reindex", resource_id="r1", **_owner_kwargs())
+
+    background = asyncio.create_task(asyncio.sleep(0))
+    tracker.register_live_task(record.task_id, background)
+    await background
+
+    assert tracker.has_live_task(record.task_id) is False
+
+
+# ── Startup zombie reaping (issue #3396) ──
+
+
+async def _age_heartbeat(tracker: TaskTracker, task_id: str, stale_seconds: float) -> None:
+    """Backdate a task's updated_at heartbeat in cache AND persistent store."""
+    task = tracker._tasks[task_id]
+    task.updated_at = time.time() - stale_seconds
+    await tracker._store.update(task)
+
+
+async def test_reap_stale_active_fails_zombie_running_task(tracker: TaskTracker):
+    record = await tracker.create(
+        "admin_reindex",
+        resource_id="viking://user/alice/memories",
+        **_owner_kwargs(),
+    )
+    await tracker.start(record.task_id, **_owner_kwargs())
+    await _age_heartbeat(tracker, record.task_id, tracker.TTL_STALE_ACTIVE + 1)
+
+    reaped = await tracker.reap_stale_active()
+
+    assert reaped == 1
+    loaded = await tracker.get(record.task_id)
+    assert loaded is not None
+    assert loaded.status == TaskStatus.FAILED
+    assert loaded.stage == "interrupted"
+    assert "interrupted" in (loaded.error or "")
+
+
+async def test_reap_stale_active_keeps_task_with_live_driver(tracker: TaskTracker):
+    record = await tracker.create("admin_reindex", resource_id="r1", **_owner_kwargs())
+    await tracker.start(record.task_id, **_owner_kwargs())
+    await _age_heartbeat(tracker, record.task_id, tracker.TTL_STALE_ACTIVE + 1)
+
+    background = asyncio.create_task(asyncio.sleep(3600))
+    tracker.register_live_task(record.task_id, background)
+    try:
+        reaped = await tracker.reap_stale_active()
+    finally:
+        background.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await background
+
+    assert reaped == 0
+    loaded = await tracker.get(record.task_id)
+    assert loaded is not None
+    assert loaded.status == TaskStatus.RUNNING
+
+
+async def test_reap_stale_active_keeps_recently_active_task(tracker: TaskTracker):
+    record = await tracker.create("admin_reindex", resource_id="r1", **_owner_kwargs())
+    await tracker.start(record.task_id, **_owner_kwargs())
+
+    reaped = await tracker.reap_stale_active()
+
+    assert reaped == 0
+    loaded = await tracker.get(record.task_id)
+    assert loaded is not None
+    assert loaded.status == TaskStatus.RUNNING
+
+
+async def test_reap_stale_active_ignores_terminal_tasks(tracker: TaskTracker):
+    completed = await tracker.create("admin_reindex", resource_id="r1", **_owner_kwargs())
+    await tracker.complete(completed.task_id, {}, **_owner_kwargs())
+    failed = await tracker.create("admin_reindex", resource_id="r2", **_owner_kwargs())
+    await tracker.fail(failed.task_id, "boom", **_owner_kwargs())
+    await _age_heartbeat(tracker, completed.task_id, tracker.TTL_STALE_ACTIVE + 1)
+    await _age_heartbeat(tracker, failed.task_id, tracker.TTL_STALE_ACTIVE + 1)
+
+    reaped = await tracker.reap_stale_active()
+
+    assert reaped == 0
+    assert (await tracker.get(completed.task_id)).status == TaskStatus.COMPLETED
+    assert (await tracker.get(failed.task_id)).status == TaskStatus.FAILED
+
+
+async def test_reap_stale_active_unblocks_same_resource_retry(tracker: TaskTracker):
+    zombie = await tracker.create_if_no_running(
+        "admin_reindex",
+        "viking://user/alice/memories",
+        **_owner_kwargs(),
+    )
+    assert zombie is not None
+    await tracker.start(zombie.task_id, **_owner_kwargs())
+    await _age_heartbeat(tracker, zombie.task_id, tracker.TTL_STALE_ACTIVE + 1)
+
+    await tracker.reap_stale_active()
+
+    retried = await tracker.create_if_no_running(
+        "admin_reindex",
+        "viking://user/alice/memories",
+        **_owner_kwargs(),
+    )
+    assert retried is not None
+    assert retried.task_id != zombie.task_id
+
+
+async def test_reap_stale_active_persists_failure_to_store():
+    agfs = _FakeAgfs()
+    tracker = TaskTracker(store=PersistentTaskStore(agfs))
+    record = await tracker.create("admin_reindex", resource_id="r1", **_owner_kwargs())
+    await tracker.start(record.task_id, **_owner_kwargs())
+    await _age_heartbeat(tracker, record.task_id, tracker.TTL_STALE_ACTIVE + 1)
+
+    await tracker.reap_stale_active()
+
+    raw = agfs.files[f"/local/acme/_system/tasks/alice/{record.task_id}.json"]
+    payload = json.loads(raw.decode("utf-8"))
+    assert payload["status"] == "failed"
+    assert payload["stage"] == "interrupted"
+
+
+async def test_reap_stale_active_finds_zombie_from_fresh_tracker():
+    """Simulate a restart: a fresh tracker (empty cache) must reap the
+    persisted zombie via store enumeration, not just cached tasks."""
+    agfs = _FakeAgfs()
+    tracker1 = TaskTracker(store=PersistentTaskStore(agfs))
+    record = await tracker1.create("admin_reindex", resource_id="r1", **_owner_kwargs())
+    await tracker1.start(record.task_id, **_owner_kwargs())
+
+    tracker2 = TaskTracker(store=PersistentTaskStore(agfs))
+    reaped = await tracker2.reap_stale_active(stale_after=0)
+
+    assert reaped == 1
+    loaded = await tracker2.get(record.task_id, **_owner_kwargs())
+    assert loaded is not None
+    assert loaded.status == TaskStatus.FAILED
+    assert loaded.stage == "interrupted"
+
+
+async def test_reap_stale_active_covers_other_accounts_and_system_owner():
+    agfs = _FakeAgfs()
+    tracker = TaskTracker(store=PersistentTaskStore(agfs))
+    other = await tracker.create(
+        "admin_reindex",
+        resource_id="r-other",
+        account_id="other-acct",
+        user_id="bob",
+    )
+    await tracker.start(other.task_id, account_id="other-acct", user_id="bob")
+    system = await tracker.create(
+        "legacy_migration",
+        resource_id="legacy-data",
+        account_id="_system",
+        user_id="root",
+    )
+    await tracker.start(system.task_id, account_id="_system", user_id="root")
+
+    fresh = TaskTracker(store=PersistentTaskStore(agfs))
+    reaped = await fresh.reap_stale_active(stale_after=0)
+
+    assert reaped == 2
+    other_loaded = await fresh.get(other.task_id, account_id="other-acct", user_id="bob")
+    system_loaded = await fresh.get(system.task_id, account_id="_system", user_id="root")
+    assert other_loaded is not None and other_loaded.status == TaskStatus.FAILED
+    assert system_loaded is not None and system_loaded.status == TaskStatus.FAILED
+
+
+async def test_reap_stale_active_with_camel_case_isdir_entries():
+    """Regression: production AGFS ls entries use ``isDir`` (camelCase).
+    A fresh tracker must still enumerate accounts/user dirs and reap the
+    cross-process zombie with real-shaped entries."""
+    agfs = _FakeAgfsCamelCase()
+    tracker1 = TaskTracker(store=PersistentTaskStore(agfs))
+    record = await tracker1.create(
+        "admin_reindex",
+        resource_id="r-camel",
+        account_id="acme",
+        user_id="alice",
+    )
+    await tracker1.start(record.task_id, account_id="acme", user_id="alice")
+
+    store = PersistentTaskStore(agfs)
+    all_tasks = await store.list_all()
+    assert any(task["task_id"] == record.task_id for task in all_tasks)
+
+    fresh = TaskTracker(store=store)
+    reaped = await fresh.reap_stale_active(stale_after=0)
+
+    assert reaped == 1
+    loaded = await fresh.get(record.task_id, account_id="acme", user_id="alice")
+    assert loaded is not None and loaded.status == TaskStatus.FAILED

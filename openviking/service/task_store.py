@@ -72,7 +72,46 @@ class PersistentTaskStore:
     async def list(self, account_id: str, *, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
         if not user_id:
             return []
-        directory = self._task_dir(account_id, user_id)
+        return await self._read_task_dir(self._task_dir(account_id, user_id))
+
+    async def list_all(self) -> List[Dict[str, Any]]:
+        """List every persisted task record across all accounts and owners.
+
+        Used by startup reconciliation (``TaskTracker.reap_stale_active``) so
+        zombie PENDING/RUNNING tasks left behind by a previous process are
+        found regardless of which account/user owns them.
+        """
+        tasks: List[Dict[str, Any]] = []
+        for account_id in await self._list_account_ids():
+            for directory in await self._task_dirs_for_account(account_id):
+                tasks.extend(await self._read_task_dir(directory))
+        return tasks
+
+    async def _list_account_ids(self) -> List[str]:
+        try:
+            items = await self._agfs.ls(self.ROOT_PREFIX)
+        except (AGFSNotFoundError, FileNotFoundError):
+            return []
+        return [
+            str(item.get("name") or "")
+            for item in items
+            if item.get("isDir", item.get("is_dir", False)) and item.get("name")
+        ]
+
+    async def _task_dirs_for_account(self, account_id: str) -> List[str]:
+        if account_id == SYSTEM_TASK_ACCOUNT_ID:
+            return [self._task_dir(SYSTEM_TASK_ACCOUNT_ID, SYSTEM_TASK_USER_ID)]
+        try:
+            items = await self._agfs.ls(self._task_root_dir(account_id))
+        except (AGFSNotFoundError, FileNotFoundError):
+            return []
+        return [
+            self._task_dir(account_id, str(item.get("name") or ""))
+            for item in items
+            if item.get("isDir", item.get("is_dir", False)) and item.get("name")
+        ]
+
+    async def _read_task_dir(self, directory: str) -> List[Dict[str, Any]]:
         try:
             items = await self._agfs.ls(directory)
         except (AGFSNotFoundError, FileNotFoundError):

@@ -51,6 +51,10 @@ from openviking_cli.utils.config import get_openviking_config
 logger = get_logger(__name__)
 
 REINDEX_TASK_TYPE = "admin_reindex"
+# Bounded wait for queue drain at the end of a reindex run. Without this the
+# request-wait tracker polls forever when an embedding/semantic root never
+# completes, leaving the tracked task stuck in RUNNING (issue #3396).
+REINDEX_QUEUE_WAIT_TIMEOUT_S = 3600.0
 PRUNE_ORPHAN_CANDIDATE_LIMIT = 100000
 PRUNE_OUTPUT_FIELDS = ["id", "uri", "level", "context_type", "account_id", "owner_user_id"]
 
@@ -192,7 +196,7 @@ class ReindexExecutor:
                 details={"uri": uri},
             )
 
-        asyncio.create_task(
+        background = asyncio.create_task(
             self._run_tracked(
                 task.task_id,
                 uri=uri,
@@ -202,6 +206,7 @@ class ReindexExecutor:
                 ctx=ctx,
             )
         )
+        tracker.register_live_task(task.task_id, background)
         return {
             "task_id": task.task_id,
             "status": "accepted",
@@ -501,7 +506,10 @@ class ReindexExecutor:
                     )
 
                 if telemetry_id and mode != "prune_orphans":
-                    await wait_tracker.wait_for_request(telemetry_id)
+                    await wait_tracker.wait_for_request(
+                        telemetry_id,
+                        timeout=REINDEX_QUEUE_WAIT_TIMEOUT_S,
+                    )
                     self._apply_embedding_wait_status(
                         counters,
                         wait_tracker.build_queue_status(telemetry_id),
