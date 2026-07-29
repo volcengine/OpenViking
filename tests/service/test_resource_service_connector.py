@@ -938,6 +938,17 @@ async def test_tos_connector_rejects_wait(connector_config, ctx, service):
 
 
 @pytest.mark.asyncio
+async def test_tos_connector_rejects_tags_instead_of_dropping_them(connector_config, ctx, service):
+    with pytest.raises(InvalidArgumentError, match="tags"):
+        await service.add_resource(
+            path="tos://bucket/prefix",
+            ctx=ctx,
+            to="viking://resources/imports",
+            tags=["team=search"],
+        )
+
+
+@pytest.mark.asyncio
 async def test_monitor_links_reason_memory_on_success(
     monkeypatch,
     connector_config,

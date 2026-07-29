@@ -201,3 +201,103 @@ test("auto-capture commits when pending tokens cross threshold", async () => {
     await rm(stateDir, { recursive: true, force: true });
   }
 });
+
+test("auto-capture sends every new turn when one response exceeds the old limit", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-capture-complete-"));
+  const transcriptPath = join(stateDir, "transcript.jsonl");
+  const calls = [];
+  const transcript = [
+    {
+      payload: {
+        message: {
+          role: "user",
+          content: "inspect every tool result",
+        },
+      },
+    },
+    {
+      payload: {
+        message: {
+          role: "assistant",
+          content: "I will inspect the complete trace.",
+        },
+      },
+    },
+  ];
+  for (let index = 0; index < 10; index += 1) {
+    transcript.push(
+      {
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          id: `ctc-item-${index}`,
+          call_id: `custom-call-${index}`,
+          status: "completed",
+          name: "exec",
+          input: `command-${index}`,
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call_output",
+          id: `ctco-item-${index}`,
+          call_id: `custom-call-${index}`,
+          output: `result-${index}`,
+        },
+      },
+    );
+  }
+
+  try {
+    await writeFile(
+      transcriptPath,
+      transcript.map((entry) => JSON.stringify(entry)).join("\n"),
+    );
+
+    await withMockOpenViking(async (req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (req.method === "GET" && url.pathname === "/health") {
+        writeJson(res, { status: "ok", result: { ok: true } });
+        return;
+      }
+      if (req.method === "POST" && url.pathname.endsWith("/messages/batch")) {
+        calls.push(await readRequestBody(req));
+        writeJson(res, { status: "ok", result: { ok: true } });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/v1/sessions/cx-complete_trace") {
+        writeJson(res, {
+          status: "ok",
+          result: { pending_tokens: 100, commit_count: 0, total_message_count: 22 },
+        });
+        return;
+      }
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "error", error: "not found" }));
+    }, async (baseUrl) => {
+      await runAutoCapture(
+        { session_id: "complete:trace", transcript_path: transcriptPath },
+        {
+          OPENVIKING_AUTO_CAPTURE: "1",
+          OPENVIKING_CAPTURE_ASSISTANT_TURNS: "1",
+          OPENVIKING_CODEX_STATE_DIR: stateDir,
+          OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
+          OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
+          OPENVIKING_CREDENTIAL_SOURCE: "env",
+          OPENVIKING_WRITE_PATH_ASYNC: "0",
+          OPENVIKING_TIMEOUT_MS: "5000",
+          OPENVIKING_URL: baseUrl,
+        },
+      );
+    });
+
+    assert.equal(
+      calls.flatMap((body) => body.messages || []).length,
+      22,
+      "every normalized text/tool turn must be sent",
+    );
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});

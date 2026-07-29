@@ -95,6 +95,8 @@ class AddResourceRequest(BaseModel):
     telemetry: TelemetryRequest = False
     watch_interval: float = 0
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
+    tags: Optional[list[str]] = None
+    tag_mode: str = "replace"
 
     @model_validator(mode="after")
     def check_path_or_temp_file_id(self):
@@ -178,6 +180,8 @@ async def temp_upload(
             to=signed.to,
             reason=signed.reason,
             processing_mode=signed.processing_mode,
+            tags=signed.tags,
+            tag_mode=signed.tag_mode,
         )
 
     try:
@@ -213,6 +217,14 @@ async def add_resource(
     resolved = None
     store = None
     if request.temp_file_id:
+        if request.watch_interval > 0:
+            raise InvalidArgumentError(
+                "watch_interval > 0 is not supported for uploaded content: an "
+                "upload is consumed as a one-time snapshot at ingest, so the "
+                "watch would re-process stale content forever. Watch a URL / "
+                "sitemap / RSS source instead, or re-add the resource when the "
+                "source changes."
+            )
         store = TempUploadStore.build(http_request.app.state.config)
         resolved = await store.resolve_for_consume(request.temp_file_id, _ctx)
         path = resolved.local_path
@@ -243,7 +255,7 @@ async def add_resource(
     # omitted because ResourceService reads it with kwargs.get(..., False).
     if "create_parent" in request.model_fields_set:
         kwargs["create_parent"] = request.create_parent
-    if request.temp_file_id:
+    if request.temp_file_id and request.watch_interval <= 0:
         kwargs["temp_file_id"] = request.temp_file_id
     if request.preserve_structure is not None:
         kwargs["preserve_structure"] = request.preserve_structure
@@ -260,6 +272,8 @@ async def add_resource(
                 instruction=request.instruction,
                 wait=request.wait,
                 timeout=request.timeout,
+                tags=request.tags,
+                tag_mode=request.tag_mode,
                 allow_local_path_resolution=allow_local_path_resolution,
                 enforce_public_remote_targets=True,
                 args=request.args,

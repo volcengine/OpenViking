@@ -18,7 +18,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
 from openviking.core.content_targets import ContentTargetSpec
+from openviking.utils.ingest_options import IngestOptions
 from openviking.core.uri_validation import validate_optional_content_target_uri
+from openviking.parse.parsers.constants import MPEG_TS_EXTENSION_ALIAS
 from openviking.resource.feishu_watch_auth import (
     FEISHU_ACCESS_TOKEN_ARG,
     FEISHU_REFRESH_TOKEN_ARG,
@@ -109,8 +111,11 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "parser_backend",
         "resolved_extension",
         "defer_post_processing",
+        "tags",
+        "tag_mode",
     }
 )
+_ADD_RESOURCE_TAG_MODES = frozenset({"replace", "append"})
 
 _INTERNAL_INGESTION_FIELDS = frozenset(
     {
@@ -193,6 +198,40 @@ class ResourceService:
                 continue
             sanitized[key] = value
         return sanitized
+
+    def _watch_processor_kwargs(
+        self,
+        processor_kwargs: Dict[str, Any],
+        tags: Optional[List[str]],
+        tag_mode: str,
+    ) -> Dict[str, Any]:
+        watch_kwargs = dict(processor_kwargs)
+        if tags is not None:
+            watch_kwargs["tags"] = tags
+            watch_kwargs["tag_mode"] = tag_mode
+        return watch_kwargs
+
+    def _processor_args_for_watch_run(self, processor_kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        return self._sanitize_watch_processor_kwargs(processor_kwargs)
+
+    def _validate_add_resource_tag_policy(
+        self,
+        *,
+        tags: Optional[List[str]],
+        tag_mode: str,
+    ) -> None:
+        if tags is not None and tag_mode not in _ADD_RESOURCE_TAG_MODES:
+            raise InvalidArgumentError(f"unsupported tag mode: {tag_mode}")
+
+    def _add_resource_ingest_tag_kwargs(
+        self,
+        *,
+        tags: Optional[List[str]],
+        tag_mode: str,
+    ) -> Dict[str, Any]:
+        if tags is None:
+            return {}
+        return {"ingest_options": IngestOptions.from_search_tags(tags, mode=tag_mode)}
 
     async def _manage_watch_if_needed(
         self,
@@ -433,6 +472,8 @@ class ResourceService:
                 processing_mode=msg.processing_mode,
                 watch_interval=msg.watch_interval,
                 manage_watch=not msg.skip_watch_management,
+                tags=msg.tags,
+                tag_mode=msg.tag_mode,
                 allow_local_path_resolution=msg.allow_local_path_resolution,
                 enforce_public_remote_targets=msg.enforce_public_remote_targets,
                 resource_lock=resource_lock,
@@ -450,6 +491,10 @@ class ResourceService:
             )
 
         telemetry_id = get_current_telemetry().telemetry_id
+        ingest_tag_kwargs = self._add_resource_ingest_tag_kwargs(
+            tags=msg.tags,
+            tag_mode=msg.tag_mode,
+        )
         request_wait_tracker = get_request_wait_tracker()
         request_wait_tracker.register_request(telemetry_id)
         try:
@@ -463,6 +508,7 @@ class ResourceService:
                 summarize=msg.summarize,
                 build_index=msg.build_index,
                 processing_mode=msg.processing_mode,
+                **ingest_tag_kwargs,
             )
             await request_wait_tracker.wait_for_request(
                 telemetry_id,
@@ -516,6 +562,8 @@ class ResourceService:
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         watch_interval: float = 0,
         manage_watch: bool = True,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
         args: Optional[Dict[str, Any]] = None,
@@ -524,6 +572,7 @@ class ResourceService:
         """Start background ingestion for Git repositories while reserving the target URI."""
         self._ensure_initialized()
         processing_mode = normalize_processing_mode(processing_mode)
+        self._validate_add_resource_tag_policy(tags=tags, tag_mode=tag_mode)
         normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
         kwargs.update(normalized_args.processor_kwargs)
         from openviking.connector.routing import credential_arg_names
@@ -590,6 +639,8 @@ class ResourceService:
                 processing_mode=processing_mode,
                 watch_interval=watch_interval,
                 skip_watch_management=not manage_watch,
+                tags=tags,
+                tag_mode=tag_mode,
                 allow_local_path_resolution=allow_local_path_resolution,
                 enforce_public_remote_targets=enforce_public_remote_targets,
                 strict=bool(kwargs.get("strict", False)),
@@ -600,7 +651,7 @@ class ResourceService:
                 preserve_structure=kwargs.get("preserve_structure"),
                 create_parent=bool(kwargs.get("create_parent", False)),
                 source_name=source_name,
-                args=self._sanitize_watch_processor_kwargs(processor_args),
+                args=self._processor_args_for_watch_run(processor_args),
             )
             task = await self._enqueue_add_resource_job(
                 msg,
@@ -721,6 +772,8 @@ class ResourceService:
         summarize: bool = False,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         watch_interval: float = 0,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
         add_type: Optional[str] = None,
@@ -751,6 +804,8 @@ class ResourceService:
             processing_mode=processing_mode,
             watch_interval=watch_interval,
             manage_watch=True,
+            tags=tags,
+            tag_mode=tag_mode,
             allow_local_path_resolution=allow_local_path_resolution,
             enforce_public_remote_targets=enforce_public_remote_targets,
             args=args,
@@ -811,6 +866,8 @@ class ResourceService:
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         watch_interval: float = 0,
         manage_watch: bool = True,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
         args: Optional[Dict[str, Any]] = None,
@@ -861,6 +918,7 @@ class ResourceService:
         """
         self._ensure_initialized()
         processing_mode = normalize_processing_mode(processing_mode)
+        self._validate_add_resource_tag_policy(tags=tags, tag_mode=tag_mode)
         normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
         kwargs.update(normalized_args.processor_kwargs)
         if watch_interval > 0 and kwargs.get("temp_file_id"):
@@ -901,6 +959,7 @@ class ResourceService:
             watch_interval=watch_interval,
             connector_args=args or {},
             kwargs=kwargs,
+            tags=tags,
         ):
             return await self._connector.submit(
                 path=path,
@@ -926,6 +985,8 @@ class ResourceService:
                 processing_mode=processing_mode,
                 watch_interval=watch_interval,
                 manage_watch=manage_watch,
+                tags=tags,
+                tag_mode=tag_mode,
                 allow_local_path_resolution=allow_local_path_resolution,
                 enforce_public_remote_targets=enforce_public_remote_targets,
                 **kwargs,
@@ -945,6 +1006,8 @@ class ResourceService:
             processing_mode=processing_mode,
             watch_interval=watch_interval,
             manage_watch=manage_watch,
+            tags=tags,
+            tag_mode=tag_mode,
             allow_local_path_resolution=allow_local_path_resolution,
             enforce_public_remote_targets=enforce_public_remote_targets,
             watch_auth_state=normalized_args.watch_auth_state,
@@ -967,6 +1030,8 @@ class ResourceService:
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         watch_interval: float = 0,
         manage_watch: bool = True,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
         watch_auth_state: Optional[Dict[str, Any]] = None,
@@ -983,6 +1048,10 @@ class ResourceService:
         request_wait_tracker = get_request_wait_tracker()
         job_enqueued = False
         deferred_lock: LockLease = NO_LOCK
+        ingest_tag_kwargs = self._add_resource_ingest_tag_kwargs(
+            tags=tags,
+            tag_mode=tag_mode,
+        )
         if telemetry_id:
             request_wait_tracker.register_request(telemetry_id)
         watch_manager = self._get_watch_manager()
@@ -1052,14 +1121,22 @@ class ResourceService:
                         or prepared_resource.meta.get("original_filename")
                         or prepared_resource.meta.get("resolved_name")
                     )
+                    source_format = resolved_extension.lstrip(".") or "file"
+                    if resolved_extension.lower().lstrip(".") == MPEG_TS_EXTENSION_ALIAS:
+                        source_format = "video"
+                    source_info = _ResourceSourceInfo(
+                        source_name=source_name,
+                        source_path=path,
+                        source_format=source_format,
+                    )
                 else:
                     resolved_extension = ""
                     source_name = kwargs.get("source_name")
-                source_info = _ResourceSourceInfo(
-                    source_name=source_name,
-                    source_path=path,
-                    source_format=resolved_extension.lstrip(".") or "file",
-                )
+                    source_info = _ResourceSourceInfo(
+                        source_name=source_name,
+                        source_path=path,
+                        source_format=resolved_extension.lstrip(".") or "file",
+                    )
                 doc_name = self._target_doc_name(path, source_name, source_info)
                 source_path = source_info.source_path or source_name or path
                 (
@@ -1156,6 +1233,8 @@ class ResourceService:
                         skip_watch_management=True,
                         defer_target_resolution=defer_target_resolution,
                         understanding_response_id=understanding_response_id,
+                        tags=tags,
+                        tag_mode=tag_mode,
                     )
                     enqueue_started = True
                     task = await self._enqueue_add_resource_job(
@@ -1186,7 +1265,7 @@ class ResourceService:
                     build_index=build_index,
                     summarize=summarize,
                     processing_mode=processing_mode,
-                    processor_kwargs=kwargs,
+                    processor_kwargs=self._watch_processor_kwargs(kwargs, tags, tag_mode),
                     watch_auth_state=watch_auth_state,
                     ctx=ctx,
                 )
@@ -1213,6 +1292,7 @@ class ResourceService:
                 allow_local_path_resolution=allow_local_path_resolution,
                 prepared_resource=prepared_resource,
                 defer_post_processing=not wait,
+                **ingest_tag_kwargs,
                 **kwargs,
             )
             prepared_resource = None
@@ -1302,6 +1382,8 @@ class ResourceService:
                     enforce_public_remote_targets=enforce_public_remote_targets,
                     source_name=kwargs.get("source_name"),
                     skip_watch_management=True,
+                    tags=tags,
+                    tag_mode=tag_mode,
                 )
                 task = await self._enqueue_add_resource_job(
                     msg,
@@ -1323,7 +1405,7 @@ class ResourceService:
                 build_index=build_index,
                 summarize=summarize,
                 processing_mode=processing_mode,
-                processor_kwargs=kwargs,
+                processor_kwargs=self._watch_processor_kwargs(kwargs, tags, tag_mode),
                 watch_auth_state=watch_auth_state,
                 ctx=ctx,
             )

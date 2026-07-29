@@ -554,6 +554,8 @@ async def add_resource(
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
     to: str = "",
     parent: str = "",
+    tags: Optional[list[str]] = None,
+    tag_mode: str = "replace",
     args: Optional[dict[str, Any]] = None,
 ) -> str:
     """Add a resource to OpenViking. Asynchronous — processing happens in the background.
@@ -586,6 +588,8 @@ async def add_resource(
             from the source.
         parent: Parent URI under viking://resources/ for remote imports. Mutually exclusive
             with ``to`` and not supported when ``add_type`` is set.
+        tags: Optional explicit k=v retrieval tags to apply after ingestion.
+        tag_mode: Tag update mode, "replace" or "append". Defaults to "replace".
         args: Parser-specific options, e.g. {"feishu_access_token": "..."} for Feishu imports,
             or {"site": true} for whole-site ingestion.
     """
@@ -626,6 +630,8 @@ async def add_resource(
                 reason=description,
                 args=args,
                 processing_mode=processing_mode,
+                tags=tags,
+                tag_mode=tag_mode,
             )
         except (PermissionDeniedError, InvalidArgumentError) as exc:
             return f"Error: {exc}"
@@ -678,6 +684,8 @@ async def add_resource(
                 processing_mode=processing_mode,
                 enforce_public_remote_targets=True,
                 args=args,
+                tags=tags,
+                tag_mode=tag_mode,
             )
         except Exception as exc:
             return f"Error adding resource: {exc}"
@@ -720,6 +728,8 @@ async def add_resource(
         reason=description,
         actor_peer_id=ctx.actor_peer_id or "",
         processing_mode=processing_mode,
+        tags=tags,
+        tag_mode=tag_mode,
     )
     base_url, url_source = _resolve_public_base_url()
     upload_url = f"{base_url}/api/v1/resources/temp_upload?token={quote(token, safe='')}"

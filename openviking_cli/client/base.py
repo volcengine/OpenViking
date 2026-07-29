@@ -47,6 +47,8 @@ class BaseClient(ABC):
         args: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
         add_type: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
     ) -> Dict[str, Any]:
         """Add resource to OpenViking.
 

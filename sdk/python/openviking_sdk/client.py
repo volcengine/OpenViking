@@ -643,6 +643,8 @@ class AsyncHTTPClient:
         telemetry: Any = False,
         processing_mode: Optional[str] = None,
         add_type: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
     ) -> Dict[str, Any]:
         if add_type is not None:
             add_type = add_type.strip() or None
@@ -672,6 +674,9 @@ class AsyncHTTPClient:
         }
         if processing_mode is not None:
             request_data["processing_mode"] = processing_mode
+        if tags is not None:
+            request_data["tags"] = tags
+            request_data["tag_mode"] = tag_mode
         if preserve_structure is not None:
             request_data["preserve_structure"] = preserve_structure
 
@@ -1851,6 +1856,8 @@ class SyncHTTPClient:
         telemetry: Any = False,
         processing_mode: Optional[str] = None,
         add_type: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.add_resource(
@@ -1871,6 +1878,8 @@ class SyncHTTPClient:
                 watch_interval=watch_interval,
                 processing_mode=processing_mode,
                 args=args,
+                tags=tags,
+                tag_mode=tag_mode,
                 telemetry=telemetry,
             )
         )

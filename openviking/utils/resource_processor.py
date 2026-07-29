@@ -13,6 +13,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from openviking.core.context import ContextLevel
+from openviking.utils.ingest_options import IngestOptions
 from openviking.core.namespace import context_type_for_uri
 from openviking.parse.image_rewrite import rewrite_image_uris
 from openviking.parse.tree_builder import TreeBuilder
@@ -136,8 +137,18 @@ class ResourceProcessor:
         self, resource_uris: List[str], ctx: RequestContext, **kwargs
     ) -> Dict[str, Any]:
         """Expose index building as a standalone method."""
+        ingest_options = IngestOptions.from_value(kwargs.get("ingest_options"))
+        if ingest_options.search_tags is None and kwargs.get("search_tags") is not None:
+            ingest_options = IngestOptions.from_search_tags(
+                kwargs.get("search_tags"),
+                mode=kwargs.get("search_tag_mode", "replace"),
+            )
         for uri in resource_uris:
-            await index_resource(uri, ctx)
+            await index_resource(
+                uri,
+                ctx,
+                ingest_options=ingest_options,
+            )
         return {"status": "success", "message": f"Indexed {len(resource_uris)} resources"}
 
     async def summarize(
@@ -178,6 +189,7 @@ class ResourceProcessor:
         }
         defer_post_processing = bool(kwargs.pop("defer_post_processing", False))
         preacquired_lock = kwargs.pop("resource_lock", NO_LOCK) or NO_LOCK
+        ingest_options = IngestOptions.from_value(kwargs.pop("ingest_options", None))
         telemetry = get_current_telemetry()
 
         async def _set_stage(stage: str) -> None:
@@ -420,6 +432,7 @@ class ResourceProcessor:
                     ctx=ctx,
                     resource_lock=resource_lock,
                     summarize=summarize,
+                    ingest_options=ingest_options,
                     **kwargs,
                 )
                 if post_result.get("warnings"):
@@ -452,6 +465,7 @@ class ResourceProcessor:
         build_index = bool(kwargs.get("build_index", True))
         processing_mode = normalize_processing_mode(processing_mode)
         vectors_only = processing_mode == VECTORS_ONLY
+        ingest_options = IngestOptions.from_value(kwargs.pop("ingest_options", None))
         should_summarize = not vectors_only and (summarize or build_index)
         result: Dict[str, Any] = {"status": "success", "root_uri": root_uri}
 
@@ -468,6 +482,7 @@ class ResourceProcessor:
                         temp_uris=[temp_uri],
                         is_code_repo=bool(prepared.get("is_code_repo")),
                         target_preexisting=target_preexisting,
+                        ingest_options=ingest_options,
                         **kwargs,
                     )
                     if (
@@ -524,13 +539,21 @@ class ResourceProcessor:
                             ctx=ctx,
                         )
                 if vectors_only and build_index:
-                    await self._vectorize_resource_files(root_uri, ctx=ctx)
+                    await self._vectorize_resource_files(
+                        root_uri,
+                        ctx=ctx,
+                        ingest_options=ingest_options,
+                    )
             finally:
                 await resource_lock.close()
         elif vectors_only:
             if not build_index:
                 return result
-            await self._vectorize_resource_files(root_uri, ctx=ctx)
+            await self._vectorize_resource_files(
+                root_uri,
+                ctx=ctx,
+                ingest_options=ingest_options,
+            )
         return result
 
     async def _delete_removed_resource_vectors(
@@ -567,7 +590,14 @@ class ResourceProcessor:
             if ids:
                 await self.vikingdb.delete(ids, ctx=ctx)
 
-    async def _vectorize_resource_files(self, root_uri: str, *, ctx: RequestContext) -> None:
+    async def _vectorize_resource_files(
+        self,
+        root_uri: str,
+        *,
+        ctx: RequestContext,
+        ingest_options: IngestOptions | None = None,
+    ) -> None:
+        ingest_options = IngestOptions.from_value(ingest_options)
         viking_fs = get_viking_fs()
         entries = await viking_fs.tree(
             root_uri,
@@ -591,6 +621,7 @@ class ResourceProcessor:
                 parent_uri=parent.uri,
                 context_type=context_type_for_uri(entry_uri),
                 ctx=ctx,
+                ingest_options=ingest_options,
                 register_request_wait=True,
             )
 

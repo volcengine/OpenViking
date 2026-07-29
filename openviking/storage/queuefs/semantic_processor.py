@@ -31,6 +31,7 @@ from openviking.parse.parsers.media.utils import (
     get_media_type,
 )
 from openviking.prompts import render_prompt
+from openviking.utils.ingest_options import IngestOptions
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
@@ -440,6 +441,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                 is_code_repo=msg.is_code_repo,
                                 changes=changes,
                                 skip_vectorization=msg.skip_vectorization,
+                                ingest_options=msg.ingest_options,
                                 coalesce_key=msg.coalesce_key,
                                 coalesce_version=msg.coalesce_version,
                             )
@@ -1539,6 +1541,7 @@ class SemanticProcessor(DequeueHandlerBase):
         overview: str,
         ctx: Optional[RequestContext] = None,
         semantic_msg_id: Optional[str] = None,
+        ingest_options: IngestOptions | None = None,
     ) -> None:
         """Create directory Context and enqueue to EmbeddingQueue."""
 
@@ -1552,6 +1555,7 @@ class SemanticProcessor(DequeueHandlerBase):
             context_type=context_type,
             ctx=active_ctx,
             semantic_msg_id=semantic_msg_id,
+            ingest_options=ingest_options,
         )
 
     async def _vectorize_single_file(
@@ -1564,6 +1568,7 @@ class SemanticProcessor(DequeueHandlerBase):
         semantic_msg_id: Optional[str] = None,
         use_summary: bool = False,
         preserve_existing_created_at: bool = False,
+        ingest_options: IngestOptions | None = None,
     ) -> None:
         """Vectorize a single file using its content or summary."""
         from openviking.utils.embedding_utils import vectorize_file
@@ -1578,4 +1583,5 @@ class SemanticProcessor(DequeueHandlerBase):
             semantic_msg_id=semantic_msg_id,
             use_summary=use_summary,
             preserve_existing_created_at=preserve_existing_created_at,
+            ingest_options=ingest_options,
         )

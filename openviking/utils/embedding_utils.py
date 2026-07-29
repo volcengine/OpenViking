@@ -13,7 +13,12 @@ from typing import Any, Dict, Optional
 from charset_normalizer import from_bytes
 
 from openviking.core.context import Context, ContextLevel, ResourceContentType, Vectorize
-from openviking.core.namespace import context_type_for_uri, is_session_uri, owner_space_for_uri
+from openviking.utils.ingest_options import IngestOptions
+from openviking.core.namespace import (
+    context_type_for_uri,
+    is_session_uri,
+    owner_space_for_uri,
+)
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
@@ -62,6 +67,19 @@ def _apply_scalar_overrides(embedding_msg, overrides: Optional[Dict[str, Any]]) 
         value = overrides.get(field)
         if value is not None:
             embedding_msg.context_data[field] = value
+
+
+def _apply_ingest_options(
+    embedding_msg,
+    ingest_options: IngestOptions | None,
+) -> None:
+    ingest_options = IngestOptions.from_value(ingest_options)
+    if not embedding_msg or ingest_options.search_tags is None:
+        return
+    embedding_msg.context_data["search_tags"] = list(ingest_options.search_tags or [])
+    embedding_msg.context_data["_upsert_options"] = {
+        "search_tag_mode": ingest_options.search_tag_mode
+    }
 
 
 async def _decrement_embedding_tracker(semantic_msg_id: Optional[str], count: int) -> None:
@@ -312,6 +330,7 @@ async def vectorize_directory_meta(
     semantic_msg_id: Optional[str] = None,
     include_overview: bool = True,
     scalar_overrides: Optional[Dict[int, Dict[str, Any]]] = None,
+    ingest_options: IngestOptions | None = None,
 ) -> None:
     """
     Vectorize directory metadata (.abstract.md and .overview.md).
@@ -332,7 +351,6 @@ async def vectorize_directory_meta(
         owner_space = owner_space_for_uri(uri, ctx)
 
         created_at, updated_at = await _resolve_context_timestamps(uri, ctx)
-
         # Cap the abstract scalar below the bytes_row 65535-byte limit. #2774
         # added this for the memory path; the resource indexing paths (here and
         # index_resource, which feeds this function) were missed, so an
@@ -359,6 +377,7 @@ async def vectorize_directory_meta(
             msg_abstract,
             (scalar_overrides or {}).get(int(ContextLevel.ABSTRACT.value)),
         )
+        _apply_ingest_options(msg_abstract, ingest_options)
         if msg_abstract:
             msg_abstract.semantic_msg_id = semantic_msg_id
             try:
@@ -392,6 +411,7 @@ async def vectorize_directory_meta(
                 msg_overview,
                 (scalar_overrides or {}).get(int(ContextLevel.OVERVIEW.value)),
             )
+            _apply_ingest_options(msg_overview, ingest_options)
             if msg_overview:
                 msg_overview.semantic_msg_id = semantic_msg_id
                 try:
@@ -424,6 +444,7 @@ async def vectorize_file(
     preserve_existing_created_at: bool = False,
     scalar_override: Optional[Dict[str, Any]] = None,
     register_request_wait: bool = False,
+    ingest_options: IngestOptions | None = None,
 ) -> None:
     """
     Vectorize a single file.
@@ -458,7 +479,6 @@ async def vectorize_file(
             ctx,
             preserve_existing_created_at=preserve_existing_created_at,
         )
-
         context = Context(
             uri=file_path,
             parent_uri=parent_uri,
@@ -543,6 +563,7 @@ async def vectorize_file(
             return
 
         _apply_scalar_overrides(embedding_msg, scalar_override)
+        _apply_ingest_options(embedding_msg, ingest_options)
         embedding_msg.semantic_msg_id = semantic_msg_id
         if register_request_wait:
             get_request_wait_tracker().register_embedding_root(
@@ -577,6 +598,7 @@ async def vectorize_file(
 async def index_resource(
     uri: str,
     ctx: RequestContext,
+    ingest_options: IngestOptions | None = None,
 ) -> None:
     """
     Build vector index for a resource directory.
@@ -611,7 +633,14 @@ async def index_resource(
         overview = content.decode("utf-8") if isinstance(content, bytes) else content
 
     if abstract or overview:
-        await vectorize_directory_meta(uri, abstract, overview, context_type=context_type, ctx=ctx)
+        await vectorize_directory_meta(
+            uri,
+            abstract,
+            overview,
+            context_type=context_type,
+            ctx=ctx,
+            ingest_options=ingest_options,
+        )
 
     # 2. Index Files
     try:
@@ -637,6 +666,7 @@ async def index_resource(
                 parent_uri=uri,
                 context_type=context_type,
                 ctx=ctx,
+                ingest_options=ingest_options,
             )
 
     except Exception as e:

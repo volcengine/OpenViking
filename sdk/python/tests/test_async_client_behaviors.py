@@ -1,3 +1,4 @@
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
@@ -6,6 +7,13 @@ import pytest
 from openviking_sdk import AsyncHTTPClient, SyncHTTPClient
 from openviking_sdk.client import Session, SyncSession
 from openviking_sdk.errors import NotFoundError
+
+
+def test_add_resource_signatures_keep_telemetry_position():
+    for func in (AsyncHTTPClient.add_resource, SyncHTTPClient.add_resource):
+        params = list(inspect.signature(func).parameters)
+        assert params.index("telemetry") < params.index("tags")
+        assert params.index("telemetry") < params.index("tag_mode")
 
 
 @pytest.mark.asyncio
@@ -685,6 +693,36 @@ async def test_import_ovpack_uploads_local_file_even_when_url_is_localhost(tmp_p
             "parent": "viking://resources/",
             "on_conflict": "skip",
             "temp_file_id": "upload_pack.ovpack",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_add_resource_sends_tags_and_tag_mode():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {"result": {"root_uri": "viking://resources/demo"}}
+
+    await client.add_resource(
+        path="https://example.com/demo.md",
+        tags=["team=search"],
+        tag_mode="append",
+    )
+
+    fake_http.post.assert_awaited_once_with(
+        "/api/v1/resources",
+        json={
+            "path": "https://example.com/demo.md",
+            "reason": "",
+            "instruction": "",
+            "wait": False,
+            "strict": False,
+            "directly_upload_media": True,
+            "watch_interval": 0,
+            "telemetry": False,
+            "tags": ["team=search"],
+            "tag_mode": "append",
         },
     )
 
