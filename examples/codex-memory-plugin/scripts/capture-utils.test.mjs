@@ -3,6 +3,264 @@ import test from "node:test";
 
 import { extractCaptureTurns } from "./capture-utils.mjs";
 
+const CAPTURE_CONFIG = {
+  captureAssistantTurns: true,
+  captureToolMaxChars: 2000,
+  captureMaxLength: 24000,
+};
+
+test("pairs current Codex function_call records by call_id", () => {
+  const turns = extractCaptureTurns(
+    [
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          id: "fc-item-1",
+          call_id: "logical-call-1",
+          name: "exec_command",
+          arguments: JSON.stringify({ cmd: "pwd" }),
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          id: "fco-item-1",
+          call_id: "logical-call-1",
+          output: "project root",
+        },
+      },
+    ],
+    CAPTURE_CONFIG,
+  );
+
+  assert.deepEqual(
+    turns.flatMap((turn) => turn.parts),
+    [
+      {
+        type: "tool",
+        tool_id: "logical-call-1",
+        tool_name: "exec_command",
+        tool_status: "running",
+        tool_input: { cmd: "pwd" },
+      },
+      {
+        type: "tool",
+        tool_id: "logical-call-1",
+        tool_name: "exec_command",
+        tool_status: "completed",
+        tool_output: "project root",
+      },
+    ],
+  );
+});
+
+test("captures current Codex custom_tool_call records", () => {
+  const turns = extractCaptureTurns(
+    [
+      {
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          id: "ctc-item-1",
+          call_id: "custom-call-1",
+          status: "completed",
+          name: "exec",
+          input: "sed -n '1,200p' /tmp/skills/tdd/SKILL.md",
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call_output",
+          id: "ctco-item-1",
+          call_id: "custom-call-1",
+          output: "skill contents",
+        },
+      },
+    ],
+    CAPTURE_CONFIG,
+  );
+
+  assert.deepEqual(
+    turns.flatMap((turn) => turn.parts),
+    [
+      {
+        type: "tool",
+        tool_id: "custom-call-1",
+        tool_name: "exec",
+        tool_status: "running",
+        tool_input: { value: "sed -n '1,200p' /tmp/skills/tdd/SKILL.md" },
+      },
+      {
+        type: "tool",
+        tool_id: "custom-call-1",
+        tool_name: "exec",
+        tool_status: "completed",
+        tool_output: "skill contents",
+      },
+    ],
+  );
+});
+
+test("captures current Codex tool_search records", () => {
+  const turns = extractCaptureTurns(
+    [
+      {
+        type: "response_item",
+        payload: {
+          type: "tool_search_call",
+          id: "ts-item-1",
+          call_id: "tool-search-1",
+          status: "completed",
+          arguments: { query: "calendar tools", limit: 3 },
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "tool_search_output",
+          id: "tso-item-1",
+          call_id: "tool-search-1",
+          status: "completed",
+          tools: [{ name: "calendar.search" }],
+        },
+      },
+    ],
+    CAPTURE_CONFIG,
+  );
+
+  assert.deepEqual(
+    turns.flatMap((turn) => turn.parts),
+    [
+      {
+        type: "tool",
+        tool_id: "tool-search-1",
+        tool_name: "tool_search",
+        tool_status: "running",
+        tool_input: { query: "calendar tools", limit: 3 },
+      },
+      {
+        type: "tool",
+        tool_id: "tool-search-1",
+        tool_name: "tool_search",
+        tool_status: "completed",
+        tool_output: JSON.stringify({ tools: [{ name: "calendar.search" }] }),
+      },
+    ],
+  );
+});
+
+test("deduplicates function records also reported as mcp_tool_call_end", () => {
+  const turns = extractCaptureTurns(
+    [
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          id: "fc-mcp-1",
+          call_id: "mcp-call-1",
+          name: "js",
+          arguments: JSON.stringify({ code: "return 1" }),
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          id: "fco-mcp-1",
+          call_id: "mcp-call-1",
+          output: "1",
+        },
+      },
+      {
+        type: "event_msg",
+        payload: {
+          type: "mcp_tool_call_end",
+          call_id: "mcp-call-1",
+          invocation: {
+            server: "node-repl",
+            tool: "js",
+            arguments: { code: "return 1" },
+          },
+          result: {
+            Ok: {
+              content: [{ type: "text", text: "1" }],
+            },
+          },
+        },
+      },
+    ],
+    CAPTURE_CONFIG,
+  );
+
+  const parts = turns.flatMap((turn) => turn.parts);
+  assert.equal(parts.length, 2);
+  assert.deepEqual(parts.map((part) => part.tool_status), ["running", "completed"]);
+  assert.deepEqual(parts.map((part) => part.tool_id), ["mcp-call-1", "mcp-call-1"]);
+});
+
+test("captures Codex subagent messages and activity with identity", () => {
+  const turns = extractCaptureTurns(
+    [
+      {
+        type: "event_msg",
+        payload: {
+          type: "agent_message",
+          message: "UI duplicate of a normal assistant response",
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "agent_message",
+          author: "reviewer",
+          recipient: "main",
+          content: [{ type: "input_text", text: "Found a pairing bug." }],
+        },
+      },
+      {
+        type: "event_msg",
+        payload: {
+          type: "sub_agent_activity",
+          event_id: "subagent-event-1",
+          occurred_at_ms: 1234,
+          agent_thread_id: "thread-1",
+          agent_path: "reviewer",
+          kind: "started",
+        },
+      },
+    ],
+    CAPTURE_CONFIG,
+  );
+
+  assert.deepEqual(turns[0], {
+    role: "assistant",
+    text: "[agent-message reviewer -> main]\nFound a pairing bug.",
+    parts: [
+      {
+        type: "text",
+        text: "[agent-message reviewer -> main]\nFound a pairing bug.",
+      },
+    ],
+  });
+  assert.deepEqual(turns[1].parts, [
+    {
+      type: "tool",
+      tool_id: "subagent-activity:subagent-event-1",
+      tool_name: "sub_agent_activity",
+      tool_status: "completed",
+      tool_output: JSON.stringify({
+        agent_thread_id: "thread-1",
+        agent_path: "reviewer",
+        kind: "started",
+        occurred_at_ms: 1234,
+      }),
+    },
+  ]);
+});
+
 test("captures Codex mcp_tool_call_end as standard tool parts", () => {
   const results = {
     results: [
@@ -32,11 +290,7 @@ test("captures Codex mcp_tool_call_end as standard tool parts", () => {
         },
       },
     ],
-    {
-      captureAssistantTurns: true,
-      captureToolMaxChars: 2000,
-      captureMaxLength: 24000,
-    },
+    CAPTURE_CONFIG,
   );
 
   assert.deepEqual(turns, [
@@ -93,11 +347,7 @@ test("keeps MCP tool-level errors out of completed Experience tool parts", () =>
         },
       },
     ],
-    {
-      captureAssistantTurns: true,
-      captureToolMaxChars: 2000,
-      captureMaxLength: 24000,
-    },
+    CAPTURE_CONFIG,
   );
 
   const parts = turns.flatMap((turn) => turn.parts);
@@ -132,11 +382,7 @@ test("preserves Experience usage metadata when Codex truncates a long MCP result
         },
       },
     ],
-    {
-      captureAssistantTurns: true,
-      captureToolMaxChars: 2000,
-      captureMaxLength: 24000,
-    },
+    CAPTURE_CONFIG,
   );
 
   const completed = turns
@@ -174,11 +420,7 @@ test("keeps search Experience URIs parseable when snippets exceed the capture li
         },
       },
     ],
-    {
-      captureAssistantTurns: true,
-      captureToolMaxChars: 2000,
-      captureMaxLength: 24000,
-    },
+    CAPTURE_CONFIG,
   );
 
   const completed = turns
