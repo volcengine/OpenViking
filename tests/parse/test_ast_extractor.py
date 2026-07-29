@@ -12,7 +12,7 @@ from openviking.parse.parsers.code.ast.aider_repomap import (
     _definition_lines,
     _query_captures,
 )
-from openviking.parse.parsers.code.ast.languages.process_engine import (
+from openviking.parse.parsers.code.ast.process_engine import (
     extract_process_skeleton,
     supports_process_skeleton,
 )

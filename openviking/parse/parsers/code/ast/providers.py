@@ -10,7 +10,7 @@ from openviking.parse.parsers.code.ast.aider_repomap import (
     _extract_with_grep_ast,
     has_tag_query,
 )
-from openviking.parse.parsers.code.ast.languages.process_engine import (
+from openviking.parse.parsers.code.ast.process_engine import (
     extract_process_skeleton,
     supports_process_skeleton,
 )
