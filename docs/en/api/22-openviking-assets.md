@@ -5,9 +5,9 @@ The OpenViking Assets Resolver parses and validates an
 then returns a normalized asset plan for a client to execute. It does not clone
 repositories, create resources, or start synchronization jobs.
 
-In normal use, run `openviking assets create`, `openviking assets sync`, or
-`openviking assets watch`; those commands call this endpoint automatically.
-Call the Resolver directly only when implementing a custom client.
+In normal use, run `ov add-resource --manifest <file>`; the CLI calls the
+Resolver and permission-preflight endpoints automatically. Call these endpoints
+directly only when implementing a custom client.
 
 ## Resolve a Catalog and Manifest
 
@@ -98,8 +98,73 @@ Protocol or content validation failures return HTTP `400` with the error code
 Empty fields, incorrect field types, or length-limit violations are rejected by
 request validation with HTTP `422`.
 
+## Preflight Git repository access
+
+```http
+POST /api/v1/openviking-assets/preflight
+```
+
+This endpoint runs read-only `git ls-remote` in the OpenViking Server execution
+environment to verify that a repository and optional ref are readable. It does
+not clone the repository, create a resource, or start a task. Manifest mode
+calls it during both dry-run and pre-submission validation.
+
+### Request body
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `name` | string | Yes | Asset name |
+| `connector` | string | Yes | Must currently be `git` |
+| `repo_url` | string | Yes | Git clone URL |
+| `branch` | string | No | Branch or tag to verify; the remote `HEAD` is checked when omitted |
+| `auth_config.username` | string | No | HTTP Basic username; defaults to `oauth2` |
+| `auth_config.token` | string | No | One-shot Git token; never persisted |
+
+```bash
+curl -X POST "${OPENVIKING_BASE_URL}/api/v1/openviking-assets/preflight" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: ${OPENVIKING_API_KEY}" \
+  -d '{
+    "name": "private-repository",
+    "connector": "git",
+    "repo_url": "https://github.com/example/private-repository",
+    "branch": "main",
+    "auth_config": {
+      "username": "oauth2",
+      "token": "<github-token>"
+    }
+  }'
+```
+
+When a token is provided explicitly, preflight does not fall back to a server
+Git credential helper. The token is passed through the child-process
+environment and does not appear in Git command arguments or the response.
+
+### Success response
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "name": "private-repository",
+    "connector": "git",
+    "locator": "github.com/example/private-repository",
+    "git_ref": "main",
+    "accessible": true
+  }
+}
+```
+
+### Error responses
+
+| HTTP status | Error code | Meaning |
+| --- | --- | --- |
+| `403` | `PERMISSION_DENIED` | Repository missing, invalid credentials, or insufficient read permission |
+| `404` | `NOT_FOUND` | Repository is readable, but the requested branch/tag is absent |
+| `503` | `UNAVAILABLE` | DNS, connection, or Git executable unavailable |
+| `504` | `DEADLINE_EXCEEDED` | Permission preflight exceeded 15 seconds |
+
 ## Related documentation
 
 - [OpenViking Assets protocol and operations guide](../guides/18-openviking-assets.md)
 - [Resource Management API](02-resources.md)
-

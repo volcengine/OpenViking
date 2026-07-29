@@ -555,6 +555,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/v1/openviking-assets/resolve` | Parse and validate a Catalog and Manifest, returning a normalized asset plan |
+| POST | `/api/v1/openviking-assets/preflight` | Read-only access check for a Git repository and ref |
 | OPTIONS | `/webdav/resources`, `/webdav/resources/{resource_path}` | Query WebDAV capabilities |
 | PROPFIND | `/webdav/resources`, `/webdav/resources/{resource_path}` | Query resource properties |
 | GET / HEAD | `/webdav/resources`, `/webdav/resources/{resource_path}` | Read a file or directory |

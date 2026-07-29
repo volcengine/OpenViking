@@ -269,6 +269,12 @@ impl ApplySummary {
 
 /// The one call the orchestrator needs; tests provide a fake implementation.
 pub trait Submitter {
+    async fn preflight(
+        &self,
+        asset: &ResolvedAsset,
+        args: Option<Map<String, Value>>,
+    ) -> Result<Value>;
+
     async fn submit(
         &self,
         asset: &ResolvedAsset,
@@ -302,7 +308,25 @@ fn build_args(
     if args.is_empty() { None } else { Some(args) }
 }
 
-/// Apply (or dry-run) a resolved manifest with per-asset failure isolation.
+fn git_auth_config(args: Option<&Map<String, Value>>) -> Option<Value> {
+    let args = args?;
+    let mut auth = Map::new();
+    for key in ["username", "token"] {
+        if let Some(value) = args.get(key) {
+            auth.insert(key.to_string(), value.clone());
+        }
+    }
+    if auth.is_empty() {
+        None
+    } else {
+        Some(Value::Object(auth))
+    }
+}
+
+/// Preflight and then apply (or dry-run) a resolved manifest.
+///
+/// Every source is checked before the first mutation. A preflight failure
+/// therefore aborts immediately even when `skip_failed` is set.
 pub async fn apply_manifest_core<S: Submitter>(
     manifest_path: &Path,
     catalog_path: &Path,
@@ -343,6 +367,42 @@ pub async fn apply_manifest_core<S: Submitter>(
         "total": assets.len(),
         "dry_run": options.dry_run,
     }));
+
+    // Source access is part of validation, including dry-run. Complete every
+    // preflight before submitting the first asset so permission failures never
+    // leave a partially applied manifest.
+    for (index, asset) in assets.iter().enumerate() {
+        let base = json!({
+            "index": index + 1,
+            "total": assets.len(),
+            "name": asset.name,
+            "connector": asset.connector,
+            "locator": asset.locator,
+            "ref": asset.git_ref,
+        });
+        emit({
+            let mut event = base.as_object().cloned().unwrap_or_default();
+            event.insert("event".to_string(), json!("asset_preflight_start"));
+            Value::Object(event)
+        });
+        let args = build_args(asset, &credential_args[&asset.name]);
+        match submitter.preflight(asset, args).await {
+            Ok(_) => emit({
+                let mut event = base.as_object().cloned().unwrap_or_default();
+                event.insert("event".to_string(), json!("asset_preflight_ok"));
+                Value::Object(event)
+            }),
+            Err(err) => {
+                emit({
+                    let mut event = base.as_object().cloned().unwrap_or_default();
+                    event.insert("event".to_string(), json!("asset_preflight_failed"));
+                    event.insert("error".to_string(), json!(err.to_string()));
+                    Value::Object(event)
+                });
+                return Err(err);
+            }
+        }
+    }
 
     let mut summary = ApplySummary {
         total: assets.len(),
@@ -406,7 +466,9 @@ pub async fn apply_manifest_core<S: Submitter>(
             Ok(response) => {
                 entry.status = if options.wait { "ok" } else { "submitted" }.to_string();
                 entry.error = None;
-                if let Some(uri) = extract_str(&response, &["uri", "resource_uri", "to"]) {
+                if let Some(uri) =
+                    extract_str(&response, &["root_uri", "uri", "resource_uri", "to"])
+                {
                     entry.resource_uri = Some(uri);
                 }
                 if let Some(task_id) = extract_str(&response, &["task_id"]) {
@@ -469,6 +531,25 @@ struct HttpSubmitter {
 }
 
 impl Submitter for HttpSubmitter {
+    async fn preflight(
+        &self,
+        asset: &ResolvedAsset,
+        args: Option<Map<String, Value>>,
+    ) -> Result<Value> {
+        self.client
+            .post(
+                "/api/v1/openviking-assets/preflight",
+                &json!({
+                    "name": asset.name,
+                    "connector": asset.connector,
+                    "repo_url": asset.repo_url,
+                    "branch": asset.branch,
+                    "auth_config": git_auth_config(args.as_ref()),
+                }),
+            )
+            .await
+    }
+
     async fn submit(
         &self,
         asset: &ResolvedAsset,
@@ -501,20 +582,6 @@ impl Submitter for HttpSubmitter {
                 false,
             )
             .await
-    }
-}
-
-struct NeverSubmitter;
-
-impl Submitter for NeverSubmitter {
-    async fn submit(
-        &self,
-        _asset: &ResolvedAsset,
-        _to: Option<String>,
-        _watch_interval: f64,
-        _args: Option<Map<String, Value>>,
-    ) -> Result<Value> {
-        Err(client_err("dry-run never submits"))
     }
 }
 
@@ -574,6 +641,17 @@ fn render_event(event: &Value) {
                 text("locator")
             );
         }
+        "asset_preflight_start" => {
+            println!(
+                "[{}/{}] checking access: {} (git:{}{ref_suffix}) ...",
+                text("index"),
+                text("total"),
+                text("name"),
+                text("locator")
+            );
+        }
+        "asset_preflight_ok" => println!("    -> access ok"),
+        "asset_preflight_failed" => eprintln!("    -> ACCESS FAILED: {}", text("error")),
         "asset_start" => {
             println!(
                 "[{}/{}] {}: {} (git:{}{ref_suffix}) ...",
@@ -602,7 +680,10 @@ fn render_event(event: &Value) {
         ),
         "summary" => {
             if event["dry_run"].as_bool().unwrap_or(false) {
-                println!("Plan complete: {} asset(s) validated.", text("total"));
+                println!(
+                    "Plan complete: {} asset(s) validated, including source access.",
+                    text("total")
+                );
             } else {
                 println!(
                     "Done: {} ok, {} failed, {} not attempted (state: {})",
@@ -648,7 +729,7 @@ pub async fn handle_manifest_apply(
     let effective_timeout = if options.wait {
         timeout.unwrap_or(60.0).max(ctx.config.timeout)
     } else {
-        ctx.config.timeout
+        ctx.config.timeout.max(20.0)
     };
     let client = ctx.get_client_with_timeout(Some(effective_timeout));
     let resolved: ResolveResponse = client
@@ -673,35 +754,22 @@ pub async fn handle_manifest_apply(
     };
 
     let credentials_file = credentials_path();
-    let summary = if options.dry_run {
-        apply_manifest_core(
-            &manifest_path,
-            &catalog_path,
-            &resolved.assets,
-            &credentials_file,
-            &options,
-            &NeverSubmitter,
-            &mut emit,
-        )
-        .await?
-    } else {
-        let submitter = HttpSubmitter {
-            client,
-            wait: options.wait,
-            timeout,
-            processing_mode: options.processing_mode.clone(),
-        };
-        apply_manifest_core(
-            &manifest_path,
-            &catalog_path,
-            &resolved.assets,
-            &credentials_file,
-            &options,
-            &submitter,
-            &mut emit,
-        )
-        .await?
+    let submitter = HttpSubmitter {
+        client,
+        wait: options.wait,
+        timeout,
+        processing_mode: options.processing_mode.clone(),
     };
+    let summary = apply_manifest_core(
+        &manifest_path,
+        &catalog_path,
+        &resolved.assets,
+        &credentials_file,
+        &options,
+        &submitter,
+        &mut emit,
+    )
+    .await?;
 
     if summary.all_failed() {
         return Err(client_err(
@@ -728,6 +796,7 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
+    type PreflightCall = (String, Option<Map<String, Value>>);
     type SubmitCall = (String, Option<String>, f64, Option<Map<String, Value>>);
 
     fn write(dir: &Path, name: &str, content: &str) -> PathBuf {
@@ -822,20 +891,48 @@ mod tests {
     }
 
     struct FakeSubmitter {
+        preflight_fail_names: Vec<&'static str>,
         fail_names: Vec<&'static str>,
+        preflight_calls: Mutex<Vec<PreflightCall>>,
         calls: Mutex<Vec<SubmitCall>>,
     }
 
     impl FakeSubmitter {
         fn new(fail_names: Vec<&'static str>) -> Self {
             Self {
+                preflight_fail_names: Vec::new(),
                 fail_names,
+                preflight_calls: Mutex::new(Vec::new()),
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn with_preflight_fail(preflight_fail_names: Vec<&'static str>) -> Self {
+            Self {
+                preflight_fail_names,
+                fail_names: Vec::new(),
+                preflight_calls: Mutex::new(Vec::new()),
                 calls: Mutex::new(Vec::new()),
             }
         }
     }
 
     impl Submitter for FakeSubmitter {
+        async fn preflight(
+            &self,
+            asset: &ResolvedAsset,
+            args: Option<Map<String, Value>>,
+        ) -> Result<Value> {
+            self.preflight_calls
+                .lock()
+                .unwrap()
+                .push((asset.name.clone(), args));
+            if self.preflight_fail_names.contains(&asset.name.as_str()) {
+                return Err(client_err(format!("access denied: {}", asset.name)));
+            }
+            Ok(json!({"accessible": true}))
+        }
+
         async fn submit(
             &self,
             asset: &ResolvedAsset,
@@ -851,7 +948,7 @@ mod tests {
                 return Err(client_err(format!("boom: {}", asset.name)));
             }
             Ok(json!({
-                "uri": format!("viking://resources/{}", asset.name),
+                "root_uri": format!("viking://resources/{}", asset.name),
                 "task_id": format!("task-{}", asset.name),
             }))
         }
@@ -971,6 +1068,7 @@ mod tests {
         };
         let (summary, events) = run(&manifest, &catalog, &assets, &creds, &opts, &submitter).await;
         assert_eq!(summary.total, 3);
+        assert_eq!(submitter.preflight_calls.lock().unwrap().len(), 3);
         assert!(submitter.calls.lock().unwrap().is_empty());
         assert!(!state_path_for(&manifest).exists());
         let planned = events
@@ -978,6 +1076,41 @@ mod tests {
             .filter(|e| e["event"] == "asset_planned")
             .count();
         assert_eq!(planned, 3);
+    }
+
+    #[tokio::test]
+    async fn preflight_failure_aborts_before_any_submission_or_state_write() {
+        let (dir, manifest, catalog, assets) = workspace();
+        let creds = dir.path().join("no-creds.yaml");
+        let submitter = FakeSubmitter::with_preflight_fail(vec!["beta"]);
+        let mut events = Vec::new();
+        let err = {
+            let mut emit = |event: Value| events.push(event);
+            apply_manifest_core(
+                &manifest,
+                &catalog,
+                &assets,
+                &creds,
+                &ManifestRunOptions {
+                    skip_failed: true,
+                    ..run_opts()
+                },
+                &submitter,
+                &mut emit,
+            )
+            .await
+            .unwrap_err()
+        };
+
+        assert!(err.to_string().contains("access denied: beta"));
+        assert_eq!(submitter.preflight_calls.lock().unwrap().len(), 2);
+        assert!(submitter.calls.lock().unwrap().is_empty());
+        assert!(!state_path_for(&manifest).exists());
+        assert!(
+            events
+                .iter()
+                .any(|event| event["event"] == "asset_preflight_failed")
+        );
     }
 
     #[tokio::test]
@@ -1051,6 +1184,10 @@ mod tests {
             &submitter,
         )
         .await;
+        let preflight_calls = submitter.preflight_calls.lock().unwrap();
+        let alpha_preflight_args = preflight_calls[0].1.as_ref().unwrap();
+        assert_eq!(alpha_preflight_args["token"], json!("sekrit"));
+        drop(preflight_calls);
         let calls = submitter.calls.lock().unwrap();
         let alpha_args = calls[0].3.as_ref().unwrap();
         assert_eq!(alpha_args["token"], json!("sekrit"));

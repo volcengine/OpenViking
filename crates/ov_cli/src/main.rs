@@ -309,7 +309,7 @@ enum Commands {
             help_heading = "Manifest mode"
         )]
         catalog: Option<String>,
-        /// Manifest mode: validate and print the plan without submitting
+        /// Manifest mode: validate config and source access, then print the plan without submitting
         #[arg(
             long = "dry-run",
             requires = "manifest",

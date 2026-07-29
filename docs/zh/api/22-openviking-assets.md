@@ -4,9 +4,8 @@ OpenViking Assets Resolver 用于解析并校验
 [`openviking-assets/1`](../guides/18-openviking-assets.md) Catalog 与 Manifest，
 返回可供客户端执行的标准化资产计划。它不会克隆仓库、创建资源或启动同步任务。
 
-通常应直接使用 `openviking assets create`、`openviking assets sync` 或
-`openviking assets watch`；这些命令会自动调用本接口。只有在开发自定义客户端时，
-才需要直接请求 Resolver。
+通常应直接使用 `ov add-resource --manifest <file>`；CLI 会自动调用 Resolver 和
+权限预检接口。只有在开发自定义客户端时，才需要直接请求这些接口。
 
 ## 解析 Catalog 与 Manifest
 
@@ -93,8 +92,71 @@ JSON
 
 请求字段为空、类型错误或超过长度限制时，由请求模型返回 HTTP `422`。
 
+## 预检 Git 仓库权限
+
+```http
+POST /api/v1/openviking-assets/preflight
+```
+
+该接口在 OpenViking Server 的实际运行环境执行只读 `git ls-remote`，校验仓库和可选 ref
+是否可读。它不会克隆仓库、创建资源或启动任务。Manifest 模式在 dry-run 和正式提交之前
+都会调用该接口。
+
+### 请求体
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `name` | string | 是 | 资产名称 |
+| `connector` | string | 是 | 当前必须是 `git` |
+| `repo_url` | string | 是 | Git clone URL |
+| `branch` | string | 否 | 要验证的 branch 或 tag；省略时验证远端 `HEAD` |
+| `auth_config.username` | string | 否 | HTTP Basic 用户名，默认 `oauth2` |
+| `auth_config.token` | string | 否 | 一次性 Git token，不持久化 |
+
+```bash
+curl -X POST "${OPENVIKING_BASE_URL}/api/v1/openviking-assets/preflight" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: ${OPENVIKING_API_KEY}" \
+  -d '{
+    "name": "private-repository",
+    "connector": "git",
+    "repo_url": "https://github.com/example/private-repository",
+    "branch": "main",
+    "auth_config": {
+      "username": "oauth2",
+      "token": "<github-token>"
+    }
+  }'
+```
+
+显式传入 token 时，preflight 不会回退到服务端 Git credential helper。token 通过子进程
+环境传递，不出现在 Git 命令参数和响应中。
+
+### 成功响应
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "name": "private-repository",
+    "connector": "git",
+    "locator": "github.com/example/private-repository",
+    "git_ref": "main",
+    "accessible": true
+  }
+}
+```
+
+### 错误响应
+
+| HTTP 状态 | 错误码 | 说明 |
+| --- | --- | --- |
+| `403` | `PERMISSION_DENIED` | 仓库不存在、凭据无效或当前身份没有读取权限 |
+| `404` | `NOT_FOUND` | 仓库可访问，但指定 branch/tag 不存在 |
+| `503` | `UNAVAILABLE` | DNS、连接或 Git 可执行文件不可用 |
+| `504` | `DEADLINE_EXCEEDED` | 权限预检超过 15 秒 |
+
 ## 相关文档
 
 - [OpenViking Assets 协议与运行指南](../guides/18-openviking-assets.md)
 - [资源管理 API](02-resources.md)
-

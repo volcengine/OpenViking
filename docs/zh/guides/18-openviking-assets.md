@@ -189,8 +189,11 @@ ov add-resource \
 - 读取两个本地 YAML 文件；
 - 调用当前 OpenViking 服务解析并校验协议；
 - 检查所有 `auth_ref` 是否能在本地解析；
+- 让服务端使用最终凭据对每个 Git 仓库执行只读 `git ls-remote` 权限预检；
 - 输出每个资产将执行的 create 或 sync 操作；
-- 不提交资源，也不写入 State。
+- 不克隆仓库、不提交资源、不创建任务，也不写入 State。
+
+任何仓库不可读时，dry-run 立即以 `PERMISSION_DENIED` 退出，不再输出可执行计划。
 
 ### 应用 Manifest
 
@@ -235,9 +238,11 @@ credentials:
 export OPENVIKING_ASSETS_CREDENTIALS_FILE=/secure/path/assets-credentials.yaml
 ```
 
-执行前，CLI 会先解析所有选中资产的 `auth_ref`。只要有一个别名不存在，整个操作会在提交
-任何资源之前失败。解析出的 Git 参数会通过当前配置的 OpenViking 服务连接发送给资源接口，
-因此远程部署应使用 TLS，并限制凭据文件的本地访问权限。
+执行前，CLI 会先解析所有选中资产的 `auth_ref`，然后由服务端在实际执行环境中用
+`git ls-remote` 校验每个仓库的读取权限。只要有一个别名不存在或仓库不可读，整个操作都会
+在提交任何资源之前失败；`--dry-run` 也执行相同预检。解析出的 Git 参数会通过当前配置的
+OpenViking 服务连接发送给 preflight 和资源接口，因此远程部署应使用 TLS，并限制凭据文件
+的本地访问权限。
 
 如果目标服务已经具备访问仓库所需的 SSH key 或其他认证配置，可以不设置 `auth_ref`。
 
@@ -304,6 +309,15 @@ Catalog 或 Manifest 的构成变化、恢复失败资产，或显式触发同�
 
 ## 失败处理
 
+权限预检先于所有资源提交。任一资产预检失败时：
+
+1. 命令立即以原始错误码退出，例如 `PERMISSION_DENIED`；
+2. 不提交任何资产，不创建后台任务；
+3. 不写入 State；
+4. `--skip-failed` 不会跳过预检失败。
+
+只有全部预检成功后，才进入以下逐资产执行阶段。
+
 默认采用 fail-fast：
 
 1. 当前资产失败；
@@ -331,7 +345,7 @@ Manifest 模式的主要参数：
 | --- | --- |
 | `-m, --manifest <file>` | Manifest 文件。 |
 | `--catalog <file>` | Catalog 文件；省略时使用 Manifest 同目录的 `assets.yaml`。 |
-| `--dry-run` | 解析并输出计划，不提交资源、不写 State。 |
+| `--dry-run` | 解析协议并校验所有仓库的读取权限；不提交资源、不创建任务、不写 State。 |
 | `--skip-failed` | 一个资产失败后继续处理其他资产。 |
 | `--wait` | 等待每个资源处理完成。 |
 | `--timeout <seconds>` | `--wait` 的超时时间。 |
@@ -360,6 +374,9 @@ ov --output json add-resource \
 
 - `plan`
 - `orphan`
+- `asset_preflight_start`
+- `asset_preflight_ok`
+- `asset_preflight_failed`
 - `asset_planned`
 - `asset_start`
 - `asset_done`
@@ -367,8 +384,9 @@ ov --output json add-resource \
 - `asset_skipped`
 - `summary`
 
-自动化程序应逐行解析，并以进程退出码和最终 `summary` 共同判断结果。注意不要假设第一行
-一定是 `plan`：存在 orphan 时，`orphan` 事件会先于 `plan` 输出。
+自动化程序应逐行解析，并始终以进程退出码判断结果；执行到 `summary` 时可结合该事件。
+preflight 失败会在 `summary` 之前立即退出。注意不要假设第一行一定是 `plan`：存在 orphan
+时，`orphan` 事件会先于 `plan` 输出。
 
 ## 当前限制
 
@@ -377,6 +395,7 @@ ov --output json add-resource \
 - 只支持 Git 资产；
 - Manifest 必须平铺，不支持递归 `include`；
 - 服务端 resolver 只返回计划，不执行批量提交；
+- 服务端 preflight 通过只读 `git ls-remote` 校验仓库权限，不下载仓库内容；
 - CLI 按顺序逐个执行资产；
 - 不自动删除 orphan；
 - 不包含 `ov share` 指针码或从现有知识库导出 Manifest 的能力；

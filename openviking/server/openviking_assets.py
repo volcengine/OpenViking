@@ -4,19 +4,39 @@
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import hashlib
 import math
+import os
 import re
 from typing import Any
 
 import yaml
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking.server.local_input_guard import require_remote_resource_source
+from openviking_cli.exceptions import (
+    DeadlineExceededError,
+    InvalidArgumentError,
+    NotFoundError,
+    PermissionDeniedError,
+    UnavailableError,
+)
 
 PROTOCOL = "openviking-assets/1"
+GIT_PREFLIGHT_TIMEOUT_SECONDS = 15.0
 _ASSET_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _REMOTE_HELPER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*::")
+_NETWORK_FAILURE_PATTERNS = (
+    "could not resolve host",
+    "connection refused",
+    "connection timed out",
+    "network is unreachable",
+    "no route to host",
+    "failed to connect",
+    "temporary failure in name resolution",
+)
 
 
 class _StrictModel(BaseModel):
@@ -164,13 +184,126 @@ def _validate_clone_url(url: str, asset_name: str) -> None:
     if _REMOTE_HELPER_RE.match(value):
         raise InvalidArgumentError(
             f"{label} uses a git remote-helper transport ('helper::...'); "
-            "use https://, ssh://, git://, file://, or a plain path"
+            "use https://, ssh://, git://, or a git@host:path URL"
         )
 
 
 def _asset_id(connector: str, locator: str, git_ref: str) -> str:
     identity = f"{connector}\n{locator}\n{git_ref}".encode()
     return hashlib.sha1(identity).hexdigest()[:12]  # noqa: S324 - stable identity, not security
+
+
+def _append_git_process_config(env: dict[str, str], key: str, value: str) -> None:
+    """Append one process-local Git config entry without putting secrets in argv."""
+
+    try:
+        count = int(env.get("GIT_CONFIG_COUNT", "0"))
+    except ValueError:
+        count = 0
+    env[f"GIT_CONFIG_KEY_{count}"] = key
+    env[f"GIT_CONFIG_VALUE_{count}"] = value
+    env["GIT_CONFIG_COUNT"] = str(count + 1)
+
+
+async def preflight_git_repository(
+    *,
+    asset_name: str,
+    repo_url: str,
+    branch: str | None = None,
+    username: str | None = None,
+    token: str | None = None,
+    timeout: float = GIT_PREFLIGHT_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    """Verify that the server can read a Git source without cloning or creating a task."""
+
+    _validate_clone_url(repo_url, asset_name)
+    repo_url = require_remote_resource_source(repo_url)
+    if timeout <= 0 or not math.isfinite(timeout):
+        raise InvalidArgumentError("Git preflight timeout must be a positive finite number")
+
+    normalized_branch = branch.strip() if branch else ""
+    if branch is not None and not normalized_branch:
+        raise InvalidArgumentError(
+            f"asset '{asset_name}': branch must be a non-empty string when set"
+        )
+
+    normalized_token = token or ""
+    normalized_username = (username or ("oauth2" if normalized_token else "")).strip()
+    if normalized_token and not repo_url.strip().lower().startswith(("http://", "https://")):
+        raise InvalidArgumentError(
+            f"asset '{asset_name}': token authentication requires an HTTP(S) Git URL"
+        )
+    if normalized_token and not normalized_username:
+        raise InvalidArgumentError(
+            f"asset '{asset_name}': username must be non-empty when token is set"
+        )
+
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GCM_INTERACTIVE"] = "Never"
+    env.setdefault("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
+    if normalized_token:
+        # An explicit auth_ref must be authoritative: disable credential-helper
+        # fallback and pass HTTP Basic auth through process-local config.
+        _append_git_process_config(env, "credential.helper", "")
+        encoded = base64.b64encode(
+            f"{normalized_username}:{normalized_token}".encode()
+        ).decode()
+        _append_git_process_config(env, "http.extraHeader", f"Authorization: Basic {encoded}")
+    elif normalized_username:
+        _append_git_process_config(env, "credential.username", normalized_username)
+
+    command = ["git", "ls-remote", "--exit-code", repo_url]
+    if normalized_branch:
+        command.extend(
+            [
+                f"refs/heads/{normalized_branch}",
+                f"refs/tags/{normalized_branch}",
+            ]
+        )
+    else:
+        command.append("HEAD")
+
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+    except FileNotFoundError as exc:
+        raise UnavailableError("git", "executable not found on the OpenViking Server") from exc
+
+    try:
+        _stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+    except TimeoutError as exc:
+        process.kill()
+        await process.communicate()
+        raise DeadlineExceededError("Git repository permission preflight", timeout) from exc
+
+    locator = normalize_repo_url(repo_url)
+    if process.returncode == 0:
+        return {
+            "name": asset_name,
+            "connector": "git",
+            "locator": locator,
+            "git_ref": normalized_branch,
+            "accessible": True,
+        }
+
+    error_text = stderr.decode(errors="replace").lower()
+    if any(pattern in error_text for pattern in _NETWORK_FAILURE_PATTERNS):
+        raise UnavailableError(
+            "Git repository",
+            f"network preflight failed for asset '{asset_name}' ({locator})",
+        )
+    if process.returncode == 2 and normalized_branch:
+        raise NotFoundError(normalized_branch, "git_ref")
+    raise PermissionDeniedError(
+        f"Cannot read Git repository for asset '{asset_name}' ({locator}); "
+        "verify auth_ref and repository permissions",
+        resource=locator,
+    )
 
 
 def resolve_openviking_assets(

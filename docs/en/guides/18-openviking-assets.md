@@ -197,8 +197,13 @@ ov add-resource \
 - reads both local YAML files;
 - asks the configured OpenViking service to resolve and validate the protocol;
 - checks that all selected `auth_ref` aliases resolve locally;
+- asks the server to run a read-only `git ls-remote` permission preflight for every repository
+  with the effective credentials;
 - prints the create or sync action planned for each asset;
-- does not submit resources or write State.
+- does not clone repositories, submit resources, create tasks, or write State.
+
+If any repository is unreadable, dry-run exits immediately with `PERMISSION_DENIED` and does not
+produce an executable plan.
 
 ### Apply the Manifest
 
@@ -244,10 +249,12 @@ Override the path with:
 export OPENVIKING_ASSETS_CREDENTIALS_FILE=/secure/path/assets-credentials.yaml
 ```
 
-Before submitting any resource, the CLI resolves every `auth_ref` used by selected assets. A
-missing alias fails the whole operation before the first submission. Resolved Git arguments are
-sent to the resource endpoint over the configured OpenViking service connection. Use TLS for
-remote deployments and restrict local access to the credentials file.
+Before submitting any resource, the CLI resolves every selected `auth_ref`, then the server runs
+`git ls-remote` in the execution environment to verify read access to every repository. A missing
+alias or unreadable repository fails the whole operation before the first submission; dry-run
+performs the same preflight. Resolved Git arguments are sent to the preflight and resource
+endpoints over the configured OpenViking service connection. Use TLS for remote deployments and
+restrict local access to the credentials file.
 
 Omit `auth_ref` when the target service already has the SSH keys or other authentication needed to
 access the repository.
@@ -317,6 +324,15 @@ explicitly trigger synchronization.
 
 ## Failure Handling
 
+Permission preflight runs before every resource submission. If any asset fails preflight:
+
+1. the command exits immediately with the original error code, such as `PERMISSION_DENIED`;
+2. no asset is submitted and no background task is created;
+3. State is not written;
+4. `--skip-failed` does not bypass the preflight failure.
+
+Per-asset execution starts only after all preflights succeed.
+
 The default behavior is fail-fast:
 
 1. the current asset fails;
@@ -345,7 +361,7 @@ Primary Manifest-mode options:
 | --- | --- |
 | `-m, --manifest <file>` | Manifest file. |
 | `--catalog <file>` | Catalog file; defaults to `assets.yaml` next to the Manifest. |
-| `--dry-run` | Resolve and print the plan without submitting resources or writing State. |
+| `--dry-run` | Resolve the protocol and validate read access to every repository without submitting resources, creating tasks, or writing State. |
 | `--skip-failed` | Continue processing after an asset fails. |
 | `--wait` | Wait for each resource to finish processing. |
 | `--timeout <seconds>` | Timeout used with `--wait`. |
@@ -375,6 +391,9 @@ Events can include:
 
 - `plan`
 - `orphan`
+- `asset_preflight_start`
+- `asset_preflight_ok`
+- `asset_preflight_failed`
 - `asset_planned`
 - `asset_start`
 - `asset_done`
@@ -382,9 +401,10 @@ Events can include:
 - `asset_skipped`
 - `summary`
 
-Automation should parse one line at a time and use both the process exit code and final `summary`
-event to determine the result. Do not assume the first line is `plan`: `orphan` events, when
-present, are emitted before it.
+Automation should parse one line at a time and always use the process exit code. When a `summary`
+event is emitted, it can provide additional result details. A preflight failure exits before
+`summary`. Do not assume the first line is `plan`: `orphan` events, when present, are emitted
+before it.
 
 ## Current Limitations
 
@@ -393,6 +413,8 @@ present, are emitted before it.
 - only Git assets are supported;
 - Manifests are flat and cannot recursively `include` other Manifests;
 - the server resolver returns a plan and does not perform batch submission;
+- the server preflight uses read-only `git ls-remote` to check repository access and does not
+  download repository contents;
 - the CLI executes assets sequentially;
 - orphans are never deleted automatically;
 - `ov share` pointer codes and exporting a Manifest from an existing knowledge base are not
