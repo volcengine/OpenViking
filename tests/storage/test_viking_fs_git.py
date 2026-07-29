@@ -204,6 +204,48 @@ async def test_commit_rejects_another_users_path_before_snapshotting():
     assert vfs._async_agfs.calls == []
 
 
+async def test_log_rejects_account_wide_history_for_user():
+    vfs = _bare_viking_fs()
+
+    with pytest.raises(PermissionDeniedError, match="Account-wide snapshot logs"):
+        await vfs.log(paths=None, ctx=_user_context())
+
+    assert vfs._async_agfs.calls == []
+
+
+async def test_log_rejects_another_users_path_before_reading_history():
+    vfs = _bare_viking_fs()
+
+    with pytest.raises(PermissionDeniedError):
+        await vfs.log(
+            paths=["viking://user/other/memories/private.md"],
+            ctx=_user_context(),
+        )
+
+    assert vfs._async_agfs.calls == []
+
+
+async def test_log_allows_user_history_for_an_accessible_path():
+    vfs = _bare_viking_fs()
+
+    await vfs.log(
+        paths=["viking://user/user/memories/project"],
+        ctx=_user_context(),
+    )
+
+    assert vfs._async_agfs.calls == [
+        (
+            "git_log",
+            {
+                "account": "account",
+                "branch": "main",
+                "limit": 20,
+                "paths": ["user/user/memories/project"],
+            },
+        )
+    ]
+
+
 async def test_restore_rejects_account_wide_restore_for_user():
     vfs = _bare_viking_fs()
 

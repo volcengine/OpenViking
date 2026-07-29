@@ -4265,9 +4265,17 @@ class VikingFS:
             return []
         real_ctx = self._ctx_or_default(ctx)
         account = real_ctx.account_id
-        tree_paths = (
-            None if not paths else [self._uri_to_tree_path(path, ctx=real_ctx) for path in paths]
-        )
+        if not paths:
+            if real_ctx.role not in {Role.ROOT, Role.ADMIN}:
+                raise PermissionDeniedError(
+                    "Account-wide snapshot logs require an administrator role",
+                    resource="viking://",
+                )
+            tree_paths: Optional[List[str]] = None
+        else:
+            for path in paths:
+                self._ensure_access(path, real_ctx)
+            tree_paths = [self._uri_to_tree_path(path, ctx=real_ctx) for path in paths]
         return await self._async_agfs.run(
             "git_log",
             account=account,
