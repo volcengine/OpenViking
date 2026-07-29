@@ -499,6 +499,58 @@ class TestGetSessionContext:
             f"Newest completed overview should be read, got: {overview_reads}"
         )
 
+    async def test_get_session_context_does_not_touch_archives_older_than_terminal(
+        self, client: AsyncOpenViking, monkeypatch
+    ):
+        """Scan cost must not grow with history length.
+
+        Archive history grows without bound, so the read path stops at the newest
+        terminal marker: no marker, overview, meta or messages read may reference
+        an older archive.
+        """
+        session = client.session(session_id="assemble_terminal_stop_cost_test")
+        summaries = [f"# Summary\n\narchive {index}" for index in range(1, 5)]
+
+        async def fake_generate(self, _messages, latest_archive_overview="", **kwargs):
+            del self, latest_archive_overview, kwargs
+            return summaries.pop(0)
+
+        monkeypatch.setattr(Session, "_generate_archive_summary_async", fake_generate)
+
+        for word in ("first", "second", "third", "fourth"):
+            session.add_message("user", [TextPart(f"{word} turn")])
+            session.add_message("assistant", [TextPart(f"{word} reply")])
+            result = await session.commit_async()
+            await _wait_for_task(result["task_id"])
+
+        session.add_message("user", [TextPart("active tail")])
+
+        touched: list[str] = []
+        original_read_file = session._viking_fs.read_file
+        original_exists = session._viking_fs.exists
+
+        async def tracking_read_file(*args, **kwargs):
+            touched.append(args[0] if args else kwargs.get("uri"))
+            return await original_read_file(*args, **kwargs)
+
+        async def tracking_exists(*args, **kwargs):
+            touched.append(args[0] if args else kwargs.get("uri"))
+            return await original_exists(*args, **kwargs)
+
+        monkeypatch.setattr(session._viking_fs, "read_file", tracking_read_file)
+        monkeypatch.setattr(session._viking_fs, "exists", tracking_exists)
+
+        context = await session.get_session_context()
+
+        assert context["latest_archive_overview"].endswith("archive 4")
+        stale = [
+            uri
+            for uri in touched
+            if isinstance(uri, str)
+            and any(f"archive_{index:03d}" in uri for index in (1, 2, 3))
+        ]
+        assert stale == [], f"Archives older than the terminal must not be read: {stale}"
+
     async def test_get_session_context_pre_archive_abstracts_always_empty(
         self, client: AsyncOpenViking, monkeypatch
     ):

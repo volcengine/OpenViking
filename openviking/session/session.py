@@ -2824,63 +2824,104 @@ class Session:
     # ============= Internal methods =============
 
     async def _collect_session_context_components(self) -> Dict[str, Any]:
-        """Collect overview from the newest terminal archive and merged messages.
+        """Collect overview and messages by stopping at the newest terminal archive.
 
-        Walk archives newest → oldest and stop at the first terminal state
-        (``completed`` or ``failed``):
+        Archive history grows without bound, so this read path deliberately never
+        walks the whole history. It scans newest → oldest and stops at the first
+        terminal marker (``.done`` or ``.failed.json``):
 
-        - ``completed``: inject that archive's overview when readable/non-empty;
-          do not fall back to older overviews when it is empty or unreadable;
-        - ``failed``: stop without injecting an overview.
+        - newest terminal is ``completed``: inject that archive's overview when
+          readable, plus raw messages from the newer non-terminal archives;
+        - newest terminal is ``failed``: no overview, and only the newer
+          non-terminal archives contribute raw messages;
+        - no terminal at all: no overview, every archive is still non-terminal
+          so all of their raw messages are returned.
 
-        Pending archives are skipped for overview selection. Messages still use
-        coverage / uncovered raw / live / checkpoint assembly from archive
-        directory state (RFC #3330), independent of this overview cut-off.
-        Public ``pre_archive_abstracts`` stay empty; abstracts are not read.
+        Nothing at or older than that terminal is read, which is a deliberate
+        deviation from the RFC #3330 recovery formula: an uncovered ``failed``
+        archive no longer replays its raw messages, and only the terminal
+        archive's checkpoints are restored. Phase 2 coverage bookkeeping is
+        unaffected because it keeps using the full ``_scan_archive_states()``
+        scan. Public ``pre_archive_abstracts`` stay empty; abstracts are not read.
         """
-        archive_states = await self._scan_archive_states()
-        latest_archive = None
-        covered_archive_ids = self._covered_archive_ids(archive_states)
-        failed_archives = sum(
-            state.state == "failed" and state.archive_id not in covered_archive_ids
-            for state in archive_states
-        )
+        archive_refs = await self._list_archive_refs()
+        newer_pending: List[Dict[str, Any]] = []
+        terminal: Optional[Dict[str, Any]] = None
+        terminal_state = ""
 
-        for state in reversed(archive_states):
-            if state.state == "pending":
+        for archive in archive_refs:  # newest → oldest
+            state = await self._archive_terminal_state(archive["archive_uri"])
+            if state == "pending":
+                newer_pending.append(archive)
                 continue
-            if state.state == "failed":
-                # Newest terminal is failed: stop and do not inject overview.
-                break
-            # completed — use this archive only; never probe older overviews.
-            overview = state.overview.strip()
-            if not overview:
-                overview = (await self._read_archive_overview(state.archive_uri)).strip()
-            if overview:
-                latest_archive = {
-                    "archive_id": state.archive_id,
-                    "archive_uri": state.archive_uri,
-                    "overview": overview,
-                    "overview_tokens": await self._read_archive_overview_tokens(
-                        state.archive_uri, overview
-                    ),
-                }
+            terminal = archive
+            terminal_state = state
             break
 
-        uncovered = await self._get_uncovered_archive_messages(archive_states)
-        merged_messages = self._stable_deduplicate_messages(uncovered + list(self._messages))
-        merged_messages = await self._insert_checkpoint_if_needed(
-            merged_messages,
-            archive_states,
+        latest_archive = None
+        failed_archives = 0
+        if terminal is not None and terminal_state == "completed":
+            overview = (await self._read_archive_overview(terminal["archive_uri"])).strip()
+            if overview:
+                latest_archive = {
+                    "archive_id": terminal["archive_id"],
+                    "archive_uri": terminal["archive_uri"],
+                    "overview": overview,
+                    "overview_tokens": await self._read_archive_overview_tokens(
+                        terminal["archive_uri"], overview
+                    ),
+                }
+            else:
+                # A required overview that is missing or unreadable still keeps
+                # the archive terminal here; the warning is emitted by the full
+                # scan used for Phase 2 bookkeeping.
+                logger.warning(
+                    "Completed archive has no readable overview: %s",
+                    terminal["archive_uri"],
+                )
+                failed_archives = 1
+        elif terminal is not None:
+            failed_archives = 1
+
+        archive_messages: List[Message] = []
+        # newer_pending was collected newest-first; restore chronological order.
+        for archive in reversed(newer_pending):
+            try:
+                archive_messages.extend(await self._read_archive_messages(archive["archive_uri"]))
+            except Exception as exc:
+                if not _is_storage_not_found(exc):
+                    raise
+                logger.warning(
+                    "Skipping pending archive %s because messages.jsonl is missing",
+                    archive["archive_uri"],
+                )
+
+        merged_messages = self._stable_deduplicate_messages(
+            archive_messages + list(self._messages)
         )
+        merged_messages = await self._insert_terminal_checkpoints(merged_messages, terminal)
 
         return {
             "latest_archive": latest_archive,
             "pre_archive_abstracts": [],
-            "total_archives": len(archive_states),
+            # Directory listing only; deriving an exact count would require the
+            # per-archive marker scan this read path exists to avoid.
+            "total_archives": len(archive_refs),
             "failed_archives": failed_archives,
             "messages": merged_messages,
         }
+
+    async def _archive_terminal_state(self, archive_uri: str) -> str:
+        """Return ``completed``, ``failed``, or ``pending`` for one archive."""
+        if not self._viking_fs:
+            return "pending"
+        for marker, state in ((".done", "completed"), (".failed.json", "failed")):
+            try:
+                if await self._viking_fs.exists(f"{archive_uri}/{marker}", ctx=self.ctx):
+                    return state
+            except Exception:
+                continue
+        return "pending"
 
     async def _list_archive_refs(self) -> List[Dict[str, Any]]:
         """List archive refs sorted by archive index descending."""
@@ -3358,28 +3399,27 @@ class Session:
             )
         return records
 
-    async def _insert_checkpoint_if_needed(
+    async def _insert_terminal_checkpoints(
         self,
         messages: List[Message],
-        states: List[ArchiveState],
+        terminal: Optional[Dict[str, Any]],
     ) -> List[Message]:
-        """Insert persisted checkpoint products after retained anchors.
+        """Insert the newest terminal archive's checkpoints after retained anchors.
 
-        Only completed archives are authoritative. Legacy archives without a
+        Only that one archive is read so the cost stays independent of history
+        length. A long User Turn committed partially more than once therefore
+        keeps just its newest compressed prefix; earlier disjoint prefixes from
+        older archives are not restored. Legacy archives without a
         ``checkpoints`` metadata field do not synthesize one from their overview.
         """
-        if not messages:
+        if not messages or terminal is None:
             return messages
 
         message_ids = {message.id for message in messages}
         candidates: Dict[str, Dict[str, Any]] = {}
-        for state in states:
-            if state.state != "completed":
-                continue
-            meta = await self._read_archive_meta(state.archive_uri)
-            checkpoints = meta.get("checkpoints")
-            if not isinstance(checkpoints, list):
-                continue
+        meta = await self._read_archive_meta(terminal["archive_uri"])
+        checkpoints = meta.get("checkpoints")
+        if isinstance(checkpoints, list):
             for checkpoint in checkpoints:
                 if not isinstance(checkpoint, dict):
                     continue
@@ -3398,14 +3438,11 @@ class Session:
                 if not valid_source_ids:
                     continue
 
-                # One long-running User Turn may be partially committed more
-                # than once. Keep every disjoint completed prefix instead of
-                # letting the newest checkpoint erase earlier compressed Steps.
                 candidate = candidates.setdefault(
                     anchor_id,
                     {
-                        "archive_id": state.archive_id,
-                        "archive_uri": state.archive_uri,
+                        "archive_id": terminal["archive_id"],
+                        "archive_uri": terminal["archive_uri"],
                         "source_message_ids": [],
                         "abstracts": [],
                     },
@@ -3418,8 +3455,6 @@ class Session:
                 ]
                 if not new_source_ids:
                     continue
-                candidate["archive_id"] = state.archive_id
-                candidate["archive_uri"] = state.archive_uri
                 candidate["source_message_ids"].extend(new_source_ids)
                 candidate["abstracts"].append(abstract.strip())
 
@@ -3461,7 +3496,13 @@ class Session:
         self,
         states: Optional[List[ArchiveState]] = None,
     ) -> List[Message]:
-        """Return pending/failed raw messages not covered by a completed archive."""
+        """Return pending/failed raw messages not covered by a completed archive.
+
+        Kept as the RFC #3330 recovery helper. ``get_session_context`` no longer
+        calls it because that read path stops at the newest terminal archive
+        instead of walking the full history; Phase 2 roll-forward still replays
+        uncovered failed archives through ``_prepare_phase2_archive_messages``.
+        """
         states = states if states is not None else await self._scan_archive_states()
         covered = self._covered_archive_ids(states)
         messages: List[Message] = []
