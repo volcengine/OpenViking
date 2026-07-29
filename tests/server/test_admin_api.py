@@ -188,6 +188,9 @@ async def admin_app(admin_service):
     manager = APIKeyManager(root_key=ROOT_KEY, viking_fs=admin_service.viking_fs)
     await manager.load()
     app.state.api_key_manager = manager
+    from openviking.service.user_deletion import setup_user_deletion
+
+    await setup_user_deletion(admin_service, manager)
 
     # Set auth plugin (lifespan not triggered in ASGI tests)
     registry = get_registry()
@@ -642,7 +645,7 @@ async def test_list_users(admin_client: httpx.AsyncClient):
     assert user_ids == {"alice", "bob"}
 
 
-async def test_remove_user(admin_client: httpx.AsyncClient):
+async def test_remove_user(admin_client: httpx.AsyncClient, admin_service: OpenVikingService):
     """ROOT can remove a user."""
     acct = _uid()
     await admin_client.post(
@@ -656,11 +659,23 @@ async def test_remove_user(admin_client: httpx.AsyncClient):
         headers=root_headers(),
     )
     bob_key = resp.json()["result"]["user_key"]
+    private_uri = "viking://user/bob/memories/private.md"
+    bob_ctx = RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER)
+    await admin_service.viking_fs.write_file(private_uri, "private", ctx=bob_ctx)
 
     resp = await admin_client.delete(
         f"/api/v1/admin/accounts/{acct}/users/bob", headers=root_headers()
     )
-    assert resp.status_code == 200
+    assert resp.status_code == 202
+    task = await _wait_for_task(admin_client, resp.json()["result"]["task_id"])
+    assert task["status"] == "completed"
+    assert not await admin_service.viking_fs.exists(private_uri, ctx=bob_ctx)
+
+    missing = await admin_client.delete(
+        f"/api/v1/admin/accounts/{acct}/users/bob",
+        headers=root_headers(),
+    )
+    assert missing.status_code == 404
 
     # Bob's key should be invalid now
     resp = await admin_client.get(

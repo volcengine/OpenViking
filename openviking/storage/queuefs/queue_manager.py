@@ -74,6 +74,7 @@ class QueueManager:
     EXTERNAL_PARSE = "ExternalParse"
     ADD_RESOURCE = "AddResource"
     SESSION_COMMIT = "SessionCommit"
+    USER_DELETION = "UserDeletion"
 
     def __init__(
         self,
@@ -166,7 +167,9 @@ class QueueManager:
             if thread.is_alive():
                 return
 
-        if queue.name == self.EMBEDDING:
+        if queue.name == self.USER_DELETION:
+            max_concurrent = 1
+        elif queue.name == self.EMBEDDING:
             max_concurrent = self._max_concurrent_embedding
         elif queue.name in {self.EXTERNAL_PARSE, self.SESSION_COMMIT}:
             max_concurrent = self._max_concurrent_external_parse

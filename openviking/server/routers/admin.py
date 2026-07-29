@@ -3,6 +3,7 @@
 """Admin endpoints for OpenViking multi-tenant HTTP Server."""
 
 import asyncio
+from uuid import uuid4
 
 from fastapi import APIRouter, Body, Depends, Path, Request
 from pydantic import BaseModel
@@ -24,8 +25,12 @@ from openviking.service.task_store import (
     SYSTEM_TASK_USER_ID,
 )
 from openviking.service.task_tracker import (
+    TaskStatus,
     get_task_tracker,
 )
+from openviking.service.user_deletion import TASK_TYPE as USER_DELETE_TASK_TYPE
+from openviking.service.user_deletion import deletion_message
+from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.exceptions import (
     FailedPreconditionError,
@@ -275,9 +280,10 @@ async def delete_account(
     # Cascade: remove AGFS data for the account
     viking_fs = get_viking_fs()
     account_prefixes = [
-        "viking://user/",
-        "viking://resources/",
+        f"viking://user/{user['user_id']}"
+        for user in manager.get_users(account_id, limit=1_000_000, expose_key=False)
     ]
+    account_prefixes.append("viking://resources")
     for prefix in account_prefixes:
         try:
             await viking_fs.rm(prefix, recursive=True, ctx=cleanup_ctx)
@@ -356,7 +362,7 @@ async def list_users(
     return Response(status="ok", result=users)
 
 
-@router.delete("/accounts/{account_id}/users/{user_id}")
+@router.delete("/accounts/{account_id}/users/{user_id}", status_code=202)
 @require_auth_root_or_admin
 async def remove_user(
     request: Request,
@@ -364,11 +370,81 @@ async def remove_user(
     user_id: str = Path(..., description="User ID"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Remove a user from an account."""
+    """Revoke a user immediately and queue private-data cleanup."""
     _check_account_access(ctx, account_id)
     manager = _get_api_key_manager(request)
-    await manager.remove_user(account_id, user_id)
-    return Response(status="ok", result={"deleted": True})
+
+    owner_account_id = ctx.account_id
+    owner_user_id = ctx.user.user_id
+    if ctx.role == Role.ROOT or (ctx.account_id == account_id and ctx.user.user_id == user_id):
+        owner_account_id = SYSTEM_TASK_ACCOUNT_ID
+        owner_user_id = SYSTEM_TASK_USER_ID
+    request_owner_account_id = owner_account_id
+    request_owner_user_id = owner_user_id
+
+    task_id = str(uuid4())
+    deletion, created = await manager.begin_user_deletion(
+        account_id,
+        user_id,
+        task_id=task_id,
+        owner_account_id=owner_account_id,
+        owner_user_id=owner_user_id,
+    )
+    tracker = get_task_tracker()
+    should_enqueue = created
+    if not created:
+        task_id = deletion["task_id"]
+        owner_account_id = deletion["owner_account_id"]
+        owner_user_id = deletion["owner_user_id"]
+        existing = await tracker.get(
+            task_id,
+            account_id=owner_account_id,
+            user_id=owner_user_id,
+        )
+        if existing is None:
+            should_enqueue = True
+        elif existing.status == TaskStatus.FAILED:
+            replacement_id = str(uuid4())
+            deletion = await manager.replace_user_deletion_task(
+                account_id,
+                user_id,
+                expected_task_id=task_id,
+                task_id=replacement_id,
+                owner_account_id=request_owner_account_id,
+                owner_user_id=request_owner_user_id,
+            )
+            task_id = deletion["task_id"]
+            owner_account_id = deletion["owner_account_id"]
+            owner_user_id = deletion["owner_user_id"]
+            should_enqueue = True
+    await tracker.create(
+        USER_DELETE_TASK_TYPE,
+        resource_id=f"{account_id}/{user_id}",
+        task_id=task_id,
+        account_id=owner_account_id,
+        user_id=owner_user_id,
+    )
+    if should_enqueue:
+        queue_manager = get_queue_manager()
+        await queue_manager.enqueue(
+            queue_manager.USER_DELETION,
+            deletion_message(
+                task_id=task_id,
+                owner_account_id=owner_account_id,
+                owner_user_id=owner_user_id,
+                account_id=account_id,
+                user_id=user_id,
+            ),
+        )
+    return Response(
+        status="ok",
+        result={
+            "account_id": account_id,
+            "user_id": user_id,
+            "status": "deleting",
+            "task_id": task_id,
+        },
+    )
 
 
 @router.put("/accounts/{account_id}/users/{user_id}/role")

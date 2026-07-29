@@ -18,6 +18,7 @@ from openviking.service.core import OpenVikingService
 from openviking.storage.transaction import LockContext, get_lock_manager
 from openviking_cli.exceptions import (
     AlreadyExistsError,
+    FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
     UnauthenticatedError,
@@ -224,6 +225,60 @@ async def test_remove_user(manager: APIKeyManager):
     await manager.remove_user(acct, "bob")
     with pytest.raises(UnauthenticatedError):
         manager.resolve(bob_key)
+
+
+async def test_user_deletion_fence_revokes_key_and_prevents_stale_finish(
+    manager: APIKeyManager,
+):
+    acct = _uid()
+    await manager.create_account(acct, "alice")
+    bob_key = await manager.register_user(acct, "bob", "user")
+
+    deletion, created = await manager.begin_user_deletion(
+        acct,
+        "bob",
+        task_id="delete-1",
+        owner_account_id=acct,
+        owner_user_id="alice",
+    )
+
+    assert created is True
+    assert deletion["task_id"] == "delete-1"
+    assert manager.is_user_deleting(acct, "bob")
+    with pytest.raises(UnauthenticatedError):
+        manager.resolve(bob_key)
+    with pytest.raises(AlreadyExistsError):
+        await manager.register_user(acct, "bob", "user")
+    assert await manager.finish_user_deletion(acct, "bob", "stale") is False
+    assert manager.has_user(acct, "bob")
+    assert await manager.finish_user_deletion(acct, "bob", "delete-1") is True
+    assert not manager.has_user(acct, "bob")
+    with pytest.raises(NotFoundError):
+        await manager.begin_user_deletion(
+            acct,
+            "bob",
+            task_id="delete-2",
+            owner_account_id=acct,
+            owner_user_id="alice",
+        )
+
+    new_key = await manager.register_user(acct, "bob", "user")
+    assert await manager.finish_user_deletion(acct, "bob", "delete-1") is False
+    assert manager.resolve(new_key).user_id == "bob"
+
+
+async def test_cannot_delete_last_active_admin(manager: APIKeyManager):
+    acct = _uid()
+    await manager.create_account(acct, "alice")
+
+    with pytest.raises(FailedPreconditionError, match="last active"):
+        await manager.begin_user_deletion(
+            acct,
+            "alice",
+            task_id="delete-1",
+            owner_account_id="_system",
+            owner_user_id="root",
+        )
 
 
 async def test_regenerate_key(manager: APIKeyManager):

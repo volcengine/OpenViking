@@ -127,6 +127,13 @@ async def _initialize_runtime_state(
     """Initialize service and auth dependencies before traffic is accepted."""
     await service.initialize()
     await _initialize_auth_plugin(app, service, config)
+    from openviking.service.user_deletion import setup_user_deletion
+
+    await setup_user_deletion(
+        service,
+        app.state.api_key_manager,
+        config.temp_upload.shared_prefix,
+    )
     logger.info("OpenVikingService initialization complete")
 
 

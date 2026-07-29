@@ -21,6 +21,7 @@ from openviking.storage.transaction import LockContext, get_lock_manager
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import (
     AlreadyExistsError,
+    FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
     UnauthenticatedError,
@@ -362,26 +363,129 @@ class LegacyAPIKeyManager:
             raise NotFoundError(user_id, "user")
 
         user_info = account.users.pop(user_id)
-        key_or_hash = user_info.get("key", "")
-
-        if key_or_hash:
-            # Get key_prefix - if not in user_info, compute from key
-            key_prefix = user_info.get("key_prefix", "")
-            if not key_prefix:
-                key_prefix = self._get_key_prefix(key_or_hash)
-
-            # Remove from prefix index
-            if key_prefix in self._prefix_index:
-                self._prefix_index[key_prefix] = [
-                    entry
-                    for entry in self._prefix_index[key_prefix]
-                    if not (entry.account_id == account_id and entry.user_id == user_id)
-                ]
-                # Remove prefix if index is empty
-                if not self._prefix_index[key_prefix]:
-                    del self._prefix_index[key_prefix]
+        self._remove_key_index_entry(account_id, user_id, user_info)
 
         await self._save_users_json(account_id)
+
+    async def begin_user_deletion(
+        self,
+        account_id: str,
+        user_id: str,
+        *,
+        task_id: str,
+        owner_account_id: str,
+        owner_user_id: str,
+    ) -> tuple[dict, bool]:
+        """Revoke a user key and persist the temporary deletion fence."""
+        account = self._accounts.get(account_id)
+        if account is None:
+            raise NotFoundError(account_id, "account")
+        user_info = account.users.get(user_id)
+        if user_info is None:
+            raise NotFoundError(user_id, "user")
+        existing = user_info.get("deletion")
+        if isinstance(existing, dict) and existing.get("task_id"):
+            return dict(existing), False
+        if user_info.get("role") == Role.ADMIN:
+            active_admins = sum(
+                info.get("role") == Role.ADMIN and not info.get("deletion")
+                for info in account.users.values()
+            )
+            if active_admins <= 1:
+                raise FailedPreconditionError("Cannot delete the last active account admin")
+
+        original = dict(user_info)
+        deletion = {
+            "task_id": task_id,
+            "owner_account_id": owner_account_id,
+            "owner_user_id": owner_user_id,
+        }
+        user_info["deletion"] = deletion
+        user_info["key"] = ""
+        user_info.pop("key_prefix", None)
+        try:
+            await self._save_users_json(account_id)
+        except Exception:
+            account.users[user_id] = original
+            raise
+        self._remove_key_index_entry(account_id, user_id, original)
+        return deletion, True
+
+    async def replace_user_deletion_task(
+        self,
+        account_id: str,
+        user_id: str,
+        *,
+        expected_task_id: str,
+        task_id: str,
+        owner_account_id: str,
+        owner_user_id: str,
+    ) -> dict:
+        """Replace a failed deletion task without changing the deletion fence."""
+        account = self._accounts.get(account_id)
+        if account is None:
+            raise NotFoundError(account_id, "account")
+        user_info = account.users.get(user_id)
+        if user_info is None:
+            raise NotFoundError(user_id, "user")
+        current = user_info.get("deletion")
+        if not isinstance(current, dict) or current.get("task_id") != expected_task_id:
+            return dict(current) if isinstance(current, dict) else {}
+        replacement = {
+            "task_id": task_id,
+            "owner_account_id": owner_account_id,
+            "owner_user_id": owner_user_id,
+        }
+        user_info["deletion"] = replacement
+        try:
+            await self._save_users_json(account_id)
+        except Exception:
+            user_info["deletion"] = current
+            raise
+        return replacement
+
+    async def finish_user_deletion(
+        self,
+        account_id: str,
+        user_id: str,
+        task_id: str,
+    ) -> bool:
+        """Remove the user only when the queued deletion still owns the fence."""
+        account = self._accounts.get(account_id)
+        if account is None:
+            return False
+        user_info = account.users.get(user_id)
+        if user_info is None:
+            return False
+        deletion = user_info.get("deletion")
+        if not isinstance(deletion, dict) or deletion.get("task_id") != task_id:
+            return False
+        account.users.pop(user_id)
+        try:
+            await self._save_users_json(account_id)
+        except Exception:
+            account.users[user_id] = user_info
+            raise
+        return True
+
+    def get_user_deletion(self, account_id: str, user_id: str) -> Optional[dict]:
+        account = self._accounts.get(account_id)
+        if account is None:
+            return None
+        user_info = account.users.get(user_id)
+        deletion = user_info.get("deletion") if user_info else None
+        return dict(deletion) if isinstance(deletion, dict) else None
+
+    def iter_user_deletions(self) -> list[tuple[str, str, dict]]:
+        return [
+            (account_id, user_id, dict(deletion))
+            for account_id, account in self._accounts.items()
+            for user_id, user_info in account.users.items()
+            if isinstance((deletion := user_info.get("deletion")), dict) and deletion.get("task_id")
+        ]
+
+    def is_user_deleting(self, account_id: str, user_id: str) -> bool:
+        return self.get_user_deletion(account_id, user_id) is not None
 
     async def regenerate_key(self, account_id: str, user_id: str, seed: Optional[str] = None) -> str:
         """Regenerate a user's API key. Old key is immediately invalidated."""
@@ -390,6 +494,8 @@ class LegacyAPIKeyManager:
             raise NotFoundError(account_id, "account")
         if user_id not in account.users:
             raise NotFoundError(user_id, "user")
+        if account.users[user_id].get("deletion"):
+            raise FailedPreconditionError("User deletion is in progress")
 
         old_user_info = account.users[user_id]
         old_key_or_hash = old_user_info.get("key", "")
@@ -458,6 +564,8 @@ class LegacyAPIKeyManager:
             raise NotFoundError(account_id, "account")
         if user_id not in account.users:
             raise NotFoundError(user_id, "user")
+        if account.users[user_id].get("deletion"):
+            raise FailedPreconditionError("User deletion is in progress")
 
         account.users[user_id]["role"] = role
 
@@ -590,6 +698,21 @@ class LegacyAPIKeyManager:
         return hashlib.sha256(stored.encode("utf-8")).hexdigest()
 
     # ---- internal helpers ----
+
+    def _remove_key_index_entry(self, account_id: str, user_id: str, user_info: dict) -> None:
+        key_or_hash = user_info.get("key", "")
+        if not key_or_hash:
+            return
+        key_prefix = user_info.get("key_prefix", "") or self._get_key_prefix(key_or_hash)
+        if key_prefix not in self._prefix_index:
+            return
+        self._prefix_index[key_prefix] = [
+            entry
+            for entry in self._prefix_index[key_prefix]
+            if not (entry.account_id == account_id and entry.user_id == user_id)
+        ]
+        if not self._prefix_index[key_prefix]:
+            del self._prefix_index[key_prefix]
 
     def _generate_api_key(self) -> str:
         """Generate new API Key (legacy format - hex)."""
