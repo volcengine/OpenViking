@@ -687,3 +687,91 @@ class TestPathLockBehavior:
             pass
 
         await lock.release(tx)
+
+
+class TestPollIntervalBackoff:
+    def test_positive_jitter_stays_within_max_cap(self):
+        """With maximum positive jitter (+10%), interval must still be <= _MAX_POLL_INTERVAL."""
+        import random
+
+        from openviking.storage.transaction.path_lock import (
+            _MAX_POLL_INTERVAL,
+            _MIN_POLL_INTERVAL,
+            _poll_interval_for_attempt,
+        )
+
+        orig = random.random
+        try:
+            random.random = lambda: 1.0
+            for attempt in (1, 2, 5, 10, 20, 100, 1000):
+                val = _poll_interval_for_attempt(attempt)
+                assert val <= _MAX_POLL_INTERVAL, (
+                    f"attempt={attempt} val={val} exceeds _MAX_POLL_INTERVAL={_MAX_POLL_INTERVAL}"
+                )
+                assert val >= _MIN_POLL_INTERVAL / 2.0, (
+                    f"attempt={attempt} val={val} below floor={_MIN_POLL_INTERVAL / 2.0}"
+                )
+        finally:
+            random.random = orig
+
+    def test_negative_jitter_stays_above_floor(self):
+        """With maximum negative jitter (-10%), interval must stay above the floor."""
+        import random
+
+        from openviking.storage.transaction.path_lock import (
+            _MAX_POLL_INTERVAL,
+            _MIN_POLL_INTERVAL,
+            _poll_interval_for_attempt,
+        )
+
+        orig = random.random
+        try:
+            random.random = lambda: 0.0
+            for attempt in (1, 2, 5, 10, 20, 100, 1000):
+                val = _poll_interval_for_attempt(attempt)
+                assert val <= _MAX_POLL_INTERVAL
+                assert val >= _MIN_POLL_INTERVAL / 2.0, (
+                    f"attempt={attempt} val={val} below floor={_MIN_POLL_INTERVAL / 2.0}"
+                )
+        finally:
+            random.random = orig
+
+    def test_progression_is_non_decreasing_until_saturation(self):
+        """Median (jitter-free) interval should grow with attempts and saturate at max."""
+        import random
+
+        from openviking.storage.transaction.path_lock import (
+            _MAX_POLL_INTERVAL,
+            _POLL_BACKOFF_FACTOR,
+            _poll_interval_for_attempt,
+        )
+
+        orig = random.random
+        try:
+            random.random = lambda: 0.5
+            prev = -1.0
+            for attempt in range(1, 40):
+                val = _poll_interval_for_attempt(attempt)
+                expected = _MAX_POLL_INTERVAL if attempt >= 30 else val
+                assert val <= expected
+                if attempt > 1:
+                    assert val >= prev * 0.95 or abs(val - prev) < 1e-6, (
+                        f"attempt={attempt} val={val} shrank vs prev={prev}"
+                    )
+                prev = val
+            assert _poll_interval_for_attempt(10**6) == _MAX_POLL_INTERVAL
+        finally:
+            random.random = orig
+
+    def test_attempt_clamped_to_valid_range(self):
+        """Invalid attempt numbers should still be handled safely within bounds."""
+        from openviking.storage.transaction.path_lock import (
+            _MAX_POLL_INTERVAL,
+            _MIN_POLL_INTERVAL,
+            _poll_interval_for_attempt,
+        )
+
+        for attempt in (0, -1, -100):
+            val = _poll_interval_for_attempt(attempt)
+            assert _MIN_POLL_INTERVAL / 2.0 <= val <= _MAX_POLL_INTERVAL
+

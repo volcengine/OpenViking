@@ -53,7 +53,10 @@ def _poll_interval_for_attempt(attempt: int) -> float:
     interval = _MIN_POLL_INTERVAL * (_POLL_BACKOFF_FACTOR ** (attempt - 1))
     interval = min(interval, _MAX_POLL_INTERVAL)
     jitter = interval * _POLL_JIT * (2 * random.random() - 1)
-    return max(_MIN_POLL_INTERVAL / 2.0, interval + jitter)
+    return min(
+        _MAX_POLL_INTERVAL,
+        max(_MIN_POLL_INTERVAL / 2.0, interval + jitter),
+    )
 
 
 async def _poll_sleep(attempt: int) -> None:
