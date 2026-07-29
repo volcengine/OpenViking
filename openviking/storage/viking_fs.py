@@ -22,7 +22,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, TypeVar, Union
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
@@ -49,7 +49,10 @@ from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.expr import And, PathScope, RawDSL
-from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
+from openviking.storage.internal_names import (
+    MULTIWRITE_PATH_LOCK_FILE,
+    STORAGE_INTERNAL_ENTRY_NAMES,
+)
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.image_search import build_multimodal_embedding_input
 from openviking.utils.time_utils import format_iso8601, get_current_timestamp, parse_iso_datetime
@@ -66,6 +69,7 @@ from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
 
 if TYPE_CHECKING:
+    from openviking.storage.transaction.lock_handle import LockHandle
     from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
     from openviking_cli.utils.config import GrepConfig, RerankConfig, RetrievalConfig
 
@@ -419,6 +423,38 @@ class VikingFS:
         digest = hashlib.sha256(relative_path.encode("utf-8")).hexdigest()
         return f"{mount_prefix}{temp_root}/{digest}.encrypt"
 
+    def _encrypted_write_lock_paths(self, path: str) -> List[str]:
+        """Return the final and temp paths protected by the encrypted write protocol."""
+        return [path, self._encrypted_temp_path(path)]
+
+    async def _run_with_encrypted_write_lock(
+        self,
+        path: str,
+        operation: Callable[[], Awaitable[_T]],
+        lock_handle: Optional["LockHandle"] = None,
+    ) -> _T:
+        """Run a write operation under a dual-path exact lock when encryption is enabled."""
+        if self._encryptor is None:
+            return await operation()
+
+        from openviking.storage.transaction import LockContext, get_lock_manager
+
+        async with LockContext(
+            get_lock_manager(),
+            self._encrypted_write_lock_paths(path),
+            lock_mode="exact",
+            # Encrypted writes lock both the final path and the deterministic
+            # staging path under `.encrypt_stage`. Keeping the global default
+            # timeout at 0 is still desirable for ordinary path locks, but
+            # this specific dual-path write is much more exposed to short-lived
+            # contention between concurrent writers. A small 1-second wait here
+            # lets us ride out transient conflicts without broadening lock
+            # behavior for unrelated call sites.
+            timeout=1.0,
+            handle=lock_handle,
+        ):
+            return await operation()
+
     def _ensure_access(self, uri: str, ctx: Optional[RequestContext]) -> None:
         real_ctx = self._ctx_or_default(ctx)
         normalized_uri, _ = self._normalized_uri_parts(uri)
@@ -559,39 +595,20 @@ class VikingFS:
         # Encryption (when configured) happens inside the ragfs layer keyed by account_id.
         return await self._async_agfs.write(path, data)
 
-    def _pathlock_fs_ctx(
-        self,
-        ctx: Optional[RequestContext],
-        lease_ref: Optional[Dict[str, Any] | str],
-    ) -> Dict[str, str] | None:
-        """Build an AGFS fs_ctx carrying account_id and an opaque pathlock lease_ref."""
-        if lease_ref is None:
-            return None
-        if isinstance(lease_ref, str):
-            ref = lease_ref
-        elif isinstance(lease_ref, dict):
-            ref = lease_ref.get("lease_ref")
-        else:
-            raise ValueError("lease_ref must be a non-empty string or lease dictionary")
-        if not isinstance(ref, str) or not ref:
-            raise ValueError("lease_ref must contain a non-empty lease_ref")
-        return {"account_id": self._ctx_or_default(ctx).account_id, "lease_ref": ref}
-
     async def mkdir(
         self,
         uri: str,
         mode: str = "755",
         exist_ok: bool = False,
         ctx: Optional[RequestContext] = None,
-        lease_ref: Dict[str, Any] | None = None,
     ) -> None:
         """Create directory."""
         self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         # Always ensure parent directories exist before creating this directory
-        await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=lease_ref)
+        await self._ensure_parent_dirs(path, ctx=ctx)
         try:
-            await self._async_agfs.mkdir(path, fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref))
+            await self._async_agfs.mkdir(path)
         except Exception as exc:
             message = str(exc).lower()
             already_exists = "exist" in message or "already" in message
@@ -603,7 +620,7 @@ class VikingFS:
         uri: str,
         recursive: bool = False,
         ctx: Optional[RequestContext] = None,
-        lease_ref: Dict[str, Any] | None = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> Dict[str, Any]:
         """Delete file/directory + recursively update vector index.
 
@@ -619,6 +636,7 @@ class VikingFS:
             of nodes deleted from vector index.
         """
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+        from openviking.storage.transaction import LockContext, get_lock_manager
 
         self._ensure_delete_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
@@ -664,62 +682,61 @@ class VikingFS:
                     f"Cannot remove directory without --recursive: {uri}",
                     details={"resource": uri, "expected_flag": "recursive"},
                 )
-            lock_method = self._async_agfs.pathlock_acquire_tree
+            lock_paths = [path]
+            lock_mode = "tree"
         else:
-            lock_method = self._async_agfs.pathlock_acquire_exact
-
-        lease = lease_ref
-        if lease is None:
-            try:
-                lease = await lock_method(path)
-            except LockAcquisitionError:
-                raise ResourceBusyError(f"Resource is being processed: {uri}", uri=uri)
+            lock_paths = [path]
+            lock_mode = "exact"
 
         try:
-            uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx) if is_dir else []
-            uris_to_delete.append(target_uri)
-            real_ctx = self._ctx_or_default(ctx)
-            estimated_count = await _estimate_deleted_count(path, real_ctx)
-            await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
-            try:
-                result = await self._async_agfs.rm(
-                    path,
-                    recursive=recursive,
-                    fs_ctx=self._pathlock_fs_ctx(ctx, lease),
+            async with LockContext(
+                get_lock_manager(),
+                lock_paths,
+                lock_mode=lock_mode,
+                handle=lock_handle,
+            ):
+                uris_to_delete = (
+                    await self._collect_uris(path, recursive, ctx=ctx) if is_dir else []
                 )
-            except AGFSDirectoryNotEmptyError:
-                raise FailedPreconditionError(
-                    f"Directory not empty: {uri}. Use recursive=True to delete non-empty directories."
-                )
-            except RuntimeError as e:
-                # Fallback for older versions without typed exceptions
-                if _is_directory_not_empty_error(str(e)):
+                uris_to_delete.append(target_uri)
+                real_ctx = self._ctx_or_default(ctx)
+                estimated_count = await _estimate_deleted_count(path, real_ctx)
+                await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
+                try:
+                    result = await self._async_agfs.rm(path, recursive=recursive)
+                except AGFSDirectoryNotEmptyError:
                     raise FailedPreconditionError(
                         f"Directory not empty: {uri}. Use recursive=True to delete non-empty directories."
                     )
-                raise
-            # Add estimated_deleted_count to the result
-            if isinstance(result, dict):
-                result["estimated_deleted_count"] = estimated_count
-            else:
-                result = {"estimated_deleted_count": estimated_count}
-            return result
-        finally:
-            if lease_ref is None:
-                await self._async_agfs.pathlock_release(lease)
+                except RuntimeError as e:
+                    # Fallback for older versions without typed exceptions
+                    if _is_directory_not_empty_error(str(e)):
+                        raise FailedPreconditionError(
+                            f"Directory not empty: {uri}. Use recursive=True to delete non-empty directories."
+                        )
+                    raise
+                # Add estimated_deleted_count to the result
+                if isinstance(result, dict):
+                    result["estimated_deleted_count"] = estimated_count
+                else:
+                    result = {"estimated_deleted_count": estimated_count}
+                return result
+        except LockAcquisitionError:
+            raise ResourceBusyError(f"Resource is being processed: {uri}", uri=uri)
 
     async def mv(
         self,
         old_uri: str,
         new_uri: str,
         ctx: Optional[RequestContext] = None,
-        lease_ref: Dict[str, Any] | None = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> Dict[str, Any]:
-        """Move file/directory while extending an optional outer pathlock lease.
+        """Move file/directory + recursively update vector index.
 
         Implemented as cp + rm to avoid lock files being carried by FS mv.
         On VectorDB update failure the copy is cleaned up so the source stays intact.
         """
+        from openviking.storage.transaction import LockContext, get_lock_manager
 
         self._ensure_mutable_access(old_uri, ctx)
         # mv is implemented as copy + recursive rm of the source (see the
@@ -770,24 +787,25 @@ class VikingFS:
         old_uri = canonicalize_uri(old_uri, real_ctx)
         new_uri = canonicalize_uri(new_uri, real_ctx)
 
-        if is_dir:
-            lease = await self._async_agfs.pathlock_acquire_batch(
-                [
-                    {"path": old_path, "kind": "tree"},
-                    {"path": new_path, "kind": "exact"},
-                ],
-                owner_lease_ref=lease_ref,
+        lock_context = (
+            LockContext(
+                get_lock_manager(),
+                [old_path],
+                lock_mode="mv",
+                mv_dst_path=new_path,
+                src_is_dir=True,
+                handle=lock_handle,
             )
-        else:
-            lease = await self._async_agfs.pathlock_acquire_batch(
-                [
-                    {"path": old_path, "kind": "exact"},
-                    {"path": new_path, "kind": "exact"},
-                ],
-                owner_lease_ref=lease_ref,
+            if is_dir
+            else LockContext(
+                get_lock_manager(),
+                [old_path, new_path],
+                lock_mode="exact",
+                handle=lock_handle,
             )
+        )
 
-        try:
+        async with lock_context as active_lock_handle:
             uris_to_move = (
                 await self._collect_uris(old_path, recursive=True, ctx=ctx) if is_dir else []
             )
@@ -806,7 +824,7 @@ class VikingFS:
                     is_dir=is_dir,
                     is_temp=is_temp,
                     ctx=ctx,
-                    lease_ref=lease,
+                    lock_handle=active_lock_handle,
                 )
             except Exception as e:
                 if "not found" in str(e).lower():
@@ -821,42 +839,30 @@ class VikingFS:
                         )
                 raise
 
+            # Remove carried lock file from the copy (directory only)
+            if is_dir:
+                carried_lock = new_path.rstrip("/") + f"/{MULTIWRITE_PATH_LOCK_FILE}"
+                try:
+                    await self._async_agfs.rm(carried_lock)
+                except Exception:
+                    pass
+
             # Update VectorDB URIs (on failure, clean up the copy)
             try:
                 await self._update_vector_store_uris(uris_to_move, old_uri, new_uri, ctx=ctx)
             except Exception:
                 try:
                     if is_dir:
-                        cleanup_lease = await self._async_agfs.pathlock_acquire_tree(
-                            new_path,
-                            owner_lease_ref=lease,
-                        )
-                        try:
-                            await self._async_agfs.rm(
-                                new_path,
-                                recursive=True,
-                                fs_ctx=self._pathlock_fs_ctx(ctx, cleanup_lease),
-                            )
-                        finally:
-                            await self._async_agfs.pathlock_release(cleanup_lease)
+                        await self._async_agfs.rm(new_path, recursive=True)
                     else:
-                        await self._async_agfs.rm(
-                            new_path,
-                            fs_ctx=self._pathlock_fs_ctx(ctx, lease),
-                        )
+                        await self._async_agfs.rm(new_path)
                 except Exception:
                     pass
                 raise
 
             # Delete source
-            await self._async_agfs.rm(
-                old_path,
-                recursive=is_dir,
-                fs_ctx=self._pathlock_fs_ctx(ctx, lease),
-            )
+            await self._async_agfs.rm(old_path, recursive=is_dir)
             return {}
-        finally:
-            await self._async_agfs.pathlock_release(lease)
 
     async def system_sync_status(
         self, uri: str, ctx: Optional[RequestContext] = None
@@ -891,91 +897,39 @@ class VikingFS:
         is_dir: bool,
         is_temp: bool,
         ctx: Optional[RequestContext] = None,
-        lease_ref: Dict[str, Any] | None = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> None:
         """Copy source to destination for mv without deleting source."""
         if is_temp:
-            if is_dir:
-                await self._copy_temp_dir_with_exact_locks(
-                    old_path,
-                    new_path,
-                    ctx=ctx,
-                    lease_ref=lease_ref,
-                )
-            else:
-                await self._async_agfs.cp(
-                    old_path,
-                    new_path,
-                    recursive=False,
-                    fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
-                )
+            await self._async_agfs.cp(
+                old_path,
+                new_path,
+                recursive=is_dir,
+                fs_ctx={"account_id": self._ctx_or_default(ctx).account_id},
+            )
             return
 
         if is_dir:
-            await self._copy_dir_through_vikingfs(old_uri, new_uri, ctx=ctx, lease_ref=lease_ref)
-        else:
-            await self._copy_file_through_vikingfs(old_uri, new_uri, ctx=ctx, lease_ref=lease_ref)
-
-    async def _copy_temp_dir_with_exact_locks(
-        self,
-        old_path: str,
-        new_path: str,
-        ctx: Optional[RequestContext],
-        lease_ref: Dict[str, Any] | None,
-    ) -> None:
-        """Copy an encrypted temp directory while locking every destination entry.
-
-        Args:
-            old_path: Source backend directory path.
-            new_path: Destination backend directory path.
-            ctx: Request context used for filesystem operations.
-            lease_ref: Exact lease covering the current destination directory.
-
-        Returns:
-            None.
-        """
-        if lease_ref is None:
-            raise ValueError("temp directory copy requires a pathlock lease")
-        fs_ctx = self._pathlock_fs_ctx(ctx, lease_ref)
-        await self._async_agfs.mkdir(new_path, fs_ctx=fs_ctx)
-        entries = await self._async_agfs.ls(old_path, fs_ctx=fs_ctx)
-        for entry in entries:
-            name = entry.get("name", "")
-            if not name or name in (".", ".."):
-                continue
-            old_child = f"{old_path.rstrip('/')}/{name}"
-            new_child = f"{new_path.rstrip('/')}/{name}"
-            child_lease = await self._async_agfs.pathlock_acquire_exact(
-                new_child,
-                owner_lease_ref=lease_ref,
+            await self._copy_dir_through_vikingfs(
+                old_uri, new_uri, ctx=ctx, lock_handle=lock_handle
             )
-            try:
-                if entry.get("isDir", False):
-                    await self._copy_temp_dir_with_exact_locks(
-                        old_child,
-                        new_child,
-                        ctx=ctx,
-                        lease_ref=child_lease,
-                    )
-                else:
-                    await self._async_agfs.cp(
-                        old_child,
-                        new_child,
-                        recursive=False,
-                        fs_ctx=self._pathlock_fs_ctx(ctx, child_lease),
-                    )
-            finally:
-                await self._async_agfs.pathlock_release(child_lease)
+        else:
+            await self._copy_file_through_vikingfs(
+                old_uri,
+                new_uri,
+                ctx=ctx,
+                lock_handle=lock_handle,
+            )
 
     async def _copy_dir_through_vikingfs(
         self,
         old_uri: str,
         new_uri: str,
         ctx: Optional[RequestContext] = None,
-        lease_ref: Dict[str, Any] | None = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> None:
         """Recursively copy a directory through VikingFS read/write hooks."""
-        await self.mkdir(new_uri, exist_ok=True, ctx=ctx, lease_ref=lease_ref)
+        await self.mkdir(new_uri, exist_ok=True, ctx=ctx)
 
         entries = await self.ls(old_uri, show_all_hidden=True, ctx=ctx)
         for entry in entries:
@@ -989,14 +943,14 @@ class VikingFS:
                     old_child_uri,
                     new_child_uri,
                     ctx=ctx,
-                    lease_ref=lease_ref,
+                    lock_handle=lock_handle,
                 )
             else:
                 await self._copy_file_through_vikingfs(
                     old_child_uri,
                     new_child_uri,
                     ctx=ctx,
-                    lease_ref=lease_ref,
+                    lock_handle=lock_handle,
                 )
 
     async def _copy_file_through_vikingfs(
@@ -1004,23 +958,11 @@ class VikingFS:
         from_uri: str,
         to_uri: str,
         ctx: Optional[RequestContext] = None,
-        lease_ref: Dict[str, Any] | None = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> None:
         """Copy one file through VikingFS read/write hooks without deleting source."""
         content_bytes = await self.read_file_bytes(from_uri, ctx=ctx)
-        if lease_ref is None:
-            await self.write_file_bytes(to_uri, content_bytes, ctx=ctx)
-            return
-
-        child_path = self._uri_to_path(to_uri, ctx=ctx)
-        child_lease = await self._async_agfs.pathlock_acquire_exact(
-            child_path,
-            owner_lease_ref=lease_ref,
-        )
-        try:
-            await self.write_file_bytes(to_uri, content_bytes, ctx=ctx, lease_ref=child_lease)
-        finally:
-            await self._async_agfs.pathlock_release(child_lease)
+        await self.write_file_bytes(to_uri, content_bytes, ctx=ctx, lock_handle=lock_handle)
 
     async def grep(
         self,
@@ -1236,15 +1178,19 @@ class VikingFS:
         if exclude_uri:
             excluded_prefix = exclude_uri.rstrip("/")
             self._ensure_access(excluded_prefix, ctx)
-            filter_expr = And([
-                filter_expr,
-                RawDSL({
-                    "op": "must_not",
-                    "field": "uri",
-                    "conds": [excluded_prefix],
-                    "para": "-d=-1",
-                }),
-            ])
+            filter_expr = And(
+                [
+                    filter_expr,
+                    RawDSL(
+                        {
+                            "op": "must_not",
+                            "field": "uri",
+                            "conds": [excluded_prefix],
+                            "para": "-d=-1",
+                        }
+                    ),
+                ]
+            )
 
         # Auto-adapt bm25 recall limit: recall up to 5x requested matches
         # while capping at VikingDB's max limit. If node_limit is unset,
@@ -1414,11 +1360,13 @@ class VikingFS:
 
             files_scanned_set.add(file_uri)
 
-            results.append({
-                "line": match.get("line", match.get("line_number", 0)),
-                "uri": file_uri,
-                "content": match.get("content", ""),
-            })
+            results.append(
+                {
+                    "line": match.get("line", match.get("line_number", 0)),
+                    "uri": file_uri,
+                    "content": match.get("content", ""),
+                }
+            )
 
             if node_limit and len(results) >= node_limit:
                 break
@@ -1588,11 +1536,13 @@ class VikingFS:
             lines = content.split("\n")
             for line_num, line in enumerate(lines, 1):
                 if compiled_pattern.search(line):
-                    matches.append({
-                        "line": line_num,
-                        "uri": entry_uri,
-                        "content": line,
-                    })
+                    matches.append(
+                        {
+                            "line": line_num,
+                            "uri": entry_uri,
+                            "content": line,
+                        }
+                    )
             return matches, 1
         except Exception as e:
             logger.debug(f"Failed to grep {entry_uri}: {e}")
@@ -1615,7 +1565,7 @@ class VikingFS:
         Extra field:
             isLocked (bool): Whether the path is currently held by a path lock
                 (either the path itself or any ancestor directory). Returns
-                False when the pathlock system is not enabled or the lookup
+                False when the LockManager is not initialized or the lookup
                 fails.
             count (int): For directories, the number of nodes in the vector index
                 under this directory (including subdirectories). For files, this
@@ -1678,9 +1628,11 @@ class VikingFS:
         return result
 
     async def _is_path_locked_async(self, path: str) -> bool:
-        """Best-effort async path-lock lookup; returns False on any error."""
+        """Best-effort async path-lock lookup; returns False when LockManager is absent."""
         try:
-            return await self._async_agfs.pathlock_is_locked(path)
+            from openviking.storage.transaction import get_lock_manager
+
+            return await get_lock_manager().is_path_locked_async(path)
         except Exception:
             return False
 
@@ -1875,15 +1827,17 @@ class VikingFS:
         ):
             info = entry["info"]
             new_entry = dict(entry.get("extra", {}))
-            new_entry.update({
-                "name": info["name"],
-                "size": info["size"],
-                "mode": info["mode"],
-                "modTime": info["modTime"],
-                "isDir": info["isDir"],
-                "rel_path": entry["rel_path"],
-                "uri": entry_uri,
-            })
+            new_entry.update(
+                {
+                    "name": info["name"],
+                    "size": info["size"],
+                    "mode": info["mode"],
+                    "modTime": info["modTime"],
+                    "isDir": info["isDir"],
+                    "rel_path": entry["rel_path"],
+                    "uri": entry_uri,
+                }
+            )
             result.append(new_entry)
         return result
 
@@ -1908,13 +1862,15 @@ class VikingFS:
         ):
             info = entry["info"]
             is_dir = info["isDir"]
-            result.append({
-                "uri": entry_uri,
-                "size": 0 if is_dir else info["size"],
-                "isDir": is_dir,
-                "modTime": format_iso8601(parse_iso_datetime(info["modTime"])),
-                "rel_path": entry["rel_path"],
-            })
+            result.append(
+                {
+                    "uri": entry_uri,
+                    "size": 0 if is_dir else info["size"],
+                    "isDir": is_dir,
+                    "modTime": format_iso8601(parse_iso_datetime(info["modTime"])),
+                    "rel_path": entry["rel_path"],
+                }
+            )
 
         await self._batch_fetch_abstracts(result, abs_limit, ctx=ctx)
 
@@ -3093,28 +3049,17 @@ class VikingFS:
 
     # ========== Parent Directory Creation ==========
 
-    async def _ensure_parent_dirs(
-        self,
-        path: str,
-        ctx: Optional[RequestContext] = None,
-        lease_ref: Dict[str, Any] | None = None,
-    ) -> None:
+    async def _ensure_parent_dirs(self, path: str, ctx: Optional[RequestContext] = None) -> None:
         """Recursively create all parent directories."""
         try:
-            await self._async_agfs.ensure_parent_dirs(
-                path,
-                fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
-            )
+            await self._async_agfs.ensure_parent_dirs(path)
         except Exception as e:
             logger.debug(f"Failed to ensure parent directories for {path}: {e}")
             parent = path.rstrip("/").rsplit("/", 1)[0]
-            await self._mkdir_path_with_parents(parent, ctx=ctx, lease_ref=lease_ref)
+            await self._mkdir_path_with_parents(parent, ctx=ctx)
 
     async def _mkdir_path_with_parents(
-        self,
-        dir_path: str,
-        ctx: Optional[RequestContext] = None,
-        lease_ref: Dict[str, Any] | None = None,
+        self, dir_path: str, ctx: Optional[RequestContext] = None
     ) -> None:
         """Create a directory path segment-by-segment using the same fs context."""
         parts = [part for part in dir_path.strip("/").split("/") if part]
@@ -3122,10 +3067,7 @@ class VikingFS:
         for part in parts:
             current = f"{current}/{part}"
             try:
-                await self._async_agfs.mkdir(
-                    current,
-                    fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
-                )
+                await self._async_agfs.mkdir(current)
             except Exception as e:
                 message = str(e).lower()
                 if "exist" in message or "already" in message:
@@ -3202,17 +3144,21 @@ class VikingFS:
         uri: str,
         content: Union[str, bytes],
         ctx: Optional[RequestContext] = None,
-        lease_ref: Dict[str, Any] | None = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> None:
-        """Write file directly. Encryption lock handled internally by EncryptionWrappedFS."""
+        """Write file directly."""
         self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
-        await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=lease_ref)
+        await self._ensure_parent_dirs(path, ctx=ctx)
 
         if isinstance(content, str):
             content = content.encode("utf-8")
 
-        await self._async_agfs.write(path, content, fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref))
+        await self._run_with_encrypted_write_lock(
+            path,
+            lambda: self._async_agfs.write(path, content),
+            lock_handle=lock_handle,
+        )
 
     async def read_file(
         self,
@@ -3313,63 +3259,59 @@ class VikingFS:
         uri: str,
         content: bytes,
         ctx: Optional[RequestContext] = None,
-        lease_ref: Dict[str, Any] | None = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> None:
-        """Write single binary file. Encryption lock handled internally by EncryptionWrappedFS."""
+        """Write single binary file."""
         self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
-        await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=lease_ref)
+        await self._ensure_parent_dirs(path, ctx=ctx)
 
-        await self._async_agfs.write(path, content, fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref))
+        await self._run_with_encrypted_write_lock(
+            path,
+            lambda: self._async_agfs.write(path, content),
+            lock_handle=lock_handle,
+        )
 
     async def append_file(
         self,
         uri: str,
         content: str,
         ctx: Optional[RequestContext] = None,
-        lease_ref: Dict[str, Any] | None = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> None:
-        """Append content to file while holding one exact pathlock lease."""
+        """Append content to file."""
         self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
 
-        owned_lease = None
         try:
-            await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=lease_ref)
-            lease = lease_ref
-            if lease is None:
-                lease = await self._async_agfs.pathlock_acquire_exact(path)
-                owned_lease = lease
-            fs_ctx = self._pathlock_fs_ctx(ctx, lease)
+            await self._ensure_parent_dirs(path, ctx=ctx)
 
-            # Read old content and rewrite the whole file to avoid lost updates.
-            existing = ""
-            try:
-                existing_bytes = self._handle_agfs_read(
-                    await self._async_agfs.read(path, fs_ctx=fs_ctx)
-                )
-                existing = self._decode_bytes(existing_bytes)
-            except FileNotFoundError:
-                pass
-            except AGFSHTTPError as e:
-                if e.status_code != 404:
+            async def _append_under_lock() -> None:
+                """Read old content and rewrite the whole file under lock to avoid lost updates."""
+                existing = ""
+                try:
+                    existing_bytes = self._handle_agfs_read(await self._async_agfs.read(path))
+                    existing = self._decode_bytes(existing_bytes)
+                except FileNotFoundError:
+                    pass
+                except AGFSHTTPError as e:
+                    if e.status_code != 404:
+                        raise
+                except AGFSClientError:
                     raise
-            except AGFSClientError:
-                raise
 
-            final_content = (existing + content).encode("utf-8")
-            await self._async_agfs.write(
+                final_content = (existing + content).encode("utf-8")
+                await self._async_agfs.write(path, final_content)
+
+            await self._run_with_encrypted_write_lock(
                 path,
-                final_content,
-                fs_ctx=fs_ctx,
+                _append_under_lock,
+                lock_handle=lock_handle,
             )
 
         except Exception as e:
             logger.error(f"[VikingFS] Failed to append to file {uri}: {e}")
             raise IOError(f"Failed to append to file {uri}: {e}")
-        finally:
-            if owned_lease is not None:
-                await self._async_agfs.pathlock_release(owned_lease)
 
     async def ls(
         self,
@@ -3602,32 +3544,24 @@ class VikingFS:
         temp_uri: str,
         target_uri: str,
         ctx: Optional[RequestContext] = None,
-        lease_ref: Dict[str, Any] | None = None,
     ) -> None:
         """Persist an already-encrypted temp tree without rewriting file bytes."""
         self._ensure_access(temp_uri, ctx)
         self._ensure_mutable_access(target_uri, ctx)
         src_path = self._uri_to_path(temp_uri, ctx=ctx)
         dst_path = self._uri_to_path(target_uri, ctx=ctx)
-        fs_ctx = self._pathlock_fs_ctx(ctx, lease_ref)
-        await self._ensure_parent_dirs(dst_path, ctx=ctx, lease_ref=lease_ref)
+        await self._ensure_parent_dirs(dst_path, ctx=ctx)
         await self._async_agfs.cp(
             src_path,
             dst_path,
             recursive=True,
-            fs_ctx=fs_ctx or {"account_id": self._ctx_or_default(ctx).account_id},
+            fs_ctx={"account_id": self._ctx_or_default(ctx).account_id},
         )
 
-    async def delete_temp(
-        self,
-        temp_uri: str,
-        ctx: Optional[RequestContext] = None,
-        lease_ref: Dict[str, Any] | None = None,
-    ) -> None:
+    async def delete_temp(self, temp_uri: str, ctx: Optional[RequestContext] = None) -> None:
         """Delete temp directory and its contents."""
         self._ensure_mutable_access(temp_uri, ctx)
         path = self._uri_to_path(temp_uri, ctx=ctx)
-        fs_ctx = self._pathlock_fs_ctx(ctx, lease_ref)
         try:
             for entry in await self._ls_entries(path, ctx=ctx):
                 name = entry.get("name", "")
@@ -3635,10 +3569,10 @@ class VikingFS:
                     continue
                 entry_path = f"{path}/{name}"
                 if entry.get("isDir"):
-                    await self.delete_temp(f"{temp_uri}/{name}", ctx=ctx, lease_ref=lease_ref)
+                    await self.delete_temp(f"{temp_uri}/{name}", ctx=ctx)
                 else:
-                    await self._async_agfs.rm(entry_path, fs_ctx=fs_ctx)
-            await self._async_agfs.rm(path, fs_ctx=fs_ctx)
+                    await self._async_agfs.rm(entry_path)
+            await self._async_agfs.rm(path)
         except Exception as e:
             logger.warning(f"[VikingFS] Failed to delete temp {temp_uri}: {e}")
 
@@ -3731,14 +3665,16 @@ class VikingFS:
     # crates/ragfs/src/git/enumerate.rs and VikingFS._INTERNAL_NAMES so that
     # callers fail fast in Python with a clear error rather than passing a
     # path that the Rust side will silently drop.
-    _GIT_INTERNAL_FIRST_SEGMENTS = frozenset({
-        "_system",
-        "tasks",
-        "temp",
-        "queue",
-        "upload",
-        ".path.ovlock",
-    })
+    _GIT_INTERNAL_FIRST_SEGMENTS = frozenset(
+        {
+            "_system",
+            "tasks",
+            "temp",
+            "queue",
+            "upload",
+            ".path.ovlock",
+        }
+    )
 
     _DEFAULT_GIT_AUTHOR_NAME = "viking-bot"
     _DEFAULT_GIT_AUTHOR_EMAIL = "bot@viking.local"
@@ -4015,6 +3951,7 @@ class VikingFS:
 
         from openviking.pyagfs.exceptions import GitRestoreWritebackPartialError
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+        from openviking.storage.transaction import LockContext, get_lock_manager
 
         # Serialize the writeback against concurrent VFS mutations on the same
         # subtree. A scoped restore tree-locks project_dir; a full restore
@@ -4029,24 +3966,20 @@ class VikingFS:
         )
         partial_exc: Optional[GitRestoreWritebackPartialError] = None
         try:
-            lease = await self._async_agfs.pathlock_acquire_tree(lock_path)
+            async with LockContext(get_lock_manager(), [lock_path], lock_mode="tree"):
+                try:
+                    result = await self._async_agfs.run("git_restore", **kwargs)
+                except GitRestoreWritebackPartialError as exc:
+                    # The ref already advanced — capture the exception and
+                    # finish the lock scope cleanly. Reindex scheduling and
+                    # re-raise happen below, outside the tree lock.
+                    partial_exc = exc
+                    result = None
         except LockAcquisitionError:
             raise ResourceBusyError(
                 f"Resource is being processed: {project_dir or '*'}",
                 uri=project_dir or "*",
             )
-
-        try:
-            try:
-                result = await self._async_agfs.run("git_restore", **kwargs)
-            except GitRestoreWritebackPartialError as exc:
-                # The ref already advanced — capture the exception and
-                # finish the lock scope cleanly. Reindex scheduling and
-                # re-raise happen below, outside the tree lock.
-                partial_exc = exc
-                result = None
-        finally:
-            await self._async_agfs.pathlock_release(lease)
 
         if partial_exc is not None:
             # HEAD has moved forward but some VFS writes/deletes failed.
@@ -4406,10 +4339,12 @@ class VikingFS:
             from openviking.service.reindex_executor import get_reindex_executor
 
             executor = get_reindex_executor()
-            await asyncio.gather(*[
-                self._run_vector_rebuild(executor, op, uri, level, ctx)
-                for (op, uri, level) in tasks
-            ])
+            await asyncio.gather(
+                *[
+                    self._run_vector_rebuild(executor, op, uri, level, ctx)
+                    for (op, uri, level) in tasks
+                ]
+            )
             await tracker.complete(
                 task_id,
                 {"status": "completed", "task_count": len(tasks)},

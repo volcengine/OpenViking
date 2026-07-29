@@ -477,6 +477,8 @@ class TestCompressorV2:
 
         with (
             patch("openviking.storage.viking_fs.get_viking_fs", return_value=None),
+            patch("openviking.storage.transaction.init_lock_manager"),
+            patch("openviking.storage.transaction.get_lock_manager", return_value=None),
             patch(
                 "openviking.session.memory.memory_type_registry.create_default_registry",
                 return_value=dummy_registry,
@@ -511,6 +513,8 @@ class TestCompressorV2:
 
         with (
             patch("openviking.storage.viking_fs.get_viking_fs", return_value=None),
+            patch("openviking.storage.transaction.init_lock_manager"),
+            patch("openviking.storage.transaction.get_lock_manager", return_value=None),
             patch(
                 "openviking.session.memory.memory_type_registry.create_default_registry",
                 return_value=dummy_registry,
@@ -582,6 +586,8 @@ class TestCompressorV2:
 
         with (
             patch("openviking.session.compressor_v2.get_viking_fs", return_value=MockVikingFS()),
+            patch("openviking.storage.transaction.init_lock_manager"),
+            patch("openviking.storage.transaction.get_lock_manager", return_value=lock_manager),
             patch(
                 "openviking.session.memory.memory_type_registry.create_default_registry",
                 return_value=SimpleNamespace(initialize_memory_files=AsyncMock()),
@@ -676,6 +682,12 @@ class TestCompressorV2:
         async def release(_handle):
             events.append("release")
 
+        lock_manager = SimpleNamespace(
+            create_handle=lambda: handle,
+            acquire_exact_tree_batch=AsyncMock(side_effect=acquire_exact_tree_batch),
+            release=AsyncMock(side_effect=release),
+        )
+
         async def post_apply(result, inheritance_map, lock_handle):
             assert result.written_uris == ["viking://user/default/memories/experiences/debug.md"]
             assert inheritance_map == {}
@@ -686,6 +698,8 @@ class TestCompressorV2:
             patch("openviking.session.compressor_v2.get_viking_fs", return_value=FakeVikingFS()),
             patch("openviking.session.compressor_v2.get_openviking_config", return_value=config),
             patch("openviking.session.compressor_v2.ExtractLoop", DummyExtractLoop),
+            patch("openviking.storage.transaction.init_lock_manager"),
+            patch("openviking.storage.transaction.get_lock_manager", return_value=lock_manager),
             patch.object(compressor, "_get_or_create_updater", return_value=DummyUpdater()),
         ):
             result = await compressor._run_extract_phase(
@@ -733,6 +747,8 @@ class TestCompressorV2:
                 events.append("write")
                 self.files[uri] = content
 
+        handle = SimpleNamespace(id="handle-1", locks=[])
+
         async def acquire_exact_path_batch(_handle, paths):
             events.append(f"exact:{paths[0]}")
             return True
@@ -740,9 +756,14 @@ class TestCompressorV2:
         async def release(_handle):
             events.append("release")
 
+        lock_manager = SimpleNamespace(
+            create_handle=lambda: handle,
+            acquire_exact_path_batch=AsyncMock(side_effect=acquire_exact_path_batch),
+            release=AsyncMock(side_effect=release),
+        )
         viking_fs = FakeVikingFS()
 
-        with patch("openviking.session.compressor_v2.get_viking_fs", return_value=viking_fs):
+        with patch("openviking.storage.transaction.get_lock_manager", return_value=lock_manager):
             await compressor._append_trajectories_to_experiences(
                 [exp_uri],
                 [traj_uri],

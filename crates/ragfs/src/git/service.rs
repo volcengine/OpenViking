@@ -1303,8 +1303,6 @@ impl GitService {
                 Err(e) => failed_deletes.push((path, e.to_string())),
             }
         }
-        written_paths.sort();
-        deleted_paths.sort();
 
         let written_actual = written_paths.len();
         let deleted_actual = deleted_paths.len();

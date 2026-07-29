@@ -12,11 +12,13 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional, TypeVa
 from openviking.core.namespace import canonical_user_root
 from openviking.core.uri_validation import validate_content_target_uri
 from openviking.server.config import AddTargetsConfig, UserConfig
+from openviking.storage.transaction import LockContext, get_lock_manager
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
 if TYPE_CHECKING:
     from openviking.server.config import ServerConfig
     from openviking.server.identity import RequestContext
+    from openviking.storage.transaction import LockHandle
     from openviking.storage.viking_fs import VikingFS
 
 
@@ -38,20 +40,14 @@ async def _user_config_lock(
     viking_fs: VikingFS,
     uri: str,
     ctx: RequestContext,
-) -> AsyncIterator[Optional[dict[str, Any]]]:
+) -> AsyncIterator[Optional[LockHandle]]:
     uri_to_path = getattr(viking_fs, "_uri_to_path", None)
-    agfs = getattr(viking_fs, "_async_agfs", None)
-    acquire = getattr(agfs, "pathlock_acquire_exact", None)
-    release = getattr(agfs, "pathlock_release", None)
-    if not callable(uri_to_path) or not callable(acquire) or not callable(release):
+    if not callable(uri_to_path):
         yield None
         return
     path = uri_to_path(uri, ctx=ctx)
-    lease = await acquire(path)
-    try:
-        yield lease
-    finally:
-        await release(lease)
+    async with LockContext(get_lock_manager(), [path], lock_mode="exact") as handle:
+        yield handle
 
 
 def _user_config_from_payload(payload: Any) -> UserConfig:
@@ -160,7 +156,7 @@ async def update_user_config(
                     sort_keys=True,
                 ),
                 ctx=ctx,
-                lease_ref=handle,
+                lock_handle=handle,
             )
         return result
 
@@ -181,7 +177,7 @@ async def write_user_config(
                 sort_keys=True,
             ),
             ctx=ctx,
-            lease_ref=handle,
+            lock_handle=handle,
         )
     return runtime
 

@@ -11,11 +11,14 @@ images themselves are stored next to the markdown file referencing them).
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, Optional, Set
+from typing import TYPE_CHECKING, Dict, Optional, Set
 
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.utils import get_logger
+
+if TYPE_CHECKING:
+    from openviking.storage.transaction.lock_handle import LockHandle
 
 logger = get_logger(__name__)
 
@@ -256,7 +259,7 @@ async def _discover_mappings(
 async def rewrite_image_uris(
     root_uri: str,
     ctx: Optional[RequestContext] = None,
-    lease_ref: Optional[Dict[str, Any]] = None,
+    lock_handle: Optional["LockHandle"] = None,
 ) -> Dict[str, int]:
     """Rewrite local image references in markdown files to viking:// URIs.
 
@@ -274,7 +277,7 @@ async def rewrite_image_uris(
     Args:
         root_uri: The final VikingFS root URI (e.g. ``viking://resources/doc``)
         ctx: Optional request context for permissions
-        lease_ref: Optional lease reference held by the caller. When the caller
+        lock_handle: Optional lock handle held by the caller. When the caller
             already owns a TREE lock over *root_uri*, forwarding it lets the
             cleanup ``rm`` reuse that lock instead of conflicting with it.
 
@@ -334,11 +337,12 @@ async def rewrite_image_uris(
 
         if rewrite_count > 0:
             try:
+                # TODO: This must be optimized once pathlock is pushed down into ragfs.
                 await viking_fs.write_file(
                     md_uri,
                     new_content,
                     ctx=ctx,
-                    lease_ref=lease_ref,
+                    lock_handle=lock_handle,
                 )
                 files_processed += 1
                 references_rewritten += rewrite_count
@@ -350,9 +354,7 @@ async def rewrite_image_uris(
     for map_dir in mappings_by_dir:
         try:
             await viking_fs.rm(
-                f"{map_dir}/{IMAGE_MAPPINGS_FILENAME}",
-                ctx=ctx,
-                lease_ref=lease_ref,
+                f"{map_dir}/{IMAGE_MAPPINGS_FILENAME}", ctx=ctx, lock_handle=lock_handle
             )
         except Exception as e:
             logger.warning(

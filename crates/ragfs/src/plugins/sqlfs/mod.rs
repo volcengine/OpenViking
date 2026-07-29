@@ -110,27 +110,6 @@ impl SQLFileSystem {
         let normalized = Self::normalize_path(path);
         normalized.rsplit('/').next().unwrap_or("").to_string()
     }
-
-    /// Run one synchronous database operation on Tokio's blocking pool.
-    ///
-    /// # Arguments
-    /// * `job` - Blocking database work that uses the SQL backend directly
-    ///
-    /// # Returns
-    /// The operation result converted back into the async SQLFS call path.
-    async fn run_blocking_db<T, F>(&self, job: F) -> Result<T>
-    where
-        T: Send + 'static,
-        F: FnOnce(&dyn DatabaseBackend) -> Result<T> + Send + 'static,
-    {
-        let backend = Arc::clone(&self.backend);
-        tokio::task::spawn_blocking(move || {
-            let backend = backend.blocking_read();
-            job(backend.as_ref())
-        })
-        .await
-        .map_err(|e| Error::internal(format!("sqlfs blocking task join error: {e}")))?
-    }
 }
 
 impl Default for SQLFileSystem {
@@ -282,11 +261,9 @@ impl FileSystem for SQLFileSystem {
 
     async fn read(&self, path: &str, offset: u64, size: u64) -> Result<Vec<u8>> {
         let normalized = Self::normalize_path(path);
-        let normalized_for_db = normalized.clone();
-        match self
-            .run_blocking_db(move |backend| backend.read_file(&normalized_for_db))
-            .await?
-        {
+        let backend = self.backend.read().await;
+
+        match backend.read_file(&normalized)? {
             Some((is_dir, data)) => {
                 if is_dir {
                     return Err(Error::IsADirectory(normalized));
@@ -331,85 +308,39 @@ impl FileSystem for SQLFileSystem {
             ));
         }
 
-        let normalized_for_db = normalized.clone();
-        let data_owned = data.to_vec();
-        let created_new = self
-            .run_blocking_db(move |backend| {
-                let exists = backend.path_exists(&normalized_for_db)?;
+        let backend = self.backend.read().await;
 
-                if exists {
-                    // Check if it's a directory
-                    if backend.is_directory(&normalized_for_db)? {
-                        return Err(Error::IsADirectory(normalized_for_db.clone()));
-                    }
+        let exists = backend.path_exists(&normalized)?;
 
-                    if matches!(flags, WriteFlag::CreateNew) {
-                        return Err(Error::AlreadyExists(normalized_for_db.clone()));
-                    }
+        if exists {
+            // Check if it's a directory
+            if backend.is_directory(&normalized)? {
+                return Err(Error::IsADirectory(normalized));
+            }
 
-                    backend.update_file(&normalized_for_db, &data_owned)?;
-                    Ok(false)
-                } else {
-                    if !matches!(flags, WriteFlag::Create | WriteFlag::CreateNew) {
-                        return Err(Error::not_found(&normalized_for_db));
-                    }
+            // Update existing file
+            backend.update_file(&normalized, data)?;
+        } else {
+            // Create new file
+            if !matches!(flags, WriteFlag::Create) {
+                return Err(Error::not_found(&normalized));
+            }
 
-                    let parent = backend.parent_path(&normalized_for_db);
-                    if parent != "/" && !backend.is_directory(&parent)? {
-                        return Err(Error::not_found(&parent));
-                    }
-
-                    backend.create_file(&normalized_for_db, 0o644, &data_owned)?;
-                    Ok(true)
+            // Check parent exists
+            let parent = backend.parent_path(&normalized);
+            if parent != "/" {
+                if !backend.is_directory(&parent)? {
+                    return Err(Error::not_found(&parent));
                 }
-            })
-            .await?;
+            }
 
-        if created_new {
+            backend.create_file(&normalized, 0o644, data)?;
+
+            // Invalidate parent cache
             self.cache.invalidate_parent(&normalized).await;
         }
 
         Ok(data.len() as u64)
-    }
-
-    async fn compare_and_write(
-        &self,
-        path: &str,
-        expected: &[u8],
-        new_data: &[u8],
-    ) -> Result<bool> {
-        let normalized = Self::normalize_path(path);
-        let normalized_for_db = normalized.clone();
-        let expected_owned = expected.to_vec();
-        let new_data_owned = new_data.to_vec();
-        let changed = self
-            .run_blocking_db(move |backend| {
-                backend.compare_and_update_file(
-                    &normalized_for_db,
-                    &expected_owned,
-                    &new_data_owned,
-                )
-            })
-            .await?;
-        if changed {
-            self.cache.invalidate_parent(&normalized).await;
-        }
-        Ok(changed)
-    }
-
-    async fn compare_and_remove(&self, path: &str, expected: &[u8]) -> Result<bool> {
-        let normalized = Self::normalize_path(path);
-        let normalized_for_db = normalized.clone();
-        let expected_owned = expected.to_vec();
-        let changed = self
-            .run_blocking_db(move |backend| {
-                backend.compare_and_delete_file(&normalized_for_db, &expected_owned)
-            })
-            .await?;
-        if changed {
-            self.cache.invalidate_parent(&normalized).await;
-        }
-        Ok(changed)
     }
 
     async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
@@ -420,21 +351,19 @@ impl FileSystem for SQLFileSystem {
             return Ok(files);
         }
 
-        let normalized_for_db = normalized.clone();
-        let list_path = normalized.clone();
-        let entries = self
-            .run_blocking_db(move |backend| {
-                if !backend.path_exists(&normalized_for_db)? {
-                    return Err(Error::not_found(&normalized_for_db));
-                }
+        let backend = self.backend.read().await;
 
-                if !backend.is_directory(&normalized_for_db)? {
-                    return Err(Error::NotADirectory(normalized_for_db));
-                }
+        // Check if directory exists
+        if !backend.path_exists(&normalized)? {
+            return Err(Error::not_found(&normalized));
+        }
 
-                backend.list_directory(&list_path)
-            })
-            .await?;
+        if !backend.is_directory(&normalized)? {
+            return Err(Error::NotADirectory(normalized));
+        }
+
+        // List directory
+        let entries = backend.list_directory(&normalized)?;
 
         // Convert to FileInfo
         let mut files = Vec::new();
@@ -458,11 +387,9 @@ impl FileSystem for SQLFileSystem {
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
         let normalized = Self::normalize_path(path);
-        let normalized_for_db = normalized.clone();
-        match self
-            .run_blocking_db(move |backend| backend.get_metadata(&normalized_for_db))
-            .await?
-        {
+        let backend = self.backend.read().await;
+
+        match backend.get_metadata(&normalized)? {
             Some(meta) => Ok(FileInfo {
                 name: Self::file_name(&normalized),
                 size: meta.size as u64,

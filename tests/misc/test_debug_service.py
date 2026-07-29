@@ -202,9 +202,9 @@ class TestObserverService:
             rerank_instance=None,
         )
 
-    @patch("openviking.service.debug_service.run_async")
-    @patch("openviking.service.debug_service.get_viking_fs")
+    @patch("openviking.service.debug_service.get_lock_manager")
     @patch("openviking.service.debug_service.RetrievalObserver")
+    @patch("openviking.service.debug_service.LockObserver")
     @patch("openviking.service.debug_service.ModelsObserver")
     @patch("openviking.service.debug_service.VikingDBObserver")
     @patch("openviking.service.debug_service.QueueObserver")
@@ -215,9 +215,9 @@ class TestObserverService:
         mock_queue_cls,
         mock_vikingdb_cls,
         mock_models_cls,
+        mock_lock_cls,
         mock_retrieval_cls,
-        mock_get_viking_fs,
-        mock_run_async,
+        mock_get_lock_mgr,
     ):
         """Test system property when all components are healthy."""
         # Setup mocks
@@ -225,6 +225,7 @@ class TestObserverService:
             mock_queue_cls,
             mock_vikingdb_cls,
             mock_models_cls,
+            mock_lock_cls,
             mock_retrieval_cls,
         ]:
             mock_observer = MagicMock()
@@ -233,15 +234,8 @@ class TestObserverService:
             mock_observer.get_status_table.return_value = "OK"
             mock_cls.return_value = mock_observer
 
-        # Mock get_viking_fs to return a viking_fs with pathlock_observe
-        mock_viking_fs = MagicMock()
-        mock_get_viking_fs.return_value = mock_viking_fs
-        mock_run_async.return_value = {
-            "active_locks": 0,
-            "waiting_locks": 0,
-            "stale_locks_removed": 0,
-            "conflicts": [],
-        }
+        # Mock get_lock_manager to return a MagicMock
+        mock_get_lock_mgr.return_value = MagicMock()
 
         mock_config = MagicMock(spec=["vlm"])  # Only allow vlm attribute
         mock_config.vlm.get_vlm_instance.return_value = MagicMock()
@@ -254,9 +248,9 @@ class TestObserverService:
         non_transaction_errors = [e for e in status.errors if "transaction" not in e]
         assert non_transaction_errors == []
 
-    @patch("openviking.service.debug_service.run_async")
-    @patch("openviking.service.debug_service.get_viking_fs")
+    @patch("openviking.service.debug_service.get_lock_manager")
     @patch("openviking.service.debug_service.RetrievalObserver")
+    @patch("openviking.service.debug_service.LockObserver")
     @patch("openviking.service.debug_service.ModelsObserver")
     @patch("openviking.service.debug_service.VikingDBObserver")
     @patch("openviking.service.debug_service.QueueObserver")
@@ -267,9 +261,9 @@ class TestObserverService:
         mock_queue_cls,
         mock_vikingdb_cls,
         mock_models_cls,
+        mock_lock_cls,
         mock_retrieval_cls,
-        mock_get_viking_fs,
-        mock_run_async,
+        mock_get_lock_mgr,
     ):
         """Test system property when some components have errors."""
         # Queue has errors
@@ -293,22 +287,16 @@ class TestObserverService:
         mock_models.get_status_table.return_value = "Error"
         mock_models_cls.return_value = mock_models
 
-        # Retrieval is healthy
-        mock_retrieval = MagicMock()
-        mock_retrieval.is_healthy.return_value = True
-        mock_retrieval.has_errors.return_value = False
-        mock_retrieval.get_status_table.return_value = "OK"
-        mock_retrieval_cls.return_value = mock_retrieval
+        # Lock and Retrieval are healthy
+        for mock_cls in [mock_lock_cls, mock_retrieval_cls]:
+            mock_observer = MagicMock()
+            mock_observer.is_healthy.return_value = True
+            mock_observer.has_errors.return_value = False
+            mock_observer.get_status_table.return_value = "OK"
+            mock_cls.return_value = mock_observer
 
-        # Mock lock (pathlock_observe) as healthy
-        mock_viking_fs = MagicMock()
-        mock_get_viking_fs.return_value = mock_viking_fs
-        mock_run_async.return_value = {
-            "active_locks": 0,
-            "waiting_locks": 0,
-            "stale_locks_removed": 0,
-            "conflicts": [],
-        }
+        # Mock get_lock_manager to return a MagicMock
+        mock_get_lock_mgr.return_value = MagicMock()
 
         mock_config = MagicMock(spec=["vlm"])  # Only allow vlm attribute
         mock_config.vlm.get_vlm_instance.return_value = MagicMock()
@@ -322,8 +310,7 @@ class TestObserverService:
         assert "queue has errors" in non_transaction_errors
         assert "models has errors" in non_transaction_errors
 
-    @patch("openviking.service.debug_service.run_async")
-    @patch("openviking.service.debug_service.get_viking_fs")
+    @patch("openviking.service.debug_service.get_lock_manager")
     @patch("openviking.service.debug_service.get_queue_manager")
     @patch("openviking.service.debug_service.QueueObserver")
     @patch("openviking.service.debug_service.VikingDBObserver")
@@ -334,8 +321,7 @@ class TestObserverService:
         mock_vikingdb_cls,
         mock_queue_cls,
         mock_get_queue_mgr,
-        mock_get_viking_fs,
-        mock_run_async,
+        mock_get_lock_mgr,
     ):
         """Test is_healthy returns True when system is healthy."""
         for mock_cls in [mock_queue_cls, mock_vikingdb_cls, mock_models_cls]:
@@ -345,14 +331,7 @@ class TestObserverService:
             mock_observer.get_status_table.return_value = "OK"
             mock_cls.return_value = mock_observer
 
-        mock_viking_fs = MagicMock()
-        mock_get_viking_fs.return_value = mock_viking_fs
-        mock_run_async.return_value = {
-            "active_locks": 0,
-            "waiting_locks": 0,
-            "stale_locks_removed": 0,
-            "conflicts": [],
-        }
+        mock_get_lock_mgr.return_value = MagicMock()
 
         mock_config = MagicMock(spec=["vlm"])
         mock_config.vlm.get_vlm_instance.return_value = MagicMock()

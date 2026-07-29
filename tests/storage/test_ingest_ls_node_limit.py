@@ -18,6 +18,7 @@ from __future__ import annotations
 import pytest
 
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+from openviking.storage.transaction import NO_LOCK
 
 
 class _TruncatingVikingFS:
@@ -42,16 +43,16 @@ class _TruncatingVikingFS:
         entries = self._children if uri == self.TEMP else []
         return entries[:node_limit]  # the real ls truncates here
 
-    async def mv(self, src, dst, ctx=None, lease_ref=None):
+    async def mv(self, src, dst, ctx=None, lock_handle=None):
         self.moved.append((src, dst))
 
-    async def rm(self, uri, recursive=False, ctx=None, lease_ref=None):
+    async def rm(self, uri, recursive=False, ctx=None, lock_handle=None):
         pass
 
-    async def mkdir(self, uri, exist_ok=False, ctx=None, lease_ref=None):
+    async def mkdir(self, uri, exist_ok=False, ctx=None):
         pass
 
-    async def delete_temp(self, uri, ctx=None, lease_ref=None):
+    async def delete_temp(self, uri, ctx=None):
         pass
 
 
@@ -67,7 +68,7 @@ async def test_sync_materializes_all_children_above_default_node_limit(monkeypat
     diff = await SemanticProcessor()._sync_topdown_recursive(
         _TruncatingVikingFS.TEMP,
         _TruncatingVikingFS.TARGET,
-        lock=None,
+        lock=NO_LOCK,
     )
 
     assert len(fake.moved) == n_children, (

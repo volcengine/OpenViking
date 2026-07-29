@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 from openviking.server.identity import RequestContext, Role
 from openviking.service import reindex_executor as reindex_module
 from openviking.service.reindex_executor import ReindexExecutor
+from openviking.storage.transaction import init_lock_manager, release_all_locks, reset_lock_manager
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -38,6 +39,7 @@ async def test_reindex_single_file_uri_acquires_tree_lock_without_not_a_director
     uri = "viking://resources/profile.md"
     path = f"{test_dir}/profile.md"
     agfs_client.write(path, b"# Profile\nSingle file reindex source.\n")
+    init_lock_manager(agfs_client)
 
     viking_fs = _FakeVikingFS(uri, path)
     service = SimpleNamespace(
@@ -63,7 +65,8 @@ async def test_reindex_single_file_uri_acquires_tree_lock_without_not_a_director
             ctx=ctx,
         )
     finally:
-        pass
+        await release_all_locks()
+        reset_lock_manager()
 
     assert result["status"] == "completed"
     assert result["uri"] == uri

@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock
 
 import pytest
@@ -16,6 +17,13 @@ async def test_mv_canonicalizes_user_shorthand_before_vector_update(monkeypatch)
     fs._collect_uris = AsyncMock(return_value=[])
     fs._copy_for_mv = AsyncMock()
     fs._update_vector_store_uris = AsyncMock()
+
+    @asynccontextmanager
+    async def unlocked(*_args, **_kwargs):
+        yield None
+
+    monkeypatch.setattr("openviking.storage.transaction.get_lock_manager", lambda: None)
+    monkeypatch.setattr("openviking.storage.transaction.LockContext", unlocked)
 
     await fs.mv(
         "viking://user/peers/vaka/memories/profile.md",

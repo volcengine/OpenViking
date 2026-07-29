@@ -187,15 +187,8 @@ impl FileInfo {
 /// Write operation flags
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WriteFlag {
-    /// Create new file or truncate existing.
-    ///
-    /// Follows POSIX `O_CREAT` / Rust `OpenOptions::create(true)` convention:
-    /// create-or-open (non-exclusive). For exclusive create-if-absent, use
-    /// `CreateNew` (POSIX `O_CREAT | O_EXCL` / Rust `create_new(true)`).
+    /// Create new file or truncate existing
     Create,
-
-    /// Create new file, fail if already exists
-    CreateNew,
 
     /// Append to existing file
     Append,

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from openviking.core.namespace import context_type_for_uri
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
+from openviking.storage.transaction import NO_LOCK, LockLease
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -35,7 +36,7 @@ class Summarizer:
         resource_uris: List[str],
         ctx: "RequestContext",
         skip_vectorization: bool = False,
-        lock: Optional[Dict[str, Any]] = None,
+        lock: LockLease = NO_LOCK,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -59,9 +60,7 @@ class Summarizer:
         enqueued_count = 0
 
         telemetry = get_current_telemetry()
-        lock_handoff: Optional[Dict[str, Any]] = None
-        if lock is not None:
-            lock_handoff = await get_viking_fs()._async_agfs.pathlock_to_handoff(lock)
+        lock_handoff = lock.to_handoff()
         target_preexisting_arg = kwargs.get("target_preexisting")
 
         def resolve_target_preexisting(index: int, target_uri: str) -> Optional[bool]:

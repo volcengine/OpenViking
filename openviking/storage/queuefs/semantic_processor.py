@@ -39,6 +39,7 @@ from openviking.storage.queuefs.semantic_lock import SemanticLockScope
 from openviking.storage.queuefs.semantic_msg import SemanticMsg, build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_queue import is_semantic_msg_stale
 from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
+from openviking.storage.transaction import NO_LOCK, LockLease
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry import bind_telemetry, bind_telemetry_stage, resolve_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -305,7 +306,7 @@ class SemanticProcessor(DequeueHandlerBase):
     async def on_dequeue(
         self,
         data: Optional[Dict[str, Any]],
-        lock: Optional[Dict[str, Any]] = None,
+        lock: LockLease = NO_LOCK,
     ) -> Optional[Dict[str, Any]]:
         """Process dequeued SemanticMsg, recursively process all subdirectories."""
         msg: Optional[SemanticMsg] = None
@@ -371,8 +372,10 @@ class SemanticProcessor(DequeueHandlerBase):
                             msg.uri, ctx=current_ctx
                         ),
                     )
+                    lock_transferred = False
                     try:
                         if msg.context_type == "memory":
+                            lock_transferred = True
                             await self._process_memory_directory(
                                 msg,
                                 ctx=current_ctx,
@@ -440,6 +443,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                 coalesce_key=msg.coalesce_key,
                                 coalesce_version=msg.coalesce_version,
                             )
+                            lock_transferred = True
                             await executor.run(run_uri)
                             self._cache_dag_stats(
                                 msg.telemetry_id,
@@ -449,7 +453,8 @@ class SemanticProcessor(DequeueHandlerBase):
                             if not executor.stale:
                                 await self._enqueue_parent_refresh(msg, target_uri or msg.uri)
                     finally:
-                        await semantic_lock.close()
+                        if not lock_transferred:
+                            await semantic_lock.close()
                     self._merge_request_stats(msg.telemetry_id, processed=1)
                     logger.info(f"Completed semantic generation for: {msg.uri}")
                     self.report_success()
@@ -516,7 +521,7 @@ class SemanticProcessor(DequeueHandlerBase):
         self,
         msg: SemanticMsg,
         ctx: Optional[RequestContext] = None,
-        lock: Optional[Dict[str, Any]] = None,
+        lock: LockLease = NO_LOCK,
     ) -> None:
         """Process a memory directory with special handling.
 
@@ -710,7 +715,7 @@ class SemanticProcessor(DequeueHandlerBase):
             )
             logger.info(f"Vectorized abstract.md and overview.md for {dir_uri}")
         finally:
-            pass
+            await lock.close()
 
     async def _write_memory_directory_semantics(
         self,
@@ -721,7 +726,7 @@ class SemanticProcessor(DequeueHandlerBase):
         overview: str,
         abstract: str,
         ctx: Optional[RequestContext],
-        lock: Optional[Dict[str, Any]] = None,
+        lock: LockLease = NO_LOCK,
     ) -> bool:
         return await write_semantic_sidecars(
             viking_fs=viking_fs,
@@ -740,7 +745,7 @@ class SemanticProcessor(DequeueHandlerBase):
         target_uri: str,
         ctx: Optional[RequestContext] = None,
         file_change_status: Optional[Dict[str, bool]] = None,
-        lock: Optional[Dict[str, Any]] = None,
+        lock: LockLease = NO_LOCK,
     ) -> DiffResult:
         viking_fs = get_viking_fs()
         if not await viking_fs.exists(root_uri, ctx=ctx):
@@ -748,6 +753,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 f"Semantic source no longer exists; refusing to sync into {target_uri}: {root_uri}"
             )
         diff = DiffResult()
+        lock_handle = lock.handle
 
         async def list_children(dir_uri: str) -> Tuple[Dict[str, str], Dict[str, str]]:
             files: Dict[str, str] = {}
@@ -785,7 +791,7 @@ class SemanticProcessor(DequeueHandlerBase):
                             target_conflict_dir,
                             recursive=True,
                             ctx=ctx,
-                            lease_ref=lock,
+                            lock_handle=lock_handle,
                         )
                         diff.deleted_dirs.append(target_conflict_dir)
                         target_dirs.pop(name, None)
@@ -797,7 +803,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
                 if target_file and name in root_dirs and not root_file:
                     try:
-                        await viking_fs.rm(target_file, ctx=ctx, lease_ref=lock)
+                        await viking_fs.rm(target_file, ctx=ctx, lock_handle=lock_handle)
                         diff.deleted_files.append(target_file)
                         target_files.pop(name, None)
                     except Exception as e:
@@ -808,7 +814,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
                 if target_file and not root_file:
                     try:
-                        await viking_fs.rm(target_file, ctx=ctx, lease_ref=lock)
+                        await viking_fs.rm(target_file, ctx=ctx, lock_handle=lock_handle)
                         diff.deleted_files.append(target_file)
                     except Exception as e:
                         logger.error(f"[SyncDiff] Failed to delete file: {target_file}, error={e}")
@@ -831,7 +837,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     if changed:
                         diff.updated_files.append(target_file)
                         try:
-                            await viking_fs.rm(target_file, ctx=ctx, lease_ref=lock)
+                            await viking_fs.rm(target_file, ctx=ctx, lock_handle=lock_handle)
                         except Exception as e:
                             logger.error(
                                 f"[SyncDiff] Failed to remove old file before update: {target_file}, error={e}"
@@ -841,7 +847,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                 root_file,
                                 target_file,
                                 ctx=ctx,
-                                lease_ref=lock,
+                                lock_handle=lock_handle,
                             )
                         except Exception as e:
                             logger.error(
@@ -857,7 +863,7 @@ class SemanticProcessor(DequeueHandlerBase):
                             root_file,
                             target_file_uri,
                             ctx=ctx,
-                            lease_ref=lock,
+                            lock_handle=lock_handle,
                         )
                     except Exception as e:
                         logger.error(
@@ -875,7 +881,7 @@ class SemanticProcessor(DequeueHandlerBase):
                         await viking_fs.rm(
                             target_conflict_file,
                             ctx=ctx,
-                            lease_ref=lock,
+                            lock_handle=lock_handle,
                         )
                         diff.deleted_files.append(target_conflict_file)
                         target_files.pop(name, None)
@@ -891,7 +897,7 @@ class SemanticProcessor(DequeueHandlerBase):
                             target_subdir,
                             recursive=True,
                             ctx=ctx,
-                            lease_ref=lock,
+                            lock_handle=lock_handle,
                         )
                         diff.deleted_dirs.append(target_subdir)
                     except Exception as e:
@@ -908,7 +914,7 @@ class SemanticProcessor(DequeueHandlerBase):
                             root_subdir,
                             target_subdir_uri,
                             ctx=ctx,
-                            lease_ref=lock,
+                            lock_handle=lock_handle,
                         )
                     except Exception as e:
                         logger.error(
@@ -923,14 +929,9 @@ class SemanticProcessor(DequeueHandlerBase):
         if not target_exists:
             parent_uri = VikingURI(target_uri).parent
             if parent_uri:
-                await viking_fs.mkdir(
-                    parent_uri.uri,
-                    exist_ok=True,
-                    ctx=ctx,
-                    lease_ref=lock,
-                )
+                await viking_fs.mkdir(parent_uri.uri, exist_ok=True, ctx=ctx)
             diff.added_dirs.append(target_uri)
-            await viking_fs.mv(root_uri, target_uri, ctx=ctx, lease_ref=lock)
+            await viking_fs.mv(root_uri, target_uri, ctx=ctx, lock_handle=lock_handle)
             # The whole temp tree (including the hidden .image_mappings.json
             # sidecar) was moved into the target; rewrite local image paths now.
             await self._rewrite_target_image_uris(root_uri, target_uri, ctx=ctx, lock=lock)
@@ -952,7 +953,7 @@ class SemanticProcessor(DequeueHandlerBase):
         root_uri: str,
         target_uri: str,
         ctx: Optional[RequestContext] = None,
-        lock: Optional[Dict[str, Any]] = None,
+        lock: LockLease = NO_LOCK,
     ) -> None:
         """Rewrite local image refs in the target after a temp-to-target sync.
 
@@ -1015,14 +1016,14 @@ class SemanticProcessor(DequeueHandlerBase):
                         target_mapping,
                         mapping_content,
                         ctx=ctx,
-                        lease_ref=lock,
+                        lock_handle=lock.handle,
                     )
                 except Exception:
                     # Target subtree may not exist (doc removed in sync); skip.
                     pass
 
         try:
-            await rewrite_image_uris(target_uri, ctx=ctx, lease_ref=lock)
+            await rewrite_image_uris(target_uri, ctx=ctx, lock_handle=lock.handle)
         except Exception as e:
             logger.error(f"[SyncDiff] Failed to rewrite image URIs for {target_uri}: {e}")
 

@@ -45,6 +45,7 @@ from openviking.server.user_config import (
 )
 from openviking.storage import VikingDBManager
 from openviking.storage.queuefs import QueueManager, get_queue_manager
+from openviking.storage.transaction import NO_LOCK, LockLease
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -359,36 +360,33 @@ class ResourceService:
         msg: Any,
         *,
         queue_name: str,
-        resource_lock: Optional[Dict[str, Any]] = None,
+        resource_lock: LockLease = NO_LOCK,
     ) -> Any:
-        """Persist a job and fully own the passed lock until handoff or release completes."""
+        """Persist a job before its TaskRecord so a crash cannot orphan the task."""
         from openviking.service.task_tracker import get_task_tracker
         from openviking.storage.queuefs import get_queue_manager
 
-        tracker = get_task_tracker()
         try:
             await get_queue_manager().enqueue(queue_name, msg.to_dict())
-            if resource_lock is not None:
-                await self._viking_fs._async_agfs.pathlock_handoff(resource_lock)
-                resource_lock = None
-            task = await tracker.create(
-                "add_resource",
-                resource_id=None if msg.defer_target_resolution else msg.root_uri,
-                account_id=msg.account_id,
-                user_id=msg.user_id,
-                task_id=msg.task_id,
-            )
-            await tracker.update_stage(
-                task.task_id,
-                "queued",
-                account_id=msg.account_id,
-                user_id=msg.user_id,
-            )
+            await resource_lock.handoff()
         except BaseException:
-            if resource_lock is not None:
-                await self._viking_fs._async_agfs.pathlock_release(resource_lock)
+            await resource_lock.close()
             raise
 
+        tracker = get_task_tracker()
+        task = await tracker.create(
+            "add_resource",
+            resource_id=None if msg.defer_target_resolution else msg.root_uri,
+            account_id=msg.account_id,
+            user_id=msg.user_id,
+            task_id=msg.task_id,
+        )
+        await tracker.update_stage(
+            task.task_id,
+            "queued",
+            account_id=msg.account_id,
+            user_id=msg.user_id,
+        )
         return task
 
     async def execute_add_resource_job(
@@ -396,10 +394,11 @@ class ResourceService:
         msg: Any,
         *,
         ctx: RequestContext,
-        resource_lock: Optional[Dict[str, Any]],
+        resource_lock: Optional[LockLease],
         stage_callback: Callable[[str], Any],
     ) -> Dict[str, Any]:
         """Execute one durable add-resource job inside its QueueFS consumer."""
+        resource_lock = resource_lock or NO_LOCK
         if msg.prepared is None:
             target_uri = msg.root_uri
             parent_uri = None
@@ -491,15 +490,18 @@ class ResourceService:
         self,
         root_uri: str,
         ctx: RequestContext,
-    ) -> Dict[str, Any]:
+    ) -> LockLease:
         """Acquire a fresh lock when a recovered job's old handoff was released."""
         if not self._resource_processor or not self._viking_fs:
             raise NotInitializedError("ResourceProcessor")
+        from openviking.storage.transaction import get_lock_manager
 
         dst_path = self._viking_fs._uri_to_path(root_uri, ctx=ctx)
-        return await self._viking_fs._async_agfs.pathlock_acquire_tree(
+        return await self._resource_processor.acquire_resource_lock(
+            get_lock_manager(),
             dst_path,
-            timeout_secs=0.0,
+            uri=root_uri,
+            timeout=0.0,
         )
 
     async def enqueue_git_add_resource(
@@ -549,7 +551,7 @@ class ResourceService:
 
         from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 
-        resource_lock: Optional[Dict[str, Any]] = None
+        resource_lock: LockLease = NO_LOCK
         try:
             if enforce_public_remote_targets and is_remote_resource_source(path):
                 path = require_remote_resource_source(path)
@@ -568,11 +570,7 @@ class ResourceService:
             )
 
             task_id = str(uuid4())
-            lock_handoff = (
-                await self._viking_fs._async_agfs.pathlock_to_handoff(resource_lock)
-                if resource_lock is not None
-                else None
-            )
+            lock_handoff = resource_lock.to_handoff()
             processor_args = {
                 key: value
                 for key, value in kwargs.items()
@@ -587,7 +585,7 @@ class ResourceService:
                 user_id=ctx.user.user_id,
                 role=str(ctx.role),
                 actor_peer_id=ctx.actor_peer_id,
-                lock_handoff=lock_handoff,
+                lock_handoff=lock_handoff.to_dict() if lock_handoff else None,
                 reason=reason,
                 instruction=instruction,
                 timeout=timeout,
@@ -608,21 +606,19 @@ class ResourceService:
                 source_name=source_name,
                 args=self._sanitize_watch_processor_kwargs(processor_args),
             )
-            enqueue_lock = resource_lock
-            resource_lock = None
             task = await self._enqueue_add_resource_job(
                 msg,
                 queue_name=QueueManager.ADD_RESOURCE,
-                resource_lock=enqueue_lock,
+                resource_lock=resource_lock,
             )
+            resource_lock = NO_LOCK
             return {
                 "status": "success",
                 "root_uri": root_uri,
                 "task_id": task.task_id,
             }
         except Exception:
-            if resource_lock is not None:
-                await self._viking_fs._async_agfs.pathlock_release(resource_lock)
+            await resource_lock.close()
             raise
 
     async def _plan_resource_target(
@@ -633,7 +629,7 @@ class ResourceService:
         target: ContentTargetSpec,
         source_name: Optional[str],
         source_info: _ResourceSourceInfo,
-    ) -> tuple[str, Optional[Dict[str, Any]]]:
+    ) -> tuple[str, LockLease]:
         if not self._resource_processor or not self._viking_fs:
             raise NotInitializedError("ResourceProcessor")
 
@@ -655,10 +651,14 @@ class ResourceService:
                 ctx=ctx,
             )
 
+        from openviking.storage.transaction import get_lock_manager
+
         dst_path = self._viking_fs._uri_to_path(root_uri, ctx=ctx)
-        resource_lock = await self._viking_fs._async_agfs.pathlock_acquire_tree(
+        resource_lock = await self._resource_processor.acquire_resource_lock(
+            get_lock_manager(),
             dst_path,
-            timeout_secs=0.0,
+            uri=root_uri,
+            timeout=0.0,
         )
         return root_uri, resource_lock
 
@@ -961,7 +961,7 @@ class ResourceService:
         enforce_public_remote_targets: bool = False,
         watch_auth_state: Optional[Dict[str, Any]] = None,
         parser_args: Optional[Dict[str, Any]] = None,
-        resource_lock: Optional[Dict[str, Any]] = None,
+        resource_lock: Optional[LockLease] = None,
         stage_callback: Optional[Callable[[str], Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
@@ -972,7 +972,7 @@ class ResourceService:
         telemetry_id = register_wait_telemetry(wait)
         request_wait_tracker = get_request_wait_tracker()
         job_enqueued = False
-        deferred_lock: Optional[Dict[str, Any]] = None
+        deferred_lock: LockLease = NO_LOCK
         if telemetry_id:
             request_wait_tracker.register_request(telemetry_id)
         watch_manager = self._get_watch_manager()
@@ -1070,18 +1070,19 @@ class ResourceService:
                 )
                 if self._viking_fs is None:
                     raise NotInitializedError("VikingFS")
-                from openviking.storage.errors import ResourceBusyError
+                from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+                from openviking.storage.transaction import OwnedLockLease, get_lock_manager
 
-                lock_lease: Optional[Dict[str, Any]] = None
+                lock_manager = get_lock_manager()
+                lock_lease: LockLease = NO_LOCK
 
-                async def _reserve_tree(uri: str) -> Dict[str, Any]:
+                async def _reserve_tree(uri: str) -> LockLease:
                     dst_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
                     try:
-                        return await self._viking_fs._async_agfs.pathlock_acquire_tree(
-                            dst_path,
-                            timeout_secs=0.0,
+                        return await OwnedLockLease.acquire_tree(
+                            lock_manager, dst_path, timeout=0.0
                         )
-                    except Exception as exc:
+                    except LockAcquisitionError as exc:
                         raise ResourceBusyError(
                             f"Resource is busy: {uri}",
                             uri=uri,
@@ -1114,11 +1115,7 @@ class ResourceService:
                     if resolved_extension:
                         processor_args["resolved_extension"] = resolved_extension
 
-                    lock_handoff = (
-                        await self._viking_fs._async_agfs.pathlock_to_handoff(lock_lease)
-                        if lock_lease is not None
-                        else None
-                    )
+                    lock_handoff = lock_lease.to_handoff()
                     msg = AddResourceMsg(
                         task_id=str(uuid4()),
                         telemetry_id=telemetry_id or None,
@@ -1145,23 +1142,22 @@ class ResourceService:
                         enforce_public_remote_targets=enforce_public_remote_targets,
                         args=processor_args,
                         source_name=source_name,
-                        lock_handoff=lock_handoff,
+                        lock_handoff=lock_handoff.to_dict() if lock_handoff else None,
                         skip_watch_management=True,
                         defer_target_resolution=defer_target_resolution,
                         understanding_response_id=understanding_response_id,
                     )
                     enqueue_started = True
-                    enqueue_lock = lock_lease
-                    lock_lease = None
                     task = await self._enqueue_add_resource_job(
                         msg,
                         queue_name=QueueManager.EXTERNAL_PARSE,
-                        resource_lock=enqueue_lock,
+                        resource_lock=lock_lease,
                     )
                 except BaseException:
-                    if not enqueue_started and lock_lease is not None:
-                        await self._viking_fs._async_agfs.pathlock_release(lock_lease)
+                    if not enqueue_started:
+                        await lock_lease.close()
                     raise
+                lock_lease = NO_LOCK
                 job_enqueued = True
                 logger.info(
                     "[ResourceService] Enqueued AddResourceMsg task_id=%s root_uri=%s",
@@ -1214,7 +1210,7 @@ class ResourceService:
             if result.get("status") == "error":
                 return result
             prepared = result.pop("_post_process", None)
-            deferred_lock = result.pop("_resource_lock", None)
+            deferred_lock = result.pop("_resource_lock", NO_LOCK)
             if wait:
                 if stage_callback is not None:
                     stage_result = stage_callback("processing_queue")
@@ -1268,11 +1264,7 @@ class ResourceService:
                 root_uri = result.get("root_uri", "")
                 if not isinstance(prepared, dict):
                     raise InternalError("Deferred resource processing payload is missing")
-                lock_handoff = (
-                    await self._viking_fs._async_agfs.pathlock_to_handoff(deferred_lock)
-                    if deferred_lock is not None
-                    else None
-                )
+                lock_handoff = deferred_lock.to_handoff()
                 msg = AddResourceMsg(
                     task_id=str(uuid4()),
                     root_uri=root_uri,
@@ -1282,7 +1274,7 @@ class ResourceService:
                     user_id=ctx.user.user_id,
                     role=str(ctx.role),
                     actor_peer_id=ctx.actor_peer_id,
-                    lock_handoff=lock_handoff,
+                    lock_handoff=lock_handoff.to_dict() if lock_handoff else None,
                     reason=reason,
                     instruction=instruction,
                     timeout=timeout,
@@ -1301,13 +1293,12 @@ class ResourceService:
                     source_name=kwargs.get("source_name"),
                     skip_watch_management=True,
                 )
-                enqueue_lock = deferred_lock
-                deferred_lock = None
                 task = await self._enqueue_add_resource_job(
                     msg,
                     queue_name=QueueManager.ADD_RESOURCE,
-                    resource_lock=enqueue_lock,
+                    resource_lock=deferred_lock,
                 )
+                deferred_lock = NO_LOCK
                 result["task_id"] = task.task_id
                 job_enqueued = True
             await self._manage_watch_if_needed(
@@ -1352,8 +1343,8 @@ class ResourceService:
             if wait or not telemetry_id or not job_enqueued:
                 get_request_wait_tracker().cleanup(telemetry_id)
                 unregister_wait_telemetry(telemetry_id)
-            if deferred_lock is not None:
-                await self._viking_fs._async_agfs.pathlock_release(deferred_lock)
+            if deferred_lock.active:
+                await deferred_lock.close()
 
     async def _link_resource_reason_memory(
         self,

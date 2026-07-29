@@ -8,6 +8,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+from openviking.storage.transaction import LockHandoffRef
+
 
 def build_semantic_coalesce_key(
     *,
@@ -50,7 +52,7 @@ class SemanticMsg:
     skip_vectorization: bool = False
     telemetry_id: str = ""
     target_uri: str = ""
-    lock_handoff: Optional[Dict[str, Any]] = None
+    lock_handoff: Optional[LockHandoffRef] = None
     is_code_repo: bool = False
     target_preexisting: Optional[bool] = None
     coalesce_key: str = ""
@@ -71,7 +73,7 @@ class SemanticMsg:
         skip_vectorization: bool = False,
         telemetry_id: str = "",
         target_uri: str = "",
-        lock_handoff: Optional[Dict[str, Any]] = None,
+        lock_handoff: Optional[LockHandoffRef] = None,
         is_code_repo: bool = False,
         target_preexisting: Optional[bool] = None,
         coalesce_key: str = "",
@@ -132,7 +134,7 @@ class SemanticMsg:
             skip_vectorization=data.get("skip_vectorization", False),
             telemetry_id=data.get("telemetry_id", ""),
             target_uri=data.get("target_uri", ""),
-            lock_handoff=data.get("lock_handoff"),
+            lock_handoff=LockHandoffRef.from_value(data.get("lock_handoff")),
             is_code_repo=data.get("is_code_repo", False),
             target_preexisting=data.get("target_preexisting"),
             coalesce_key=data.get("coalesce_key", ""),
