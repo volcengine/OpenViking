@@ -31,6 +31,7 @@ from openviking.parse.parsers.media.utils import (
     get_media_type,
 )
 from openviking.prompts import render_prompt
+from openviking.utils.ingest_options import IngestOptions
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
@@ -440,8 +441,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                 is_code_repo=msg.is_code_repo,
                                 changes=changes,
                                 skip_vectorization=msg.skip_vectorization,
-                                search_tags=msg.search_tags,
-                                search_tag_mode=msg.search_tag_mode,
+                                ingest_options=msg.ingest_options,
                                 coalesce_key=msg.coalesce_key,
                                 coalesce_version=msg.coalesce_version,
                             )
@@ -1541,8 +1541,7 @@ class SemanticProcessor(DequeueHandlerBase):
         overview: str,
         ctx: Optional[RequestContext] = None,
         semantic_msg_id: Optional[str] = None,
-        search_tags: Optional[List[str]] = None,
-        search_tag_mode: str = "replace",
+        ingest_options: IngestOptions | None = None,
     ) -> None:
         """Create directory Context and enqueue to EmbeddingQueue."""
 
@@ -1556,8 +1555,7 @@ class SemanticProcessor(DequeueHandlerBase):
             context_type=context_type,
             ctx=active_ctx,
             semantic_msg_id=semantic_msg_id,
-            search_tags=search_tags,
-            search_tag_mode=search_tag_mode,
+            ingest_options=ingest_options,
         )
 
     async def _vectorize_single_file(
@@ -1570,8 +1568,7 @@ class SemanticProcessor(DequeueHandlerBase):
         semantic_msg_id: Optional[str] = None,
         use_summary: bool = False,
         preserve_existing_created_at: bool = False,
-        search_tags: Optional[List[str]] = None,
-        search_tag_mode: str = "replace",
+        ingest_options: IngestOptions | None = None,
     ) -> None:
         """Vectorize a single file using its content or summary."""
         from openviking.utils.embedding_utils import vectorize_file
@@ -1586,6 +1583,5 @@ class SemanticProcessor(DequeueHandlerBase):
             semantic_msg_id=semantic_msg_id,
             use_summary=use_summary,
             preserve_existing_created_at=preserve_existing_created_at,
-            search_tags=search_tags,
-            search_tag_mode=search_tag_mode,
+            ingest_options=ingest_options,
         )

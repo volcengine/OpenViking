@@ -2,6 +2,7 @@ import types
 
 import pytest
 
+from openviking.utils.ingest_options import IngestOptions
 from openviking.core.context import Context, ResourceContentType
 from openviking.utils import embedding_utils
 
@@ -253,7 +254,7 @@ async def test_vectorize_file_writes_search_tags_into_embedding_context(monkeypa
         summary_dict={"name": "demo.md", "summary": "deployment summary"},
         parent_uri="viking://user/default/resources",
         ctx=DummyReq(),
-        search_tags=["team=search", "env=test"],
+        ingest_options=IngestOptions.from_search_tags(["team=search", "env=test"]),
     )
 
     assert len(queue.items) == 1
@@ -279,8 +280,10 @@ async def test_vectorize_file_appends_search_tags_to_existing_record_tags(monkey
         summary_dict={"name": "demo.md", "summary": "deployment summary"},
         parent_uri="viking://user/default/resources",
         ctx=DummyReq(),
-        search_tags=["env=prod", "team=search"],
-        search_tag_mode="append",
+        ingest_options=IngestOptions.from_search_tags(
+            ["env=prod", "team=search"],
+            mode="append",
+        ),
     )
 
     assert len(queue.items) == 1
@@ -316,8 +319,10 @@ async def test_vectorize_file_append_does_not_read_existing_tags(monkeypatch):
         summary_dict={"name": "demo.md", "summary": "deployment summary"},
         parent_uri="viking://user/default/resources",
         ctx=DummyReq(),
-        search_tags=["env=prod", "team=search"],
-        search_tag_mode="append",
+        ingest_options=IngestOptions.from_search_tags(
+            ["env=prod", "team=search"],
+            mode="append",
+        ),
     )
 
     assert queue.items[0].context_data["search_tags"] == ["env=prod", "team=search"]
@@ -335,7 +340,7 @@ async def test_vectorize_directory_meta_writes_search_tags_into_embedding_contex
         abstract="demo abstract",
         overview="demo overview",
         ctx=DummyReq(),
-        search_tags=["team=search", "env=test"],
+        ingest_options=IngestOptions.from_search_tags(["team=search", "env=test"]),
     )
 
     assert len(queue.items) == 2
@@ -354,8 +359,10 @@ async def test_vectorize_directory_meta_appends_search_tags_by_level(monkeypatch
         abstract="demo abstract",
         overview="demo overview",
         ctx=DummyReq(),
-        search_tags=["env=prod", "team=search"],
-        search_tag_mode="append",
+        ingest_options=IngestOptions.from_search_tags(
+            ["env=prod", "team=search"],
+            mode="append",
+        ),
     )
 
     assert len(queue.items) == 2

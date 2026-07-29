@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from openviking.utils.ingest_options import IngestOptions
 from openviking.server.identity import RequestContext, Role
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking_cli.session.user_id import UserIdentifier
@@ -90,6 +91,7 @@ async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch,
         resource_lock=lock,
         build_index=True,
         processing_mode="vectors_only",
+        ingest_options=IngestOptions.from_search_tags(["team=search"], mode="append"),
     )
 
     assert result == {"status": "success", "root_uri": "viking://resources/demo"}
@@ -111,6 +113,10 @@ async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch,
         "name": "page.md",
         "summary": "",
     }
+    assert vectorize_file.await_args.kwargs["ingest_options"] == IngestOptions(
+        search_tags=["team=search"],
+        search_tag_mode="append",
+    )
     assert vectorize_file.await_args.kwargs["register_request_wait"] is True
     processor._delete_resource_semantic_markers.assert_not_awaited()
     processor._delete_resource_semantic_vectors.assert_not_awaited()

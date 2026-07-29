@@ -21,6 +21,7 @@ import httpx
 
 from openviking.connector.client import ConnectorClient
 from openviking.core.content_targets import ContentTargetSpec
+from openviking.utils.ingest_options import IngestOptions
 from openviking.core.uri_validation import validate_optional_content_target_uri
 from openviking.resource.feishu_watch_auth import (
     FEISHU_ACCESS_TOKEN_ARG,
@@ -60,7 +61,6 @@ from openviking.utils.media_processor import _smart_stem
 from openviking.utils.network_guard import ensure_public_remote_target
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking.utils.skill_processor import SkillProcessingPreparation, SkillProcessor
-from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import (
     ConflictError,
     DeadlineExceededError,
@@ -232,10 +232,7 @@ class ResourceService:
     ) -> Dict[str, Any]:
         if tags is None:
             return {}
-        return {
-            "ingest_search_tags": normalize_search_tags(tags),
-            "ingest_search_tag_mode": tag_mode,
-        }
+        return {"ingest_options": IngestOptions.from_search_tags(tags, mode=tag_mode)}
 
     async def _manage_watch_if_needed(
         self,

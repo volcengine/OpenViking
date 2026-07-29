@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import pytest_asyncio
 
+from openviking.utils.ingest_options import IngestOptions
 from openviking.resource.watch_manager import WatchManager
 from openviking.server.identity import RequestContext, Role
 from openviking.service import resource_service as resource_service_module
@@ -259,10 +260,10 @@ class TestWatchTaskCreation:
         )
 
         assert "tags_result" not in result
-        assert resource_service._resource_processor.calls[-1]["ingest_search_tags"] == [
-            "team=search"
-        ]
-        assert resource_service._resource_processor.calls[-1]["ingest_search_tag_mode"] == "append"
+        assert resource_service._resource_processor.calls[-1]["ingest_options"] == IngestOptions(
+            search_tags=["team=search"],
+            search_tag_mode="append",
+        )
 
     @pytest.mark.asyncio
     async def test_add_resource_rejects_invalid_tag_mode_before_processing(
@@ -378,8 +379,10 @@ class TestWatchTaskCreation:
         )
 
         assert "tags_result" not in result
-        assert finish_calls[-1]["kwargs"]["ingest_search_tags"] == ["team=search"]
-        assert finish_calls[-1]["kwargs"]["ingest_search_tag_mode"] == "append"
+        assert finish_calls[-1]["kwargs"]["ingest_options"] == IngestOptions(
+            search_tags=["team=search"],
+            search_tag_mode="append",
+        )
 
     @pytest.mark.asyncio
     async def test_create_watch_task_with_default_interval(

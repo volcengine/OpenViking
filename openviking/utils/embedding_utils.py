@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 from charset_normalizer import from_bytes
 
 from openviking.core.context import Context, ContextLevel, ResourceContentType, Vectorize
+from openviking.utils.ingest_options import IngestOptions
 from openviking.core.namespace import (
     context_type_for_uri,
     is_session_uri,
@@ -68,15 +69,17 @@ def _apply_scalar_overrides(embedding_msg, overrides: Optional[Dict[str, Any]]) 
             embedding_msg.context_data[field] = value
 
 
-def _apply_search_tags(
+def _apply_ingest_options(
     embedding_msg,
-    search_tags: Optional[list[str]],
-    search_tag_mode: str = "replace",
+    ingest_options: IngestOptions | None,
 ) -> None:
-    if not embedding_msg or search_tags is None:
+    ingest_options = IngestOptions.from_value(ingest_options)
+    if not embedding_msg or ingest_options.search_tags is None:
         return
-    embedding_msg.context_data["search_tags"] = list(search_tags)
-    embedding_msg.context_data["_upsert_options"] = {"search_tag_mode": search_tag_mode}
+    embedding_msg.context_data["search_tags"] = list(ingest_options.search_tags or [])
+    embedding_msg.context_data["_upsert_options"] = {
+        "search_tag_mode": ingest_options.search_tag_mode
+    }
 
 
 async def _decrement_embedding_tracker(semantic_msg_id: Optional[str], count: int) -> None:
@@ -327,8 +330,7 @@ async def vectorize_directory_meta(
     semantic_msg_id: Optional[str] = None,
     include_overview: bool = True,
     scalar_overrides: Optional[Dict[int, Dict[str, Any]]] = None,
-    search_tags: Optional[list[str]] = None,
-    search_tag_mode: str = "replace",
+    ingest_options: IngestOptions | None = None,
 ) -> None:
     """
     Vectorize directory metadata (.abstract.md and .overview.md).
@@ -375,7 +377,7 @@ async def vectorize_directory_meta(
             msg_abstract,
             (scalar_overrides or {}).get(int(ContextLevel.ABSTRACT.value)),
         )
-        _apply_search_tags(msg_abstract, search_tags, search_tag_mode)
+        _apply_ingest_options(msg_abstract, ingest_options)
         if msg_abstract:
             msg_abstract.semantic_msg_id = semantic_msg_id
             try:
@@ -409,7 +411,7 @@ async def vectorize_directory_meta(
                 msg_overview,
                 (scalar_overrides or {}).get(int(ContextLevel.OVERVIEW.value)),
             )
-            _apply_search_tags(msg_overview, search_tags, search_tag_mode)
+            _apply_ingest_options(msg_overview, ingest_options)
             if msg_overview:
                 msg_overview.semantic_msg_id = semantic_msg_id
                 try:
@@ -442,8 +444,7 @@ async def vectorize_file(
     preserve_existing_created_at: bool = False,
     scalar_override: Optional[Dict[str, Any]] = None,
     register_request_wait: bool = False,
-    search_tags: Optional[list[str]] = None,
-    search_tag_mode: str = "replace",
+    ingest_options: IngestOptions | None = None,
 ) -> None:
     """
     Vectorize a single file.
@@ -562,7 +563,7 @@ async def vectorize_file(
             return
 
         _apply_scalar_overrides(embedding_msg, scalar_override)
-        _apply_search_tags(embedding_msg, search_tags, search_tag_mode)
+        _apply_ingest_options(embedding_msg, ingest_options)
         embedding_msg.semantic_msg_id = semantic_msg_id
         if register_request_wait:
             get_request_wait_tracker().register_embedding_root(
@@ -597,8 +598,7 @@ async def vectorize_file(
 async def index_resource(
     uri: str,
     ctx: RequestContext,
-    search_tags: Optional[list[str]] = None,
-    search_tag_mode: str = "replace",
+    ingest_options: IngestOptions | None = None,
 ) -> None:
     """
     Build vector index for a resource directory.
@@ -639,8 +639,7 @@ async def index_resource(
             overview,
             context_type=context_type,
             ctx=ctx,
-            search_tags=search_tags,
-            search_tag_mode=search_tag_mode,
+            ingest_options=ingest_options,
         )
 
     # 2. Index Files
@@ -667,8 +666,7 @@ async def index_resource(
                 parent_uri=uri,
                 context_type=context_type,
                 ctx=ctx,
-                search_tags=search_tags,
-                search_tag_mode=search_tag_mode,
+                ingest_options=ingest_options,
             )
 
     except Exception as e:
