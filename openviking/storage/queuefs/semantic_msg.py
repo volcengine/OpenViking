@@ -3,11 +3,12 @@
 """SemanticMsg: Semantic extraction queue message dataclass."""
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+from openviking.utils.ingest_options import IngestOptions
 from openviking.storage.transaction import LockHandoffRef
 
 
@@ -55,6 +56,7 @@ class SemanticMsg:
     lock_handoff: Optional[LockHandoffRef] = None
     is_code_repo: bool = False
     target_preexisting: Optional[bool] = None
+    ingest_options: IngestOptions = field(default_factory=IngestOptions)
     coalesce_key: str = ""
     coalesce_version: int = 0
     changes: Optional[Dict[str, List[str]]] = (
@@ -76,6 +78,7 @@ class SemanticMsg:
         lock_handoff: Optional[LockHandoffRef] = None,
         is_code_repo: bool = False,
         target_preexisting: Optional[bool] = None,
+        ingest_options: IngestOptions | Dict[str, Any] | None = None,
         coalesce_key: str = "",
         coalesce_version: int = 0,
         changes: Optional[Dict[str, List[str]]] = None,
@@ -94,13 +97,16 @@ class SemanticMsg:
         self.lock_handoff = lock_handoff
         self.is_code_repo = is_code_repo
         self.target_preexisting = target_preexisting
+        self.ingest_options = IngestOptions.from_value(ingest_options)
         self.coalesce_key = coalesce_key
         self.coalesce_version = coalesce_version
         self.changes = changes
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert object to dictionary."""
-        return asdict(self)
+        data = asdict(self)
+        data["ingest_options"] = self.ingest_options.to_dict()
+        return data
 
     def to_json(self) -> str:
         """Convert object to JSON string."""
@@ -137,6 +143,13 @@ class SemanticMsg:
             lock_handoff=LockHandoffRef.from_value(data.get("lock_handoff")),
             is_code_repo=data.get("is_code_repo", False),
             target_preexisting=data.get("target_preexisting"),
+            ingest_options=(
+                data.get("ingest_options")
+                or {
+                    "search_tags": data.get("search_tags"),
+                    "search_tag_mode": data.get("search_tag_mode", "replace"),
+                }
+            ),
             coalesce_key=data.get("coalesce_key", ""),
             coalesce_version=data.get("coalesce_version", 0),
             changes=data.get("changes"),

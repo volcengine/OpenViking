@@ -70,7 +70,7 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
         resource_processor=processor,
         skill_processor=object(),
     )
-    service._should_use_connector = lambda *_args, **_kwargs: False
+    service._connector_delegate = SimpleNamespace(should_delegate=lambda *_args, **_kwargs: False)
     tracker = SimpleNamespace(
         create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
         update_stage=AsyncMock(),

@@ -7,6 +7,7 @@ Handles summarization and key information extraction.
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
+from openviking.utils.ingest_options import IngestOptions
 from openviking.core.namespace import context_type_for_uri
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.transaction import NO_LOCK, LockLease
@@ -47,6 +48,7 @@ class Summarizer:
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
 
         temp_uris = kwargs.get("temp_uris", [])
+        ingest_options = IngestOptions.from_value(kwargs.get("ingest_options"))
         if not temp_uris:
             temp_uris = resource_uris
         if len(temp_uris) != len(resource_uris):
@@ -125,6 +127,7 @@ class Summarizer:
                     lock_handoff=lock_handoff,
                     is_code_repo=kwargs.get("is_code_repo", False),
                     target_preexisting=resolve_target_preexisting(idx, target_uri),
+                    ingest_options=ingest_options,
                 )
                 if msg.telemetry_id:
                     get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)

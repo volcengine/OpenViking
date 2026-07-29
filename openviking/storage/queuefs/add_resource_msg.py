@@ -42,6 +42,8 @@ class AddResourceMsg:
     defer_target_resolution: bool = False
     understanding_response_id: Optional[str] = None
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
+    tags: Optional[list[str]] = None
+    tag_mode: str = "replace"
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
@@ -120,4 +122,10 @@ class AddResourceMsg:
                 else None
             ),
             processing_mode=data.get("processing_mode", DEFAULT_PROCESSING_MODE),
+            tags=(
+                list(data["tags"])
+                if isinstance(data.get("tags"), list)
+                else None
+            ),
+            tag_mode=str(data.get("tag_mode") or "replace"),
         )

@@ -1,8 +1,21 @@
 import inspect
 
+from openviking_sdk.client import AsyncHTTPClient, SyncHTTPClient
+
 from openviking import AsyncOpenViking, SyncOpenViking
 from openviking.client.local import LocalClient
-from openviking_sdk.client import AsyncHTTPClient, SyncHTTPClient
+
+
+def test_python_add_resource_clients_accept_add_type_keyword():
+    for client_type in (
+        AsyncOpenViking,
+        SyncOpenViking,
+        LocalClient,
+        AsyncHTTPClient,
+        SyncHTTPClient,
+    ):
+        parameters = inspect.signature(client_type.add_resource).parameters
+        assert "add_type" in parameters, client_type.__name__
 
 
 def test_async_openviking_add_resource_preserves_positional_watch_args():
