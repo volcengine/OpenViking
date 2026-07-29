@@ -126,11 +126,14 @@ class BaseChannel(ABC):
         """
         allow_list = getattr(self.config, "allow_from", [])
 
-        # If no allow list, allow everyone
+        # Fail closed when no allowlist is configured. Operators who
+        # intentionally expose a channel to every sender can opt in with "*".
         if not allow_list:
-            return True
+            return False
 
         sender_str = str(sender_id)
+        if "*" in allow_list:
+            return True
         if sender_str in allow_list:
             return True
         if "|" in sender_str:

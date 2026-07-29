@@ -245,7 +245,7 @@ Gateway Token 只保护 Gateway 入口；OpenViking API Key 表示调用者身�
         "enabled": true,
         "app_id": "<feishu-app-id>",
         "app_secret": "<feishu-app-secret>",
-        "allow_from": [],
+        "allow_from": ["<sender-id>"],
         "ov_tools_enable": true
       }
     ]
@@ -313,6 +313,8 @@ export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
 | `bot.gateway.port` | `18790` | Gateway 监听端口 |
 | `bot.sandbox.backend` | `direct` | 执行后端 |
 | `bot.sandbox.mode` | `shared` | 工作区隔离方式 |
+| `bot.tools.exec.enabled` | `false` | 是否暴露 Shell 执行工具 |
+| `bot.tools.exec.allow_direct` | `false` | 使用 `direct` 后端暴露 Shell 执行时必须额外开启的不安全选项 |
 | `bot.sandbox.backends.direct.allow_compile_exec` | `false` | 不安全的显式开关；为使用 `direct` backend 的 Compile 添加 `exec`，普通 Compile 任务在关闭时仍可运行 |
 | `bot.heartbeat.enabled` | `true` | 是否周期检查 `HEARTBEAT.md` |
 | `bot.heartbeat.interval_seconds` | `600` | 心跳间隔 |
@@ -510,8 +512,8 @@ Gateway 的 Bot API 前缀为 `/bot/v1`：
 - 不要把模型 API Key、OpenViking API Key 或 Gateway Token 提交到仓库。
 - 非 localhost Gateway 必须配置高强度随机 Token，并在网络层启用 HTTPS。
 - `X-Gateway-Token` 只保护 Gateway，不能代替 OpenViking 用户身份。
-- `allow_from: []` 表示不限制发送者；对外服务建议配置明确白名单。
-- `direct` 后端会以 Bot 进程用户权限执行文件和 Shell 操作，不适合不可信调用者。
+- `allow_from: []` 会拒绝所有发送者。请配置明确的发送者 ID；只有确实需要公开访问时才使用 `["*"]`。
+- Shell `exec` 工具默认关闭。使用 `direct` 后端启用时还必须显式设置 `bot.tools.exec.allow_direct: true`，因为命令会以 Bot 进程用户权限运行。
 - `openviking_connection` 只能来自可信 Server 代理或本地可信链路，不应接受公网请求体自行声明。
 
 ## 更多文档
