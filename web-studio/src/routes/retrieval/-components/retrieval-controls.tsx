@@ -23,9 +23,6 @@ import { cn } from '#/lib/utils'
 import type { FindContextType } from '#/lib/retrieval'
 
 import {
-  DEFAULT_RECALL_MAX_CHARS,
-  DEFAULT_RECALL_MIN_SCORE,
-  RECALL_MEMORY_TYPES,
   RESULT_COUNT_OPTIONS,
   RETRIEVAL_MODES,
   RETRIEVAL_SCOPES,
@@ -127,137 +124,127 @@ export function RetrievalControls({
         ))}
       </div>
 
-      {mode === 'recall' ? (
-        <RecallControls
+      <div className="flex flex-wrap items-center gap-2">
+        <Select
+          value={String(options.resultCount)}
+          onValueChange={(value) =>
+            onOptionsChange({ resultCount: Number(value) })
+          }
+        >
+          <SelectTrigger size="sm" aria-label={t('controls.resultCount')}>
+            <SelectValue>
+              {t('controls.resultCount')} {options.resultCount}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {RESULT_COUNT_OPTIONS.map((option) => (
+              <SelectItem key={option} value={String(option)}>
+                {option}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <Select
+          value={options.scope}
+          onValueChange={(value) =>
+            onOptionsChange({
+              scope: value as RetrievalRequestOptions['scope'],
+            })
+          }
+        >
+          <SelectTrigger size="sm" aria-label={t('controls.scope')}>
+            <SelectValue>
+              {t(`controls.scopes.${options.scope}.label`)}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {RETRIEVAL_SCOPES.map((item) => (
+              <SelectItem key={item} value={item}>
+                {t(`controls.scopes.${item}.label`)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        {options.scope === 'custom' ? (
+          <Input
+            aria-label={t('controls.customScope')}
+            className="h-8 w-64 font-mono text-sm"
+            onChange={(event) =>
+              onOptionsChange({ customPathInput: event.target.value })
+            }
+            placeholder={t('controls.customScopePlaceholder')}
+            value={options.customPathInput}
+          />
+        ) : null}
+
+        <div className="inline-flex h-8 max-w-full items-center gap-1.5 rounded-md border bg-muted/30 px-2.5 text-xs text-muted-foreground">
+          <FolderOpen className="size-3.5 shrink-0" />
+          <span className="shrink-0">{t('controls.effectiveScope')}</span>
+          <span className="max-w-64 truncate font-mono text-foreground">
+            {options.targetUri ?? t('controls.allContexts')}
+          </span>
+        </div>
+
+        {mode === 'search' ? (
+          <Input
+            aria-label={t('controls.sessionId')}
+            className="h-8 w-52 font-mono text-sm"
+            onChange={(event) =>
+              onOptionsChange({ sessionId: event.target.value })
+            }
+            placeholder={t('controls.sessionPlaceholder')}
+            value={options.sessionId ?? ''}
+          />
+        ) : null}
+
+        {mode === 'grep' ? (
+          <label className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md border bg-muted/20 px-2.5 text-xs text-foreground">
+            <Checkbox
+              checked={options.ignoreCase}
+              onCheckedChange={(checked) =>
+                onOptionsChange({ ignoreCase: checked === true })
+              }
+            />
+            {t('controls.ignoreCase')}
+          </label>
+        ) : null}
+
+        {semanticMode ? (
+          <Button
+            className="h-8 gap-1.5"
+            onClick={() => setAdvancedOpen((open) => !open)}
+            size="sm"
+            variant="outline"
+          >
+            <SlidersHorizontal className="size-3.5" />
+            {t('advanced.title')}
+            {advancedCount > 0 ? (
+              <span className="rounded-full bg-primary/10 px-1.5 text-[10px] text-primary">
+                {advancedCount}
+              </span>
+            ) : null}
+            <ChevronDown
+              className={cn(
+                'size-3.5 transition-transform',
+                advancedOpen && 'rotate-180',
+              )}
+            />
+          </Button>
+        ) : null}
+      </div>
+
+      {semanticMode && advancedOpen ? (
+        <SemanticAdvancedControls
           onOptionsChange={onOptionsChange}
+          onReset={resetAdvanced}
           options={options}
           t={t}
+          toggleContextType={toggleContextType}
+          toggleLevel={toggleLevel}
         />
-      ) : (
-        <>
-          <div className="flex flex-wrap items-center gap-2">
-            <Select
-              value={String(options.resultCount)}
-              onValueChange={(value) =>
-                onOptionsChange({ resultCount: Number(value) })
-              }
-            >
-              <SelectTrigger size="sm" aria-label={t('controls.resultCount')}>
-                <SelectValue>
-                  {t('controls.resultCount')} {options.resultCount}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {RESULT_COUNT_OPTIONS.map((option) => (
-                  <SelectItem key={option} value={String(option)}>
-                    {option}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            <Select
-              value={options.scope}
-              onValueChange={(value) =>
-                onOptionsChange({
-                  scope: value as RetrievalRequestOptions['scope'],
-                })
-              }
-            >
-              <SelectTrigger size="sm" aria-label={t('controls.scope')}>
-                <SelectValue>
-                  {t(`controls.scopes.${options.scope}.label`)}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {RETRIEVAL_SCOPES.map((item) => (
-                  <SelectItem key={item} value={item}>
-                    {t(`controls.scopes.${item}.label`)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            {options.scope === 'custom' ? (
-              <Input
-                aria-label={t('controls.customScope')}
-                className="h-8 w-64 font-mono text-sm"
-                onChange={(event) =>
-                  onOptionsChange({ customPathInput: event.target.value })
-                }
-                placeholder={t('controls.customScopePlaceholder')}
-                value={options.customPathInput}
-              />
-            ) : null}
-
-            <div className="inline-flex h-8 max-w-full items-center gap-1.5 rounded-md border bg-muted/30 px-2.5 text-xs text-muted-foreground">
-              <FolderOpen className="size-3.5 shrink-0" />
-              <span className="shrink-0">{t('controls.effectiveScope')}</span>
-              <span className="max-w-64 truncate font-mono text-foreground">
-                {options.targetUri ?? t('controls.allContexts')}
-              </span>
-            </div>
-
-            {mode === 'search' ? (
-              <Input
-                aria-label={t('controls.sessionId')}
-                className="h-8 w-52 font-mono text-sm"
-                onChange={(event) =>
-                  onOptionsChange({ sessionId: event.target.value })
-                }
-                placeholder={t('controls.sessionPlaceholder')}
-                value={options.sessionId ?? ''}
-              />
-            ) : null}
-
-            {mode === 'grep' ? (
-              <label className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md border bg-muted/20 px-2.5 text-xs text-foreground">
-                <Checkbox
-                  checked={options.ignoreCase}
-                  onCheckedChange={(checked) =>
-                    onOptionsChange({ ignoreCase: checked === true })
-                  }
-                />
-                {t('controls.ignoreCase')}
-              </label>
-            ) : null}
-
-            {semanticMode ? (
-              <Button
-                className="h-8 gap-1.5"
-                onClick={() => setAdvancedOpen((open) => !open)}
-                size="sm"
-                variant="outline"
-              >
-                <SlidersHorizontal className="size-3.5" />
-                {t('advanced.title')}
-                {advancedCount > 0 ? (
-                  <span className="rounded-full bg-primary/10 px-1.5 text-[10px] text-primary">
-                    {advancedCount}
-                  </span>
-                ) : null}
-                <ChevronDown
-                  className={cn(
-                    'size-3.5 transition-transform',
-                    advancedOpen && 'rotate-180',
-                  )}
-                />
-              </Button>
-            ) : null}
-          </div>
-
-          {semanticMode && advancedOpen ? (
-            <SemanticAdvancedControls
-              onOptionsChange={onOptionsChange}
-              onReset={resetAdvanced}
-              options={options}
-              t={t}
-              toggleContextType={toggleContextType}
-              toggleLevel={toggleLevel}
-            />
-          ) : null}
-        </>
-      )}
+      ) : null}
     </div>
   )
 }
@@ -386,113 +373,6 @@ function SemanticAdvancedControls({
           {t('advanced.reset')}
         </Button>
       </div>
-    </div>
-  )
-}
-
-function RecallControls({
-  onOptionsChange,
-  options,
-  t,
-}: {
-  onOptionsChange: (patch: Partial<RetrievalRequestOptions>) => void
-  options: RetrievalRequestOptions
-  t: TFunction<'retrieval'>
-}) {
-  return (
-    <div className="rounded-xl border bg-card/50 p-4">
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {RECALL_MEMORY_TYPES.map((type) => (
-          <ControlGroup key={type} label={t(`recall.types.${type}`)}>
-            <Input
-              aria-label={t(`recall.types.${type}`)}
-              className="h-8"
-              min={0}
-              onChange={(event) =>
-                onOptionsChange({
-                  recallQuotas: {
-                    ...options.recallQuotas,
-                    [type]: Math.max(0, Number(event.target.value)),
-                  },
-                })
-              }
-              type="number"
-              value={options.recallQuotas[type]}
-            />
-          </ControlGroup>
-        ))}
-      </div>
-
-      <div className="mt-4 grid gap-4 border-t pt-4 md:grid-cols-3">
-        <ControlGroup label={t('recall.maxChars')}>
-          <Input
-            aria-label={t('recall.maxChars')}
-            className="h-8"
-            min={1}
-            onChange={(event) =>
-              onOptionsChange({
-                recallMaxChars:
-                  Number(event.target.value) || DEFAULT_RECALL_MAX_CHARS,
-              })
-            }
-            type="number"
-            value={options.recallMaxChars}
-          />
-        </ControlGroup>
-        <ControlGroup label={t('recall.minScore')}>
-          <Input
-            aria-label={t('recall.minScore')}
-            className="h-8"
-            max={1}
-            min={0}
-            onChange={(event) =>
-              onOptionsChange({
-                recallMinScore:
-                  event.target.value === ''
-                    ? DEFAULT_RECALL_MIN_SCORE
-                    : Number(event.target.value),
-              })
-            }
-            step={0.05}
-            type="number"
-            value={options.recallMinScore}
-          />
-        </ControlGroup>
-        <ControlGroup label={t('recall.peerScope')}>
-          <Select
-            onValueChange={(value) =>
-              onOptionsChange({
-                recallPeerScope:
-                  value as RetrievalRequestOptions['recallPeerScope'],
-              })
-            }
-            value={options.recallPeerScope}
-          >
-            <SelectTrigger
-              aria-label={t('recall.peerScope')}
-              className="h-8 w-full"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">{t('recall.peerScopes.all')}</SelectItem>
-              <SelectItem value="actor">
-                {t('recall.peerScopes.actor')}
-              </SelectItem>
-            </SelectContent>
-          </Select>
-        </ControlGroup>
-      </div>
-
-      <label className="mt-4 flex items-center gap-2 border-t pt-3 text-xs">
-        <Switch
-          checked={options.recallRender}
-          onCheckedChange={(checked) =>
-            onOptionsChange({ recallRender: checked })
-          }
-        />
-        {t('recall.render')}
-      </label>
     </div>
   )
 }

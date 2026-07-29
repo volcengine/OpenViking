@@ -18,7 +18,6 @@ describe('RetrievalDetailSheet', () => {
       <RetrievalDetailSheet
         detail={{
           abstract: 'Result summary',
-          content: 'Full content',
           contextType: 'memory',
           score: 0.8,
           uri: 'viking://user/default/memories/test.md',
@@ -30,7 +29,6 @@ describe('RetrievalDetailSheet', () => {
 
     expect(screen.getByText('detail.summary')).toBeDefined()
     expect(screen.getByText('Result summary')).toBeDefined()
-    expect(screen.queryByText('Full content')).toBeNull()
     expect(screen.queryByText('detail.content')).toBeNull()
   })
 })

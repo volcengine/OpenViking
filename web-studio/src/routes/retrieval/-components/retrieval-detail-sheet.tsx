@@ -36,13 +36,9 @@ const DETAIL_TYPE_META: Record<
 
 export interface RetrievalDetail {
   abstract?: string
-  content?: string
   contextType: FindContextType
   item?: FindResultItem
   memoryType?: string
-  mode?: string
-  origin?: string
-  rank?: number
   score: number
   summary?: string
   uri: string
@@ -108,15 +104,6 @@ export function RetrievalDetailSheet({
               label={t('detail.level')}
               value={`L${detail.item.level}`}
             />
-          ) : null}
-          {detail?.rank ? (
-            <MetaBadge label={t('detail.rank')} value={String(detail.rank)} />
-          ) : null}
-          {detail?.origin ? (
-            <MetaBadge label={t('detail.origin')} value={detail.origin} />
-          ) : null}
-          {detail?.mode ? (
-            <MetaBadge label={t('detail.mode')} value={detail.mode} />
           ) : null}
           {resourceSearch ? (
             <Button

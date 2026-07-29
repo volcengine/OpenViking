@@ -1,7 +1,5 @@
 import {
   DEFAULT_RESULT_COUNT,
-  DEFAULT_RECALL_MAX_CHARS,
-  DEFAULT_RECALL_QUOTAS,
   DEFAULT_RETRIEVAL_MODE,
   DEFAULT_RETRIEVAL_SCOPE,
   LAST_RETRIEVAL_SEARCH_KEY,
@@ -12,7 +10,6 @@ import {
 import type {
   ResultCountOption,
   RetrievalMode,
-  RecallPeerScope,
   RetrievalRequestOptions,
   RetrievalScope,
   RetrievalSearch,
@@ -57,12 +54,8 @@ export function validateRetrievalSearch(
     search.ignoreCase === true || search.ignoreCase === 'true' || undefined
   const provenance =
     search.provenance === true || search.provenance === 'true' || undefined
-  const render =
-    search.render === false || search.render === 'false' ? false : undefined
   const minScore = parseFiniteNumber(search.minScore)
-  const maxChars = parsePositiveInteger(search.maxChars)
   const timeField = isTimeField(search.timeField) ? search.timeField : undefined
-  const peerScope = isPeerScope(search.peerScope) ? search.peerScope : undefined
 
   return {
     ...(q && { q }),
@@ -85,13 +78,6 @@ export function validateRetrievalSearch(
       search.until.trim() && { until: search.until.trim() }),
     ...(timeField && { timeField }),
     ...(provenance && { provenance }),
-    ...(typeof search.recallQuotas === 'string' &&
-      search.recallQuotas.trim() && {
-        recallQuotas: search.recallQuotas.trim(),
-      }),
-    ...(maxChars !== undefined && { maxChars }),
-    ...(peerScope && { peerScope }),
-    ...(render === false && { render }),
   }
 }
 
@@ -111,11 +97,7 @@ export function hasRetrievalSearch(search: RetrievalSearch): boolean {
     search.since ||
     search.until ||
     search.timeField ||
-    search.provenance ||
-    search.recallQuotas ||
-    search.maxChars ||
-    search.peerScope ||
-    search.render === false,
+    search.provenance,
   )
 }
 
@@ -129,17 +111,8 @@ function parseFiniteNumber(value: unknown): number | undefined {
   return Number.isFinite(numeric) ? numeric : undefined
 }
 
-function parsePositiveInteger(value: unknown): number | undefined {
-  const numeric = parseFiniteNumber(value)
-  return numeric !== undefined && numeric > 0 ? Math.floor(numeric) : undefined
-}
-
 function isTimeField(value: unknown): value is RetrievalTimeField {
   return value === 'created_at' || value === 'updated_at'
-}
-
-function isPeerScope(value: unknown): value is RecallPeerScope {
-  return value === 'actor' || value === 'all'
 }
 
 export function readLastRetrievalSearch(): RetrievalSearch | undefined {
@@ -196,10 +169,6 @@ export function buildSubmittedSearch(params: {
   until: string
   timeField: RetrievalTimeField
   includeProvenance: boolean
-  recallQuotas: Record<string, number>
-  recallMaxChars: number
-  recallPeerScope: RecallPeerScope
-  recallRender: boolean
 }): RetrievalSearch {
   const q = params.q.trim()
   const path = params.path.trim()
@@ -209,13 +178,6 @@ export function buildSubmittedSearch(params: {
   const levels = params.levels.join(',')
   const since = params.since.trim()
   const until = params.until.trim()
-  const recallQuotas = Object.entries(params.recallQuotas)
-    .map(([key, value]) => `${key}:${value}`)
-    .join(',')
-  const defaultRecallQuotas = Object.entries(DEFAULT_RECALL_QUOTAS)
-    .map(([key, value]) => `${key}:${value}`)
-    .join(',')
-
   return {
     q,
     ...(params.mode !== DEFAULT_RETRIEVAL_MODE && { mode: params.mode }),
@@ -243,21 +205,6 @@ export function buildSubmittedSearch(params: {
       params.timeField !== 'updated_at' && { timeField: params.timeField }),
     ...((params.mode === 'find' || params.mode === 'search') &&
       params.includeProvenance && { provenance: true }),
-    ...(params.mode === 'recall' &&
-      recallQuotas !== defaultRecallQuotas && { recallQuotas }),
-    ...(params.mode === 'recall' &&
-      params.recallMaxChars !== DEFAULT_RECALL_MAX_CHARS && {
-        maxChars: params.recallMaxChars,
-      }),
-    ...(params.mode === 'recall' &&
-      params.scoreThreshold !== undefined && {
-        minScore: params.scoreThreshold,
-      }),
-    ...(params.mode === 'recall' &&
-      params.recallPeerScope !== 'all' && {
-        peerScope: params.recallPeerScope,
-      }),
-    ...(params.mode === 'recall' && !params.recallRender && { render: false }),
   }
 }
 
@@ -274,12 +221,7 @@ export function buildSearchFromOptions(
     mode,
     path: options.customPathInput,
     q,
-    recallMaxChars: options.recallMaxChars,
-    recallPeerScope: options.recallPeerScope,
-    recallQuotas: options.recallQuotas,
-    recallRender: options.recallRender,
-    scoreThreshold:
-      mode === 'recall' ? options.recallMinScore : options.scoreThreshold,
+    scoreThreshold: options.scoreThreshold,
     scope: options.scope,
     session: options.sessionId ?? '',
     since: options.since ?? '',
@@ -325,19 +267,4 @@ export function parseLevels(value?: string): number[] {
   return parseCsv(value)
     .map(Number)
     .filter((level) => level === 0 || level === 1 || level === 2)
-}
-
-export function parseRecallQuotas(
-  value?: string,
-): Record<keyof typeof DEFAULT_RECALL_QUOTAS, number> {
-  const quotas = { ...DEFAULT_RECALL_QUOTAS }
-  for (const part of parseCsv(value)) {
-    const [key, rawValue] = part.split(':')
-    if (!(key in quotas)) continue
-    const numeric = Number(rawValue)
-    if (Number.isFinite(numeric) && numeric >= 0) {
-      quotas[key as keyof typeof quotas] = Math.floor(numeric)
-    }
-  }
-  return quotas
 }

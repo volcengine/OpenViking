@@ -7,9 +7,6 @@ import { RetrievalResults } from './-components/retrieval-results'
 import { RetrievalSearchBar } from './-components/search-bar'
 import {
   DEFAULT_CUSTOM_PATH_INPUT,
-  DEFAULT_RECALL_MAX_CHARS,
-  DEFAULT_RECALL_MIN_SCORE,
-  DEFAULT_RECALL_QUOTAS,
   DEFAULT_RESULT_COUNT,
   DEFAULT_RETRIEVAL_MODE,
   DEFAULT_RETRIEVAL_SCOPE,
@@ -23,7 +20,6 @@ import {
   hasRetrievalSearch,
   parseCsv,
   parseLevels,
-  parseRecallQuotas,
   readLastRetrievalSearch,
   validateRetrievalSearch,
   writeLastRetrievalSearch,
@@ -47,7 +43,6 @@ const FIND_CONTEXT_TYPES = new Set<FindContextType>([
 ])
 
 function optionsFromSearch(search: RetrievalSearch): RetrievalRequestOptions {
-  const mode = search.mode ?? DEFAULT_RETRIEVAL_MODE
   const scope = search.scope ?? DEFAULT_RETRIEVAL_SCOPE
   const customPathInput = search.path ?? DEFAULT_CUSTOM_PATH_INPUT
 
@@ -60,16 +55,8 @@ function optionsFromSearch(search: RetrievalSearch): RetrievalRequestOptions {
     ignoreCase: search.ignoreCase ?? false,
     includeProvenance: search.provenance ?? false,
     levels: parseLevels(search.levels),
-    recallMaxChars: search.maxChars ?? DEFAULT_RECALL_MAX_CHARS,
-    recallMinScore:
-      mode === 'recall'
-        ? (search.minScore ?? DEFAULT_RECALL_MIN_SCORE)
-        : DEFAULT_RECALL_MIN_SCORE,
-    recallPeerScope: search.peerScope ?? 'all',
-    recallQuotas: parseRecallQuotas(search.recallQuotas),
-    recallRender: search.render ?? true,
     resultCount: search.count ?? DEFAULT_RESULT_COUNT,
-    scoreThreshold: mode === 'recall' ? undefined : search.minScore,
+    scoreThreshold: search.minScore,
     sessionId: search.session,
     since: search.since,
     scope,
@@ -211,6 +198,7 @@ function RetrievalPage() {
         data={hasSubmitted ? retrievalQuery.data : undefined}
         hasRetrievableContext={resourceProbeQuery.data?.hasContext ?? false}
         hasSubmitted={hasSubmitted}
+        error={retrievalQuery.error}
         isCheckingContext={resourceProbeQuery.isLoading}
         isError={retrievalQuery.isError}
         isLoading={retrievalQuery.isLoading}

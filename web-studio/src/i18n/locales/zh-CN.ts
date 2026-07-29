@@ -98,7 +98,7 @@ const zhCN = {
         models: 'VLM、Embedding 和 Rerank 模型服务。',
         filesystem: 'OpenViking 文件系统与挂载点。',
         lock: '事务锁与并发控制服务。',
-        retrieval: '上下文检索与召回服务。',
+        retrieval: '上下文检索服务。',
       },
     },
     offline: {
@@ -847,7 +847,6 @@ const zhCN = {
     placeholders: {
       find: '输入语义检索内容',
       search: '输入需要结合会话理解的问题',
-      recall: '输入需要召回的记忆主题',
       grep: '输入正则表达式或精确文本',
       glob: '输入文件模式，例如 **/*.md',
     },
@@ -857,7 +856,6 @@ const zhCN = {
       modes: {
         find: 'find',
         search: 'search',
-        recall: 'recall',
         grep: 'grep',
         glob: 'glob',
       },
@@ -910,39 +908,9 @@ const zhCN = {
       provenance: '返回检索过程',
       reset: '重置筛选',
     },
-    recall: {
-      types: {
-        events: '事件',
-        entities: '实体',
-        preferences: '偏好',
-        experiences: '经验',
-      },
-      maxChars: '最大字符数',
-      minScore: '最低相关度',
-      peerScope: 'Peer 范围',
-      peerScopes: {
-        all: '全局及其他项目',
-        actor: '当前项目',
-      },
-      render: '生成可注入的记忆文本',
-      resultTitle: '记忆召回结果（{{count}}）',
-      entries: '召回条目',
-      rendered: '注入文本',
-      copy: '复制',
-      copied: '已复制',
-      stats: {
-        returned: '返回条目',
-        dropped: '预算丢弃',
-        maxChars: '字符预算',
-        scope: '召回范围',
-      },
-    },
     detail: {
       score: '相关度',
       level: '层级',
-      rank: '排名',
-      origin: '来源',
-      mode: '模式',
       openPlayground: '在 Playground 打开',
       uri: 'URI',
       summary: '摘要',
@@ -982,7 +950,15 @@ const zhCN = {
       description: '先上传您的第一份资源吧～',
       upload: '上传文件',
     },
-    error: '检索出错',
+    error: {
+      title: '检索失败',
+      fallback: '请求未能完成，请稍后重试。',
+      network:
+        '请求未能到达 OpenViking 服务，请检查连接地址、服务状态或跨域配置。',
+      code: '错误码',
+      status: 'HTTP 状态',
+      requestId: 'Request ID',
+    },
     noResults: {
       title: '没有找到匹配的内容',
       subtitle: '试试换个关键词或调整路径范围',

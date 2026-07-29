@@ -98,7 +98,7 @@ const en = {
         models: 'VLM, embedding, and rerank model services.',
         filesystem: 'OpenViking filesystem and mount services.',
         lock: 'Transaction locks and concurrency control.',
-        retrieval: 'Context retrieval and recall service.',
+        retrieval: 'Context retrieval service.',
       },
     },
     offline: {
@@ -877,7 +877,6 @@ const en = {
     placeholders: {
       find: 'Enter a semantic query',
       search: 'Enter a question to interpret with session context',
-      recall: 'Enter a memory topic to recall',
       grep: 'Enter a regular expression or exact text',
       glob: 'Enter a file pattern, for example **/*.md',
     },
@@ -887,7 +886,6 @@ const en = {
       modes: {
         find: 'find',
         search: 'search',
-        recall: 'recall',
         grep: 'grep',
         glob: 'glob',
       },
@@ -940,39 +938,9 @@ const en = {
       provenance: 'Include retrieval provenance',
       reset: 'Reset filters',
     },
-    recall: {
-      types: {
-        events: 'Events',
-        entities: 'Entities',
-        preferences: 'Preferences',
-        experiences: 'Experiences',
-      },
-      maxChars: 'Maximum characters',
-      minScore: 'Minimum relevance',
-      peerScope: 'Peer scope',
-      peerScopes: {
-        all: 'Global and other projects',
-        actor: 'Current project',
-      },
-      render: 'Generate injection-ready memory text',
-      resultTitle: 'Memory recall results ({{count}})',
-      entries: 'Entries',
-      rendered: 'Rendered context',
-      copy: 'Copy',
-      copied: 'Copied',
-      stats: {
-        returned: 'Returned',
-        dropped: 'Dropped by budget',
-        maxChars: 'Character budget',
-        scope: 'Recall scope',
-      },
-    },
     detail: {
       score: 'Score',
       level: 'Level',
-      rank: 'Rank',
-      origin: 'Origin',
-      mode: 'Mode',
       openPlayground: 'Open in Playground',
       uri: 'URI',
       summary: 'Summary',
@@ -1012,7 +980,15 @@ const en = {
       description: 'Upload your first resource to get started.',
       upload: 'Upload File',
     },
-    error: 'Search failed',
+    error: {
+      title: 'Search failed',
+      fallback: 'The request could not be completed. Please try again.',
+      network:
+        'The OpenViking service could not be reached. Check the connection URL, service status, or CORS configuration.',
+      code: 'Error code',
+      status: 'HTTP status',
+      requestId: 'Request ID',
+    },
     noResults: {
       title: 'No matching content found',
       subtitle: 'Try another keyword or adjust the path scope',

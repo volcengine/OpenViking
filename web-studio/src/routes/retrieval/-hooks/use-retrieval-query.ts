@@ -1,22 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
 
-import {
-  fetchFind,
-  fetchGlob,
-  fetchGrep,
-  fetchRecall,
-  fetchSearch,
-} from '#/lib/retrieval'
-import type { GroupedFindResult, RecallResult } from '#/lib/retrieval'
+import { fetchFind, fetchGlob, fetchGrep, fetchSearch } from '#/lib/retrieval'
+import type { GroupedFindResult } from '#/lib/retrieval'
 
 import type {
   RetrievalMode,
   RetrievalRequestOptions,
 } from '../-types/retrieval'
-
-export type RetrievalQueryResult =
-  | { kind: 'recall'; result: RecallResult }
-  | { kind: 'results'; result: GroupedFindResult }
 
 export function useRetrievalQuery({
   enabled,
@@ -29,7 +19,7 @@ export function useRetrievalQuery({
   query: string
   options: RetrievalRequestOptions
 }) {
-  return useQuery<RetrievalQueryResult>({
+  return useQuery<GroupedFindResult>({
     enabled,
     gcTime: 5 * 60_000,
     queryFn: () => {
@@ -46,17 +36,7 @@ export function useRetrievalQuery({
           targetUri: options.targetUri,
           timeField: options.timeField,
           until: options.until,
-        }).then((result) => ({ kind: 'results' as const, result }))
-      }
-
-      if (mode === 'recall') {
-        return fetchRecall(query, {
-          maxChars: options.recallMaxChars,
-          minScore: options.recallMinScore,
-          peerScope: options.recallPeerScope,
-          quotas: options.recallQuotas,
-          render: options.recallRender,
-        }).then((result) => ({ kind: 'recall' as const, result }))
+        })
       }
 
       if (mode === 'grep') {
@@ -64,14 +44,14 @@ export function useRetrievalQuery({
           caseInsensitive: options.ignoreCase,
           limit: options.resultCount,
           uri: options.targetUri ?? 'viking://',
-        }).then((result) => ({ kind: 'results' as const, result }))
+        })
       }
 
       if (mode === 'glob') {
         return fetchGlob(query, {
           limit: options.resultCount,
           uri: options.targetUri ?? 'viking://',
-        }).then((result) => ({ kind: 'results' as const, result }))
+        })
       }
 
       return fetchFind(query, {
@@ -85,7 +65,7 @@ export function useRetrievalQuery({
         targetUri: options.targetUri,
         timeField: options.timeField,
         until: options.until,
-      }).then((result) => ({ kind: 'results' as const, result }))
+      })
     },
     queryKey: ['retrieval', mode, query, options],
     staleTime: 60_000,

@@ -1,5 +1,6 @@
 import {
   Brain,
+  CircleAlert,
   FileText,
   FolderOpen,
   Loader2,
@@ -20,10 +21,8 @@ import type {
 } from '#/lib/retrieval'
 
 import { LoadingHint } from './loading-hint'
-import { RecallResults } from './recall-results'
 import { RetrievalDetailSheet } from './retrieval-detail-sheet'
 import type { RetrievalDetail } from './retrieval-detail-sheet'
-import type { RetrievalQueryResult } from '../-hooks/use-retrieval-query'
 import { displayName, flattenResults, memoryTypeFromUri } from '../-lib/results'
 import type { FlatRetrievalItem } from '../-types/retrieval'
 
@@ -44,6 +43,7 @@ const TYPE_META: Record<
 
 export function RetrievalResults({
   data,
+  error,
   hasRetrievableContext,
   hasSubmitted,
   isCheckingContext,
@@ -53,7 +53,8 @@ export function RetrievalResults({
   resultCount,
   t,
 }: {
-  data?: RetrievalQueryResult
+  data?: GroupedFindResult
+  error?: unknown
   hasRetrievableContext: boolean
   hasSubmitted: boolean
   isCheckingContext: boolean
@@ -64,28 +65,19 @@ export function RetrievalResults({
   t: TFunction<'retrieval'>
 }) {
   const [detail, setDetail] = useState<RetrievalDetail | null>(null)
-  const flatItems = useMemo(
-    () => (data?.kind === 'results' ? flattenResults(data.result) : []),
-    [data],
-  )
-  const queryPlanItems =
-    data?.kind === 'results' ? (data.result.query_plan?.queries ?? []) : []
-  const provenance =
-    data?.kind === 'results' ? (data.result.provenance ?? []) : []
-  const total =
-    data?.kind === 'recall' ? data.result.entries.length : flatItems.length
-  const hasResults = total > 0
+  const flatItems = useMemo(() => (data ? flattenResults(data) : []), [data])
+  const queryPlanItems = data?.query_plan?.queries ?? []
+  const provenance = data?.provenance ?? []
+  const hasResults = flatItems.length > 0
 
   return (
     <>
       <div className="flex flex-col gap-3">
         <h2 className="text-base font-medium">
           {hasSubmitted && hasResults
-            ? data?.kind === 'recall'
-              ? t('recall.resultTitle', { count: total })
-              : t('results.topN', {
-                  count: Math.min(flatItems.length, resultCount),
-                })
+            ? t('results.topN', {
+                count: Math.min(flatItems.length, resultCount),
+              })
             : t('results.title')}
         </h2>
 
@@ -100,9 +92,7 @@ export function RetrievalResults({
           ) : isLoading ? (
             <LoadingHint />
           ) : isError ? (
-            <div className="flex min-h-80 items-center justify-center text-sm text-destructive">
-              {t('error')}
-            </div>
+            <RetrievalError error={error} t={t} />
           ) : !hasResults ? (
             <div className="flex min-h-80 flex-col items-center justify-center gap-2 text-center">
               <SearchIcon className="size-8 text-muted-foreground/25" />
@@ -113,8 +103,6 @@ export function RetrievalResults({
                 {t('noResults.subtitle')}
               </p>
             </div>
-          ) : data?.kind === 'recall' ? (
-            <RecallResults onSelect={setDetail} result={data.result} t={t} />
           ) : (
             <ResultList
               flatItems={flatItems}
@@ -133,6 +121,78 @@ export function RetrievalResults({
         t={t}
       />
     </>
+  )
+}
+
+function RetrievalError({
+  error,
+  t,
+}: {
+  error?: unknown
+  t: TFunction<'retrieval'>
+}) {
+  const details = getErrorDetails(error, t)
+
+  return (
+    <div className="flex min-h-80 items-center justify-center px-6 py-10">
+      <div className="flex max-w-xl flex-col items-center text-center">
+        <div className="flex size-10 items-center justify-center rounded-full bg-destructive/10 text-destructive">
+          <CircleAlert className="size-5" />
+        </div>
+        <h3 className="mt-3 text-sm font-medium text-foreground">
+          {t('error.title')}
+        </h3>
+        <p className="mt-1.5 text-sm leading-6 text-muted-foreground">
+          {details.message}
+        </p>
+        <div className="mt-3 flex flex-wrap justify-center gap-2">
+          {details.code ? (
+            <ErrorMeta label={t('error.code')} value={details.code} />
+          ) : null}
+          {details.statusCode ? (
+            <ErrorMeta
+              label={t('error.status')}
+              value={String(details.statusCode)}
+            />
+          ) : null}
+          {details.requestId ? (
+            <ErrorMeta label={t('error.requestId')} value={details.requestId} />
+          ) : null}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function getErrorDetails(error: unknown, t: TFunction<'retrieval'>) {
+  if (!error || typeof error !== 'object') {
+    return { message: t('error.fallback') }
+  }
+
+  const data = error as Record<string, unknown>
+  const code = typeof data.code === 'string' ? data.code : undefined
+  const rawMessage =
+    typeof data.message === 'string' && data.message.trim()
+      ? data.message.trim()
+      : undefined
+
+  return {
+    code,
+    message:
+      code === 'NETWORK_ERROR'
+        ? t('error.network')
+        : (rawMessage ?? t('error.fallback')),
+    requestId: typeof data.requestId === 'string' ? data.requestId : undefined,
+    statusCode:
+      typeof data.statusCode === 'number' ? data.statusCode : undefined,
+  }
+}
+
+function ErrorMeta({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="rounded-md border bg-muted/30 px-2 py-1 font-mono text-[10px] text-muted-foreground">
+      {label}: <span className="text-foreground">{value}</span>
+    </span>
   )
 }
 

@@ -1,24 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import {
-  fetchFind,
-  fetchFindAllTypes,
-  fetchGlob,
-  fetchGrep,
-  fetchRecall,
-} from './retrieval'
+import { fetchFind, fetchFindAllTypes, fetchGlob, fetchGrep } from './retrieval'
 
-const {
-  rawPostMock,
-  postSearchFindMock,
-  postSearchGlobMock,
-  postSearchGrepMock,
-} = vi.hoisted(() => ({
-  rawPostMock: vi.fn(),
-  postSearchFindMock: vi.fn(),
-  postSearchGlobMock: vi.fn(),
-  postSearchGrepMock: vi.fn(),
-}))
+const { postSearchFindMock, postSearchGlobMock, postSearchGrepMock } =
+  vi.hoisted(() => ({
+    postSearchFindMock: vi.fn(),
+    postSearchGlobMock: vi.fn(),
+    postSearchGrepMock: vi.fn(),
+  }))
 
 vi.mock('#/lib/ov-client', () => ({
   getOvResult: async (request: Promise<unknown>) => {
@@ -28,10 +17,6 @@ vi.mock('#/lib/ov-client', () => ({
     return rawResponse.data.result
   },
   normalizeOvClientError: (error: unknown) => error,
-  ovClient: {
-    getOptions: () => ({ baseUrl: 'http://openviking.test' }),
-    instance: { post: rawPostMock },
-  },
   postSearchFind: postSearchFindMock,
   postSearchGlob: postSearchGlobMock,
   postSearchGrep: postSearchGrepMock,
@@ -51,7 +36,6 @@ describe('pattern retrieval', () => {
     postSearchFindMock.mockReset()
     postSearchGlobMock.mockReset()
     postSearchGrepMock.mockReset()
-    rawPostMock.mockReset()
   })
 
   it('passes advanced semantic filters through one find request', async () => {
@@ -81,60 +65,6 @@ describe('pattern retrieval', () => {
         time_field: 'created_at',
         until: '2026-07-27',
       }),
-    })
-  })
-
-  it('calls recall through the configured authenticated client', async () => {
-    rawPostMock.mockReturnValue(
-      response({
-        entries: [
-          {
-            mode: 'full',
-            origin: 'self',
-            rank: 1,
-            score: 0.82,
-            type: 'preferences',
-            uri: 'viking://user/default/memories/preferences/api.md',
-          },
-        ],
-        rendered: '<memory />',
-        stats: {
-          dropped: 0,
-          max_chars: 6500,
-          min_score: 0.1,
-          origins: { self: 1 },
-          peer_scope: 'all',
-          quotas: { preferences: 3 },
-          returned: 1,
-          searched: { preferences: 1 },
-        },
-      }),
-    )
-
-    const result = await fetchRecall('API preferences', {
-      maxChars: 6500,
-      minScore: 0.1,
-      peerScope: 'all',
-      quotas: { experiences: 2 },
-      render: true,
-    })
-
-    expect(rawPostMock).toHaveBeenCalledWith(
-      '/api/v1/search/recall',
-      {
-        max_chars: 6500,
-        min_score: 0.1,
-        peer_scope: 'all',
-        query: 'API preferences',
-        quotas: { experiences: 2 },
-        render: true,
-      },
-      { baseURL: 'http://openviking.test' },
-    )
-    expect(result).toMatchObject({
-      entries: [{ type: 'preferences', origin: 'self' }],
-      rendered: '<memory />',
-      stats: { returned: 1 },
     })
   })
 
