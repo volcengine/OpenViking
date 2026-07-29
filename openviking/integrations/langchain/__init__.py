@@ -15,6 +15,7 @@ __all__ = [
     "OpenVikingChatMessageHistory",
     "OpenVikingCancellationProgress",
     "OpenVikingCommitPolicy",
+    "OpenVikingContextRunnable",
     "OpenVikingContextMiddleware",
     "OpenVikingPartialWriteError",
     "OpenVikingRecordResult",
@@ -49,6 +50,10 @@ def __getattr__(name: str) -> Any:
         from openviking.integrations.langchain.context import OpenVikingSessionContextAssembler
 
         return OpenVikingSessionContextAssembler
+    if name == "OpenVikingContextRunnable":
+        from openviking.integrations.langchain.context import OpenVikingContextRunnable
+
+        return OpenVikingContextRunnable
     if name == "OpenVikingSessionRecorder":
         from openviking.integrations.langchain.recording import OpenVikingSessionRecorder
 

@@ -75,11 +75,12 @@ workspace；切换 workspace 前应先关闭或 reset 当前 client。
 `aclear()`；`OpenVikingSessionRecorder` 提供 `arecord()`、`aflush()` 和
 `aclose()`。异步 LangGraph 运行会自动选择 `awrap_model_call()` 和
 `aafter_agent()`。同一 adapter 首次被并发调用时，每个 event loop 只会创建一个内部
-HTTP client。每次 `with_openviking_context()` 调用都独立持有本次写入所需的 history
-快照、peer 身份和召回上下文引用。因此，同一 session 的调用可以并发执行，不会因为
+HTTP client。通过 `with_openviking_context()` 执行的每次 runnable 调用都独立持有
+本次写入所需的 history 快照、peer 身份和召回上下文引用。因此，同一 session 的调用
+可以并发执行，不会因为
 退出时再次读取实时 history 而丢失消息；未消费完的 stream 也不会占用 session 级
-lifecycle lock。只有最终的 append-and-commit 步骤会在同一个 event loop 中按 session
-串行执行。
+lifecycle lock。只有最终的 append-and-commit 步骤会被串行化：async 写入在每个
+event loop 内按 session 串行执行，sync 写入则会跨线程按 session 串行执行。
 
 如果 recorder 已确认部分写入后任务被取消，`arecord()` 会重新抛出原始
 `asyncio.CancelledError`。可将该异常或外层的 `asyncio.TimeoutError` 传给
@@ -95,9 +96,31 @@ Adapter 不会关闭调用方注入的 client。对于 adapter 自行创建的 c
 `await recorder.aclose()` 仍能释放全部资源。
 如果条件允许，应在关闭 event loop 前关闭 HTTP-backed adapter；原始 loop 已结束后的
 清理属于 best-effort。
-`with_openviking_context()` 返回 LangChain 标准的
-`RunnableWithMessageHistory`，而该类型没有 close hook。因此长期运行的异步应用使用此
-helper 时，应按上例注入并关闭由调用方管理的异步 client。
+
+`with_openviking_context()` 返回 `OpenVikingContextRunnable`。它兼容 LangChain 的
+`RunnableWithMessageHistory`，并负责管理其创建的 context 和 recording adapter。
+它会在多次调用之间复用按 event loop 隔离的 client，同时继续隔离每次调用的 history、
+peer 身份和召回引用。推荐使用托管生命周期：
+
+```python
+async with with_openviking_context(runnable, url="http://localhost:1933") as chain:
+    result = await chain.ainvoke(
+        {"messages": [...]},
+        config={"configurable": {"session_id": "support-thread-1"}},
+    )
+```
+
+同步调用使用 `with ...`，也可以显式调用 `close()` 或 `await aclose()`。不要在正在运行的
+event loop 中调用 `close()`，此时应使用 `aclose()`。注入的 client 仍由调用方管理。
+
+LCEL 组合会返回普通的 `RunnableSequence`，不会暴露 OpenViking 的 close 方法。应保留
+托管 wrapper，并在其生命周期内完成组合：
+
+```python
+async with with_openviking_context(runnable, url="http://localhost:1933") as managed:
+    chain = managed | another_step
+    result = await chain.ainvoke(...)
+```
 
 ## Peer 身份
 
@@ -155,11 +178,12 @@ from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
 from openviking.integrations.langchain import with_openviking_context
 
-chain = with_openviking_context(
+with with_openviking_context(
     RunnableLambda(lambda msgs: AIMessage(content="...")),
     url="http://localhost:1933",
     api_key="...",
-)
+) as chain:
+    result = chain.invoke(...)
 ```
 
 ### Agent tools
