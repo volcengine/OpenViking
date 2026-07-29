@@ -10,7 +10,7 @@ import asyncio
 import inspect
 import json
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -27,6 +27,31 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _UNSET = object()
+
+
+def _utc_now() -> datetime:
+    """Return the current instant as a UTC timezone-aware datetime."""
+    return datetime.now(timezone.utc)
+
+
+def _as_utc(value: Optional[datetime]) -> Optional[datetime]:
+    """Normalize a possibly-naive datetime to UTC timezone-aware form.
+
+    * ``None`` → ``None`` (unchanged, for optional fields).
+    * Timezone-aware → converted to UTC.
+    * Naive datetimes (the legacy of ``datetime.now()`` and early JSON
+      payloads without a ``Z`` suffix) are treated as UTC by attaching
+      the UTC timezone rather than the local one, because every write
+      path in this module previously produced wall-clock UTC-like
+      timestamps via ``datetime.now()`` called on the server; this
+      keeps the on-disk ordering stable for existing watch tasks
+      (issue #3268).
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _uri_matches_prefix(uri: Optional[str], prefix: str) -> bool:
@@ -78,7 +103,7 @@ class WatchTask(BaseModel):
     auth_state: Optional[Dict[str, Any]] = Field(
         default=None, description="Private authentication state for scheduled re-processing"
     )
-    created_at: datetime = Field(default_factory=datetime.now, description="Task creation time")
+    created_at: datetime = Field(default_factory=_utc_now, description="Task creation time")
     last_execution_time: Optional[datetime] = Field(None, description="Last execution time")
     next_execution_time: Optional[datetime] = Field(None, description="Next execution time")
     is_active: bool = Field(default=True, description="Whether the task is active")
@@ -126,14 +151,38 @@ class WatchTask(BaseModel):
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "WatchTask":
-        """Create task from dictionary."""
+        """Create task from dictionary, normalizing all datetimes to UTC-aware."""
         data = dict(data)
         if isinstance(data.get("created_at"), str):
-            data["created_at"] = datetime.fromisoformat(data["created_at"])
+            try:
+                data["created_at"] = _as_utc(datetime.fromisoformat(data["created_at"]))
+            except ValueError:
+                data["created_at"] = _utc_now()
+        elif data.get("created_at") is None:
+            data["created_at"] = _utc_now()
+        else:
+            data["created_at"] = _as_utc(data["created_at"])
+
         if isinstance(data.get("last_execution_time"), str):
-            data["last_execution_time"] = datetime.fromisoformat(data["last_execution_time"])
+            try:
+                data["last_execution_time"] = _as_utc(
+                    datetime.fromisoformat(data["last_execution_time"])
+                )
+            except ValueError:
+                data["last_execution_time"] = None
+        else:
+            data["last_execution_time"] = _as_utc(data.get("last_execution_time"))
+
         if isinstance(data.get("next_execution_time"), str):
-            data["next_execution_time"] = datetime.fromisoformat(data["next_execution_time"])
+            try:
+                data["next_execution_time"] = _as_utc(
+                    datetime.fromisoformat(data["next_execution_time"])
+                )
+            except ValueError:
+                data["next_execution_time"] = None
+        else:
+            data["next_execution_time"] = _as_utc(data.get("next_execution_time"))
+
         if data.get("processor_kwargs") is None:
             data["processor_kwargs"] = {}
         if data.get("auth_state") is not None and not isinstance(data.get("auth_state"), dict):
@@ -141,8 +190,17 @@ class WatchTask(BaseModel):
         return cls(**data)
 
     def calculate_next_execution_time(self) -> datetime:
-        """Calculate next execution time based on interval."""
-        base_time = self.last_execution_time or self.created_at
+        """Calculate next execution time based on interval.
+
+        The returned datetime is always UTC timezone-aware so it can be
+        safely compared against ``_utc_now()`` without triggering the
+        naive-vs-aware TypeError reported in issue #3268.
+        """
+        base_time = (
+            _as_utc(self.last_execution_time)
+            or _as_utc(self.created_at)
+            or _utc_now()
+        )
         return base_time + timedelta(minutes=self.watch_interval)
 
 
@@ -839,7 +897,7 @@ class WatchManager:
                 await self._save_tasks()
                 return
 
-            task.last_execution_time = datetime.now()
+            task.last_execution_time = _utc_now()
             task.next_execution_time = task.calculate_next_execution_time()
 
             await self._save_tasks()
@@ -854,7 +912,7 @@ class WatchManager:
             List of tasks that need to be executed
         """
         async with self._lock:
-            now = datetime.now()
+            now = _utc_now()
             due_tasks = []
 
             for task in self._tasks.values():
@@ -864,7 +922,8 @@ class WatchManager:
                 if account_id and task.account_id != account_id:
                     continue
 
-                if task.next_execution_time and task.next_execution_time <= now:
+                task_next = _as_utc(task.next_execution_time)
+                if task_next is not None and task_next <= now:
                     due_tasks.append(task)
 
             return due_tasks
@@ -877,7 +936,8 @@ class WatchManager:
                     continue
                 if account_id and task.account_id != account_id:
                     continue
-                if task.next_execution_time is None:
+                task_next = _as_utc(task.next_execution_time)
+                if task_next is None:
                     continue
-                next_times.append(task.next_execution_time)
+                next_times.append(task_next)
             return min(next_times) if next_times else None

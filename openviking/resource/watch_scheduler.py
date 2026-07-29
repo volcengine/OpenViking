@@ -7,7 +7,7 @@ Provides scheduled task execution for watch tasks.
 """
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Set
 
 from openviking.resource.feishu_watch_auth import (
@@ -17,7 +17,7 @@ from openviking.resource.feishu_watch_auth import (
     feishu_auth_state_needs_refresh,
     is_feishu_auth_state,
 )
-from openviking.resource.watch_manager import WatchManager
+from openviking.resource.watch_manager import WatchManager, _as_utc, _utc_now
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
@@ -167,10 +167,15 @@ class WatchScheduler:
                 if self._watch_manager:
                     next_time = await self._watch_manager.get_next_execution_time()
                     if next_time is not None:
-                        now = datetime.now()
+                        # Ensure both sides of the subtraction are UTC-aware. The
+                        # scheduler loop used to mix naive (datetime.now) and
+                        # potentially tz-aware (ISO loaded) datetimes, which
+                        # raised TypeError in Python >=3.9 (issue #3268).
+                        now = _utc_now()
+                        next_utc = _as_utc(next_time) or now
                         sleep_seconds = min(
                             self._check_interval,
-                            max(0.0, (next_time - now).total_seconds()),
+                            max(0.0, (next_utc - now).total_seconds()),
                         )
                 await asyncio.sleep(sleep_seconds)
             except asyncio.CancelledError:
