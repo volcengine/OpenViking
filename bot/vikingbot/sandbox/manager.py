@@ -39,16 +39,24 @@ class SandboxManager:
         return self._sandboxes[workspace_id]
 
     async def _create_sandbox(self, workspace_id: str) -> SandboxBackend:
-        """Create new sandbox instance."""
+        """Create new sandbox instance.
+
+        Captures workspace existence *before* ``instance.start()`` because
+        start() itself materialises the workspace directory on disk.  Using
+        a post-start existence check would always see the directory present
+        and would therefore never copy bootstrap files into a fresh
+        workspace.
+        """
         workspace = self.workspace / workspace_id
+        workspace_existed = workspace.exists()
         instance = self._backend_cls(self.config.sandbox, workspace_id, workspace)
         try:
             await instance.start()
-        except Exception as e:
+        except Exception:
             import traceback
 
             traceback.print_exc()
-        if not workspace.exists():
+        if not workspace_existed:
             await self._copy_bootstrap_files(workspace)
         return instance
 
