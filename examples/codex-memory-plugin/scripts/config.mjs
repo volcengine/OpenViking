@@ -32,6 +32,7 @@
  *   OPENVIKING_TIMEOUT_MS, OPENVIKING_CAPTURE_TIMEOUT_MS
  *   OPENVIKING_RECALL_TIMEOUT_MS, OPENVIKING_RECALL_COMPRESS_TIMEOUT_MS
  *   OPENVIKING_RECALL_COMPRESS_MODEL, OPENVIKING_RECALL_COMPRESS_THINKING
+ *   OPENVIKING_RECALL_COMPRESS_BASE_URL
  *   OPENVIKING_RECALL_LIMIT, OPENVIKING_SCORE_THRESHOLD
  *   OPENVIKING_WORKSPACE_PEER, OPENVIKING_RECALL_PEER_SCOPE
  *   OPENVIKING_DEBUG=1, OPENVIKING_DEBUG_LOG
@@ -123,6 +124,10 @@ export function loadConfig() {
     process.env.OPENVIKING_RECALL_COMPRESS_MODEL,
     hasOwn(cx, "recallCompressModel") ? str(cx.recallCompressModel, "") : "",
   );
+  const recallCompressBaseUrl = str(
+    process.env.OPENVIKING_RECALL_COMPRESS_BASE_URL,
+    hasOwn(cx, "recallCompressBaseUrl") ? str(cx.recallCompressBaseUrl, "") : "",
+  );
   const cxRecallCompressThinking = hasOwn(cx, "recallCompressThinking")
     ? cx.recallCompressThinking
     : (hasOwn(cx, "recallCompressReasoningEffort") ? cx.recallCompressReasoningEffort : "");
@@ -168,6 +173,7 @@ export function loadConfig() {
     recallPeerScope,
     recallCompress: envBool("OPENVIKING_RECALL_COMPRESS") ?? (cx.recallCompress !== false),
     recallCompressModel,
+    recallCompressBaseUrl,
     recallCompressThinking,
     recallCompressConfigured: Boolean(recallCompressModel || recallCompressThinking),
     recallCompressTimeoutMs,

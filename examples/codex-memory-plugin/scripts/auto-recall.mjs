@@ -406,7 +406,7 @@ async function getRecallCompressorProfile() {
 async function runCodexCompressor(prompt, profile) {
   const tmp = await mkdtemp(join(tmpdir(), "ov-recall-compress-"));
   const outputPath = join(tmp, "last-message.txt");
-  const args = buildCodexExecArgs(profile, outputPath);
+  const args = buildCodexExecArgs(profile, outputPath, cfg);
 
   try {
     return await new Promise((resolve) => {

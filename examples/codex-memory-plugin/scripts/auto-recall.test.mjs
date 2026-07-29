@@ -109,9 +109,11 @@ async function withFakeCodex(output, fn, { exitCode = 0 } = {}) {
   const binDir = await mkdtemp(join(tmpdir(), "ov-fake-codex-"));
   const executable = join(binDir, "codex");
   const callLog = join(binDir, "calls.log");
+  const argsLog = join(binDir, "args.log");
   await writeFile(executable, `#!/bin/sh
 output_path=""
 while [ "$#" -gt 0 ]; do
+  printf '%s\\n' "$1" >> "$FAKE_CODEX_ARGS_LOG"
   if [ "$1" = "--output-last-message" ]; then
     shift
     output_path="$1"
@@ -129,9 +131,11 @@ printf '%s' "$FAKE_CODEX_OUTPUT" > "$output_path"
   try {
     return await fn({
       callLog,
+      argsLog,
       env: {
         PATH: `${binDir}:${process.env.PATH}`,
         FAKE_CODEX_CALL_LOG: callLog,
+        FAKE_CODEX_ARGS_LOG: argsLog,
         FAKE_CODEX_EXIT_CODE: String(exitCode),
         FAKE_CODEX_OUTPUT: output,
       },
@@ -152,7 +156,7 @@ async function runEndpointCompressionCase({
   const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-endpoint-compress-"));
   let requestBody = null;
   try {
-    return await withFakeCodex(compressorOutput, async ({ callLog, env }) => {
+    return await withFakeCodex(compressorOutput, async ({ callLog, argsLog, env }) => {
       const result = await withMockOpenViking(async (req, res) => {
         const url = new URL(req.url, "http://127.0.0.1");
         if (req.method === "GET" && url.pathname === "/health") {
@@ -188,9 +192,11 @@ async function runEndpointCompressionCase({
         },
       ));
       const compressorCallLog = await readFile(callLog, "utf-8").catch(() => "");
+      const compressorArgs = await readFile(argsLog, "utf-8").catch(() => "");
       return {
         output: JSON.parse(result.stdout.trim()),
         compressorCalls: compressorCallLog.trim().split("\n").filter(Boolean).length,
+        compressorArgs: compressorArgs.trim().split("\n").filter(Boolean),
         requestBody,
       };
     }, { exitCode });
@@ -364,6 +370,26 @@ test("auto-recall applies the relevance compressor to server recall entries", as
   assert.deepEqual(result.output, {});
   assert.equal(result.compressorCalls, 1);
   assert.equal(result.requestBody.max_chars, 18000);
+});
+
+test("auto-recall passes the configured compressor base URL to Codex", async () => {
+  const result = await runEndpointCompressionCase({
+    prompt: "Explain HTTP 429",
+    entry: {
+      uri: "viking://user/zeus/memories/events/retry.md",
+      score: 0.91,
+      type: "events",
+      mode: "summary",
+      summary: "Retry with backoff",
+    },
+    rendered: "<memory_group>Retry with backoff</memory_group>",
+    compressorOutput: "NO_RELEVANT_MEMORY",
+    extraEnv: { OPENVIKING_RECALL_COMPRESS_BASE_URL: "https://compressor.example/v1" },
+  });
+
+  assert.ok(result.compressorArgs.includes('model_provider="openviking_compressor"'));
+  assert.ok(result.compressorArgs.includes('model_providers.openviking_compressor.name="openviking_compressor"'));
+  assert.ok(result.compressorArgs.includes('model_providers.openviking_compressor.base_url="https://compressor.example/v1"'));
 });
 
 test("auto-recall falls back to a bounded deterministic digest when endpoint compression fails", async () => {
