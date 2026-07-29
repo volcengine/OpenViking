@@ -113,32 +113,123 @@ class TestExcelSectioningInheritance:
 
     def test_unset_sectioning_follows_markdown(self):
         markdown = MarkdownConfig(max_section_size=512, max_section_chars=2000)
-        resolved = ExcelConfig().with_sectioning_defaults_from(markdown)
+        resolved = ExcelConfig.from_dict({}).with_sectioning_defaults_from(markdown)
         assert resolved.max_section_size == 512
         assert resolved.max_section_chars == 2000
 
     def test_explicit_excel_values_win(self):
         markdown = MarkdownConfig(max_section_size=512, max_section_chars=2000)
-        resolved = ExcelConfig(max_section_size=1024).with_sectioning_defaults_from(markdown)
+        resolved = ExcelConfig.from_dict(
+            {"max_section_size": 1024}
+        ).with_sectioning_defaults_from(markdown)
         assert resolved.max_section_size == 1024
-        # Still unset, so this one keeps following Markdown.
+        # Absent from parsers.excel, so this one keeps following Markdown.
         assert resolved.max_section_chars == 2000
+
+    def test_explicit_value_equal_to_default_is_not_overwritten(self):
+        """"Excel keeps 2048" is a legitimate config even though 2048 is the default.
+
+        Comparing against class defaults cannot distinguish it from an absent
+        key, which would make the documented "explicit values win" contract
+        false for exactly this case.
+        """
+        markdown = MarkdownConfig(max_section_size=512)
+        resolved = ExcelConfig.from_dict(
+            {"max_section_size": 2048}
+        ).with_sectioning_defaults_from(markdown)
+        assert resolved.max_section_size == 2048
 
     def test_process_pool_knobs_are_never_inherited(self):
         markdown = MarkdownConfig(max_section_size=512)
-        resolved = ExcelConfig(
-            enable_process_pool=True, process_pool_workers=8
+        resolved = ExcelConfig.from_dict(
+            {"enable_process_pool": True, "process_pool_workers": 8}
         ).with_sectioning_defaults_from(markdown)
         assert resolved.enable_process_pool is True
         assert resolved.process_pool_workers == 8
         assert resolved.max_section_size == 512
 
     def test_default_markdown_leaves_excel_unchanged(self):
-        resolved = ExcelConfig().with_sectioning_defaults_from(MarkdownConfig())
+        resolved = ExcelConfig.from_dict({}).with_sectioning_defaults_from(MarkdownConfig())
         assert resolved == ExcelConfig()
 
     def test_missing_markdown_config_is_tolerated(self):
-        assert ExcelConfig().with_sectioning_defaults_from(None) == ExcelConfig()
+        assert ExcelConfig.from_dict({}).with_sectioning_defaults_from(None) == ExcelConfig()
+
+    def test_hand_built_config_is_treated_as_fully_explicit(self):
+        """A config built without from_dict carries no key provenance."""
+        markdown = MarkdownConfig(max_section_size=512)
+        resolved = ExcelConfig(max_section_size=2048).with_sectioning_defaults_from(markdown)
+        assert resolved.max_section_size == 2048
+
+    def test_provenance_does_not_affect_equality(self):
+        assert ExcelConfig.from_dict({}) == ExcelConfig()
+        assert ExcelConfig.from_dict({"max_section_size": 2048}) == ExcelConfig()
+
+    def test_absent_excel_section_still_inherits_through_full_config(self):
+        """Deployments predating parsers.excel must keep their Excel sectioning."""
+        from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
+
+        cfg = OpenVikingConfig.from_dict({"markdown": {"max_section_size": 512}})
+        resolved = cfg.excel.with_sectioning_defaults_from(cfg.markdown)
+        assert resolved.max_section_size == 512
+
+    def test_key_provenance_does_not_leak_into_serialization(self):
+        """Provenance is bookkeeping, not config: it must not reach any output.
+
+        A dataclass field would appear in asdict/model_dump and, being a
+        frozenset, would break JSON serialization for callers.
+        """
+        import dataclasses
+        import json
+
+        cfg = ExcelConfig.from_dict({"max_section_size": 2048})
+        dumped = dataclasses.asdict(cfg)
+        assert "_explicit_fields" not in dumped
+        assert not any(key.startswith("_") for key in dumped), sorted(dumped)
+        json.dumps(dumped)
+
+    def test_config_data_cannot_forge_key_provenance(self):
+        """Provenance must not be settable from a config file."""
+        with pytest.raises(ValueError):
+            ExcelConfig.from_dict({"_explicit_fields": ["max_section_size"]})
+
+    def test_replace_and_copy_preserve_key_provenance(self):
+        import copy
+        import dataclasses
+
+        markdown = MarkdownConfig(max_section_size=512)
+        cfg = ExcelConfig.from_dict({"max_section_size": 2048})
+
+        for variant in (
+            dataclasses.replace(cfg, enable_process_pool=True),
+            copy.copy(cfg),
+            copy.deepcopy(cfg),
+        ):
+            resolved = variant.with_sectioning_defaults_from(markdown)
+            assert resolved.max_section_size == 2048
+
+    def test_absent_excel_section_inherits_through_parser_loader(self):
+        """load_parser_configs_from_dict is a second config entry point."""
+        from openviking_cli.utils.config.parser_config import (
+            load_parser_configs_from_dict,
+        )
+
+        configs = load_parser_configs_from_dict({"markdown": {"max_section_size": 512}})
+        resolved = configs["excel"].with_sectioning_defaults_from(configs["markdown"])
+        assert resolved.max_section_size == 512
+
+    def test_explicit_excel_section_wins_through_full_config(self):
+        from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
+
+        cfg = OpenVikingConfig.from_dict(
+            {
+                "markdown": {"max_section_size": 512},
+                "excel": {"max_section_size": 2048, "enable_process_pool": True},
+            }
+        )
+        resolved = cfg.excel.with_sectioning_defaults_from(cfg.markdown)
+        assert resolved.max_section_size == 2048
+        assert resolved.enable_process_pool is True
 
     def test_registry_resolves_excel_against_markdown(self, monkeypatch):
         from types import SimpleNamespace
@@ -150,7 +241,7 @@ class TestExcelSectioningInheritance:
             markdown=MarkdownConfig(max_section_size=512, max_section_chars=2000),
             pdf=ParserConfig(),
             html=ParserConfig(),
-            excel=ExcelConfig(enable_process_pool=True),
+            excel=ExcelConfig.from_dict({"enable_process_pool": True}),
             image=ParserConfig(),
         )
         monkeypatch.setattr(

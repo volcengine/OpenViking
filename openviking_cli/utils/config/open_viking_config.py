@@ -207,7 +207,11 @@ class OpenVikingConfig(BaseModel):
     )
 
     excel: ExcelConfig = Field(
-        default_factory=ExcelConfig, description="Excel parsing configuration"
+        # from_dict on an empty mapping, not the bare constructor: an absent
+        # parsers.excel section must record that no key was set, so sectioning
+        # still follows parsers.markdown for deployments predating this section.
+        default_factory=lambda: ExcelConfig.from_dict({}),
+        description="Excel parsing configuration",
     )
 
     html: HTMLConfig = Field(default_factory=HTMLConfig, description="HTML parsing configuration")
