@@ -10,6 +10,7 @@ shape-anchored so legitimate directory content is never dropped.
 
 from openviking.service.reindex_executor import (
     _ABSTRACT_NOT_READY_SUFFIX,
+    _NO_SUBSTANTIVE_CONTENT_SUFFIX,
     _OVERVIEW_NOT_READY_SUFFIX,
     _is_not_ready_sentinel,
 )
@@ -18,6 +19,13 @@ from openviking.service.reindex_executor import (
 def test_real_abstract_sentinel_is_detected():
     rendered = "# viking://memory/projects/foo [Directory abstract is not ready]"
     assert _is_not_ready_sentinel(rendered, _ABSTRACT_NOT_READY_SUFFIX)
+
+
+def test_no_substantive_content_marker_is_detected():
+    # Permanent empty/title-only-directory marker (issue #3028) must also be
+    # refused by the reindex embedding guard.
+    rendered = "# viking://memory/projects/foo\n\n[Directory has no substantive content]"
+    assert _is_not_ready_sentinel(rendered, _NO_SUBSTANTIVE_CONTENT_SUFFIX)
 
 
 def test_real_overview_sentinel_is_detected():
