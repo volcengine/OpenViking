@@ -34,10 +34,13 @@ from openviking.session.memory.utils import (
 from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
 from openviking.telemetry import bind_telemetry_stage, tracer
+from openviking.utils.token_estimation import estimate_text_tokens, truncate_text_to_token_budget
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
+
+_DEFAULT_PROMPT_BUDGET_TOKENS = 32000
 
 
 _CANNED_REFUSAL_RE = re.compile(
@@ -261,6 +264,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 )
 
             # Call LLM with tools - model decides: tool calls OR final operations
+            self._enforce_prompt_budget(messages)
             pretty_print_messages(messages)
 
             tool_calls, operations = await self._call_llm(messages)
@@ -610,6 +614,60 @@ The final output of the model must strictly follow the JSON Schema format shown 
             )
 
         return has_unknown_tool
+
+    @staticmethod
+    def _enforce_prompt_budget(messages: List[Dict[str, Any]]) -> None:
+        """Truncate oversized message contents so the total token budget is respected.
+
+        When compressor_v2 is running over a long session with many tool
+        results and read prefetch buffers, the prompt handed to the VLM can
+        grow to 52k+ tokens, well above typical provider context windows. This
+        helper estimates the prompt size and, when it exceeds the budget,
+        truncates the longest ``content`` strings in place (from the end so
+        the system / earliest instructions are preserved). It does not remove
+        messages wholesale — only cuts long content fields.
+        """
+        total = 0
+        lengths: List[Tuple[int, int, int]] = []
+        for msg_idx, msg in enumerate(messages):
+            content = msg.get("content")
+            if not isinstance(content, str):
+                continue
+            length = estimate_text_tokens(content)
+            total += length
+            # Only consider truncating entries > 2k tokens (instructions,
+            # prefetch blobs, read buffers) — short messages stay intact.
+            if length > 2048:
+                lengths.append((length, msg_idx, len(lengths)))
+        if total <= _DEFAULT_PROMPT_BUDGET_TOKENS:
+            return
+        lengths.sort(reverse=True)
+        remaining = total - _DEFAULT_PROMPT_BUDGET_TOKENS
+        truncated_count = 0
+        for length, msg_idx, _ in lengths:
+            if remaining <= 0:
+                break
+            content = messages[msg_idx]["content"]
+            # Compute a target size that reduces the prompt by `remaining`
+            # but keeps at least 20% of the original content so context is
+            # not completely lost.
+            keep_tokens = max(length - remaining, length // 5)
+            new_content = truncate_text_to_token_budget(
+                content,
+                keep_tokens,
+                marker="\n…[TRUNCATED FOR PROMPT BUDGET]…\n",
+                head_ratio=0.85,
+            )
+            new_len = estimate_text_tokens(new_content)
+            if new_len < length:
+                messages[msg_idx]["content"] = new_content
+                remaining -= length - new_len
+                truncated_count += 1
+        if truncated_count:
+            tracer.info(
+                f"[PromptBudget] truncated {truncated_count} message(s) — "
+                f"original ~{total} tokens, kept ~{max(_DEFAULT_PROMPT_BUDGET_TOKENS, total - remaining)} tokens"
+            )
 
     async def _call_llm(
         self, messages: List[Dict[str, Any]]
