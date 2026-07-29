@@ -503,7 +503,9 @@ Enable Langfuse with:
 }
 ```
 
-The repository includes `deploy/docker/deploy_langfuse.sh` for local deployment.
+The repository includes `deploy/docker/deploy_langfuse.sh` for a loopback-only
+local deployment. On first launch it generates unique credentials in a
+Git-ignored, mode-`0600` `deploy/docker/langfuse/.env`.
 
 ## Security Notes
 

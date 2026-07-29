@@ -503,7 +503,8 @@ Gateway 的 Bot API 前缀为 `/bot/v1`：
 }
 ```
 
-仓库内提供了 `deploy/docker/deploy_langfuse.sh`，可用于本地部署。
+仓库内提供了 `deploy/docker/deploy_langfuse.sh`，用于仅绑定回环地址的本地部署。首次启动时，
+脚本会在 Git 忽略且权限为 `0600` 的 `deploy/docker/langfuse/.env` 中生成唯一凭据。
 
 ## 安全提示
 
