@@ -792,6 +792,7 @@ class SemanticDagExecutor:
         need_vectorize = True
         children_changed = True
         abstract = ""
+        overview: Optional[str] = None
         try:
             overview = None
             abstract = None
@@ -811,25 +812,36 @@ class SemanticDagExecutor:
                     overview = await self._processor._generate_overview(
                         dir_uri, file_summaries, children_abstracts
                     )
-                overview, abstract = self._processor._normalize_overview_generation(overview)
+
+                if overview is None:
+                    logger.error(
+                        f"[SemanticDag] Skipping semantic write for {dir_uri}: "
+                        "overview generation failed "
+                        "(no placeholder persisted; next extraction will retry)."
+                    )
+                    need_vectorize = False
+                    abstract = ""
+                else:
+                    overview, abstract = self._processor._normalize_overview_generation(overview)
 
             # Write directly, protected by the outer semantic lock.
-            try:
-                wrote = await self._write_directory_semantics(dir_uri, overview, abstract)
-                if not wrote:
-                    need_vectorize = False
-            except Exception:
-                logger.info(f"[SemanticDag] {dir_uri} write failed, skipping")
+            if overview is not None and abstract is not None:
+                try:
+                    wrote = await self._write_directory_semantics(dir_uri, overview, abstract)
+                    if not wrote:
+                        need_vectorize = False
+                except Exception:
+                    logger.info(f"[SemanticDag] {dir_uri} write failed, skipping")
 
             try:
-                if need_vectorize:
+                if need_vectorize and overview is not None:
                     task = VectorizeTask(
                         task_type="directory",
                         uri=dir_uri,
                         context_type=self._context_type,
                         ctx=self._ctx,
                         semantic_msg_id=self._semantic_msg_id,
-                        abstract=abstract,
+                        abstract=abstract or "",
                         overview=overview,
                         ingest_options=self._ingest_options,
                     )
@@ -852,7 +864,7 @@ class SemanticDagExecutor:
                 self._root_done.set()
             return
 
-        await self._on_child_done(parent_uri, dir_uri, abstract)
+        await self._on_child_done(parent_uri, dir_uri, abstract or "")
         self._release_dir_node(dir_uri)
 
     async def _add_vectorize_task(self, task: VectorizeTask) -> None:
