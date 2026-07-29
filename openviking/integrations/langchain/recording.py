@@ -96,6 +96,78 @@ class OpenVikingPartialWriteError(RuntimeError):
         return self.stage == "commit"
 
 
+@dataclass(frozen=True, slots=True)
+class OpenVikingCancellationProgress:
+    """Confirmed recording progress attached to an original cancellation."""
+
+    session_id: str
+    result: OpenVikingRecordResult
+    stage: Literal["batch", "commit"] = "batch"
+
+    @property
+    def messages_written(self) -> int:
+        """Return the number of payloads confirmed written before cancellation."""
+
+        return self.result.messages_written
+
+    @property
+    def input_messages_consumed(self) -> int:
+        """Return the caller-message prefix that is safe to skip on retry."""
+
+        return self.result.input_messages_consumed
+
+    @property
+    def context_attached(self) -> bool:
+        """Return whether recalled context was confirmed persisted."""
+
+        return self.result.context_attached
+
+    @property
+    def commit_pending(self) -> bool:
+        """Return whether only the post-write commit remains incomplete."""
+
+        return self.stage == "commit"
+
+
+_CANCELLATION_PROGRESS_ATTRIBUTE = "_openviking_recording_progress"
+
+
+def get_openviking_cancellation_progress(
+    error: BaseException,
+) -> OpenVikingCancellationProgress | None:
+    """Return recording progress from a cancellation or a timeout wrapping it."""
+
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        progress = getattr(current, _CANCELLATION_PROGRESS_ATTRIBUTE, None)
+        if isinstance(progress, OpenVikingCancellationProgress):
+            return progress
+        current = current.__cause__ or current.__context__
+    return None
+
+
+def _attach_cancellation_progress(
+    error: asyncio.CancelledError,
+    *,
+    session_id: str,
+    result: OpenVikingRecordResult,
+    stage: Literal["batch", "commit"] = "batch",
+) -> None:
+    """Annotate the original cancellation without changing its identity."""
+
+    setattr(
+        error,
+        _CANCELLATION_PROGRESS_ATTRIBUTE,
+        OpenVikingCancellationProgress(
+            session_id=session_id,
+            result=result,
+            stage=stage,
+        ),
+    )
+
+
 @dataclass(slots=True)
 class _PreparedMessage:
     input_end: int
@@ -268,6 +340,20 @@ class OpenVikingSessionRecorder:
                     session_id=session_id,
                     messages=batch.payloads,
                 )
+            except asyncio.CancelledError as exc:
+                if messages_written == 0:
+                    raise
+                result = OpenVikingRecordResult(
+                    messages_written=messages_written,
+                    input_messages_consumed=input_messages_consumed,
+                    context_attached=context_attached,
+                )
+                _attach_cancellation_progress(
+                    exc,
+                    session_id=session_id,
+                    result=result,
+                )
+                raise
             except Exception as exc:
                 if messages_written == 0:
                     raise
@@ -291,6 +377,15 @@ class OpenVikingSessionRecorder:
         )
         try:
             await aapply_commit_policy(client, session_id, self.commit_policy)
+        except asyncio.CancelledError as exc:
+            self._pending_commit_sessions.add(session_id)
+            _attach_cancellation_progress(
+                exc,
+                session_id=session_id,
+                result=result,
+                stage="commit",
+            )
+            raise
         except Exception as exc:
             self._pending_commit_sessions.add(session_id)
             raise OpenVikingPartialWriteError(

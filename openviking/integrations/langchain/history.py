@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Sequence
 from typing import Any, Callable
@@ -33,6 +34,7 @@ from openviking.integrations.langchain.messages import (
 from openviking.integrations.langchain.recording import (
     OpenVikingPartialWriteError,
     OpenVikingSessionRecorder,
+    get_openviking_cancellation_progress,
 )
 
 logger = logging.getLogger(__name__)
@@ -169,6 +171,11 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
             if exc.context_attached:
                 self._acknowledge_context_parts()
             raise
+        except asyncio.CancelledError as exc:
+            progress = get_openviking_cancellation_progress(exc)
+            if progress is not None and progress.context_attached:
+                self._acknowledge_context_parts()
+            raise
         if result.context_attached:
             self._acknowledge_context_parts()
 
@@ -226,6 +233,22 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
             return None
         text = str(value).strip()
         return text or None
+
+    def _prepare_invocation(
+        self,
+        *,
+        peer_id: str | None,
+        context_parts: Sequence[dict[str, Any]] = (),
+    ) -> None:
+        """Set invocation-local attribution and recalled context."""
+
+        self.peer_id = peer_id
+        self._pending_context_parts = list(context_parts)
+
+    def _discard_invocation_context(self) -> None:
+        """Discard recalled context owned by an interrupted invocation."""
+
+        self._pending_context_parts = []
 
     def _acknowledge_context_parts(self) -> None:
         had_pending_context = bool(self._pending_context_parts)
