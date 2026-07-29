@@ -6,7 +6,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from openviking.parse.parsers.constants import FILE_TYPE_CODE
+from openviking.parse.parsers.constants import (
+    FILE_TYPE_CODE,
+    FILE_TYPE_DOCUMENTATION,
+    FILE_TYPE_OTHER,
+)
 from openviking.parse.parsers.code.ast import SkeletonExtractionResult
 from openviking.parse.parsers.media.utils import get_media_type
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
@@ -104,6 +108,34 @@ def test_cuda_extensions_are_dispatched_as_code():
     processor = SemanticProcessor()
     assert processor._detect_file_type("kernel.cu") == FILE_TYPE_CODE
     assert processor._detect_file_type("common.cuh") == FILE_TYPE_CODE
+
+
+def test_documentation_extensions_are_dispatched_before_code_skeleton_support():
+    processor = SemanticProcessor()
+    with patch(
+        "openviking.parse.parsers.code.ast.providers.supports_code_skeleton",
+        return_value=True,
+    ):
+        assert processor._detect_file_type("README.md") == FILE_TYPE_DOCUMENTATION
+
+
+def test_process_supported_extensions_are_dispatched_as_code():
+    processor = SemanticProcessor()
+    assert processor._detect_file_type("main.tf") == FILE_TYPE_CODE
+
+
+def test_process_denied_non_code_formats_are_not_dispatched_as_code():
+    processor = SemanticProcessor()
+    assert processor._detect_file_type("request.http") == FILE_TYPE_OTHER
+
+
+def test_legacy_code_extensions_remain_fallback_when_skeleton_is_unsupported():
+    processor = SemanticProcessor()
+    with patch(
+        "openviking.parse.parsers.code.ast.providers.supports_code_skeleton",
+        return_value=False,
+    ):
+        assert processor._detect_file_type("sample.py") == FILE_TYPE_CODE
 
 
 @pytest.mark.asyncio

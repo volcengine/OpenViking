@@ -179,7 +179,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
     def _detect_file_type(self, file_name: str) -> str:
         """
-        Detect file type based on extension using constants from code parser.
+        Detect file type for summary prompt selection.
 
         Args:
             file_name: File name with extension
@@ -189,15 +189,21 @@ class SemanticProcessor(DequeueHandlerBase):
         """
         file_name_lower = file_name.lower()
 
-        # Check if file is a code file
-        for ext in CODE_EXTENSIONS:
-            if file_name_lower.endswith(ext):
-                return FILE_TYPE_CODE
-
-        # Check if file is a documentation file
+        # Documentation prompts should win over broad code skeleton recognition.
         for ext in DOCUMENTATION_EXTENSIONS:
             if file_name_lower.endswith(ext):
                 return FILE_TYPE_DOCUMENTATION
+
+        from openviking.parse.parsers.code.ast.providers import supports_code_skeleton
+
+        if supports_code_skeleton(file_name):
+            return FILE_TYPE_CODE
+
+        # Keep legacy extension-based routing for code-like text formats not
+        # covered by tags queries or tree-sitter-language-pack.
+        for ext in CODE_EXTENSIONS:
+            if file_name_lower.endswith(ext):
+                return FILE_TYPE_CODE
 
         # Default to other
         return FILE_TYPE_OTHER
