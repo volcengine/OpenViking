@@ -166,6 +166,19 @@ result = client.add_resource(
 print(result)
 ```
 
+To ingest content without VLM semantic understanding, pass `processing_mode="vectors_only"`.
+This writes/syncs the resource tree and vectorizes current files, but does not generate
+or refresh `.abstract.md` / `.overview.md`.
+
+```python
+result = client.add_resource(
+    "/path/to/notes.md",
+    to="viking://resources/demo-notes",
+    processing_mode="vectors_only",
+    wait=True,
+)
+```
+
 ### Filesystem Operations
 
 ```python

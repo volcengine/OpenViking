@@ -78,7 +78,20 @@ or reset it before selecting another workspace.
 and `aclear()`. `OpenVikingSessionRecorder` provides `arecord()`, `aflush()`,
 and `aclose()`. Async LangGraph runs select `awrap_model_call()` and
 `aafter_agent()` automatically. Concurrent first use creates one internal HTTP
-client per adapter and event loop.
+client per adapter and event loop. Each `with_openviking_context()` invocation
+owns the history snapshot, peer identity, and recalled-context references used
+to record its turn. Concurrent calls may therefore share a session without a
+second live history read losing messages, and an abandoned stream does not hold
+a session-wide lifecycle lock. Only the final append-and-commit step is
+serialized per session and event loop.
+
+If cancellation occurs after a recorder has confirmed part of a write,
+`arecord()` re-raises the original `asyncio.CancelledError`. Pass that exception,
+or a wrapping `asyncio.TimeoutError`, to
+`get_openviking_cancellation_progress()` to inspect the confirmed message
+prefix or pending-commit state before retrying. Preserving the original
+cancellation object also preserves the standard `asyncio.wait_for()` and
+`asyncio.timeout()` timeout behavior.
 
 Adapters never close an injected client. When an adapter creates its own client,
 release it with `await retriever.aclose()`, `await assembler.aclose()`,

@@ -30,6 +30,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.retrieve.type_quota_recall import (
     DEFAULT_MAX_CHARS,
     DEFAULT_MIN_SCORE,
@@ -538,6 +539,7 @@ async def add_resource(
     temp_file_id: str = "",
     description: str = "",
     watch_interval: float = 0,
+    processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
     to: str = "",
     parent: str = "",
     args: Optional[dict[str, Any]] = None,
@@ -559,6 +561,8 @@ async def add_resource(
         watch_interval: Auto-refresh cadence in minutes. 0 = no watch. Prefer >=1440 (24h)
             unless the source changes faster — every refresh re-embeds the whole resource.
             Only applies to remote-URL invocations.
+        processing_mode: "semantic_and_vectors" for normal semantic processing, or
+            "vectors_only" to skip semantic understanding and only build vector indexes.
         to: Target URI under viking://resources/ (e.g. "viking://resources/volcengine/OpenViking").
             Leave empty to derive a URI from the source.
         parent: Parent URI under viking://resources/ for remote imports. Mutually exclusive
@@ -586,7 +590,13 @@ async def add_resource(
         store = TempUploadStore.build(server_config)
         try:
             result = await ingest_temp_upload(
-                store, temp_file_id, ctx, to=to, reason=description, args=args
+                store,
+                temp_file_id,
+                ctx,
+                to=to,
+                reason=description,
+                args=args,
+                processing_mode=processing_mode,
             )
         except (PermissionDeniedError, InvalidArgumentError) as exc:
             return f"Error: {exc}"
@@ -631,6 +641,7 @@ async def add_resource(
                 reason=description,
                 wait=False,
                 watch_interval=watch_interval,
+                processing_mode=processing_mode,
                 enforce_public_remote_targets=True,
                 args=args,
             )
@@ -673,6 +684,7 @@ async def add_resource(
         to=to,
         reason=description,
         actor_peer_id=ctx.actor_peer_id or "",
+        processing_mode=processing_mode,
     )
     base_url, url_source = _resolve_public_base_url()
     upload_url = f"{base_url}/api/v1/resources/temp_upload?token={quote(token, safe='')}"

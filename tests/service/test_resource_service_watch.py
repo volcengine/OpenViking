@@ -34,7 +34,16 @@ class MockResourceProcessor:
 
     async def process_resource(self, **kwargs):
         self.calls.append(kwargs)
-        return {"root_uri": kwargs.get("to") or "viking://resources/test"}
+        root_uri = kwargs.get("to") or "viking://resources/test"
+        return {
+            "root_uri": root_uri,
+            "_post_process": {"root_uri": root_uri},
+            "_resource_lock": SimpleNamespace(
+                active=False,
+                to_handoff=MagicMock(return_value=None),
+                close=AsyncMock(),
+            ),
+        }
 
 
 class MockSkillProcessor:
@@ -92,6 +101,13 @@ def isolate_service_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest_asyncio.fixture
+async def watch_manager() -> AsyncGenerator[WatchManager, None]:
+    manager = WatchManager(viking_fs=None)
+    await manager.initialize()
+    yield manager
+
+
+@pytest_asyncio.fixture
 async def resource_service(watch_manager: WatchManager) -> AsyncGenerator[ResourceService, None]:
     """Create ResourceService instance with watch support."""
     scheduler = MagicMock()
@@ -102,6 +118,9 @@ async def resource_service(watch_manager: WatchManager) -> AsyncGenerator[Resour
         resource_processor=MockResourceProcessor(),
         skill_processor=MockSkillProcessor(),
         watch_scheduler=scheduler,
+    )
+    service._enqueue_add_resource_job = AsyncMock(
+        return_value=SimpleNamespace(task_id="test-task")
     )
     yield service
 
@@ -199,6 +218,7 @@ class TestWatchTaskCreation:
             watch_interval=30.0,
             build_index=False,
             summarize=True,
+            processing_mode="vectors_only",
             custom_option="x",
         )
 
@@ -206,7 +226,9 @@ class TestWatchTaskCreation:
         assert task is not None
         assert task.build_index is False
         assert task.summarize is True
+        assert task.processing_mode == "vectors_only"
         assert task.processor_kwargs.get("custom_option") == "x"
+        assert "processing_mode" not in task.processor_kwargs
 
     @pytest.mark.asyncio
     async def test_create_watch_task_with_default_interval(

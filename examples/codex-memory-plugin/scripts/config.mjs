@@ -197,10 +197,6 @@ export function loadConfig() {
       process.env.OPENVIKING_CAPTURE_MAX_LENGTH,
       num(cx.captureMaxLength, 24000),
     ))),
-    captureMaxTurnsPerStop: Math.max(1, Math.floor(num(
-      process.env.OPENVIKING_CAPTURE_MAX_TURNS_PER_STOP,
-      num(cx.captureMaxTurnsPerStop, 8),
-    ))),
     captureTimeoutMs,
     captureToolMaxChars: Math.max(200, Math.floor(num(
       process.env.OPENVIKING_CAPTURE_TOOL_MAX_CHARS,

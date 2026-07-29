@@ -28,6 +28,7 @@ pub async fn handle_add_resource(
     exclude: Option<String>,
     no_directly_upload_media: bool,
     watch_interval: f64,
+    processing_mode: String,
     resource_args: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
@@ -108,6 +109,7 @@ pub async fn handle_add_resource(
         effective_exclude,
         directly_upload_media,
         watch_interval,
+        processing_mode,
         add_resource_args,
         ctx.output_format,
         ctx.compact,

@@ -109,6 +109,117 @@ data: {"event":"response","data":{"content":"The knowledge base contains…","re
 
 `event` can be `reasoning`, `reasoning_delta`, `tool_call`, `tool_result`, `content_delta`, `iteration`, or `response`.
 
+### compile()
+
+Start an asynchronous, Skill-driven Compile task. VikingBot loads the selected Skill, reads the supplied OpenViking directories with the authenticated user identity, runs a task-scoped AgentLoop, and commits validated outputs below the target URI.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `from` | string[] | Yes | - | One or more source directories |
+| `to` | string | Yes | - | Target Resource or Memory directory, or a supported Skill namespace |
+| `skill` | string | Yes | - | Skill directory or its `SKILL.md` URI |
+| `reason` | string | No | Skill-driven default | Additional instructions for this Compile run |
+
+**HTTP API**
+
+```
+POST /bot/v1/compile
+```
+
+```bash
+curl -X POST http://localhost:1933/bot/v1/compile \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "from": ["viking://resources/research"],
+    "to": "viking://resources/research-wiki",
+    "skill": "viking://user/default/skills/research-compiler",
+    "reason": "Track the historical progress and preserve supporting evidence."
+  }'
+```
+
+**CLI**
+
+```bash
+ov compile \
+  --from viking://resources/research \
+  --to viking://resources/research-wiki \
+  --skill viking://user/default/skills/research-compiler \
+  --reason "Track the historical progress and preserve supporting evidence." \
+  --wait
+```
+
+`--wait` polls the status endpoint until the task reaches a terminal state. `--timeout` limits only the local wait and does not cancel the server task.
+
+The `direct` backend runs Compile `exec` commands with the Bot host's permissions. `bot.sandbox.backends.direct.allow_compile_exec` defaults to `false`, so Compile omits `exec` while ordinary Wiki and artifact generation can still run through file tools. A Skill that declares `requires.bins` or `requires.env` fails with `SKILL_CAPABILITY_UNAVAILABLE` before any command probe runs. Setting the option to `true` is an explicit unsafe opt-in; isolated backends with filesystem and network policies are recommended for CLI-dependent Skills. Admission overflow returns `429 RESOURCE_EXHAUSTED`.
+
+**Response Example**
+
+The HTTP endpoint returns `202 Accepted`:
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "task_id": "cmp_01abc",
+    "status": "accepted",
+    "to": "viking://resources/research-wiki"
+  }
+}
+```
+
+### compile_status()
+
+Get the current state and, for a terminal task, its result or error. A task is visible only to the principal that created it; a missing task and a task owned by another principal both return `404`.
+
+**HTTP API**
+
+```
+GET /bot/v1/compile/{task_id}
+```
+
+```bash
+curl http://localhost:1933/bot/v1/compile/cmp_01abc \
+  -H "X-API-Key: your-key"
+```
+
+**Response Example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "task_id": "cmp_01abc",
+    "status": "completed",
+    "stage": "completed",
+    "created_at": "2026-07-28T08:00:00Z",
+    "updated_at": "2026-07-28T08:02:30Z",
+    "result": {
+      "from": ["viking://resources/research"],
+      "to": "viking://resources/research-wiki",
+      "skill": "viking://user/default/skills/research-compiler",
+      "okf_version": "0.1",
+      "created": ["viking://resources/research-wiki/Progress.md"],
+      "updated": [],
+      "unchanged": [],
+      "page_count": 1,
+      "link_count": 0,
+      "warnings": []
+    }
+  }
+}
+```
+
+Task lifecycle values are:
+
+| Status | Typical stages |
+|--------|----------------|
+| `accepted` | `queued` |
+| `running` | `loading_skill`, `collecting_context`, `agent`, `rendering` |
+| `committing` | `writing`, `refreshing` |
+| `completed` | `completed` |
+| `failed` | Stage where the failure occurred; the response contains `error.code` and `error.message` |
+
 ### feedback()
 
 Submit explicit feedback for an existing assistant response.
@@ -153,7 +264,7 @@ A missing target response returns `404`. Rating feedback without `feedback_score
 
 ## Client Scope
 
-The standard OpenViking Python, TypeScript, and Go SDKs do not currently wrap the Bot proxy. Chat is available through the `ov chat` CLI and HTTP. The VikingBot Gateway also exposes Session and Channel APIs; see the [VikingBot documentation](https://github.com/volcengine/OpenViking/blob/main/bot/README.md#http-api).
+The standard OpenViking Python, TypeScript, and Go SDKs do not currently wrap the Bot proxy. Chat and Compile are available through the `ov` CLI and HTTP. The VikingBot Gateway also exposes Session and Channel APIs; see the [VikingBot documentation](https://github.com/volcengine/OpenViking/blob/main/bot/README.md#http-api).
 
 ## Related Documentation
 

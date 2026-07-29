@@ -24,6 +24,16 @@ The client follows the same HTTP API, identity headers, response envelope and er
 
 Existing local file paths are uploaded automatically, and local directories are zipped before upload. Other strings are sent to the server as URLs or server-side paths.
 
+To ingest content without VLM semantic understanding, pass `processingMode: "vectors_only"` to `addResource`. This writes or syncs the resource tree and vectorizes current files, but does not generate or refresh `.abstract.md` / `.overview.md`.
+
+```ts
+await client.addResource("./docs/guide.md", {
+  to: "viking://resources/guide",
+  processingMode: "vectors_only",
+  wait: true,
+});
+```
+
 Deployments using shared temporary storage can set `uploadMode: "shared"`; the server also accepts `"local"` (the default).
 
 OVPack exports and backups follow the Python and Go SDK contract: they are streamed to a Node.js local file and return its final path.

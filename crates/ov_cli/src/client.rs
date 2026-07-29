@@ -31,6 +31,9 @@ fn compact_request_body(body: &mut Value) {
                 return !map.is_empty();
             }
         }
+        if key == "processing_mode" {
+            return value != "semantic_and_vectors";
+        }
         true
     });
 }
@@ -95,6 +98,61 @@ pub enum SnapshotShowResult {
         size: u64,
         bytes: Vec<u8>,
     },
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CompileAccepted {
+    pub task_id: String,
+    pub status: String,
+    pub to: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CompileErrorInfo {
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CompileResult {
+    #[serde(rename = "from")]
+    pub from_uris: Vec<String>,
+    pub to: String,
+    pub skill: String,
+    pub okf_version: String,
+    #[serde(default)]
+    pub created: Vec<String>,
+    #[serde(default)]
+    pub updated: Vec<String>,
+    #[serde(default)]
+    pub unchanged: Vec<String>,
+    pub page_count: usize,
+    pub link_count: usize,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CompileTaskStatus {
+    pub task_id: String,
+    pub status: String,
+    pub stage: String,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(default)]
+    pub result: Option<CompileResult>,
+    #[serde(default)]
+    pub error: Option<CompileErrorInfo>,
+}
+
+#[derive(serde::Serialize)]
+struct CompileCreateRequest<'a> {
+    #[serde(rename = "from")]
+    from_uris: &'a [String],
+    to: &'a str,
+    skill: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'a str>,
 }
 
 // ============ HttpClient ============
@@ -260,6 +318,26 @@ impl HttpClient {
     }
 
     // ============ Content Methods ============
+
+    pub async fn create_compile(
+        &self,
+        from_uris: &[String],
+        to: &str,
+        skill: &str,
+        reason: Option<&str>,
+    ) -> Result<CompileAccepted> {
+        let body = CompileCreateRequest {
+            from_uris,
+            to,
+            skill,
+            reason,
+        };
+        self.post("/bot/v1/compile", &body).await
+    }
+
+    pub async fn get_compile(&self, task_id: &str) -> Result<CompileTaskStatus> {
+        self.get(&format!("/bot/v1/compile/{task_id}"), &[]).await
+    }
 
     pub async fn read(&self, uri: &str) -> Result<String> {
         let params = vec![("uri".to_string(), uri.to_string())];
@@ -616,6 +694,7 @@ impl HttpClient {
         exclude: Option<String>,
         directly_upload_media: bool,
         watch_interval: f64,
+        processing_mode: String,
         resource_args: Option<Map<String, Value>>,
         show_progress: bool,
         verbose: bool,
@@ -678,6 +757,7 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
+                    "processing_mode": processing_mode.as_str(),
                     "args": args.clone(),
                 }));
 
@@ -713,6 +793,7 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
+                    "processing_mode": processing_mode.as_str(),
                     "args": args.clone(),
                 }));
 
@@ -736,6 +817,7 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
+                    "processing_mode": processing_mode.as_str(),
                     "args": args.clone(),
                 }));
 
@@ -756,6 +838,7 @@ impl HttpClient {
                 "exclude": exclude,
                 "directly_upload_media": directly_upload_media,
                 "watch_interval": watch_interval,
+                "processing_mode": processing_mode.as_str(),
                 "args": args,
             }));
 
@@ -1753,6 +1836,26 @@ mod tests {
     }
 
     #[test]
+    fn compact_request_body_drops_default_processing_mode_for_legacy_servers() {
+        let mut body = json!({
+            "path": "https://example.com/guide.md",
+            "processing_mode": "semantic_and_vectors",
+        });
+        super::compact_request_body(&mut body);
+        assert!(!body.as_object().unwrap().contains_key("processing_mode"));
+    }
+
+    #[test]
+    fn compact_request_body_keeps_non_default_processing_mode() {
+        let mut body = json!({
+            "path": "https://example.com/guide.md",
+            "processing_mode": "vectors_only",
+        });
+        super::compact_request_body(&mut body);
+        assert_eq!(body["processing_mode"], "vectors_only");
+    }
+
+    #[test]
     fn timeout_config_calculation() {
         let config = TimeoutConfig::new(60, 2.0);
 
@@ -1982,6 +2085,49 @@ mod tests {
         assert!(request.starts_with("GET /api/v1/fs/tree?"));
         assert!(!request.contains("tz="));
         assert!(!request.contains("include_mod_time_iso="));
+    }
+
+    #[tokio::test]
+    async fn compile_create_deserializes_http_202_body() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let address = listener.local_addr().expect("listener should have address");
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("request should arrive");
+            let mut buffer = vec![0; 4096];
+            let _ = stream.read(&mut buffer).await.expect("request should read");
+            let body = r#"{"status":"ok","result":{"task_id":"cmp_1","status":"accepted","to":"viking://resources/wiki"}}"#;
+            let response = format!(
+                "HTTP/1.1 202 Accepted\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("response should write");
+        });
+        let client = HttpClient::new(
+            format!("http://{address}"),
+            None,
+            None,
+            None,
+            None,
+            5.0,
+            false,
+            None,
+        );
+        let accepted = client
+            .create_compile(
+                &["viking://resources/source".into()],
+                "viking://resources/wiki",
+                "viking://agent/skills/wiki",
+                None,
+            )
+            .await
+            .expect("202 response body should deserialize");
+        assert_eq!(accepted.task_id, "cmp_1");
     }
 
     #[tokio::test]

@@ -9,9 +9,27 @@ from types import SimpleNamespace
 
 import httpx
 
+from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import resources as resources_router
+from openviking.server.routers.resources import AddResourceRequest
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
+from openviking_cli.session.user_id import UserIdentifier
+
+
+def test_add_resource_request_accepts_processing_mode():
+    request = AddResourceRequest(
+        path="https://example.com/demo.md",
+        processing_mode="vectors_only",
+    )
+
+    assert request.processing_mode == "vectors_only"
+
+
+def test_add_resource_request_defaults_processing_mode():
+    request = AddResourceRequest(path="https://example.com/demo.md")
+
+    assert request.processing_mode == "semantic_and_vectors"
 
 
 async def _wait_task_terminal(client: httpx.AsyncClient, task_id: str, timeout: float = 10.0):
@@ -97,6 +115,35 @@ async def test_add_resource_forwards_args_to_service(
 
     assert resp.status_code == 200
     assert seen["args"] == {"feishu_access_token": "u-test"}
+
+
+async def test_add_resource_forwards_processing_mode_to_service(monkeypatch):
+    seen = {}
+
+    async def fake_add_resource(**kwargs):
+        seen.update(kwargs)
+        return {
+            "status": "success",
+            "root_uri": "viking://resources/demo",
+        }
+
+    service = SimpleNamespace(resources=SimpleNamespace(add_resource=fake_add_resource))
+    monkeypatch.setattr(resources_router, "get_service", lambda: service)
+
+    response = await resources_router.add_resource(
+        SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(config=None))),
+        AddResourceRequest(
+            path="https://example.com/demo.md",
+            processing_mode="vectors_only",
+        ),
+        RequestContext(
+            user=UserIdentifier("account-1", "user-1"),
+            role=Role.USER,
+        ),
+    )
+
+    assert response["status"] == "ok"
+    assert seen["processing_mode"] == "vectors_only"
 
 
 async def test_add_resource_preserves_create_parent_field_presence(

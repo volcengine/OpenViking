@@ -641,6 +641,7 @@ class AsyncHTTPClient:
         watch_interval: float = 0,
         args: Optional[Dict[str, Any]] = None,
         telemetry: Any = False,
+        processing_mode: Optional[str] = None,
     ) -> Dict[str, Any]:
         if to and parent:
             raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
@@ -661,6 +662,8 @@ class AsyncHTTPClient:
             "args": args or {},
             "telemetry": telemetry,
         }
+        if processing_mode is not None:
+            request_data["processing_mode"] = processing_mode
         if preserve_structure is not None:
             request_data["preserve_structure"] = preserve_structure
 
@@ -1057,6 +1060,31 @@ class AsyncHTTPClient:
         )
         return self._handle_response(response)
 
+    async def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+        """Read the exact UTF-8 content stored for a file, including hidden metadata."""
+        response = await self._request(
+            "GET",
+            "/api/v1/content/read",
+            params={
+                "uri": VikingURI.normalize(uri),
+                "offset": offset,
+                "limit": limit,
+                "raw": True,
+            },
+        )
+        return self._handle_response(response)
+
+    async def download_bytes(self, uri: str) -> bytes:
+        """Download an OpenViking file without interpreting its contents."""
+        response = await self._request(
+            "GET",
+            "/api/v1/content/download",
+            params={"uri": VikingURI.normalize(uri)},
+        )
+        if not response.is_success:
+            self._handle_response_data(response)
+        return bytes(response.content)
+
     async def abstract(self, uri: str) -> str:
         response = await self._request(
             "GET", "/api/v1/content/abstract", params={"uri": VikingURI.normalize(uri)}
@@ -1085,6 +1113,33 @@ class AsyncHTTPClient:
                 "uri": VikingURI.normalize(uri),
                 "content": content,
                 "mode": mode,
+                "wait": wait,
+                "timeout": timeout,
+                "telemetry": telemetry,
+            },
+        )
+        return self._handle_response_data(response).get("result", {})
+
+    async def batch_write(
+        self,
+        root_uri: str,
+        operations: List[Dict[str, Any]],
+        wait: bool = True,
+        timeout: Optional[float] = None,
+        telemetry: Any = False,
+    ) -> Dict[str, Any]:
+        """Apply a preconditioned multi-file content write."""
+        normalized_operations = []
+        for operation in operations:
+            item = dict(operation)
+            item["uri"] = VikingURI.normalize(str(item.get("uri") or ""))
+            normalized_operations.append(item)
+        response = await self._request(
+            "POST",
+            "/api/v1/content/batch-write",
+            json={
+                "root_uri": VikingURI.normalize(root_uri),
+                "operations": normalized_operations,
                 "wait": wait,
                 "timeout": timeout,
                 "telemetry": telemetry,
@@ -1786,6 +1841,7 @@ class SyncHTTPClient:
         watch_interval: float = 0,
         args: Optional[Dict[str, Any]] = None,
         telemetry: Any = False,
+        processing_mode: Optional[str] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.add_resource(
@@ -1803,6 +1859,7 @@ class SyncHTTPClient:
                 directly_upload_media=directly_upload_media,
                 preserve_structure=preserve_structure,
                 watch_interval=watch_interval,
+                processing_mode=processing_mode,
                 args=args,
                 telemetry=telemetry,
             )
@@ -2054,6 +2111,12 @@ class SyncHTTPClient:
     def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
         return run_async(self._async_client.read(uri, offset=offset, limit=limit))
 
+    def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+        return run_async(self._async_client.read_raw(uri, offset=offset, limit=limit))
+
+    def download_bytes(self, uri: str) -> bytes:
+        return run_async(self._async_client.download_bytes(uri))
+
     def abstract(self, uri: str) -> str:
         return run_async(self._async_client.abstract(uri))
 
@@ -2074,6 +2137,24 @@ class SyncHTTPClient:
                 uri=uri,
                 content=content,
                 mode=mode,
+                wait=wait,
+                timeout=timeout,
+                telemetry=telemetry,
+            )
+        )
+
+    def batch_write(
+        self,
+        root_uri: str,
+        operations: List[Dict[str, Any]],
+        wait: bool = True,
+        timeout: Optional[float] = None,
+        telemetry: Any = False,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.batch_write(
+                root_uri=root_uri,
+                operations=operations,
                 wait=wait,
                 timeout=timeout,
                 telemetry=telemetry,

@@ -390,6 +390,22 @@ def test_add_resource_message_round_trips_internal_fields():
     assert restored.understanding_response_id == "response-1"
 
 
+def test_add_resource_message_round_trips_processing_mode():
+    msg = AddResourceMsg(
+        task_id="task-1",
+        path="https://example.com/demo.md",
+        root_uri="viking://resources/demo",
+        account_id="account-1",
+        user_id="user-1",
+        role="user",
+        processing_mode="vectors_only",
+    )
+
+    restored = AddResourceMsg.from_dict(msg.to_dict())
+
+    assert restored.processing_mode == "vectors_only"
+
+
 @pytest.mark.asyncio
 async def test_uat_producer_payload_reaches_worker_without_persisting_token(monkeypatch):
     source = "https://example.larkoffice.com/docx/doxcnToken"
@@ -702,6 +718,7 @@ async def test_add_resource_job_expands_parser_args():
         user_id="user-1",
         role="user",
         args={"custom_option": "forwarded"},
+        processing_mode="vectors_only",
     )
     ctx = RequestContext(
         user=UserIdentifier("account-1", "user-1"),
@@ -719,6 +736,41 @@ async def test_add_resource_job_expands_parser_args():
     assert call.kwargs["to"] == "viking://resources/doxcnToken"
     assert call.kwargs["parent"] is None
     assert call.kwargs["custom_option"] == "forwarded"
+    assert call.kwargs["processing_mode"] == "vectors_only"
+
+
+@pytest.mark.asyncio
+async def test_prepared_add_resource_job_forwards_processing_mode():
+    resource_processor = SimpleNamespace(
+        finish_prepared_resource=AsyncMock(
+            return_value={"status": "success", "root_uri": "viking://resources/demo"}
+        )
+    )
+    service = ResourceService(resource_processor=resource_processor)
+    msg = AddResourceMsg(
+        task_id="task-1",
+        path="/tmp/demo.md",
+        root_uri="viking://resources/demo",
+        account_id="account-1",
+        user_id="user-1",
+        role="user",
+        prepared={"root_uri": "viking://resources/demo"},
+        processing_mode="vectors_only",
+    )
+    ctx = RequestContext(
+        user=UserIdentifier("account-1", "user-1"),
+        role=Role.USER,
+    )
+
+    await service.execute_add_resource_job(
+        msg,
+        ctx=ctx,
+        resource_lock=None,
+        stage_callback=AsyncMock(),
+    )
+
+    call = resource_processor.finish_prepared_resource.await_args
+    assert call.kwargs["processing_mode"] == "vectors_only"
 
 
 @pytest.mark.asyncio

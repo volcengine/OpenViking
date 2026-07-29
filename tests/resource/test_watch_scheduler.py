@@ -110,3 +110,34 @@ class TestWatchSchedulerResourceExistence:
         assert updated.is_active is True
         assert resource_service.calls and resource_service.calls[0]["to"] == task.to_uri
         manager.update_execution_time.assert_awaited_once_with(task.task_id)
+
+    @pytest.mark.asyncio
+    async def test_execute_task_forwards_processing_mode(self, tmp_path):
+        class FakeResourceService(ResourceService):
+            def __init__(self):
+                super().__init__()
+                self.calls = []
+
+            async def refresh_resource(self, **kwargs):
+                self.calls.append(kwargs)
+                return {"root_uri": kwargs.get("to")}
+
+        source = tmp_path / "source.txt"
+        source.write_text("ok")
+        resource_service = FakeResourceService()
+        scheduler = WatchScheduler(resource_service=resource_service, check_interval=1)
+        manager = WatchManager(viking_fs=None)
+        await manager.initialize()
+        scheduler._watch_manager = manager
+        manager.update_execution_time = AsyncMock()
+        task = await manager.create_task(
+            path=str(source),
+            to_uri="viking://resources/codeask/wiki",
+            watch_interval=30.0,
+            processing_mode="vectors_only",
+        )
+
+        await scheduler._execute_task(task)
+
+        assert resource_service.calls
+        assert resource_service.calls[0]["processing_mode"] == "vectors_only"

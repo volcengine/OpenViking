@@ -755,6 +755,7 @@ class DirectBackendConfig(BaseModel):
     """Direct backend configuration."""
 
     restrict_to_workspace: bool = False  # If true, restrict file access to workspace directory
+    allow_compile_exec: bool = False
 
 
 class SrtBackendConfig(BaseModel):
