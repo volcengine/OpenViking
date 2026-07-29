@@ -1,6 +1,7 @@
 """Context builder for assembling agent prompts."""
 
 import base64
+import json
 import mimetypes
 import platform
 import time as _time
@@ -41,6 +42,7 @@ class ContextBuilder:
         is_group_chat: bool = False,
         eval: bool = False,
         openviking_connection: dict[str, Any] | None = None,
+        current_dir: str | None = None,
         enable_subagents: bool = True,
         config: "Config | None" = None,
     ):
@@ -55,6 +57,7 @@ class ContextBuilder:
         self._is_group_chat = is_group_chat
         self._eval = eval
         self._openviking_connection = openviking_connection
+        self._current_dir = current_dir
         self._enable_subagents = enable_subagents
         self._config = config
         self.latest_relevant_memories: str | None = None
@@ -131,6 +134,14 @@ class ContextBuilder:
             sandbox_cwd = await self.sandbox_manager.get_sandbox_cwd(session_key)
             parts.append(
                 f"## Sandbox Environment\n\nYou are running in a sandboxed environment. All file operations and command execution are restricted to the sandbox directory.\nThe sandbox root directory is `{sandbox_cwd}` (use relative paths for all operations)."
+            )
+
+        # User-selected directory forwarded by the Studio playground. When the
+        # user asks about "the current directory" this is the one they mean.
+        if self._current_dir:
+            parts.append(
+                "## User-Selected Directory\n\nThe user has selected the following directory in the Studio resource tree. When the user refers to 'the current directory', they mean this one:\n"
+                + json.dumps({"current_dir": self._current_dir}, ensure_ascii=False)
             )
 
         # Bootstrap files

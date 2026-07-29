@@ -9,6 +9,7 @@ export type ChatStreamEventType =
 
 export type BotChatRequest = {
   channel_id?: string
+  current_dir?: string
   message: string
   need_reply?: boolean
   session_id?: string
