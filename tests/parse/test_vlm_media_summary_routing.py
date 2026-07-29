@@ -40,7 +40,10 @@ class _MediaVLM:
         media_path: str,
         filename: str,
         media_type: str,
+        prepare_media=None,
     ):
+        if prepare_media is not None:
+            await prepare_media()
         with open(media_path, "rb") as file:
             content = file.read()
         self.completion_calls.append((prompt, filename, media_type, content))
