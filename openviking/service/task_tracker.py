@@ -190,19 +190,14 @@ class TaskTracker:
     async def restore_work_tasks(self, owners: Dict[str, tuple[str, str]]) -> None:
         """Restore task records referenced by rebuilt QueueFS work."""
         for task_id, (account_id, user_id) in owners.items():
-            task = await self.get(task_id, account_id=account_id, user_id=user_id)
-            if task is not None and task.status == TaskStatus.CANCELLING:
-                await self._finalize_cancellation(task_id)
+            await self.get(task_id, account_id=account_id, user_id=user_id)
 
     def _on_task_work_idle(self, task_id: str) -> None:
         loop = self._runtime_loop
         if loop is None or loop.is_closed():
             return
 
-        def _schedule() -> None:
-            asyncio.create_task(self._finalize_cancellation(task_id))
-
-        loop.call_soon_threadsafe(_schedule)
+        asyncio.run_coroutine_threadsafe(self._finalize_cancellation(task_id), loop)
 
     def is_cancellation_requested(self, task_id: str) -> bool:
         """Fast thread-safe status check used by queue workers."""
@@ -248,17 +243,11 @@ class TaskTracker:
             with self._lock:
                 expired_ids = []
                 for tid, t in self._tasks.items():
-                    if (
-                        t.status == TaskStatus.COMPLETED
-                        and (now - t.updated_at) > self.TTL_COMPLETED
-                    ):
+                    if t.status in (TaskStatus.COMPLETED, TaskStatus.CANCELLED) and (
+                        now - t.updated_at
+                    ) > self.TTL_COMPLETED:
                         expired_ids.append(tid)
                     elif t.status == TaskStatus.FAILED and (now - t.updated_at) > self.TTL_FAILED:
-                        expired_ids.append(tid)
-                    elif (
-                        t.status == TaskStatus.CANCELLED
-                        and (now - t.updated_at) > self.TTL_COMPLETED
-                    ):
                         expired_ids.append(tid)
 
                 for tid in expired_ids:
@@ -431,25 +420,19 @@ class TaskTracker:
     ) -> None:
         """Transition task to COMPLETED with optional result."""
         transitioned = False
-        cancelling = False
         async with self._async_lock:
             task = await self._load_for_update(task_id, account_id, user_id)
-            if task and task.status not in _TERMINAL_STATUSES:
-                if task.status == TaskStatus.CANCELLING:
-                    cancelling = True
-                else:
-                    task.status = TaskStatus.COMPLETED
-                    task.stage = "completed"
-                    task.result = result
-                    if resource_id is not None:
-                        task.resource_id = resource_id
-                    task.updated_at = time.time()
-                    await self._store.update(task)
-                    with self._lock:
-                        self._tasks[task.task_id] = task
-                    transitioned = True
-        if cancelling:
-            await self._finalize_cancellation(task_id, account_id=account_id, user_id=user_id)
+            if task and task.status in (TaskStatus.PENDING, TaskStatus.RUNNING):
+                task.status = TaskStatus.COMPLETED
+                task.stage = "completed"
+                task.result = result
+                if resource_id is not None:
+                    task.resource_id = resource_id
+                task.updated_at = time.time()
+                await self._store.update(task)
+                with self._lock:
+                    self._tasks[task.task_id] = task
+                transitioned = True
         if transitioned:
             logger.info("[TaskTracker] Task %s completed", task_id)
 
@@ -462,23 +445,17 @@ class TaskTracker:
     ) -> None:
         """Transition task to FAILED with sanitized error."""
         transitioned = False
-        cancelling = False
         async with self._async_lock:
             task = await self._load_for_update(task_id, account_id, user_id)
-            if task and task.status not in _TERMINAL_STATUSES:
-                if task.status == TaskStatus.CANCELLING:
-                    cancelling = True
-                else:
-                    task.status = TaskStatus.FAILED
-                    task.stage = "failed"
-                    task.error = _sanitize_error(error)
-                    task.updated_at = time.time()
-                    await self._store.update(task)
-                    with self._lock:
-                        self._tasks[task.task_id] = task
-                    transitioned = True
-        if cancelling:
-            await self._finalize_cancellation(task_id, account_id=account_id, user_id=user_id)
+            if task and task.status in (TaskStatus.PENDING, TaskStatus.RUNNING):
+                task.status = TaskStatus.FAILED
+                task.stage = "failed"
+                task.error = _sanitize_error(error)
+                task.updated_at = time.time()
+                await self._store.update(task)
+                with self._lock:
+                    self._tasks[task.task_id] = task
+                transitioned = True
         if transitioned:
             logger.warning("[TaskTracker] Task %s failed: %s", task_id, _sanitize_error(error))
 
@@ -506,16 +483,13 @@ class TaskTracker:
                 await self._store.update(task)
                 with self._lock:
                     self._tasks[task.task_id] = task
-            snapshot = self._copy(task)
-
         self._work_index.cancel_active(task_id)
         await self._finalize_cancellation(
             task_id,
             account_id=account_id,
             user_id=user_id,
         )
-        latest = await self.get(task_id, account_id=account_id, user_id=user_id)
-        return latest or snapshot
+        return await self.get(task_id, account_id=account_id, user_id=user_id)
 
     async def _finalize_cancellation(
         self,
@@ -538,25 +512,15 @@ class TaskTracker:
                 with self._lock:
                     self._tasks[task.task_id] = task
 
-    def register_running_task(
-        self,
-        task_id: str,
-        active_task: asyncio.Task,
-    ) -> None:
-        """Register an asyncio task so a running cancellation can interrupt it."""
+    def register_running_task(self, task_id: str) -> None:
+        """Register the current asyncio task so cancellation can interrupt it."""
         self._runtime_loop = self._runtime_loop or asyncio.get_running_loop()
-        self._work_index.register_active(task_id, active_task)
+        active_task = asyncio.current_task()
+        if active_task is not None:
+            self._work_index.register_active(task_id, active_task)
 
-    def unregister_running_task(
-        self,
-        task_id: str,
-        active_task: Optional[asyncio.Task] = None,
-    ) -> None:
-        if active_task is None:
-            try:
-                active_task = asyncio.current_task()
-            except RuntimeError:
-                active_task = None
+    def unregister_running_task(self, task_id: str) -> None:
+        active_task = asyncio.current_task()
         if active_task is not None:
             self._work_index.unregister_active(task_id, active_task)
 

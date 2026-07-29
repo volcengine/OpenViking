@@ -66,7 +66,6 @@ class EnqueueHookBase(abc.ABC):
 class DequeueHandlerBase(abc.ABC):
     """Dequeue handler base class, supports callback mechanism to report processing results."""
 
-    manages_active_task = False
     _success_callback: Optional[Callable[[], None]] = None
     _requeue_callback: Optional[Callable[[], None]] = None
     _error_callback: Optional[Callable[[str, Optional[Dict[str, Any]]], None]] = None
@@ -229,10 +228,8 @@ class NamedQueue:
         else:
             task_metadata = None
 
-        if (
-            self._task_work_index is not None
-            and task_metadata is not None
-            and self._task_work_index.cancellation_requested(task_metadata.task_id)
+        if self._task_work_index is not None and not self._task_work_index.register(
+            self.name, task_metadata
         ):
             logger.info(
                 "[NamedQueue] Skip enqueue for cancelling task %s on %s",
@@ -240,9 +237,6 @@ class NamedQueue:
                 self.name,
             )
             raise asyncio.CancelledError
-
-        if self._task_work_index is not None:
-            self._task_work_index.register(self.name, task_metadata)
 
         try:
             if isinstance(data, dict):
@@ -255,7 +249,7 @@ class NamedQueue:
             raise
         return msg_id if isinstance(msg_id, str) else str(msg_id)
 
-    async def ack(self, msg_id: str, message: Optional[Dict[str, Any]] = None) -> bool:
+    async def ack(self, msg_id: str, message: Optional[Dict[str, Any]] = None) -> None:
         """Acknowledge successful processing of a message (deletes it from persistent storage).
 
         Must be called after the dequeue handler finishes processing a message.
@@ -263,16 +257,14 @@ class NamedQueue:
         re-queued on the next startup via RecoverStale.
         """
         if not msg_id:
-            return False
+            return
         ack_file = f"{self.path}/ack"
         try:
             await self._async_agfs.write(ack_file, msg_id.encode("utf-8"))
             if self._task_work_index is not None and message is not None:
                 self._task_work_index.settle(self.name, message)
-            return True
         except Exception as e:
             logger.warning(f"[NamedQueue] Ack failed for {self.name} msg_id={msg_id}: {e}")
-            return False
 
     async def _read_queue_message(self) -> Optional[Dict[str, Any]]:
         """Read and remove one message from the AGFS queue; return parsed dict or None.
@@ -345,7 +337,7 @@ class NamedQueue:
         if metadata is None or self._task_work_index is None:
             return await self._dequeue_handler.on_dequeue(data)
 
-        active_task = None if self._dequeue_handler.manages_active_task else asyncio.current_task()
+        active_task = asyncio.current_task()
         with bind_task_context(metadata.task_id, metadata.account_id, metadata.user_id):
             if self._task_work_index.cancellation_requested(metadata.task_id):
                 return await self._dequeue_handler.on_cancelled(data)

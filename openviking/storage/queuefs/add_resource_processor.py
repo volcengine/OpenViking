@@ -25,8 +25,6 @@ logger = get_logger(__name__)
 class AddResourceProcessor(DequeueHandlerBase):
     """Own an add-resource task until it reaches a terminal state and can be ACKed."""
 
-    manages_active_task = True
-
     def __init__(
         self,
         resource_service: Any,
@@ -156,9 +154,6 @@ class AddResourceProcessor(DequeueHandlerBase):
                     user_id=ctx.user.user_id,
                     stage="queued",
                 )
-                active_task = asyncio.current_task()
-                if active_task is not None:
-                    tracker.register_running_task(msg.task_id, active_task)
                 result = await self._resource_service.execute_add_resource_job(
                     msg,
                     ctx=ctx,
@@ -194,20 +189,6 @@ class AddResourceProcessor(DequeueHandlerBase):
                 )
                 self.report_success()
                 return None
-            except asyncio.CancelledError:
-                task = await tracker.get(
-                    msg.task_id,
-                    account_id=ctx.account_id,
-                    user_id=ctx.user.user_id,
-                )
-                if task is not None and task.status in (
-                    TaskStatus.CANCELLING,
-                    TaskStatus.CANCELLED,
-                ):
-                    self.report_success()
-                    return None
-                # Shutdown cancellation leaves the message active for RecoverStale.
-                raise
             except Exception as exc:
                 await tracker.fail(
                     msg.task_id,
@@ -218,7 +199,6 @@ class AddResourceProcessor(DequeueHandlerBase):
                 self.report_error(str(exc), data)
                 return None
             finally:
-                tracker.unregister_running_task(msg.task_id)
                 with suppress(Exception):
                     if resource_lock is not None:
                         await resource_lock.close()

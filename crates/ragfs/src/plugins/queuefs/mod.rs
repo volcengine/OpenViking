@@ -765,21 +765,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_queuefs_messages_snapshot_is_non_destructive() {
-        let fs = queuefs_with("test").await;
-        enqueue(&fs, "test", b"msg1").await;
-        enqueue(&fs, "test", b"msg2").await;
-
-        let raw = fs.read("/test/messages", 0, 0).await.unwrap();
-        let messages: Vec<TestQueueMessage> = serde_json::from_slice(&raw).unwrap();
-
-        assert_eq!(messages.len(), 2);
-        assert_eq!(messages[0].data, "msg1");
-        assert_eq!(messages[1].data, "msg2");
-        assert_eq!(queue_size(&fs, "test").await, 2);
-    }
-
-    #[tokio::test]
     async fn test_queuefs_clear() {
         let fs = queuefs_with("test").await;
 

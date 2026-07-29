@@ -4330,16 +4330,14 @@ class VikingFS:
         from openviking.service.task_work_index import bind_task_context
 
         tracker = get_task_tracker()
-        await tracker.start(
-            task_id,
-            account_id=ctx.account_id,
-            user_id=ctx.user.user_id,
-            stage="reindexing",
-        )
-        active_task = asyncio.current_task()
-        if active_task is not None:
-            tracker.register_running_task(task_id, active_task)
+        tracker.register_running_task(task_id)
         try:
+            await tracker.start(
+                task_id,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+                stage="reindexing",
+            )
             from openviking.service.reindex_executor import get_reindex_executor
 
             executor = get_reindex_executor()

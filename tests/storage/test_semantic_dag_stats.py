@@ -20,7 +20,7 @@ class _FakeVikingFS:
         del node_limit
         return self._tree.get(uri, [])
 
-    async def write_file(self, path, content, ctx=None):
+    async def write_file(self, path, content, ctx=None, lock_handle=None):
         self.writes.append((path, content))
 
     def _uri_to_path(self, uri, ctx=None):

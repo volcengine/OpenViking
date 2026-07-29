@@ -19,8 +19,6 @@ from typing import Any, Callable, Dict, Iterable, Iterator, Mapping, Optional
 from uuid import uuid4
 
 TASK_WORK_ID_FIELD = "_task_work_id"
-TASK_ACCOUNT_ID_FIELD = "_task_account_id"
-TASK_USER_ID_FIELD = "_task_user_id"
 
 
 @dataclass(frozen=True)
@@ -36,12 +34,6 @@ class QueueTaskMetadata:
     work_id: str
     account_id: str = ""
     user_id: str = ""
-
-    @property
-    def owner(self) -> Optional[tuple[str, str]]:
-        if self.account_id and self.user_id:
-            return self.account_id, self.user_id
-        return None
 
 
 _current_task_context: ContextVar[Optional[TaskExecutionContext]] = ContextVar(
@@ -87,8 +79,8 @@ def _payload_dict(message: Any) -> Optional[Dict[str, Any]]:
 
 
 def _owner_from_payload(payload: Mapping[str, Any]) -> tuple[str, str]:
-    account_id = payload.get(TASK_ACCOUNT_ID_FIELD) or payload.get("account_id")
-    user_id = payload.get(TASK_USER_ID_FIELD) or payload.get("user_id")
+    account_id = payload.get("account_id")
+    user_id = payload.get("user_id")
 
     user = payload.get("user")
     if isinstance(user, dict):
@@ -99,11 +91,6 @@ def _owner_from_payload(payload: Mapping[str, Any]) -> tuple[str, str]:
     if isinstance(context_data, dict):
         account_id = account_id or context_data.get("account_id")
         user_id = user_id or context_data.get("owner_user_id")
-        context_user = context_data.get("user")
-        if isinstance(context_user, dict):
-            account_id = account_id or context_user.get("account_id")
-            user_id = user_id or context_user.get("user_id")
-
     return str(account_id or ""), str(user_id or "")
 
 
@@ -126,10 +113,9 @@ def prepare_task_payload(
     work_id = str(payload.get(TASK_WORK_ID_FIELD) or uuid4())
     payload["task_id"] = task_id
     payload[TASK_WORK_ID_FIELD] = work_id
-    if account_id:
-        payload[TASK_ACCOUNT_ID_FIELD] = account_id
-    if user_id:
-        payload[TASK_USER_ID_FIELD] = user_id
+    if account_id and user_id:
+        payload.setdefault("account_id", account_id)
+        payload.setdefault("user_id", user_id)
     return payload, QueueTaskMetadata(task_id, work_id, account_id, user_id)
 
 
@@ -150,10 +136,6 @@ def extract_task_metadata(message: Any) -> Optional[QueueTaskMetadata]:
     return QueueTaskMetadata(str(task_id), str(work_id), account_id, user_id)
 
 
-IdleCallback = Callable[[str], None]
-CancellationCheck = Callable[[str], bool]
-
-
 class TaskWorkIndex:
     """Thread-safe, rebuildable index of persistent and currently active task work."""
 
@@ -161,14 +143,14 @@ class TaskWorkIndex:
         self._lock = threading.Lock()
         self._work: Dict[str, set[tuple[str, str]]] = {}
         self._active: Dict[str, set[asyncio.Task[Any]]] = {}
-        self._on_idle: Optional[IdleCallback] = None
-        self._is_cancellation_requested: Optional[CancellationCheck] = None
+        self._on_idle: Optional[Callable[[str], None]] = None
+        self._is_cancellation_requested: Optional[Callable[[str], bool]] = None
 
     def set_callbacks(
         self,
         *,
-        on_idle: IdleCallback,
-        is_cancellation_requested: CancellationCheck,
+        on_idle: Callable[[str], None],
+        is_cancellation_requested: Callable[[str], bool],
     ) -> None:
         self._on_idle = on_idle
         self._is_cancellation_requested = is_cancellation_requested
@@ -186,19 +168,21 @@ class TaskWorkIndex:
                 if metadata is None:
                     continue
                 work.setdefault(metadata.task_id, set()).add((queue_name, metadata.work_id))
-                if metadata.owner is not None:
-                    owners[metadata.task_id] = metadata.owner
+                if metadata.account_id and metadata.user_id:
+                    owners[metadata.task_id] = (metadata.account_id, metadata.user_id)
         with self._lock:
-            for task_id, entries in self._work.items():
-                work.setdefault(task_id, set()).update(entries)
             self._work = work
         return owners
 
-    def register(self, queue_name: str, metadata: Optional[QueueTaskMetadata]) -> None:
+    def register(self, queue_name: str, metadata: Optional[QueueTaskMetadata]) -> bool:
+        """Atomically reject cancelled work or add it to the runtime index."""
         if metadata is None:
-            return
+            return True
         with self._lock:
+            if self.cancellation_requested(metadata.task_id):
+                return False
             self._work.setdefault(metadata.task_id, set()).add((queue_name, metadata.work_id))
+        return True
 
     def settle(self, queue_name: str, message: Any) -> None:
         metadata = (
@@ -232,8 +216,10 @@ class TaskWorkIndex:
         active_task: asyncio.Task[Any],
     ) -> None:
         with self._lock:
-            self._active.setdefault(task_id, set()).add(active_task)
-        if self.cancellation_requested(task_id):
+            cancelled = self.cancellation_requested(task_id)
+            if not cancelled:
+                self._active.setdefault(task_id, set()).add(active_task)
+        if cancelled:
             active_task.get_loop().call_soon(active_task.cancel)
 
     def unregister_active(self, task_id: str, active_task: asyncio.Task[Any]) -> None:
