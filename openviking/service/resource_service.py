@@ -22,6 +22,7 @@ import httpx
 from openviking.connector.client import ConnectorClient
 from openviking.core.content_targets import ContentTargetSpec
 from openviking.core.uri_validation import validate_optional_content_target_uri
+from openviking.parse.parsers.constants import MPEG_TS_EXTENSION_ALIAS
 from openviking.resource.feishu_watch_auth import (
     FEISHU_ACCESS_TOKEN_ARG,
     FEISHU_REFRESH_TOKEN_ARG,
@@ -1042,14 +1043,22 @@ class ResourceService:
                         or prepared_resource.meta.get("original_filename")
                         or prepared_resource.meta.get("resolved_name")
                     )
+                    source_format = resolved_extension.lstrip(".") or "file"
+                    if resolved_extension.lower().lstrip(".") == MPEG_TS_EXTENSION_ALIAS:
+                        source_format = "video"
+                    source_info = _ResourceSourceInfo(
+                        source_name=source_name,
+                        source_path=path,
+                        source_format=source_format,
+                    )
                 else:
                     resolved_extension = ""
                     source_name = kwargs.get("source_name")
-                source_info = _ResourceSourceInfo(
-                    source_name=source_name,
-                    source_path=path,
-                    source_format=resolved_extension.lstrip(".") or "file",
-                )
+                    source_info = _ResourceSourceInfo(
+                        source_name=source_name,
+                        source_path=path,
+                        source_format=resolved_extension.lstrip(".") or "file",
+                    )
                 doc_name = self._target_doc_name(path, source_name, source_info)
                 source_path = source_info.source_path or source_name or path
                 (

@@ -29,6 +29,7 @@ from openviking.parse.image_rewrite import (
     build_artifact_image_mappings,
 )
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.parse.parsers.constants import MPEG_TS_EXTENSION_ALIAS
 from openviking.parse.parsers.media.constants import (
     AUDIO_EXTENSIONS,
     IMAGE_EXTENSIONS,
@@ -71,6 +72,7 @@ class UnderstandingAPI(BaseParser):
             raise ValueError("parser_api.api_key is required for UnderstandingAPI")
 
         self._video_exts = {e.lstrip(".") for e in VIDEO_EXTENSIONS}
+        self._video_exts.add(MPEG_TS_EXTENSION_ALIAS)
         self._audio_exts = {e.lstrip(".") for e in AUDIO_EXTENSIONS}
         self._image_exts = {e.lstrip(".") for e in IMAGE_EXTENSIONS}
 
@@ -223,7 +225,9 @@ class UnderstandingAPI(BaseParser):
         result = ParseResult(
             root=root_node,
             source_path=original_source if isinstance(original_source, str) else url or source_str,
-            source_format=doc_type,
+            source_format=(
+                content_type if content_type in {"image", "audio", "video"} else doc_type
+            ),
             temp_dir_path=temp_dir_path,
             parser_name="UnderstandingAPI",
             meta=task_meta,
