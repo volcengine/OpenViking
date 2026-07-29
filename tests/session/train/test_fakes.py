@@ -9,7 +9,7 @@ from typing import Any
 
 
 class InMemoryAGFS:
-    """Tiny synchronous AGFS fake for training integration tests."""
+    """Tiny synchronous AGFS fake with enough semantics for PathLockEngine."""
 
     def __init__(self, files: dict[str, str] | None = None):
         self.files: dict[str, bytes] = {}

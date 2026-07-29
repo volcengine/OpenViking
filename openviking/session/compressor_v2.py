@@ -179,9 +179,7 @@ class SessionCompressorV2:
         Always create new instance to avoid cross-request state pollution.
         """
         return MemoryUpdater(
-            registry=registry,
-            vikingdb=self.vikingdb,
-            transaction_handle=transaction_handle,
+            registry=registry, vikingdb=self.vikingdb, transaction_handle=transaction_handle
         )
 
     def _split_operations_by_memory_type(
@@ -284,14 +282,17 @@ class SessionCompressorV2:
         telemetry.set("memory.extract.deleted", 0)
         telemetry.set("memory.extract.skipped", 0)
 
-        from openviking.storage.errors import LockAcquisitionError
+        from openviking.storage.transaction import get_lock_manager, init_lock_manager
 
-        # 初始化锁（仅在有 AGFS 时使用锁机制）
+        # 初始化锁管理器（仅在有 AGFS 时使用锁机制）
         viking_fs = get_viking_fs()
-        lease = None
+        lock_manager = None
         transaction_handle = None
-        has_agfs = viking_fs and hasattr(viking_fs, "agfs") and viking_fs.agfs
-        if not has_agfs:
+        if viking_fs and hasattr(viking_fs, "agfs") and viking_fs.agfs:
+            init_lock_manager(viking_fs.agfs)
+            lock_manager = get_lock_manager()
+            transaction_handle = lock_manager.create_handle()
+        else:
             logger.debug("AGFS unavailable, running memory extraction without locks")
 
         try:
@@ -329,7 +330,7 @@ class SessionCompressorV2:
                 context_provider=context_provider,
             )
             read_scope = isolation_handler.get_read_scope()
-            if has_agfs:
+            if lock_manager:
                 schemas = orchestrator.context_provider.get_memory_schemas(ctx)
                 exact_lock_paths, tree_lock_dirs = _render_memory_schema_locks(
                     schemas=schemas,
@@ -349,30 +350,28 @@ class SessionCompressorV2:
 
                 # 循环重试获取锁（机制确保不会死锁）
                 while True:
-                    try:
-                        lease = await viking_fs._async_agfs.pathlock_acquire_exact_tree_batch(
-                            exact_lock_paths,
-                            tree_lock_dirs,
-                            timeout_secs=0.1,
-                        )
+                    lock_acquired = await lock_manager.acquire_exact_tree_batch(
+                        transaction_handle,
+                        exact_paths=exact_lock_paths,
+                        tree_paths=tree_lock_dirs,
+                        timeout=None,
+                    )
+                    if lock_acquired:
                         break
-                    except LockAcquisitionError:
-                        retry_count += 1
-                        if max_retries > 0 and retry_count >= max_retries:
-                            raise TimeoutError(
-                                "Failed to acquire memory locks after "
-                                f"{retry_count} retries (max={max_retries})"
-                            )
-
-                        last_lock_retry_warning_at = _log_memory_lock_retry(
-                            retry_count=retry_count,
-                            max_retries=max_retries,
-                            last_warning_at=last_lock_retry_warning_at,
+                    retry_count += 1
+                    if max_retries > 0 and retry_count >= max_retries:
+                        raise TimeoutError(
+                            "Failed to acquire memory locks after "
+                            f"{retry_count} retries (max={max_retries})"
                         )
-                        if retry_interval > 0:
-                            await asyncio.sleep(retry_interval)
 
-                transaction_handle = lease
+                    last_lock_retry_warning_at = _log_memory_lock_retry(
+                        retry_count=retry_count,
+                        max_retries=max_retries,
+                        last_warning_at=last_lock_retry_warning_at,
+                    )
+                    if retry_interval > 0:
+                        await asyncio.sleep(retry_interval)
 
             orchestrator._transaction_handle = transaction_handle  # 传递给 ExtractLoop
 
@@ -470,12 +469,12 @@ class SessionCompressorV2:
                 raise
             return []
         finally:
-            # 确保释放所有锁
-            if lease is not None:
+            # 确保释放所有锁（仅在有锁管理器时）
+            if lock_manager and transaction_handle:
                 try:
-                    await viking_fs._async_agfs.pathlock_release(lease)
+                    await lock_manager.release(transaction_handle)
                 except Exception as e:
-                    logger.warning(f"Failed to release pathlock: {e}")
+                    logger.warning(f"Failed to release transaction lock: {e}")
 
     @staticmethod
     def _empty_memory_diff(archive_uri: str = "") -> Dict[str, Any]:
@@ -593,7 +592,7 @@ class SessionCompressorV2:
             async def _append_sources_before_unlock(
                 result: MemoryUpdateResult,
                 inheritance_map: Dict[str, List[str]],
-                lease_ref: Any,
+                lock_handle: Any,
                 exp_provider=exp_provider,
                 exp_dir=exp_dir,
                 traj_uri=traj_uri,
@@ -613,7 +612,7 @@ class SessionCompressorV2:
                         source_uris,
                         ctx,
                         viking_fs,
-                        lease_ref=lease_ref,
+                        lock_handle=lock_handle,
                     )
 
             exp_result = await self._run_extract_phase(
@@ -733,7 +732,7 @@ class SessionCompressorV2:
         Returns None on failure (unless strict_extract_errors is True, in which case
         the exception is re-raised).
         """
-        from openviking.storage.errors import LockAcquisitionError
+        from openviking.storage.transaction import get_lock_manager, init_lock_manager
 
         config = get_openviking_config()
         vlm = config.vlm.get_vlm_instance()
@@ -765,12 +764,15 @@ class SessionCompressorV2:
             thinking=thinking,
         )
 
-        lease = None
+        lock_manager = None
         transaction_handle = None
-        has_agfs = viking_fs and hasattr(viking_fs, "agfs") and viking_fs.agfs
+        if viking_fs and hasattr(viking_fs, "agfs") and viking_fs.agfs:
+            init_lock_manager(viking_fs.agfs)
+            lock_manager = get_lock_manager()
+            transaction_handle = lock_manager.create_handle()
 
         try:
-            if has_agfs:
+            if lock_manager:
                 schemas = [
                     schema
                     for schema in provider.get_memory_schemas(ctx)
@@ -790,30 +792,28 @@ class SessionCompressorV2:
                 retry_count = 0
                 last_lock_retry_warning_at = 0.0
                 while True:
-                    try:
-                        lease = await viking_fs._async_agfs.pathlock_acquire_exact_tree_batch(
-                            exact_lock_paths,
-                            tree_lock_dirs,
-                            timeout_secs=0.1,
-                        )
+                    lock_acquired = await lock_manager.acquire_exact_tree_batch(
+                        transaction_handle,
+                        exact_paths=exact_lock_paths,
+                        tree_paths=tree_lock_dirs,
+                        timeout=None,
+                    )
+                    if lock_acquired:
                         break
-                    except LockAcquisitionError:
-                        retry_count += 1
-                        if max_retries > 0 and retry_count >= max_retries:
-                            raise TimeoutError(
-                                f"[{phase_label}] Failed to acquire memory locks after "
-                                f"{retry_count} retries (max={max_retries})"
-                            )
-                        last_lock_retry_warning_at = _log_memory_lock_retry(
-                            retry_count=retry_count,
-                            max_retries=max_retries,
-                            last_warning_at=last_lock_retry_warning_at,
-                            phase_label=phase_label,
+                    retry_count += 1
+                    if max_retries > 0 and retry_count >= max_retries:
+                        raise TimeoutError(
+                            f"[{phase_label}] Failed to acquire memory locks after "
+                            f"{retry_count} retries (max={max_retries})"
                         )
-                        if retry_interval > 0:
-                            await asyncio.sleep(retry_interval)
-
-                transaction_handle = lease
+                    last_lock_retry_warning_at = _log_memory_lock_retry(
+                        retry_count=retry_count,
+                        max_retries=max_retries,
+                        last_warning_at=last_lock_retry_warning_at,
+                        phase_label=phase_label,
+                    )
+                    if retry_interval > 0:
+                        await asyncio.sleep(retry_interval)
 
             provider._transaction_handle = transaction_handle
             orchestrator._transaction_handle = transaction_handle
@@ -916,11 +916,11 @@ class SessionCompressorV2:
                 raise
             return None
         finally:
-            if lease is not None:
+            if lock_manager and transaction_handle:
                 try:
-                    await viking_fs._async_agfs.pathlock_release(lease)
+                    await lock_manager.release(transaction_handle)
                 except Exception as e:
-                    logger.warning(f"[{phase_label}] Failed to release pathlock: {e}")
+                    logger.warning(f"[{phase_label}] Failed to release transaction lock: {e}")
 
     async def _resolve_supersedes(
         self,
@@ -997,7 +997,7 @@ class SessionCompressorV2:
         traj_uris: List[str],
         ctx,
         viking_fs,
-        lease_ref: Optional[Any] = None,
+        lock_handle: Optional[Any] = None,
     ) -> None:
         """Write bidirectional StoredLinks between traj_uris and each exp file.
 
@@ -1010,28 +1010,33 @@ class SessionCompressorV2:
 
         for exp_uri in exp_uris:
             try:
-                lease = lease_ref
-                owns_lease = False
-                if lease is None:
-                    lock_path = viking_fs._uri_to_path(exp_uri, ctx=ctx)
-                    try:
-                        lease = await viking_fs._async_agfs.pathlock_acquire_exact(lock_path)
-                        owns_lease = True
-                    except Exception as e:
-                        logger.warning(f"Failed to acquire trajectory metadata lock: {e}")
-                        continue
-
                 try:
+                    from openviking.storage.transaction import LockContext, get_lock_manager
+
+                    lock_manager = get_lock_manager()
+                except Exception:
                     await self._append_trajectory_metadata(
                         exp_uri,
                         normalized_traj_uris,
                         ctx,
                         viking_fs,
-                        lease_ref=lease,
                     )
-                finally:
-                    if owns_lease:
-                        await viking_fs._async_agfs.pathlock_release(lease)
+                    continue
+
+                lock_path = viking_fs._uri_to_path(exp_uri, ctx=ctx)
+                async with LockContext(
+                    lock_manager,
+                    [lock_path],
+                    lock_mode="exact",
+                    handle=lock_handle,
+                ) as active_lock_handle:
+                    await self._append_trajectory_metadata(
+                        exp_uri,
+                        normalized_traj_uris,
+                        ctx,
+                        viking_fs,
+                        lock_handle=active_lock_handle,
+                    )
             except Exception as e:
                 logger.warning(f"Failed to append source trajectories to {exp_uri}: {e}")
 
@@ -1041,7 +1046,7 @@ class SessionCompressorV2:
         traj_uris: List[str],
         ctx,
         viking_fs,
-        lease_ref=None,
+        lock_handle=None,
     ) -> None:
         from datetime import timezone
 
@@ -1065,11 +1070,12 @@ class SessionCompressorV2:
         mf.links = new_exp_links
 
         if links_changed:
+            # TODO: This must be optimized once pathlock is pushed down into ragfs.
             await viking_fs.write_file(
                 exp_uri,
                 MemoryFileUtils.write(mf),
                 ctx=ctx,
-                lease_ref=lease_ref,
+                lock_handle=lock_handle,
             )
             tracer.info(
                 f"[agent_link] wrote exp→traj links -> {exp_uri} (traj_count={len(traj_uris)})"
@@ -1078,7 +1084,7 @@ class SessionCompressorV2:
             tracer.info(f"[agent_link] links already present, skip: {exp_uri}")
 
         # Write traj.backlinks — exp_uri already handled above
-        await write_stored_links(links, ctx, viking_fs, skip_uris={exp_uri}, lease_ref=lease_ref)
+        await write_stored_links(links, ctx, viking_fs, skip_uris={exp_uri})
 
     async def _build_memory_diff(
         self,

@@ -80,12 +80,19 @@ class PolicySet:
         if uri_to_path is None:
             raise RuntimeError("PolicySet.viking_fs must provide _uri_to_path for locking")
 
+        from openviking.storage.transaction import get_lock_manager
+
+        lock_manager = get_lock_manager()
+        handle = lock_manager.create_handle()
         path = uri_to_path(self.root_uri, ctx=self.request_context)
-        lease = await self.viking_fs._async_agfs.pathlock_acquire_tree(path, timeout_secs=300.0)
+        acquired = await lock_manager.acquire_tree(handle, path, timeout=None)
+        if not acquired:
+            await lock_manager.release(handle)
+            raise RuntimeError(f"Failed to acquire policy tree lock for {self.root_uri}")
         try:
-            yield lease
+            yield handle
         finally:
-            await self.viking_fs._async_agfs.pathlock_release(lease)
+            await lock_manager.release(handle)
 
     async def reload(self) -> "PolicySet":
         """Reload this policy set from its backing VikingFS under the same ctx."""

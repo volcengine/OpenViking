@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use crate::core::errors::{Error, Result};
 use crate::core::filesystem::FileSystem;
-use crate::core::internal_names::is_hidden_runtime_lock_name;
 use crate::core::WriteFlag;
 use crate::crypto;
 use futures::stream::{self, StreamExt};
@@ -10,6 +9,8 @@ use futures::stream::{self, StreamExt};
 use super::manifest::{StorageShape, SHAPE_MANIFEST_PATH};
 
 const SYSTEM_ACCOUNT_ID: &[u8] = b"_system";
+const PATH_LOCK_FILE: &str = ".path.ovlock";
+const EXACT_LOCK_FILE_PREFIX: &str = ".exact.ovlock.";
 
 fn normalize_shape_path(path: &str) -> String {
     let mut normalized = path.trim().to_string();
@@ -35,7 +36,7 @@ fn is_persistent_task_record_path(path: &str) -> bool {
 
 fn is_path_lock_record_path(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or("");
-    is_hidden_runtime_lock_name(name)
+    name == PATH_LOCK_FILE || name.starts_with(EXACT_LOCK_FILE_PREFIX)
 }
 
 /// Read the raw guard-file bytes from the backend root.

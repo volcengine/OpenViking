@@ -442,6 +442,7 @@ class StreamingMemoryUpdater:
         updater = MemoryUpdater(
             registry=self.registry,
             vikingdb=self.vikingdb,
+            transaction_handle=None,
         )
         extract_context = ExtractContext(messages)
         isolation_handler = _make_isolation_handler(request, extract_context)
