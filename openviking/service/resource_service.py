@@ -18,7 +18,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
 from openviking.core.content_targets import ContentTargetSpec
-from openviking.utils.ingest_options import IngestOptions
 from openviking.core.uri_validation import validate_optional_content_target_uri
 from openviking.parse.parsers.constants import MPEG_TS_EXTENSION_ALIAS
 from openviking.resource.feishu_watch_auth import (
@@ -54,6 +53,7 @@ from openviking.telemetry.resource_summary import (
     unregister_wait_telemetry,
 )
 from openviking.utils import is_git_repo_url, parse_code_hosting_url
+from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.media_processor import _smart_stem
 from openviking.utils.network_guard import ensure_public_remote_target
 from openviking.utils.resource_processor import ResourceProcessor
@@ -959,7 +959,6 @@ class ResourceService:
             watch_interval=watch_interval,
             connector_args=args or {},
             kwargs=kwargs,
-            tags=tags,
         ):
             return await self._connector.submit(
                 path=path,
@@ -968,6 +967,8 @@ class ResourceService:
                 to=to,
                 reason=reason,
                 connector_args=args or {},
+                tags=tags,
+                tag_mode=tag_mode,
                 **kwargs,
             )
 

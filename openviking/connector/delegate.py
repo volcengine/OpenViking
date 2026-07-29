@@ -38,6 +38,7 @@ from openviking.resource.processing_mode import (
     ProcessingMode,
 )
 from openviking.server.identity import RequestContext
+from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import InternalError, InvalidArgumentError
 from openviking_cli.utils import get_logger
 
@@ -304,6 +305,8 @@ class ConnectorDelegate:
         reason: str = "",
         declared_add_type: Optional[str] = None,
         connector_args: Optional[Dict[str, Any]] = None,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Route add_resource to the external Connector service."""
@@ -414,6 +417,12 @@ class ConnectorDelegate:
             task_info_url=config.tracker,
             account_id=ctx.account_id,
         )
+        extra_params = None
+        if tags is not None:
+            extra_params = {
+                "tags": normalize_search_tags(tags),
+                "tag_mode": tag_mode,
+            }
 
         task_tracker = get_task_tracker()
         task = await task_tracker.create(
@@ -431,7 +440,7 @@ class ConnectorDelegate:
                 include_child=True,
                 param_config=param_config,
                 auth_config=auth_config or None,
-                extra_params=None,
+                extra_params=extra_params,
             )
 
             connector_task_key = result.get("task_key") or result.get("TaskKey") or ""

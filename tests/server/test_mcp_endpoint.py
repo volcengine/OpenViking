@@ -689,7 +689,7 @@ async def test_add_resource_declared_add_type_rejects_parent(service):
 
     assert result == "Error: add_type cannot be combined with parent."
 
- 
+
 async def test_add_resource_remote_tags_are_forwarded(service, monkeypatch):
     captured = {}
 

@@ -938,14 +938,31 @@ async def test_tos_connector_rejects_wait(connector_config, ctx, service):
 
 
 @pytest.mark.asyncio
-async def test_tos_connector_rejects_tags_instead_of_dropping_them(connector_config, ctx, service):
-    with pytest.raises(InvalidArgumentError, match="tags"):
-        await service.add_resource(
-            path="tos://bucket/prefix",
-            ctx=ctx,
-            to="viking://resources/imports",
-            tags=["team=search"],
-        )
+async def test_tos_connector_forwards_tags_and_mode(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+):
+    tracker = _task_tracker()
+    connector_client = SimpleNamespace(
+        submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"})
+    )
+    _install_connector_dependencies(monkeypatch, tracker, connector_client)
+
+    await service.add_resource(
+        path="tos://bucket/prefix",
+        ctx=ctx,
+        to="viking://resources/imports",
+        tags=[" Team=Search ", "env=test", "team=search"],
+        tag_mode="append",
+    )
+
+    submitted = connector_client.submit_doc_add.await_args.kwargs
+    assert submitted["extra_params"] == {
+        "tags": ["team=search", "env=test"],
+        "tag_mode": "append",
+    }
 
 
 @pytest.mark.asyncio
