@@ -4103,7 +4103,9 @@ mod tests {
             }
             _ => panic!("expected add-resource command"),
         }
+    }
 
+    #[test]
     fn cli_parses_add_resource_tags() {
         let cli = Cli::try_parse_from([
             "ov",
@@ -4122,7 +4124,10 @@ mod tests {
             Commands::AddResource { tags, tag_mode, .. } => {
                 assert_eq!(tags, vec!["team=search", "env=test"]);
                 assert_eq!(tag_mode, "append");
+            }
+            _ => panic!("expected add-resource command"),
         }
+    }
 
     #[test]
     fn cli_parses_skills_command_group() {
