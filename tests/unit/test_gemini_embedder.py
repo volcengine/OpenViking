@@ -314,3 +314,118 @@ class TestBuildConfig:
         assert call_kwargs.get("api_key") == "key"
         if _HTTP_RETRY_AVAILABLE:
             assert "http_options" in call_kwargs
+
+
+class TestCustomApiBaseSingleRequestEndpoint:
+    """Custom api_base must dispatch :embedContent (single-item), never :batchEmbedContents."""
+
+    @staticmethod
+    def _fake_response():
+        return {
+            "embedding": {
+                "values": [0.1, -0.2, 0.3, 0.0] * 192,  # 768 values
+            }
+        }
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_sync_request_path_is_embed_content(self, mock_client_class):
+        import httpx
+
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        captured: dict = {"requests": []}
+        fake_resp = self._fake_response()
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            captured["requests"].append(request)
+            return httpx.Response(200, json=fake_resp)
+
+        transport = httpx.MockTransport(_handler)
+
+        with patch(
+            "openviking.models.embedder.gemini_embedders.httpx.Client",
+            side_effect=lambda **kw: httpx.Client(transport=transport, **kw),
+        ), patch(
+            "openviking.models.embedder.gemini_embedders.httpx.AsyncClient",
+        ):
+            embedder = GeminiDenseEmbedder(
+                "gemini-embedding-2",
+                api_key="gateway-key",
+                api_base="https://gateway.example.com",
+                dimension=768,
+                task_type="RETRIEVAL_DOCUMENT",
+                title="doc title",
+            )
+            try:
+                result = embedder.embed("hello world", is_query=False)
+            finally:
+                embedder.close()
+
+        assert len(captured["requests"]) == 1
+        req = captured["requests"][0]
+        assert str(req.url).endswith(
+            "/v1beta/models/gemini-embedding-2:embedContent"
+        ), f"Outgoing URL must end with the single-item RPC, got: {req.url}"
+        assert ":batchEmbedContents" not in str(req.url)
+        assert req.method == "POST"
+        body = req.json()
+        assert "content" in body, "Single-item RPC body should use 'content' (not 'requests[]')"
+        assert "requests" not in body, "Batch envelope must not be sent on the custom path"
+        assert body["model"] == "models/gemini-embedding-2"
+        assert body["content"]["parts"][0]["text"] == "hello world"
+        assert body["config"]["outputDimensionality"] == 768
+        assert body["config"]["taskType"] == "RETRIEVAL_DOCUMENT"
+        assert body["config"]["title"] == "doc title"
+        assert req.headers.get("x-goog-api-key") == "gateway-key"
+        assert len(result.dense_vector) == 768
+
+    @pytest.mark.asyncio
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    async def test_async_request_path_is_embed_content(self, mock_client_class):
+        import httpx
+
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        captured: dict = {"requests": []}
+        fake_resp = self._fake_response()
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            captured["requests"].append(request)
+            return httpx.Response(200, json=fake_resp)
+
+        transport = httpx.MockTransport(_handler)
+
+        with patch(
+            "openviking.models.embedder.gemini_embedders.httpx.Client",
+        ), patch(
+            "openviking.models.embedder.gemini_embedders.httpx.AsyncClient",
+            side_effect=lambda **kw: httpx.AsyncClient(transport=transport, **kw),
+        ):
+            embedder = GeminiDenseEmbedder(
+                "gemini-embedding-001",
+                api_key="k-async",
+                api_base="https://private.internal.proxy:8443/custom-base/",
+                dimension=768,
+            )
+            try:
+                result = await embedder.embed_async(
+                    "async query", is_query=True, task_type="RETRIEVAL_QUERY"
+                )
+            finally:
+                embedder.close()
+
+        assert len(captured["requests"]) == 1
+        req = captured["requests"][0]
+        url_str = str(req.url)
+        assert url_str.endswith(
+            "/v1beta/models/gemini-embedding-001:embedContent"
+        ), f"Async outgoing URL must end with single-item RPC, got: {url_str}"
+        assert ":batchEmbedContents" not in url_str
+        # Trailing slash must be stripped from the configured base
+        assert "/custom-base/v1beta" in url_str
+        body = req.json()
+        assert "content" in body and "requests" not in body
+        assert body["content"]["parts"][0]["text"] == "async query"
+        assert body["config"]["taskType"] == "RETRIEVAL_QUERY"
+        assert req.headers.get("x-goog-api-key") == "k-async"
+        assert len(result.dense_vector) == 768
