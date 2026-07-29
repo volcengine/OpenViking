@@ -349,7 +349,13 @@ vikingbot gateway
       "enabled": true,
       "botToken": "xoxb-...",
       "appToken": "xapp-...",
-      "groupPolicy": "mention"
+      "groupPolicy": "allowlist",
+      "groupAllowFrom": ["C0123456789"],
+      "groupSenderAllowFrom": ["U0123456789"],
+      "dm": {
+        "policy": "allowlist",
+        "allowFrom": ["U0123456789"]
+      }
     }
   ]
 }
@@ -361,11 +367,12 @@ vikingbot gateway
 vikingbot gateway
 ```
 
-直接向机器人发送私信或在频道中 @提及它 —— 它应该会回复！
+使用允许的用户发送私信，或由允许的用户在允许的频道中发送消息，机器人应当回复。
 
 > [!TIP]
-> - `groupPolicy`：`"mention"`（默认 —— 仅在 @提及時回复）、`"open"`（回复所有频道消息）或 `"allowlist"`（限制到特定频道）。
-> - 私信策略默认为开放。设置 `"dm": {"enabled": false}` 以禁用私信。
+> - Slack 默认拒绝所有请求。使用 `groupPolicy: "allowlist"` 时，频道 ID 必须在 `groupAllowFrom` 中，发送者 ID 也必须在 `groupSenderAllowFrom` 中。
+> - `groupPolicy: "mention"` 允许任意频道中的任意发送者通过 @提及调用机器人；`"open"` 允许所有频道消息。两者都是显式的宽松访问选项。
+> - 私信默认使用 `policy: "allowlist"`，并通过 `dm.allowFrom` 配置 Slack 用户 ID。设置 `dm.enabled: false` 可禁用私信；显式设置 `policy: "open"` 才会接受所有私信发送者。
 
 </details>
 

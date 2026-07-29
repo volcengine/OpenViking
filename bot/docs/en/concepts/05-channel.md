@@ -357,7 +357,13 @@ Slack uses **Socket Mode**, so no public URL is required.
       "enabled": true,
       "botToken": "xoxb-...",
       "appToken": "xapp-...",
-      "groupPolicy": "mention"
+      "groupPolicy": "allowlist",
+      "groupAllowFrom": ["C0123456789"],
+      "groupSenderAllowFrom": ["U0123456789"],
+      "dm": {
+        "policy": "allowlist",
+        "allowFrom": ["U0123456789"]
+      }
     }
   ]
 }
@@ -369,11 +375,13 @@ Slack uses **Socket Mode**, so no public URL is required.
 vikingbot gateway
 ```
 
-Send the bot a direct message, or mention it in a channel. It should reply.
+Send the bot a direct message from an allowed user, or send a message from an
+allowed user in an allowed channel. It should reply.
 
 > [!TIP]
-> - `groupPolicy`: `"mention"` (default; reply only when mentioned), `"open"` (reply to every channel message), or `"allowlist"` (restrict replies to selected channels).
-> - Direct messages are enabled by default. Set `"dm": {"enabled": false}` to disable them.
+> - Slack defaults to deny-all. With `groupPolicy: "allowlist"`, both the channel ID in `groupAllowFrom` and sender ID in `groupSenderAllowFrom` must match.
+> - `groupPolicy: "mention"` allows any sender in any channel to invoke the bot when mentioned. `"open"` allows every channel message. Both are explicit broad-access opt-ins.
+> - Direct messages default to `policy: "allowlist"` and use `dm.allowFrom` as a Slack user-ID allowlist. Set `dm.enabled` to `false` to disable DMs, or explicitly set `policy: "open"` to accept every DM sender.
 
 </details>
 
