@@ -580,6 +580,9 @@ class TestCompressorV2:
 
         lock_manager = SimpleNamespace(
             create_handle=lambda: object(),
+            get_handle=MagicMock(return_value=object()),
+            refresh_lock=AsyncMock(),
+            _path_lock=SimpleNamespace(_lock_expire=0.02),
             acquire_exact_tree_batch=AsyncMock(return_value=False),
             release=AsyncMock(),
         )
@@ -684,6 +687,9 @@ class TestCompressorV2:
 
         lock_manager = SimpleNamespace(
             create_handle=lambda: handle,
+            get_handle=MagicMock(return_value=handle),
+            refresh_lock=AsyncMock(),
+            _path_lock=SimpleNamespace(_lock_expire=0.02),
             acquire_exact_tree_batch=AsyncMock(side_effect=acquire_exact_tree_batch),
             release=AsyncMock(side_effect=release),
         )
@@ -758,6 +764,9 @@ class TestCompressorV2:
 
         lock_manager = SimpleNamespace(
             create_handle=lambda: handle,
+            get_handle=MagicMock(return_value=handle),
+            refresh_lock=AsyncMock(),
+            _path_lock=SimpleNamespace(_lock_expire=0.02),
             acquire_exact_path_batch=AsyncMock(side_effect=acquire_exact_path_batch),
             release=AsyncMock(side_effect=release),
         )
@@ -1105,3 +1114,149 @@ class TestExtractLoopPatchRepair:
             operations.upsert_operations[0].memory_fields["content"].blocks[0].search
             == "- Likes reading"
         )
+
+    @pytest.mark.asyncio
+    async def test_owned_lock_lease_refreshes_across_long_extract_then_releases(
+        self,
+    ):
+        """OwnedLockLease refresh must fire during extraction; release happens after post_apply."""
+        import asyncio
+
+        from openviking.storage.transaction.lock_manager import LockHandle
+
+        compressor = SessionCompressorV2(vikingdb=None)
+        user = UserIdentifier.the_default_user()
+        ctx = RequestContext(user=user, role=Role.ROOT)
+        messages = [Message(id="msg-long", role="user", parts=[TextPart("long")])]
+        events: List[str] = []
+        refresh_hits = 0
+
+        class FakeVikingFS:
+            agfs = object()
+
+            def _uri_to_path(self, uri: str, ctx=None) -> str:
+                return uri
+
+        class DummyProvider:
+            async def prepare_extraction_messages(self):
+                pass
+
+            def get_memory_schemas(self, _ctx):
+                return []
+
+            def get_extract_context(self):
+                return ExtractContext(messages)
+
+            def _get_registry(self):
+                return object()
+
+        class SlowExtractLoop:
+            def __init__(self, **kwargs):
+                pass
+
+            async def run(self):
+                nonlocal refresh_hits
+                events.append("extract_start")
+                await asyncio.sleep(0.08)
+                refresh_hits = lock_manager.refresh_lock.await_count
+                events.append("extract_end")
+                return (
+                    ResolvedOperations(
+                        upsert_operations=[
+                            ResolvedOperation(
+                                old_memory_file_content=None,
+                                memory_fields={},
+                                memory_type="experiences",
+                                uris=["viking://user/default/memories/experiences/long.md"],
+                            )
+                        ],
+                        delete_file_contents=[],
+                        errors=[],
+                    ),
+                    [],
+                )
+
+        class DummyUpdater:
+            async def apply_operations(self, operations, ctx, **kwargs):
+                events.append("apply")
+                result = MemoryUpdateResult()
+                result.written_uris = [
+                    "viking://user/default/memories/experiences/long.md"
+                ]
+                return result
+
+        config = SimpleNamespace(
+            vlm=SimpleNamespace(get_vlm_instance=lambda: object()),
+            memory=SimpleNamespace(
+                v2_lock_max_retries=1,
+                v2_lock_retry_interval_seconds=0.0,
+            ),
+        )
+        # LockHandle with real locks so OwnedLockLease starts the refresh loop
+        raw_handle = LockHandle.create(
+            tx_id="tx-long",
+            lock_paths=["viking://user/default"],
+            lock_type="tree",
+        )
+
+        async def acquire_exact_tree_batch(*args, **kwargs):
+            events.append("acquire")
+            return True
+
+        async def release(_handle):
+            events.append("release")
+
+        lock_manager = SimpleNamespace(
+            create_handle=lambda: raw_handle,
+            get_handle=MagicMock(return_value=raw_handle),
+            refresh_lock=AsyncMock(),
+            _path_lock=SimpleNamespace(_lock_expire=0.02),
+            acquire_exact_tree_batch=AsyncMock(side_effect=acquire_exact_tree_batch),
+            release=AsyncMock(side_effect=release),
+        )
+
+        async def post_apply(result, inheritance_map, lock_handle):
+            events.append("post_apply")
+
+        with (
+            patch(
+                "openviking.session.compressor_v2.get_viking_fs",
+                return_value=FakeVikingFS(),
+            ),
+            patch(
+                "openviking.session.compressor_v2.get_openviking_config",
+                return_value=config,
+            ),
+            patch("openviking.session.compressor_v2.ExtractLoop", SlowExtractLoop),
+            patch("openviking.storage.transaction.init_lock_manager"),
+            patch(
+                "openviking.storage.transaction.get_lock_manager",
+                return_value=lock_manager,
+            ),
+            patch.object(
+                compressor, "_get_or_create_updater", return_value=DummyUpdater()
+            ),
+        ):
+            result = await compressor._run_extract_phase(
+                provider=DummyProvider(),
+                messages=messages,
+                ctx=ctx,
+                strict_extract_errors=True,
+                phase_label="experience(long)",
+                post_apply=post_apply,
+            )
+
+        assert result[0] == ["viking://user/default/memories/experiences/long.md"]
+        assert refresh_hits >= 2, (
+            f"Expected >= 2 refreshes during 0.08s sleep (expire/2=0.01s), "
+            f"got {refresh_hits}; refresh_lock awaited {lock_manager.refresh_lock.await_count}x total"
+        )
+        assert events == [
+            "acquire",
+            "extract_start",
+            "extract_end",
+            "apply",
+            "post_apply",
+            "release",
+        ], f"event ordering wrong: {events}"
+
