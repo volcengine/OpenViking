@@ -558,6 +558,163 @@ class TestImageLinkSplit:
         assert f"![p]({root}/guides/page/photo.png)" in page, page
         assert f'<img src="{root}/guides/page/photo.png" width="80%">' in page, page
 
+    async def test_image_titles_preserved_through_ingest_and_rewrite(self, tmp_path: Path):
+        from openviking.parse.image_rewrite import rewrite_image_uris
+
+        kb = tmp_path / "kb"
+        (kb / "assets").mkdir(parents=True)
+        _write_valid_png(kb / "assets" / "system.png")
+        _write_valid_png(kb / "assets" / "diagram (draft).png")
+        _write_valid_png(kb / "assets" / "query.png")
+        _write_valid_png(kb / "assets" / "fragment.png")
+        _write_valid_png(kb / "assets" / "right.png")
+        _write_valid_png(kb / 'assets/photo "draft".png')
+        (kb / "index.md").write_text(
+            '![plain](./assets/system.png "System architecture")\n\n'
+            "![paren](./assets/diagram (draft).png 'Draft diagram')\n\n"
+            '![query](./assets/query.png?rev=1 "Query title")\n\n'
+            "![fragment](./assets/fragment.png#preview 'Fragment title')\n\n"
+            '![quoted-paren](./assets/right.png "right)paren")\n\n'
+            '![quoted-path](./assets/photo "draft".png "Caption")',
+            encoding="utf-8",
+        )
+
+        fake = FakeVikingFS()
+        with patch.object(BaseParser, "_get_viking_fs", return_value=fake):
+            result = await DirectoryParser().parse(str(kb))
+
+            temp = result.temp_dir_path
+            entries = await fake.ls(temp)
+            doc_dirs = [entry for entry in entries if entry["isDir"]]
+            root = f"viking://resources/{doc_dirs[0]['name']}"
+            src_prefix = doc_dirs[0]["uri"].rstrip("/") + "/"
+            for uri in list(fake.files):
+                if uri.startswith(src_prefix):
+                    fake.files[f"{root}/{uri[len(src_prefix) :]}"] = fake.files[uri]
+
+            import openviking.parse.image_rewrite as image_rewrite_mod
+
+            with patch.object(image_rewrite_mod, "get_viking_fs", return_value=fake):
+                stats = await rewrite_image_uris(root, lock_handle=None)
+
+        assert stats["references_rewritten"] == 6, stats
+        page = _decode(fake.files[f"{root}/index/index.md"])
+        assert f'![plain]({root}/index/system.png "System architecture")' in page, page
+        assert f"![paren]({root}/index/diagram (draft).png 'Draft diagram')" in page, page
+        assert f'![query]({root}/index/query.png "Query title")' in page, page
+        assert f"![fragment]({root}/index/fragment.png 'Fragment title')" in page, page
+        assert f'![quoted-paren]({root}/index/right.png "right)paren")' in page, page
+        assert f'![quoted-path]({root}/index/photo "draft".png "Caption")' in page, page
+
+    async def test_code_examples_are_not_mapped_but_backticks_in_a_path_are(self, tmp_path: Path):
+        kb = tmp_path / "kb"
+        (kb / "assets").mkdir(parents=True)
+        _write_valid_png(kb / "assets" / "secret.png")
+        _write_valid_png(kb / "assets" / "se`cret`.png")
+        (kb / "index.md").write_text(
+            '`![inline](./assets/secret.png "Inline example")`\n\n'
+            "```markdown\n![fenced](./assets/secret.png 'Fenced example')\n```\n\n"
+            '![crossing](./assets/se`cret`.png "Crossing example")',
+            encoding="utf-8",
+        )
+
+        fake = FakeVikingFS()
+        with patch.object(BaseParser, "_get_viking_fs", return_value=fake):
+            await DirectoryParser().parse(str(kb))
+
+        assert any(uri.endswith("/secret.png") for uri in fake.files), fake.files
+        assert any(uri.endswith("/se`cret`.png") for uri in fake.files), fake.files
+        mappings = [
+            _decode(content)
+            for uri, content in fake.files.items()
+            if uri.endswith(".image_mappings.json")
+        ]
+        assert mappings and "./assets/se`cret`.png" in mappings[0], fake.files
+        assert "./assets/secret.png" not in mappings[0], fake.files
+        pages = [_decode(content) for uri, content in fake.files.items() if uri.endswith(".md")]
+        assert pages == [
+            '`![inline](./assets/secret.png "Inline example")`\n\n'
+            "```markdown\n![fenced](./assets/secret.png 'Fenced example')\n```\n\n"
+            '![crossing](./assets/se`cret`.png "Crossing example")'
+        ]
+
+    async def test_escaped_image_marker_is_not_ingested(self, tmp_path: Path):
+        kb = tmp_path / "kb"
+        (kb / "assets").mkdir(parents=True)
+        _write_valid_png(kb / "assets" / "literal.png")
+        _write_valid_png(kb / "assets" / "real.png")
+        (kb / "index.md").write_text(
+            r"\![literal](./assets/literal.png)"
+            "\n"
+            r"\\![real](./assets/real.png)",
+            encoding="utf-8",
+        )
+
+        fake = FakeVikingFS()
+        with patch.object(BaseParser, "_get_viking_fs", return_value=fake):
+            await DirectoryParser().parse(str(kb))
+
+        mappings = [
+            _decode(content)
+            for uri, content in fake.files.items()
+            if uri.endswith(".image_mappings.json")
+        ]
+        assert mappings and "./assets/real.png" in mappings[0], fake.files
+        assert "./assets/literal.png" not in mappings[0], fake.files
+
+    async def test_same_image_with_distinct_suffixes_keeps_each_mapping(self, tmp_path: Path):
+        from openviking.parse.image_rewrite import rewrite_image_uris
+
+        kb = tmp_path / "kb"
+        (kb / "assets").mkdir(parents=True)
+        _write_valid_png(kb / "assets" / "shared.png")
+        (kb / "index.md").write_text(
+            "![one](./assets/shared.png?v=1)\n![two](./assets/shared.png?v=2#preview)",
+            encoding="utf-8",
+        )
+
+        fake = FakeVikingFS()
+        with patch.object(BaseParser, "_get_viking_fs", return_value=fake):
+            result = await DirectoryParser().parse(str(kb))
+
+            temp = result.temp_dir_path
+            entries = await fake.ls(temp)
+            doc_dirs = [entry for entry in entries if entry["isDir"]]
+            root = f"viking://resources/{doc_dirs[0]['name']}"
+            src_prefix = doc_dirs[0]["uri"].rstrip("/") + "/"
+            for uri in list(fake.files):
+                if uri.startswith(src_prefix):
+                    fake.files[f"{root}/{uri[len(src_prefix) :]}"] = fake.files[uri]
+
+            import openviking.parse.image_rewrite as image_rewrite_mod
+
+            with patch.object(image_rewrite_mod, "get_viking_fs", return_value=fake):
+                stats = await rewrite_image_uris(root, lock_handle=None)
+
+        assert stats["references_rewritten"] == 2, stats
+        page = _decode(fake.files[f"{root}/index/index.md"])
+        assert page.count(f"({root}/index/shared.png)") == 2, page
+
+    async def test_protected_malformed_image_does_not_consume_later_image(self, tmp_path: Path):
+        kb = tmp_path / "kb"
+        (kb / "assets").mkdir(parents=True)
+        _write_valid_png(kb / "assets" / "image.png")
+        (kb / "index.md").write_text(
+            "`![code](ignored(` ![ok](./assets/image.png))) `",
+            encoding="utf-8",
+        )
+
+        fake = FakeVikingFS()
+        with patch.object(BaseParser, "_get_viking_fs", return_value=fake):
+            await DirectoryParser().parse(str(kb))
+
+        mappings = [
+            _decode(content)
+            for uri, content in fake.files.items()
+            if uri.endswith(".image_mappings.json")
+        ]
+        assert mappings and "./assets/image.png" in mappings[0], fake.files
+
     async def test_invalid_image_depth_adjusted(self, tmp_path: Path):
         # In base_dir but not a decodable image -> ingest skips it -> depth-adjust.
         kb = tmp_path / "kb"
@@ -586,6 +743,577 @@ class TestRewriteImageUris:
         import openviking.parse.image_rewrite as image_rewrite_mod
 
         return patch.object(image_rewrite_mod, "get_viking_fs", return_value=fake)
+
+    def test_terminal_parenthesized_filename_mapping_wins(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = "![p](photo.png (copy))"
+        rewritten, count = _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"photo.png (copy)"},
+            {"photo.png (copy)": "photo.png (copy)"},
+        )
+
+        assert count == 1
+        assert rewritten == "![p](viking://resources/doc/photo.png (copy))"
+
+    def test_quoted_title_may_contain_right_parenthesis(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = '![x](image.png "right)paren")'
+        rewritten, count = _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"image.png"},
+            {"image.png": "image.png"},
+        )
+
+        assert count == 1
+        assert rewritten == '![x](viking://resources/doc/image.png "right)paren")'
+
+    def test_escaped_and_nested_alt_brackets_are_rewritten(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = r"![a \] b [nested]](image.png)"
+        rewritten, count = _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"image.png"},
+            {"image.png": "image.png"},
+        )
+
+        assert count == 1
+        assert rewritten == r"![a \] b [nested]](viking://resources/doc/image.png)"
+
+    def test_path_sanitizer_drops_ascii_separators_and_brackets(self):
+        parser = MarkdownParser()
+
+        assert parser._sanitize_for_path(r"abc\\def[ghi]") == "abcdefghi"
+
+    def test_malformed_image_scanner_makes_monotonic_progress(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        malformed_documents = [
+            "![x](" * 20_000,
+            "![x](\n" * 20_000,
+            "![unterminated\n" * 20_000,
+            "![x](unterminated " * 20_000,
+            "![unterminated " * 20_000,
+            "![bad](broken 'unterminated ![ok](foo')" * 20_000,
+        ]
+        for content in malformed_documents:
+            assert _rewrite_content(content, "viking://resources/doc", set(), {}) == (
+                content,
+                0,
+            )
+
+    def test_scanner_and_rewrite_growth_are_linear(self):
+        from time import perf_counter
+
+        from openviking.parse.image_rewrite import (
+            _iter_markdown_images,
+            _rewrite_content,
+        )
+
+        def measure_scanner(repetitions: int) -> float:
+            content = "![outer ![inner](x)](y) " * repetitions
+            started = perf_counter()
+            assert sum(1 for _ in _iter_markdown_images(content)) == repetitions
+            return perf_counter() - started
+
+        small = min(measure_scanner(5_000) for _ in range(2))
+        large = min(measure_scanner(20_000) for _ in range(2))
+        assert large < small * 6 + 0.05
+
+        def measure_rewrite(repetitions: int) -> float:
+            content = "`![code](ignored(` ![ok](image.png)\n" * repetitions
+            started = perf_counter()
+            _rewritten, count = _rewrite_content(
+                content,
+                "viking://resources/doc",
+                {"image.png"},
+                {"image.png": "image.png"},
+            )
+            assert count == repetitions
+            return perf_counter() - started
+
+        small = min(measure_rewrite(1_000) for _ in range(2))
+        large = min(measure_rewrite(4_000) for _ in range(2))
+        assert large < small * 6 + 0.05
+
+    def test_deeply_nested_candidates_do_not_copy_overlapping_payloads(self):
+        from openviking.parse.image_rewrite import (
+            _iter_markdown_images,
+            _rewrite_content,
+        )
+
+        depth = 20_000
+        content = "![x](" * depth + "image.png" + ")" * depth
+        matches = list(_iter_markdown_images(content))
+        assert len(matches) == 1
+        match = matches[0]
+        payload = content[match.payload_start : match.payload_end]
+        assert payload.startswith("![x](")
+        assert payload.endswith(")")
+
+        assert _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"image.png"},
+            {"image.png": "image.png"},
+        ) == (content, 0)
+
+    def test_nested_alt_mapping_misses_have_linear_growth(self):
+        from time import perf_counter
+
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        def measure(depth: int) -> float:
+            content = "![a " * depth + "leaf" + "](missing.png)" * depth
+            started = perf_counter()
+            assert _rewrite_content(content, "viking://resources/doc", set(), {}) == (
+                content,
+                0,
+            )
+            return perf_counter() - started
+
+        small = min(measure(1_000) for _ in range(2))
+        large = min(measure(4_000) for _ in range(2))
+        assert large < small * 6 + 0.05
+
+    def test_nested_alt_uses_outer_syntax_regardless_of_mappings(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = "![outer ![inner](inner.png)](outer.png)"
+        assert _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"inner.png"},
+            {"inner.png": "inner.png"},
+        ) == (content, 0)
+        assert _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"inner.png", "outer.png"},
+            {
+                "inner.png": "inner.png",
+                "outer.png": "outer.png",
+            },
+        ) == (
+            "![outer ![inner](inner.png)](viking://resources/doc/outer.png)",
+            1,
+        )
+
+    def test_nested_image_text_in_destination_keeps_outer_syntax(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = "![outer](assets/foo![bar](baz).png)"
+        assert _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"baz.png"},
+            {"baz": "baz.png"},
+        ) == (content, 0)
+        assert _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"outer.png"},
+            {"assets/foo![bar](baz).png": "outer.png"},
+        ) == ("![outer](viking://resources/doc/outer.png)", 1)
+
+    def test_valid_image_after_malformed_image_is_still_rewritten(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        malformed_prefixes = [
+            "![bad alt\n",
+            '![bad](broken "unterminated)\n',
+            "![bad](broken((\n",
+            "![bad alt ",
+            '![bad](broken "unterminated) ',
+            "![bad](broken(( ",
+            "![bad](broken 'unterminated ",
+        ]
+        for malformed_prefix in malformed_prefixes:
+            content = malformed_prefix + "  ![ok](image.png)"
+            rewritten, count = _rewrite_content(
+                content,
+                "viking://resources/doc",
+                {"image.png"},
+                {"image.png": "image.png"},
+            )
+
+            assert count == 1
+            assert rewritten == (malformed_prefix + "  ![ok](viking://resources/doc/image.png)")
+
+    def test_confirmed_multiline_title_does_not_expose_nested_candidate(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = '![outer](image.png "line\n![inner](other.png")'
+        assert _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"image.png", 'other.png"'},
+            {
+                "image.png": "image.png",
+                'other.png"': 'other.png"',
+            },
+        ) == ('![outer](viking://resources/doc/image.png "line\n![inner](other.png")', 1)
+
+    def test_confirmed_title_precedence_does_not_depend_on_outer_mapping(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = "![bad](broken 'unterminated) ![ok](foo')"
+        assert _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"image.png"},
+            {"foo'": "image.png"},
+        ) == (content, 0)
+
+    def test_malformed_title_cannot_borrow_across_blank_line_or_fence(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        documents = [
+            "![bad](broken 'unterminated\n\n![ok](foo')",
+            '![bad](broken "unterminated\n```markdown\n")\n```\n![ok](image.png)',
+        ]
+        mappings = [
+            ({"image.png"}, {"foo'": "image.png"}),
+            ({"image.png"}, {"image.png": "image.png"}),
+        ]
+        expected = [
+            "![bad](broken 'unterminated\n\n![ok](viking://resources/doc/image.png)",
+            '![bad](broken "unterminated\n```markdown\n")\n```\n'
+            "![ok](viking://resources/doc/image.png)",
+        ]
+        for content, (available, path_mappings), rewritten in zip(
+            documents, mappings, expected, strict=True
+        ):
+            assert _rewrite_content(
+                content,
+                "viking://resources/doc",
+                available,
+                path_mappings,
+            ) == (rewritten, 1)
+
+    def test_valid_multiline_title_after_malformed_image_is_rewritten_normally(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        malformed_prefix = "![bad alt\n"
+        content = malformed_prefix + '![outer](image.png "line one\n![literal] line two")'
+        rewritten, count = _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"image.png"},
+            {"image.png": "image.png"},
+        )
+
+        assert count == 1
+        assert rewritten == (
+            malformed_prefix
+            + '![outer](viking://resources/doc/image.png "line one\n![literal] line two")'
+        )
+
+    def test_complete_image_text_inside_a_valid_title_stays_title_text(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = '![outer](image.png "see ![icon](other.png)")'
+        rewritten, count = _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"image.png", "other.png"},
+            {
+                "image.png": "image.png",
+                "other.png": "other.png",
+            },
+        )
+
+        assert count == 1
+        assert rewritten == ('![outer](viking://resources/doc/image.png "see ![icon](other.png)")')
+
+    def test_image_text_inside_an_unresolved_valid_title_is_not_rewritten(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = '![outer](missing.png "see ![icon](other.png)")'
+        assert _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"other.png"},
+            {"other.png": "other.png"},
+        ) == (content, 0)
+
+    def test_incomplete_image_text_inside_a_valid_title_stays_title_text(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = '![outer](image.png "see ![icon](other.png")'
+        rewritten, count = _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"image.png", 'other.png"'},
+            {
+                "image.png": "image.png",
+                'other.png"': 'other.png"',
+            },
+        )
+
+        assert count == 1
+        assert rewritten == ('![outer](viking://resources/doc/image.png "see ![icon](other.png")')
+
+    def test_quoted_filename_chunk_before_terminal_title_is_rewritten(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = '![x](photo "draft".png "Caption")'
+        rewritten, count = _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {'photo "draft".png'},
+            {'photo "draft".png': 'photo "draft".png'},
+        )
+
+        assert count == 1
+        assert rewritten == ('![x](viking://resources/doc/photo "draft".png "Caption")')
+
+    def test_html_image_text_inside_a_markdown_title_is_not_rewritten(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = "![outer](image.png 'see <img src=\"other.png\">')"
+        rewritten, count = _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"image.png", "other.png"},
+            {
+                "image.png": "image.png",
+                "other.png": "other.png",
+            },
+        )
+
+        assert count == 1
+        assert rewritten == (
+            "![outer](viking://resources/doc/image.png 'see <img src=\"other.png\">')"
+        )
+
+    def test_html_image_text_inside_a_parenthesized_title_is_not_rewritten(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = '![outer](image.png (see <img src="other.png">))'
+        rewritten, count = _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"image.png", "other.png"},
+            {
+                "image.png": "image.png",
+                "other.png": "other.png",
+            },
+        )
+
+        assert count == 1
+        assert rewritten == (
+            '![outer](viking://resources/doc/image.png (see <img src="other.png">))'
+        )
+
+    def test_html_image_text_inside_markdown_alt_is_not_rewritten_separately(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = '![outer <img src="inner.png">](outer.png)'
+        rewritten, count = _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"outer.png", "inner.png"},
+            {
+                "outer.png": "outer.png",
+                "inner.png": "inner.png",
+            },
+        )
+
+        assert count == 1
+        assert rewritten == ('![outer <img src="inner.png">](viking://resources/doc/outer.png)')
+
+    def test_html_tag_owns_markdown_shaped_text_inside_its_attributes(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = '<img alt="![inner](inner.png)" src="outer.png">'
+        rewritten, count = _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"outer.png", "inner.png"},
+            {
+                "outer.png": "outer.png",
+                "inner.png": "inner.png",
+            },
+        )
+
+        assert count == 1
+        assert rewritten == (
+            '<img alt="![inner](inner.png)" src="viking://resources/doc/outer.png">'
+        )
+
+    def test_backticks_inside_an_image_do_not_make_the_opener_code(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = '![`alt`](image.png "use `code`")'
+        rewritten, count = _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"image.png"},
+            {"image.png": "image.png"},
+        )
+
+        assert count == 1
+        assert rewritten == ('![`alt`](viking://resources/doc/image.png "use `code`")')
+
+    def test_code_span_brackets_inside_alt_text_are_opaque_to_pairing(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = "![alt `[`](image.png)"
+        rewritten, count = _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"image.png"},
+            {"image.png": "image.png"},
+        )
+
+        assert count == 1
+        assert rewritten == "![alt `[`](viking://resources/doc/image.png)"
+
+    def test_protected_malformed_image_does_not_suppress_a_real_image(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = "`![code](ignored(` ![ok](image.png))) `"
+        rewritten, count = _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"image.png"},
+            {"image.png": "image.png"},
+        )
+
+        assert count == 1
+        assert rewritten == ("`![code](ignored(` ![ok](viking://resources/doc/image.png))) `")
+
+    def test_escaped_image_marker_requires_an_even_backslash_run(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = r"\![literal](literal.png) \\![real](image.png)"
+        rewritten, count = _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"literal.png", "image.png"},
+            {
+                "literal.png": "literal.png",
+                "image.png": "image.png",
+            },
+        )
+
+        assert count == 1
+        assert rewritten == (
+            r"\![literal](literal.png) \\![real](viking://resources/doc/image.png)"
+        )
+
+    def test_escaped_parenthesis_and_apostrophe_destinations_are_rewritten(self):
+        from openviking.parse.image_rewrite import _rewrite_content
+
+        content = r"![escaped](foo\)bar.png) ![apostrophe](it's.png)"
+        rewritten, count = _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"escaped.png", "apostrophe.png"},
+            {
+                r"foo\)bar.png": "escaped.png",
+                "it's.png": "apostrophe.png",
+            },
+        )
+
+        assert count == 2
+        assert rewritten == (
+            "![escaped](viking://resources/doc/escaped.png) "
+            "![apostrophe](viking://resources/doc/apostrophe.png)"
+        )
+
+    def test_title_splitter_handles_long_non_title_payload(self):
+        from openviking.parse.image_rewrite import _split_markdown_image_target
+
+        cases = {
+            'assets/image.png "Double title"': ("assets/image.png", ' "Double title"'),
+            "assets/image.png 'Single title'": ("assets/image.png", " 'Single title'"),
+            "assets/image.png (Parenthesized title)": (
+                "assets/image.png",
+                " (Parenthesized title)",
+            ),
+            r'assets/image.png "Escaped \" quote"': (
+                "assets/image.png",
+                r' "Escaped \" quote"',
+            ),
+            r'assets/image.png "unterminated\"': (
+                r'assets/image.png "unterminated\"',
+                "",
+            ),
+        }
+        for payload, expected in cases.items():
+            assert _split_markdown_image_target(payload) == expected
+
+        payload = "assets/" + (" " * 100_000) + "image.png"
+        assert _split_markdown_image_target(payload) == (payload, "")
+
+    def test_artifact_query_and_fragment_titles_survive_rewrite(self, tmp_path: Path):
+        from openviking.parse.image_rewrite import (
+            _rewrite_content,
+            build_artifact_image_mappings,
+        )
+
+        (tmp_path / "image.png").write_bytes(b"image")
+        content = (
+            '![query](image.png?rev=1 "Query title")\n'
+            "![fragment](image.png#preview 'Fragment title')"
+        )
+        (tmp_path / "doc.md").write_text(content, encoding="utf-8")
+
+        mappings = build_artifact_image_mappings(tmp_path)["doc.md"]
+        assert mappings == {
+            "image.png?rev=1": "image.png",
+            "image.png#preview": "image.png",
+        }
+        rewritten, count = _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"image.png"},
+            mappings,
+        )
+
+        assert count == 2
+        assert '![query](viking://resources/doc/image.png "Query title")' in rewritten
+        assert "![fragment](viking://resources/doc/image.png 'Fragment title')" in rewritten
+
+    def test_protected_span_overlap_is_detected(self):
+        from openviking.parse.image_rewrite import (
+            _iter_unprotected_html_images,
+            _protected_ranges,
+            _rewrite_content,
+            _span_intersects_protected_ranges,
+        )
+
+        protected = [(10, 20), (30, 40)]
+        assert _span_intersects_protected_ranges(5, 15, protected)
+        assert _span_intersects_protected_ranges(15, 25, protected)
+        assert not _span_intersects_protected_ranges(5, 10, protected)
+        assert not _span_intersects_protected_ranges(20, 30, protected)
+
+        html = '<img alt="example" src="image.png">'
+        assert not list(_iter_unprotected_html_images(html, [(5, 15)]))
+
+        content = '![ok](image.png)\n![example](image.png "`code`")'
+        ranges = _protected_ranges(content)
+        assert all(left[1] < right[0] for left, right in zip(ranges, ranges[1:], strict=False))
+        rewritten, count = _rewrite_content(
+            content,
+            "viking://resources/doc",
+            {"image.png"},
+            {"image.png": "image.png"},
+        )
+        assert count == 2
+        assert rewritten == (
+            "![ok](viking://resources/doc/image.png)\n"
+            '![example](viking://resources/doc/image.png "`code`")'
+        )
 
     async def test_nested_mapping_consumed(self):
         from openviking.parse.image_rewrite import rewrite_image_uris

@@ -175,7 +175,6 @@ class MarkdownParser(BaseParser):
         self._code_block_pattern = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
         self._inline_code_pattern = re.compile(r"`([^`]+)`")
         self._link_pattern = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
-        self._image_pattern = re.compile(r"!\[([^\]]*)\]\(((?:[^()]|\([^()]*\))+)\)")
         self._list_pattern = re.compile(r"^(\s*)[-*+]\s+(.+)$", re.MULTILINE)
         self._numbered_list_pattern = re.compile(r"^(\s*)\d+\.\s+(.+)$", re.MULTILINE)
         self._frontmatter_pattern = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
@@ -588,33 +587,67 @@ class MarkdownParser(BaseParser):
 
             # Collect all image references in this markdown file: markdown
             # embeds (![...]) and HTML <img src="..."> tags alike.
-            from openviking.parse.image_rewrite import HTML_IMG_PATTERN
+            from openviking.parse.image_rewrite import (
+                _owned_image_matches,
+                _protected_ranges,
+                _split_markdown_image_target,
+            )
 
-            image_refs = [m.group(2) for m in self._image_pattern.finditer(content)]
-            image_refs += [m.group(2) for m in HTML_IMG_PATTERN.finditer(content)]
+            protected = _protected_ranges(content)
+            markdown_matches, html_matches = _owned_image_matches(content, protected)
+            image_refs = [(match.start, match.end, match, True) for match in markdown_matches]
+            image_refs += [
+                (match.start(), match.end(), match.group(2), False) for match in html_matches
+            ]
             if not image_refs:
                 continue
 
             # Resolve local image paths, skipping remote URIs and duplicates
             local_images = []
-            origin_images_links = []
+            origin_links_by_path: Dict[Path, list[str]] = {}
             seen_paths = set()
 
-            for path_str in image_refs:
+            for _start, _end, reference, is_markdown in image_refs:
+                raw_path = (
+                    content[reference.payload_start : reference.payload_end]
+                    if is_markdown
+                    else reference
+                )
+                path_str = raw_path
+                resolved_path = None
+                if is_markdown:
+                    destination, title = _split_markdown_image_target(raw_path)
+                    if title:
+                        if self._is_remote_uri(destination):
+                            path_str = destination
+                        else:
+                            # Preserve the pre-title behavior for an existing local
+                            # filename whose final component only looks like a title.
+                            resolved_path = self._resolve_image_path(
+                                raw_path,
+                                base_dir,
+                                allowed_media_dirs,
+                                strip_suffix=False,
+                            )
+                            if resolved_path is None:
+                                path_str = destination
+
                 # Skip remote URIs
                 if self._is_remote_uri(path_str):
                     continue
 
-                resolved_path = self._resolve_image_path(path_str, base_dir, allowed_media_dirs)
+                if resolved_path is None:
+                    resolved_path = self._resolve_image_path(path_str, base_dir, allowed_media_dirs)
                 if resolved_path is None:
                     logger.warning(f"[MarkdownParser] Image file not found: {path_str}")
                     continue
 
                 # Skip duplicates within the same markdown file
                 if resolved_path in seen_paths:
+                    origin_links_by_path[resolved_path].append(path_str)
                     continue
                 seen_paths.add(resolved_path)
-                origin_images_links.append(path_str)
+                origin_links_by_path[resolved_path] = [path_str]
                 local_images.append(resolved_path)
 
             if not local_images:
@@ -626,7 +659,7 @@ class MarkdownParser(BaseParser):
             # Copy each local image next to the markdown file, deduplicating names
             used_names: set[str] = set()
             file_mappings: Dict[str, str] = {}  # original_path_str -> unique_filename
-            for origin_link, resolved_path in zip(origin_images_links, local_images, strict=False):
+            for resolved_path in local_images:
                 try:
                     if not await asyncio.to_thread(resolved_path.exists):
                         logger.warning(f"[MarkdownParser] Image file not found: {resolved_path}")
@@ -651,8 +684,10 @@ class MarkdownParser(BaseParser):
                     await viking_fs.write_file_bytes(viking_path, image_bytes)
                     logger.debug(f"[MarkdownParser] Copied image to VikingFS: {viking_path}")
 
-                    # Record mapping for post-commit rewrite
-                    file_mappings[origin_link] = unique_filename
+                    # One physical file may have multiple query/fragment-bearing
+                    # source references; all of them must retain provenance.
+                    for origin_link in origin_links_by_path[resolved_path]:
+                        file_mappings[origin_link] = unique_filename
 
                 except Exception as e:
                     logger.warning(f"[MarkdownParser] Failed to ingest image {resolved_path}: {e}")
@@ -679,6 +714,8 @@ class MarkdownParser(BaseParser):
         path_str: str,
         base_dir: Optional[Path],
         allowed_media_dirs: Optional[List[Path]] = None,
+        *,
+        strip_suffix: bool = True,
     ) -> Optional[Path]:
         """
         Resolve a local image reference to an existing filesystem path.
@@ -695,6 +732,16 @@ class MarkdownParser(BaseParser):
             allowed root, otherwise None
         """
         try:
+            if strip_suffix:
+                path_without_suffix = re.split(r"[?#]", path_str, maxsplit=1)[0]
+                if path_without_suffix != path_str:
+                    return self._resolve_image_path(
+                        path_without_suffix,
+                        base_dir,
+                        allowed_media_dirs,
+                        strip_suffix=False,
+                    )
+
             path = Path(path_str)
 
             # Reject absolute paths: they can point anywhere on the host

@@ -11,7 +11,7 @@ images themselves are stored next to the markdown file referencing them).
 import json
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, Optional, Set
+from typing import TYPE_CHECKING, Dict, Iterator, NamedTuple, Optional, Set
 
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import get_viking_fs
@@ -22,7 +22,6 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-_IMAGE_PATTERN = re.compile(r"!\[([^\]]*)\]\(((?:[^()]|\([^()]*\))+)\)")
 _REMOTE_PREFIXES = ("http://", "https://", "viking://", "data:", "ftp://")
 
 # Sidecar written by MarkdownParser._ingest_local_images at each document root,
@@ -34,6 +33,428 @@ IMAGE_MAPPINGS_FILENAME = ".image_mappings.json"
 HTML_IMG_PATTERN = re.compile(r"""(<img\s[^>]*?src=["'])([^"']+)(["'][^>]*>)""", re.IGNORECASE)
 _FENCE_PATTERN = re.compile(r"^(\s{0,3})(`{3,}|~{3,})")
 _LIST_ITEM_PATTERN = re.compile(r"^(\s{0,3})([-*+]|\d{1,9}[.)])(\s+)")
+
+
+class _MarkdownImageMatch(NamedTuple):
+    start: int
+    end: int
+    alt_start: int
+    alt_end: int
+    payload_start: int
+    payload_end: int
+    title_start: int
+    title_end: int
+
+
+def _iter_unprotected_html_images(
+    content: str,
+    protected_ranges: Optional[list[tuple[int, int]]] = None,
+) -> Iterator[re.Match]:
+    """Yield HTML image matches outside sorted protected ranges in linear time."""
+    protected = protected_ranges or []
+    protected_index = 0
+    for match in HTML_IMG_PATTERN.finditer(content):
+        start = match.start()
+        end = match.end()
+        while protected_index < len(protected) and protected[protected_index][1] <= start:
+            protected_index += 1
+        if protected_index < len(protected) and protected[protected_index][0] < end:
+            continue
+        yield match
+
+
+def _merge_sorted_ranges(
+    first: list[tuple[int, int]],
+    second: list[tuple[int, int]],
+) -> list[tuple[int, int]]:
+    """Merge two source-ordered range streams in linear time."""
+    merged: list[tuple[int, int]] = []
+    first_index = 0
+    second_index = 0
+    while first_index < len(first) or second_index < len(second):
+        if second_index >= len(second) or (
+            first_index < len(first) and first[first_index][0] <= second[second_index][0]
+        ):
+            start, end = first[first_index]
+            first_index += 1
+        else:
+            start, end = second[second_index]
+            second_index += 1
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _next_position_by_level(
+    starts: list[int],
+    levels: Dict[int, int],
+    positions_by_level: Dict[int, list[int]],
+) -> Dict[int, int]:
+    """Map each sorted start to the next position at its parenthesis level."""
+    offsets: Dict[int, int] = {}
+    result: Dict[int, int] = {}
+    for start in starts:
+        level = levels[start]
+        positions = positions_by_level.get(level, [])
+        offset = offsets.get(level, 0)
+        while offset < len(positions) and positions[offset] < start:
+            offset += 1
+        offsets[level] = offset
+        result[start] = positions[offset] if offset < len(positions) else -1
+    return result
+
+
+def _iter_markdown_images(
+    content: str,
+    protected_ranges: Optional[list[tuple[int, int]]] = None,
+) -> Iterator[_MarkdownImageMatch]:
+    """Yield Markdown image spans with linear preprocessing and bounded recovery."""
+    length = len(content)
+    protected = protected_ranges or []
+    protected_index = 0
+    candidate_starts: list[int] = []
+    bracket_stack: list[int] = []
+    bracket_matches: Dict[int, int] = {}
+    backslashes = 0
+
+    # Pair every unescaped bracket once. An unmatched outer image therefore
+    # cannot consume a later independently balanced image candidate.
+    for index, char in enumerate(content):
+        while protected_index < len(protected) and protected[protected_index][1] <= index:
+            protected_index += 1
+        if (
+            protected_index < len(protected)
+            and protected[protected_index][0] <= index < protected[protected_index][1]
+        ):
+            backslashes = 0
+            continue
+        if char == "\\":
+            backslashes += 1
+            continue
+        escaped = backslashes % 2 == 1
+        backslashes = 0
+        if not escaped and char == "!" and index + 1 < length and content[index + 1] == "[":
+            candidate_starts.append(index)
+        if escaped:
+            continue
+        if char == "[":
+            bracket_stack.append(index)
+        elif char == "]" and bracket_stack:
+            bracket_matches[bracket_stack.pop()] = index
+
+    candidate_bounds: Dict[int, tuple[int, int]] = {}
+    payload_start_set: Set[int] = set()
+    for start in candidate_starts:
+        alt_end = bracket_matches.get(start + 1)
+        if alt_end is None or alt_end + 1 >= length or content[alt_end + 1] != "(":
+            continue
+        payload_start = alt_end + 2
+        candidate_bounds[start] = (alt_end, payload_start)
+        payload_start_set.add(payload_start)
+
+    # Images and titles cannot borrow delimiters across blank lines or protected
+    # block-code regions. Inline code remains part of the surrounding block.
+    block_boundaries: Set[int] = set()
+    protected_index = 0
+    offset = 0
+    for line in content.splitlines(keepends=True):
+        line_start = offset
+        line_end = line_start + len(line)
+        offset = line_end
+        while protected_index < len(protected) and protected[protected_index][1] <= line_start:
+            protected_index += 1
+        if not line.strip():
+            block_boundaries.add(line_end)
+        if (
+            protected_index < len(protected)
+            and protected[protected_index][0] <= line_start
+            and protected[protected_index][1] >= line_end
+        ):
+            block_boundaries.add(line_start)
+            block_boundaries.add(line_end)
+    block_ids = [0] * (length + 1)
+    block_id = 0
+    for position in range(length + 1):
+        block_id += position in block_boundaries
+        block_ids[position] = block_id
+
+    payload_starts: list[int] = []
+    payload_levels: Dict[int, int] = {}
+    closes_by_level: Dict[int, list[int]] = {}
+    title_openers: list[tuple[int, int, str]] = []
+    next_same_quote: Dict[int, int] = {}
+    quote_positions: list[int] = []
+    last_quote: Dict[str, int] = {}
+    parenthesis_stack: list[int] = []
+    matching_parenthesis: Dict[int, int] = {}
+    parenthesis_level = 0
+    backslashes = 0
+    protected_index = 0
+
+    for index, char in enumerate(content):
+        if index in payload_start_set:
+            payload_starts.append(index)
+            payload_levels[index] = parenthesis_level
+        while protected_index < len(protected) and protected[protected_index][1] <= index:
+            protected_index += 1
+        if (
+            protected_index < len(protected)
+            and protected[protected_index][0] <= index < protected[protected_index][1]
+        ):
+            backslashes = 0
+            continue
+        if char == "\\":
+            backslashes += 1
+            continue
+        escaped = backslashes % 2 == 1
+        backslashes = 0
+        if escaped:
+            continue
+
+        if char == "(":
+            if index > 0 and content[index - 1].isspace():
+                title_openers.append((index, parenthesis_level, char))
+            parenthesis_stack.append(index)
+            parenthesis_level += 1
+        elif char == ")":
+            closes_by_level.setdefault(parenthesis_level, []).append(index)
+            if parenthesis_stack:
+                matching_parenthesis[parenthesis_stack.pop()] = index
+            parenthesis_level -= 1
+
+        if char in {'"', "'"}:
+            previous = last_quote.get(char)
+            if previous is not None:
+                next_same_quote[previous] = index
+            last_quote[char] = index
+            quote_positions.append(index)
+            if index > 0 and content[index - 1].isspace():
+                title_openers.append((index, parenthesis_level, char))
+
+    if length in payload_start_set:
+        payload_starts.append(length)
+        payload_levels[length] = parenthesis_level
+
+    next_close = _next_position_by_level(payload_starts, payload_levels, closes_by_level)
+    terminal_marker_positions = set(quote_positions)
+    terminal_marker_positions.update(matching_parenthesis.values())
+    next_nonspace_after_marker: Dict[int, int] = {}
+    following_nonspace = length
+    for index in range(length - 1, -1, -1):
+        if index in terminal_marker_positions:
+            next_nonspace_after_marker[index] = following_nonspace
+        if not content[index].isspace():
+            following_nonspace = index
+
+    terminal_titles_by_level: Dict[int, list[int]] = {}
+    title_bounds: Dict[int, tuple[int, int]] = {}
+    for position, level, marker in title_openers:
+        title_end = (
+            matching_parenthesis.get(position, -1)
+            if marker == "("
+            else next_same_quote.get(position, -1)
+        )
+        if title_end < 0:
+            continue
+        close = next_nonspace_after_marker[title_end]
+        if close < length and content[close] == ")":
+            terminal_titles_by_level.setdefault(level, []).append(position)
+            title_bounds[position] = (position + 1, title_end)
+    next_title_opener = _next_position_by_level(
+        payload_starts,
+        payload_levels,
+        terminal_titles_by_level,
+    )
+
+    raw_matches: Dict[int, tuple[int, int, int, int]] = {}
+    for start in candidate_starts:
+        if start not in candidate_bounds:
+            continue
+        alt_end, payload_start = candidate_bounds[start]
+        close = next_close[payload_start]
+        title_opener = next_title_opener[payload_start]
+        title_start = -1
+        title_end = -1
+
+        if title_opener >= 0 and (close < 0 or title_opener < close):
+            title_start, title_end = title_bounds[title_opener]
+            close = next_nonspace_after_marker[title_end]
+            if close >= length or content[close] != ")":
+                continue
+        elif close <= payload_start:
+            continue
+
+        if block_ids[start] != block_ids[close]:
+            continue
+        raw_matches[start] = (alt_end, close, title_start, title_end)
+
+    suppressed: Set[int] = set()
+
+    # A syntactically confirmed title owns all text that starts in its interior.
+    # Never let mapping or filesystem success reinterpret title text as an image.
+    title_events_at: Dict[int, list[tuple[int, int]]] = {}
+    for owner, (_alt_end, _close, title_start, title_end) in raw_matches.items():
+        if title_start >= 0:
+            title_events_at.setdefault(title_start, []).append((title_end, owner))
+    title_events = [
+        (position, title_end, owner)
+        for position in range(length)
+        for title_end, owner in title_events_at.get(position, ())
+    ]
+    title_event_index = 0
+    furthest_title_end = -1
+    for start in candidate_starts:
+        raw_match = raw_matches.get(start)
+        if raw_match is None:
+            continue
+        while title_event_index < len(title_events) and title_events[title_event_index][0] <= start:
+            title_start, title_end, owner = title_events[title_event_index]
+            title_event_index += 1
+            if owner not in suppressed:
+                furthest_title_end = max(furthest_title_end, title_end)
+        if start < furthest_title_end:
+            suppressed.add(start)
+
+    selected_end = -1
+    for start in candidate_starts:
+        if start not in raw_matches or start in suppressed:
+            continue
+        alt_end, close, title_start, title_end = raw_matches[start]
+        if start < selected_end:
+            continue
+        selected_end = close + 1
+        payload_start = candidate_bounds[start][1]
+        yield _MarkdownImageMatch(
+            start,
+            close + 1,
+            start + 2,
+            alt_end,
+            payload_start,
+            close,
+            title_start,
+            title_end,
+        )
+
+
+def _owned_image_matches(
+    content: str,
+    protected: list[tuple[int, int]],
+) -> tuple[list[_MarkdownImageMatch], list[re.Match]]:
+    """Return non-overlapping Markdown and HTML images with outer syntax owning."""
+    html_candidates = list(_iter_unprotected_html_images(content, protected))
+    markdown_protected = _merge_sorted_ranges(
+        protected,
+        [(match.start(), match.end()) for match in html_candidates],
+    )
+    markdown_matches = list(_iter_markdown_images(content, markdown_protected))
+    html_excluded = _merge_sorted_ranges(
+        protected,
+        [(match.start, match.end) for match in markdown_matches],
+    )
+    html_matches = list(_iter_unprotected_html_images(content, html_excluded))
+    return markdown_matches, html_matches
+
+
+def _split_markdown_image_target(payload: str) -> tuple[str, str]:
+    """Return ``(destination, exact_title_suffix)`` for one image payload.
+
+    This scans once from the end instead of making the image regex choose an
+    ambiguous whitespace boundary. Callers can still prefer the full payload
+    when it names an existing file or sidecar key.
+    """
+    content_end = len(payload)
+    while content_end > 0 and payload[content_end - 1].isspace():
+        content_end -= 1
+    if content_end == 0:
+        return payload, ""
+
+    closing = payload[content_end - 1]
+    if closing not in {'"', "'", ")"}:
+        return payload, ""
+
+    slash = content_end - 2
+    while slash >= 0 and payload[slash] == "\\":
+        slash -= 1
+    if (content_end - slash - 2) % 2:
+        return payload, ""
+
+    opening = -1
+    if closing in {'"', "'"}:
+        index = content_end - 2
+        while index >= 0:
+            if payload[index] != closing:
+                index -= 1
+                continue
+            slash = index - 1
+            while slash >= 0 and payload[slash] == "\\":
+                slash -= 1
+            if (index - slash - 1) % 2 == 0:
+                opening = index
+                break
+            index = slash
+    else:
+        depth = 1
+        index = content_end - 2
+        while index >= 0:
+            char = payload[index]
+            if char not in "()":
+                index -= 1
+                continue
+            slash = index - 1
+            while slash >= 0 and payload[slash] == "\\":
+                slash -= 1
+            if (index - slash - 1) % 2:
+                index = slash
+                continue
+            if char == ")":
+                depth += 1
+            else:
+                depth -= 1
+                if depth == 0:
+                    opening = index
+                    break
+            index = slash
+
+    if opening <= 0:
+        return payload, ""
+
+    separator_start = opening
+    while separator_start > 0 and payload[separator_start - 1].isspace():
+        separator_start -= 1
+    if separator_start == opening or not payload[:separator_start].strip():
+        return payload, ""
+
+    return payload[:separator_start], payload[separator_start:]
+
+
+def _artifact_image_candidate(
+    image_ref: str,
+    md_dir: Path,
+    root: Path,
+    *,
+    strip_suffix: bool = True,
+) -> Optional[Path]:
+    # Query/fragment suffixes are reference syntax, not literal filenames. The
+    # title-ambiguity caller opts out for its compatibility-first exact probe.
+    ref = image_ref.strip()
+    if not ref or _is_remote_uri(ref):
+        return None
+
+    path_part = re.split(r"[?#]", ref, maxsplit=1)[0] if strip_suffix else ref
+    ref_path = Path(path_part)
+    if not path_part or ref_path.is_absolute():
+        return None
+
+    try:
+        candidate = (md_dir / ref_path).resolve()
+        candidate.relative_to(root)
+    except (OSError, ValueError):
+        return None
+    if candidate.parent != md_dir or not candidate.is_file():
+        return None
+    return candidate
 
 
 def build_artifact_image_mappings(root_dir: Path) -> Dict[str, Dict[str, str]]:
@@ -58,38 +479,41 @@ def build_artifact_image_mappings(root_dir: Path) -> Dict[str, Dict[str, str]]:
 
         protected = _protected_ranges(content)
 
-        refs = [(match.start(), match.group(2)) for match in _IMAGE_PATTERN.finditer(content)]
-        refs.extend((match.start(), match.group(2)) for match in HTML_IMG_PATTERN.finditer(content))
+        markdown_matches, html_matches = _owned_image_matches(content, protected)
+        refs = [(match.start, match.end, match, True) for match in markdown_matches]
+        refs.extend((match.start(), match.end(), match.group(2), False) for match in html_matches)
 
         file_mappings: Dict[str, str] = {}
         md_dir = md_path.parent.resolve()
-        for pos, original_ref in refs:
-            if any(start <= pos < end for start, end in protected):
-                continue
 
-            ref = original_ref.strip()
-            if not ref or _is_remote_uri(ref):
-                continue
-
-            # Queries/fragments are not part of the local filesystem path, but
-            # the exact original reference remains the mapping key used later.
-            path_part = re.split(r"[?#]", ref, maxsplit=1)[0]
-            ref_path = Path(path_part)
-            if not path_part or ref_path.is_absolute():
-                continue
-
-            try:
-                candidate = (md_dir / ref_path).resolve()
-                candidate.relative_to(root)
-            except (OSError, ValueError):
+        for _start, _end, reference, is_markdown in refs:
+            original_ref = (
+                content[reference.payload_start : reference.payload_end]
+                if is_markdown
+                else reference
+            )
+            destination, title = (
+                _split_markdown_image_target(original_ref) if is_markdown else (original_ref, "")
+            )
+            mapping_ref = original_ref
+            if title:
+                # Compatibility first: an existing literal filename such as
+                # ``photo.png (copy)`` remains a path, not a title-bearing ref.
+                candidate = _artifact_image_candidate(
+                    original_ref, md_dir, root, strip_suffix=False
+                )
+                if candidate is None:
+                    candidate = _artifact_image_candidate(destination, md_dir, root)
+                    if candidate is not None:
+                        mapping_ref = destination
+            else:
+                candidate = _artifact_image_candidate(original_ref, md_dir, root)
+            if candidate is None:
                 continue
 
             # The existing sidecar contract stores only the final filename and
             # rewrite_image_uris resolves it beside the markdown file.
-            if candidate.parent != md_dir or not candidate.is_file():
-                continue
-
-            file_mappings[original_ref] = candidate.name
+            file_mappings[mapping_ref] = candidate.name
 
         if file_mappings:
             mappings[md_path.relative_to(root).as_posix()] = file_mappings
@@ -217,7 +641,42 @@ def _protected_ranges(content: str):
 
         prev_blank = is_blank
 
-    return ranges
+    if not ranges:
+        return []
+
+    merged = []
+    # Fenced/indented lines and inline spans are appended in source order.
+    for start, end in ranges:
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _span_intersects_protected_ranges(
+    start: int,
+    end: int,
+    ranges: list[tuple[int, int]],
+) -> bool:
+    """Return whether ``[start, end)`` overlaps sorted, disjoint ``ranges``."""
+    low = 0
+    high = len(ranges)
+    while low < high:
+        middle = (low + high) // 2
+        if ranges[middle][1] <= start:
+            low = middle + 1
+        else:
+            high = middle
+    return low < len(ranges) and ranges[low][0] < end
+
+
+def _position_in_protected_ranges(
+    position: int,
+    ranges: list[tuple[int, int]],
+) -> bool:
+    """Return whether one source position is inside a protected Markdown span."""
+    return _span_intersects_protected_ranges(position, position + 1, ranges)
 
 
 async def _discover_mappings(
@@ -384,16 +843,12 @@ def _rewrite_content(
 
     protected = _protected_ranges(content)
 
-    def _in_protected(pos: int) -> bool:
-        for s, e in protected:
-            if s <= pos < e:
-                return True
-        return False
-
     def _mapped_uri(path: str) -> Optional[str]:
         """viking:// URI for *path* if the mapping covers it, else None."""
         image_name = mappings.get(path)
-        if image_name and image_name in available_images:
+        if image_name is None:
+            return None
+        if image_name in available_images:
             return f"{image_dir}/{image_name}"
         logger.warning(
             f"[image_rewrite] Image not found in VikingFS: path = {path}, "
@@ -401,43 +856,66 @@ def _rewrite_content(
         )
         return None
 
-    def replacer(match: re.Match) -> str:
+    def replace_markdown_image(match: _MarkdownImageMatch) -> Optional[str]:
         nonlocal rewrite_count
-        alt_text = match.group(1)
-        path = match.group(2)
-
-        # Skip image references that live inside code blocks / inline code.
-        if _in_protected(match.start()):
-            return match.group(0)
+        payload = content[match.payload_start : match.payload_end]
+        path = payload
+        title = ""
+        # The sidecar is the provenance boundary. ``available_images`` only
+        # validates mapped targets; it cannot safely infer an original ref.
+        if payload not in mappings:
+            destination, title_suffix = _split_markdown_image_target(payload)
+            if title_suffix:
+                path = destination
+                title = title_suffix
 
         if _is_remote_uri(path):
-            return match.group(0)
+            return None
 
         uri = _mapped_uri(path)
         if uri is None:
-            return match.group(0)
+            return None
+        alt_text = content[match.alt_start : match.alt_end]
         rewrite_count += 1
-        return f"![{alt_text}]({uri})"
+        return f"![{alt_text}]({uri}{title})"
 
-    def img_tag_replacer(match: re.Match) -> str:
+    def replace_html_image(match: re.Match) -> Optional[str]:
         nonlocal rewrite_count
         path = match.group(2)
 
-        if _in_protected(match.start()):
-            return match.group(0)
-
         if _is_remote_uri(path):
-            return match.group(0)
+            return None
 
         uri = _mapped_uri(path)
         if uri is None:
-            return match.group(0)
+            return None
         rewrite_count += 1
         return f"{match.group(1)}{uri}{match.group(3)}"
 
-    new_content = _IMAGE_PATTERN.sub(replacer, content)
+    parts = []
+    cursor = 0
+    markdown_matches, _ = _owned_image_matches(content, protected)
+    for match in markdown_matches:
+        replacement = replace_markdown_image(match)
+        if replacement is None:
+            continue
+        parts.append(content[cursor : match.start])
+        parts.append(replacement)
+        cursor = match.end
+    parts.append(content[cursor:])
+    new_content = "".join(parts)
     # The markdown pass may have shifted offsets; recompute protected ranges
     # against the updated text before rewriting <img> tags.
     protected = _protected_ranges(new_content)
-    new_content = HTML_IMG_PATTERN.sub(img_tag_replacer, new_content)
-    return new_content, rewrite_count
+    _, html_matches = _owned_image_matches(new_content, protected)
+    parts = []
+    cursor = 0
+    for match in html_matches:
+        replacement = replace_html_image(match)
+        if replacement is None:
+            continue
+        parts.append(new_content[cursor : match.start()])
+        parts.append(replacement)
+        cursor = match.end()
+    parts.append(new_content[cursor:])
+    return "".join(parts), rewrite_count
