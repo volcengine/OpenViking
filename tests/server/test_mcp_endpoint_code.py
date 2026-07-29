@@ -55,9 +55,9 @@ def _set_mcp_identity(service):
 
 
 def _patch_fs(monkeypatch, service, *, read=None, ls=None):
-    """Replace service.fs.read / .ls with async fakes."""
+    """Replace service.fs.read_visible / .ls with async fakes."""
     if read is not None:
-        monkeypatch.setattr(service.fs, "read", read)
+        monkeypatch.setattr(service.fs, "read_visible", read)
     if ls is not None:
         monkeypatch.setattr(service.fs, "ls", ls)
 

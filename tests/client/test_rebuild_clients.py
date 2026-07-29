@@ -204,23 +204,28 @@ async def test_local_client_reindex_forwards_to_service():
     )
 
 
-async def test_local_client_read_strips_memory_fields():
+async def test_local_client_read_uses_public_content_projection():
     client = object.__new__(LocalClient)
     client._ctx = object()
-    raw = 'line one\nline two\n\n<!-- MEMORY_FIELDS\n{"memory_type":"notes"}\n-->'
-    client._service = SimpleNamespace(fs=SimpleNamespace(read=AsyncMock(return_value=raw)))
+    client._service = SimpleNamespace(
+        fs=SimpleNamespace(read_visible=AsyncMock(return_value="line one\nline two"))
+    )
 
     uri = "viking://user/memories/notes/demo.md"
-    assert await client.read(uri) == "line one\nline two"
-    assert await client.read(uri, offset=4, limit=1) == ""
-    client._service.fs.read.assert_awaited_with(uri, ctx=client._ctx)
+    assert await client.read(uri, offset=1, limit=1) == "line one\nline two"
+    client._service.fs.read_visible.assert_awaited_once_with(
+        uri,
+        ctx=client._ctx,
+        offset=1,
+        limit=1,
+    )
 
 
 async def test_local_client_read_does_not_strip_resource_comments():
     client = object.__new__(LocalClient)
     client._ctx = object()
     raw = 'visible\n\n<!-- MEMORY_FIELDS\n{"looks_like":"user content"}\n-->'
-    client._service = SimpleNamespace(fs=SimpleNamespace(read=AsyncMock(return_value=raw)))
+    client._service = SimpleNamespace(fs=SimpleNamespace(read_visible=AsyncMock(return_value=raw)))
 
     assert await client.read("viking://resources/demo.md") == raw
 

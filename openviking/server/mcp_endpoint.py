@@ -376,7 +376,7 @@ async def read(uris: str | list[str]) -> str:
     async def _read_one(uri: str) -> str:
         async with semaphore:
             try:
-                body = await service.fs.read(uri, ctx=ctx)
+                body = await service.fs.read_visible(uri, ctx=ctx)
                 if isinstance(body, str) and body.strip():
                     return body
             except Exception:
@@ -918,7 +918,7 @@ async def code_outline(uri: str) -> str:
     service = get_service()
     ctx = _get_ctx()
     try:
-        content = await service.fs.read(uri, ctx=ctx)
+        content = await service.fs.read_visible(uri, ctx=ctx)
     except Exception as exc:
         return f"Error: failed to read {uri}: {exc}"
     if not isinstance(content, str):
@@ -951,7 +951,7 @@ async def code_search(query: str, uri: str) -> str:
     async def _read(u: str) -> Optional[tuple[str, str]]:
         async with semaphore:
             try:
-                body = await service.fs.read(u, ctx=ctx)
+                body = await service.fs.read_visible(u, ctx=ctx)
             except Exception as exc:
                 logger.warning("code_search: read failed for %s: %s", u, exc)
                 return None
@@ -979,7 +979,7 @@ async def code_expand(uri: str, symbol: str) -> str:
     service = get_service()
     ctx = _get_ctx()
     try:
-        content = await service.fs.read(uri, ctx=ctx)
+        content = await service.fs.read_visible(uri, ctx=ctx)
     except Exception as exc:
         return f"Error: failed to read {uri}: {exc}"
     if not isinstance(content, str):

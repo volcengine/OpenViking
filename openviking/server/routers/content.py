@@ -27,7 +27,6 @@ from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
-from openviking.session.memory.utils.content_visibility import visible_content
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, PermissionDeniedError
 from openviking_cli.utils import get_logger
@@ -151,12 +150,10 @@ async def read(
     service = get_service()
     uri = resolve_path_variables(uri)
     try:
-        result = await service.fs.read(
-            uri,
-            ctx=_ctx,
-            offset=offset if raw else 0,
-            limit=limit if raw else -1,
-        )
+        if raw:
+            result = await service.fs.read(uri, ctx=_ctx, offset=offset, limit=limit)
+        else:
+            result = await service.fs.read_visible(uri, ctx=_ctx, offset=offset, limit=limit)
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:
@@ -164,10 +161,6 @@ async def read(
         if mapped is not None:
             raise mapped from e
         raise
-
-    if not raw and isinstance(result, (bytes, str)):
-        text = result.decode("utf-8") if isinstance(result, bytes) else result
-        result = visible_content(text, uri=uri, offset=offset, limit=limit)
 
     return Response(status="ok", result=result)
 

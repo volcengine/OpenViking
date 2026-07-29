@@ -52,7 +52,7 @@ async def code_outline_endpoint(
     if not request.uri.startswith("viking://"):
         return Response(status="ok", result=_ERROR_NOT_VIKING).model_dump(exclude_none=True)
     service = get_service()
-    content = await service.fs.read(request.uri, ctx=_ctx)
+    content = await service.fs.read_visible(request.uri, ctx=_ctx)
     if not isinstance(content, str):
         return Response(status="ok", result=f"Error: {request.uri} is not text").model_dump(
             exclude_none=True
@@ -85,7 +85,7 @@ async def code_search_endpoint(
     async def _read_one(uri: str):
         async with semaphore:
             try:
-                body = await service.fs.read(uri, ctx=_ctx)
+                body = await service.fs.read_visible(uri, ctx=_ctx)
             except Exception as exc:
                 logger.warning("code_search: read failed for %s: %s", uri, exc)
                 return None, uri
@@ -117,7 +117,7 @@ async def code_expand_endpoint(
     if not request.symbol:
         return Response(status="ok", result="Error: empty symbol").model_dump(exclude_none=True)
     service = get_service()
-    content = await service.fs.read(request.uri, ctx=_ctx)
+    content = await service.fs.read_visible(request.uri, ctx=_ctx)
     if not isinstance(content, str):
         return Response(status="ok", result=f"Error: {request.uri} is not text").model_dump(
             exclude_none=True
