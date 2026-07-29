@@ -552,3 +552,60 @@ class TestRequiredIdentityDefaults:
         assert len(result.preferences) == 1
         assert result.preferences[0].user == "carol"
         assert result.preferences[0].content == "go"
+
+    def test_generated_page_id_does_not_collide_with_supplied_one(self):
+        """A generated id must never reuse an id the model already supplied.
+
+        Collisions make link resolution order-dependent, because links address
+        pages by id alone and two pages sharing an id are indistinguishable.
+        """
+        content = json.dumps(
+            {
+                "preferences": [
+                    # Model supplied exactly the first id the allocator would pick.
+                    {"page_id": 100, "user": "dana", "topic": "editor", "content": "vim"},
+                    {"user": "dana", "topic": "shell", "content": "zsh"},
+                ]
+            }
+        )
+        result, error = parse_json_with_stability(content, self._Operations)
+
+        assert error is None
+        assert len(result.preferences) == 2
+        page_ids = [p.page_id for p in result.preferences]
+        assert len(set(page_ids)) == 2, f"page_id collision: {page_ids}"
+        assert 100 in page_ids, "supplied id must be preserved"
+
+    def test_generated_ids_skip_all_supplied_ids_across_types(self):
+        """Allocation is global: ids taken in one memory type block another."""
+        content = json.dumps(
+            {
+                "preferences": [{"page_id": 101, "user": "e", "topic": "t", "content": "c"}],
+                "entities": [
+                    {"page_id": 100, "category": "hw", "name": "printer"},
+                    {"category": "hw", "name": "scanner"},
+                ],
+            }
+        )
+        result, error = parse_json_with_stability(content, self._Operations)
+
+        assert error is None
+        all_ids = [p.page_id for p in result.preferences] + [e.page_id for e in result.entities]
+        assert len(set(all_ids)) == len(all_ids), f"collision across types: {all_ids}"
+        assert {100, 101} <= set(all_ids), "supplied ids must be preserved"
+
+    def test_string_page_ids_are_honoured_when_avoiding_collisions(self):
+        """A supplied id given as a string still blocks that number."""
+        content = json.dumps(
+            {
+                "preferences": [
+                    {"page_id": "100", "user": "f", "topic": "t", "content": "c"},
+                    {"user": "f", "topic": "u", "content": "d"},
+                ]
+            }
+        )
+        result, error = parse_json_with_stability(content, self._Operations)
+
+        assert error is None
+        page_ids = [int(p.page_id) for p in result.preferences]
+        assert len(set(page_ids)) == 2, f"string id not honoured: {page_ids}"

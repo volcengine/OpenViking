@@ -374,6 +374,34 @@ _REQUIRED_FIELD_DEFAULTS = {
 _MIN_GENERATED_PAGE_ID = 100
 
 
+def _collect_existing_page_ids(parsed_data: Any, props: Any) -> set:
+    """Return every ``page_id`` the model already supplied in this payload.
+
+    Generated ids must not collide with these: a duplicate page_id makes link
+    resolution order-dependent, because ``links`` entries reference pages by id
+    and two pages sharing one id cannot be told apart.
+    """
+    seen = set()
+    for field in props:
+        value = parsed_data.get(field)
+        if not isinstance(value, list):
+            continue
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            page_id = item.get("page_id")
+            if isinstance(page_id, bool):
+                continue
+            if isinstance(page_id, int):
+                seen.add(page_id)
+            elif isinstance(page_id, str):
+                try:
+                    seen.add(int(page_id.strip()))
+                except (TypeError, ValueError):
+                    continue
+    return seen
+
+
 def _fill_required_identity_defaults(parsed_data: Any, model_class: Any) -> None:
     """Fill well-known missing REQUIRED fields on memory items, in place.
 
@@ -394,6 +422,9 @@ def _fill_required_identity_defaults(parsed_data: Any, model_class: Any) -> None
         return
     defs = schema.get("$defs") or {}
     props = schema.get("properties") or {}
+    # Never reuse an id the model already assigned: a collision would make link
+    # resolution order-dependent, since links reference pages by id alone.
+    used_page_ids = _collect_existing_page_ids(parsed_data, props)
     next_page_id = _MIN_GENERATED_PAGE_ID
     for field, spec in props.items():
         value = parsed_data.get(field)
@@ -410,7 +441,10 @@ def _fill_required_identity_defaults(parsed_data: Any, model_class: Any) -> None
                 if item.get(name) not in (None, ""):
                     continue
                 if name == "page_id":
+                    while next_page_id in used_page_ids:
+                        next_page_id += 1
                     item[name] = next_page_id
+                    used_page_ids.add(next_page_id)
                     next_page_id += 1
                 elif name in _REQUIRED_FIELD_DEFAULTS:
                     item[name] = _REQUIRED_FIELD_DEFAULTS[name]
