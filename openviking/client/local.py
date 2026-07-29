@@ -1038,6 +1038,9 @@ class LocalClient(BaseClient):
         return {
             "session_id": session_id,
             "message_count": len(session.messages),
+            # Post-write value so a commit policy can decide without a
+            # follow-up get_session round trip.
+            "pending_tokens": self._session_pending_tokens(session),
         }
 
     async def batch_add_messages(
@@ -1101,7 +1104,23 @@ class LocalClient(BaseClient):
             "session_id": session_id,
             "message_count": len(session.messages),
             "added": len(added),
+            # Post-write value so a commit policy can decide without a
+            # follow-up get_session round trip.
+            "pending_tokens": self._session_pending_tokens(session),
         }
+
+    @staticmethod
+    def _session_pending_tokens(session: Any) -> int:
+        """Read the post-write pending-token count from a session.
+
+        Returns 0 when the session object does not expose ``meta`` so callers
+        keep working against lightweight or legacy session implementations.
+        """
+        meta = getattr(session, "meta", None)
+        try:
+            return max(0, int(getattr(meta, "pending_tokens", 0) or 0))
+        except (TypeError, ValueError):
+            return 0
 
     def _resolve_message_peer_id(
         self,
