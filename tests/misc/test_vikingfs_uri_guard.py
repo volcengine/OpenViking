@@ -316,3 +316,90 @@ class TestVikingFSURITraversalGuard:
         entries = await fs._ls_entries("/local/default")
 
         assert [entry["name"] for entry in entries] == ["resources"]
+
+
+def _not_found_error() -> Exception:
+    """Build a canonical AGFS not-found error matching rm()'s is_not_found_error path."""
+    from openviking.pyagfs.exceptions import AGFSNotFoundError
+
+    return AGFSNotFoundError("missing", code="NOT_FOUND")
+
+
+class TestRmOrphanCleanupRecursiveFlag:
+    """Missing-path rm() must honour recursive=True vs recursive=False for descendant vectors."""
+
+    @pytest.mark.asyncio
+    async def test_non_recursive_missing_deletes_only_exact_target(self) -> None:
+        from openviking.pyagfs.exceptions import AGFSNotFoundError
+
+        fs = _make_viking_fs()
+        recorded: list[list[str]] = []
+
+        async def _fake_delete(uris, ctx=None):
+            recorded.append(list(uris))
+
+        async def _fake_collect(target_uri, ctx=None):
+            # Two "indexed" children the caller must NOT touch when recursive=False.
+            return [
+                "viking://resources/foo/child.md",
+                "viking://resources/foo/nested/deep.md",
+            ]
+
+        fs._delete_from_vector_store = _fake_delete
+        fs._collect_child_uris_from_vector_store = _fake_collect
+        fs._collect_uris = AsyncMock(return_value=[])
+        fs._ctx_or_default = lambda ctx: ctx or _user_ctx()
+        fs._get_vector_store = MagicMock(return_value=None)
+        fs._ensure_delete_access = MagicMock()
+        fs._uri_to_path = MagicMock(return_value="/local/default/resources/foo")
+        fs._path_to_uri = MagicMock(return_value="viking://resources/foo")
+        fs.agfs.stat = AsyncMock(side_effect=AGFSNotFoundError("missing"))
+
+        result = await fs.rm("viking://resources/foo", recursive=False)
+
+        assert result["estimated_deleted_count"] == 0
+        assert len(recorded) == 1, f"expected exactly one delete call, got {recorded}"
+        deleted_uris = recorded[0]
+        # Exact target + any _collect_uris output (mocked empty). No children.
+        assert deleted_uris == ["viking://resources/foo"]
+        # _collect_child_uris_from_vector_store should not even be invoked.
+        fs._collect_child_uris_from_vector_store = _fake_collect  # keep reference happy
+
+    @pytest.mark.asyncio
+    async def test_recursive_missing_deletes_exact_target_and_descendants(self) -> None:
+        from openviking.pyagfs.exceptions import AGFSNotFoundError
+
+        fs = _make_viking_fs()
+        recorded: list[list[str]] = []
+
+        async def _fake_delete(uris, ctx=None):
+            recorded.append(list(uris))
+
+        child_uris = [
+            "viking://resources/foo/child.md",
+            "viking://resources/foo/nested/deep.md",
+        ]
+
+        async def _fake_collect(target_uri, ctx=None):
+            return list(child_uris)
+
+        fs._delete_from_vector_store = _fake_delete
+        fs._collect_child_uris_from_vector_store = _fake_collect
+        fs._collect_uris = AsyncMock(return_value=[])
+        fs._ctx_or_default = lambda ctx: ctx or _user_ctx()
+        fs._get_vector_store = MagicMock(return_value=None)
+        fs._ensure_delete_access = MagicMock()
+        fs._uri_to_path = MagicMock(return_value="/local/default/resources/foo")
+        fs._path_to_uri = MagicMock(return_value="viking://resources/foo")
+        fs.agfs.stat = AsyncMock(side_effect=AGFSNotFoundError("missing"))
+
+        result = await fs.rm("viking://resources/foo", recursive=True)
+
+        assert result["estimated_deleted_count"] == 0
+        assert len(recorded) == 1
+        deleted_uris = recorded[0]
+        assert "viking://resources/foo" in deleted_uris
+        for child in child_uris:
+            assert child in deleted_uris, (
+                f"recursive=True should clean descendant {child}; got {deleted_uris}"
+            )

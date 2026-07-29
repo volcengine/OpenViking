@@ -653,12 +653,18 @@ class VikingFS:
             real_ctx = self._ctx_or_default(ctx)
             uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
             uris_to_delete.append(target_uri)
-            orphan_child_uris = await self._collect_child_uris_from_vector_store(
-                target_uri, ctx=ctx
-            )
-            for child_uri in orphan_child_uris:
-                if child_uri not in uris_to_delete:
-                    uris_to_delete.append(child_uri)
+            if recursive:
+                # Only walk descendant vector URIs when the caller requested
+                # recursive deletion. With recursive=False we must not delete
+                # indexed children we never enumerated via the filesystem (the
+                # non-recursive directory guard never runs for missing AGFS
+                # entries, so an explicit flag guard is required here).
+                orphan_child_uris = await self._collect_child_uris_from_vector_store(
+                    target_uri, ctx=ctx
+                )
+                for child_uri in orphan_child_uris:
+                    if child_uri not in uris_to_delete:
+                        uris_to_delete.append(child_uri)
             estimated_count = await _estimate_deleted_count(path, real_ctx)
             await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
             logger.info(f"[VikingFS] rm target not found, cleaned orphan index: {uri}")
