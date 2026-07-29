@@ -62,7 +62,7 @@ def extract_skeleton_result(
         if is_skeleton_useful(text):
             return SkeletonExtractionResult(text, "aider_repomap", False, "maintained tags query")
         reason = "tags query produced no useful skeleton"
-        logger.info("Code skeleton requires LLM fallback for '%s': %s", file_name, reason)
+        logger.debug("Code skeleton requires LLM fallback for '%s': %s", file_name, reason)
         return SkeletonExtractionResult(None, "llm", True, reason)
     else:
         reasons.append("no maintained tags query")
@@ -73,5 +73,5 @@ def extract_skeleton_result(
     reasons.append("process produced no useful skeleton")
 
     reason = "; ".join(reasons)
-    logger.info("Code skeleton requires LLM fallback for '%s': %s", file_name, reason)
+    logger.debug("Code skeleton requires LLM fallback for '%s': %s", file_name, reason)
     return SkeletonExtractionResult(None, "llm", True, reason)
