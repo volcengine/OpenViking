@@ -636,6 +636,29 @@ class _SpyExecutor:
         return 0
 
 
+class _MemTaskStore:
+    async def create(self, task):
+        return None
+
+    async def update(self, task):
+        return None
+
+    async def get(self, task_id, *, account_id=None, user_id=None):
+        return None
+
+    async def list(self, account_id, *, user_id=None):
+        return []
+
+    async def delete(self, task_id, *, account_id, user_id=None):
+        return None
+
+
+class _FailingReindexExecutor(_SpyExecutor):
+    async def execute(self, *, uri, mode, wait, ctx):
+        self.calls.append(("reindex_file", uri))
+        raise RuntimeError("vector backend unavailable")
+
+
 @pytest.mark.asyncio
 async def test_restore_schedules_reindex_for_derived_only_change(vfs, monkeypatch):
     """When a restore only changes a directory `.abstract.md` (source file
@@ -854,22 +877,6 @@ async def test_restore_returns_pollable_task_id(vfs, monkeypatch):
         set_task_tracker,
     )
 
-    class _MemTaskStore:
-        async def create(self, task):
-            return None
-
-        async def update(self, task):
-            return None
-
-        async def get(self, task_id, *, account_id=None, user_id=None):
-            return None
-
-        async def list(self, account_id, *, user_id=None):
-            return []
-
-        async def delete(self, task_id, *, account_id, user_id=None):
-            return None
-
     set_task_tracker(TaskTracker(store=_MemTaskStore()))
     try:
         ctx = _make_ctx(account="acct_taskid")
@@ -899,6 +906,51 @@ async def test_restore_returns_pollable_task_id(vfs, monkeypatch):
         assert task.task_type == "snapshot_restore_reindex"
         assert task.status.value == "completed"
         assert ("reindex_file", "viking://resources/proj/x.md") in spy.calls
+    finally:
+        set_task_tracker(None)
+
+
+@pytest.mark.asyncio
+async def test_restore_reindex_task_fails_when_vector_rebuild_fails(vfs, monkeypatch):
+    """A failed vector rebuild must not make a restore task look complete."""
+    executor = _FailingReindexExecutor()
+
+    import openviking.service.reindex_executor as reindex_mod
+
+    monkeypatch.setattr(reindex_mod, "get_reindex_executor", lambda: executor)
+
+    from openviking.service.task_tracker import TaskTracker, set_task_tracker
+
+    set_task_tracker(TaskTracker(store=_MemTaskStore()))
+    try:
+        ctx = _make_ctx(account="acct_failed_rebuild")
+        await vfs.write_file("viking://resources/proj/x.md", b"v1", ctx=ctx)
+        c1 = await vfs.commit(message="v1", ctx=ctx)
+        await vfs.write_file("viking://resources/proj/x.md", b"v2", ctx=ctx)
+        await vfs.commit(message="v2", ctx=ctx)
+
+        result = await vfs.restore(
+            project_dir="viking://resources/proj",
+            source_commit=c1["commit_oid"],
+            ctx=ctx,
+        )
+        task_id = result.get("task_id")
+        assert task_id
+
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        from openviking.service.task_tracker import get_task_tracker
+
+        task = await get_task_tracker().get(
+            task_id,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        )
+        assert task is not None
+        assert task.status.value == "failed"
+        assert task.error == "1 of 1 vector rebuild tasks failed"
+        assert "vector backend unavailable" not in task.error
     finally:
         set_task_tracker(None)
 
