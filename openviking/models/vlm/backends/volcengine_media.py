@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from openviking.utils.media_limits import MAX_MEDIA_FILE_BYTES
 from openviking.utils.model_retry import retry_async
 
 if TYPE_CHECKING:
@@ -22,7 +23,6 @@ MEDIA_EXTENSIONS = {
     "audio": frozenset({".mp3", ".wav", ".aac", ".m4a"}),
     "video": frozenset({".mp4", ".avi", ".mov"}),
 }
-MAX_MEDIA_FILE_BYTES = 512 * 1024 * 1024
 _CLEANUP_TIMEOUT_SECONDS = 5.0
 _RETRYABLE_HTTP_STATUSES = frozenset({429, 500, 502, 503, 504})
 _PERMANENT_429_MARKERS = (

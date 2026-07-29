@@ -262,6 +262,28 @@ async def test_media_summary_rejects_file_that_grows_past_limit(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_media_summary_rejects_unknown_size_past_hard_limit(monkeypatch):
+    fs = _FS()
+    fs.stat.return_value = {"size": 0}
+    fs.read = AsyncMock(side_effect=[b"a" * 4, b"b" * 4, b"c", b""])
+    client = _CapturingPathClient()
+    model_config = SimpleNamespace(get_client_instance=lambda: client)
+    monkeypatch.setattr(media_utils, "_MEDIA_READ_CHUNK_BYTES", 4)
+    monkeypatch.setattr(media_utils, "MAX_MEDIA_FILE_BYTES", 8, raising=False)
+    monkeypatch.setattr(media_utils, "get_viking_fs", lambda: fs)
+    monkeypatch.setattr(media_utils, "get_openviking_config", lambda: _config(model_config))
+
+    result = await media_utils.generate_video_summary(
+        "viking://resources/video/unknown-size.mp4",
+        "unknown-size.mp4",
+    )
+
+    assert result == {"name": "unknown-size.mp4", "summary": ""}
+    assert fs.read.await_count == 3
+    assert client.path_calls == 0
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("first_chunk", [b"", "not-bytes"])
 async def test_media_summary_rejects_empty_or_non_binary_chunk(monkeypatch, first_chunk):
     fs = _FS()

@@ -12,6 +12,7 @@ from openviking.core.path_variables import CalendarVariableProvider
 from openviking.parse.parsers.constants import TYPESCRIPT_MPEG_TS_EXTENSION
 from openviking.prompts import render_prompt
 from openviking.storage.viking_fs import get_viking_fs
+from openviking.utils.media_limits import MAX_MEDIA_FILE_BYTES
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
@@ -390,6 +391,8 @@ async def _write_media_to_path(
             if not chunk:
                 break
             offset += len(chunk)
+            if offset > MAX_MEDIA_FILE_BYTES:
+                raise _MediaTooLargeError("Media content exceeds the hard size limit")
             if expected_size > 0 and offset > expected_size:
                 raise _MediaTooLargeError("Media content exceeds the size reported by storage")
             output.write(chunk)
