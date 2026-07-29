@@ -673,10 +673,15 @@ class SemanticProcessor(DequeueHandlerBase):
                 paths_to_vectorize = changed_files
             else:
                 paths_to_vectorize = set(file_paths)
+            # Only vectorize files that carry substantive content. Non-substantive
+            # entries (heading-only, empty) produce misleading retrieval vectors
+            # and are skipped to avoid hallucinated recall.
             file_vectorize_items = [
                 (file_path, summary)
                 for file_path, summary in zip(file_paths, file_summaries, strict=False)
-                if file_path in paths_to_vectorize and summary is not None
+                if file_path in paths_to_vectorize
+                and summary is not None
+                and summary.get("has_substantive_content", True)
             ]
             generated_content = await self._generate_overview(
                 dir_uri, completed_summaries, [], llm_sem=llm_sem
@@ -727,6 +732,9 @@ class SemanticProcessor(DequeueHandlerBase):
                     semantic_msg_id=msg.id,
                     preserve_existing_created_at=True,
                 )
+            # Directory-level overview/abstract vectors are always emitted so
+            # directory nodes remain navigable; only file-level vectors are
+            # suppressed for non-substantive entries.
             await self._vectorize_directory(
                 uri=dir_uri,
                 context_type="memory",
@@ -1053,6 +1061,34 @@ class SemanticProcessor(DequeueHandlerBase):
         except Exception as e:
             logger.error(f"[SyncDiff] Failed to rewrite image URIs for {target_uri}: {e}")
 
+    @staticmethod
+    def _has_substantive_markdown_body(content: str) -> bool:
+        """Detect whether Markdown content contains substantive body text.
+
+        Returns False for empty, whitespace-only, heading-only, separator-only,
+        and blank-only documents. Returns True whenever a non-heading, non-
+        separator, non-blank real body line exists (even a single short
+        sentence in any language), so legitimate short documents keep the VLM
+        summarization path.
+        """
+        if not content:
+            return False
+        heading_re = re.compile(r"^\s{0,3}#{1,6}(?:\s|$)")
+        setext_re = re.compile(r"^\s*(?:=+\s*|-+\s*)\s*$")
+        thematic_re = re.compile(r"^\s*(?:(?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,})\s*$")
+        for raw in content.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            if heading_re.match(raw):
+                continue
+            if setext_re.match(raw) and len(line) >= 2:
+                continue
+            if thematic_re.match(raw):
+                continue
+            return True
+        return False
+
     async def _generate_text_summary(
         self,
         file_path: str,
@@ -1073,29 +1109,33 @@ class SemanticProcessor(DequeueHandlerBase):
 
         full_content = content or ""
 
+        file_type = self._detect_file_type(file_name)
+        has_substantive_content = True
+        if file_type != FILE_TYPE_CODE:
+            has_substantive_content = self._has_substantive_markdown_body(full_content)
+
         def result(summary: str) -> Dict[str, Any]:
-            return {"name": file_name, "summary": summary, "content": full_content}
+            return {
+                "name": file_name,
+                "summary": summary,
+                "content": full_content,
+                "has_substantive_content": has_substantive_content,
+            }
 
         # Limit content length
         max_chars = get_openviking_config().semantic.max_file_content_chars
-        if len(content) > max_chars:
+        if content and len(content) > max_chars:
             content = content[:max_chars] + "\n...(truncated)"
 
-        # Check for near-empty content to prevent hallucinated L0/L1 summaries.
-        # Empty or title-only documents (e.g. just a heading with no body) cause
-        # the VLM to hallucinate content. Skip VLM when there is insufficient
-        # actual text to summarize.
-        _meaningful_chars = 0
-        if content:
-            _stripped = re.sub(r"#+\s*", "", content)
-            _stripped = re.sub(r"[*_`~\-><!\[\]()]", "", _stripped)
-            _meaningful_chars = len(_stripped.strip())
-        if _meaningful_chars < 50:
+        # Prevent hallucinated L0/L1 summaries for documents without body text.
+        # Empty, whitespace-only, heading-only, and separator-only Markdown docs
+        # carry no real information; skip VLM so it cannot invent content.
+        # Code files use the existing skeleton/LLM path regardless: a short
+        # source file is still substantive.
+        if file_type != FILE_TYPE_CODE and not has_substantive_content:
             logger.warning(
-                "Skipping VLM summarization for near-empty document: %s "
-                "(%d chars of meaningful content)",
+                "Skipping VLM summarization for document with no substantive body: %s",
                 file_path,
-                _meaningful_chars,
             )
             return result("")
 
@@ -1107,9 +1147,6 @@ class SemanticProcessor(DequeueHandlerBase):
         from openviking.session.memory.utils.language import resolve_output_language
 
         output_language = resolve_output_language(content)
-
-        # Detect file type and select appropriate prompt
-        file_type = self._detect_file_type(file_name)
 
         if file_type == FILE_TYPE_CODE:
             code_mode = get_openviking_config().code.code_summary_mode
@@ -1328,7 +1365,7 @@ class SemanticProcessor(DequeueHandlerBase):
     async def _generate_overview(
         self,
         dir_uri: str,
-        file_summaries: List[Dict[str, str]],
+        file_summaries: List[Dict[str, Any]],
         children_abstracts: List[Dict[str, str]],
         llm_sem: Optional[asyncio.Semaphore] = None,
     ) -> str:
@@ -1339,67 +1376,89 @@ class SemanticProcessor(DequeueHandlerBase):
         summaries into batches, generates a partial overview per batch, then
         merges the partials into a final overview.
 
+        Entries with has_substantive_content=False are filtered out of the LLM
+        prompt. When no substantive entries remain a deterministic neutral
+        overview is returned without invoking the model.
+
         Args:
             dir_uri: Directory URI
-            file_summaries: File summary list
+            file_summaries: File summary list (may carry has_substantive_content)
             children_abstracts: Subdirectory summary list
 
         Returns:
-            Markdown overview content generated by the model.
+            Markdown overview content generated by the model or deterministic fallback.
         """
 
         config = get_openviking_config()
         vlm = config.vlm
         semantic = config.semantic
+        dir_name = dir_uri.split("/")[-1]
+
+        # Filter file summaries: keep only entries that carry substantive content.
+        # Media/code paths default to substantive=True; only doc/text items that
+        # were explicitly marked non-substantive are dropped.
+        substantive_files: List[Dict[str, Any]] = [
+            item for item in file_summaries if item.get("has_substantive_content", True)
+        ]
+        substantive_children: List[Dict[str, str]] = list(children_abstracts)
+
+        has_any_substantive = bool(substantive_files or substantive_children)
+        if not has_any_substantive:
+            logger.info(
+                "Directory %s has no substantive file or child entries; "
+                "returning deterministic neutral overview",
+                dir_uri,
+            )
+            return f"# {dir_name}\n\nNo substantive entries to summarize."
 
         if not vlm.is_available():
             logger.warning("VLM not available, using default overview")
-            return f"# {dir_uri.split('/')[-1]}\n\n[Directory overview is not ready]"
+            return f"# {dir_name}\n\n[Directory overview is not ready]"
 
         from openviking.session.memory.utils.language import resolve_output_language
 
-        # Build file index mapping and summary string
-        file_index_map = {}
-        file_summaries_lines = []
-        for idx, item in enumerate(file_summaries, 1):
+        # Build file index mapping and summary string using substantive entries.
+        file_index_map: Dict[int, str] = {}
+        file_summaries_lines: List[str] = []
+        for idx, item in enumerate(substantive_files, 1):
             file_index_map[idx] = item["name"]
             file_summaries_lines.append(f"[{idx}] {item['name']}: {item['summary']}")
         file_summaries_str = "\n".join(file_summaries_lines) if file_summaries_lines else "None"
 
         # Build subdirectory summary string
         children_abstracts_str = (
-            "\n".join(f"- {item['name']}/: {item['abstract']}" for item in children_abstracts)
-            if children_abstracts
+            "\n".join(f"- {item['name']}/: {item['abstract']}" for item in substantive_children)
+            if substantive_children
             else "None"
         )
 
-        language_source_parts = []
-        if file_summaries:
+        language_source_parts: List[str] = []
+        if substantive_files:
             language_source_parts.append(file_summaries_str)
-        if children_abstracts:
+        if substantive_children:
             language_source_parts.append(children_abstracts_str)
         if not language_source_parts:
-            language_source_parts.append(dir_uri.split("/")[-1])
+            language_source_parts.append(dir_name)
         output_language = resolve_output_language("\n".join(language_source_parts), config=config)
 
         # Budget guard: check if prompt would be oversized
         estimated_size = len(file_summaries_str) + len(children_abstracts_str)
         over_budget = estimated_size > semantic.max_overview_prompt_chars
-        entry_count = len(file_summaries) + len(children_abstracts)
+        entry_count = len(substantive_files) + len(substantive_children)
         many_entries = entry_count > semantic.overview_batch_size
 
         if over_budget and many_entries:
             # Many entries, oversized prompt → batch and merge
             logger.info(
                 f"Overview prompt for {dir_uri} exceeds budget "
-                f"({estimated_size} chars, {len(file_summaries)} files, "
-                f"{len(children_abstracts)} subdirectories). "
+                f"({estimated_size} chars, {len(substantive_files)} files, "
+                f"{len(substantive_children)} subdirectories). "
                 f"Splitting into batches of {semantic.overview_batch_size}."
             )
             overview = await self._batched_generate_overview(
                 dir_uri,
-                file_summaries,
-                children_abstracts,
+                substantive_files,
+                substantive_children,
                 file_index_map,
                 llm_sem=llm_sem,
                 output_language=output_language,
@@ -1408,14 +1467,14 @@ class SemanticProcessor(DequeueHandlerBase):
             # Few files but long summaries → truncate summaries to fit budget
             logger.info(
                 f"Overview prompt for {dir_uri} exceeds budget "
-                f"({estimated_size} chars) with {len(file_summaries)} files. "
+                f"({estimated_size} chars) with {len(substantive_files)} files. "
                 f"Truncating summaries to fit."
             )
             budget = semantic.max_overview_prompt_chars
             budget -= len(children_abstracts_str)
-            per_file = max(100, budget // max(len(file_summaries), 1))
+            per_file = max(100, budget // max(len(substantive_files), 1))
             truncated_lines = []
-            for idx, item in enumerate(file_summaries, 1):
+            for idx, item in enumerate(substantive_files, 1):
                 summary = item["summary"][:per_file]
                 truncated_lines.append(f"[{idx}] {item['name']}: {summary}")
             file_summaries_str = "\n".join(truncated_lines)
