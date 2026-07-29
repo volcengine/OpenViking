@@ -7,13 +7,58 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LANGFUSE_DIR="$SCRIPT_DIR/langfuse"
 LANGFUSE_ENV_FILE="$LANGFUSE_DIR/.env"
 
-if ! command -v openssl >/dev/null 2>&1; then
-  echo "Error: openssl is required to generate Langfuse deployment secrets."
+RESET_EXISTING=false
+if [ "$#" -gt 1 ]; then
+  echo "Error: expected at most one argument." >&2
+  echo "Usage: $0 [--reset]" >&2
+  exit 2
+fi
+
+case "${1:-}" in
+  "")
+    ;;
+  --reset)
+    RESET_EXISTING=true
+    ;;
+  -h|--help)
+    echo "Usage: $0 [--reset]"
+    echo "  --reset  Delete existing local Langfuse data and generate new credentials."
+    exit 0
+    ;;
+  *)
+    echo "Error: unsupported argument '$1'." >&2
+    echo "Usage: $0 [--reset]" >&2
+    exit 2
+    ;;
+esac
+
+cd "$LANGFUSE_DIR"
+
+if docker compose version >/dev/null 2>&1; then
+  COMPOSE_CMD=(docker compose)
+elif command -v docker-compose >/dev/null 2>&1; then
+  COMPOSE_CMD=(docker-compose)
+else
+  echo "Error: neither 'docker compose' nor 'docker-compose' is available."
   exit 1
 fi
 
-if [ ! -e "$LANGFUSE_ENV_FILE" ]; then
+generate_env_file() {
+  local target_file="$1"
+  if ! command -v openssl >/dev/null 2>&1; then
+    echo "Error: openssl is required to generate Langfuse deployment secrets." >&2
+    return 1
+  fi
+
   umask 077
+  local postgres_password
+  local clickhouse_password
+  local minio_user
+  local minio_password
+  local redis_password
+  local langfuse_public_key
+  local langfuse_secret_key
+  local admin_password
   postgres_password="$(openssl rand -hex 24)"
   clickhouse_password="$(openssl rand -hex 24)"
   minio_user="minio-$(openssl rand -hex 8)"
@@ -41,20 +86,68 @@ if [ ! -e "$LANGFUSE_ENV_FILE" ]; then
     "LANGFUSE_INIT_PROJECT_PUBLIC_KEY=$langfuse_public_key" \
     "LANGFUSE_INIT_PROJECT_SECRET_KEY=$langfuse_secret_key" \
     "LANGFUSE_INIT_USER_PASSWORD=$admin_password" \
-    > "$LANGFUSE_ENV_FILE"
-  chmod 600 "$LANGFUSE_ENV_FILE"
-  echo "Generated unique Langfuse credentials in $LANGFUSE_ENV_FILE"
+    > "$target_file"
+  chmod 600 "$target_file"
+}
+
+COMPOSE_PROJECT="${COMPOSE_PROJECT_NAME:-$(basename "$LANGFUSE_DIR")}"
+existing_postgres_volumes="$(
+  docker volume ls \
+    --quiet \
+    --filter "label=com.docker.compose.project=$COMPOSE_PROJECT" \
+    --filter "label=com.docker.compose.volume=langfuse_postgres_data"
+)"
+
+if [ ! -e "$LANGFUSE_ENV_FILE" ] \
+  && [ -n "$existing_postgres_volumes" ] \
+  && [ "$RESET_EXISTING" = false ]; then
+  echo "Error: existing Langfuse data was detected, but $LANGFUSE_ENV_FILE is missing." >&2
+  echo "Refusing to generate new credentials because they would not match the existing data." >&2
+  echo "" >&2
+  echo "To preserve the deployment, restore an .env with its current credentials and" >&2
+  echo "complete a service-specific credential and encryption-key migration." >&2
+  echo "To discard all local Langfuse data, rerun this script with --reset." >&2
+  exit 1
 fi
 
-cd "$LANGFUSE_DIR"
+temporary_env_file=""
+cleanup_temporary_env() {
+  if [ -n "$temporary_env_file" ] && [ -e "$temporary_env_file" ]; then
+    rm -f -- "$temporary_env_file"
+  fi
+}
+trap cleanup_temporary_env EXIT
 
-if docker compose version >/dev/null 2>&1; then
-  COMPOSE_CMD=(docker compose)
-elif command -v docker-compose >/dev/null 2>&1; then
-  COMPOSE_CMD=(docker-compose)
-else
-  echo "Error: neither 'docker compose' nor 'docker-compose' is available."
-  exit 1
+if [ "$RESET_EXISTING" = true ]; then
+  temporary_env_file="$(mktemp "$LANGFUSE_DIR/.env.tmp.XXXXXX")"
+  generate_env_file "$temporary_env_file"
+  echo "⚠️  Reset requested: deleting existing local Langfuse containers and data volumes."
+  if [ -e "$LANGFUSE_ENV_FILE" ]; then
+    "${COMPOSE_CMD[@]}" down --volumes --remove-orphans
+  else
+    "${COMPOSE_CMD[@]}" --env-file "$temporary_env_file" down --volumes --remove-orphans
+  fi
+
+  remaining_postgres_volumes="$(
+    docker volume ls \
+      --quiet \
+      --filter "label=com.docker.compose.project=$COMPOSE_PROJECT" \
+      --filter "label=com.docker.compose.volume=langfuse_postgres_data"
+  )"
+  if [ -n "$remaining_postgres_volumes" ]; then
+    echo "Error: the existing Langfuse Postgres volume was not removed; reset aborted." >&2
+    exit 1
+  fi
+
+  mv -f -- "$temporary_env_file" "$LANGFUSE_ENV_FILE"
+  temporary_env_file=""
+  echo "Generated new Langfuse credentials in $LANGFUSE_ENV_FILE"
+elif [ ! -e "$LANGFUSE_ENV_FILE" ]; then
+  temporary_env_file="$(mktemp "$LANGFUSE_DIR/.env.tmp.XXXXXX")"
+  generate_env_file "$temporary_env_file"
+  mv -f -- "$temporary_env_file" "$LANGFUSE_ENV_FILE"
+  temporary_env_file=""
+  echo "Generated unique Langfuse credentials in $LANGFUSE_ENV_FILE"
 fi
 
 echo "🚀 Starting Langfuse..."

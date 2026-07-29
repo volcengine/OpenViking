@@ -506,6 +506,10 @@ Enable Langfuse with:
 The repository includes `deploy/docker/deploy_langfuse.sh` for a loopback-only
 local deployment. On first launch it generates unique credentials in a
 Git-ignored, mode-`0600` `deploy/docker/langfuse/.env`.
+When upgrading an older deployment, the script refuses to generate new
+credentials over an existing data volume. Preserve the current credentials and
+migrate them deliberately, or run `deploy_langfuse.sh --reset` to delete all
+local Langfuse data and start clean.
 
 ## Security Notes
 

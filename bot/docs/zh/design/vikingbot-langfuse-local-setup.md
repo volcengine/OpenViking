@@ -51,6 +51,27 @@ The script creates `bot/deploy/docker/langfuse/.env` with mode `0600` on first
 launch, then starts the stack from
 `bot/deploy/docker/langfuse/docker-compose.yml`. The file is ignored by Git.
 
+### Upgrading an Existing Local Deployment
+
+Older versions used repository-known defaults directly from Docker Compose and
+did not create `.env`. Their named volumes retain those database and encryption
+credentials. Generating unrelated values on upgrade would prevent Langfuse from
+using the existing data, so the launcher detects this state and stops.
+
+If the data must be preserved, do not reset the deployment. Restore an `.env`
+containing the credentials currently used by the stack, back up the data, and
+perform the appropriate database and Langfuse credential/encryption migration.
+
+For disposable local data, request an explicit clean reset:
+
+```bash
+cd bot/deploy/docker
+./deploy_langfuse.sh --reset
+```
+
+`--reset` deletes the local Langfuse containers and all Compose-managed data
+volumes before generating new credentials. This operation cannot be undone.
+
 Expected local endpoints and credentials:
 
 - Web UI: `http://localhost:3000`
@@ -227,6 +248,13 @@ Typical causes are:
 3. A company network policy blocks anonymous registry access
 
 Resolve Docker connectivity first, then rerun the deployment script.
+
+### 9.4 Existing Data Detected but `.env` Is Missing
+
+The launcher intentionally refuses to start because freshly generated
+credentials would not match the existing persistent data. Choose one of the
+upgrade paths in [Upgrading an Existing Local Deployment](#upgrading-an-existing-local-deployment);
+do not create arbitrary replacement credentials for the existing volumes.
 
 ---
 

@@ -505,6 +505,9 @@ Gateway 的 Bot API 前缀为 `/bot/v1`：
 
 仓库内提供了 `deploy/docker/deploy_langfuse.sh`，用于仅绑定回环地址的本地部署。首次启动时，
 脚本会在 Git 忽略且权限为 `0600` 的 `deploy/docker/langfuse/.env` 中生成唯一凭据。
+升级旧部署时，如果脚本发现已有数据卷但缺少 `.env`，会拒绝生成不匹配的新凭据。需要保留数据时，
+请恢复现有凭据并按服务要求迁移；如可丢弃全部本地 Langfuse 数据，可运行
+`deploy_langfuse.sh --reset` 后重新初始化。
 
 ## 安全提示
 
