@@ -1,0 +1,409 @@
+# OpenViking Assets
+
+> Experimental. The `openviking-assets/1` protocol and CLI behavior may change in later releases.
+
+OpenViking Assets describes what a knowledge base should contain as declarative files. A team
+maintains its ingestible sources in a Catalog and creates Manifests that select named assets for
+different use cases. Applying a Manifest creates or updates each resource and stores the mapping
+between assets and `viking://` resources locally.
+
+It is intended for multi-repository code knowledge bases, shared documentation sets, and other
+resource collections that need to be reproducible and continuously refreshed.
+
+## How It Differs from Other Resource Operations
+
+| Capability | Description |
+| --- | --- |
+| `ov add-resource <source>` | Adds or updates one resource; it describes one operation. |
+| OpenViking Assets | Declares the expected composition of a resource set for review, sharing, and repeated application. |
+| OVPack | Exports or imports an existing data snapshot, including content and optional index data. |
+
+OpenViking Assets does not replace the existing ingestion pipeline. Git fetching, parsing,
+semantic extraction, vectorization, and Watch refreshes still use `add_resource` and server-side
+connectors. Assets adds only the declaration, resolution, and per-asset orchestration layers.
+
+## Conceptual Model
+
+OpenViking Assets has three primary objects:
+
+- **Catalog**: the inventory of sources a team can ingest, including source locations, branches,
+  default refresh intervals, and credential aliases.
+- **Manifest**: a list of asset names selected for one build.
+- **State**: the result of the last Manifest application and the mapping from assets to
+  `viking://` resources.
+
+```text
+assets.yaml + manifest.yaml
+          |
+          v
+Server resolves and validates openviking-assets/1
+          |
+          v
+Resolved Assets
+          |
+          v
+CLI resolves local credentials and State
+          |
+          v
+One add_resource call per asset -> viking:// resources
+```
+
+The server is the authoritative protocol parser. The CLI sends the raw Catalog and Manifest YAML
+to the configured OpenViking service. The server validates them and returns an execution plan;
+the resolver endpoint itself does not create resources.
+
+## Protocol
+
+### Catalog
+
+A Catalog is normally named `assets.yaml`:
+
+```yaml
+protocol: openviking-assets/1
+
+defaults:
+  git:
+    auth_ref: team-git
+    watch_interval: 1440
+
+assets:
+  - name: openviking
+    connector: git
+    description: OpenViking main repository
+    params:
+      repo_url: https://github.com/volcengine/OpenViking
+      branch: main
+
+  - name: requests
+    connector: git
+    description: Requests HTTP client source
+    watch_interval: 0
+    params:
+      repo_url: https://github.com/psf/requests
+      branch: main
+```
+
+Catalog top-level fields:
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `protocol` | Yes | Must currently be `openviking-assets/1`. |
+| `defaults` | No | Connector-specific Catalog defaults. |
+| `assets` | Yes | The list of asset definitions. |
+
+`defaults.git` supports:
+
+| Field | Description |
+| --- | --- |
+| `auth_ref` | Default alias in the local credentials file. |
+| `watch_interval` | Default Watch interval in minutes; `0` disables automatic refresh. |
+
+Git assets support:
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `name` | Yes | Unique Catalog name matching `[A-Za-z0-9][A-Za-z0-9._-]*`. |
+| `connector` | Yes | v1 supports only `git`. |
+| `description` | No | Human-readable purpose of the asset. |
+| `params.repo_url` | Yes | Git clone URL. |
+| `params.branch` | No | Branch to ingest; it cannot be empty when set. |
+| `auth_ref` | No | Overrides `defaults.git.auth_ref`. |
+| `watch_interval` | No | Overrides `defaults.git.watch_interval`. |
+
+Catalog validation is strict. Unknown fields, duplicate names, and unsupported connectors fail the
+whole resolution, even when the affected asset is not selected by the current Manifest. `params`
+contents and clone URL safety are validated for the assets the Manifest selects.
+
+### Manifest
+
+A Manifest is a flat list of asset names:
+
+```yaml
+protocol: openviking-assets/1
+catalog: ../assets.yaml
+
+assets:
+  - openviking
+  - requests
+```
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `protocol` | No | Must be `openviking-assets/1` when set. |
+| `catalog` | No | Descriptive Catalog path. The current CLI does not use it to locate the file. |
+| `assets` | Yes | Asset names selected from the Catalog; at least one must remain after resolution. |
+| `include` | No | v1 cannot compose other Manifests; a non-empty value fails resolution. |
+
+Duplicate asset names are removed while preserving their first position. Referencing an unknown
+asset fails the whole resolution.
+
+::: warning Catalog file lookup
+The current CLI does not load the `catalog:` path from the Manifest. It uses:
+
+1. The path passed to `--catalog <file>`, resolved from the current working directory.
+2. `assets.yaml` next to the Manifest when `--catalog` is omitted.
+:::
+
+### Asset Identity
+
+The server generates a stable `asset_id` from:
+
+```text
+connector + normalized locator + ref
+```
+
+Git URL normalization removes the protocol, user prefix, host port, trailing `.git`, and trailing
+slashes, and lowercases the host. HTTPS, SSH, and SCP-style URLs for the same repository therefore
+normally produce the same locator, while different branches produce different assets.
+
+The asset name is not part of the identity. Renaming an asset without changing its source and
+branch keeps it associated with the existing resource. Changing the source or branch produces a
+new asset and leaves the previous one as an orphan.
+
+For safety, clone URLs cannot:
+
+- be empty or contain control characters;
+- begin with `-`;
+- use Git remote-helper transports such as `ext::` or `fd::`.
+
+## Quick Start
+
+### Prerequisites
+
+1. Install an `ov` CLI version that supports OpenViking Assets.
+2. Configure an OpenViking service that provides `/api/v1/openviking-assets/resolve`.
+3. Verify the connection:
+
+```bash
+ov health
+```
+
+### Validate the Example
+
+The repository contains a complete example under
+[`examples/openviking-assets`](https://github.com/volcengine/OpenViking/tree/main/examples/openviking-assets).
+
+From the OpenViking repository root, run:
+
+```bash
+ov add-resource \
+  --manifest examples/openviking-assets/manifests/code-qa.yaml \
+  --catalog examples/openviking-assets/assets.yaml \
+  --dry-run
+```
+
+`--dry-run`:
+
+- reads both local YAML files;
+- asks the configured OpenViking service to resolve and validate the protocol;
+- checks that all selected `auth_ref` aliases resolve locally;
+- prints the create or sync action planned for each asset;
+- does not submit resources or write State.
+
+### Apply the Manifest
+
+Remove `--dry-run` after reviewing the plan:
+
+```bash
+ov add-resource \
+  --manifest examples/openviking-assets/manifests/code-qa.yaml \
+  --catalog examples/openviking-assets/assets.yaml
+```
+
+Wait for each resource to finish processing:
+
+```bash
+ov add-resource \
+  --manifest examples/openviking-assets/manifests/code-qa.yaml \
+  --catalog examples/openviking-assets/assets.yaml \
+  --wait \
+  --timeout 600
+```
+
+## Credentials
+
+Catalogs carry only `auth_ref` aliases and must not contain tokens, passwords, or private keys.
+The CLI resolves aliases from this file by default:
+
+```text
+~/.openviking/openviking_assets_credentials.yaml
+```
+
+Example:
+
+```yaml
+credentials:
+  team-git:
+    username: oauth2
+    token: replace-with-your-token
+```
+
+Override the path with:
+
+```bash
+export OPENVIKING_ASSETS_CREDENTIALS_FILE=/secure/path/assets-credentials.yaml
+```
+
+Before submitting any resource, the CLI resolves every `auth_ref` used by selected assets. A
+missing alias fails the whole operation before the first submission. Resolved Git arguments are
+sent to the resource endpoint over the configured OpenViking service connection. Use TLS for
+remote deployments and restrict local access to the credentials file.
+
+Omit `auth_ref` when the target service already has the SSH keys or other authentication needed to
+access the repository.
+
+## Create, Sync, and State
+
+After a non-dry-run application, the CLI writes this file next to the Manifest:
+
+```text
+<manifest-file>.state.json
+```
+
+For example:
+
+```text
+code-qa.yaml.state.json
+```
+
+State uses the `openviking-assets-state/1` protocol and records:
+
+- the `asset_id`, name, connector, locator, and ref;
+- the corresponding `resource_uri` and `task_id`;
+- the latest status, error, and application time.
+
+Application rules:
+
+| Condition | Behavior |
+| --- | --- |
+| State has no resource URI for the `asset_id` | Create a new resource. |
+| State has an existing resource URI | Sync by passing the URI as `to` to `add_resource`. |
+| An asset is no longer selected | Report it as an orphan; keep its resource and State entry. |
+| The source or branch changes the `asset_id` | Create a new asset and report the old one as an orphan. |
+
+State belongs to one execution environment and is not part of the Catalog or Manifest protocol.
+A repository that shares Manifests should normally add this to its `.gitignore`:
+
+```text
+*.state.json
+```
+
+Do not apply the same Manifest concurrently. The current State file has no cross-process lock.
+
+Content-level synchronization cursors do not live in Manifest State. Continuous refreshes are
+managed by OpenViking Watches and connectors.
+
+## Refresh Intervals
+
+`watch_interval` precedence, from highest to lowest, is:
+
+1. CLI `--watch-interval`;
+2. per-asset `watch_interval`;
+3. `defaults.git.watch_interval`;
+4. `0`, which disables automatic refresh.
+
+Temporarily apply a 60-minute interval to every selected asset:
+
+```bash
+ov add-resource \
+  --manifest manifests/code-qa.yaml \
+  --catalog assets.yaml \
+  --watch-interval 60
+```
+
+Subsequent content refreshes are performed by Watches. You do not need to apply the Manifest on a
+schedule. Reapply it to pick up Catalog or Manifest composition changes, retry failed assets, or
+explicitly trigger synchronization.
+
+## Failure Handling
+
+The default behavior is fail-fast:
+
+1. the current asset fails;
+2. later assets are marked not attempted;
+3. successful assets and the failure are written to State;
+4. the command exits non-zero.
+
+Use `--skip-failed` to continue with the remaining assets:
+
+```bash
+ov add-resource \
+  --manifest manifests/code-qa.yaml \
+  --catalog assets.yaml \
+  --skip-failed
+```
+
+`--skip-failed` does not turn a partial failure into success. The command still exits non-zero when
+any asset fails, and successfully created resources are not rolled back. If every asset fails, the
+command reports that nothing was applied successfully.
+
+## CLI Options
+
+Primary Manifest-mode options:
+
+| Option | Description |
+| --- | --- |
+| `-m, --manifest <file>` | Manifest file. |
+| `--catalog <file>` | Catalog file; defaults to `assets.yaml` next to the Manifest. |
+| `--dry-run` | Resolve and print the plan without submitting resources or writing State. |
+| `--skip-failed` | Continue processing after an asset fails. |
+| `--wait` | Wait for each resource to finish processing. |
+| `--timeout <seconds>` | Timeout used with `--wait`. |
+| `--watch-interval <minutes>` | Override the refresh interval for all assets. |
+| `--processing-mode <mode>` | Use `semantic_and_vectors` or `vectors_only` for every asset. |
+
+`--to`, `--parent`, `--parent-auto-create`, `--args`, `--strict`, `--ignore-dirs`, `--include`,
+and `--exclude` belong to single-resource mode and cannot be combined with `--manifest`.
+
+`--reason`, `--instruction`, `--no-directly-upload-media`, `--progress`, `--no-progress`, and
+`--verbose` are not currently applied to assets in Manifest mode. Do not rely on them in Manifest
+commands.
+
+## Structured Output
+
+Default output is intended for terminal use. With JSON output, Manifest mode emits NDJSON: one
+complete JSON event per line rather than one JSON document.
+
+```bash
+ov --output json add-resource \
+  --manifest manifests/code-qa.yaml \
+  --catalog assets.yaml \
+  --dry-run
+```
+
+Events can include:
+
+- `plan`
+- `orphan`
+- `asset_planned`
+- `asset_start`
+- `asset_done`
+- `asset_failed`
+- `asset_skipped`
+- `summary`
+
+Automation should parse one line at a time and use both the process exit code and final `summary`
+event to determine the result. Do not assume the first line is `plan`: `orphan` events, when
+present, are emitted before it.
+
+## Current Limitations
+
+`openviking-assets/1` currently has these boundaries:
+
+- only Git assets are supported;
+- Manifests are flat and cannot recursively `include` other Manifests;
+- the server resolver returns a plan and does not perform batch submission;
+- the CLI executes assets sequentially;
+- orphans are never deleted automatically;
+- `ov share` pointer codes and exporting a Manifest from an existing knowledge base are not
+  included;
+- State is a local file and is not synchronized across machines;
+- the CLI and server must both support the same protocol version.
+
+## Related Documentation
+
+- [OpenViking Assets API](../api/22-openviking-assets.md)
+- [Resource Management API](../api/02-resources.md)
+- [Resource Watch API](../api/15-watches.md)
+- [OVPack Import and Export](09-ovpack.md)
+- [OpenViking Assets Examples](https://github.com/volcengine/OpenViking/tree/main/examples/openviking-assets)
