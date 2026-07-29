@@ -142,7 +142,7 @@ SemanticMsg(
 代码骨架提取按以下固定顺序执行：
 
 1. 语言存在维护中的 `tags.scm` 时，优先使用 tags query。
-2. 不存在 query 或 query 未产出可用骨架时，使用 `tree-sitter-language-pack.process()`。
+2. 不存在对应的 `tags.scm` 时，使用 `tree-sitter-language-pack.process()`。
 3. 两种提取方式都无可用结果时，才将 `semantic.code_summary` 作为兜底处理。
 
 长短代码文件都遵循同一路由。

@@ -762,7 +762,7 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 
 ### code
 
-代码骨架提取内置在代码摘要流程中，不再提供解析器级配置。OpenViking 会优先使用维护中的 `tags.scm` query；未覆盖或结果不可用时，使用 `tree-sitter-language-pack.process()`；两者都无可用结果时，才将 `semantic.code_summary` 作为兜底处理。
+代码骨架提取内置在代码摘要流程中，不再提供解析器级配置。OpenViking 会在语言存在维护中的 `tags.scm` 时优先使用 tags query；不存在对应的 `tags.scm` 时，使用 `tree-sitter-language-pack.process()`；当前提取路线无可用结果时，才将 `semantic.code_summary` 作为兜底处理。
 
 当前保留的 `code` 配置字段用于远程代码资源的网络防护和代码托管白名单。提取路线详见 [代码骨架提取](../concepts/06-extraction.md#代码骨架提取)。
 

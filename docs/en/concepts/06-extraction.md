@@ -143,8 +143,8 @@ The skeleton can include imports, classes, methods, functions, and other languag
 Code skeleton extraction follows this fixed order:
 
 1. Use a maintained `tags.scm` query when one exists for the language.
-2. Otherwise, or when that query produces no useful result, use `tree-sitter-language-pack.process()`.
-3. Invoke `semantic.code_summary` only as fallback when neither extractor produces a useful skeleton.
+2. If no corresponding `tags.scm` exists, use `tree-sitter-language-pack.process()`.
+3. Invoke `semantic.code_summary` only as fallback when the extraction route produces no useful skeleton.
 
 This routing applies to short and long code files alike.
 

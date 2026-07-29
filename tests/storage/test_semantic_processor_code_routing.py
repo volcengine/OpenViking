@@ -138,13 +138,5 @@ def test_legacy_code_extensions_remain_fallback_when_skeleton_is_unsupported():
         assert processor._detect_file_type("sample.py") == FILE_TYPE_CODE
 
 
-@pytest.mark.asyncio
-async def test_ts_extension_is_dispatched_as_video():
-    processor = SemanticProcessor()
-    assert get_media_type("sample.ts", None) == "video"
-    with patch(
-        "openviking.storage.queuefs.semantic_processor.generate_video_summary",
-        new=AsyncMock(return_value={"name": "sample.ts", "summary": ""}),
-    ) as video_summary:
-        await processor._generate_single_file_summary("viking://resources/sample.ts")
-    video_summary.assert_awaited_once()
+def test_plain_ts_extension_is_not_dispatched_as_video():
+    assert get_media_type("viking://resources/sample.ts", None) is None
