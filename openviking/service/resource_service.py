@@ -40,9 +40,9 @@ from openviking.server.user_config import (
     effective_resource_add_target,
     effective_skill_add_target,
 )
-from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking.storage.viking_fs import VikingFS
+from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import (
@@ -1899,25 +1899,33 @@ class ResourceService:
                 "pending": queue_pending,
                 "by_queue": queue_by_name,
             }
-        except Exception as e:
+        except Exception:
+            logger.exception("[ResourceService] get_idle_status: queue source failed")
             uncertain = True
-            breakdown["queue"] = {"error": str(e)}
+            breakdown["queue"] = {"error": "queue_status_unavailable"}
 
         # ── Central TaskTracker ──
+        # Authoritative source: read the persistent TaskStore (not the
+        # process-local cache) so PENDING/RUNNING records persisted by this or
+        # any other worker process — including ones never loaded into this
+        # process — are counted. The snapshot is taken atomically (total and
+        # by_type from one read) so the two can never disagree.
         try:
             from openviking.service.task_tracker import get_task_tracker
 
             tracker = get_task_tracker()
-            active_total = tracker.count_active()
-            active_by_type = tracker.snapshot_active_counts_by_type()
+            snap = await tracker.snapshot_active_from_store()
+            active_total = snap["total"]
+            active_by_type = snap["by_type"]
             total_pending += active_total
             breakdown["tasks"] = {
                 "pending": active_total,
                 "by_type": active_by_type,
             }
-        except Exception as e:
+        except Exception:
+            logger.exception("[ResourceService] get_idle_status: task source failed")
             uncertain = True
-            breakdown["tasks"] = {"error": str(e)}
+            breakdown["tasks"] = {"error": "task_status_unavailable"}
 
         idle = (total_pending == 0) and not uncertain
         return {

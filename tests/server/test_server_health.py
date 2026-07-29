@@ -143,7 +143,10 @@ async def test_system_idle_route_returns_false():
             "idle": False,
             "pending": 3,
             "breakdown": {
-                "queue": {"pending": 2, "by_queue": {"Embedding": {"pending": 0, "in_progress": 2}}},
+                "queue": {
+                    "pending": 2,
+                    "by_queue": {"Embedding": {"pending": 0, "in_progress": 2}},
+                },
                 "tasks": {"pending": 1, "by_type": {"session_commit": 1}},
             },
         }
@@ -173,16 +176,11 @@ async def test_get_idle_status_when_idle(monkeypatch):
         async def check_status(self):
             return {"Embedding": QueueStatus(pending=0, in_progress=0)}
 
-    monkeypatch.setattr(
-        "openviking.service.resource_service.get_queue_manager", lambda: _FakeQM()
-    )
+    monkeypatch.setattr("openviking.service.resource_service.get_queue_manager", lambda: _FakeQM())
 
     class _FakeTracker:
-        def count_active(self):
-            return 0
-
-        def snapshot_active_counts_by_type(self):
-            return {}
+        async def snapshot_active_from_store(self):
+            return {"total": 0, "by_type": {}}
 
     import openviking.service.task_tracker as tt
 
@@ -213,16 +211,11 @@ async def test_get_idle_status_with_queue_work(monkeypatch):
                 "Semantic": QueueStatus(pending=1, in_progress=0),
             }
 
-    monkeypatch.setattr(
-        "openviking.service.resource_service.get_queue_manager", lambda: _FakeQM()
-    )
+    monkeypatch.setattr("openviking.service.resource_service.get_queue_manager", lambda: _FakeQM())
 
     class _FakeTracker:
-        def count_active(self):
-            return 0
-
-        def snapshot_active_counts_by_type(self):
-            return {}
+        async def snapshot_active_from_store(self):
+            return {"total": 0, "by_type": {}}
 
     import openviking.service.task_tracker as tt
 
@@ -246,16 +239,11 @@ async def test_get_idle_status_with_active_task(monkeypatch):
         async def check_status(self):
             return {"Embedding": QueueStatus(pending=0, in_progress=0)}
 
-    monkeypatch.setattr(
-        "openviking.service.resource_service.get_queue_manager", lambda: _FakeQM()
-    )
+    monkeypatch.setattr("openviking.service.resource_service.get_queue_manager", lambda: _FakeQM())
 
     class _FakeTracker:
-        def count_active(self):
-            return 1
-
-        def snapshot_active_counts_by_type(self):
-            return {"session_commit": 1}
+        async def snapshot_active_from_store(self):
+            return {"total": 1, "by_type": {"session_commit": 1}}
 
     import openviking.service.task_tracker as tt
 
@@ -275,16 +263,11 @@ async def test_get_idle_status_conservative_on_queue_error(monkeypatch):
     def _boom():
         raise RuntimeError("QueueManager is not initialized")
 
-    monkeypatch.setattr(
-        "openviking.service.resource_service.get_queue_manager", _boom
-    )
+    monkeypatch.setattr("openviking.service.resource_service.get_queue_manager", _boom)
 
     class _FakeTracker:
-        def count_active(self):
-            return 0
-
-        def snapshot_active_counts_by_type(self):
-            return {}
+        async def snapshot_active_from_store(self):
+            return {"total": 0, "by_type": {}}
 
     import openviking.service.task_tracker as tt
 
@@ -295,6 +278,63 @@ async def test_get_idle_status_conservative_on_queue_error(monkeypatch):
     # Uncertain source => never report idle=True even though pending==0.
     assert result["idle"] is False
     assert "error" in result["breakdown"]["queue"]
+
+
+async def test_get_idle_status_reads_persisted_tasks_not_cache(monkeypatch):
+    """Persisted-but-not-cached active task => idle=False (authoritative store).
+
+    Regression for the review point: a fresh process whose local _tasks cache is
+    empty must still report idle=False when the TaskStore holds a PENDING/RUNNING
+    record written by another worker (or never loaded into this process).
+    """
+    from openviking.service.resource_service import ResourceService
+    from openviking.storage.queuefs.named_queue import QueueStatus
+
+    class _FakeQM:
+        async def check_status(self):
+            return {"Embedding": QueueStatus(pending=0, in_progress=0)}
+
+    monkeypatch.setattr("openviking.service.resource_service.get_queue_manager", lambda: _FakeQM())
+
+    class _FakeStore:
+        async def list(self, account_id, *, user_id=None):
+            return [
+                {
+                    "task_id": "t-persisted-only",
+                    "task_type": "session_commit",
+                    "status": "running",
+                }
+            ]
+
+    class _FakeTracker:
+        # Local cache is empty (count_active would return 0), but the store has work.
+        def count_active(self):
+            return 0
+
+        def snapshot_active_counts_by_type(self):
+            return {}
+
+        async def snapshot_active_from_store(self):
+            store = _FakeStore()
+            records = await store.list("_system", user_id="root")
+            grouped = {}
+            total = 0
+            for rec in records:
+                if rec.get("status") in ("pending", "running"):
+                    grouped[rec["task_type"]] = grouped.get(rec["task_type"], 0) + 1
+                    total += 1
+            return {"total": total, "by_type": grouped}
+
+    import openviking.service.task_tracker as tt
+
+    monkeypatch.setattr(tt, "get_task_tracker", lambda: _FakeTracker())
+
+    result = await ResourceService().get_idle_status()
+
+    # Despite the empty process-local cache, the persisted RUNNING task forces idle=False.
+    assert result["idle"] is False
+    assert result["pending"] == 1
+    assert result["breakdown"]["tasks"]["by_type"] == {"session_commit": 1}
 
 
 async def test_backend_sync_status_endpoint(client: httpx.AsyncClient, service):

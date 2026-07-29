@@ -551,6 +551,53 @@ class TaskTracker:
 
     _ACTIVE_STATUSES = (TaskStatus.PENDING, TaskStatus.RUNNING)
 
+    def snapshot_active(self) -> Dict[str, Any]:
+        """Return an atomic snapshot of non-terminal (PENDING + RUNNING) counts.
+
+        Both ``total`` and ``by_type`` are derived under a single ``_lock``
+        acquisition, so they can never disagree (a task transitioning between
+        two separate reads would otherwise make ``pending`` inconsistent with
+        ``breakdown.tasks.by_type``).
+
+        NOTE: this reflects only the process-local ``_tasks`` cache. For an
+        authoritative, cross-process view use :meth:`snapshot_active_from_store`.
+        """
+        from collections import defaultdict
+
+        grouped: Dict[str, int] = defaultdict(int)
+        total = 0
+        with self._lock:
+            for t in self._tasks.values():
+                if t.status in self._ACTIVE_STATUSES:
+                    grouped[t.task_type] += 1
+                    total += 1
+        return {"total": total, "by_type": dict(grouped)}
+
+    async def snapshot_active_from_store(self) -> Dict[str, Any]:
+        """Authoritative active snapshot read from the persistent TaskStore.
+
+        Unlike :meth:`snapshot_active` (process-local cache only), this lists
+        the system task directory so PENDING/RUNNING records persisted by this
+        or any other worker process — including ones never loaded into this
+        process's cache — are counted. This is the source the server-level idle
+        endpoint must use to avoid reporting a false authoritative ``idle=true``.
+        """
+        from collections import defaultdict
+
+        from openviking.service.task_store import SYSTEM_TASK_ACCOUNT_ID, SYSTEM_TASK_USER_ID
+
+        grouped: Dict[str, int] = defaultdict(int)
+        total = 0
+        records = await self._store.list(SYSTEM_TASK_ACCOUNT_ID, user_id=SYSTEM_TASK_USER_ID)
+        active_values = {s.value for s in self._ACTIVE_STATUSES}
+        for rec in records:
+            status = rec.get("status")
+            if status in active_values:
+                task_type = rec.get("task_type") or "unknown"
+                grouped[task_type] += 1
+                total += 1
+        return {"total": total, "by_type": dict(grouped)}
+
     def count_active(self) -> int:
         """Return the number of non-terminal tasks (PENDING + RUNNING).
 
