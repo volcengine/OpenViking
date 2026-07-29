@@ -33,6 +33,7 @@
 pub mod cache;
 pub mod core;
 pub mod crypto;
+pub mod lock;
 pub mod multibackend;
 pub mod git;
 pub mod plugins;

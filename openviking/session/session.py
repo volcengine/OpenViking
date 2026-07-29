@@ -696,8 +696,8 @@ class Session:
         await self._viking_fs.write_file(f"{self._session_uri}/messages.jsonl", "", ctx=self.ctx)
         await self._save_meta()
 
-    async def _save_meta(self) -> None:
-        """Persist .meta.json to storage."""
+    async def _save_meta(self, lease_ref: Optional[Any] = None) -> None:
+        """Persist .meta.json to storage using an optional held PathLock lease."""
         if not self._viking_fs:
             return
         self._meta.updated_at = get_current_timestamp()
@@ -705,6 +705,7 @@ class Session:
             uri=f"{self._session_uri}/.meta.json",
             content=json.dumps(self._meta.to_dict(), ensure_ascii=False),
             ctx=self.ctx,
+            lease_ref=lease_ref,
         )
 
     @property
@@ -1123,15 +1124,11 @@ class Session:
             await self._append_messages_without_path_lock(messages)
             return
 
-        from openviking.storage.transaction import LockContext, get_lock_manager
-
         session_path = uri_to_path(self._session_uri, ctx=self.ctx)
-        async with LockContext(
-            get_lock_manager(),
-            [session_path],
-            lock_mode="exact",
-            timeout=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS,
-        ):
+        lease = await self._viking_fs._async_agfs.pathlock_acquire_tree(
+            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+        )
+        try:
             self._messages = await self._read_live_messages_strict()
             in_memory_meta = self._meta
             try:
@@ -1151,8 +1148,11 @@ class Session:
                 f"{self._session_uri}/messages.jsonl",
                 batch_content,
                 ctx=self.ctx,
+                lease_ref=lease,
             )
-            await self._save_meta()
+            await self._save_meta(lease_ref=lease)
+        finally:
+            await self._viking_fs._async_agfs.pathlock_release(lease)
 
     async def _append_messages_without_path_lock(self, messages: List[Message]) -> None:
         """Compatibility append for storage adapters without path locking."""
@@ -1418,7 +1418,12 @@ class Session:
         self._meta.retained_message_token_budget = retained_message_token_budget
         self._meta.min_raw_tail_steps = min_raw_tail_steps
 
-    async def _merge_archive_meta(self, archive_uri: str, updates: Dict[str, Any]) -> None:
+    async def _merge_archive_meta(
+        self,
+        archive_uri: str,
+        updates: Dict[str, Any],
+        lease_ref: Optional[Any] = None,
+    ) -> None:
         """Merge archive metadata so Phase 2 cannot erase Phase 1 planning data."""
         if not self._viking_fs:
             return
@@ -1439,6 +1444,7 @@ class Session:
                 uri=f"{archive_uri}/.meta.json",
                 content=json.dumps(meta, ensure_ascii=False),
                 ctx=self.ctx,
+                lease_ref=lease_ref,
             )
 
     @staticmethod
@@ -1477,6 +1483,7 @@ class Session:
         min_raw_tail_steps: int,
         agent_evolution_enabled: bool = True,
         agent_memory_skip_reason: Optional[str] = None,
+        lease_ref: Optional[Any] = None,
     ) -> None:
         """Persist the Phase 1 intent before any destructive root rewrite."""
         payload = {
@@ -1502,9 +1509,15 @@ class Session:
                     "skip_reason": agent_memory_skip_reason,
                 },
             },
+            lease_ref=lease_ref,
         )
 
-    async def _write_phase1_ready_marker(self, archive_uri: str) -> None:
+    async def _write_phase1_ready_marker(
+        self,
+        archive_uri: str,
+        lease_ref: Optional[Any] = None,
+    ) -> None:
+        """Persist that Phase 1 is ready using an optional held PathLock lease."""
         phase1 = await self._read_phase1_meta(archive_uri)
         phase1.update(
             {
@@ -1512,7 +1525,7 @@ class Session:
                 "ready_at": get_current_timestamp(),
             }
         )
-        await self._merge_archive_meta(archive_uri, {"phase1": phase1})
+        await self._merge_archive_meta(archive_uri, {"phase1": phase1}, lease_ref=lease_ref)
 
     async def _archive_file_exists(self, archive_uri: str, file_name: str) -> bool:
         try:
@@ -1542,15 +1555,11 @@ class Session:
         if await self._archive_file_exists(archive_uri, ".failed.json"):
             return False
 
-        from openviking.storage.transaction import LockContext, get_lock_manager
-
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        async with LockContext(
-            get_lock_manager(),
-            [session_path],
-            lock_mode="exact",
-            timeout=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS,
-        ):
+        lease = await self._viking_fs._async_agfs.pathlock_acquire_tree(
+            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+        )
+        try:
             marker = await self._read_phase1_meta(archive_uri)
             if marker.get("status") == "ready":
                 return True
@@ -1572,20 +1581,21 @@ class Session:
                     archive_uri,
                     stage="phase1_recovery",
                     error=f"Cannot verify Phase 1 state: {exc}",
+                    lease_ref=lease,
                 )
                 return False
 
             live_ids = [message.id for message in live_messages]
             archived_only_ids = set(archived_ids) - set(retained_ids)
-            phase1_applied = (
-                live_ids[: len(retained_ids)] == retained_ids
-                and not archived_only_ids.intersection(live_ids)
-            )
+            phase1_applied = live_ids[
+                : len(retained_ids)
+            ] == retained_ids and not archived_only_ids.intersection(live_ids)
             if not phase1_applied:
                 await self._write_failed_marker(
                     archive_uri,
                     stage="phase1_recovery",
                     error="Root rewrite was not durably completed before process interruption",
+                    lease_ref=lease,
                 )
                 return False
 
@@ -1603,9 +1613,7 @@ class Session:
             self._remember_retention_policy(
                 keep_recent_count=max(0, int(marker.get("keep_recent_count", 0) or 0)),
                 retention_mode=str(marker.get("retention_mode", "") or "") or None,
-                keep_recent_turn_count=max(
-                    0, int(marker.get("keep_recent_turn_count", 0) or 0)
-                ),
+                keep_recent_turn_count=max(0, int(marker.get("keep_recent_turn_count", 0) or 0)),
                 retained_message_token_budget=max(
                     0, int(marker.get("retained_message_token_budget", 0) or 0)
                 ),
@@ -1618,10 +1626,12 @@ class Session:
             )
             self._meta.last_commit_at = get_current_timestamp()
             self._rebuild_pending_tokens()
-            await self._save_meta()
-            await self._write_phase1_ready_marker(archive_uri)
+            await self._save_meta(lease_ref=lease)
+            await self._write_phase1_ready_marker(archive_uri, lease_ref=lease)
             logger.warning("Recovered interrupted Session Phase 1: %s", archive_uri)
             return True
+        finally:
+            await self._viking_fs._async_agfs.pathlock_release(lease)
 
     def commit(
         self,
@@ -1677,7 +1687,6 @@ class Session:
         from openviking.service.task_tracker import get_task_tracker
         from openviking.storage.queuefs import QueueManager, get_queue_manager
         from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
-        from openviking.storage.transaction import LockContext, get_lock_manager
 
         trace_id = tracer.get_trace_id()
         keep_recent_count = max(0, int(keep_recent_count or 0))
@@ -1733,12 +1742,10 @@ class Session:
         # can hold stale Session objects, so in-memory emptiness is never a
         # correctness boundary.
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        async with LockContext(
-            get_lock_manager(),
-            [session_path],
-            lock_mode="exact",
-            timeout=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS,
-        ):
+        lease = await self._viking_fs._async_agfs.pathlock_acquire_tree(
+            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+        )
+        try:
             self._messages = await self._read_live_messages_strict()
             try:
                 meta_content = await self._viking_fs.read_file(
@@ -1790,7 +1797,7 @@ class Session:
                     retained_message_token_budget=effective_token_budget if turn_mode else 0,
                     min_raw_tail_steps=effective_min_tail,
                 )
-                await self._save_meta()
+                await self._save_meta(lease_ref=lease)
                 get_current_telemetry().set("memory.extracted", 0)
                 return {
                     "session_id": self.session_id,
@@ -1830,7 +1837,7 @@ class Session:
             # remember the policy for subsequent add_message accounting.
             if not messages_to_archive:
                 self._messages = retained_messages
-                await self._write_to_agfs_async(messages=self._messages)
+                await self._write_to_agfs_async(messages=self._messages, lease_ref=lease)
                 self._meta.pending_tokens = 0
                 self._meta.message_count = total
                 self._remember_retention_policy(
@@ -1840,7 +1847,7 @@ class Session:
                     retained_message_token_budget=effective_token_budget if turn_mode else 0,
                     min_raw_tail_steps=effective_min_tail,
                 )
-                await self._save_meta()
+                await self._save_meta(lease_ref=lease)
                 get_current_telemetry().set("memory.extracted", 0)
                 return {
                     "session_id": self.session_id,
@@ -1891,6 +1898,7 @@ class Session:
                     min_raw_tail_steps=effective_min_tail,
                     agent_evolution_enabled=agent_evolution_enabled,
                     agent_memory_skip_reason=agent_memory_skip_reason,
+                    lease_ref=lease,
                 )
 
                 # Archive raw remains durable and recoverable before any live
@@ -1901,6 +1909,7 @@ class Session:
                         uri=f"{archive_uri}/messages.jsonl",
                         content="\n".join(lines) + "\n",
                         ctx=self.ctx,
+                        lease_ref=lease,
                     )
                     if retention_plan is not None:
                         await self._merge_archive_meta(
@@ -1913,6 +1922,7 @@ class Session:
                                     min_raw_tail_steps=effective_min_tail,
                                 )
                             },
+                            lease_ref=lease,
                         )
 
                 phase1_stage = "queue_enqueue"
@@ -1937,7 +1947,7 @@ class Session:
 
                 phase1_stage = "phase1_persist"
                 self._messages = retained_messages
-                await self._write_to_agfs_async(messages=self._messages)
+                await self._write_to_agfs_async(messages=self._messages, lease_ref=lease)
                 self._meta.message_count = len(self._messages)
                 self._meta.pending_tokens = 0
                 self._remember_retention_policy(
@@ -1952,8 +1962,8 @@ class Session:
                     self._compression.compression_index,
                 )
                 self._meta.last_commit_at = get_current_timestamp()
-                await self._save_meta()
-                await self._write_phase1_ready_marker(archive_uri)
+                await self._save_meta(lease_ref=lease)
+                await self._write_phase1_ready_marker(archive_uri, lease_ref=lease)
             except Exception as e:
                 logger.error(f"[commit] Failed during {phase1_stage}: {e}")
                 # Whether the queue write failed or a queued Phase 1 stopped
@@ -1964,6 +1974,7 @@ class Session:
                         archive_uri,
                         stage=phase1_stage,
                         error=str(e),
+                        lease_ref=lease,
                     )
                 except Exception:
                     logger.exception(
@@ -1973,6 +1984,8 @@ class Session:
                 self._messages = original_messages
                 self._compression.compression_index -= 1
                 raise
+        finally:
+            await self._viking_fs._async_agfs.pathlock_release(lease)
         # Lock released; Phase 1 intent, queue item, retained root, metadata and
         # ready metadata are all durable.
 
@@ -2092,23 +2105,17 @@ class Session:
             # that temporarily stored this snapshot in the queue payload.
             phase1 = archive_meta.get("phase1")
             queue_snapshot = phase1.get("queue_message") if isinstance(phase1, dict) else None
-            agent_evolution_snapshot = (
-                queue_snapshot if isinstance(queue_snapshot, dict) else {}
-            )
+            agent_evolution_snapshot = queue_snapshot if isinstance(queue_snapshot, dict) else {}
 
         snapshot_enabled = agent_evolution_snapshot.get("enabled")
         if snapshot_enabled is None:
             snapshot_enabled = agent_evolution_snapshot.get("agent_evolution_enabled")
         # Archives created before this setting existed preserve their original
         # behavior, where Agent memory extraction was enabled by default.
-        agent_evolution_enabled = (
-            snapshot_enabled if isinstance(snapshot_enabled, bool) else True
-        )
+        agent_evolution_enabled = snapshot_enabled if isinstance(snapshot_enabled, bool) else True
         agent_memory_skip_reason = agent_evolution_snapshot.get("skip_reason")
         if agent_memory_skip_reason is None:
-            agent_memory_skip_reason = agent_evolution_snapshot.get(
-                "agent_memory_skip_reason"
-            )
+            agent_memory_skip_reason = agent_evolution_snapshot.get("agent_memory_skip_reason")
         if agent_memory_skip_reason is None:
             agent_memory_skip_reason = _agent_memory_skip_reason(
                 agent_evolution_enabled=agent_evolution_enabled,
@@ -2694,6 +2701,7 @@ class Session:
         blocked_by: str = "",
         skipped: bool = True,
         completed_memory_steps: Optional[Dict[str, List[str]]] = None,
+        lease_ref: Optional[Any] = None,
     ) -> None:
         """Persist a terminal failure marker for the archive."""
         if not self._viking_fs:
@@ -2711,6 +2719,7 @@ class Session:
             uri=f"{archive_uri}/.failed.json",
             content=json.dumps(payload, ensure_ascii=False),
             ctx=self.ctx,
+            lease_ref=lease_ref,
         )
 
     async def get_session_context(self, token_budget: int = 128_000) -> Dict[str, Any]:
@@ -3381,9 +3390,7 @@ class Session:
                     continue
                 if not isinstance(abstract, str) or not abstract.strip():
                     continue
-                valid_source_ids = [
-                    item for item in source_ids if isinstance(item, str) and item
-                ]
+                valid_source_ids = [item for item in source_ids if isinstance(item, str) and item]
                 if not valid_source_ids:
                     continue
 
@@ -3401,9 +3408,7 @@ class Session:
                 )
                 seen_source_ids = set(candidate["source_message_ids"])
                 new_source_ids = [
-                    source_id
-                    for source_id in valid_source_ids
-                    if source_id not in seen_source_ids
+                    source_id for source_id in valid_source_ids if source_id not in seen_source_ids
                 ]
                 if not new_source_ids:
                     continue
@@ -3487,9 +3492,7 @@ class Session:
 
         while True:
             earlier_states = [
-                state
-                for state in await self._scan_archive_states()
-                if state.index < archive_index
+                state for state in await self._scan_archive_states() if state.index < archive_index
             ]
             pending_states = [state for state in earlier_states if state.state == "pending"]
             if not pending_states:
@@ -3580,15 +3583,11 @@ class Session:
         telemetry_snapshot: Any,
     ) -> None:
         """Merge Phase 2 results without overwriting concurrent root updates."""
-        from openviking.storage.transaction import LockContext, get_lock_manager
-
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        async with LockContext(
-            get_lock_manager(),
-            [session_path],
-            lock_mode="exact",
-            timeout=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS,
-        ):
+        lease = await self._viking_fs._async_agfs.pathlock_acquire_tree(
+            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+        )
+        try:
             latest_meta = self._meta
             try:
                 meta_content = await self._viking_fs.read_file(
@@ -3622,7 +3621,9 @@ class Session:
             latest_meta.last_commit_at = get_current_timestamp()
             latest_meta.message_count = await self._read_live_message_count()
             self._meta = latest_meta
-            await self._save_meta()
+            await self._save_meta(lease_ref=lease)
+        finally:
+            await self._viking_fs._async_agfs.pathlock_release(lease)
 
     async def _read_live_message_count(self) -> int:
         """Count current live session messages from persisted storage."""
@@ -4809,8 +4810,12 @@ class Session:
 
         return "\n".join(parts).rstrip() + "\n"
 
-    async def _write_to_agfs_async(self, messages: List[Message]) -> None:
-        """Write messages.jsonl to AGFS (async)."""
+    async def _write_to_agfs_async(
+        self,
+        messages: List[Message],
+        lease_ref: Optional[Any] = None,
+    ) -> None:
+        """Write messages.jsonl to AGFS using an optional held PathLock lease."""
         if not self._viking_fs:
             return
 
@@ -4827,16 +4832,19 @@ class Session:
             uri=f"{self._session_uri}/messages.jsonl",
             content=content,
             ctx=self.ctx,
+            lease_ref=lease_ref,
         )
         await viking_fs.write_file(
             uri=f"{self._session_uri}/.abstract.md",
             content=abstract,
             ctx=self.ctx,
+            lease_ref=lease_ref,
         )
         await viking_fs.write_file(
             uri=f"{self._session_uri}/.overview.md",
             content=overview,
             ctx=self.ctx,
+            lease_ref=lease_ref,
         )
 
     def _generate_abstract(self) -> str:

@@ -31,7 +31,6 @@ from openviking.storage.index_consistency import check_index_consistency
 from openviking.storage.queuefs.add_resource_processor import AddResourceProcessor
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
 from openviking.storage.queuefs.session_commit_processor import SessionCommitProcessor
-from openviking.storage.transaction import LockManager, init_lock_manager
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
 from openviking.utils.agfs_utils import (
     build_runtime_ragfs_binding_config,
@@ -88,7 +87,7 @@ class OpenVikingService:
         self._resource_processor: Optional[ResourceProcessor] = None
         self._skill_processor: Optional[SkillProcessor] = None
         self._session_compressor: Optional["SessionCompressorV2"] = None
-        self._lock_manager: Optional[LockManager] = None
+
         self._directory_initializer: Optional[DirectoryInitializer] = None
         self._watch_scheduler: Optional[WatchScheduler] = None
         self._encryptor: Optional[Any] = None
@@ -173,16 +172,7 @@ class OpenVikingService:
         if self._queue_manager:
             self._queue_manager.setup_standard_queues(self._vikingdb_manager, start=False)
 
-        # Initialize LockManager (fail-fast if RAGFS missing)
-        if self._agfs_client is None:
-            raise RuntimeError("RAGFS client not initialized for LockManager")
-        tx_cfg = config.transaction
-        self._lock_manager = init_lock_manager(
-            agfs=self._agfs_client,
-            lock_timeout=tx_cfg.lock_timeout,
-            lock_expire=tx_cfg.lock_expire,
-            redo_recovery_enabled=tx_cfg.redo_recovery_enabled,
-        )
+        # PathLock has been moved to Rust ragfs; Python-layer LockManager is no longer needed.
         set_task_tracker(config.build_task_tracker(self._agfs_client))
 
     def _build_ragfs_binding_config(self) -> Any:
@@ -231,11 +221,6 @@ class OpenVikingService:
     def vikingdb_manager(self) -> Optional[VikingDBManager]:
         """Get VikingDBManager instance."""
         return self._vikingdb_manager
-
-    @property
-    def lock_manager(self) -> Optional[LockManager]:
-        """Get LockManager instance."""
-        return self._lock_manager
 
     @property
     def session_compressor(self) -> Optional["SessionCompressorV2"]:
@@ -376,11 +361,6 @@ class OpenVikingService:
             skill_processor=self._skill_processor,
         )
 
-        # Start LockManager if initialized
-        if self._lock_manager:
-            await self._lock_manager.start()
-            logger.info("LockManager started")
-
         self._watch_scheduler = WatchScheduler(
             resource_service=self._resource_service,
             viking_fs=self._viking_fs,
@@ -437,6 +417,7 @@ class OpenVikingService:
                         self._resource_service,
                         asyncio.get_running_loop(),
                         queue_name,
+                        self._viking_fs,
                     ),
                     allow_create=True,
                 )
@@ -475,10 +456,6 @@ class OpenVikingService:
             await asyncio.to_thread(self._queue_manager.stop)
             self._queue_manager = None
             logger.info("Queue manager stopped")
-
-        if self._lock_manager:
-            await self._lock_manager.stop()
-            self._lock_manager = None
 
         if self._vikingdb_manager:
             self._vikingdb_manager.mark_closing()

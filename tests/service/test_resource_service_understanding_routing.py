@@ -34,10 +34,11 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
         },
         is_temporary=True,
     )
-    lock = SimpleNamespace(
-        to_handoff=lambda: SimpleNamespace(to_dict=lambda: {"handle_id": "lock-1"}),
-        handoff=AsyncMock(),
-        close=AsyncMock(),
+    lock = {"lease_ref": "lock-1"}
+    agfs = SimpleNamespace(
+        pathlock_to_handoff=AsyncMock(return_value={"handle_id": "lock-1"}),
+        pathlock_handoff=AsyncMock(),
+        pathlock_release=AsyncMock(),
     )
     processor = SimpleNamespace(
         understanding_api_enabled=lambda: True,
@@ -58,7 +59,7 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
     )
     service = ResourceService(
         vikingdb=object(),
-        viking_fs=object(),
+        viking_fs=SimpleNamespace(_async_agfs=agfs),
         resource_processor=processor,
         skill_processor=object(),
     )
@@ -77,10 +78,6 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
     monkeypatch.setattr(
         "openviking.storage.queuefs.get_queue_manager",
         lambda: queue_manager,
-    )
-    monkeypatch.setattr(
-        "openviking.storage.transaction.get_lock_manager",
-        lambda: object(),
     )
 
     result = await service.add_resource(
@@ -106,4 +103,5 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
     assert not downloaded.exists()
     processor.submit_understanding.assert_awaited_once_with(prepared)
     processor.process_resource.assert_not_awaited()
-    lock.handoff.assert_awaited_once()
+    agfs.pathlock_to_handoff.assert_awaited_once_with(lock)
+    agfs.pathlock_handoff.assert_awaited_once_with(lock)

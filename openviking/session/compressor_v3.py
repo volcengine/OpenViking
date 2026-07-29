@@ -184,7 +184,6 @@ class SessionCompressorV3:
         return MemoryUpdater(
             registry=registry,
             vikingdb=self.vikingdb,
-            transaction_handle=transaction_handle,
         )
 
     async def _build_memory_diff(

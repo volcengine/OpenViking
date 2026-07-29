@@ -29,7 +29,7 @@ use regex::Regex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::core::filesystem::{relative_depth, relative_match_file, sort_directory_entries};
-use crate::core::glob::{PreparedGlob, validate_pattern};
+use crate::core::glob::PreparedGlob;
 use crate::core::{
     ConfigParameter, Error, FileInfo, FileSystem, GlobEntry, GlobPage, GrepMatch, GrepResult,
     PluginConfig, Result, ServicePlugin, TreeEntry, WriteFlag,
@@ -573,18 +573,67 @@ impl FileSystem for S3FileSystem {
         }
     }
 
-    async fn write(&self, path: &str, data: &[u8], _offset: u64, _flags: WriteFlag) -> Result<u64> {
+    async fn write(&self, path: &str, data: &[u8], _offset: u64, flags: WriteFlag) -> Result<u64> {
         let normalized = Self::normalize_path(path);
         let key = self.client.build_key(&normalized);
 
-        // S3 always replaces the full object
-        self.client.put_object(&key, data.to_vec()).await?;
+        match flags {
+            WriteFlag::CreateNew => {
+                self.client.put_object_create_new(&key, data.to_vec()).await?;
+            }
+            _ => {
+                // S3 always replaces the full object for non-exclusive writes.
+                self.client.put_object(&key, data.to_vec()).await?;
+            }
+        }
 
         // Invalidate caches
         self.dir_cache.invalidate_parent(&normalized).await;
         self.stat_cache.invalidate(&normalized).await;
 
         Ok(data.len() as u64)
+    }
+
+    async fn compare_and_write(
+        &self,
+        path: &str,
+        expected: &[u8],
+        new_data: &[u8],
+    ) -> Result<bool> {
+        let normalized = Self::normalize_path(path);
+        let key = self.client.build_key(&normalized);
+        let Some((current, etag)) = self.client.get_object_with_etag(&key).await? else {
+            return Ok(false);
+        };
+        if current.as_slice() != expected {
+            return Ok(false);
+        }
+        let changed = self
+            .client
+            .put_object_if_match(&key, new_data.to_vec(), &etag)
+            .await?;
+        if changed {
+            self.dir_cache.invalidate_parent(&normalized).await;
+            self.stat_cache.invalidate(&normalized).await;
+        }
+        Ok(changed)
+    }
+
+    async fn compare_and_remove(&self, path: &str, expected: &[u8]) -> Result<bool> {
+        let normalized = Self::normalize_path(path);
+        let key = self.client.build_key(&normalized);
+        let Some((current, etag)) = self.client.get_object_with_etag(&key).await? else {
+            return Ok(false);
+        };
+        if current.as_slice() != expected {
+            return Ok(false);
+        }
+        let changed = self.client.delete_object_if_match(&key, &etag).await?;
+        if changed {
+            self.dir_cache.invalidate_parent(&normalized).await;
+            self.stat_cache.invalidate(&normalized).await;
+        }
+        Ok(changed)
     }
 
     async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
