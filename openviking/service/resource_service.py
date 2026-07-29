@@ -43,6 +43,7 @@ from openviking.server.local_input_guard import (
 from openviking.server.user_config import (
     effective_resource_add_target,
     effective_skill_add_target,
+    validate_skill_add_target,
 )
 from openviking.storage import VikingDBManager
 from openviking.storage.queuefs import QueueManager, get_queue_manager
@@ -2040,6 +2041,12 @@ class ResourceService:
                 viking_fs=self._viking_fs,
                 ctx=ctx,
                 server_config=get_server_config(),
+            )
+        if target_uri:
+            target_uri = validate_skill_add_target(
+                target_uri,
+                ctx=ctx,
+                viking_fs=self._viking_fs,
             )
         telemetry_id = get_current_telemetry().telemetry_id
         request_wait_tracker = get_request_wait_tracker()

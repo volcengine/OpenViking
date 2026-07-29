@@ -461,10 +461,24 @@ class VikingFS:
         if not self._is_accessible(normalized_uri, real_ctx):
             raise PermissionDeniedError(f"Access denied for {uri}", resource=normalized_uri)
 
+    def _ensure_shared_skill_mutation_access(
+        self, normalized_uri: str, real_ctx: RequestContext
+    ) -> None:
+        shared_skills_root = "viking://agent/skills"
+        if real_ctx.role not in {Role.ROOT, Role.ADMIN} and (
+            normalized_uri == shared_skills_root
+            or normalized_uri.startswith(f"{shared_skills_root}/")
+        ):
+            raise PermissionDeniedError(
+                "Only administrators can modify shared agent skills",
+                resource=normalized_uri,
+            )
+
     def _ensure_mutable_access(self, uri: str, ctx: Optional[RequestContext]) -> None:
         self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         normalized_uri, _ = self._normalized_uri_parts(uri)
+        self._ensure_shared_skill_mutation_access(normalized_uri, real_ctx)
         if is_hidden_by_actor_peer_view(normalized_uri, real_ctx) or may_include_hidden_actor_peers(
             normalized_uri, real_ctx
         ):
@@ -480,6 +494,7 @@ class VikingFS:
         self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         normalized_uri, _ = self._normalized_uri_parts(uri)
+        self._ensure_shared_skill_mutation_access(normalized_uri, real_ctx)
         if is_hidden_by_actor_peer_view(normalized_uri, real_ctx) or may_include_hidden_actor_peers(
             normalized_uri, real_ctx
         ):
@@ -3861,8 +3876,15 @@ class VikingFS:
         real_ctx = self._ctx_or_default(ctx)
         account = real_ctx.account_id
         if paths is None:
+            if real_ctx.role not in {Role.ROOT, Role.ADMIN}:
+                raise PermissionDeniedError(
+                    "Account-wide snapshots require an administrator role",
+                    resource="viking://",
+                )
             tree_paths: Optional[List[str]] = None
         else:
+            for path in paths:
+                self._ensure_access(path, real_ctx)
             tree_paths = [self._uri_to_tree_path(p, ctx=real_ctx) for p in paths]
         return await self._async_agfs.run(
             "git_commit",
@@ -3927,8 +3949,17 @@ class VikingFS:
         account = real_ctx.account_id
         tree_dir: Optional[str]
         if project_dir is None:
+            if real_ctx.role not in {Role.ROOT, Role.ADMIN}:
+                raise PermissionDeniedError(
+                    "Account-wide snapshot restores require an administrator role",
+                    resource="viking://",
+                )
             tree_dir = None
         else:
+            if dry_run:
+                self._ensure_access(project_dir, real_ctx)
+            else:
+                self._ensure_mutable_access(project_dir, real_ctx)
             tree_dir = self._uri_to_tree_path(project_dir, ctx=real_ctx).rstrip("/")
             if not tree_dir:
                 raise ValueError(f"project_dir must not be empty: {project_dir!r}")
@@ -4084,6 +4115,8 @@ class VikingFS:
         """
         real_ctx = self._ctx_or_default(ctx)
         account = real_ctx.account_id
+        if path is not None:
+            self._ensure_access(path, real_ctx)
         tree_path = self._uri_to_tree_path(path, ctx=real_ctx) if path else None
         kwargs: Dict[str, Any] = {
             "account": account,
@@ -4112,6 +4145,7 @@ class VikingFS:
         """
         real_ctx = self._ctx_or_default(ctx)
         account = real_ctx.account_id
+        self._ensure_access(path, real_ctx)
         tree_path = self._uri_to_tree_path(path, ctx=real_ctx)
         resp = await self._async_agfs.run(
             "git_show",

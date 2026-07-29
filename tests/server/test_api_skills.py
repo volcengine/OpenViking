@@ -8,6 +8,10 @@ import zipfile
 import pytest
 from starlette.responses import PlainTextResponse
 
+from openviking.server.auth import get_request_context
+from openviking.server.identity import RequestContext, Role
+from openviking_cli.session.user_id import UserIdentifier
+
 
 @pytest.fixture(autouse=True)
 def _stub_mcp_endpoint(monkeypatch):
@@ -47,6 +51,61 @@ async def _add_skill(client, name: str = "api-skill", description: str = "API sk
     )
     assert response.status_code == 200, response.text
     return response.json()["result"]
+
+
+async def test_user_cannot_create_update_or_delete_shared_agent_skills(app, client):
+    create_response = await client.post(
+        "/api/v1/skills",
+        json={
+            "data": _skill_md("shared-skill", "Original shared skill"),
+            "target_uri": "viking://agent/skills",
+            "wait": True,
+        },
+    )
+    assert create_response.status_code == 200, create_response.text
+
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user=UserIdentifier("default", "ordinary-user"),
+        role=Role.USER,
+    )
+    try:
+        for method, path, payload in [
+            (
+                "post",
+                "/api/v1/skills",
+                {
+                    "data": _skill_md("new-shared-skill", "Unauthorized shared skill"),
+                    "target_uri": "viking://agent/skills",
+                    "wait": True,
+                },
+            ),
+            (
+                "put",
+                "/api/v1/skills/shared-skill",
+                {
+                    "data": _skill_md("shared-skill", "Unauthorized replacement"),
+                    "target_uri": "viking://agent/skills",
+                    "wait": True,
+                },
+            ),
+            (
+                "delete",
+                "/api/v1/skills/shared-skill",
+                None,
+            ),
+        ]:
+            response = await client.request(method, path, json=payload)
+            assert response.status_code == 403, response.text
+            assert response.json()["error"]["code"] == "PERMISSION_DENIED"
+    finally:
+        app.dependency_overrides.pop(get_request_context, None)
+
+    show_response = await client.get(
+        "/api/v1/skills/shared-skill",
+        params={"target_uri": "viking://agent/skills", "level": 0},
+    )
+    assert show_response.status_code == 200, show_response.text
+    assert show_response.json()["result"]["description"] == "Original shared skill"
 
 
 async def test_skills_api_list_empty_collection(client):

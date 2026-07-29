@@ -159,6 +159,82 @@ def _request_context() -> RequestContext:
     )
 
 
+def _user_context(user_id: str = "user") -> RequestContext:
+    return RequestContext(
+        user=UserIdentifier(account_id="account", user_id=user_id),
+        role=Role.USER,
+    )
+
+
+class _RecordingGitAGFS:
+    def __init__(self, result=None):
+        self.calls = []
+        self.result = result or {"result": "noop"}
+
+    async def run(self, operation, **kwargs):
+        self.calls.append((operation, kwargs))
+        return self.result
+
+
+def _bare_viking_fs(result=None) -> VikingFS:
+    vfs = object.__new__(VikingFS)
+    vfs._async_agfs = _RecordingGitAGFS(result)
+    return vfs
+
+
+async def test_commit_rejects_account_wide_snapshot_for_user():
+    vfs = _bare_viking_fs()
+
+    with pytest.raises(PermissionDeniedError, match="Account-wide snapshots"):
+        await vfs.commit(message="unsafe", paths=None, ctx=_user_context())
+
+    assert vfs._async_agfs.calls == []
+
+
+async def test_commit_rejects_another_users_path_before_snapshotting():
+    vfs = _bare_viking_fs()
+
+    with pytest.raises(PermissionDeniedError):
+        await vfs.commit(
+            message="unsafe",
+            paths=["viking://user/other/memories/private.md"],
+            ctx=_user_context(),
+        )
+
+    assert vfs._async_agfs.calls == []
+
+
+async def test_restore_rejects_account_wide_restore_for_user():
+    vfs = _bare_viking_fs()
+
+    with pytest.raises(PermissionDeniedError, match="Account-wide snapshot restores"):
+        await vfs.restore(source_commit="main", project_dir=None, ctx=_user_context())
+
+    assert vfs._async_agfs.calls == []
+
+
+@pytest.mark.parametrize("method_name", ["show", "show_blob_raw"])
+async def test_snapshot_blob_reads_reject_another_users_path(method_name):
+    vfs = _bare_viking_fs({"oid": "a" * 40, "size": 1, "bytes": b"x"})
+
+    with pytest.raises(PermissionDeniedError):
+        await getattr(vfs, method_name)(
+            "main",
+            path="viking://user/other/memories/private.md",
+            ctx=_user_context(),
+        )
+
+    assert vfs._async_agfs.calls == []
+
+
+async def test_shared_agent_skills_are_read_only_for_users():
+    vfs = _bare_viking_fs()
+
+    vfs._ensure_access("viking://agent/skills/shared", _user_context())
+    with pytest.raises(PermissionDeniedError, match="administrators"):
+        vfs._ensure_mutable_access("viking://agent/skills/shared", _user_context())
+
+
 async def test_diff_rejects_files_over_size_limit(monkeypatch):
     monkeypatch.setattr(viking_fs_module, "SNAPSHOT_DIFF_MAX_FILE_BYTES", 3)
     vfs = _DiffVikingFS(b"old\n", b"new\n")
@@ -277,9 +353,7 @@ async def test_diff_uses_bounded_native_diff_builder():
             {
                 "before": "old\n",
                 "after": "new\n",
-                "fromfile": (
-                    "viking://user/user/memories/experiences/example.md@from"
-                ),
+                "fromfile": ("viking://user/user/memories/experiences/example.md@from"),
                 "tofile": "viking://user/user/memories/experiences/example.md@to",
                 "timeout_ms": viking_fs_module.SNAPSHOT_DIFF_TIMEOUT_MS,
                 "max_output_bytes": viking_fs_module.SNAPSHOT_DIFF_MAX_OUTPUT_BYTES,

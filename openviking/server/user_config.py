@@ -83,8 +83,9 @@ def validate_skill_add_target(
     viking_fs: VikingFS,
 ) -> str:
     normalized = uri.strip().rstrip("/")
-    if normalized == "viking://user/skills":
-        resolved = f"{canonical_user_root(ctx)}/skills"
+    user_skills_root = f"{canonical_user_root(ctx)}/skills"
+    if normalized in {"viking://user/skills", user_skills_root}:
+        resolved = user_skills_root
     elif normalized == "viking://agent/skills":
         resolved = "viking://agent/skills"
     else:
