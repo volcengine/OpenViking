@@ -8,7 +8,7 @@ scattered across different modules. All configurations inherit from ParserConfig
 and can be loaded from ov.conf files.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
@@ -465,6 +465,43 @@ class ExcelConfig(ParserConfig):
 
     enable_process_pool: bool = False
     process_pool_workers: int = 2
+
+    # Excel is converted to Markdown and then sectioned by MarkdownParser, so
+    # these fields decide the resulting node structure and stable URIs.
+    _SECTIONING_FIELDS = (
+        "max_content_length",
+        "encoding",
+        "max_section_size",
+        "section_size_flexibility",
+        "max_section_chars",
+    )
+
+    def with_sectioning_defaults_from(self, markdown: "ParserConfig") -> "ExcelConfig":
+        """Inherit unset sectioning fields from the Markdown configuration.
+
+        Excel used to be registered with ``config.markdown`` directly, so a
+        deployment that tuned ``parsers.markdown`` also tuned Excel imports.
+        Introducing a dedicated ``parsers.excel`` section must not silently
+        change that node structure, so any sectioning field still at its class
+        default keeps following Markdown. Explicit ``parsers.excel`` values
+        always win.
+
+        A field explicitly set to exactly its default is indistinguishable from
+        an unset one here; both resolve to the Markdown value, which only
+        differs when Markdown itself was customised.
+        """
+        if markdown is None:
+            return self
+
+        defaults = {field.name: field.default for field in fields(ExcelConfig)}
+        overrides = {
+            name: getattr(markdown, name)
+            for name in self._SECTIONING_FIELDS
+            if hasattr(markdown, name) and getattr(self, name) == defaults[name]
+        }
+        if not overrides:
+            return self
+        return replace(self, **overrides)
 
     def validate(self) -> None:
         """Validate Excel-specific configuration."""
