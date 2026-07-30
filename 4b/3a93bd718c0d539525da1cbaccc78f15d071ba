@@ -1,0 +1,77 @@
+benchmark/locomo/vikingbot/COMPILE_EXPERIMENT.md
+  s_0708a1468840aa::t_615e68cb7b90e6 1-95
+benchmark/locomo/vikingbot/import_via_compile.py
+  s_0708a1468840aa::t_e7ed52b221dc80 1-439
+bot/tests/test_compile.py
+  s_0708a1468840aa::t_68d5d5bd6b298e 8,16,112-113,119-133,1367-1728
+bot/tests/test_openviking_api_key_type.py
+  s_0708a1468840aa::t_ba3d5e0fc7bb07 201-216
+bot/vikingbot/compile/models.py
+  s_0708a1468840aa::t_40dab63377bda0 17-20,44,46,59-60,64-69,77,191,250
+bot/vikingbot/compile/service.py
+  s_0708a1468840aa::t_40877487fa702d 17,20-21,33,82,270-274,276-280,282-289,314,333-550,582,584,696-698,710-714,993-1129
+bot/vikingbot/openviking_mount/ov_server.py
+  s_0708a1468840aa::t_0fb233b8f2452b 49,72,88,116,213,229,238,369,372-373,815,1045,1240-1256
+crates/ov_cli/src/client.rs
+  s_0708a1468840aa::t_c9cb4e3de5418b 132-133,165-166,169-174,345,347,354,1826,2175,2177,2184-2211
+crates/ov_cli/src/commands/compile.rs
+  s_0708a1468840aa::t_5db8e30b1560d3 13,15,30-39,127
+crates/ov_cli/src/help_ui.rs
+  s_0708a1468840aa::t_f1650c56670617 873,883-886
+crates/ov_cli/src/main.rs
+  s_0708a1468840aa::t_5724e2685f56d9 974,984,987,989,993-995,3185,3196,3561,3588,3596-3618,3627-3629
+docs/design/ov-compile-design.md
+  s_0708a1468840aa::t_54d028855e34ac 11,46-47,49,60-80,87-94,216-221,224-225,295
+docs/en/api/05-sessions.md
+  s_0708a1468840aa::t_d60ebde8c2f779 1328-1329,1341-1343,1356,1362-1363
+docs/en/api/24-vikingbot.md
+  s_0708a1468840aa::t_e4f035f17e0761 120-122,155-170
+docs/zh/api/05-sessions.md
+  s_0708a1468840aa::t_15bdcc31b2bc95 1302,1314-1316,1329,1335
+docs/zh/api/24-vikingbot.md
+  s_0708a1468840aa::t_8e3c55c2d0649f 120-122,155-168
+openviking/client/local.py
+  s_0708a1468840aa::t_0684336d97f299 941-957
+openviking/server/routers/sessions.py
+  s_0708a1468840aa::t_f9bc1e915ef499 134-141,489,492,494-501
+openviking/service/session_service.py
+  s_0708a1468840aa::t_618f9c6fb2af80 12,21,381-390,393-395,404-435,437
+openviking/session/compressor_v2.py
+  s_0708a1468840aa::t_4bb5a010ce8298 32,237,306
+openviking/session/compressor_v3.py
+  s_0708a1468840aa::t_0b6fc753a410fc 161,171,306,341,535,571
+openviking/session/memory/session_extract_context_provider.py
+  s_0708a1468840aa::t_fb36b49d695f89 63,71,241-254
+openviking_cli/client/_http_compat.py
+  s_0708a1468840aa::t_6806ee405cf0f1 236-258,315-331
+openviking_cli/client/base.py
+  s_0708a1468840aa::t_787ec61f4a0ed5 399-410
+tests/client/test_http_client_compact.py
+  s_0708a1468840aa::t_e2a72f0b5c6569 96-113
+tests/server/test_agent_evolution_global_setting.py
+  s_0708a1468840aa::t_72707a07d4d5ae 287-329
+tests/server/test_api_sessions.py
+  s_0708a1468840aa::t_afc0f6c645b400 915-951
+tests/service/test_session_service_extract.py
+  s_0708a1468840aa::t_251c21190bb718 1-70
+tests/unit/test_locomo_peer_wiring.py
+  s_0708a1468840aa::t_c82e1d6003f67a 26-29,77-121
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "4b3a93bd718c0d539525da1cbaccc78f15d071ba",
+  "prompts": {},
+  "sessions": {
+    "s_0708a1468840aa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb117-f612-7ed3-abc8-bb5bb8ef35fe",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
