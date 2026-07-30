@@ -535,7 +535,7 @@ JSON 输出 - 错误：
 | POST | `/api/v1/admin/accounts/{account_id}/users` | 注册用户 |
 | GET | `/api/v1/admin/accounts/{account_id}/users` | 列出用户 |
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | 移除用户 |
-| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | 修改用户角色 |
+| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | 将用户提升为 ADMIN |
 | POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | 重新生成用户 Key |
 | GET | `/api/v1/privacy-configs` | 列出隐私配置分类 |
 | GET | `/api/v1/privacy-configs/{category}` | 列出分类目标 |

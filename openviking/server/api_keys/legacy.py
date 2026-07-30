@@ -15,7 +15,11 @@ from argon2.exceptions import VerifyMismatchError
 
 from openviking.pyagfs import AGFSAlreadyExistsError, AGFSNotFoundError, AsyncAGFSClient
 from openviking.pyagfs.async_client import fs_ctx_from_agfs_path
-from openviking.server.api_keys.models import AccountInfo, UserKeyEntry
+from openviking.server.api_keys.models import (
+    AccountInfo,
+    UserKeyEntry,
+    validate_account_user_role,
+)
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.viking_fs import VikingFS
@@ -301,6 +305,7 @@ class LegacyAPIKeyManager:
         seed: Optional[str] = None,
     ) -> str:
         """Register a new user in an account. Returns the user's API key (legacy format)."""
+        resolved_role = validate_account_user_role(role)
         # Validate user_id format
         verr = validate_user_id(user_id)
         if verr:
@@ -328,7 +333,7 @@ class LegacyAPIKeyManager:
             key_prefix = self._get_key_prefix(key)
 
         user_info = {
-            "role": role,
+            "role": resolved_role,
             "key": stored_key,
         }
         if self._api_key_hashing_enabled:
@@ -339,7 +344,7 @@ class LegacyAPIKeyManager:
         entry = UserKeyEntry(
             account_id=account_id,
             user_id=user_id,
-            role=Role(role),
+            role=resolved_role,
             key_or_hash=stored_key,
             is_hashed=is_hashed,
         )
@@ -455,13 +460,14 @@ class LegacyAPIKeyManager:
 
     async def set_role(self, account_id: str, user_id: str, role: str) -> None:
         """Update a user's role."""
+        resolved_role = validate_account_user_role(role)
         account = self._accounts.get(account_id)
         if account is None:
             raise NotFoundError(account_id, "account")
         if user_id not in account.users:
             raise NotFoundError(user_id, "user")
 
-        account.users[user_id]["role"] = role
+        account.users[user_id]["role"] = resolved_role
 
         # Update role in prefix index
         user_info = account.users[user_id]
@@ -475,7 +481,7 @@ class LegacyAPIKeyManager:
             if key_prefix in self._prefix_index:
                 for entry in self._prefix_index[key_prefix]:
                     if entry.account_id == account_id and entry.user_id == user_id:
-                        entry.role = Role(role)
+                        entry.role = resolved_role
                         break
 
         await self._save_users_json(account_id)

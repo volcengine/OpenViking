@@ -540,7 +540,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/admin/accounts/{account_id}/users` | Register a user |
 | GET | `/api/v1/admin/accounts/{account_id}/users` | List users |
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | Remove a user |
-| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | Change a user role |
+| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | Promote a user to ADMIN |
 | POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | Regenerate a user key |
 | GET | `/api/v1/privacy-configs` | List privacy configuration categories |
 | GET | `/api/v1/privacy-configs/{category}` | List category targets |

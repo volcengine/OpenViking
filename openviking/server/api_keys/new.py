@@ -15,7 +15,11 @@ from openviking.server.api_keys.legacy import (
     LegacyAPIKeyManager,
     derive_seeded_api_key_secret,
 )
-from openviking.server.api_keys.models import AccountInfo, UserKeyEntry
+from openviking.server.api_keys.models import (
+    AccountInfo,
+    UserKeyEntry,
+    validate_account_user_role,
+)
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import InvalidArgumentError, UnauthenticatedError
@@ -252,6 +256,7 @@ class NewAPIKeyManager:
         seed: Optional[str] = None,
     ) -> str:
         """Register a new user in an account. Returns the user's API key in new format."""
+        resolved_role = validate_account_user_role(role)
         # Validate user_id format
         verr = validate_user_id(user_id)
         if verr:
@@ -281,7 +286,7 @@ class NewAPIKeyManager:
             key_prefix = self._legacy._get_key_prefix(key)
 
         user_info = {
-            "role": role,
+            "role": resolved_role,
             "key": stored_key,
         }
         if self._legacy._api_key_hashing_enabled:
@@ -292,7 +297,7 @@ class NewAPIKeyManager:
         entry = UserKeyEntry(
             account_id=account_id,
             user_id=user_id,
-            role=Role(role),
+            role=resolved_role,
             key_or_hash=stored_key,
             is_hashed=is_hashed,
         )
