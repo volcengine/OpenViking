@@ -1,9 +1,10 @@
 //! OpenViking Assets manifest mode for `ov add-resource -m <manifest.yaml>`.
 //!
 //! Implements the declaration layer of the OpenViking Assets protocol
-//! (`openviking-assets/1`): a manifest defines its assets directly under
-//! `catalog:`, or — when several manifests share one asset catalog — selects
-//! assets by name from a separate catalog file (`assets.yaml`).
+//! (`openviking-assets/1`). Two keys carry the whole model: `catalog:` always
+//! holds asset definitions — inline in the manifest, or in a separate
+//! `catalog.yaml` shared by several manifests — and `assets:` always holds the
+//! names this build applies, defaulting to all of them.
 //! Validation is strict by design — unknown
 //! fields are errors, not warnings — so a mistyped manifest fails at parse
 //! time instead of silently degrading. Fetching, parsing, vectorization and
@@ -20,7 +21,7 @@ use crate::error::{Error, Result};
 use crate::output::OutputFormat;
 
 pub const STATE_PROTOCOL: &str = "openviking-assets-state/1";
-const DEFAULT_CATALOG_FILENAME: &str = "assets.yaml";
+const DEFAULT_CATALOG_FILENAME: &str = "catalog.yaml";
 const CREDENTIALS_ENV: &str = "OPENVIKING_ASSETS_CREDENTIALS_FILE";
 
 fn client_err(msg: impl Into<String>) -> Error {
@@ -240,6 +241,33 @@ pub struct ManifestRunOptions {
     /// Overrides per-asset / catalog-default values when set.
     pub watch_interval: Option<f64>,
     pub processing_mode: String,
+    /// Route assets through an external Connector service instead of the
+    /// standard ingestion pipeline.
+    pub external_connector: bool,
+}
+
+/// The `add_type` to submit for one asset.
+///
+/// Declaring it routes the source to an external Connector service, so it is
+/// sent only when the caller asked for that. The standard pipeline resolves
+/// the source from the URL itself and rejects `add_type` without an exact
+/// `to` target, which a first-time create does not have.
+fn effective_add_type(external_connector: bool, connector: &str) -> Option<String> {
+    external_connector.then(|| connector.to_string())
+}
+
+/// Where one asset lands.
+///
+/// A resource already recorded in State is synced in place. A first create
+/// normally lets the server name the resource, but a declared `add_type`
+/// requires an exact target, so external-Connector runs derive one from the
+/// asset name — unique within a manifest and already URI-safe.
+fn target_uri(
+    existing: Option<String>,
+    external_connector: bool,
+    asset_name: &str,
+) -> Option<String> {
+    existing.or_else(|| external_connector.then(|| format!("viking://resources/{asset_name}")))
 }
 
 impl Default for ManifestRunOptions {
@@ -250,6 +278,7 @@ impl Default for ManifestRunOptions {
             wait: false,
             watch_interval: None,
             processing_mode: "semantic_and_vectors".to_string(),
+            external_connector: false,
         }
     }
 }
@@ -461,7 +490,16 @@ pub async fn apply_manifest_core<S: Submitter>(
         };
         let args = build_args(asset, &credential_args[&asset.name]);
         match submitter
-            .submit(asset, entry.resource_uri.clone(), watch_interval, args)
+            .submit(
+                asset,
+                target_uri(
+                    entry.resource_uri.clone(),
+                    options.external_connector,
+                    &asset.name,
+                ),
+                watch_interval,
+                args,
+            )
             .await
         {
             Ok(response) => {
@@ -529,6 +567,7 @@ struct HttpSubmitter {
     wait: bool,
     timeout: Option<f64>,
     processing_mode: String,
+    external_connector: bool,
 }
 
 impl Submitter for HttpSubmitter {
@@ -561,7 +600,7 @@ impl Submitter for HttpSubmitter {
         self.client
             .add_resource(
                 &asset.repo_url,
-                Some("git".to_string()),
+                effective_add_type(self.external_connector, &asset.connector),
                 to,
                 None,
                 None,
@@ -714,7 +753,7 @@ fn manifest_defines_assets(manifest_yaml: &str) -> bool {
 /// Entry point for `ov add-resource -m <manifest>`.
 pub async fn handle_manifest_apply(
     manifest: String,
-    catalog: Option<String>,
+    catalog_file: Option<String>,
     options: ManifestRunOptions,
     timeout: Option<f64>,
     ctx: CliContext,
@@ -726,7 +765,7 @@ pub async fn handle_manifest_apply(
             manifest_path.display()
         ))
     })?;
-    let catalog_path = match catalog {
+    let catalog_path = match catalog_file {
         Some(path) => Some(PathBuf::from(path)),
         None if manifest_defines_assets(&manifest_yaml) => None,
         None => Some(
@@ -741,7 +780,7 @@ pub async fn handle_manifest_apply(
         .map(|path| {
             std::fs::read_to_string(path).map_err(|e| {
                 client_err(format!(
-                    "cannot read catalog '{}': {e}; define assets under 'catalog' in the manifest or pass --catalog <file>",
+                    "cannot read asset definitions '{}': {e}; define assets under 'catalog' in the manifest or pass --catalog <file>",
                     path.display()
                 ))
             })
@@ -781,6 +820,7 @@ pub async fn handle_manifest_apply(
         wait: options.wait,
         timeout,
         processing_mode: options.processing_mode.clone(),
+        external_connector: options.external_connector,
     };
     let summary = apply_manifest_core(
         &manifest_path,
@@ -820,13 +860,37 @@ mod tests {
     use std::sync::Mutex;
 
     #[test]
+    fn add_type_is_declared_only_for_external_connector_runs() {
+        // The standard pipeline resolves the source from the URL and rejects
+        // add_type without an exact `to`, which a first create does not have.
+        assert_eq!(effective_add_type(false, "git"), None);
+        assert_eq!(effective_add_type(true, "git"), Some("git".to_string()));
+        assert_eq!(effective_add_type(true, "tos"), Some("tos".to_string()));
+    }
+
+    #[test]
+    fn creates_get_an_exact_target_only_for_external_connector_runs() {
+        // Standard runs let the server name a new resource.
+        assert_eq!(target_uri(None, false, "alpha"), None);
+        // A declared add_type requires an exact target, derived from the name.
+        assert_eq!(
+            target_uri(None, true, "alpha"),
+            Some("viking://resources/alpha".to_string())
+        );
+        // An existing resource is synced in place under either mode.
+        let existing = Some("viking://resources/renamed".to_string());
+        assert_eq!(target_uri(existing.clone(), false, "alpha"), existing);
+        assert_eq!(target_uri(existing.clone(), true, "alpha"), existing);
+    }
+
+    #[test]
     fn manifest_defines_assets_detects_catalog_lists_only() {
         assert!(manifest_defines_assets(
             "protocol: openviking-assets/1\ncatalog:\n  - name: alpha\n    connector: git\n"
         ));
         assert!(!manifest_defines_assets("assets:\n  - alpha\n"));
         assert!(!manifest_defines_assets(
-            "catalog: ../assets.yaml\nassets:\n  - alpha\n"
+            "catalog: ../catalog.yaml\nassets:\n  - alpha\n"
         ));
         assert!(!manifest_defines_assets(": not yaml ["));
     }
@@ -846,7 +910,7 @@ mod tests {
     fn workspace() -> (tempfile::TempDir, PathBuf, PathBuf, Vec<ResolvedAsset>) {
         let dir = tempfile::tempdir().unwrap();
         let manifest = dir.path().join("manifest.yaml");
-        let catalog = dir.path().join("assets.yaml");
+        let catalog = dir.path().join("catalog.yaml");
         let assets = vec![
             ResolvedAsset {
                 name: "alpha".into(),

@@ -300,9 +300,9 @@ enum Commands {
             ]
         )]
         manifest: Option<String>,
-        /// Manifest mode: separate catalog file for manifests that select assets by name
-        /// (defaults to assets.yaml next to the manifest; not used when the manifest
-        /// defines assets under 'catalog')
+        /// Manifest mode: shared catalog file holding the asset definitions
+        /// (defaults to catalog.yaml next to the manifest; not used when the manifest
+        /// defines them inline under 'catalog')
         #[arg(
             long = "catalog",
             value_name = "file",
@@ -311,6 +311,15 @@ enum Commands {
             help_heading = "Manifest mode"
         )]
         catalog: Option<String>,
+        /// Manifest mode: route assets through an external Connector service, declaring each
+        /// asset's connector as add_type and creating each resource at an exact target URI
+        #[arg(
+            long = "external-connector",
+            requires = "manifest",
+            conflicts_with = "path",
+            hide = true
+        )]
+        external_connector: bool,
         /// Manifest mode: validate config and source access, then print the plan without submitting
         #[arg(
             long = "dry-run",
@@ -2858,6 +2867,7 @@ async fn main() {
             add_type,
             manifest,
             catalog,
+            external_connector,
             dry_run,
             skip_failed,
             to,
@@ -2891,6 +2901,7 @@ async fn main() {
                         wait,
                         watch_interval,
                         processing_mode,
+                        external_connector,
                     },
                     timeout,
                     ctx,
@@ -4912,14 +4923,14 @@ mod tests {
     }
 
     #[test]
-    fn cli_manifest_mode_accepts_explicit_catalog() {
+    fn cli_manifest_mode_accepts_explicit_catalog_file() {
         let result = Cli::try_parse_from([
             "ov",
             "add-resource",
             "--manifest",
             "manifests/code-qa.yaml",
             "--catalog",
-            "assets.yaml",
+            "catalog.yaml",
             "--dry-run",
         ]);
 
@@ -4927,16 +4938,41 @@ mod tests {
     }
 
     #[test]
-    fn cli_catalog_requires_manifest_mode() {
+    fn cli_catalog_file_requires_manifest_mode() {
         let result = Cli::try_parse_from([
             "ov",
             "add-resource",
             "https://github.com/org/repo",
             "--catalog",
-            "assets.yaml",
+            "catalog.yaml",
         ]);
 
         assert!(result.is_err(), "--catalog without --manifest must fail");
+    }
+
+    #[test]
+    fn cli_external_connector_stays_manifest_only() {
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "add-resource",
+                "--manifest",
+                "code-qa.yaml",
+                "--external-connector",
+            ])
+            .is_ok(),
+            "hidden flag should still parse in manifest mode"
+        );
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "add-resource",
+                "https://github.com/org/repo",
+                "--external-connector",
+            ])
+            .is_err(),
+            "--external-connector without --manifest must fail"
+        );
     }
 
     #[test]

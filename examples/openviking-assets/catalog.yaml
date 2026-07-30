@@ -7,7 +7,7 @@ defaults:
   git:
     watch_interval: 1440   # minutes; refresh every repo daily unless overridden
 
-assets:
+catalog:
   - name: openviking
     connector: git
     description: OpenViking main repository — server, CLI and SDKs

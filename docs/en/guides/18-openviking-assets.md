@@ -36,7 +36,7 @@ OpenViking Assets has three primary objects:
   `viking://` resources.
 
 ```text
-manifest.yaml (+ assets.yaml when a shared Catalog is used)
+manifest.yaml (+ catalog.yaml when a shared Catalog is used)
           |
           v
 Server resolves and validates openviking-assets/1
@@ -130,8 +130,8 @@ in the Manifest's `catalog` or in a separate Catalog file.
 ### Sharing a Catalog Across Manifests
 
 When several Manifests reuse the same sources, move the asset definitions into a Catalog file,
-normally named `assets.yaml`. A Catalog holds `protocol`, optional `defaults`, and the same asset
-definitions under `assets`:
+normally named `catalog.yaml`. A Catalog holds `protocol`, optional `defaults`, and the same
+`catalog` block — a Catalog file is simply a Manifest that selects nothing:
 
 ```yaml
 protocol: openviking-assets/1
@@ -141,7 +141,7 @@ defaults:
     auth_ref: team-git
     watch_interval: 1440
 
-assets:
+catalog:
   - name: openviking
     connector: git
     description: OpenViking main repository
@@ -167,11 +167,13 @@ assets:
 ```
 
 The team maintains one Catalog; editing an asset there updates every Manifest that selects it.
+Because the two documents share a shape, a Catalog can also be applied directly with
+`ov add-resource -m catalog.yaml`, which ingests everything it defines.
 
 The CLI locates the Catalog file as follows:
 
 1. The path passed to `--catalog <file>`, resolved from the current working directory.
-2. `assets.yaml` next to the Manifest when `--catalog` is omitted.
+2. `catalog.yaml` next to the Manifest when `--catalog` is omitted.
 
 A Manifest that defines `catalog` itself never uses a separate Catalog file; passing one with it
 fails resolution.
@@ -392,7 +394,7 @@ Primary Manifest-mode options:
 | Option | Description |
 | --- | --- |
 | `-m, --manifest <file>` | Manifest file. |
-| `--catalog <file>` | Separate Catalog file for Manifests that select assets by name; defaults to `assets.yaml` next to the Manifest. Not used when the Manifest defines `catalog` itself. |
+| `--catalog <file>` | Separate Catalog file for Manifests that select assets by name; defaults to `catalog.yaml` next to the Manifest. Not used when the Manifest defines `catalog` itself. |
 | `--dry-run` | Resolve the protocol and validate read access to every repository without submitting resources, creating tasks, or writing State. |
 | `--skip-failed` | Continue processing after an asset fails. |
 | `--wait` | Wait for each resource to finish processing. |

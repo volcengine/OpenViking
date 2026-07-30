@@ -31,7 +31,7 @@ OpenViking Assets 包含三个主要对象：
 - **State**：某个 Manifest 上次执行的结果，以及资产到 `viking://` 资源的映射。
 
 ```text
-manifest.yaml（使用共享 Catalog 时再加 assets.yaml）
+manifest.yaml（使用共享 Catalog 时再加 catalog.yaml）
           |
           v
 服务端解析和校验 openviking-assets/1
@@ -122,7 +122,8 @@ Git 资产支持：
 ### 多个 Manifest 共享一个 Catalog
 
 当多个 Manifest 复用同一批资源时，把资产定义移到单独的 Catalog 文件中，通常命名为
-`assets.yaml`。Catalog 包含 `protocol`、可选的 `defaults`，以及 `assets` 下的资产定义：
+`catalog.yaml`。Catalog 包含 `protocol`、可选的 `defaults`，以及同样的 `catalog` 块——
+一份 Catalog 文件就是一个不做选择的 Manifest：
 
 ```yaml
 protocol: openviking-assets/1
@@ -132,7 +133,7 @@ defaults:
     auth_ref: team-git
     watch_interval: 1440
 
-assets:
+catalog:
   - name: openviking
     connector: git
     description: OpenViking 主仓库
@@ -157,12 +158,13 @@ assets:
   - requests
 ```
 
-全团队维护一份 Catalog；在 Catalog 中修改资产，所有选择它的 Manifest 都会生效。
+全团队维护一份 Catalog；在 Catalog 中修改资产，所有选择它的 Manifest 都会生效。因为两种
+文档同构，Catalog 也可以直接执行：`ov add-resource -m catalog.yaml` 会导入它定义的全部资产。
 
 CLI 按以下规则查找 Catalog 文件：
 
 1. 传入 `--catalog <file>` 时使用该路径；相对路径基于当前工作目录。
-2. 未传入时读取 Manifest 所在目录下的 `assets.yaml`。
+2. 未传入时读取 Manifest 所在目录下的 `catalog.yaml`。
 
 定义了 `catalog` 的 Manifest 不使用单独的 Catalog 文件；同时传入会导致解析失败。
 
@@ -371,7 +373,7 @@ Manifest 模式的主要参数：
 | 参数 | 说明 |
 | --- | --- |
 | `-m, --manifest <file>` | Manifest 文件。 |
-| `--catalog <file>` | 按名称选择资产的 Manifest 使用的单独 Catalog 文件；省略时使用 Manifest 同目录的 `assets.yaml`。Manifest 自身定义了 `catalog` 时不使用。 |
+| `--catalog <file>` | 按名称选择资产的 Manifest 使用的单独 Catalog 文件；省略时使用 Manifest 同目录的 `catalog.yaml`。Manifest 自身定义了 `catalog` 时不使用。 |
 | `--dry-run` | 解析协议并校验所有仓库的读取权限；不提交资源、不创建任务、不写 State。 |
 | `--skip-failed` | 一个资产失败后继续处理其他资产。 |
 | `--wait` | 等待每个资源处理完成。 |
