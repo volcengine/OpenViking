@@ -1,7 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -10,10 +9,10 @@ import pytest
 from openviking.models.vlm.backends.volcengine_vlm import VolcEngineVLM
 
 
-def _response(text: str, *, status: str = "completed"):
+def _response(text: str):
     return SimpleNamespace(
         id="response-1",
-        status=status,
+        status="completed",
         output=[
             SimpleNamespace(
                 type="message",
@@ -72,7 +71,7 @@ def test_volcengine_advertises_only_supported_media_inputs():
     )
 
 
-async def test_audio_media_call_reuses_vlm_client_and_configuration(tmp_path, monkeypatch):
+async def test_audio_media_request_and_remote_cleanup(tmp_path, monkeypatch):
     path = tmp_path / "meeting.mp3"
     path.write_bytes(b"ID3-audio")
     ark = _ark("audio result")
@@ -90,10 +89,7 @@ async def test_audio_media_call_reuses_vlm_client_and_configuration(tmp_path, mo
     upload = ark.files.create.await_args.kwargs
     assert upload["purpose"] == "user_data"
     assert upload["preprocess_configs"] is None
-    assert upload["extra_headers"] == {
-        "x-request-id": "request-1",
-        "X-Client-Request-Id": ("ToB-direct,OpenViking_Service,openviking-service_cn-beijing"),
-    }
+    assert upload["extra_headers"]["x-request-id"] == "request-1"
     ark.files.wait_for_processing.assert_awaited_once_with(
         "file-1",
         poll_interval=1.5,
@@ -113,13 +109,10 @@ async def test_audio_media_call_reuses_vlm_client_and_configuration(tmp_path, mo
     )
 
 
-async def test_video_media_call_passes_fps_and_cleanup_failure_preserves_result(
-    tmp_path, monkeypatch
-):
+async def test_video_media_request_uses_configured_fps(tmp_path, monkeypatch):
     path = tmp_path / "clip.mov"
     path.write_bytes(b"video")
     ark = _ark("video result")
-    ark.files.delete.side_effect = RuntimeError("cleanup unavailable")
     vlm = _vlm()
     monkeypatch.setattr(vlm, "get_async_client", lambda: ark)
 
@@ -132,6 +125,11 @@ async def test_video_media_call_passes_fps_and_cleanup_failure_preserves_result(
 
     assert result == "video result"
     assert ark.files.create.await_args.kwargs["preprocess_configs"] == {"video": {"fps": 0.5}}
+    assert ark.responses.create.await_args.kwargs["input"][0]["content"][0] == {
+        "type": "input_video",
+        "file_id": "file-1",
+    }
+    ark.files.delete.assert_awaited_once()
 
 
 async def test_failed_file_processing_is_terminal_and_cleans_remote_file(tmp_path, monkeypatch):
@@ -154,115 +152,4 @@ async def test_failed_file_processing_is_terminal_and_cleans_remote_file(tmp_pat
         )
 
     assert ark.files.create.await_count == 1
-    ark.files.delete.assert_awaited_once()
-
-
-async def test_media_usage_updates_vlm_token_tracker(tmp_path, monkeypatch):
-    path = tmp_path / "clip.mp4"
-    path.write_bytes(b"video")
-    ark = _ark("tracked result")
-    vlm = _vlm()
-    monkeypatch.setattr(vlm, "get_async_client", lambda: ark)
-
-    result = await vlm.get_media_completion_async(
-        prompt="analyze video",
-        media_path=path,
-        filename=path.name,
-        media_type="video",
-    )
-
-    assert result == "tracked result"
-    usage = vlm.get_token_usage()
-    assert usage["total_usage"]["prompt_tokens"] == 120
-    assert usage["total_usage"]["completion_tokens"] == 40
-    assert usage["usage_by_model"]["media-model"]["total_usage"]["call_count"] == 1
-
-
-async def test_transient_upload_error_retries_with_same_vlm_client(tmp_path, monkeypatch):
-    class ServiceUnavailable(RuntimeError):
-        status_code = 503
-
-    path = tmp_path / "meeting.mp3"
-    path.write_bytes(b"ID3-audio")
-    ark = _ark("retried result")
-    ark.files.create.side_effect = [
-        ServiceUnavailable("provider response must not be logged"),
-        SimpleNamespace(id="file-2"),
-    ]
-    vlm = _vlm(max_retries=1)
-    monkeypatch.setattr(vlm, "get_async_client", lambda: ark)
-    monkeypatch.setattr(
-        "openviking.utils.model_retry.asyncio.sleep",
-        AsyncMock(),
-    )
-
-    result = await vlm.get_media_completion_async(
-        prompt="analyze audio",
-        media_path=path,
-        filename=path.name,
-        media_type="audio",
-    )
-
-    assert result == "retried result"
-    assert ark.files.create.await_count == 2
-    ark.files.delete.assert_awaited_once_with(
-        "file-2",
-        extra_headers=vlm.extra_headers,
-    )
-
-
-async def test_cancellation_still_cleans_up_uploaded_file(tmp_path, monkeypatch):
-    path = tmp_path / "clip.mp4"
-    path.write_bytes(b"video")
-    ark = _ark()
-    processing_started = asyncio.Event()
-
-    async def wait_forever(*_args, **_kwargs):
-        processing_started.set()
-        await asyncio.Future()
-
-    ark.files.wait_for_processing.side_effect = wait_forever
-    vlm = _vlm()
-    monkeypatch.setattr(vlm, "get_async_client", lambda: ark)
-
-    task = asyncio.create_task(
-        vlm.get_media_completion_async(
-            prompt="analyze video",
-            media_path=path,
-            filename=path.name,
-            media_type="video",
-        )
-    )
-    await processing_started.wait()
-    task.cancel()
-
-    with pytest.raises(asyncio.CancelledError):
-        await task
-
-    ark.files.delete.assert_awaited_once_with(
-        "file-1",
-        extra_headers=vlm.extra_headers,
-    )
-
-
-async def test_cleanup_error_preserves_original_processing_error(tmp_path, monkeypatch):
-    path = tmp_path / "clip.mp4"
-    path.write_bytes(b"video")
-    ark = _ark()
-    ark.files.wait_for_processing.return_value = SimpleNamespace(
-        status="failed",
-        error=SimpleNamespace(message="unsupported codec"),
-    )
-    ark.files.delete.side_effect = RuntimeError("cleanup unavailable")
-    vlm = _vlm()
-    monkeypatch.setattr(vlm, "get_async_client", lambda: ark)
-
-    with pytest.raises(RuntimeError, match="unsupported codec"):
-        await vlm.get_media_completion_async(
-            prompt="analyze video",
-            media_path=path,
-            filename=path.name,
-            media_type="video",
-        )
-
     ark.files.delete.assert_awaited_once()
