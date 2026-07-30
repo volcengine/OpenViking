@@ -86,6 +86,13 @@ def _smart_stem(path_or_name: str | Path) -> str:
 logger = get_logger(__name__)
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _gh_slug(text: str) -> str:
     """GitHub-style heading slug: lowercase, strip punctuation, spaces→'-', keep CJK."""
     s = text.strip().lower()
@@ -397,18 +404,79 @@ class MarkdownParser(BaseParser):
         """Phase 2 (write only): replay ``layout.ops`` against the real VikingFS —
         create dirs, write each section (rewriting relative links when enabled), then
         ingest the local images those sections reference."""
+        started = time.perf_counter()
         viking_fs = self._get_viking_fs()
+        mkdir_ops = [op for op in layout.ops if op.kind == "mkdir"]
+        write_ops = [op for op in layout.ops if op.kind == "write"]
+        write_chars = sum(len(op.content or "") for op in write_ops)
+
+        rewrite_enabled = bool(
+            self._rewrite_ctx
+            and self._rewrite_ctx.get("enabled")
+            and self._rewrite_ctx.get("source_path")
+            and self._rewrite_ctx.get("import_root")
+        )
+
+        mkdir_started = time.perf_counter()
+        mkdir_count = 0
         for op in layout.ops:
             if op.kind == "mkdir":
                 await viking_fs.mkdir(op.uri, exist_ok=op.exist_ok)
-            else:
-                await self._write_section(op.uri, op.content)
+                mkdir_count += 1
+        mkdir_s = time.perf_counter() - mkdir_started
+
+        write_started = time.perf_counter()
+        for op in write_ops:
+            await self._write_section(op.uri, op.content)
+        write_s = time.perf_counter() - write_started
 
         # Ingest local image files, placing each image next to the markdown file
-        # that references it.
-        await self._ingest_local_images(layout.root_dir, base_dir, allowed_media_dirs)
+        # that references it. For generated tables with no image references, avoid
+        # glob+read over every chunk file we just wrote.
+        images_started = time.perf_counter()
+        has_image_refs = self._layout_has_local_image_refs(write_ops)
+        if has_image_refs:
+            await self._ingest_local_images(layout.root_dir, base_dir, allowed_media_dirs)
+        images_s = time.perf_counter() - images_started
+
+        total_s = time.perf_counter() - started
+        if _env_bool("OPENVIKING_MARKDOWN_APPLY_PROFILE", False):
+            logger.info(
+                f"[MarkdownApplyProfile] total={total_s:.3f}s mkdir={mkdir_s:.3f}s "
+                f"write={write_s:.3f}s images={images_s:.3f}s ops={len(layout.ops)} "
+                f"mkdir_ops={len(mkdir_ops)} mkdir_count={mkdir_count} "
+                f"write_ops={len(write_ops)} write_chars={write_chars} "
+                f"rewrite_enabled={rewrite_enabled} has_image_refs={has_image_refs} "
+                f"root={layout.root_dir}"
+            )
 
     # ========== Helper Methods ==========
+
+    def _layout_has_local_image_refs(self, write_ops: List[_LayoutOp]) -> bool:
+        """Return True when planned markdown content references local images.
+
+        This mirrors the image patterns consumed by _ingest_local_images, but runs
+        against in-memory layout content so pure-text imports avoid a VFS glob/read
+        pass over every generated markdown chunk.
+        """
+        try:
+            from openviking.parse.image_rewrite import HTML_IMG_PATTERN
+        except ImportError:
+            HTML_IMG_PATTERN = re.compile(
+                r"""(<img\s[^>]*?src=["'])([^"']+)(["'][^>]*>)""", re.IGNORECASE
+            )
+
+        for op in write_ops:
+            content = op.content or ""
+            if "![" in content:
+                for match in self._image_pattern.finditer(content):
+                    if not self._is_remote_uri(match.group(2)):
+                        return True
+            if "<img" in content.lower():
+                for match in HTML_IMG_PATTERN.finditer(content):
+                    if not self._is_remote_uri(match.group(2)):
+                        return True
+        return False
 
     def _extract_frontmatter(self, content: str) -> Tuple[str, Optional[Dict[str, Any]]]:
         """

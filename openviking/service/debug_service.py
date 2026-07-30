@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from openviking.server.identity import RequestContext
-from openviking.storage import VikingDBManager
+from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.storage.observers import (
     FilesystemObserver,
     ModelsObserver,

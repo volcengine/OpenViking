@@ -266,9 +266,10 @@ class OpenVikingSessionRecorder:
         messages_written = 0
         input_messages_consumed = 0
         context_attached = False
+        persisted_pending_tokens: Any = None
         for batch in batches:
             try:
-                call_openviking(
+                write_result = call_openviking(
                     client,
                     "batch_add_messages",
                     session_id=session_id,
@@ -290,13 +291,24 @@ class OpenVikingSessionRecorder:
             messages_written += len(batch.payloads)
             input_messages_consumed = batch.input_end
             context_attached = context_attached or batch.context_attached
+            if isinstance(write_result, dict) and "pending_tokens" in write_result:
+                persisted_pending_tokens = write_result.get("pending_tokens")
+            else:
+                hint = item_value(write_result, "pending_tokens")
+                if hint is not None:
+                    persisted_pending_tokens = hint
         result = OpenVikingRecordResult(
             messages_written=messages_written,
             input_messages_consumed=len(input_messages),
             context_attached=context_attached,
         )
         try:
-            apply_commit_policy(client, session_id, self.commit_policy)
+            apply_commit_policy(
+                client,
+                session_id,
+                self.commit_policy,
+                persisted_pending_tokens=persisted_pending_tokens,
+            )
         except Exception as exc:
             self._pending_commit_sessions.add(session_id)
             raise OpenVikingPartialWriteError(
@@ -332,9 +344,10 @@ class OpenVikingSessionRecorder:
         messages_written = 0
         input_messages_consumed = 0
         context_attached = False
+        persisted_pending_tokens: Any = None
         for batch in batches:
             try:
-                await acall_openviking(
+                write_result = await acall_openviking(
                     client,
                     "batch_add_messages",
                     session_id=session_id,
@@ -370,13 +383,24 @@ class OpenVikingSessionRecorder:
             messages_written += len(batch.payloads)
             input_messages_consumed = batch.input_end
             context_attached = context_attached or batch.context_attached
+            if isinstance(write_result, dict) and "pending_tokens" in write_result:
+                persisted_pending_tokens = write_result.get("pending_tokens")
+            else:
+                hint = item_value(write_result, "pending_tokens")
+                if hint is not None:
+                    persisted_pending_tokens = hint
         result = OpenVikingRecordResult(
             messages_written=messages_written,
             input_messages_consumed=len(input_messages),
             context_attached=context_attached,
         )
         try:
-            await aapply_commit_policy(client, session_id, self.commit_policy)
+            await aapply_commit_policy(
+                client,
+                session_id,
+                self.commit_policy,
+                persisted_pending_tokens=persisted_pending_tokens,
+            )
         except asyncio.CancelledError as exc:
             self._pending_commit_sessions.add(session_id)
             _attach_cancellation_progress(

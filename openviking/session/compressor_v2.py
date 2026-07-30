@@ -28,7 +28,7 @@ from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import render_template
 from openviking.session.skill import SkillOperationUpdater, dedup_session_skill_operations
 from openviking.session.skill.session_skill_context_provider import SESSION_SKILL_MEMORY_TYPE
-from openviking.storage import VikingDBManager
+from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.utils.skill_processor import SkillProcessor

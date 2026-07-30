@@ -138,6 +138,19 @@ def _resolve_message_parts(msg_request: AddMessageRequest) -> List[Part]:
     return [TextPart(text=msg_request.content or "")]
 
 
+def _session_pending_tokens(session: Any) -> int:
+    """Read the post-write pending-token count from a session.
+
+    Returns 0 when the session object does not expose ``meta`` so the response
+    stays well-formed against lightweight or legacy session implementations.
+    """
+    meta = getattr(session, "meta", None)
+    try:
+        return max(0, int(getattr(meta, "pending_tokens", 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _resolve_message_peer_id(msg_request: AddMessageRequest, ctx: RequestContext) -> Optional[str]:
     if msg_request.peer_id is not None:
         return msg_request.peer_id
@@ -519,6 +532,9 @@ async def add_message(
         return {
             "session_id": session_id,
             "message_count": len(session.messages),
+            # Post-write value so a commit policy can decide without a
+            # follow-up get_session round trip.
+            "pending_tokens": _session_pending_tokens(session),
         }
 
     execution = await run_operation(
@@ -567,6 +583,9 @@ async def batch_add_messages(
             "session_id": session_id,
             "message_count": len(session.messages),
             "added": len(msgs),
+            # Post-write value so a commit policy can decide without a
+            # follow-up get_session round trip.
+            "pending_tokens": _session_pending_tokens(session),
         }
 
     execution = await run_operation(

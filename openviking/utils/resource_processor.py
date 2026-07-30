@@ -24,7 +24,7 @@ from openviking.resource.processing_mode import (
     normalize_processing_mode,
 )
 from openviking.server.identity import RequestContext
-from openviking.storage import VikingDBManager
+from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.expr import And, Eq, PathScope
 from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES

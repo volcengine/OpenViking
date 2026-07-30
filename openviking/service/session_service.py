@@ -16,7 +16,7 @@ from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory_policy import MemoryPolicy
-from openviking.storage import VikingDBManager
+from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import (
     AlreadyExistsError,

@@ -40,7 +40,7 @@ from openviking.server.user_config import (
     effective_resource_add_target,
     effective_skill_add_target,
 )
-from openviking.storage import VikingDBManager
+from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry

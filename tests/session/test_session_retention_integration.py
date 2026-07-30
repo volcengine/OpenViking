@@ -114,9 +114,14 @@ async def test_session_context_enforces_hard_budget_without_mutating_archive_raw
     assert live.content == "B" * 4000
 
 
-async def test_failed_archive_returns_raw_but_done_without_overview_stays_archived(
+async def test_context_stops_at_newest_terminal_without_replaying_older_failed_raw(
     client: AsyncOpenViking,
 ):
+    """The read path stops at archive_002 and never replays archive_001 raw.
+
+    Phase 2 still treats the uncovered failed archive as replayable; only
+    ``get_session_context`` stops at the newest terminal.
+    """
     session = client.session(session_id="failed_and_wm_disabled_archive_test")
     await session.ensure_exists()
     await _write_archive(
@@ -134,13 +139,17 @@ async def test_failed_archive_returns_raw_but_done_without_overview_stays_archiv
 
     context = await session.get_session_context()
 
-    assert [message["id"] for message in context["messages"]] == ["u1"]
+    assert [message["id"] for message in context["messages"]] == []
+    # archive_002 is the terminal: .done without a readable overview, so the
+    # read path reports it as failed and injects no overview.
+    assert context["latest_archive_overview"] == ""
     assert context["stats"]["failedArchives"] == 1
 
 
-async def test_done_with_missing_required_overview_remains_uncovered(
+async def test_done_with_missing_required_overview_reports_failed_without_raw(
     client: AsyncOpenViking,
 ):
+    """A required overview that is unreadable yields no overview and no raw."""
     session = client.session(session_id="missing_required_overview_test")
     await session.ensure_exists()
     await _write_archive(
@@ -156,7 +165,8 @@ async def test_done_with_missing_required_overview_remains_uncovered(
 
     context = await session.get_session_context()
 
-    assert [message["id"] for message in context["messages"]] == ["u1"]
+    assert [message["id"] for message in context["messages"]] == []
+    assert context["latest_archive_overview"] == ""
     assert context["stats"]["failedArchives"] == 1
 
 
@@ -182,7 +192,8 @@ async def test_legacy_done_marker_covers_only_its_own_archive(
     context = await session.get_session_context()
 
     assert context["latest_archive_overview"].endswith("legacy archive two only")
-    assert [message["id"] for message in context["messages"]] == ["u1"]
+    # Terminal-stop read path: archive_001 sits at/older than the terminal.
+    assert [message["id"] for message in context["messages"]] == []
 
 
 async def test_coverage_metadata_cannot_hide_a_pending_archive(
@@ -209,9 +220,15 @@ async def test_coverage_metadata_cannot_hide_a_pending_archive(
         },
     )
 
-    context = await session.get_session_context()
+    # Phase 2 bookkeeping still refuses to treat a pending archive as covered.
+    states = await session._scan_archive_states()
+    covered = session._covered_archive_ids(states)
+    assert "archive_001" not in covered
 
-    assert [message["id"] for message in context["messages"]] == ["u1"]
+    # The read path stops at the newest terminal, so the pending archive that is
+    # older than it does not contribute raw messages either.
+    context = await session.get_session_context()
+    assert [message["id"] for message in context["messages"]] == []
 
 
 async def test_later_coverage_absorbs_failed_raw_and_stable_deduplicates_root(
@@ -1051,8 +1068,14 @@ async def test_missing_required_checkpoint_keeps_archive_raw_uncovered(
 
     assert not await session._viking_fs.exists(f"{archive_uri}/.done", ctx=session.ctx)
     assert await session._viking_fs.exists(f"{archive_uri}/.failed.json", ctx=session.ctx)
+    # A missing required checkpoint keeps the archive uncovered and durable on
+    # disk. The terminal-stop read path no longer replays its raw messages, so
+    # the archived step ``a1`` is gone while the retained anchor and live tail
+    # stay, and no checkpoint is synthesized.
+    raw = await session._read_archive_messages(archive_uri)
+    assert [message.id for message in raw] == ["u1", "a1"]
     context = await session.get_session_context()
-    assert [message["id"] for message in context["messages"]] == ["u1", "a1", "a2"]
+    assert [message["id"] for message in context["messages"]] == ["u1", "a2"]
     assert not any(message.get("message_kind") == "checkpoint" for message in context["messages"])
 
 
@@ -1180,9 +1203,14 @@ async def test_covered_failed_partial_turn_checkpoint_points_to_covering_overvie
     assert checkpoint["source_message_ids"] == ["a1"]
 
 
-async def test_repeated_partial_commits_merge_checkpoints_for_same_turn_anchor(
+async def test_repeated_partial_commits_restore_only_newest_checkpoint(
     client: AsyncOpenViking,
 ):
+    """Terminal-stop keeps checkpoint reads O(1), so only archive_002 is restored.
+
+    The earlier disjoint prefix from archive_001 is intentionally not merged
+    anymore; restoring it would require walking the whole archive history.
+    """
     session = client.session(session_id="repeated_partial_checkpoint_merge_test")
     await session.ensure_exists()
     anchor = _text_message("u1", "user", "investigate the outage")
@@ -1232,12 +1260,9 @@ async def test_repeated_partial_commits_merge_checkpoints_for_same_turn_anchor(
         "a3",
     ]
     checkpoint = context["messages"][1]
-    assert checkpoint["source_message_ids"] == ["a1", "a2"]
+    assert checkpoint["source_message_ids"] == ["a2"]
     assert checkpoint["parts"][0]["uri"] == second_uri
-    assert checkpoint["parts"][0]["abstract"] == (
-        "First prefix found pool saturation.\n\n"
-        "Second prefix ruled out the network path."
-    )
+    assert checkpoint["parts"][0]["abstract"] == "Second prefix ruled out the network path."
 
 
 async def test_commit_externalizes_tool_outputs_across_the_whole_turn(
@@ -1445,10 +1470,15 @@ async def test_add_waits_for_commit_root_rewrite_and_remains_live(
     ]
 
 
-async def test_queue_enqueue_failure_marks_archive_failed_and_keeps_raw_logically_live(
+async def test_queue_enqueue_failure_marks_archive_failed_and_keeps_raw_durable(
     client: AsyncOpenViking,
     monkeypatch,
 ):
+    """The failed marker is authoritative and the raw file stays durable.
+
+    Terminal-stop means ``get_session_context`` no longer replays that raw as
+    logical live; recovery goes through Phase 2 roll-forward instead.
+    """
     session = client.session(session_id="queue_enqueue_failure_recovery_test")
     session.add_message("user", [TextPart("do not lose me")])
 
@@ -1474,7 +1504,12 @@ async def test_queue_enqueue_failure_marks_archive_failed_and_keeps_raw_logicall
     )
     assert states[0].state == "failed"
     assert failed["stage"] == "queue_enqueue"
+    # Raw stays durable on disk, and this message is also still live in root
+    # because the failed commit never trimmed it.
+    raw = await session._read_archive_messages(states[0].archive_uri)
+    assert [message.content for message in raw] == ["do not lose me"]
     assert [message["parts"][0]["text"] for message in context["messages"]] == ["do not lose me"]
+    assert context["stats"]["failedArchives"] == 1
 
 
 async def test_phase1_root_rewrite_failure_marks_orphan_archive_failed(
@@ -1507,10 +1542,12 @@ async def test_phase1_root_rewrite_failure_marks_orphan_archive_failed(
     context = await fresh.get_session_context()
     assert states[0].state == "failed"
     assert failed["stage"] == "phase1_persist"
-    assert [message["parts"][0]["text"] for message in context["messages"]] == [
-        "archive candidate",
-        "retained tail",
-    ]
+    # The orphan archive keeps its raw messages durable on disk and Phase 2 can
+    # still roll them forward. The terminal-stop read path, however, no longer
+    # replays them as logical live, so only the retained tail is assembled.
+    raw = await fresh._read_archive_messages(states[0].archive_uri)
+    assert [message.content for message in raw] == ["archive candidate"]
+    assert [message["parts"][0]["text"] for message in context["messages"]] == ["retained tail"]
 
 
 async def test_phase1_enqueues_before_root_rewrite_and_publishes_ready_last(

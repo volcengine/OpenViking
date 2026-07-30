@@ -201,6 +201,18 @@ OpenViking は、VikingMem 論文に記載されたコア機能の一部をオ�
 > arXiv:2605.29640, 2026. Accepted by VLDB 2026.
 > 📄 [arXiv で論文を読む](https://arxiv.org/abs/2605.29640)
 
+## パートナープロジェクト
+
+OpenViking は、コンテキストデータエコシステムを構築するために他のオープンソースプロジェクトとのコラボレーションを歓迎します。確認済みのパートナーは以下の通りです:
+
+- [deer-flow](https://github.com/bytedance/deer-flow) - オープンソースの長時間 SuperAgent フレームワーク
+- [NoKV](https://github.com/NoKV-Lab/NoKV) - AI ネイティブの分散ファイルシステム
+- [loopx](https://github.com/huangruiteng/loopx) - 軽量なループエンジニアリング状態カーネル
+- [Hermes Agent](https://github.com/NousResearch/hermes-agent) - あなたと共に成長するエージェント
+- [heima](https://github.com/litentry/heima) - Substrate ベースの EVM 互換 L1 チェーン
+
+パートナーリストへの参加に興味がありますか？コミュニティに issue を提出して申請してください。
+
 ## コミュニティとコントリビューション
 
 OpenViking はまだ初期段階にあり、作るべきものが数多く残っています。
