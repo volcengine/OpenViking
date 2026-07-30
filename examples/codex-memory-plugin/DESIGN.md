@@ -218,6 +218,8 @@ OV session id, while commits create additional archives under that session.
 {
   "codexSessionId": "0193af...",   // codex thread id
   "ovSessionId": "cx-0193af...-or-null", // null means "committed, awaiting next Stop"
+  "actorPeerId": "-Users-x-Dev-OpenViking", // effective peer fixed for this session
+  "workspacePeerId": "-Users-x-Dev-OpenViking", // compatibility for older plugin versions
   "capturedTurnCount": 7,            // turns from transcript already appended
   "createdAt": 1715000000000,
   "lastUpdatedAt": 1715000300000
@@ -228,6 +230,15 @@ Legacy state files from earlier plugin versions may still contain a UUID
 `ovSessionId`; those are now overwritten with the derived `cx-*` id on the
 next resolve. The migration window for preserving old UUID sessions has
 closed.
+
+`actorPeerId` records the effective actor identity at session creation so a
+later SessionStart sweep can commit orphaned state from another workspace
+without borrowing the new session's peer. An empty string records that peer
+isolation was intentionally disabled; `null` means the state has not recorded
+an identity yet. `workspacePeerId` remains as a fallback for state written
+before `actorPeerId` was introduced. If neither field identifies the actor,
+the sweep preserves the state and skips automatic commit instead of guessing
+or broadening peer access.
 
 State files are atomic-write (tmpfile + rename) to survive crash mid-write.
 

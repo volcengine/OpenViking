@@ -78,7 +78,7 @@ function emitAdditionalContext(additionalContext) {
   });
 }
 
-async function fetchJSON(path, init = {}) {
+async function fetchJSON(path, init = {}, actorPeerId = activePeerId) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), cfg.captureTimeoutMs);
   try {
@@ -89,7 +89,7 @@ async function fetchJSON(path, init = {}) {
     }
     if (cfg.sendIdentityHeaders && cfg.account) headers["X-OpenViking-Account"] = cfg.account;
     if (cfg.sendIdentityHeaders && cfg.user) headers["X-OpenViking-User"] = cfg.user;
-    if (activePeerId) headers["X-OpenViking-Actor-Peer"] = activePeerId;
+    if (actorPeerId) headers["X-OpenViking-Actor-Peer"] = actorPeerId;
     if (cfg.userAgent) headers["User-Agent"] = cfg.userAgent;
     const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     const body = await res.json().catch(() => null);
@@ -103,11 +103,12 @@ async function fetchJSON(path, init = {}) {
   }
 }
 
-async function commitOvSession(ovSessionId) {
+async function commitOvSession(ovSessionId, actorPeerId) {
   if (!ovSessionId) return null;
   return fetchJSON(
     `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`,
     { method: "POST", body: JSON.stringify({}) },
+    actorPeerId,
   );
 }
 
@@ -189,7 +190,26 @@ async function injectResumeArchive(newSessionId) {
 async function commitAndClear(state, reason) {
   if (state.ovSessionId) {
     const ovSessionId = state.ovSessionId;
-    const commit = await commitOvSession(state.ovSessionId);
+    // A SessionStart sweep may commit state created by another workspace.
+    // Use that session's persisted actor identity instead of the peer derived
+    // from the workspace that happens to be starting now. For state written
+    // before actorPeerId existed, workspacePeerId is the exact prior identity.
+    // An explicitly persisted empty actorPeerId means peer isolation was
+    // intentionally disabled. If neither identity field is known, preserve
+    // the state instead of guessing or broadening access.
+    const hasActorPeerId = Object.prototype.hasOwnProperty.call(state, "actorPeerId")
+      && state.actorPeerId !== null
+      && state.actorPeerId !== undefined;
+    const actorPeerId = hasActorPeerId ? state.actorPeerId : (state.workspacePeerId || "");
+    if (!hasActorPeerId && !actorPeerId) {
+      logError("commit_missing_peer_keep_state", {
+        reason,
+        codexSessionId: state.codexSessionId,
+        ovSessionId: state.ovSessionId,
+      });
+      return { committed: false, ovSessionId: null };
+    }
+    const commit = await commitOvSession(state.ovSessionId, actorPeerId);
     if (!commit) {
       logError("commit_failed_keep_state", {
         reason,
@@ -242,9 +262,15 @@ async function main() {
   activePeerId = effectivePeer.peerId;
   if (newSessionId !== "unknown") {
     const state = await loadState(newSessionId);
+    const hasActorPeerId = state.actorPeerId !== null && state.actorPeerId !== undefined;
+    activePeerId = hasActorPeerId
+      ? state.actorPeerId
+      : (state.workspacePeerId || effectivePeer.peerId);
     await saveState({
       ...state,
-      workspacePeerId: effectivePeer.source === "workspace" ? effectivePeer.peerId : "",
+      actorPeerId: activePeerId,
+      workspacePeerId: state.workspacePeerId
+        || (!hasActorPeerId && effectivePeer.source === "workspace" ? effectivePeer.peerId : ""),
     });
   }
   log("start", {

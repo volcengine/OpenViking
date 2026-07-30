@@ -47,6 +47,9 @@ function defaultState(codexSessionId) {
   return {
     codexSessionId,
     ovSessionId: null,
+    // null means this state has not recorded an actor identity yet. An empty
+    // string is distinct: it means peer isolation was intentionally disabled.
+    actorPeerId: null,
     workspacePeerId: "",
     capturedTurnCount: 0,
     createdAt: now,

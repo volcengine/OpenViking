@@ -141,7 +141,10 @@ async function main() {
   const transcriptPath = input.transcript_path || null;
   const trigger = input.trigger || "auto";
   const state = await loadState(sessionId);
-  activePeerId = cfg.peerId || state.workspacePeerId || resolveEffectivePeerId({ cfg, cwd: process.cwd() }).peerId;
+  activePeerId = state.actorPeerId !== null && state.actorPeerId !== undefined
+    ? state.actorPeerId
+    : (state.workspacePeerId || resolveEffectivePeerId({ cfg, cwd: process.cwd() }).peerId);
+  state.actorPeerId = activePeerId;
   log("start", { sessionId, transcriptPath, trigger, hasPeer: Boolean(activePeerId) });
 
   const health = await fetchJSON("/health");
