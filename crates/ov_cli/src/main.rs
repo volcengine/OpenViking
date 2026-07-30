@@ -300,7 +300,9 @@ enum Commands {
             ]
         )]
         manifest: Option<String>,
-        /// Manifest mode: asset catalog file (defaults to assets.yaml next to the manifest)
+        /// Manifest mode: separate catalog file for manifests that select assets by name
+        /// (defaults to assets.yaml next to the manifest; not used when the manifest
+        /// defines assets under 'catalog')
         #[arg(
             long = "catalog",
             value_name = "file",

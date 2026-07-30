@@ -2,10 +2,10 @@
 
 > 实验性功能。`openviking-assets/1` 协议和命令行行为仍可能在后续版本中调整。
 
-OpenViking Assets 用声明文件描述“一个知识库应该由哪些资源组成”。团队在一个
-Catalog 中维护可接入资源的全集，再用多个 Manifest 按名称选择不同用途所需的资源。
-执行 Manifest 时，OpenViking 会逐项创建或更新资源，并在本地保存资产与
-`viking://` 资源之间的映射。
+OpenViking Assets 用声明文件描述“一个知识库应该由哪些资源组成”。最简单的形态是
+一个 Manifest 文件直接定义要接入的资产；团队也可以在共享的 Catalog 中维护可接入
+资源的全集，再用多个 Manifest 按名称选择不同用途所需的资源。执行 Manifest 时，
+OpenViking 会逐项创建或更新资源，并在本地保存资产与 `viking://` 资源之间的映射。
 
 它适合管理多仓代码问答库、团队文档集和其他需要重复构建、持续更新的资源集合。
 
@@ -24,12 +24,14 @@ Watch 更新仍由 `add_resource` 及服务端连接器完成；Assets 只增加
 
 OpenViking Assets 包含三个主要对象：
 
-- **Catalog**：团队可接入资源的目录，包含来源、分支、默认更新周期和凭据别名。
-- **Manifest**：一次构建需要选择的资产名称列表。
+- **Manifest**：实际执行的文件。可以在 `catalog:` 下直接定义要接入的资产，也可以按名称
+  从单独的 Catalog 文件中选择资产。
+- **Catalog**：团队可接入资源的目录，包含来源、分支、默认更新周期和凭据别名。只有在多个
+  Manifest 需要共享时才作为单独文件存在，否则直接写在 Manifest 里。
 - **State**：某个 Manifest 上次执行的结果，以及资产到 `viking://` 资源的映射。
 
 ```text
-assets.yaml + manifest.yaml
+manifest.yaml（使用共享 Catalog 时再加 assets.yaml）
           |
           v
 服务端解析和校验 openviking-assets/1
@@ -44,14 +46,81 @@ CLI 解析本地凭据和 State
 逐个调用 add_resource -> viking:// resources
 ```
 
-服务端是协议解析的权威实现。CLI 会把 Catalog 和 Manifest 的原始 YAML 发送到当前配置的
-OpenViking 服务，由服务端完成严格校验并返回执行计划；服务端的解析接口本身不会创建资源。
+服务端是协议解析的权威实现。CLI 会把 Manifest 的原始 YAML（使用单独 Catalog 文件时
+一并发送 Catalog YAML）发送到当前配置的 OpenViking 服务，由服务端完成严格校验并返回
+执行计划；服务端的解析接口本身不会创建资源。
 
 ## 协议
 
-### Catalog
+### Manifest
 
-Catalog 通常命名为 `assets.yaml`：
+Manifest 描述一次知识库构建。最简单的形态下它是唯一需要的文件：在 `catalog:` 下
+直接定义资产：
+
+```yaml
+protocol: openviking-assets/1
+
+defaults:
+  git:
+    auth_ref: team-git
+    watch_interval: 1440
+
+catalog:
+  - name: openviking
+    connector: git
+    description: OpenViking 主仓库
+    params:
+      repo_url: https://github.com/volcengine/OpenViking
+      branch: main
+
+  - name: requests
+    connector: git
+    description: Requests HTTP 客户端源码
+    watch_interval: 0
+    params:
+      repo_url: https://github.com/psf/requests
+      branch: main
+```
+
+Manifest 顶层字段：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `protocol` | 定义 `catalog` 时必填 | 当前必须为 `openviking-assets/1`；只按名称选择资产的 Manifest 可省略，但设置时同样会校验。 |
+| `defaults` | 否 | 为本文件定义的资产设置连接器级默认值；只能与 `catalog` 一起使用。 |
+| `catalog` | 否 | 资产定义列表（字段见下）。定义了 `catalog` 的 Manifest 自身就是完整配置。 |
+| `assets` | 见说明 | 要执行的资产名称。`catalog` 在同一文件中时可省略——省略表示执行全部定义的资产；资产定义在单独 Catalog 文件中时必填。 |
+| `include` | 否 | v1 不支持组合其他 Manifest；非空时解析失败。 |
+
+重复的资产名称会按首次出现的位置去重。选择不存在的资产时，整个解析失败。
+
+`defaults.git` 支持：
+
+| 字段 | 说明 |
+| --- | --- |
+| `auth_ref` | 本地凭据文件中的默认别名。 |
+| `watch_interval` | 默认 Watch 周期，单位为分钟；`0` 表示不自动刷新。 |
+
+Git 资产支持：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `name` | 是 | 唯一资产名称，必须匹配 `[A-Za-z0-9][A-Za-z0-9._-]*`。 |
+| `connector` | 是 | v1 只支持 `git`。 |
+| `description` | 否 | 资产用途说明。 |
+| `params.repo_url` | 是 | Git clone URL。 |
+| `params.branch` | 否 | 要接入的分支；设置时不能为空。 |
+| `auth_ref` | 否 | 覆盖 `defaults.git.auth_ref`。 |
+| `watch_interval` | 否 | 覆盖 `defaults.git.watch_interval`。 |
+
+校验是严格的：未知字段、重复资产名和不支持的连接器都会使整个解析失败，即使有问题的资产
+没有被本次执行选择。`params` 内容和 clone URL 安全性针对被选中的资产校验。这些规则与
+资产定义所在的位置无关——写在 Manifest 的 `catalog` 里和写在单独的 Catalog 文件里完全相同。
+
+### 多个 Manifest 共享一个 Catalog
+
+当多个 Manifest 复用同一批资源时，把资产定义移到单独的 Catalog 文件中，通常命名为
+`assets.yaml`。Catalog 包含 `protocol`、可选的 `defaults`，以及 `assets` 下的资产定义：
 
 ```yaml
 protocol: openviking-assets/1
@@ -78,65 +147,22 @@ assets:
       branch: main
 ```
 
-Catalog 顶层字段：
-
-| 字段 | 必填 | 说明 |
-| --- | --- | --- |
-| `protocol` | 是 | 当前必须为 `openviking-assets/1`。 |
-| `defaults` | 否 | 按连接器设置 Catalog 级默认值。 |
-| `assets` | 是 | 资产定义列表。 |
-
-`defaults.git` 支持：
-
-| 字段 | 说明 |
-| --- | --- |
-| `auth_ref` | 本地凭据文件中的默认别名。 |
-| `watch_interval` | 默认 Watch 周期，单位为分钟；`0` 表示不自动刷新。 |
-
-Git 资产支持：
-
-| 字段 | 必填 | 说明 |
-| --- | --- | --- |
-| `name` | 是 | Catalog 内唯一名称，必须匹配 `[A-Za-z0-9][A-Za-z0-9._-]*`。 |
-| `connector` | 是 | v1 只支持 `git`。 |
-| `description` | 否 | 资产用途说明。 |
-| `params.repo_url` | 是 | Git clone URL。 |
-| `params.branch` | 否 | 要接入的分支；设置时不能为空。 |
-| `auth_ref` | 否 | 覆盖 `defaults.git.auth_ref`。 |
-| `watch_interval` | 否 | 覆盖 `defaults.git.watch_interval`。 |
-
-Catalog 采用严格校验：未知字段、重复资产名和不支持的连接器都会使整个解析失败，
-即使有问题的资产没有被当前 Manifest 选择。`params` 内容和 clone URL 安全性
-针对被 Manifest 选中的资产校验。
-
-### Manifest
-
-Manifest 是一个平铺的资产名称列表：
+每个 Manifest 只需按名称选择：
 
 ```yaml
-protocol: openviking-assets/1
-catalog: ../assets.yaml
-
 assets:
   - openviking
   - requests
 ```
 
-| 字段 | 必填 | 说明 |
-| --- | --- | --- |
-| `protocol` | 否 | 设置时必须为 `openviking-assets/1`。 |
-| `catalog` | 否 | Catalog 的描述性路径。当前 CLI 不使用此字段查找文件。 |
-| `assets` | 是 | 从 Catalog 中选择的资产名称列表，解析后至少包含一个资产。 |
-| `include` | 否 | v1 不支持组合其他 Manifest；非空时解析失败。 |
+全团队维护一份 Catalog；在 Catalog 中修改资产，所有选择它的 Manifest 都会生效。
 
-重复的资产名称会按首次出现的位置去重。Manifest 引用不存在的资产时，整个解析失败。
-
-::: warning Catalog 文件查找规则
-当前 CLI 不会根据 Manifest 中的 `catalog:` 字段读取文件。实际规则是：
+CLI 按以下规则查找 Catalog 文件：
 
 1. 传入 `--catalog <file>` 时使用该路径；相对路径基于当前工作目录。
 2. 未传入时读取 Manifest 所在目录下的 `assets.yaml`。
-:::
+
+定义了 `catalog` 的 Manifest 不使用单独的 Catalog 文件；同时传入会导致解析失败。
 
 ### 资产身份
 
@@ -170,23 +196,30 @@ Git URL 会去除协议、用户名前缀、端口、结尾的 `.git` 和 `/`，
 ov health
 ```
 
-### 验证示例
+### 编写并验证 Manifest
 
-仓库中的完整示例位于
-[`examples/openviking-assets`](https://github.com/volcengine/OpenViking/tree/main/examples/openviking-assets)。
+创建 `manifest.yaml`：
 
-在 OpenViking 仓库根目录执行：
+```yaml
+protocol: openviking-assets/1
+
+catalog:
+  - name: openviking
+    connector: git
+    params:
+      repo_url: https://github.com/volcengine/OpenViking
+      branch: main
+```
+
+先验证：
 
 ```bash
-ov add-resource \
-  --manifest examples/openviking-assets/manifests/code-qa.yaml \
-  --catalog examples/openviking-assets/assets.yaml \
-  --dry-run
+ov add-resource --manifest manifest.yaml --dry-run
 ```
 
 `--dry-run` 会完成以下操作：
 
-- 读取两个本地 YAML 文件；
+- 读取本地 YAML 文件（使用单独 Catalog 文件时一并读取）；
 - 调用当前 OpenViking 服务解析并校验协议；
 - 检查所有 `auth_ref` 是否能在本地解析；
 - 让服务端使用最终凭据对每个 Git 仓库执行只读 `git ls-remote` 权限预检；
@@ -200,24 +233,22 @@ ov add-resource \
 确认计划后去掉 `--dry-run`：
 
 ```bash
-ov add-resource \
-  --manifest examples/openviking-assets/manifests/code-qa.yaml \
-  --catalog examples/openviking-assets/assets.yaml
+ov add-resource --manifest manifest.yaml
 ```
 
 等待每个资源处理完成：
 
 ```bash
-ov add-resource \
-  --manifest examples/openviking-assets/manifests/code-qa.yaml \
-  --catalog examples/openviking-assets/assets.yaml \
-  --wait \
-  --timeout 600
+ov add-resource --manifest manifest.yaml --wait --timeout 600
 ```
+
+仓库中包含一个完整示例（含共享 Catalog 和多个 Manifest），位于
+[`examples/openviking-assets`](https://github.com/volcengine/OpenViking/tree/main/examples/openviking-assets)。
 
 ## 凭据
 
-Catalog 只保存 `auth_ref` 别名，不应保存 token、密码或私钥。CLI 默认从以下文件解析别名：
+Manifest 和 Catalog 只保存 `auth_ref` 别名，不应保存 token、密码或私钥。CLI 默认从以下
+文件解析别名：
 
 ```text
 ~/.openviking/openviking_assets_credentials.yaml
@@ -298,10 +329,7 @@ State 属于执行环境，不是 Catalog 或 Manifest 协议的一部分。共�
 例如，临时把 Manifest 中全部资产调整为每 60 分钟刷新：
 
 ```bash
-ov add-resource \
-  --manifest manifests/code-qa.yaml \
-  --catalog assets.yaml \
-  --watch-interval 60
+ov add-resource --manifest manifest.yaml --watch-interval 60
 ```
 
 后续内容刷新由 Watch 执行，不需要周期性重新运行 Manifest。重新运行 Manifest 主要用于应用
@@ -328,10 +356,7 @@ Catalog 或 Manifest 的构成变化、恢复失败资产，或显式触发同�
 使用 `--skip-failed` 可以继续处理其余资产：
 
 ```bash
-ov add-resource \
-  --manifest manifests/code-qa.yaml \
-  --catalog assets.yaml \
-  --skip-failed
+ov add-resource --manifest manifest.yaml --skip-failed
 ```
 
 `--skip-failed` 不会把部分失败转换为成功。只要有资产失败，命令最终仍以非零状态退出；
@@ -344,7 +369,7 @@ Manifest 模式的主要参数：
 | 参数 | 说明 |
 | --- | --- |
 | `-m, --manifest <file>` | Manifest 文件。 |
-| `--catalog <file>` | Catalog 文件；省略时使用 Manifest 同目录的 `assets.yaml`。 |
+| `--catalog <file>` | 按名称选择资产的 Manifest 使用的单独 Catalog 文件；省略时使用 Manifest 同目录的 `assets.yaml`。Manifest 自身定义了 `catalog` 时不使用。 |
 | `--dry-run` | 解析协议并校验所有仓库的读取权限；不提交资源、不创建任务、不写 State。 |
 | `--skip-failed` | 一个资产失败后继续处理其他资产。 |
 | `--wait` | 等待每个资源处理完成。 |
@@ -364,10 +389,7 @@ Manifest 模式的主要参数：
 JSON 事件，而不是一个单独的 JSON 文档：
 
 ```bash
-ov --output json add-resource \
-  --manifest manifests/code-qa.yaml \
-  --catalog assets.yaml \
-  --dry-run
+ov --output json add-resource --manifest manifest.yaml --dry-run
 ```
 
 可能出现的事件包括：

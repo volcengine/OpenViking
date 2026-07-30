@@ -19,12 +19,12 @@ router = APIRouter(prefix="/api/v1/openviking-assets", tags=["openviking-assets"
 
 
 class ResolveOpenVikingAssetsRequest(BaseModel):
-    """Raw YAML inputs for resolving one flat manifest against one catalog."""
+    """Raw YAML inputs for resolving one flat manifest, with an optional separate catalog."""
 
     model_config = ConfigDict(extra="forbid")
 
-    manifest_yaml: str = Field(min_length=1, max_length=1_000_000)
-    catalog_yaml: str = Field(min_length=1, max_length=4_000_000)
+    manifest_yaml: str = Field(min_length=1, max_length=4_000_000)
+    catalog_yaml: str | None = Field(default=None, min_length=1, max_length=4_000_000)
     manifest_label: str = Field(default="manifest.yaml", min_length=1, max_length=1024)
     catalog_label: str = Field(default="assets.yaml", min_length=1, max_length=1024)
 

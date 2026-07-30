@@ -2,10 +2,11 @@
 
 > Experimental. The `openviking-assets/1` protocol and CLI behavior may change in later releases.
 
-OpenViking Assets describes what a knowledge base should contain as declarative files. A team
-maintains its ingestible sources in a Catalog and creates Manifests that select named assets for
-different use cases. Applying a Manifest creates or updates each resource and stores the mapping
-between assets and `viking://` resources locally.
+OpenViking Assets describes what a knowledge base should contain as declarative files. In the
+simplest form, one Manifest file defines the assets to ingest. A team can also keep its ingestible
+sources in a shared Catalog and write Manifests that select named assets for different use cases.
+Applying a Manifest creates or updates each resource and stores the mapping between assets and
+`viking://` resources locally.
 
 It is intended for multi-repository code knowledge bases, shared documentation sets, and other
 resource collections that need to be reproducible and continuously refreshed.
@@ -26,14 +27,16 @@ connectors. Assets adds only the declaration, resolution, and per-asset orchestr
 
 OpenViking Assets has three primary objects:
 
+- **Manifest**: the file you apply. It defines the assets to ingest directly under `catalog:`, or
+  selects assets by name from a separate Catalog file.
 - **Catalog**: the inventory of sources a team can ingest, including source locations, branches,
-  default refresh intervals, and credential aliases.
-- **Manifest**: a list of asset names selected for one build.
+  default refresh intervals, and credential aliases. It is a separate file only when several
+  Manifests share it; otherwise it lives inside the Manifest.
 - **State**: the result of the last Manifest application and the mapping from assets to
   `viking://` resources.
 
 ```text
-assets.yaml + manifest.yaml
+manifest.yaml (+ assets.yaml when a shared Catalog is used)
           |
           v
 Server resolves and validates openviking-assets/1
@@ -48,15 +51,85 @@ CLI resolves local credentials and State
 One add_resource call per asset -> viking:// resources
 ```
 
-The server is the authoritative protocol parser. The CLI sends the raw Catalog and Manifest YAML
-to the configured OpenViking service. The server validates them and returns an execution plan;
-the resolver endpoint itself does not create resources.
+The server is the authoritative protocol parser. The CLI sends the raw Manifest YAML — plus the
+Catalog YAML when a separate Catalog file is used — to the configured OpenViking service. The
+server validates them and returns an execution plan; the resolver endpoint itself does not create
+resources.
 
 ## Protocol
 
-### Catalog
+### Manifest
 
-A Catalog is normally named `assets.yaml`:
+A Manifest describes one knowledge-base build. In the simplest form it is the only file you need:
+define the assets directly under `catalog:`:
+
+```yaml
+protocol: openviking-assets/1
+
+defaults:
+  git:
+    auth_ref: team-git
+    watch_interval: 1440
+
+catalog:
+  - name: openviking
+    connector: git
+    description: OpenViking main repository
+    params:
+      repo_url: https://github.com/volcengine/OpenViking
+      branch: main
+
+  - name: requests
+    connector: git
+    description: Requests HTTP client source
+    watch_interval: 0
+    params:
+      repo_url: https://github.com/psf/requests
+      branch: main
+```
+
+Manifest top-level fields:
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `protocol` | Yes when `catalog` is present | Must currently be `openviking-assets/1`. Optional for Manifests that only select names, but still checked when set. |
+| `defaults` | No | Connector defaults for the assets defined in this Manifest; only allowed together with `catalog`. |
+| `catalog` | No | The list of asset definitions (fields below). A Manifest that defines `catalog` is complete on its own. |
+| `assets` | See description | Asset names to apply. Optional when `catalog` is in the same file — omitting it applies every defined asset. Required when the definitions live in a separate Catalog file. |
+| `include` | No | v1 cannot compose other Manifests; a non-empty value fails resolution. |
+
+Duplicate selected names are removed while preserving their first position. Selecting an unknown
+asset fails the whole resolution.
+
+`defaults.git` supports:
+
+| Field | Description |
+| --- | --- |
+| `auth_ref` | Default alias in the local credentials file. |
+| `watch_interval` | Default Watch interval in minutes; `0` disables automatic refresh. |
+
+Git assets support:
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `name` | Yes | Unique asset name matching `[A-Za-z0-9][A-Za-z0-9._-]*`. |
+| `connector` | Yes | v1 supports only `git`. |
+| `description` | No | Human-readable purpose of the asset. |
+| `params.repo_url` | Yes | Git clone URL. |
+| `params.branch` | No | Branch to ingest; it cannot be empty when set. |
+| `auth_ref` | No | Overrides `defaults.git.auth_ref`. |
+| `watch_interval` | No | Overrides `defaults.git.watch_interval`. |
+
+Validation is strict. Unknown fields, duplicate names, and unsupported connectors fail the whole
+resolution, even for assets the current run does not select. `params` contents and clone URL
+safety are validated for the selected assets. The same rules apply wherever the definitions live —
+in the Manifest's `catalog` or in a separate Catalog file.
+
+### Sharing a Catalog Across Manifests
+
+When several Manifests reuse the same sources, move the asset definitions into a Catalog file,
+normally named `assets.yaml`. A Catalog holds `protocol`, optional `defaults`, and the same asset
+definitions under `assets`:
 
 ```yaml
 protocol: openviking-assets/1
@@ -83,66 +156,23 @@ assets:
       branch: main
 ```
 
-Catalog top-level fields:
-
-| Field | Required | Description |
-| --- | --- | --- |
-| `protocol` | Yes | Must currently be `openviking-assets/1`. |
-| `defaults` | No | Connector-specific Catalog defaults. |
-| `assets` | Yes | The list of asset definitions. |
-
-`defaults.git` supports:
-
-| Field | Description |
-| --- | --- |
-| `auth_ref` | Default alias in the local credentials file. |
-| `watch_interval` | Default Watch interval in minutes; `0` disables automatic refresh. |
-
-Git assets support:
-
-| Field | Required | Description |
-| --- | --- | --- |
-| `name` | Yes | Unique Catalog name matching `[A-Za-z0-9][A-Za-z0-9._-]*`. |
-| `connector` | Yes | v1 supports only `git`. |
-| `description` | No | Human-readable purpose of the asset. |
-| `params.repo_url` | Yes | Git clone URL. |
-| `params.branch` | No | Branch to ingest; it cannot be empty when set. |
-| `auth_ref` | No | Overrides `defaults.git.auth_ref`. |
-| `watch_interval` | No | Overrides `defaults.git.watch_interval`. |
-
-Catalog validation is strict. Unknown fields, duplicate names, and unsupported connectors fail the
-whole resolution, even when the affected asset is not selected by the current Manifest. `params`
-contents and clone URL safety are validated for the assets the Manifest selects.
-
-### Manifest
-
-A Manifest is a flat list of asset names:
+Each Manifest then only selects names:
 
 ```yaml
-protocol: openviking-assets/1
-catalog: ../assets.yaml
-
 assets:
   - openviking
   - requests
 ```
 
-| Field | Required | Description |
-| --- | --- | --- |
-| `protocol` | No | Must be `openviking-assets/1` when set. |
-| `catalog` | No | Descriptive Catalog path. The current CLI does not use it to locate the file. |
-| `assets` | Yes | Asset names selected from the Catalog; at least one must remain after resolution. |
-| `include` | No | v1 cannot compose other Manifests; a non-empty value fails resolution. |
+The team maintains one Catalog; editing an asset there updates every Manifest that selects it.
 
-Duplicate asset names are removed while preserving their first position. Referencing an unknown
-asset fails the whole resolution.
-
-::: warning Catalog file lookup
-The current CLI does not load the `catalog:` path from the Manifest. It uses:
+The CLI locates the Catalog file as follows:
 
 1. The path passed to `--catalog <file>`, resolved from the current working directory.
 2. `assets.yaml` next to the Manifest when `--catalog` is omitted.
-:::
+
+A Manifest that defines `catalog` itself never uses a separate Catalog file; passing one with it
+fails resolution.
 
 ### Asset Identity
 
@@ -178,23 +208,30 @@ For safety, clone URLs cannot:
 ov health
 ```
 
-### Validate the Example
+### Write and Validate a Manifest
 
-The repository contains a complete example under
-[`examples/openviking-assets`](https://github.com/volcengine/OpenViking/tree/main/examples/openviking-assets).
+Create `manifest.yaml`:
 
-From the OpenViking repository root, run:
+```yaml
+protocol: openviking-assets/1
+
+catalog:
+  - name: openviking
+    connector: git
+    params:
+      repo_url: https://github.com/volcengine/OpenViking
+      branch: main
+```
+
+Validate it first:
 
 ```bash
-ov add-resource \
-  --manifest examples/openviking-assets/manifests/code-qa.yaml \
-  --catalog examples/openviking-assets/assets.yaml \
-  --dry-run
+ov add-resource --manifest manifest.yaml --dry-run
 ```
 
 `--dry-run`:
 
-- reads both local YAML files;
+- reads the local YAML file, plus the Catalog file when one is used;
 - asks the configured OpenViking service to resolve and validate the protocol;
 - checks that all selected `auth_ref` aliases resolve locally;
 - asks the server to run a read-only `git ls-remote` permission preflight for every repository
@@ -210,24 +247,23 @@ produce an executable plan.
 Remove `--dry-run` after reviewing the plan:
 
 ```bash
-ov add-resource \
-  --manifest examples/openviking-assets/manifests/code-qa.yaml \
-  --catalog examples/openviking-assets/assets.yaml
+ov add-resource --manifest manifest.yaml
 ```
 
 Wait for each resource to finish processing:
 
 ```bash
-ov add-resource \
-  --manifest examples/openviking-assets/manifests/code-qa.yaml \
-  --catalog examples/openviking-assets/assets.yaml \
-  --wait \
-  --timeout 600
+ov add-resource --manifest manifest.yaml --wait --timeout 600
 ```
+
+The repository contains a complete example, including a shared Catalog with several Manifests,
+under
+[`examples/openviking-assets`](https://github.com/volcengine/OpenViking/tree/main/examples/openviking-assets).
 
 ## Credentials
 
-Catalogs carry only `auth_ref` aliases and must not contain tokens, passwords, or private keys.
+Manifests and Catalogs carry only `auth_ref` aliases and must not contain tokens, passwords, or
+private keys.
 The CLI resolves aliases from this file by default:
 
 ```text
@@ -312,10 +348,7 @@ managed by OpenViking Watches and connectors.
 Temporarily apply a 60-minute interval to every selected asset:
 
 ```bash
-ov add-resource \
-  --manifest manifests/code-qa.yaml \
-  --catalog assets.yaml \
-  --watch-interval 60
+ov add-resource --manifest manifest.yaml --watch-interval 60
 ```
 
 Subsequent content refreshes are performed by Watches. You do not need to apply the Manifest on a
@@ -343,10 +376,7 @@ The default behavior is fail-fast:
 Use `--skip-failed` to continue with the remaining assets:
 
 ```bash
-ov add-resource \
-  --manifest manifests/code-qa.yaml \
-  --catalog assets.yaml \
-  --skip-failed
+ov add-resource --manifest manifest.yaml --skip-failed
 ```
 
 `--skip-failed` does not turn a partial failure into success. The command still exits non-zero when
@@ -360,7 +390,7 @@ Primary Manifest-mode options:
 | Option | Description |
 | --- | --- |
 | `-m, --manifest <file>` | Manifest file. |
-| `--catalog <file>` | Catalog file; defaults to `assets.yaml` next to the Manifest. |
+| `--catalog <file>` | Separate Catalog file for Manifests that select assets by name; defaults to `assets.yaml` next to the Manifest. Not used when the Manifest defines `catalog` itself. |
 | `--dry-run` | Resolve the protocol and validate read access to every repository without submitting resources, creating tasks, or writing State. |
 | `--skip-failed` | Continue processing after an asset fails. |
 | `--wait` | Wait for each resource to finish processing. |
@@ -381,10 +411,7 @@ Default output is intended for terminal use. With JSON output, Manifest mode emi
 complete JSON event per line rather than one JSON document.
 
 ```bash
-ov --output json add-resource \
-  --manifest manifests/code-qa.yaml \
-  --catalog assets.yaml \
-  --dry-run
+ov --output json add-resource --manifest manifest.yaml --dry-run
 ```
 
 Events can include:

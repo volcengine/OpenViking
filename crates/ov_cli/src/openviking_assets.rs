@@ -1,9 +1,10 @@
 //! OpenViking Assets manifest mode for `ov add-resource -m <manifest.yaml>`.
 //!
 //! Implements the declaration layer of the OpenViking Assets protocol
-//! (`openviking-assets/1`):
-//! a team-wide asset catalog (`assets.yaml`) plus flat build manifests selecting
-//! catalog assets by name. Validation is strict by design — unknown
+//! (`openviking-assets/1`): a manifest defines its assets directly under
+//! `catalog:`, or — when several manifests share one asset catalog — selects
+//! assets by name from a separate catalog file (`assets.yaml`).
+//! Validation is strict by design — unknown
 //! fields are errors, not warnings — so a mistyped manifest fails at parse
 //! time instead of silently degrading. Fetching, parsing, vectorization and
 //! watch-based refresh stay in the server and its connector plugins.
@@ -698,6 +699,18 @@ fn render_event(event: &Value) {
     }
 }
 
+/// True when the manifest defines its assets directly under a top-level
+/// `catalog:` list, so no separate catalog file is needed. The server owns
+/// full validation; this only decides whether to attach a catalog file.
+fn manifest_defines_assets(manifest_yaml: &str) -> bool {
+    serde_yaml::from_str::<serde_yaml::Value>(manifest_yaml)
+        .map(|doc| {
+            doc.get("catalog")
+                .is_some_and(serde_yaml::Value::is_sequence)
+        })
+        .unwrap_or(false)
+}
+
 /// Entry point for `ov add-resource -m <manifest>`.
 pub async fn handle_manifest_apply(
     manifest: String,
@@ -707,24 +720,33 @@ pub async fn handle_manifest_apply(
     ctx: CliContext,
 ) -> Result<()> {
     let manifest_path = PathBuf::from(&manifest);
-    let catalog_path = catalog.map(PathBuf::from).unwrap_or_else(|| {
-        manifest_path
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join(DEFAULT_CATALOG_FILENAME)
-    });
     let manifest_yaml = std::fs::read_to_string(&manifest_path).map_err(|e| {
         client_err(format!(
             "cannot read manifest '{}': {e}",
             manifest_path.display()
         ))
     })?;
-    let catalog_yaml = std::fs::read_to_string(&catalog_path).map_err(|e| {
-        client_err(format!(
-            "cannot read catalog '{}': {e}; pass --catalog <file> when it is not next to the manifest",
-            catalog_path.display()
-        ))
-    })?;
+    let catalog_path = match catalog {
+        Some(path) => Some(PathBuf::from(path)),
+        None if manifest_defines_assets(&manifest_yaml) => None,
+        None => Some(
+            manifest_path
+                .parent()
+                .unwrap_or(Path::new("."))
+                .join(DEFAULT_CATALOG_FILENAME),
+        ),
+    };
+    let catalog_yaml = catalog_path
+        .as_ref()
+        .map(|path| {
+            std::fs::read_to_string(path).map_err(|e| {
+                client_err(format!(
+                    "cannot read catalog '{}': {e}; define assets under 'catalog' in the manifest or pass --catalog <file>",
+                    path.display()
+                ))
+            })
+        })
+        .transpose()?;
 
     let effective_timeout = if options.wait {
         timeout.unwrap_or(60.0).max(ctx.config.timeout)
@@ -732,16 +754,16 @@ pub async fn handle_manifest_apply(
         ctx.config.timeout.max(20.0)
     };
     let client = ctx.get_client_with_timeout(Some(effective_timeout));
+    let mut request = json!({
+        "manifest_yaml": manifest_yaml,
+        "manifest_label": manifest_path.display().to_string(),
+    });
+    if let (Some(path), Some(yaml)) = (&catalog_path, &catalog_yaml) {
+        request["catalog_yaml"] = json!(yaml);
+        request["catalog_label"] = json!(path.display().to_string());
+    }
     let resolved: ResolveResponse = client
-        .post(
-            "/api/v1/openviking-assets/resolve",
-            &json!({
-                "manifest_yaml": manifest_yaml,
-                "catalog_yaml": catalog_yaml,
-                "manifest_label": manifest_path.display().to_string(),
-                "catalog_label": catalog_path.display().to_string(),
-            }),
-        )
+        .post("/api/v1/openviking-assets/resolve", &request)
         .await?;
 
     let json_mode = matches!(ctx.output_format, OutputFormat::Json);
@@ -762,7 +784,8 @@ pub async fn handle_manifest_apply(
     };
     let summary = apply_manifest_core(
         &manifest_path,
-        &catalog_path,
+        // Single-file manifests are their own catalog in plan output.
+        catalog_path.as_deref().unwrap_or(&manifest_path),
         &resolved.assets,
         &credentials_file,
         &options,
@@ -796,6 +819,18 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
+    #[test]
+    fn manifest_defines_assets_detects_catalog_lists_only() {
+        assert!(manifest_defines_assets(
+            "protocol: openviking-assets/1\ncatalog:\n  - name: alpha\n    connector: git\n"
+        ));
+        assert!(!manifest_defines_assets("assets:\n  - alpha\n"));
+        assert!(!manifest_defines_assets(
+            "catalog: ../assets.yaml\nassets:\n  - alpha\n"
+        ));
+        assert!(!manifest_defines_assets(": not yaml ["));
+    }
+
     type PreflightCall = (String, Option<Map<String, Value>>);
     type SubmitCall = (String, Option<String>, f64, Option<Map<String, Value>>);
 
@@ -810,7 +845,7 @@ mod tests {
 
     fn workspace() -> (tempfile::TempDir, PathBuf, PathBuf, Vec<ResolvedAsset>) {
         let dir = tempfile::tempdir().unwrap();
-        let manifest = dir.path().join("kb.yaml");
+        let manifest = dir.path().join("manifest.yaml");
         let catalog = dir.path().join("assets.yaml");
         let assets = vec![
             ResolvedAsset {
@@ -853,7 +888,7 @@ mod tests {
     #[test]
     fn state_roundtrip_and_orphans() {
         let dir = tempfile::tempdir().unwrap();
-        let manifest = dir.path().join("kb.yaml");
+        let manifest = dir.path().join("manifest.yaml");
         let mut state = load_state(&manifest).unwrap();
         state.record(
             "abc",

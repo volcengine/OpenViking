@@ -69,7 +69,8 @@ class _Catalog(_StrictModel):
 
 class _Manifest(_StrictModel):
     protocol: str | None = None
-    catalog: str | None = None
+    defaults: _Defaults | None = None
+    catalog: list[_CatalogAsset] | str | None = None
     include: list[str] | None = None
     assets: list[str] | None = None
 
@@ -309,40 +310,69 @@ async def preflight_git_repository(
 def resolve_openviking_assets(
     *,
     manifest_yaml: str,
-    catalog_yaml: str,
+    catalog_yaml: str | None = None,
     manifest_label: str = "manifest.yaml",
     catalog_label: str = "assets.yaml",
 ) -> ResolveResult:
-    """Parse and resolve one flat manifest against one catalog.
+    """Parse and resolve one flat manifest, optionally against a separate catalog.
 
-    This API deliberately does not follow ``include`` entries and does not
-    submit resources. The caller remains responsible for execution.
+    A manifest either defines its assets directly under ``catalog`` or selects
+    assets by name from a separate catalog file. This API deliberately does not
+    follow ``include`` entries and does not submit resources. The caller
+    remains responsible for execution.
     """
 
     manifest = _parse_yaml(manifest_yaml, _Manifest, "manifest", manifest_label)
-    catalog = _parse_yaml(catalog_yaml, _Catalog, "catalog", catalog_label)
     assert isinstance(manifest, _Manifest)
-    assert isinstance(catalog, _Catalog)
 
     if manifest.protocol is not None and manifest.protocol != PROTOCOL:
         raise InvalidArgumentError(
             f"manifest '{manifest_label}': unsupported protocol '{manifest.protocol}' "
             f"(expected '{PROTOCOL}')"
         )
-    if manifest.catalog is not None and not manifest.catalog.strip():
-        raise InvalidArgumentError(
-            f"manifest '{manifest_label}': 'catalog' must be a non-empty path string"
-        )
     if manifest.include:
         raise InvalidArgumentError(
             f"manifest '{manifest_label}': 'include' is not supported by the server resolver; "
             "use a flat manifest"
         )
-    if catalog.protocol != PROTOCOL:
+    if isinstance(manifest.catalog, str):
         raise InvalidArgumentError(
-            f"catalog '{catalog_label}': unsupported protocol '{catalog.protocol}' "
-            f"(expected '{PROTOCOL}')"
+            f"manifest '{manifest_label}': 'catalog' holds asset definitions, not a file "
+            "path; define assets under 'catalog' or pass the catalog file separately"
         )
+
+    if manifest.catalog is not None:
+        if catalog_yaml is not None:
+            raise InvalidArgumentError(
+                f"manifest '{manifest_label}' already defines 'catalog'; "
+                "do not pass a separate catalog file"
+            )
+        if manifest.protocol is None:
+            raise InvalidArgumentError(
+                f"manifest '{manifest_label}': 'protocol' is required when the manifest "
+                f"defines 'catalog' (expected '{PROTOCOL}')"
+            )
+        catalog = _Catalog(protocol=PROTOCOL, defaults=manifest.defaults, assets=manifest.catalog)
+        catalog_label = manifest_label
+    else:
+        if manifest.defaults is not None:
+            raise InvalidArgumentError(
+                f"manifest '{manifest_label}': 'defaults' is only allowed when the manifest "
+                "defines 'catalog'"
+            )
+        if catalog_yaml is None:
+            raise InvalidArgumentError(
+                f"manifest '{manifest_label}' selects assets by name but no catalog was "
+                "provided; define assets under 'catalog' or pass a catalog file"
+            )
+        parsed_catalog = _parse_yaml(catalog_yaml, _Catalog, "catalog", catalog_label)
+        assert isinstance(parsed_catalog, _Catalog)
+        catalog = parsed_catalog
+        if catalog.protocol != PROTOCOL:
+            raise InvalidArgumentError(
+                f"catalog '{catalog_label}': unsupported protocol '{catalog.protocol}' "
+                f"(expected '{PROTOCOL}')"
+            )
 
     names: list[str] = []
     seen_names: set[str] = set()
@@ -354,6 +384,10 @@ def resolve_openviking_assets(
         if name not in seen_names:
             names.append(name)
             seen_names.add(name)
+    if manifest.assets is None and manifest.catalog is not None:
+        # A single-file manifest without an explicit selection applies everything
+        # it defines; duplicate definition names are rejected below.
+        names = [asset.name for asset in catalog.assets]
     if not names:
         raise InvalidArgumentError(f"manifest '{manifest_label}' selects no assets")
 
@@ -393,6 +427,11 @@ def resolve_openviking_assets(
     missing = [name for name in names if name not in catalog_by_name]
     if missing:
         listed = ", ".join(f"'{name}'" for name in missing)
+        if manifest.catalog is not None:
+            raise InvalidArgumentError(
+                f"manifest '{manifest_label}' selects asset(s) not defined in its "
+                f"'catalog': {listed}"
+            )
         raise InvalidArgumentError(
             f"manifest '{manifest_label}' references asset(s) not in catalog "
             f"'{catalog_label}': {listed}"

@@ -1,13 +1,15 @@
 # OpenViking Assets Resolver
 
 OpenViking Assets Resolver 用于解析并校验
-[`openviking-assets/1`](../guides/18-openviking-assets.md) Catalog 与 Manifest，
-返回可供客户端执行的标准化资产计划。它不会克隆仓库、创建资源或启动同步任务。
+[`openviking-assets/1`](../guides/18-openviking-assets.md) Manifest——既支持在
+`catalog` 字段中直接定义资产的单文件 Manifest，也支持搭配单独 Catalog 文件的
+Manifest——并返回可供客户端执行的标准化资产计划。它不会克隆仓库、创建资源或启动
+同步任务。
 
 通常应直接使用 `ov add-resource --manifest <file>`；CLI 会自动调用 Resolver 和
 权限预检接口。只有在开发自定义客户端时，才需要直接请求这些接口。
 
-## 解析 Catalog 与 Manifest
+## 解析 Manifest
 
 ```http
 POST /api/v1/openviking-assets/resolve
@@ -25,12 +27,12 @@ X-API-Key: <your-api-key>
 
 | 字段 | 类型 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- | --- |
-| `manifest_yaml` | string | 是 | — | Manifest 的完整 YAML 内容，长度为 1～1,000,000 字符 |
-| `catalog_yaml` | string | 是 | — | Catalog 的完整 YAML 内容，长度为 1～4,000,000 字符 |
+| `manifest_yaml` | string | 是 | — | Manifest 的完整 YAML 内容，长度为 1～4,000,000 字符 |
+| `catalog_yaml` | string | 否 | — | Catalog 的完整 YAML 内容，长度为 1～4,000,000 字符。Manifest 按名称选择资产时必填；Manifest 在 `catalog` 中定义资产时必须省略。 |
 | `manifest_label` | string | 否 | `manifest.yaml` | Manifest 的来源标签，用于错误信息，长度为 1～1,024 字符 |
 | `catalog_label` | string | 否 | `assets.yaml` | Catalog 的来源标签，用于错误信息，长度为 1～1,024 字符 |
 
-示例：
+单文件 Manifest 示例：
 
 ```bash
 curl -X POST "${OPENVIKING_BASE_URL}/api/v1/openviking-assets/resolve" \
@@ -38,13 +40,14 @@ curl -X POST "${OPENVIKING_BASE_URL}/api/v1/openviking-assets/resolve" \
   -H "X-API-Key: ${OPENVIKING_API_KEY}" \
   --data-binary @- <<'JSON'
 {
-  "manifest_yaml": "protocol: openviking-assets/1\ncatalog: assets.yaml\nassets:\n  - name: openviking\n",
-  "catalog_yaml": "protocol: openviking-assets/1\nassets:\n  openviking:\n    connector: git\n    repo_url: https://github.com/volcengine/OpenViking\n    branch: main\n    watch_interval: 1440\n",
-  "manifest_label": "manifests/code-qa.yaml",
-  "catalog_label": "assets.yaml"
+  "manifest_yaml": "protocol: openviking-assets/1\ncatalog:\n  - name: openviking\n    connector: git\n    watch_interval: 1440\n    params:\n      repo_url: https://github.com/volcengine/OpenViking\n      branch: main\n",
+  "manifest_label": "manifest.yaml"
 }
 JSON
 ```
+
+Manifest 按名称选择资产时，把 Catalog YAML 放入 `catalog_yaml`，来源标签放入
+`catalog_label` 一并发送。
 
 ### 成功响应
 
@@ -53,8 +56,8 @@ JSON
   "status": "ok",
   "result": {
     "protocol": "openviking-assets/1",
-    "manifest": "manifests/code-qa.yaml",
-    "catalog": "assets.yaml",
+    "manifest": "manifest.yaml",
+    "catalog": "manifest.yaml",
     "assets": [
       {
         "name": "openviking",
@@ -78,14 +81,17 @@ JSON
 - `git_ref` 是最终解析出的 Git 引用。
 - `asset_id` 是由连接器、规范化定位符与 Git 引用生成的 12 位稳定标识；示例值仅作格式说明。
 - `watch_interval` 的单位是分钟。
+- `catalog` 回显 `catalog_label`；单文件 Manifest 时与 Manifest 标签相同。
 
 ### 错误响应
 
 协议或内容校验失败时返回 HTTP `400`，错误码为 `INVALID_ARGUMENT`。常见原因包括：
 
 - YAML 无法解析或包含未知字段；
-- `protocol` 不是 `openviking-assets/1`；
+- `protocol` 不是 `openviking-assets/1`，或 Manifest 定义了 `catalog` 却没有声明 `protocol`；
 - Manifest 使用了 v1 尚不支持的非空 `include`；
+- Manifest 定义了 `catalog`，请求却同时传入了 `catalog_yaml`；
+- Manifest 按名称选择资产，请求却没有提供 `catalog_yaml`；
 - Manifest 引用了 Catalog 中不存在的资产；
 - 连接器、仓库 URL、Git 引用或资产身份不合法；
 - 同一份 Manifest 中出现重复资产身份。

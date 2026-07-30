@@ -1,15 +1,17 @@
 # OpenViking Assets Resolver
 
 The OpenViking Assets Resolver parses and validates an
-[`openviking-assets/1`](../guides/18-openviking-assets.md) Catalog and Manifest,
-then returns a normalized asset plan for a client to execute. It does not clone
-repositories, create resources, or start synchronization jobs.
+[`openviking-assets/1`](../guides/18-openviking-assets.md) Manifest — either
+self-contained, with assets defined under its `catalog` field, or paired with a
+separate Catalog file — then returns a normalized asset plan for a client to
+execute. It does not clone repositories, create resources, or start
+synchronization jobs.
 
 In normal use, run `ov add-resource --manifest <file>`; the CLI calls the
 Resolver and permission-preflight endpoints automatically. Call these endpoints
 directly only when implementing a custom client.
 
-## Resolve a Catalog and Manifest
+## Resolve a Manifest
 
 ```http
 POST /api/v1/openviking-assets/resolve
@@ -28,12 +30,12 @@ X-API-Key: <your-api-key>
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `manifest_yaml` | string | Yes | — | Complete Manifest YAML, 1–1,000,000 characters |
-| `catalog_yaml` | string | Yes | — | Complete Catalog YAML, 1–4,000,000 characters |
+| `manifest_yaml` | string | Yes | — | Complete Manifest YAML, 1–4,000,000 characters |
+| `catalog_yaml` | string | No | — | Complete Catalog YAML, 1–4,000,000 characters. Required when the Manifest selects assets by name; must be omitted when the Manifest defines assets under `catalog`. |
 | `manifest_label` | string | No | `manifest.yaml` | Manifest source label used in errors, 1–1,024 characters |
 | `catalog_label` | string | No | `assets.yaml` | Catalog source label used in errors, 1–1,024 characters |
 
-Example:
+Example with a self-contained Manifest:
 
 ```bash
 curl -X POST "${OPENVIKING_BASE_URL}/api/v1/openviking-assets/resolve" \
@@ -41,13 +43,14 @@ curl -X POST "${OPENVIKING_BASE_URL}/api/v1/openviking-assets/resolve" \
   -H "X-API-Key: ${OPENVIKING_API_KEY}" \
   --data-binary @- <<'JSON'
 {
-  "manifest_yaml": "protocol: openviking-assets/1\ncatalog: assets.yaml\nassets:\n  - name: openviking\n",
-  "catalog_yaml": "protocol: openviking-assets/1\nassets:\n  openviking:\n    connector: git\n    repo_url: https://github.com/volcengine/OpenViking\n    branch: main\n    watch_interval: 1440\n",
-  "manifest_label": "manifests/code-qa.yaml",
-  "catalog_label": "assets.yaml"
+  "manifest_yaml": "protocol: openviking-assets/1\ncatalog:\n  - name: openviking\n    connector: git\n    watch_interval: 1440\n    params:\n      repo_url: https://github.com/volcengine/OpenViking\n      branch: main\n",
+  "manifest_label": "manifest.yaml"
 }
 JSON
 ```
+
+When a Manifest selects assets by name, send the Catalog YAML in `catalog_yaml`
+and its label in `catalog_label`.
 
 ### Success response
 
@@ -56,8 +59,8 @@ JSON
   "status": "ok",
   "result": {
     "protocol": "openviking-assets/1",
-    "manifest": "manifests/code-qa.yaml",
-    "catalog": "assets.yaml",
+    "manifest": "manifest.yaml",
+    "catalog": "manifest.yaml",
     "assets": [
       {
         "name": "openviking",
@@ -82,6 +85,8 @@ Where:
 - `asset_id` is a stable 12-character identifier derived from the connector,
   normalized locator, and Git reference. The value above illustrates the format.
 - `watch_interval` is measured in minutes.
+- `catalog` echoes `catalog_label`; for a self-contained Manifest it equals the
+  Manifest label.
 
 ### Error responses
 
@@ -89,8 +94,11 @@ Protocol or content validation failures return HTTP `400` with the error code
 `INVALID_ARGUMENT`. Common causes include:
 
 - malformed YAML or unknown fields;
-- a `protocol` other than `openviking-assets/1`;
+- a `protocol` other than `openviking-assets/1`, or a Manifest that defines
+  `catalog` without declaring `protocol`;
 - a non-empty `include`, which v1 does not support;
+- a Manifest that defines `catalog` submitted together with `catalog_yaml`;
+- a Manifest that selects assets by name without any `catalog_yaml`;
 - a Manifest referencing an asset absent from the Catalog;
 - an invalid connector, repository URL, Git reference, or asset identity;
 - duplicate asset identities in one Manifest.

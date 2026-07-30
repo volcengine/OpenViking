@@ -41,10 +41,31 @@ assets:
 """
 
 MANIFEST = """\
-catalog: ../assets.yaml
 assets:
   - alpha
   - beta
+"""
+
+SINGLE_FILE_MANIFEST = """\
+protocol: openviking-assets/1
+
+defaults:
+  git:
+    watch_interval: 30
+
+catalog:
+  - name: alpha
+    connector: git
+    description: alpha repo
+    params:
+      repo_url: https://github.com/org/alpha
+      branch: main
+
+  - name: beta
+    connector: git
+    params:
+      repo_url: git@github.com:org/beta.git
+    watch_interval: 0
 """
 
 
@@ -73,6 +94,27 @@ def test_resolver_normalizes_and_resolves_defaults():
     assert result.assets[1].locator == "github.com/org/beta"
     identity = b"git\ngithub.com/org/alpha\nmain"
     assert result.assets[0].asset_id == hashlib.sha1(identity).hexdigest()[:12]
+
+
+def test_resolver_accepts_single_file_manifest():
+    result = resolve_openviking_assets(
+        manifest_yaml=SINGLE_FILE_MANIFEST,
+        manifest_label="single-file.yaml",
+    )
+
+    assert [asset.name for asset in result.assets] == ["alpha", "beta"]
+    assert result.manifest == "single-file.yaml"
+    assert result.catalog == "single-file.yaml"
+    assert result.assets[0].watch_interval == 30
+    assert result.assets[1].watch_interval == 0
+
+
+def test_single_file_manifest_selects_subset():
+    result = resolve_openviking_assets(
+        manifest_yaml=SINGLE_FILE_MANIFEST + "\nassets:\n  - beta\n",
+    )
+
+    assert [asset.name for asset in result.assets] == ["beta"]
 
 
 @pytest.mark.parametrize(
@@ -110,9 +152,19 @@ def test_normalize_repo_url_forms(url: str, expected: str):
             ),
             "same source",
         ),
+        ("catalog: ../assets.yaml\nassets:\n  - alpha\n", CATALOG, "not a file path"),
+        (SINGLE_FILE_MANIFEST, CATALOG, "do not pass a separate catalog"),
+        (
+            SINGLE_FILE_MANIFEST.replace("protocol: openviking-assets/1\n\n", ""),
+            None,
+            "'protocol' is required",
+        ),
+        (SINGLE_FILE_MANIFEST + "\nassets:\n  - missing\n", None, "not defined in its"),
+        ("defaults:\n  git:\n    watch_interval: 5\nassets:\n  - alpha\n", CATALOG, "only allowed"),
+        (MANIFEST, None, "no catalog was provided"),
     ],
 )
-def test_resolver_rejects_invalid_configuration(manifest: str, catalog: str, message: str):
+def test_resolver_rejects_invalid_configuration(manifest: str, catalog: str | None, message: str):
     with pytest.raises(InvalidArgumentError, match=message):
         resolve_openviking_assets(manifest_yaml=manifest, catalog_yaml=catalog)
 
@@ -199,6 +251,19 @@ async def test_resolve_endpoint_returns_standard_envelope(client: httpx.AsyncCli
     assert body["status"] == "ok"
     assert [asset["name"] for asset in body["result"]["assets"]] == ["alpha", "beta"]
     assert body["result"]["manifest"] == "manifests/code-qa.yaml"
+
+
+async def test_resolve_endpoint_accepts_single_file_manifest(client: httpx.AsyncClient):
+    response = await client.post(
+        "/api/v1/openviking-assets/resolve",
+        json={"manifest_yaml": SINGLE_FILE_MANIFEST, "manifest_label": "single-file.yaml"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert [asset["name"] for asset in body["result"]["assets"]] == ["alpha", "beta"]
+    assert body["result"]["catalog"] == "single-file.yaml"
 
 
 async def test_resolve_endpoint_maps_configuration_errors(client: httpx.AsyncClient):
