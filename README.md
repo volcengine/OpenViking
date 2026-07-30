@@ -192,7 +192,7 @@ Officially hosted on Volcano Engine, available in China.
 
 ### Coming Soon
 - Global hosting service on [BytePlus](https://www.byteplus.com) (for regions outside China)
-- Private distributed enterprise edition (deployed via activation code)
+- Private distributed enterprise edition (deployed via activation code, supports BYOC)
 
 ## Research
 
