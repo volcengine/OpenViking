@@ -820,6 +820,40 @@ AST 提取支持：Python、JavaScript/TypeScript、Java、C/C++、Rust、Go、C
 需要 GitHub、GitLab 或 Azure DevOps 专属 URL 语义时，应配置到对应的平台字段；
 其他 Git 主机统一添加到 `code_hosting_domains`。
 
+### webfeed
+
+控制 sitemap、sitemapindex、RSS 和 Atom URL 的整站导入行为。配置位于 `parsers.webfeed`：
+
+```json
+{
+  "parsers": {
+    "webfeed": {
+      "max_pages": 200,
+      "max_concurrency": 5,
+      "request_timeout": 30.0,
+      "politeness_delay": 0.2,
+      "same_host_only": true,
+      "respect_robots": true,
+      "max_depth": 2,
+      "suggest_feed": true
+    }
+  }
+}
+```
+
+| 字段 | 类型 | 说明 | 默认值 |
+|------|------|------|--------|
+| `max_pages` | int | 单个 feed 或自动发现站点最多镜像的页面数，超过后截断 | `200` |
+| `max_concurrency` | int | 镜像 feed 条目时的最大并发抓取数 | `5` |
+| `request_timeout` | float | feed、sitemap、robots.txt 和页面抓取的单次请求超时时间（秒） | `30.0` |
+| `politeness_delay` | float | 对同一 host 连续请求之间的延迟（秒） | `0.2` |
+| `same_host_only` | bool | 仅镜像 feed 所在 host 的页面，跳过跨 host 条目 | `true` |
+| `respect_robots` | bool | 抓取镜像页面前检查 robots.txt | `true` |
+| `max_depth` | int | sitemapindex 递归展开的最大深度 | `2` |
+| `suggest_feed` | bool | 添加单个站点根页面且发现 sitemap/RSS 时，在响应中追加非阻塞提示 | `true` |
+
+当 `add_resource` 指向 sitemap、sitemapindex、RSS 或 Atom URL 时，OpenViking 会把其中列出的页面镜像成一个资源树。对该 feed URL 设置 `watch_interval` 后，每次 watch 运行都会从 feed 刷新整棵树。传入 `args={"site": true}` 可让 OpenViking 从裸域名或首页自动发现站点 feed；传入 `args={"site": false}` 则让看起来像 feed 的 URL 仍走单页 HTTP 导入路径。
+
 ### rerank
 
 用于搜索结果精排的 Rerank 模型。支持 VikingDB (火山引擎)、Cohere 和 OpenAI 兼容接口。
@@ -1345,7 +1379,7 @@ openviking-server --config /path/to/ov.conf
 
 ### ov.conf
 
-本文档上方各配置段（embedding、vlm、rerank、storage）均属于 `ov.conf`。SDK 嵌入模式和服务端共用此文件。
+本文档上方各配置段（embedding、vlm、rerank、retrieval、grep、parsers、storage）均属于 `ov.conf`。SDK 嵌入模式和服务端共用此文件。
 
 如需配置 memory 相关行为，可在 `ov.conf` 中添加 `memory` 段：
 
@@ -1723,6 +1757,18 @@ Task 记录文件位于所属账号的系统目录：
   },
   "code": {
     "code_summary_mode": "ast"
+  },
+  "parsers": {
+    "webfeed": {
+      "max_pages": 200,
+      "max_concurrency": 5,
+      "request_timeout": 30.0,
+      "politeness_delay": 0.2,
+      "same_host_only": true,
+      "respect_robots": true,
+      "max_depth": 2,
+      "suggest_feed": true
+    }
   },
   "server": {
     "host": "string",
