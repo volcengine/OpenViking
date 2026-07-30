@@ -1039,9 +1039,16 @@ impl PathLockManager {
                 }
             }
             for dir in missing.into_iter().rev() {
-                self.resolver.fs.mkdir(&dir, 0o755).await.map_err(|e| {
-                    PathLockError::Io(format!("failed to create lock dir '{dir}': {e}"))
-                })?;
+                if let Err(mkdir_error) = self.resolver.fs.mkdir(&dir, 0o755).await {
+                    match self.resolver.fs.stat(&dir).await {
+                        Ok(info) if info.is_dir => continue,
+                        _ => {
+                            return Err(PathLockError::Io(format!(
+                                "failed to create lock dir '{dir}': {mkdir_error}"
+                            )));
+                        }
+                    }
+                }
             }
         }
         Ok(())
@@ -1517,9 +1524,90 @@ impl PathLockManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
+    use crate::core::{Error, FileInfo, Result as FsResult, WriteFlag};
     use crate::plugins::memfs::MemFileSystem;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use async_trait::async_trait;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use tokio::sync::Barrier;
+
+    struct ConcurrentParentCreationFs {
+        inner: Arc<MemFileSystem>,
+        shared_parent: String,
+        initial_missing_stats: AtomicUsize,
+        initial_stat_barrier: Barrier,
+        shared_parent_mkdir_attempts: AtomicUsize,
+    }
+
+    impl ConcurrentParentCreationFs {
+        fn new(inner: Arc<MemFileSystem>, shared_parent: &str) -> Self {
+            Self {
+                inner,
+                shared_parent: shared_parent.to_string(),
+                initial_missing_stats: AtomicUsize::new(0),
+                initial_stat_barrier: Barrier::new(2),
+                shared_parent_mkdir_attempts: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl FileSystem for ConcurrentParentCreationFs {
+        async fn create(&self, path: &str) -> FsResult<()> {
+            self.inner.create(path).await
+        }
+
+        async fn mkdir(&self, path: &str, mode: u32) -> FsResult<()> {
+            if path == self.shared_parent {
+                self.shared_parent_mkdir_attempts
+                    .fetch_add(1, Ordering::SeqCst);
+            }
+            self.inner.mkdir(path, mode).await
+        }
+
+        async fn remove(&self, path: &str) -> FsResult<()> {
+            self.inner.remove(path).await
+        }
+
+        async fn remove_all(&self, path: &str) -> FsResult<()> {
+            self.inner.remove_all(path).await
+        }
+
+        async fn read(&self, path: &str, offset: u64, size: u64) -> FsResult<Vec<u8>> {
+            self.inner.read(path, offset, size).await
+        }
+
+        async fn write(
+            &self,
+            path: &str,
+            data: &[u8],
+            offset: u64,
+            flags: WriteFlag,
+        ) -> FsResult<u64> {
+            self.inner.write(path, data, offset, flags).await
+        }
+
+        async fn read_dir(&self, path: &str) -> FsResult<Vec<FileInfo>> {
+            self.inner.read_dir(path).await
+        }
+
+        async fn stat(&self, path: &str) -> FsResult<FileInfo> {
+            if path == self.shared_parent
+                && self.initial_missing_stats.fetch_add(1, Ordering::SeqCst) < 2
+            {
+                self.initial_stat_barrier.wait().await;
+                return Err(Error::not_found(path));
+            }
+            self.inner.stat(path).await
+        }
+
+        async fn rename(&self, old_path: &str, new_path: &str) -> FsResult<()> {
+            self.inner.rename(old_path, new_path).await
+        }
+
+        async fn chmod(&self, path: &str, mode: u32) -> FsResult<()> {
+            self.inner.chmod(path, mode).await
+        }
+    }
 
     struct FailNextRemoveProvider {
         inner: crate::lock::provider::MemoryPathLockProvider,
@@ -1626,6 +1714,39 @@ mod tests {
             PathLockManager::new(fs.clone(), provider, PathLockConfig::default()),
             fs,
         )
+    }
+
+    #[tokio::test]
+    async fn exact_locks_tolerate_concurrent_parent_directory_creation() {
+        let inner = Arc::new(MemFileSystem::new());
+        inner.mkdir("/local", 0o755).await.unwrap();
+        inner.mkdir("/local/default", 0o755).await.unwrap();
+        inner
+            .mkdir("/local/default/resources", 0o755)
+            .await
+            .unwrap();
+        let shared_parent = "/local/default/resources/shared";
+        let fs = Arc::new(ConcurrentParentCreationFs::new(
+            inner.clone(),
+            shared_parent,
+        ));
+        let provider = Arc::new(crate::lock::provider::MemoryPathLockProvider::new());
+        let first_manager =
+            PathLockManager::new(fs.clone(), provider.clone(), PathLockConfig::default());
+        let second_manager =
+            PathLockManager::new(fs.clone(), provider, PathLockConfig::default());
+        let first_path = format!("{shared_parent}/a.md");
+        let second_path = format!("{shared_parent}/b.md");
+
+        let (first, second) = tokio::join!(
+            first_manager.acquire_exact(&first_path, Duration::ZERO, None),
+            second_manager.acquire_exact(&second_path, Duration::ZERO, None),
+        );
+
+        assert!(first.is_ok(), "first lock failed: {first:?}");
+        assert!(second.is_ok(), "second lock failed: {second:?}");
+        assert_eq!(fs.shared_parent_mkdir_attempts.load(Ordering::SeqCst), 2);
+        assert!(inner.stat(shared_parent).await.unwrap().is_dir);
     }
 
     #[tokio::test]

@@ -19,7 +19,8 @@ fn pathlock_err_to_py(err: PathLockError) -> PyErr {
     match &err {
         PathLockError::Conflict { .. }
         | PathLockError::Timeout { .. }
-        | PathLockError::HandoffFailed(_) => {
+        | PathLockError::HandoffFailed(_)
+        | PathLockError::Io(_) => {
             #[allow(deprecated)]
             Python::with_gil(|py| {
                 let ty = LOCK_ACQUISITION_ERROR_TYPE
@@ -2592,6 +2593,25 @@ mod tests {
         Python::attach(|py| {
             let value: i32 = py_detach_blocking(py, || 40 + 2);
             assert_eq!(value, 42);
+        });
+    }
+
+    #[test]
+    fn pathlock_io_error_maps_to_lock_acquisition_error() {
+        Python::initialize();
+        Python::attach(|py| {
+            let errors_mod = py.import("openviking.storage.errors").unwrap();
+            let lock_error_type: Py<PyType> = errors_mod
+                .getattr("LockAcquisitionError")
+                .unwrap()
+                .extract()
+                .unwrap();
+            let _ = LOCK_ACQUISITION_ERROR_TYPE.set(lock_error_type.clone_ref(py));
+
+            let error =
+                pathlock_err_to_py(PathLockError::Io("failed to create lock dir".to_string()));
+
+            assert!(error.is_instance(py, lock_error_type.bind(py)));
         });
     }
 
