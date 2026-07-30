@@ -998,9 +998,7 @@ class OpenAPIChannel(BaseChannel):
                     detail=OPENVIKING_UPSTREAM_NOT_CONFIGURED_DETAIL,
                 )
             await self._assert_runtime_upstream_auth_mode(
-                self._identity_headers_from_connection(
-                    compile_request.openviking_connection
-                )
+                self._identity_headers_from_connection(compile_request.openviking_connection)
             )
             compile_request._principal_scope = self._connection_principal_scope(
                 compile_request.openviking_connection
@@ -1220,6 +1218,12 @@ class OpenAPIChannel(BaseChannel):
             disabled_tools.append("message")
         return {"disabled_tools": disabled_tools}
 
+    def _request_media(self, request: ChatRequest) -> list[dict[str, Any]]:
+        return [image.model_dump(mode="json", exclude_none=True) for image in request.images]
+
+    def _request_content(self, request: ChatRequest) -> str:
+        return request.message or "[Image]"
+
     def _request_openviking_connection(self, request: ChatRequest) -> dict[str, Any] | None:
         if request.openviking_connection:
             connection = request.openviking_connection.model_dump(exclude_none=True)
@@ -1266,7 +1270,7 @@ class OpenAPIChannel(BaseChannel):
             )
 
             # Build content with context if provided
-            content = request.message
+            content = self._request_content(request)
             if request.context:
                 # Context is handled separately by session manager
                 pass
@@ -1277,6 +1281,7 @@ class OpenAPIChannel(BaseChannel):
                 sender_id=user_id,
                 actor_peer_id=self._request_actor_peer_id(request, user_id),
                 content=content,
+                media=self._request_media(request),
                 metadata=self._request_metadata(request),
                 openviking_connection=self._request_openviking_connection(request),
             )
@@ -1347,7 +1352,8 @@ class OpenAPIChannel(BaseChannel):
                     session_key=session_key,
                     sender_id=user_id,
                     actor_peer_id=self._request_actor_peer_id(request, user_id),
-                    content=request.message,
+                    content=self._request_content(request),
+                    media=self._request_media(request),
                     metadata=self._request_metadata(request),
                     openviking_connection=self._request_openviking_connection(request),
                 )
@@ -1421,7 +1427,7 @@ class OpenAPIChannel(BaseChannel):
             )
 
             # Build content with context if provided
-            content = request.message
+            content = self._request_content(request)
             if request.context:
                 # Context is handled separately by session manager
                 pass
@@ -1433,6 +1439,7 @@ class OpenAPIChannel(BaseChannel):
                 actor_peer_id=self._request_actor_peer_id(request, user_id),
                 content=content,
                 need_reply=request.need_reply,
+                media=self._request_media(request),
                 metadata=self._request_metadata(request),
                 openviking_connection=self._request_openviking_connection(request),
             )
@@ -1510,7 +1517,8 @@ class OpenAPIChannel(BaseChannel):
                     session_key=session_key,
                     sender_id=user_id,
                     actor_peer_id=self._request_actor_peer_id(request, user_id),
-                    content=request.message,
+                    content=self._request_content(request),
+                    media=self._request_media(request),
                     metadata=self._request_metadata(request),
                     openviking_connection=self._request_openviking_connection(request),
                 )

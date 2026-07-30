@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.models.vlm import MultiCredentialVLM
+from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
 from vikingbot.config import loader
 from vikingbot.config.schema import Config
 from vikingbot.providers.vlm_adapter import VLMProviderAdapter
@@ -236,6 +237,50 @@ def test_explicit_bot_model_without_credentials_keeps_single_model_behavior(tmp_
     assert isinstance(provider, VLMProviderAdapter)
     assert not isinstance(provider._vlm, MultiCredentialVLM)
     assert provider._vlm.model == "bot-model"
+
+
+def test_explicit_litellm_provider_uses_vlm_adapter(tmp_path, monkeypatch):
+    config = _write_config(
+        tmp_path,
+        monkeypatch,
+        {
+            "bot": {
+                "agents": {
+                    "provider": "litellm",
+                    "model": "openrouter/openai/gpt-4o-mini",
+                    "api_key": "bot-key",
+                }
+            }
+        },
+    )
+
+    from vikingbot.cli.commands import _make_provider
+
+    provider = _make_provider(config)
+
+    assert isinstance(provider, VLMProviderAdapter)
+    assert isinstance(provider._vlm, LiteLLMVLMProvider)
+    assert provider._vlm.model == "openrouter/openai/gpt-4o-mini"
+
+
+def test_bot_model_without_provider_rejects_legacy_fallback(tmp_path, monkeypatch):
+    config = _write_config(
+        tmp_path,
+        monkeypatch,
+        {
+            "bot": {
+                "agents": {
+                    "model": "openrouter/openai/gpt-4o-mini",
+                    "api_key": "bot-key",
+                }
+            }
+        },
+    )
+
+    from vikingbot.cli.commands import _make_provider
+
+    with pytest.raises(RuntimeError, match="Set provider to 'litellm'"):
+        _make_provider(config)
 
 
 def test_saving_inherited_config_does_not_turn_root_model_into_bot_override(tmp_path, monkeypatch):
