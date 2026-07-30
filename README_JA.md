@@ -192,6 +192,17 @@ ov chat   # 別のターミナルで実行
 
 自分で運用したくない場合は、公式ホスティング版の OpenViking Personal をすぐに利用できます。VikingDB によりローカルハードウェアをはるかに超える規模までスケールし、最大 50 ファイルまでの無料トライアルが付属します。既存のオープンソース版ユーザーは移行ツールで移行できます。→ [openviking.ai](https://www.openviking.ai)
 
+## マネージドサービス
+
+### Volcano Engine（中国地域）
+Volcano Engine 上で公式にホスティングされており、中国地域で利用可能です。
+- 製品ページ：[www.volcengine.com/product/openviking-service](https://www.volcengine.com/product/openviking-service)
+- ドキュメント：[docs.volcengine.com/docs/84313/2374478](https://docs.volcengine.com/docs/84313/2374478)
+
+### 近日公開
+- [BytePlus](https://www.byteplus.com) 上でのグローバルホスティングサービス（中国以外の地域向け）
+- プライベート分散型エンタープライズ版（アクティベーションコードでデプロイ、BYOC をサポート）
+
 ## 研究
 
 OpenViking は、VikingMem 論文に記載されたコア機能の一部をオープンソースとして公開しています:

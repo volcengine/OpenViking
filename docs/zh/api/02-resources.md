@@ -668,3 +668,4 @@ shared 模式的响应示例：
 - [技能](04-skills.md) - 技能管理 API
 - [检索](06-retrieval.md) - 搜索和上下文获取
 - [ovpack 指南](../guides/09-ovpack.md) - ovpack 导入导出详细说明
+- [OpenViking Assets](../guides/18-openviking-assets.md) - 声明式资源集合协议和运行指南

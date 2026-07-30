@@ -6,10 +6,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from collections.abc import AsyncIterator, Callable, Sequence
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
+from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Iterator
+
+from pydantic import PrivateAttr
 
 try:
     from langchain_core.messages import BaseMessage, SystemMessage
@@ -37,6 +41,7 @@ from openviking.integrations.langchain.history import (
     context_parts_from_documents,
 )
 from openviking.integrations.langchain.messages import OPENVIKING_CONTEXT_MARKER
+from openviking.integrations.langchain.recording import OpenVikingSessionRecorder
 from openviking.integrations.langchain.retrievers import OpenVikingRetriever
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 
@@ -85,17 +90,51 @@ class _AsyncSessionWriteLockPool:
                 self._entries.pop(session_id, None)
 
 
+@dataclass(slots=True)
+class _SyncSessionWriteLockEntry:
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    users: int = 0
+
+
+class _SyncSessionWriteLockPool:
+    """Serialize synchronous writes without retaining inactive session IDs."""
+
+    def __init__(self) -> None:
+        self._entries: dict[str, _SyncSessionWriteLockEntry] = {}
+        self._entries_lock = threading.Lock()
+
+    @contextmanager
+    def acquire(self, session_id: str) -> Iterator[None]:
+        with self._entries_lock:
+            entry = self._entries.get(session_id)
+            if entry is None:
+                entry = _SyncSessionWriteLockEntry()
+                self._entries[session_id] = entry
+            entry.users += 1
+        try:
+            with entry.lock:
+                yield
+        finally:
+            with self._entries_lock:
+                entry.users -= 1
+                if entry.users == 0 and self._entries.get(session_id) is entry:
+                    self._entries.pop(session_id, None)
+
+
 class _InvocationOpenVikingChatMessageHistory(OpenVikingChatMessageHistory):
     """Hold the entry history snapshot for one runnable invocation."""
 
     def __init__(
         self,
         *args: Any,
+        recorder: OpenVikingSessionRecorder,
+        sync_write_lock_pool: _SyncSessionWriteLockPool,
         async_write_lock_pools: LoopScopedAsyncClientCache,
         **kwargs: Any,
     ):
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, _recorder=recorder, **kwargs)
         self._entry_snapshot: list[BaseMessage] | None = None
+        self._sync_write_lock_pool = sync_write_lock_pool
         self._async_write_lock_pools = async_write_lock_pools
 
     @property
@@ -111,7 +150,8 @@ class _InvocationOpenVikingChatMessageHistory(OpenVikingChatMessageHistory):
 
     def add_messages(self, messages: Sequence[BaseMessage]) -> None:
         try:
-            super().add_messages(messages)
+            with self._sync_write_lock_pool.acquire(self.session_id):
+                super().add_messages(messages)
         finally:
             self._entry_snapshot = None
 
@@ -192,8 +232,38 @@ class OpenVikingSessionContextAssembler:
         self._owns_client = client is None
         self._owns_retriever = retriever is None
         self._client_cache: Any = None
+        self._client_cache_lock = threading.Lock()
         self._async_clients = LoopScopedAsyncClientCache()
         self._closed = False
+
+    def __deepcopy__(
+        self,
+        memo: dict[int, Any] | None = None,
+    ) -> OpenVikingSessionContextAssembler:
+        """Copy configuration with fresh caches and preserved injected ownership."""
+
+        memo = {} if memo is None else memo
+        for client in (self._connection.client, self._connection.async_client):
+            if client is not None:
+                memo[id(client)] = client
+        if not self._owns_retriever:
+            memo[id(self.retriever)] = self.retriever
+
+        copied = type(self).__new__(type(self))
+        memo[id(self)] = copied
+        copied.__dict__ = {
+            name: (
+                None
+                if name == "_client_cache"
+                else threading.Lock()
+                if name == "_client_cache_lock"
+                else LoopScopedAsyncClientCache()
+                if name == "_async_clients"
+                else deepcopy(value, memo)
+            )
+            for name, value in self.__dict__.items()
+        }
+        return copied
 
     def assemble(
         self,
@@ -241,8 +311,13 @@ class OpenVikingSessionContextAssembler:
     def _get_client(self) -> Any:
         self._raise_if_closed()
         if self._client_cache is None:
-            self._client_cache = ensure_client(self._connection)
-        return self._client_cache
+            with self._client_cache_lock:
+                self._raise_if_closed()
+                if self._client_cache is None:
+                    self._client_cache = ensure_client(self._connection)
+        client = self._client_cache
+        self._raise_if_closed()
+        return client
 
     async def get_async_client(self) -> Any:
         """Return the async client interface used by this assembler.
@@ -274,8 +349,9 @@ class OpenVikingSessionContextAssembler:
         if self._closed:
             return
         self._closed = True
-        sync_client = self._client_cache
-        self._client_cache = None
+        with self._client_cache_lock:
+            sync_client = self._client_cache
+            self._client_cache = None
         async_clients = await asyncio.to_thread(self._async_clients.pop_all)
 
         first_error: BaseException | None = None
@@ -437,6 +513,115 @@ class OpenVikingSessionContextAssembler:
         return f"{OPENVIKING_CONTEXT_MARKER}\n" + "\n\n".join(sections) + "\n</openviking_context>"
 
 
+class _OpenVikingContextResources:
+    """Share one lifecycle owner across derived runnable copies."""
+
+    def __init__(
+        self,
+        assembler: OpenVikingSessionContextAssembler,
+        recorder: OpenVikingSessionRecorder,
+    ) -> None:
+        self._assembler = assembler
+        self._recorder = recorder
+        self._closed = False
+        self._close_lock = threading.Lock()
+
+    def __copy__(self) -> _OpenVikingContextResources:
+        return self
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> _OpenVikingContextResources:
+        memo[id(self)] = self
+        return self
+
+    def close(self) -> None:
+        with self._close_lock:
+            if self._closed:
+                return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(self.aclose())
+            return
+        raise RuntimeError(
+            "OpenVikingContextRunnable.close() cannot run inside an active event loop; "
+            "use `await runnable.aclose()`"
+        )
+
+    async def aclose(self) -> None:
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+
+        first_error: BaseException | None = None
+        for component in (self._assembler, self._recorder):
+            try:
+                await component.aclose()
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
+
+    def raise_if_closed(self) -> None:
+        with self._close_lock:
+            if self._closed:
+                raise RuntimeError("OpenVikingContextRunnable is closed")
+
+
+class OpenVikingContextRunnable(RunnableWithMessageHistory):
+    """LangChain history wrapper with deterministic OpenViking cleanup."""
+
+    _resources: _OpenVikingContextResources = PrivateAttr()
+
+    def __init__(
+        self,
+        *args: Any,
+        _resources: _OpenVikingContextResources,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self._resources = _resources
+
+    def close(self) -> None:
+        """Release internally created resources outside a running event loop."""
+
+        self._resources.close()
+
+    async def aclose(self) -> None:
+        """Release internally created context and recording resources."""
+
+        await self._resources.aclose()
+
+    def __enter__(self) -> OpenVikingContextRunnable:
+        """Enter a synchronous managed lifecycle."""
+
+        self._resources.raise_if_closed()
+        return self
+
+    def __exit__(
+        self,
+        _exc_type: type[BaseException] | None,
+        _exc: BaseException | None,
+        _traceback: Any,
+    ) -> None:
+        self.close()
+
+    async def __aenter__(self) -> OpenVikingContextRunnable:
+        """Enter an asynchronous managed lifecycle."""
+
+        self._resources.raise_if_closed()
+        return self
+
+    async def __aexit__(
+        self,
+        _exc_type: type[BaseException] | None,
+        _exc: BaseException | None,
+        _traceback: Any,
+    ) -> None:
+        await self.aclose()
+
+
 def with_openviking_context(
     runnable: Any,
     *,
@@ -465,8 +650,12 @@ def with_openviking_context(
     session_id_config_key: str = "session_id",
     peer_id_config_key: str = "peer_id",
     inject_context: bool = True,
-) -> RunnableWithMessageHistory:
-    """Wrap a runnable with invocation-scoped OpenViking history and context."""
+) -> OpenVikingContextRunnable:
+    """Wrap a runnable with invocation-scoped history and managed resources.
+
+    Use the returned runnable as a context manager, or call ``close()`` /
+    ``await aclose()`` when it is no longer needed.
+    """
 
     assembler = OpenVikingSessionContextAssembler(
         client=client,
@@ -488,27 +677,34 @@ def with_openviking_context(
         include_active_messages=False,
         include_recall=inject_context,
     )
+    recorder = OpenVikingSessionRecorder(
+        client=client,
+        async_client=async_client,
+        url=url,
+        api_key=api_key,
+        account=account,
+        user=user,
+        user_id=user_id,
+        actor_peer_id=actor_peer_id,
+        path=path,
+        timeout=timeout,
+        extra_headers=extra_headers,
+        auto_initialize=auto_initialize,
+        commit_policy=commit_policy,
+    )
+    resources = _OpenVikingContextResources(assembler, recorder)
+    sync_write_lock_pool = _SyncSessionWriteLockPool()
     async_write_lock_pools = LoopScopedAsyncClientCache()
 
     def make_history(active_session_id: str) -> OpenVikingChatMessageHistory:
+        resources.raise_if_closed()
         return _InvocationOpenVikingChatMessageHistory(
             session_id=active_session_id,
+            recorder=recorder,
+            sync_write_lock_pool=sync_write_lock_pool,
             async_write_lock_pools=async_write_lock_pools,
             peer_id=peer_id,
-            client=client,
-            async_client=async_client,
-            url=url,
-            api_key=api_key,
-            account=account,
-            user=user,
-            user_id=user_id,
-            actor_peer_id=actor_peer_id,
-            path=path,
-            timeout=timeout,
-            extra_headers=extra_headers,
-            auto_initialize=auto_initialize,
             token_budget=token_budget,
-            commit_policy=commit_policy,
         )
 
     if session_id is None:
@@ -611,13 +807,14 @@ def with_openviking_context(
     bound = (RunnableLambda(inject, afunc=ainject) | runnable).with_listeners(
         on_error=clear_pending_on_error
     )
-    wrapped = RunnableWithMessageHistory(
+    wrapped = OpenVikingContextRunnable(
         bound,
         session_history_factory,
         input_messages_key=input_messages_key,
         output_messages_key=output_messages_key,
         history_messages_key=history_messages_key,
         history_factory_config=history_factory_config,
+        _resources=resources,
     )
     return wrapped
 

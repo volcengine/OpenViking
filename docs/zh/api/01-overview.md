@@ -545,10 +545,12 @@ JSON 输出 - 错误：
 | POST | `/api/v1/privacy-configs/{category}/{target_key}` | 写入并激活新版本 |
 | POST | `/api/v1/privacy-configs/{category}/{target_key}/activate` | 激活指定版本 |
 
-### [WebDAV](20-webdav.md) 与 [VikingBot API](24-vikingbot.md)
+### [OpenViking Assets](22-openviking-assets.md)、[WebDAV](20-webdav.md) 与 [VikingBot API](24-vikingbot.md)
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| POST | `/api/v1/openviking-assets/resolve` | 解析并校验 Catalog 与 Manifest，返回标准化资产计划 |
+| POST | `/api/v1/openviking-assets/preflight` | 只读校验 Git 仓库和 ref 的访问权限 |
 | OPTIONS | `/webdav/resources`、`/webdav/resources/{resource_path}` | 查询 WebDAV 能力 |
 | PROPFIND | `/webdav/resources`、`/webdav/resources/{resource_path}` | 查询资源属性 |
 | GET / HEAD | `/webdav/resources`、`/webdav/resources/{resource_path}` | 读取文件或目录 |
@@ -576,4 +578,4 @@ JSON 输出 - 错误：
 | 数据生命周期 | Watch、快照、OVPack |
 | 运维与观测 | 系统、任务、Observer、Metrics |
 | 身份与治理 | 管理员、隐私配置 |
-| 协议与扩展 | WebDAV、VikingBot API |
+| 协议与扩展 | OpenViking Assets、WebDAV、VikingBot API |

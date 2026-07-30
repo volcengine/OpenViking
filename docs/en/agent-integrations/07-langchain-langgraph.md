@@ -78,12 +78,14 @@ or reset it before selecting another workspace.
 and `aclear()`. `OpenVikingSessionRecorder` provides `arecord()`, `aflush()`,
 and `aclose()`. Async LangGraph runs select `awrap_model_call()` and
 `aafter_agent()` automatically. Concurrent first use creates one internal HTTP
-client per adapter and event loop. Each `with_openviking_context()` invocation
-owns the history snapshot, peer identity, and recalled-context references used
-to record its turn. Concurrent calls may therefore share a session without a
+client per adapter and event loop. Each runnable invocation through
+`with_openviking_context()` owns the history snapshot, peer identity, and
+recalled-context references used to record its turn. Concurrent calls may
+therefore share a session without a
 second live history read losing messages, and an abandoned stream does not hold
 a session-wide lifecycle lock. Only the final append-and-commit step is
-serialized per session and event loop.
+serialized: async writes are serialized per session within each event loop,
+while synchronous writes are serialized per session across threads.
 
 If cancellation occurs after a recorder has confirmed part of a write,
 `arecord()` re-raises the original `asyncio.CancelledError`. Pass that exception,
@@ -101,10 +103,34 @@ release it with `await retriever.aclose()`, `await assembler.aclose()`,
 recorder open so `await recorder.aclose()` can still release every resource.
 When possible, close HTTP-backed adapters before shutting down their event
 loops; cleanup after an originating loop has already ended is best-effort.
-`with_openviking_context()` returns LangChain's standard
-`RunnableWithMessageHistory`, which has no close hook. Long-lived async
-applications using that helper should therefore inject and close a
-caller-owned async client as shown above.
+
+`with_openviking_context()` returns an `OpenVikingContextRunnable`, a compatible
+subclass of LangChain's `RunnableWithMessageHistory` that owns the context and
+recording adapters it creates. It reuses their loop-scoped clients across
+invocations while keeping invocation history, peer identity, and recalled
+references isolated. Prefer a managed lifecycle:
+
+```python
+async with with_openviking_context(runnable, url="http://localhost:1933") as chain:
+    result = await chain.ainvoke(
+        {"messages": [...]},
+        config={"configurable": {"session_id": "support-thread-1"}},
+    )
+```
+
+Use `with ...` for synchronous calls, or call `close()` / `await aclose()`
+explicitly. `close()` cannot run inside an active event loop; use `aclose()`
+there. Injected clients remain caller-owned.
+
+LCEL composition returns a plain `RunnableSequence`, which does not expose the
+OpenViking close methods. Keep the managed wrapper and compose inside its
+lifecycle:
+
+```python
+async with with_openviking_context(runnable, url="http://localhost:1933") as managed:
+    chain = managed | another_step
+    result = await chain.ainvoke(...)
+```
 
 ## Peer Identity
 
@@ -162,11 +188,12 @@ from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
 from openviking.integrations.langchain import with_openviking_context
 
-chain = with_openviking_context(
+with with_openviking_context(
     RunnableLambda(lambda msgs: AIMessage(content="...")),
     url="http://localhost:1933",
     api_key="...",
-)
+) as chain:
+    result = chain.invoke(...)
 ```
 
 ### Agent tools

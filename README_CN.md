@@ -192,6 +192,17 @@ ov chat   # 在另一个终端运行
 
 不想自己运维？OpenViking Personal 由官方托管、开箱即用，借助 VikingDB 获得远超本地硬件的扩展能力，并提供至多 50 个文件的免费试用；开源版用户可以用迁移工具平滑迁移。→ [openviking.ai](https://www.openviking.ai)
 
+## 托管服务
+
+### 火山引擎（中国地区）
+在火山引擎上官方托管，中国地区可用。
+- 产品页面：[www.volcengine.com/product/openviking-service](https://www.volcengine.com/product/openviking-service)
+- 文档：[docs.volcengine.com/docs/84313/2374478](https://docs.volcengine.com/docs/84313/2374478)
+
+### 即将推出
+- 在 [BytePlus](https://www.byteplus.com) 上的全球托管服务（面向中国以外地区）
+- 私有化分布式企业版（通过激活码激活部署，支持 BYOC）
+
 ## 研究
 
 OpenViking 开源了 VikingMem 论文中描述的部分核心能力：

@@ -67,6 +67,7 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
         context_parts_acknowledger: Callable[[str], None] | None = None,
         peer_id: str | None = None,
         peer_id_provider: Callable[[str], str | None] | None = None,
+        _recorder: OpenVikingSessionRecorder | None = None,
     ):
         self.session_id = session_id
         self.peer_id = peer_id
@@ -78,7 +79,8 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
         self.context_parts_provider = context_parts_provider
         self.context_parts_acknowledger = context_parts_acknowledger
         self._pending_context_parts: list[dict[str, Any]] = []
-        self._recorder = OpenVikingSessionRecorder(
+        self._owns_recorder = _recorder is None
+        self._recorder = _recorder or OpenVikingSessionRecorder(
             client=client,
             async_client=async_client,
             url=url,
@@ -200,13 +202,15 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
         """Release resources owned by this history adapter."""
 
         self._acknowledge_context_parts()
-        self._recorder.close()
+        if self._owns_recorder:
+            self._recorder.close()
 
     async def aclose(self) -> None:
         """Asynchronously release resources owned by this history adapter."""
 
         self._acknowledge_context_parts()
-        await self._recorder.aclose()
+        if self._owns_recorder:
+            await self._recorder.aclose()
 
     def _get_client(self) -> Any:
         return self._recorder.client

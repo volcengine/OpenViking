@@ -219,6 +219,7 @@ const apiReferenceSidebar = {
       {
         text: 'Protocols & Extensions',
         items: [
+          ['22-openviking-assets.md', 'OpenViking Assets'],
           ['20-webdav.md', 'WebDAV'],
           ['24-vikingbot.md', 'VikingBot API']
         ]
@@ -278,6 +279,7 @@ const apiReferenceSidebar = {
       {
         text: '协议与扩展',
         items: [
+          ['22-openviking-assets.md', 'OpenViking Assets'],
           ['20-webdav.md', 'WebDAV'],
           ['24-vikingbot.md', 'VikingBot API']
         ]
@@ -387,6 +389,7 @@ const guidesSidebar = {
         items: [
           ['06-mcp-integration.md', 'MCP Integration'],
           ['09-ovpack.md', 'OVPack'],
+          ['18-openviking-assets.md', 'OpenViking Assets'],
           ['10-prompt-guide.md', 'Prompt Customization'],
           ['17-vikingbot.md', 'VikingBot']
         ]
@@ -429,6 +432,7 @@ const guidesSidebar = {
         items: [
           ['06-mcp-integration.md', 'MCP 集成'],
           ['09-ovpack.md', 'OVPack'],
+          ['18-openviking-assets.md', 'OpenViking Assets'],
           ['10-prompt-guide.md', 'Prompt 自定义'],
           ['17-vikingbot.md', 'VikingBot']
         ]

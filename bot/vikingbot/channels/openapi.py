@@ -13,7 +13,8 @@ from urllib.parse import urlsplit
 
 import httpx
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import Response, StreamingResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from loguru import logger
 
 from vikingbot.bus.events import InboundMessage, OutboundEventType, OutboundMessage
@@ -64,6 +65,35 @@ HOP_BY_HOP_HEADERS = {
     "transfer-encoding",
     "upgrade",
 }
+
+
+def _public_validation_error(error: Any) -> dict[str, Any]:
+    """Keep validation diagnostics without reflecting request data."""
+    if not isinstance(error, dict):
+        return {
+            "type": "value_error",
+            "loc": ["request"],
+            "msg": "Invalid request value",
+        }
+
+    location = error.get("loc", ("request",))
+    if not isinstance(location, (list, tuple)):
+        location = (location,)
+    return {
+        "type": str(error.get("type") or "value_error"),
+        "loc": [item if isinstance(item, (str, int)) else str(item) for item in location],
+        "msg": str(error.get("msg") or "Invalid request value"),
+    }
+
+
+async def _request_validation_error_handler(
+    _request: Request,
+    exc: RequestValidationError,
+) -> JSONResponse:
+    # Pydantic validation errors include the original `input` by default. Never
+    # return it here: image inputs may contain large or sensitive Base64 data.
+    errors = [_public_validation_error(error) for error in exc.errors()]
+    return JSONResponse(status_code=422, content={"detail": errors})
 
 
 @dataclass(frozen=True)
@@ -998,9 +1028,7 @@ class OpenAPIChannel(BaseChannel):
                     detail=OPENVIKING_UPSTREAM_NOT_CONFIGURED_DETAIL,
                 )
             await self._assert_runtime_upstream_auth_mode(
-                self._identity_headers_from_connection(
-                    compile_request.openviking_connection
-                )
+                self._identity_headers_from_connection(compile_request.openviking_connection)
             )
             compile_request._principal_scope = self._connection_principal_scope(
                 compile_request.openviking_connection
@@ -1200,6 +1228,11 @@ class OpenAPIChannel(BaseChannel):
             logger.warning("No external FastAPI app provided, cannot setup routes")
             return
 
+        self._app.add_exception_handler(
+            RequestValidationError,
+            _request_validation_error_handler,
+        )
+
         # Get the router and include it at root path
         # Note: openviking-server adds its own /bot/v1 prefix when proxying
         router = self.get_router()
@@ -1219,6 +1252,12 @@ class OpenAPIChannel(BaseChannel):
         if "message" not in disabled_tools:
             disabled_tools.append("message")
         return {"disabled_tools": disabled_tools}
+
+    def _request_media(self, request: ChatRequest) -> list[dict[str, Any]]:
+        return [image.model_dump(mode="json", exclude_none=True) for image in request.images]
+
+    def _request_content(self, request: ChatRequest) -> str:
+        return request.message or "[Image]"
 
     def _request_openviking_connection(self, request: ChatRequest) -> dict[str, Any] | None:
         if request.openviking_connection:
@@ -1266,7 +1305,7 @@ class OpenAPIChannel(BaseChannel):
             )
 
             # Build content with context if provided
-            content = request.message
+            content = self._request_content(request)
             if request.context:
                 # Context is handled separately by session manager
                 pass
@@ -1277,6 +1316,7 @@ class OpenAPIChannel(BaseChannel):
                 sender_id=user_id,
                 actor_peer_id=self._request_actor_peer_id(request, user_id),
                 content=content,
+                media=self._request_media(request),
                 metadata=self._request_metadata(request),
                 openviking_connection=self._request_openviking_connection(request),
             )
@@ -1347,7 +1387,8 @@ class OpenAPIChannel(BaseChannel):
                     session_key=session_key,
                     sender_id=user_id,
                     actor_peer_id=self._request_actor_peer_id(request, user_id),
-                    content=request.message,
+                    content=self._request_content(request),
+                    media=self._request_media(request),
                     metadata=self._request_metadata(request),
                     openviking_connection=self._request_openviking_connection(request),
                 )
@@ -1421,7 +1462,7 @@ class OpenAPIChannel(BaseChannel):
             )
 
             # Build content with context if provided
-            content = request.message
+            content = self._request_content(request)
             if request.context:
                 # Context is handled separately by session manager
                 pass
@@ -1433,6 +1474,7 @@ class OpenAPIChannel(BaseChannel):
                 actor_peer_id=self._request_actor_peer_id(request, user_id),
                 content=content,
                 need_reply=request.need_reply,
+                media=self._request_media(request),
                 metadata=self._request_metadata(request),
                 openviking_connection=self._request_openviking_connection(request),
             )
@@ -1510,7 +1552,8 @@ class OpenAPIChannel(BaseChannel):
                     session_key=session_key,
                     sender_id=user_id,
                     actor_peer_id=self._request_actor_peer_id(request, user_id),
-                    content=request.message,
+                    content=self._request_content(request),
+                    media=self._request_media(request),
                     metadata=self._request_metadata(request),
                     openviking_connection=self._request_openviking_connection(request),
                 )

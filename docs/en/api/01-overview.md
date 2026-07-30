@@ -550,10 +550,12 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/privacy-configs/{category}/{target_key}` | Write and activate a new version |
 | POST | `/api/v1/privacy-configs/{category}/{target_key}/activate` | Activate a version |
 
-### [WebDAV](20-webdav.md) and [VikingBot API](24-vikingbot.md)
+### [OpenViking Assets](22-openviking-assets.md), [WebDAV](20-webdav.md), and [VikingBot API](24-vikingbot.md)
 
 | Method | Path | Description |
 |--------|------|-------------|
+| POST | `/api/v1/openviking-assets/resolve` | Parse and validate a Catalog and Manifest, returning a normalized asset plan |
+| POST | `/api/v1/openviking-assets/preflight` | Read-only access check for a Git repository and ref |
 | OPTIONS | `/webdav/resources`, `/webdav/resources/{resource_path}` | Query WebDAV capabilities |
 | PROPFIND | `/webdav/resources`, `/webdav/resources/{resource_path}` | Query resource properties |
 | GET / HEAD | `/webdav/resources`, `/webdav/resources/{resource_path}` | Read a file or directory |
@@ -581,4 +583,4 @@ The sidebar is organized by responsibility rather than historical file size:
 | Data Lifecycle | Watches, snapshots, and OVPack |
 | Operations & Observability | System, tasks, Observer, and Metrics |
 | Identity & Governance | Administration and privacy configuration |
-| Protocols & Extensions | WebDAV and VikingBot API |
+| Protocols & Extensions | OpenViking Assets, WebDAV, and VikingBot API |

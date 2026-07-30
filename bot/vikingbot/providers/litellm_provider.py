@@ -7,6 +7,7 @@ import litellm
 from litellm import acompletion
 from loguru import logger
 
+from openviking.utils.multimodal import redact_image_data_urls
 from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.providers.base import (
     LLMProvider,
@@ -136,9 +137,7 @@ class LiteLLMProvider(LLMProvider):
             kwargs["thinking"] = {"type": "enabled"}
             return
 
-        if thinking_param == "dashscope_enable_thinking" or model_lower.startswith(
-            "dashscope/"
-        ):
+        if thinking_param == "dashscope_enable_thinking" or model_lower.startswith("dashscope/"):
             extra_body = dict(kwargs.get("extra_body") or {})
             extra_body["enable_thinking"] = True
             kwargs["extra_body"] = extra_body
@@ -283,7 +282,7 @@ class LiteLLMProvider(LLMProvider):
                         name="llm-chat",
                         as_type="generation",
                         model=model,
-                        input=messages,
+                        input=redact_image_data_urls(messages),
                         metadata=metadata,
                     )
                     if response_id:
