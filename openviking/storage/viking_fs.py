@@ -3635,16 +3635,7 @@ class VikingFS:
         path = self._uri_to_path(temp_uri, ctx=ctx)
         fs_ctx = self._pathlock_fs_ctx(ctx, lease_ref)
         try:
-            for entry in await self._ls_entries(path, ctx=ctx):
-                name = entry.get("name", "")
-                if name in [".", ".."]:
-                    continue
-                entry_path = f"{path}/{name}"
-                if entry.get("isDir"):
-                    await self.delete_temp(f"{temp_uri}/{name}", ctx=ctx, lease_ref=lease_ref)
-                else:
-                    await self._async_agfs.rm(entry_path, fs_ctx=fs_ctx)
-            await self._async_agfs.rm(path, fs_ctx=fs_ctx)
+            await self._async_agfs.rm(path, recursive=True, fs_ctx=fs_ctx)
         except Exception as e:
             logger.warning(f"[VikingFS] Failed to delete temp {temp_uri}: {e}")
 
