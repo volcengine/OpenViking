@@ -167,6 +167,10 @@ class NamedQueue:
 
     def _on_process_error(self, error_msg: str, data: Optional[Dict[str, Any]] = None) -> None:
         """Called on processing failure."""
+        if self._task_work_index is not None and data is not None:
+            metadata = extract_task_metadata(data)
+            if metadata is not None:
+                self._task_work_index.record_failure(metadata.task_id, error_msg)
         with self._lock:
             self._in_progress -= 1
             self._error_count += 1

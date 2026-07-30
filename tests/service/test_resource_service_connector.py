@@ -831,7 +831,7 @@ async def test_add_resource_job_executes_frozen_route(ctx, service):
     call = service._execute_resource_ingestion.await_args.kwargs
     assert call["path"] == msg.path
     assert call["to"] == msg.root_uri
-    assert call["wait"] is True
+    assert call["defer_post_processing"] is False
     assert call["resource_lock"] is resource_lock
     assert call["parser_backend"] == "understanding"
     service._should_use_connector.assert_not_called()

@@ -11,11 +11,11 @@ from typing import Any, Dict, Optional
 from openviking.observability.context import bind_execution_context
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import TaskStatus, get_task_tracker
-from openviking.service.task_work_index import bind_task_context
+from openviking.service.task_work_index import bind_task_context, extract_task_metadata
 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
-from openviking.telemetry import bind_telemetry, resolve_telemetry
-from openviking.telemetry.resource_summary import summarize_queue_errors
+from openviking.telemetry import bind_telemetry, resolve_telemetry, unregister_telemetry
+from openviking.telemetry.resource_summary import record_resource_queue_metrics
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.logger import get_logger
 
@@ -80,6 +80,7 @@ class AddResourceProcessor(DequeueHandlerBase):
         return True
 
     async def _process(self, msg: AddResourceMsg, data: Dict[str, Any]) -> None:
+        telemetry_id = msg.telemetry_id or ""
         ctx = RequestContext(
             user=UserIdentifier(msg.account_id, msg.user_id),
             role=Role(msg.role),
@@ -102,6 +103,7 @@ class AddResourceProcessor(DequeueHandlerBase):
         ):
             if task.status in (TaskStatus.CANCELLING, TaskStatus.CANCELLED):
                 await self._release_cancelled_handoff(msg)
+            unregister_telemetry(telemetry_id)
             self.report_success()
             return None
 
@@ -118,9 +120,9 @@ class AddResourceProcessor(DequeueHandlerBase):
                 user_id=ctx.user.user_id,
             )
             self.report_error(f"Invalid lock_handoff: {exc}", data)
+            unregister_telemetry(telemetry_id)
             return None
 
-        telemetry_id = msg.telemetry_id or ""
         telemetry = resolve_telemetry(telemetry_id) if telemetry_id else None
         if telemetry is None:
             from openviking.telemetry.operation import OperationTelemetry
@@ -143,6 +145,7 @@ class AddResourceProcessor(DequeueHandlerBase):
             bind_task_context(msg.task_id, ctx.account_id, ctx.user.user_id),
         ):
             try:
+                metadata = extract_task_metadata(data)
                 await tracker.start(
                     msg.task_id,
                     account_id=ctx.account_id,
@@ -165,16 +168,19 @@ class AddResourceProcessor(DequeueHandlerBase):
                     )
                     self.report_error("resource processing failed", data)
                     return None
-                queue_errors = summarize_queue_errors(result.get("queue_status"))
-                if queue_errors:
-                    await tracker.fail(
-                        msg.task_id,
-                        "queue processing failed: " + "; ".join(queue_errors),
-                        account_id=ctx.account_id,
-                        user_id=ctx.user.user_id,
-                    )
-                    self.report_error("queue processing failed", data)
-                    return None
+                await tracker.wait_for_descendants(msg.task_id, metadata.work_id)
+                record_resource_queue_metrics(
+                    telemetry=telemetry,
+                    telemetry_id=telemetry_id,
+                    root_uri=result.get("root_uri"),
+                )
+                await self._resource_service._link_resource_reason_memory(
+                    result=result,
+                    ctx=ctx,
+                    reason=msg.reason,
+                    source_name=msg.source_name,
+                    timeout=msg.timeout,
+                )
                 await tracker.complete(
                     msg.task_id,
                     result,
@@ -194,6 +200,7 @@ class AddResourceProcessor(DequeueHandlerBase):
                 self.report_error(str(exc), data)
                 return None
             finally:
+                unregister_telemetry(telemetry_id)
                 with suppress(Exception):
                     if resource_lock is not None:
                         await self._viking_fs._async_agfs.pathlock_release(resource_lock)
@@ -213,6 +220,7 @@ class AddResourceProcessor(DequeueHandlerBase):
             self._service_loop,
         )
         await asyncio.wrap_future(future)
+        unregister_telemetry(msg.telemetry_id or "")
         self.report_success()
         return None
 

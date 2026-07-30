@@ -147,6 +147,7 @@ class TaskWorkIndex:
         self._lock = threading.Lock()
         self._work: Dict[str, set[tuple[str, str]]] = {}
         self._active: Dict[str, set[asyncio.Task[Any]]] = {}
+        self._failures: Dict[str, str] = {}
         self._on_idle: Optional[Callable[[str], None]] = None
         self._is_cancellation_requested: Optional[Callable[[str], bool]] = None
 
@@ -176,6 +177,7 @@ class TaskWorkIndex:
                     owners[metadata.task_id] = (metadata.account_id, metadata.user_id)
         with self._lock:
             self._work = work
+            self._failures = {}
         return owners
 
     def register(self, queue_name: str, metadata: Optional[QueueTaskMetadata]) -> bool:
@@ -203,16 +205,34 @@ class TaskWorkIndex:
                     self._work.pop(metadata.task_id, None)
             if not self._work.get(metadata.task_id) and not self._active.get(metadata.task_id):
                 became_idle = True
-        if became_idle and self.cancellation_requested(metadata.task_id) and self._on_idle:
+        if became_idle and self._on_idle:
             self._on_idle(metadata.task_id)
 
-    def has_work(self, task_id: str) -> bool:
+    def has_work(self, task_id: str, exclude_work_id: Optional[str] = None) -> bool:
         with self._lock:
+            if exclude_work_id is not None:
+                return any(
+                    work_id != exclude_work_id
+                    for _queue_name, work_id in self._work.get(task_id, ())
+                )
             return bool(self._work.get(task_id) or self._active.get(task_id))
 
     def cancellation_requested(self, task_id: str) -> bool:
         callback = self._is_cancellation_requested
         return bool(callback is not None and callback(task_id))
+
+    def record_failure(self, task_id: str, error: str) -> None:
+        """Record the first failed work item owned by a task."""
+        with self._lock:
+            self._failures.setdefault(task_id, error)
+
+    def failure(self, task_id: str) -> Optional[str]:
+        with self._lock:
+            return self._failures.get(task_id)
+
+    def clear_failure(self, task_id: str) -> None:
+        with self._lock:
+            self._failures.pop(task_id, None)
 
     def register_active(
         self,
@@ -236,7 +256,7 @@ class TaskWorkIndex:
                     self._active.pop(task_id, None)
             if not self._work.get(task_id) and not self._active.get(task_id):
                 became_idle = True
-        if became_idle and self.cancellation_requested(task_id) and self._on_idle:
+        if became_idle and self._on_idle:
             self._on_idle(task_id)
 
     def cancel_active(self, task_id: str) -> None:

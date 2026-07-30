@@ -12,6 +12,7 @@ from openviking.parse.understanding_api import PREPARED_RESPONSE_ID_ARG, Underst
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
 from openviking.service.task_tracker import TaskStatus
+from openviking.service.task_work_index import TASK_WORK_ID_FIELD
 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 from openviking.storage.queuefs.add_resource_processor import AddResourceProcessor
 from openviking.storage.queuefs.queue_manager import QueueManager
@@ -788,7 +789,8 @@ async def test_add_resource_processor_persists_final_resource_uri(monkeypatch):
     service = SimpleNamespace(
         execute_add_resource_job=AsyncMock(
             return_value={"status": "success", "root_uri": final_uri}
-        )
+        ),
+        _link_resource_reason_memory=AsyncMock(),
     )
     task_tracker = SimpleNamespace(
         create=AsyncMock(return_value=SimpleNamespace(status=TaskStatus.PENDING)),
@@ -796,6 +798,7 @@ async def test_add_resource_processor_persists_final_resource_uri(monkeypatch):
         update_stage=AsyncMock(),
         complete=AsyncMock(),
         fail=AsyncMock(),
+        wait_for_descendants=AsyncMock(),
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.add_resource_processor.get_task_tracker",
@@ -823,7 +826,9 @@ async def test_add_resource_processor_persists_final_resource_uri(monkeypatch):
         understanding_response_id="response-1",
     )
 
-    await processor._process(msg, msg.to_dict())
+    data = msg.to_dict()
+    data[TASK_WORK_ID_FIELD] = "work-1"
+    await processor._process(msg, data)
 
     task_tracker.create.assert_awaited_once_with(
         "add_resource",
@@ -831,6 +836,7 @@ async def test_add_resource_processor_persists_final_resource_uri(monkeypatch):
         account_id="account-1",
         user_id="user-1",
         task_id="task-1",
+        meta={"source_path": ""},
     )
     task_tracker.complete.assert_awaited_once_with(
         "task-1",

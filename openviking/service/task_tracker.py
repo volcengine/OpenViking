@@ -199,7 +199,7 @@ class TaskTracker:
         if loop is None or loop.is_closed():
             return
 
-        asyncio.run_coroutine_threadsafe(self._finalize_cancellation(task_id), loop)
+        asyncio.run_coroutine_threadsafe(self._finalize_task(task_id), loop)
 
     def is_cancellation_requested(self, task_id: str) -> bool:
         """Fast thread-safe status check used by queue workers."""
@@ -416,29 +416,20 @@ class TaskTracker:
     async def complete(
         self,
         task_id: str,
-        result: Optional[Dict[str, Any]] = None,
+        result: Dict[str, Any],
         account_id: Optional[str] = None,
         user_id: Optional[str] = None,
         *,
         resource_id: Optional[str] = None,
     ) -> None:
-        """Transition task to COMPLETED with optional result."""
-        transitioned = False
-        async with self._async_lock:
-            task = await self._load_for_update(task_id, account_id, user_id)
-            if task and task.status in (TaskStatus.PENDING, TaskStatus.RUNNING):
-                task.status = TaskStatus.COMPLETED
-                task.stage = "completed"
-                task.result = result
-                if resource_id is not None:
-                    task.resource_id = resource_id
-                task.updated_at = time.time()
-                await self._store.update(task)
-                with self._lock:
-                    self._tasks[task.task_id] = task
-                transitioned = True
-        if transitioned:
-            logger.info("[TaskTracker] Task %s completed", task_id)
+        """Record successful completion and finalize after owned work settles."""
+        await self._record_outcome(
+            task_id,
+            account_id,
+            user_id,
+            result=result,
+            resource_id=resource_id,
+        )
 
     async def fail(
         self,
@@ -447,21 +438,36 @@ class TaskTracker:
         account_id: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> None:
-        """Transition task to FAILED with sanitized error."""
-        transitioned = False
+        """Record failure and finalize after owned work settles."""
+        await self._record_outcome(task_id, account_id, user_id, error=error)
+
+    async def _record_outcome(
+        self,
+        task_id: str,
+        account_id: Optional[str],
+        user_id: Optional[str],
+        *,
+        result: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None,
+        resource_id: Optional[str] = None,
+    ) -> None:
         async with self._async_lock:
             task = await self._load_for_update(task_id, account_id, user_id)
             if task and task.status in (TaskStatus.PENDING, TaskStatus.RUNNING):
-                task.status = TaskStatus.FAILED
-                task.stage = "failed"
-                task.error = _sanitize_error(error)
+                if result is not None:
+                    task.result = result
+                    if resource_id is not None:
+                        task.resource_id = resource_id
+                if error is not None and task.error is None:
+                    task.error = _sanitize_error(error)
+                work_error = self._work_index.failure(task_id)
+                if work_error and task.error is None:
+                    task.error = _sanitize_error(work_error)
                 task.updated_at = time.time()
                 await self._store.update(task)
                 with self._lock:
                     self._tasks[task.task_id] = task
-                transitioned = True
-        if transitioned:
-            logger.warning("[TaskTracker] Task %s failed: %s", task_id, _sanitize_error(error))
+        await self._finalize_task(task_id, account_id=account_id, user_id=user_id)
 
     async def cancel(
         self,
@@ -488,33 +494,71 @@ class TaskTracker:
                 with self._lock:
                     self._tasks[task.task_id] = task
         self._work_index.cancel_active(task_id)
-        await self._finalize_cancellation(
+        await self._finalize_task(
             task_id,
             account_id=account_id,
             user_id=user_id,
         )
         return await self.get(task_id, account_id=account_id, user_id=user_id)
 
-    async def _finalize_cancellation(
+    async def _finalize_task(
         self,
         task_id: str,
         account_id: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> None:
-        """Enter CANCELLED only after all durable and active work is settled."""
+        """Apply the task's terminal outcome after all owned work is settled."""
         if self._work_index.has_work(task_id):
             return
         async with self._async_lock:
             task = await self._load_for_update(task_id, account_id, user_id)
-            if task and task.status == TaskStatus.CANCELLING:
+            if task and task.status in _ACTIVE_STATUSES:
                 if self._work_index.has_work(task_id):
                     return
-                task.status = TaskStatus.CANCELLED
-                task.stage = "cancelled"
+                if task.status != TaskStatus.CANCELLING:
+                    work_error = self._work_index.failure(task_id)
+                    if work_error and task.error is None:
+                        task.error = _sanitize_error(work_error)
+                if task.status == TaskStatus.CANCELLING:
+                    task.status = TaskStatus.CANCELLED
+                elif task.error is not None:
+                    task.status = TaskStatus.FAILED
+                elif task.result is not None:
+                    task.status = TaskStatus.COMPLETED
+                else:
+                    return
+                task.stage = task.status.value
                 task.updated_at = time.time()
                 await self._store.update(task)
                 with self._lock:
                     self._tasks[task.task_id] = task
+                self._work_index.clear_failure(task_id)
+                logger.info("[TaskTracker] Task %s %s", task_id, task.status.value)
+
+    async def wait(
+        self,
+        task_id: str,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        timeout: Optional[float] = None,
+        poll_interval: float = 0.05,
+    ) -> TaskRecord:
+        """Wait for one task's terminal state without changing its lifecycle."""
+        async def _poll() -> TaskRecord:
+            while True:
+                task = await self.get(task_id, account_id=account_id, user_id=user_id)
+                if task.status in _TERMINAL_STATUSES:
+                    return task
+                await asyncio.sleep(poll_interval)
+
+        if timeout is None:
+            return await _poll()
+        return await asyncio.wait_for(_poll(), timeout)
+
+    async def wait_for_descendants(self, task_id: str, current_work_id: str) -> None:
+        """Wait on the same durable work index used by completion and cancellation."""
+        while self._work_index.has_work(task_id, exclude_work_id=current_work_id):
+            await asyncio.sleep(0.05)
 
     def register_running_task(self, task_id: str) -> None:
         """Register the current asyncio task so cancellation can interrupt it."""
