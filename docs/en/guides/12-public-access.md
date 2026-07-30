@@ -14,6 +14,8 @@ public HTTPS domain.
 Prerequisites: a public domain, ports 80 + 443 reachable, DNS pointing at
 your host.
 
+<a id="adding-https-for-public-access"></a>
+
 ## Option A: bundled Caddy with auto Let's Encrypt (recommended)
 
 `docker compose up` already brings up a Caddy reverse-proxy container. Add a

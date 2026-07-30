@@ -176,7 +176,15 @@ If the `openclaw` CLI cannot run inside the container, merge the following field
 - If `plugins.allow` already exists, append `openviking`; otherwise, do not create an allowlist only for this plugin.
 - `contextEngine` is an exclusive slot. If another context engine is configured, change it only after confirming the replacement. Root API keys also require `accountId` and `userId` in `config`.
 - When connecting to another service from a container, use a `baseUrl` that is reachable from the container rather than `127.0.0.1`.
-- `apiKey` is stored as plaintext. Restrict file permissions or provide the file through a managed Secret volume, then restart the Gateway, container, or Pod.
+- Prefer a `SecretRef` for `apiKey` instead of a plaintext string so the key is never stored inside `openclaw.json`. Supported shapes match OpenClaw's standard `SecretRef` used by LLM/TTS/MCP provider configs:
+
+  | Shape | Example | Notes |
+  | --- | --- | --- |
+  | `env` | `{ "source": "env", "id": "OPENVIKING_API_KEY" }` | Reads the named env var at plugin load time. |
+  | `file` | `{ "source": "file", "id": "/etc/secrets/openviking.key" }` | Reads UTF-8, trims whitespace. `~` is expanded; ideal for Kubernetes `secretKeyRef` volumes and 0600-managed files. |
+  | `exec` | `{ "source": "exec", "provider": "op", "id": "op://vault/openviking/credential" }` | Runs `<provider> <id>` and trims stdout (1Password `op`, Vault, gopass, etc. all match this shape). |
+
+  A plain `string` (including `${ENV_VAR}` interpolation) is still accepted, but only as a backward-compatibility path; in that case, restrict file permissions or provide the file through a managed Secret volume, then restart the Gateway, container, or Pod.
 
 ### 3. Restart OpenClaw Gateway
 

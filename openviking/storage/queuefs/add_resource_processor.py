@@ -29,21 +29,19 @@ class AddResourceProcessor(DequeueHandlerBase):
         resource_service: Any,
         service_loop: asyncio.AbstractEventLoop,
         queue_name: str,
+        viking_fs: Any,
     ):
         self._resource_service = resource_service
         self._service_loop = service_loop
         self._queue_name = queue_name
+        self._viking_fs = viking_fs
 
     async def _load_lock(self, msg: AddResourceMsg, ctx: RequestContext) -> Any:
+        """Adopt a pathlock handoff ref, returning an owned lease dict."""
         if msg.lock_handoff is None:
             return None
-        from openviking.storage.transaction.lock_lease import LockHandoffRef, OwnedLockLease
-
-        ref = LockHandoffRef.from_value(msg.lock_handoff)
-        if ref is None:
-            raise ValueError("Invalid lock_handoff")
         try:
-            return await OwnedLockLease.from_handoff(ref)
+            return await self._viking_fs._async_agfs.pathlock_adopt(msg.lock_handoff)
         except Exception as handoff_error:
             try:
                 return await self._resource_service.reacquire_add_resource_job_lock(
@@ -179,7 +177,7 @@ class AddResourceProcessor(DequeueHandlerBase):
             finally:
                 with suppress(Exception):
                     if resource_lock is not None:
-                        await resource_lock.close()
+                        await self._viking_fs._async_agfs.pathlock_release(resource_lock)
 
     async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         if not data:

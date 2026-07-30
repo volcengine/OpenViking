@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Sequence
 from typing import Any, Callable
@@ -18,7 +19,9 @@ except ImportError as exc:  # pragma: no cover - exercised by optional import pa
 
 from openviking.integrations.langchain.client import (
     OpenVikingCommitPolicy,
+    acall_openviking,
     call_openviking,
+    is_not_found_error,
 )
 from openviking.integrations.langchain.messages import (
     langchain_message_to_openviking as langchain_message_to_openviking,
@@ -32,6 +35,7 @@ from openviking.integrations.langchain.messages import (
 from openviking.integrations.langchain.recording import (
     OpenVikingPartialWriteError,
     OpenVikingSessionRecorder,
+    get_openviking_cancellation_progress,
 )
 
 logger = logging.getLogger(__name__)
@@ -45,6 +49,7 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
         session_id: str,
         *,
         client: Any = None,
+        async_client: Any = None,
         url: str | None = None,
         api_key: str | None = None,
         account: str | None = None,
@@ -62,6 +67,7 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
         context_parts_acknowledger: Callable[[str], None] | None = None,
         peer_id: str | None = None,
         peer_id_provider: Callable[[str], str | None] | None = None,
+        _recorder: OpenVikingSessionRecorder | None = None,
     ):
         self.session_id = session_id
         self.peer_id = peer_id
@@ -73,8 +79,10 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
         self.context_parts_provider = context_parts_provider
         self.context_parts_acknowledger = context_parts_acknowledger
         self._pending_context_parts: list[dict[str, Any]] = []
-        self._recorder = OpenVikingSessionRecorder(
+        self._owns_recorder = _recorder is None
+        self._recorder = _recorder or OpenVikingSessionRecorder(
             client=client,
+            async_client=async_client,
             url=url,
             api_key=api_key,
             account=account,
@@ -108,9 +116,29 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
                 session_id=self.session_id,
                 token_budget=self.token_budget,
             )
-        except Exception:
+        except Exception as exc:
             logger.debug("OpenViking chat history context fetch failed", exc_info=True)
-            self._ensure_session(client)
+            if is_not_found_error(exc):
+                self._ensure_session(client)
+            return []
+
+        return restore_openviking_messages(context.get("messages") or [])
+
+    async def aget_messages(self) -> list[BaseMessage]:
+        """Asynchronously return active messages from the OpenViking session."""
+
+        client = await self._get_async_client()
+        try:
+            context = await acall_openviking(
+                client,
+                "get_session_context",
+                session_id=self.session_id,
+                token_budget=self.token_budget,
+            )
+        except Exception as exc:
+            logger.debug("OpenViking chat history context fetch failed", exc_info=True)
+            if is_not_found_error(exc):
+                await self._aensure_session(client)
             return []
 
         return restore_openviking_messages(context.get("messages") or [])
@@ -132,20 +160,63 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
         if result.context_attached:
             self._acknowledge_context_parts()
 
+    async def aadd_messages(self, messages: Sequence[BaseMessage]) -> None:
+        """Asynchronously persist messages through the shared session recorder."""
+
+        if not self._pending_context_parts and self.context_parts_provider:
+            self._pending_context_parts = list(self.context_parts_provider(self.session_id))
+        try:
+            result = await self._recorder.arecord(
+                self.session_id,
+                messages,
+                peer_id=self._effective_peer_id(),
+                context_parts=self._pending_context_parts,
+            )
+        except OpenVikingPartialWriteError as exc:
+            if exc.context_attached:
+                self._acknowledge_context_parts()
+            raise
+        except asyncio.CancelledError as exc:
+            progress = get_openviking_cancellation_progress(exc)
+            if progress is not None and progress.context_attached:
+                self._acknowledge_context_parts()
+            raise
+        if result.context_attached:
+            self._acknowledge_context_parts()
+
     def clear(self) -> None:
         client = self._get_client()
         call_openviking(client, "delete_session", session_id=self.session_id)
         self._ensure_session(client)
         self._acknowledge_context_parts()
 
+    async def aclear(self) -> None:
+        """Asynchronously reset this OpenViking session."""
+
+        client = await self._get_async_client()
+        await acall_openviking(client, "delete_session", session_id=self.session_id)
+        await self._aensure_session(client)
+        self._acknowledge_context_parts()
+
     def close(self) -> None:
         """Release resources owned by this history adapter."""
 
         self._acknowledge_context_parts()
-        self._recorder.close()
+        if self._owns_recorder:
+            self._recorder.close()
+
+    async def aclose(self) -> None:
+        """Asynchronously release resources owned by this history adapter."""
+
+        self._acknowledge_context_parts()
+        if self._owns_recorder:
+            await self._recorder.aclose()
 
     def _get_client(self) -> Any:
         return self._recorder.client
+
+    async def _get_async_client(self) -> Any:
+        return await self._recorder.get_async_client()
 
     def _ensure_session(self, client: Any) -> None:
         try:
@@ -153,6 +224,12 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
         except Exception:
             logger.debug("OpenViking chat history session ensure failed", exc_info=True)
             pass
+
+    async def _aensure_session(self, client: Any) -> None:
+        try:
+            await acall_openviking(client, "create_session", session_id=self.session_id)
+        except Exception:
+            logger.debug("OpenViking chat history session ensure failed", exc_info=True)
 
     def _effective_peer_id(self) -> str | None:
         if self.peer_id_provider is None:
@@ -163,6 +240,22 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
             return None
         text = str(value).strip()
         return text or None
+
+    def _prepare_invocation(
+        self,
+        *,
+        peer_id: str | None,
+        context_parts: Sequence[dict[str, Any]] = (),
+    ) -> None:
+        """Set invocation-local attribution and recalled context."""
+
+        self.peer_id = peer_id
+        self._pending_context_parts = list(context_parts)
+
+    def _discard_invocation_context(self) -> None:
+        """Discard recalled context owned by an interrupted invocation."""
+
+        self._pending_context_parts = []
 
     def _acknowledge_context_parts(self) -> None:
         had_pending_context = bool(self._pending_context_parts)

@@ -89,6 +89,7 @@ const IMPORT_EXPORT_SESSIONS: &[HelpCommand] = help_commands![
 const INTERACTIVE_ADMIN: &[HelpCommand] = help_commands![
     "tui",
     "chat",
+    "compile",
     "admin",
     "system",
     "reindex",
@@ -140,6 +141,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov add-resource https://example.com/sitemap.xml --watch-interval 1440",
                 description: "Import a whole site via sitemap/RSS and refresh it daily.",
+            },
+            HelpItem {
+                label: "ov add-resource tos://bucket/docs/ --add-type tos --to viking://resources/docs",
+                description: "Declare the Connector source type explicitly (Connector integration must be enabled).",
             },
         ],
         next_steps: &[
@@ -861,6 +866,24 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         next_steps: &[HelpItem {
             label: "ov find \"topic\"",
             description: "Search context directly.",
+        }],
+    },
+    CommandHelpSpec {
+        path: &["compile"],
+        purpose: "Use a required VikingBot Skill to compile OpenViking materials into Wiki pages or a Skill package.",
+        examples: &[
+            HelpItem {
+                label: "ov compile --from viking://resources/weekly --to viking://resources/wiki --skill viking://agent/skills/monthly_wiki --wait",
+                description: "Compile one source directory into Wiki pages.",
+            },
+            HelpItem {
+                label: "ov compile --from viking://resources/weekly --to viking://agent/skills --skill viking://agent/skills/skill-creator --wait",
+                description: "Generate or update one shared Skill package.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov tree <target-uri>",
+            description: "Inspect the generated output.",
         }],
     },
     CommandHelpSpec {

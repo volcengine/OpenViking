@@ -192,6 +192,17 @@ ov chat   # 別のターミナルで実行
 
 自分で運用したくない場合は、公式ホスティング版の OpenViking Personal をすぐに利用できます。VikingDB によりローカルハードウェアをはるかに超える規模までスケールし、最大 50 ファイルまでの無料トライアルが付属します。既存のオープンソース版ユーザーは移行ツールで移行できます。→ [openviking.ai](https://www.openviking.ai)
 
+## マネージドサービス
+
+### Volcano Engine（中国地域）
+Volcano Engine 上で公式にホスティングされており、中国地域で利用可能です。
+- 製品ページ：[www.volcengine.com/product/openviking-service](https://www.volcengine.com/product/openviking-service)
+- ドキュメント：[docs.volcengine.com/docs/84313/2374478](https://docs.volcengine.com/docs/84313/2374478)
+
+### 近日公開
+- [BytePlus](https://www.byteplus.com) 上でのグローバルホスティングサービス（中国以外の地域向け）
+- プライベート分散型エンタープライズ版（アクティベーションコードでデプロイ、BYOC をサポート）
+
 ## 研究
 
 OpenViking は、VikingMem 論文に記載されたコア機能の一部をオープンソースとして公開しています:
@@ -200,6 +211,18 @@ OpenViking は、VikingMem 論文に記載されたコア機能の一部をオ�
 > Jiajie Fu, Junwen Chen, Mengzhao Wang, Aoxiang He, Maojia Sheng, Xiangyu Ke, Yifan Zhu, and Yunjun Gao.
 > arXiv:2605.29640, 2026. Accepted by VLDB 2026.
 > 📄 [arXiv で論文を読む](https://arxiv.org/abs/2605.29640)
+
+## パートナープロジェクト
+
+OpenViking は、コンテキストデータエコシステムを構築するために他のオープンソースプロジェクトとのコラボレーションを歓迎します。確認済みのパートナーは以下の通りです:
+
+- [deer-flow](https://github.com/bytedance/deer-flow) - オープンソースの長時間 SuperAgent フレームワーク
+- [NoKV](https://github.com/NoKV-Lab/NoKV) - AI ネイティブの分散ファイルシステム
+- [loopx](https://github.com/huangruiteng/loopx) - 軽量なループエンジニアリング状態カーネル
+- [Hermes Agent](https://github.com/NousResearch/hermes-agent) - あなたと共に成長するエージェント
+- [heima](https://github.com/litentry/heima) - Substrate ベースの EVM 互換 L1 チェーン
+
+パートナーリストへの参加に興味がありますか？コミュニティに issue を提出して申請してください。
 
 ## コミュニティとコントリビューション
 

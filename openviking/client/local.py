@@ -8,6 +8,7 @@ Implements BaseClient interface using direct service calls (embedded mode).
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.core.peer_id import normalize_peer_id
+from openviking.core.skill_loader import validate_skill_format
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers.skills import (
     _list_skill_files,
@@ -15,7 +16,6 @@ from openviking.server.routers.skills import (
     _require_skill,
     _restore_skill_privacy,
     _skill_summary_from_hit,
-    _validate_skill_format,
 )
 from openviking.service import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
@@ -138,9 +138,23 @@ class LocalClient(BaseClient):
         telemetry: TelemetryRequest = False,
         watch_interval: float = 0,
         args: Optional[Dict[str, Any]] = None,
+        processing_mode: str = "semantic_and_vectors",
+        add_type: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
         **kwargs,
     ) -> Dict[str, Any]:
-        """Add resource to OpenViking."""
+        """Add resource to OpenViking.
+
+        ``add_type`` declares a Connector source and requires an exact ``to``
+        target; it cannot be combined with ``parent``.
+        """
+        if add_type is not None:
+            add_type = add_type.strip() or None
+        if add_type and parent:
+            raise ValueError("'add_type' cannot be combined with 'parent'.")
+        if add_type and not to:
+            raise ValueError("'add_type' requires an exact 'to' target.")
         if to and parent:
             raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
 
@@ -150,6 +164,7 @@ class LocalClient(BaseClient):
             fn=lambda: self._service.resources.add_resource(
                 path=path,
                 ctx=self._ctx,
+                add_type=add_type,
                 to=to,
                 parent=parent,
                 reason=reason,
@@ -158,8 +173,11 @@ class LocalClient(BaseClient):
                 timeout=timeout,
                 build_index=build_index,
                 summarize=summarize,
+                processing_mode=processing_mode,
                 watch_interval=watch_interval,
                 args=args,
+                tags=tags,
+                tag_mode=tag_mode,
                 **kwargs,
             ),
         )
@@ -493,8 +511,7 @@ class LocalClient(BaseClient):
         target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Validate skill data."""
-        result = _validate_skill_format(
-            self._service,
+        result = validate_skill_format(
             data,
             strict=strict,
             skill_dir_name=skill_dir_name,
@@ -750,7 +767,8 @@ class LocalClient(BaseClient):
 
         async def _search():
             session = None
-            if session_id:
+            # Intent off: skip session.load — SearchService will not scan session either.
+            if session_id and self._service.search.is_intent_enabled():
                 session = self._service.sessions.session(self._ctx, session_id)
                 await session.load()
             return await self._service.search.search(
@@ -1033,6 +1051,9 @@ class LocalClient(BaseClient):
         return {
             "session_id": session_id,
             "message_count": len(session.messages),
+            # Post-write value so a commit policy can decide without a
+            # follow-up get_session round trip.
+            "pending_tokens": self._session_pending_tokens(session),
         }
 
     async def batch_add_messages(
@@ -1096,7 +1117,23 @@ class LocalClient(BaseClient):
             "session_id": session_id,
             "message_count": len(session.messages),
             "added": len(added),
+            # Post-write value so a commit policy can decide without a
+            # follow-up get_session round trip.
+            "pending_tokens": self._session_pending_tokens(session),
         }
+
+    @staticmethod
+    def _session_pending_tokens(session: Any) -> int:
+        """Read the post-write pending-token count from a session.
+
+        Returns 0 when the session object does not expose ``meta`` so callers
+        keep working against lightweight or legacy session implementations.
+        """
+        meta = getattr(session, "meta", None)
+        try:
+            return max(0, int(getattr(meta, "pending_tokens", 0) or 0))
+        except (TypeError, ValueError):
+            return 0
 
     def _resolve_message_peer_id(
         self,

@@ -114,7 +114,9 @@ def relative_uri_path(root_uri: str, uri: str) -> str:
 
 
 def _content_segment_index(parts: tuple[str, ...]) -> Optional[int]:
-    """Return the first content segment after a user namespace root."""
+    """Return the content segment for a supported namespace shape."""
+    if len(parts) >= 2 and parts[:2] == ("agent", "skills"):
+        return 1
     if len(parts) >= 3 and parts[0] == "agent" and parts[2] in _CONTENT_TYPES_BY_SCOPE["agent"]:
         return 2
     if len(parts) < 2 or parts[0] != "user":

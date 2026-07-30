@@ -464,6 +464,7 @@ class CollectionAdapter(ABC):
         output_fields: Optional[list[str]] = None,
         order_by: Optional[str] = None,
         order_desc: bool = False,
+        raise_on_error: bool = False,
     ) -> list[Dict[str, Any]]:
         coll = self.get_collection()
         vectordb_filter = self._compile_filter(filter)
@@ -489,13 +490,23 @@ class CollectionAdapter(ABC):
                 output_fields=output_fields,
             )
         else:
-            result = coll.search_by_random(
-                index_name=self._index_name,
-                limit=limit,
-                offset=offset,
-                filters=vectordb_filter,
-                output_fields=output_fields,
-            )
+            if raise_on_error:
+                result = coll.search_by_random(
+                    index_name=self._index_name,
+                    limit=limit,
+                    offset=offset,
+                    filters=vectordb_filter,
+                    output_fields=output_fields,
+                    raise_on_error=True,
+                )
+            else:
+                result = coll.search_by_random(
+                    index_name=self._index_name,
+                    limit=limit,
+                    offset=offset,
+                    filters=vectordb_filter,
+                    output_fields=output_fields,
+                )
 
         records: list[Dict[str, Any]] = []
         for item in result.data:
@@ -519,7 +530,12 @@ class CollectionAdapter(ABC):
         coll = self.get_collection()
         delete_ids = list(ids or [])
         if not delete_ids and filter is not None:
-            matched = self.query(filter=filter, limit=limit, output_fields=["id"])
+            matched = self.query(
+                filter=filter,
+                limit=limit,
+                output_fields=["id"],
+                raise_on_error=self.mode == "http",
+            )
             delete_ids = [record["id"] for record in matched if record.get("id")]
 
         if not delete_ids:

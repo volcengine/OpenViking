@@ -2,6 +2,7 @@ import types
 
 import pytest
 
+from openviking.utils.ingest_options import IngestOptions
 from openviking.core.context import Context, ResourceContentType
 from openviking.utils import embedding_utils
 
@@ -12,6 +13,18 @@ class DummyQueue:
 
     async def enqueue(self, msg):
         self.items.append(msg)
+
+
+class DummyQueueWithId(DummyQueue):
+    async def enqueue(self, msg):
+        self.items.append(msg)
+        return "queue-message-id"
+
+
+class FailingQueue(DummyQueue):
+    async def enqueue(self, msg):
+        self.items.append(msg)
+        raise RuntimeError("queue unavailable")
 
 
 class DummyQueueManager:
@@ -120,6 +133,83 @@ async def test_vectorize_file_uses_summary_first(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_vectorize_file_registers_request_wait_with_embedding_msg_id(monkeypatch):
+    queue = DummyQueueWithId()
+    registered = []
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("hello"))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
+        ),
+    )
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_request_wait_tracker",
+        lambda: types.SimpleNamespace(
+            register_embedding_root=lambda telemetry_id, root_id: registered.append(
+                (telemetry_id, root_id)
+            )
+        ),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/test.md",
+        summary_dict={"name": "test.md", "summary": ""},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+        register_request_wait=True,
+    )
+
+    assert len(queue.items) == 1
+    assert registered == [(queue.items[0].telemetry_id, queue.items[0].id)]
+    assert registered[0][1] != "queue-message-id"
+
+
+@pytest.mark.asyncio
+async def test_vectorize_file_marks_registered_wait_root_failed_when_enqueue_raises(monkeypatch):
+    queue = FailingQueue()
+    registered = []
+    failed = []
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("hello"))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
+        ),
+    )
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_request_wait_tracker",
+        lambda: types.SimpleNamespace(
+            register_embedding_root=lambda telemetry_id, root_id: registered.append(
+                (telemetry_id, root_id)
+            ),
+            mark_embedding_failed=lambda telemetry_id, root_id, message: failed.append(
+                (telemetry_id, root_id, message)
+            ),
+        ),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/test.md",
+        summary_dict={"name": "test.md", "summary": ""},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+        register_request_wait=True,
+    )
+
+    assert len(queue.items) == 1
+    assert registered == [(queue.items[0].telemetry_id, queue.items[0].id)]
+    assert failed
+    assert failed[0][0:2] == registered[0]
+
+
+@pytest.mark.asyncio
 async def test_vectorize_unknown_text_file_embeds_summary_but_indexes_raw_content(monkeypatch):
     queue = DummyQueue()
     raw_makefile = "build:\n\tcargo build --locked\n"
@@ -144,6 +234,144 @@ async def test_vectorize_unknown_text_file_embeds_summary_but_indexes_raw_conten
     msg = queue.items[0]
     assert msg.message == "VLM generated build file summary"
     assert msg.context_data["content"] == raw_makefile
+
+
+@pytest.mark.asyncio
+async def test_vectorize_file_writes_search_tags_into_embedding_context(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("deployment guide"))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
+        ),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/demo.md",
+        summary_dict={"name": "demo.md", "summary": "deployment summary"},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+        ingest_options=IngestOptions.from_search_tags(["team=search", "env=test"]),
+    )
+
+    assert len(queue.items) == 1
+    msg = queue.items[0]
+    assert msg.context_data["search_tags"] == ["team=search", "env=test"]
+
+
+@pytest.mark.asyncio
+async def test_vectorize_file_appends_search_tags_to_existing_record_tags(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("deployment guide"))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
+        ),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/demo.md",
+        summary_dict={"name": "demo.md", "summary": "deployment summary"},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+        ingest_options=IngestOptions.from_search_tags(
+            ["env=prod", "team=search"],
+            mode="append",
+        ),
+    )
+
+    assert len(queue.items) == 1
+    msg = queue.items[0]
+    assert msg.context_data["search_tags"] == ["env=prod", "team=search"]
+    assert msg.context_data["_upsert_options"] == {"search_tag_mode": "append"}
+
+
+@pytest.mark.asyncio
+async def test_vectorize_file_append_does_not_read_existing_tags(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("deployment guide"))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
+        ),
+    )
+
+    class DummyVikingDB:
+        async def filter(self, **_kwargs):
+            raise AssertionError("vectorize must not read existing tags")
+
+    monkeypatch.setattr(
+        "openviking.server.dependencies.get_service",
+        lambda: types.SimpleNamespace(vikingdb_manager=DummyVikingDB()),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/demo.md",
+        summary_dict={"name": "demo.md", "summary": "deployment summary"},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+        ingest_options=IngestOptions.from_search_tags(
+            ["env=prod", "team=search"],
+            mode="append",
+        ),
+    )
+
+    assert queue.items[0].context_data["search_tags"] == ["env=prod", "team=search"]
+    assert queue.items[0].context_data["_upsert_options"] == {"search_tag_mode": "append"}
+
+
+@pytest.mark.asyncio
+async def test_vectorize_directory_meta_writes_search_tags_into_embedding_context(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("ignored"))
+
+    await embedding_utils.vectorize_directory_meta(
+        uri="viking://user/default/resources/demo",
+        abstract="demo abstract",
+        overview="demo overview",
+        ctx=DummyReq(),
+        ingest_options=IngestOptions.from_search_tags(["team=search", "env=test"]),
+    )
+
+    assert len(queue.items) == 2
+    for msg in queue.items:
+        assert msg.context_data["search_tags"] == ["team=search", "env=test"]
+
+
+@pytest.mark.asyncio
+async def test_vectorize_directory_meta_appends_search_tags_by_level(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("ignored"))
+
+    await embedding_utils.vectorize_directory_meta(
+        uri="viking://user/default/resources/demo",
+        abstract="demo abstract",
+        overview="demo overview",
+        ctx=DummyReq(),
+        ingest_options=IngestOptions.from_search_tags(
+            ["env=prod", "team=search"],
+            mode="append",
+        ),
+    )
+
+    assert len(queue.items) == 2
+    assert queue.items[0].context_data["level"] == 0
+    assert queue.items[0].context_data["search_tags"] == ["env=prod", "team=search"]
+    assert queue.items[0].context_data["_upsert_options"] == {"search_tag_mode": "append"}
+    assert queue.items[1].context_data["level"] == 1
+    assert queue.items[1].context_data["search_tags"] == ["env=prod", "team=search"]
+    assert queue.items[1].context_data["_upsert_options"] == {"search_tag_mode": "append"}
 
 
 @pytest.mark.asyncio

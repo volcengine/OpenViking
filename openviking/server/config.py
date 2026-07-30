@@ -196,7 +196,7 @@ class UsageAuditConfig(BaseModel):
 class UsageReporterSinkConfig(BaseModel):
     """Usage reporter sink configuration."""
 
-    type: Literal["custom", "http"] = "custom"
+    type: Literal["custom", "file_log"] = "custom"
     class_path: Optional[str] = None
     config: Dict[str, object] = Field(default_factory=dict)
 
@@ -242,7 +242,7 @@ class ObservabilityConfig(BaseModel):
 class TempUploadConfig(BaseModel):
     """Temporary upload configuration."""
 
-    default_mode: str = "local"
+    default_mode: Literal["local", "shared"] = "local"
     shared_max_size_bytes: int = 512 * 1024 * 1024
     shared_prefix: str = "viking://upload"
 

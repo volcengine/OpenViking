@@ -5,11 +5,88 @@
 
 import asyncio
 import zipfile
+from types import SimpleNamespace
 
 import httpx
+import pytest
 
+from openviking.server.identity import RequestContext, Role
+from openviking.server.routers import resources as resources_router
+from openviking.server.routers.resources import AddResourceRequest
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
+from openviking_cli.session.user_id import UserIdentifier
+
+
+def test_add_resource_request_accepts_processing_mode():
+    request = AddResourceRequest(
+        path="https://example.com/demo.md",
+        processing_mode="vectors_only",
+    )
+
+    assert request.processing_mode == "vectors_only"
+
+
+def test_add_resource_request_defaults_processing_mode():
+    request = AddResourceRequest(path="https://example.com/demo.md")
+
+    assert request.processing_mode == "semantic_and_vectors"
+
+
+def test_add_resource_request_accepts_declared_add_type():
+    request = AddResourceRequest(
+        path="https://example.com/space",
+        add_type=" feishu ",
+        to="viking://resources/feishu",
+    )
+
+    assert request.add_type == "feishu"
+    assert request.to == "viking://resources/feishu"
+
+
+def test_add_resource_request_rejects_add_type_with_temp_file_id():
+    import pytest
+
+    with pytest.raises(ValueError, match="temp_file_id"):
+        AddResourceRequest(temp_file_id="upload_abc", add_type="feishu")
+
+
+def test_add_resource_request_requires_exact_to_for_declared_add_type():
+    import pytest
+
+    with pytest.raises(ValueError, match="exact 'to'"):
+        AddResourceRequest(path="space:home", add_type="feishu")
+
+
+def test_add_resource_request_rejects_add_type_with_parent():
+    import pytest
+
+    with pytest.raises(ValueError, match="'parent'"):
+        AddResourceRequest(
+            path="space:home",
+            add_type="feishu",
+            to="viking://resources/feishu",
+            parent="viking://resources/imports",
+        )
+
+
+def test_require_remote_resource_source_allows_declared_add_type():
+    from openviking.server.local_input_guard import require_remote_resource_source
+
+    assert (
+        require_remote_resource_source("space:home", declared_connector_add_type="feishu")
+        == "space:home"
+    )
+
+
+def test_require_remote_resource_source_still_rejects_without_declared_type():
+    import pytest
+
+    from openviking.server.local_input_guard import require_remote_resource_source
+    from openviking_cli.exceptions import PermissionDeniedError
+
+    with pytest.raises(PermissionDeniedError):
+        require_remote_resource_source("/etc/passwd")
 
 
 async def _wait_task_terminal(client: httpx.AsyncClient, task_id: str, timeout: float = 10.0):
@@ -95,6 +172,65 @@ async def test_add_resource_forwards_args_to_service(
 
     assert resp.status_code == 200
     assert seen["args"] == {"feishu_access_token": "u-test"}
+
+
+async def test_add_resource_forwards_processing_mode_to_service(monkeypatch):
+    seen = {}
+
+    async def fake_add_resource(**kwargs):
+        seen.update(kwargs)
+        return {
+            "status": "success",
+            "root_uri": "viking://resources/demo",
+        }
+
+    service = SimpleNamespace(resources=SimpleNamespace(add_resource=fake_add_resource))
+    monkeypatch.setattr(resources_router, "get_service", lambda: service)
+
+    response = await resources_router.add_resource(
+        SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(config=None))),
+        AddResourceRequest(
+            path="https://example.com/demo.md",
+            processing_mode="vectors_only",
+        ),
+        RequestContext(
+            user=UserIdentifier("account-1", "user-1"),
+            role=Role.USER,
+        ),
+    )
+
+    assert response["status"] == "ok"
+    assert seen["processing_mode"] == "vectors_only"
+
+
+async def test_add_resource_forwards_tags_to_service(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    seen = {}
+
+    async def fake_add_resource(**kwargs):
+        seen.update(kwargs)
+        return {
+            "status": "success",
+            "root_uri": "viking://resources/demo",
+        }
+
+    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "path": "https://example.com/demo.md",
+            "tags": ["team=search"],
+            "tag_mode": "append",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert seen["tags"] == ["team=search"]
+    assert seen["tag_mode"] == "append"
 
 
 async def test_add_resource_preserves_create_parent_field_presence(
@@ -566,9 +702,8 @@ async def test_wait_processed_after_add(
     assert resp.json()["status"] == "ok"
 
 
-async def test_add_resource_with_watch_interval_auto_binds_root_uri(
+async def test_add_resource_rejects_temp_upload_with_watch_interval(
     client: httpx.AsyncClient,
-    service,
     sample_markdown_file,
     upload_temp_dir,
 ):
@@ -581,19 +716,9 @@ async def test_add_resource_with_watch_interval_auto_binds_root_uri(
             "wait": True,
         },
     )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    root_uri = body["result"]["root_uri"]
-    task = await service.watch_scheduler.watch_manager.get_task_by_uri(
-        to_uri=root_uri,
-        account_id="default",
-        user_id="test_user",
-        role="ROOT",
-    )
-    assert task is not None
-    assert task.to_uri == root_uri
-    assert task.watch_interval == 5.0
+    assert resp.status_code == 400
+    assert "uploaded content" in resp.text
+    assert not (upload_temp_dir / "watch_sources").exists()
 
 
 async def test_add_resource_with_default_watch_interval(
@@ -626,6 +751,37 @@ async def test_temp_upload_success(client: httpx.AsyncClient, upload_temp_dir):
     assert "telemetry" not in body
     assert body["result"]["temp_file_id"].endswith(".md")
     assert "/" not in body["result"]["temp_file_id"]
+
+
+async def test_temp_upload_uses_configured_shared_default(monkeypatch):
+    saved_modes = []
+
+    class Store:
+        async def save_upload(self, file, upload_mode, ctx):
+            saved_modes.append(upload_mode)
+            return "shared_123"
+
+    async def run_immediately(*, fn, **kwargs):
+        return SimpleNamespace(result=await fn(), telemetry=None)
+
+    config = SimpleNamespace(temp_upload=SimpleNamespace(default_mode="shared"))
+    request = SimpleNamespace(
+        state=SimpleNamespace(signed_upload=None),
+        app=SimpleNamespace(state=SimpleNamespace(config=config)),
+    )
+    monkeypatch.setattr(resources_router.TempUploadStore, "build", lambda _: Store())
+    monkeypatch.setattr(resources_router, "run_operation", run_immediately)
+
+    response = await resources_router.temp_upload(
+        request=request,
+        file=object(),
+        telemetry=False,
+        upload_mode=None,
+        _ctx=object(),
+    )
+
+    assert saved_modes == ["shared"]
+    assert response["result"]["temp_file_id"] == "shared_123"
 
 
 async def test_temp_upload_with_telemetry_returns_summary(
@@ -704,6 +860,48 @@ async def test_shared_temp_upload_and_add_resource_deletes_upload_dir(
     assert body["status"] == "ok"
     assert body["result"]["root_uri"].startswith("viking://")
     assert not await vfs.exists(upload_root)
+
+
+@pytest.mark.parametrize("upload_mode", ["local", "shared"])
+async def test_temp_upload_with_watch_and_tags_is_rejected_without_watch_source(
+    client: httpx.AsyncClient,
+    service,
+    upload_temp_dir,
+    upload_mode,
+):
+    data = {"upload_mode": upload_mode} if upload_mode == "shared" else None
+    upload_resp = await client.post(
+        "/api/v1/resources/temp_upload",
+        files={"file": ("watched.md", b"# watched upload\n", "text/markdown")},
+        data=data,
+    )
+    assert upload_resp.status_code == 200
+    temp_file_id = upload_resp.json()["result"]["temp_file_id"]
+    target_uri = f"viking://resources/watched-{upload_mode}-upload.md"
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": temp_file_id,
+            "to": target_uri,
+            "reason": f"{upload_mode} upload watch",
+            "wait": True,
+            "watch_interval": 5.0,
+            "tags": ["team=watch", "env=test"],
+            "tag_mode": "replace",
+        },
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "uploaded content" in resp.text
+    task = await service.watch_scheduler.watch_manager.get_task_by_uri(
+        to_uri=target_uri,
+        account_id="default",
+        user_id="test_user",
+        role="ROOT",
+    )
+    assert task is None
+    assert not (upload_temp_dir / "watch_sources").exists()
 
 
 async def test_shared_temp_upload_failed_consume_is_retryable(

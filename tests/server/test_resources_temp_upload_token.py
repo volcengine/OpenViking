@@ -32,9 +32,18 @@ def _issue(
     to: str = "",
     reason: str = "",
     actor_peer_id: str = "",
+    tags: list[str] | None = None,
+    tag_mode: str = "replace",
 ):
     token, _ = upload_token_store.issue(
-        account_id, user_id, ttl_seconds=600, to=to, reason=reason, actor_peer_id=actor_peer_id
+        account_id,
+        user_id,
+        ttl_seconds=600,
+        to=to,
+        reason=reason,
+        actor_peer_id=actor_peer_id,
+        tags=tags,
+        tag_mode=tag_mode,
     )
     return token
 
@@ -49,6 +58,8 @@ def _stub_ingest(service, monkeypatch, root_uri: str = "viking://resources/uploa
         captured["ctx"] = ctx
         captured["to"] = kwargs.get("to")
         captured["reason"] = kwargs.get("reason")
+        captured["tags"] = kwargs.get("tags")
+        captured["tag_mode"] = kwargs.get("tag_mode")
         captured["allow_local_path_resolution"] = kwargs.get("allow_local_path_resolution")
         return {"root_uri": root_uri}
 
@@ -89,6 +100,22 @@ async def test_token_upload_forwards_to_and_reason(
     assert resp.status_code == 200, resp.text
     assert captured["to"] == "viking://resources/team/proj"
     assert captured["reason"] == "quarterly report"
+
+
+async def test_token_upload_forwards_tags_and_tag_mode(
+    client: httpx.AsyncClient, service, upload_temp_dir: Path, monkeypatch
+):
+    captured = _stub_ingest(service, monkeypatch)
+    token = _issue(tags=["team=search"], tag_mode="append")
+    resp = await client.post(
+        "/api/v1/resources/temp_upload",
+        params={"token": token},
+        files={"file": ("r.md", b"data", "text/markdown")},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert captured["tags"] == ["team=search"]
+    assert captured["tag_mode"] == "append"
 
 
 async def test_token_upload_uses_token_identity_ignoring_spoofed_headers(

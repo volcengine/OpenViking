@@ -16,7 +16,7 @@ use crate::multibackend::config::{
     item_params_to_config_values, sync_mode_from_config, validate_backup_excludes,
     validate_primary_encryption_flags, validate_redirect_targets,
 };
-use crate::multibackend::meta::MountRootFsContextResolver;
+use crate::multibackend::meta::RelativePathFsContextResolver;
 use crate::multibackend::types::MultiBackendBuildContext;
 use crate::shape::validate::ensure_backend_shape;
 
@@ -85,6 +85,8 @@ pub async fn build_multi_write_fs(
             build_ctx
                 .enc_provider_type
                 .expect("global encryption validated before building primary backend"),
+            build_ctx.pathlock_manager.clone(),
+            build_ctx.backend_prefix.clone(),
         ))
     } else {
         primary_raw.clone()
@@ -146,6 +148,8 @@ pub async fn build_multi_write_fs(
                 build_ctx
                     .enc_provider_type
                     .expect("global encryption validated before building backup backend"),
+                build_ctx.pathlock_manager.clone(),
+                build_ctx.backend_prefix.clone(),
             ))
         } else {
             backup_raw
@@ -176,8 +180,6 @@ pub async fn build_multi_write_fs(
         .retry_backoff_base_ms(bc.retry_backoff_base_ms.unwrap_or(1_000))
         .max_retry_per_round(bc.retry_max_retries_per_round.unwrap_or(3))
         .quarantine_after_failures(bc.retry_quarantine_after_failures.unwrap_or(9))
-        .ctx_resolver(Arc::new(MountRootFsContextResolver::new(
-            &config.mount_path,
-        )))
+        .ctx_resolver(Arc::new(RelativePathFsContextResolver))
         .build()
 }

@@ -100,7 +100,7 @@ class UsageSink:
         ...
 ```
 
-具体 Sink 可以作为外部扩展通过 `class_path` 动态加载。开源包同时提供不依赖第三方消息队列 SDK 的内置 HTTP Sink，用于需要本地持久化重试的部署。
+具体 Sink 可以作为外部扩展通过 `class_path` 动态加载。开源包同时提供不依赖第三方消息队列 SDK 的内置文件日志 Sink，供日志采集系统读取。
 
 配置示例：
 
@@ -130,53 +130,40 @@ def load_class(class_path: str):
 
 每个 Sink 的 `write()` 调用最多等待 5 秒。超时或异常只记录日志，不影响其他 Sink。Reporter 在应用生命周期内只创建一次，应用退出时调用 Sink 可选的 `close()` 方法。同步和异步 `close()` 均受同一超时限制；同步 hook 在独立 daemon 线程中执行，超时后不会阻塞事件循环、后续 Sink 清理或进程退出。
 
-内置 HTTP Sink 在 `write()` 返回前把事件批次写入本地 outbox，再由后台线程发送。它只依赖 Python 标准库，不引入 Kafka 等厂商依赖。HTTP Sink 支持指数退避、`413` 拆包、不可恢复批次转入 dead-letter，以及有界磁盘容量。
+内置文件日志 Sink 将事件立即追加到专用日志文件，不写默认 stdout，也不发起
+HTTP 请求。日志文件使用 UTC 小时滚动，默认保留 168 个小时文件。部署侧应将
+专用目录挂载到日志采集系统可见的宿主机路径。多个 server worker 写入同一路径
+时，通过进程间文件锁串行化写入和滚动；Windows worker 写入后主动关闭文件句柄，
+避免其他进程滚动重命名失败。
 
-### 6.1 HTTP CountRecord 协议
+### 6.1 文件日志 CountRecord 协议
 
 `UsageEvent` 继续作为 OpenViking 内部抽取结果和自定义 Sink 的稳定协议。内置
-HTTP Sink 在写入 outbox 前，将 `UsageEvent` 转换为计量接收端使用的
-`CountRecord`。这样计量平台协议不会侵入 Extractor，也不会改变自定义 Sink
-的输入。
+文件日志 Sink 将 `UsageEvent` 转换为计量接收端使用的 `CountRecord`。每个事件
+写成一行包含 Kafka key/value 的 JSON envelope：
 
-HTTP 批次外层继续保留 `schema_version`、`resource_id`、`batch_id`、
-`created_at`、`attempt`、`next_retry_at` 和 `events`。`events` 数组中的元素
-采用以下格式：
-
-```json
-{
-  "CountName": "experience.recall.count",
-  "OpType": "add",
-  "amount": 1.0,
-  "timestamp": 1785124800000,
-  "uniqueId": "ue_<sha256>",
-  "tags": {
-    "account_id": "new",
-    "user_id": "test",
-    "resource_uri": "viking://user/test/memories/experiences/example.md",
-    "resource_type": "experience"
-  },
-  "extra": {
-    "session_id": "session-id",
-    "task_id": "task-id",
-    "archive_uri": "viking://user/test/sessions/session-id/history/archive_001",
-    "message_id": "message-id",
-    "tool_call_id": "tool-call-id",
-    "tool_name": "search_experience"
-  }
-}
+```text
+{"key":"ov-xxx|new|test|viking://user/test/memories/experiences/example.md","value":{"count_name":"experience.recall.count","op_type":"add","amount":1.0,"timestamp":1785124800000,"unique_id":"ue_<sha256>","tags":{"account_id":"new","user_id":"test","resource_uri":"viking://user/test/memories/experiences/example.md","resource_type":"experience"},"extra":{"session_id":"session-id","task_id":"task-id","archive_uri":"viking://user/test/sessions/session-id/history/archive_001","message_id":"message-id","tool_call_id":"tool-call-id","tool_name":"search_experience"},"prefix":"ov-xxx"}}
 ```
 
 字段映射：
 
-- `memory.recalled` 映射为 `CountName=experience.recall.count`。
-- `memory.injected` 映射为 `CountName=experience.inject.count`。
-- `OpType` 固定为 `add`。
+- envelope 的 `key` 与原 Kafka message key 一致，格式为
+  `resource_id|account_id|user_id|resource_uri`；`resource_uri` 为空时回退
+  到 `session_id`。
+- envelope 的 `value` 是原 Kafka message value 的完整 JSON，不拆分内部字段。
+- 整行使用 JSON envelope，key 中的分隔符不会影响 key/value 解析。
+- JSON 中的 `prefix` 为 OpenViking 实例的 resource ID。
+- `memory.recalled` 映射为 `count_name=experience.recall.count`。
+- `memory.injected` 映射为 `count_name=experience.inject.count`。
+- `op_type` 固定为 `add`。
 - `amount` 固定为 `1.0`。
 - `timestamp` 由 `occurred_at` 转换为 Unix 毫秒时间戳。
-- `uniqueId` 使用稳定的 `event_id`。
-- `tags` 保存 `account_id`、`user_id`、`resource_uri` 和 `resource_type`。
-- `extra` 保存 `session_id`、可选的 `task_id` 以及 `evidence` 中的审计字段。
+- JSON 中的 `unique_id` 使用稳定的 `event_id`。
+- JSON 中的 `tags` 保存 `account_id`、`user_id`、`resource_uri` 和
+  `resource_type`。
+- JSON 中的 `extra` 保存 `session_id`、可选的 `task_id` 以及 `evidence`
+  中的审计字段。
 - 非空的 `UsageEvent.attributes` 原样写入 `extra.attributes`。
 - 空的可选字段不写入 `extra`。
 
@@ -206,19 +193,19 @@ server:
           endpoint: https://usage.example.com/events
 ```
 
-内置 HTTP Sink：
+内置文件日志 Sink：
 
 ```yaml
 server:
   usage_reporter:
     enabled: true
     sinks:
-      - type: http
+      - type: file_log
         config:
-          endpoint: https://usage.example.com/events
+          path: /var/log/openviking_usage/usage.log
           resource_id_env: OV_RESOURCE_ID
-          outbox_dir: /var/lib/openviking/.usage_outbox
-          max_outbox_bytes: 268435456
+          rotation_interval_hours: 1
+          backup_count: 168
 ```
 
 ## 8. 对 OpenViking 的侵入
@@ -289,6 +276,6 @@ schema_version
 任务恢复或附加属性变化破坏幂等性。同一 session message 中同一 tool call
 对同一资源产生的事件，在 phase2 重放后仍得到相同 `event_id`。
 
-内置 HTTP Sink 提供持久化 outbox、失败重试和发送确认。所有 `2xx` 响应视为确认，瞬时错误进入指数退避重试，`400` / `422` 进入 dead-letter。HTTP Sink 可能重复发送同一事件，消费端需按由内部 `event_id` 映射得到的 `CountRecord.uniqueId` 去重。
-
-HTTP outbox 使用 `max_outbox_bytes` 限制磁盘占用。达到上限时先淘汰最旧的 dead-letter，再淘汰最旧的 pending；inflight 不被淘汰。因此即使启用 HTTP Sink，长期下游故障和容量压力下仍可能丢失事件，整体机制保持 best-effort，不承诺端到端 at-least-once。
+内置文件日志 Sink 在 `write()` 返回前完成本地追加，但不负责 TLS 采集、Kafka
+投递或下游确认。文件写入、TLS 采集和下游消费任一阶段都可能在故障时产生丢失
+或重复，消费端需按 `unique_id` 去重，整体保持 best-effort 语义。

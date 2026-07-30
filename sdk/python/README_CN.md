@@ -98,6 +98,8 @@ print("session:", session)
 client.session("demo-session").add_message("user", "hello from sdk")
 context = client.session("demo-session").get_session_context(token_budget=4096)
 print("context:", context)
+
+client.close()
 ```
 
 ## 快速开始：异步客户端
@@ -162,6 +164,18 @@ result = client.add_resource(
     wait=True,
 )
 print(result)
+```
+
+如果只希望入库并生成向量、不走 VLM 语义理解，可以传 `processing_mode="vectors_only"`。
+该模式会写入/同步资源树并向量化当前文件，但不会生成或刷新 `.abstract.md` / `.overview.md`。
+
+```python
+result = client.add_resource(
+    "/path/to/notes.md",
+    to="viking://resources/demo-notes",
+    processing_mode="vectors_only",
+    wait=True,
+)
 ```
 
 ### 文件系统操作

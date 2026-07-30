@@ -15,17 +15,6 @@ from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 
 
-class _NoopLockContext:
-    def __init__(self, *args, **kwargs):
-        pass
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
-
-
 def _make_msg(uri="viking://user/memories", context_type="memory", **kwargs):
     """Build a minimal SemanticMsg for testing."""
     defaults = {
@@ -241,7 +230,6 @@ async def test_memory_write_error_reports_error():
             "openviking.storage.queuefs.semantic_processor.resolve_telemetry",
             return_value=None,
         ),
-        patch("openviking.storage.transaction.LockContext", _NoopLockContext),
         patch.object(
             processor,
             "_generate_single_file_summary",

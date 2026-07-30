@@ -7,7 +7,8 @@ from __future__ import annotations
 import asyncio
 import uuid
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any, AsyncIterator, Dict, List, Mapping, Optional
 
 from openviking.core.namespace import canonicalize_uri, uri_parts, visible_roots
 from openviking.server.identity import RequestContext, Role
@@ -16,6 +17,7 @@ from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.result import UpdateResult
 from openviking.storage.vectordb.utils.logging_init import init_cpp_logging
 from openviking.storage.vectordb_adapters import create_collection_adapter
+from openviking.utils.tags import merge_search_tags
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.vectordb_config import DEFAULT_INDEX_NAME, VectorDBBackendConfig
 
@@ -68,6 +70,25 @@ URI_REWRITE_OUTPUT_FIELDS = [
 ]
 
 VIKINGDB_CONTENT_MAX_SIZE = 1024 * 1024
+
+
+@dataclass(frozen=True)
+class UpsertOptions:
+    partial_update: bool = False
+    search_tag_mode: str = "replace"
+
+
+def normalize_upsert_options(
+    options: UpsertOptions | Mapping[str, Any] | None = None,
+) -> UpsertOptions:
+    if options is None:
+        return UpsertOptions()
+    if isinstance(options, UpsertOptions):
+        return options
+    return UpsertOptions(
+        partial_update=bool(options.get("partial_update", False)),
+        search_tag_mode=str(options.get("search_tag_mode", "replace")),
+    )
 
 
 async def _wait_for_task_completion_despite_cancellation(
@@ -310,14 +331,19 @@ class _SingleAccountBackend:
     # Data Operations (with tenant enforcement)
     # =========================================================================
 
-    async def upsert(self, data: Dict[str, Any], partial_update: bool = False) -> str:
+    async def upsert(
+        self,
+        data: Dict[str, Any],
+        options: UpsertOptions | Mapping[str, Any] | None = None,
+    ) -> str:
+        options = normalize_upsert_options(options)
         try:
             payload = self._bind_upsert_payload(data)
         except (PermissionError, ValueError) as exc:
             logger.warning("Rejecting upsert: %s", exc)
             return ""
 
-        if partial_update:
+        if options.partial_update:
             try:
                 existing_records = await self._async_adapter.call("get", [payload["id"]])
                 if self._bound_account_id:
@@ -332,6 +358,11 @@ class _SingleAccountBackend:
 
             if existing_records:
                 existing = dict(existing_records[0])
+                if options.search_tag_mode == "append" and payload.get("search_tags") is not None:
+                    payload["search_tags"] = merge_search_tags(
+                        existing.get("search_tags"),
+                        payload.get("search_tags"),
+                    )
                 existing.update({k: v for k, v in payload.items() if v is not None})
                 payload = existing
 
@@ -463,7 +494,7 @@ class _SingleAccountBackend:
             return await self._async_adapter.call("delete", filter=filter)
         except Exception as e:
             logger.error("Error deleting by filter: %s", e)
-            return 0
+            raise
 
     async def exists(self, id: str) -> bool:
         try:
@@ -839,20 +870,26 @@ class VikingVectorIndexBackend:
     # =========================================================================
 
     async def upsert(
-        self, data: Dict[str, Any], *, ctx: RequestContext, partial_update: bool = False
+        self,
+        data: Dict[str, Any],
+        *,
+        ctx: RequestContext,
+        options: UpsertOptions | Mapping[str, Any] | None = None,
     ) -> str:
         """Main write entrypoint.
 
-        With the default ``partial_update=False``, this preserves the legacy
-        full-record upsert behavior. When ``partial_update=True``, the backend
+        With the default ``options.partial_update=False``, this preserves the legacy
+        full-record upsert behavior. When ``options.partial_update=True``, the backend
         first reads the current record and preserves unspecified existing
         fields before issuing the final upsert.
         """
+        options = normalize_upsert_options(options)
         logger.debug(
             "[VikingVectorIndexBackend.upsert] Called with ctx.account_id=%s, "
-            "partial_update=%s, data=%s",
+            "partial_update=%s, search_tag_mode=%s, data=%s",
             ctx.account_id,
-            partial_update,
+            options.partial_update,
+            options.search_tag_mode,
             data,
         )
         backend = self._get_backend_for_context(ctx)
@@ -860,10 +897,15 @@ class VikingVectorIndexBackend:
             "[VikingVectorIndexBackend.upsert] Using backend for account_id=%s",
             ctx.account_id,
         )
-        result = await backend.upsert(data, partial_update=partial_update)
+        result = await backend.upsert(
+            data,
+            options=options,
+        )
         logger.debug(
-            "[VikingVectorIndexBackend.upsert] Completed with partial_update=%s, result=%s",
-            partial_update,
+            "[VikingVectorIndexBackend.upsert] Completed with partial_update=%s, "
+            "search_tag_mode=%s, result=%s",
+            options.partial_update,
+            options.search_tag_mode,
             result,
         )
         return result
@@ -876,8 +918,9 @@ class VikingVectorIndexBackend:
         All records are validated for the bound account before one adapter
         invocation is made. Adapters may split that invocation into multiple
         data-plane requests, so this API does not guarantee transaction
-        atomicity. Use :meth:`upsert` with ``partial_update=True`` when omitted
-        fields must be preserved from existing records.
+        atomicity. Use :meth:`upsert` with
+        ``options=UpsertOptions(partial_update=True)`` when omitted fields must
+        be preserved from existing records.
         """
         logger.debug(
             "[VikingVectorIndexBackend.upsert_many] Called with ctx.account_id=%s, count=%s",

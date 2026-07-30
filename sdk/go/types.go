@@ -36,6 +36,8 @@ type AddResourceOptions struct {
 	PreserveStructure   *bool
 	WatchInterval       float64
 	Args                map[string]any
+	Tags                []string
+	TagMode             string
 	Telemetry           any
 }
 
@@ -203,6 +205,7 @@ type FindOptions struct {
 	Until          string
 	TimeField      string
 	Level          []int
+	Tags           []string
 }
 
 // SearchOptions controls Search.
@@ -220,6 +223,7 @@ type SearchOptions struct {
 	Until          string
 	TimeField      string
 	Level          []int
+	Tags           []string
 }
 
 // GrepOptions controls Grep.

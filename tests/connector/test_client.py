@@ -104,6 +104,27 @@ async def test_submit_doc_add_carries_non_tos_source_in_param_config():
 
 
 @pytest.mark.asyncio
+async def test_submit_doc_add_forwards_resource_tags():
+    _FakeAsyncClient.response_payload = {"code": 0, "data": {"task_key": "connector-1"}}
+    client = ConnectorClient("https://connector/doc/add", "https://tracker/task/info", "acct")
+
+    await client.submit_doc_add(
+        add_type="tos",
+        api_key="secret",
+        tos_path="bucket/prefix",
+        to="viking://resources/imports",
+        extra_params={
+            "tags": ["team=search", "env=test"],
+            "tag_mode": "append",
+        },
+    )
+
+    payload = _FakeAsyncClient.calls[0]["json"]
+    assert payload["tags"] == ["team=search", "env=test"]
+    assert payload["tag_mode"] == "append"
+
+
+@pytest.mark.asyncio
 async def test_submit_doc_add_keeps_credentials_out_of_param_config():
     _FakeAsyncClient.response_payload = {"code": 0, "data": {"task_key": "connector-1"}}
     client = ConnectorClient("https://connector/doc/add", "https://tracker/task/info", "acct")

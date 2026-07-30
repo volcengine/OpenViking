@@ -343,7 +343,7 @@ class AsyncHTTPClient:
         user: Optional[str] = None,
         actor_peer_id: Optional[str] = None,
         agent_id: Optional[str] = None,
-        timeout: float = 60.0,
+        timeout: Optional[float] = None,
         extra_headers: Optional[Dict[str, str]] = None,
         profile_enabled: Optional[bool] = None,
         upload_mode: Optional[str] = None,
@@ -641,11 +641,22 @@ class AsyncHTTPClient:
         watch_interval: float = 0,
         args: Optional[Dict[str, Any]] = None,
         telemetry: Any = False,
+        processing_mode: Optional[str] = None,
+        add_type: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
     ) -> Dict[str, Any]:
+        if add_type is not None:
+            add_type = add_type.strip() or None
+        if add_type and parent:
+            raise ValueError("'add_type' cannot be combined with 'parent'.")
+        if add_type and not to:
+            raise ValueError("'add_type' requires an exact 'to' target.")
         if to and parent:
             raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
 
         request_data = {
+            "add_type": add_type,
             "to": to,
             "parent": parent,
             "reason": reason,
@@ -661,11 +672,16 @@ class AsyncHTTPClient:
             "args": args or {},
             "telemetry": telemetry,
         }
+        if processing_mode is not None:
+            request_data["processing_mode"] = processing_mode
+        if tags is not None:
+            request_data["tags"] = tags
+            request_data["tag_mode"] = tag_mode
         if preserve_structure is not None:
             request_data["preserve_structure"] = preserve_structure
 
         path_obj = Path(path)
-        if path_obj.exists():
+        if not add_type and path_obj.exists():
             if path_obj.is_dir():
                 request_data["source_name"] = path_obj.name
                 zip_path = self._zip_directory(path)
@@ -1057,6 +1073,31 @@ class AsyncHTTPClient:
         )
         return self._handle_response(response)
 
+    async def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+        """Read the exact UTF-8 content stored for a file, including hidden metadata."""
+        response = await self._request(
+            "GET",
+            "/api/v1/content/read",
+            params={
+                "uri": VikingURI.normalize(uri),
+                "offset": offset,
+                "limit": limit,
+                "raw": True,
+            },
+        )
+        return self._handle_response(response)
+
+    async def download_bytes(self, uri: str) -> bytes:
+        """Download an OpenViking file without interpreting its contents."""
+        response = await self._request(
+            "GET",
+            "/api/v1/content/download",
+            params={"uri": VikingURI.normalize(uri)},
+        )
+        if not response.is_success:
+            self._handle_response_data(response)
+        return bytes(response.content)
+
     async def abstract(self, uri: str) -> str:
         response = await self._request(
             "GET", "/api/v1/content/abstract", params={"uri": VikingURI.normalize(uri)}
@@ -1085,6 +1126,33 @@ class AsyncHTTPClient:
                 "uri": VikingURI.normalize(uri),
                 "content": content,
                 "mode": mode,
+                "wait": wait,
+                "timeout": timeout,
+                "telemetry": telemetry,
+            },
+        )
+        return self._handle_response_data(response).get("result", {})
+
+    async def batch_write(
+        self,
+        root_uri: str,
+        operations: List[Dict[str, Any]],
+        wait: bool = True,
+        timeout: Optional[float] = None,
+        telemetry: Any = False,
+    ) -> Dict[str, Any]:
+        """Apply a preconditioned multi-file content write."""
+        normalized_operations = []
+        for operation in operations:
+            item = dict(operation)
+            item["uri"] = VikingURI.normalize(str(item.get("uri") or ""))
+            normalized_operations.append(item)
+        response = await self._request(
+            "POST",
+            "/api/v1/content/batch-write",
+            json={
+                "root_uri": VikingURI.normalize(root_uri),
+                "operations": normalized_operations,
                 "wait": wait,
                 "timeout": timeout,
                 "telemetry": telemetry,
@@ -1590,7 +1658,8 @@ class AsyncHTTPClient:
         return self._handle_response(response)
 
     async def admin_migrate(self, cleanup: bool = False) -> Dict[str, Any]:
-        response = await self._request("POST", "/api/v1/admin/migrate", json={"cleanup": cleanup})
+        action = "cleanup" if cleanup else "migrate"
+        response = await self._request("POST", "/api/v1/admin/migrate", json={"action": action})
         return self._handle_response(response)
 
     def get_status(self) -> Dict[str, Any]:
@@ -1785,10 +1854,15 @@ class SyncHTTPClient:
         watch_interval: float = 0,
         args: Optional[Dict[str, Any]] = None,
         telemetry: Any = False,
+        processing_mode: Optional[str] = None,
+        add_type: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.add_resource(
                 path=path,
+                add_type=add_type,
                 to=to,
                 parent=parent,
                 reason=reason,
@@ -1802,7 +1876,10 @@ class SyncHTTPClient:
                 directly_upload_media=directly_upload_media,
                 preserve_structure=preserve_structure,
                 watch_interval=watch_interval,
+                processing_mode=processing_mode,
                 args=args,
+                tags=tags,
+                tag_mode=tag_mode,
                 telemetry=telemetry,
             )
         )
@@ -2053,6 +2130,12 @@ class SyncHTTPClient:
     def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
         return run_async(self._async_client.read(uri, offset=offset, limit=limit))
 
+    def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+        return run_async(self._async_client.read_raw(uri, offset=offset, limit=limit))
+
+    def download_bytes(self, uri: str) -> bytes:
+        return run_async(self._async_client.download_bytes(uri))
+
     def abstract(self, uri: str) -> str:
         return run_async(self._async_client.abstract(uri))
 
@@ -2073,6 +2156,24 @@ class SyncHTTPClient:
                 uri=uri,
                 content=content,
                 mode=mode,
+                wait=wait,
+                timeout=timeout,
+                telemetry=telemetry,
+            )
+        )
+
+    def batch_write(
+        self,
+        root_uri: str,
+        operations: List[Dict[str, Any]],
+        wait: bool = True,
+        timeout: Optional[float] = None,
+        telemetry: Any = False,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.batch_write(
+                root_uri=root_uri,
+                operations=operations,
                 wait=wait,
                 timeout=timeout,
                 telemetry=telemetry,

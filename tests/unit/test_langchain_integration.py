@@ -629,7 +629,10 @@ def test_in_memory_openviking_client_batch_add_messages_records_messages():
         ],
     )
 
-    assert result == {"session_id": "batch-session", "message_count": 2, "added": 2}
+    assert result["session_id"] == "batch-session"
+    assert result["message_count"] == 2
+    assert result["added"] == 2
+    assert result["pending_tokens"] > 0
     assert [message["role"] for message in client.sessions["batch-session"]] == [
         "user",
         "assistant",
@@ -771,6 +774,75 @@ def test_session_context_assembler_keeps_peer_id_out_of_recall():
     assembler.assemble(session_id="assembler-peer-session", query="azure")
 
     assert "peer_id" not in client.search_calls[-1]
+
+
+def test_session_context_assembler_creates_only_after_not_found():
+    class RecordingClient(InMemoryOpenVikingClient):
+        def __init__(self):
+            super().__init__()
+            self.create_calls = 0
+            self.context_calls = 0
+
+        def create_session(self, session_id=None):
+            self.create_calls += 1
+            return super().create_session(session_id=session_id)
+
+        def get_session_context(self, session_id, token_budget=128_000, **kwargs):
+            self.context_calls += 1
+            return super().get_session_context(
+                session_id,
+                token_budget=token_budget,
+                **kwargs,
+            )
+
+    client = RecordingClient()
+    assembler = OpenVikingSessionContextAssembler(
+        client=client,
+        include_recall=False,
+    )
+
+    assembler.assemble(session_id="read-before-create", query="")
+    assembler.assemble(session_id="read-before-create", query="")
+
+    assert client.context_calls == 2
+    assert client.create_calls == 1
+    assert "read-before-create" in client.sessions
+
+
+def test_session_context_assembler_creates_on_code_not_found():
+    class ForeignNotFound(Exception):
+        def __init__(self):
+            super().__init__("session missing")
+            self.code = "NOT_FOUND"
+
+    class RecordingClient(InMemoryOpenVikingClient):
+        def __init__(self):
+            super().__init__()
+            self.create_calls = 0
+
+        def create_session(self, session_id=None):
+            self.create_calls += 1
+            return super().create_session(session_id=session_id)
+
+        def get_session_context(self, session_id, token_budget=128_000, **kwargs):
+            if session_id not in self.sessions:
+                raise ForeignNotFound()
+            return super().get_session_context(
+                session_id,
+                token_budget=token_budget,
+                **kwargs,
+            )
+
+    client = RecordingClient()
+    assembler = OpenVikingSessionContextAssembler(
+        client=client,
+        include_recall=False,
+    )
+
+    assembler.assemble(session_id="foreign-not-found", query="")
+
+    assert client.create_calls == 1
+    assert "foreign-not-found" in client.sessions
 
 
 def test_with_openviking_context_wraps_runnable_with_history():
@@ -1267,6 +1339,30 @@ def test_pending_token_commit_does_not_create_missing_session():
     assert "missing-commit-session" not in client.sessions
 
 
+def test_pending_token_commit_uses_persisted_value_without_session_lookup():
+    class RecordingClient(InMemoryOpenVikingClient):
+        def __init__(self):
+            super().__init__()
+            self.get_session_calls = 0
+
+        def get_session(self, session_id, auto_create=False):
+            self.get_session_calls += 1
+            return super().get_session(session_id, auto_create=auto_create)
+
+    client = RecordingClient()
+    client.create_session("persisted-hint-session")
+
+    result = apply_commit_policy(
+        client,
+        "persisted-hint-session",
+        OpenVikingCommitPolicy(mode="pending_tokens", pending_token_threshold=1),
+        persisted_pending_tokens=0,
+    )
+
+    assert result is None
+    assert client.get_session_calls == 0
+
+
 def test_langgraph_middleware_injects_recall_and_captures_messages():
     client = InMemoryOpenVikingClient(
         {"viking://user/memories/profile.md": "The user prefers azure deployments."}
@@ -1313,6 +1409,58 @@ def test_langgraph_middleware_injects_recall_and_captures_messages():
     assert len(archived_messages) == 2
     assistant_parts = archived_messages[1]["parts"]
     assert any(part["type"] == "context" for part in assistant_parts)
+
+
+def test_langgraph_middleware_batches_persistence_before_separate_commit():
+    class RecordingClient(InMemoryOpenVikingClient):
+        def __init__(self):
+            super().__init__()
+            self.events = []
+            self._inside_batch = False
+
+        def add_message(self, *args, **kwargs):
+            if not self._inside_batch:
+                self.events.append("add_message")
+            return super().add_message(*args, **kwargs)
+
+        def batch_add_messages(self, *args, **kwargs):
+            self.events.append("batch_add_messages")
+            self._inside_batch = True
+            try:
+                return super().batch_add_messages(*args, **kwargs)
+            finally:
+                self._inside_batch = False
+
+        def get_session(self, *args, **kwargs):
+            self.events.append("get_session")
+            return super().get_session(*args, **kwargs)
+
+        def commit_session(self, *args, **kwargs):
+            self.events.append("commit_session")
+            return super().commit_session(*args, **kwargs)
+
+    client = RecordingClient()
+    middleware = OpenVikingContextMiddleware(
+        client=client,
+        session_id_resolver=lambda state, runtime: "middleware-batch-commit",
+        commit_policy=OpenVikingCommitPolicy(
+            mode="pending_tokens",
+            pending_token_threshold=1,
+        ),
+    )
+
+    middleware.after_agent(
+        {
+            "messages": [
+                HumanMessage(content="Persist me in one batch."),
+                AIMessage(content="Then commit separately."),
+            ]
+        },
+        runtime=None,
+    )
+
+    assert client.events == ["batch_add_messages", "commit_session"]
+    assert client.archives["middleware-batch-commit"]
 
 
 def test_langgraph_middleware_uses_peer_id_only_for_message_capture():

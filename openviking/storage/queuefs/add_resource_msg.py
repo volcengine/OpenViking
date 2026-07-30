@@ -5,6 +5,8 @@
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, Optional
 
+from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
+
 
 @dataclass(kw_only=True)
 class AddResourceMsg:
@@ -39,6 +41,9 @@ class AddResourceMsg:
     skip_watch_management: bool = True
     defer_target_resolution: bool = False
     understanding_response_id: Optional[str] = None
+    processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
+    tags: Optional[list[str]] = None
+    tag_mode: str = "replace"
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
@@ -116,4 +121,11 @@ class AddResourceMsg:
                 if isinstance(data.get("understanding_response_id"), str)
                 else None
             ),
+            processing_mode=data.get("processing_mode", DEFAULT_PROCESSING_MODE),
+            tags=(
+                list(data["tags"])
+                if isinstance(data.get("tags"), list)
+                else None
+            ),
+            tag_mode=str(data.get("tag_mode") or "replace"),
         )

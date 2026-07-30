@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Union
 
 from openviking.parse.base import ParseResult
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.parse.parsers.constants import TYPESCRIPT_MPEG_TS_EXTENSION
 from openviking.parse.parsers.directory import DirectoryParser
 from openviking.parse.parsers.epub import EPubParser
 from openviking.parse.parsers.excel import ExcelParser
@@ -22,6 +23,7 @@ from openviking.parse.parsers.html import HTMLParser
 from openviking.parse.parsers.legacy_doc import LegacyDocParser
 from openviking.parse.parsers.markdown import MarkdownParser
 from openviking.parse.parsers.media import AudioParser, ImageParser, VideoParser
+from openviking.parse.parsers.media.utils import is_mpeg_ts, read_mpeg_ts_probe
 from openviking.parse.parsers.pdf import PDFParser
 from openviking.parse.parsers.powerpoint import PowerPointParser
 from openviking.parse.parsers.text import TextParser
@@ -91,6 +93,12 @@ class ParserRegistry:
         """
         path = Path(path)
         ext = path.suffix.lower()
+        if ext == TYPESCRIPT_MPEG_TS_EXTENSION:
+            if not path.is_file():
+                return None
+            if not is_mpeg_ts(read_mpeg_ts_probe(path)):
+                return None
+
         parser_name = self._extension_map.get(ext)
 
         if parser_name:
@@ -171,7 +179,11 @@ def get_registry() -> ParserRegistry:
                 "word": config.markdown,
                 "legacy_doc": config.markdown,
                 "powerpoint": config.markdown,
-                "excel": config.markdown,
+                # Excel had no dedicated config section and reused
+                # ``config.markdown``. Keep unset sectioning fields following
+                # Markdown so existing deployments keep their node structure and
+                # stable URIs after this upgrade.
+                "excel": config.excel.with_sectioning_defaults_from(config.markdown),
                 "epub": config.markdown,
                 "image": config.image,
             }
