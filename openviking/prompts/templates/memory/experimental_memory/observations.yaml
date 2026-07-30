@@ -1,0 +1,71 @@
+memory_type: observations
+description: |
+  Observation memory - captures inferred stable patterns from multiple facts,
+  events, or repeated conversational evidence.
+
+  Observations are not raw facts. They should clearly state that the content is
+  an inference, include evidence, and remain revisable when new evidence appears.
+  Do not use observations for one-off events or direct factual claims.
+directory: "viking://user/{{ user_space }}/memories/observations"
+filename_template: "{{ subject }}/{{ topic }}.md"
+enabled: true
+operation_mode: "upsert"
+content_template: |
+  # {{ topic }}
+  Subject: {{ subject }}
+  Confidence: {{ confidence }}
+
+  ## Observation
+  {{ content }}
+
+  ## Evidence
+  {{ evidence }}
+embedding_template: |-
+  Subject: {{ subject }}
+  Topic: {{ topic }}
+  Observation: {{ content }}
+  Evidence: {{ evidence }}
+overview_template: |-
+  # Observations Overview
+  {% if items %}**Subject:** {{ items[0].file_content.subject|default(directory_name, true) }}{% endif %}
+  {% for item in items %}
+  - [{{ item.file_content.topic|default(item.file_name, true) }}](./{{ item.file_name }})
+  {% endfor %}
+
+fields:
+  - name: subject
+    type: string
+    description: |
+      The entity, user, project, object, or topic this inferred pattern is about.
+      {% if language == 'en' %}Use lowercase with underscores, max 4 words.{% else %}Keep it concise and natural in {{ language }}.{% endif %}
+    merge_op: immutable
+
+  - name: topic
+    type: string
+    description: |
+      Concise topic for this observation.
+      {% if language == 'en' %}Use lowercase with underscores, max 4 words.{% else %}Keep it concise and natural in {{ language }}.{% endif %}
+    merge_op: immutable
+
+  - name: confidence
+    type: float32
+    description: |
+      Confidence from 0.0 to 1.0. Increase only when there is repeated or strong
+      supporting evidence; lower it when evidence is weak or mixed.
+    merge_op: replace
+
+  - name: evidence
+    type: string
+    description: |
+      Markdown bullet list of supporting evidence. Prefer fact/event URIs when
+      available; otherwise cite message ranges such as "ranges: 0-3".
+      Preserve old evidence unless it is contradicted or duplicated.
+    merge_op: patch
+
+  - name: content
+    type: string
+    description: |
+      Markdown description of the inferred pattern in {{ language }}.
+      State the inference carefully, without presenting it as a directly stated
+      fact. Mention uncertainty or boundary conditions when relevant.
+    merge_op: patch

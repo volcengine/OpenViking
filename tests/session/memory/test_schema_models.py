@@ -368,6 +368,42 @@ class TestSchemaModelGenerator:
             assert "custom_field" in model.model_fields
             assert "memory_type" not in model.model_fields
 
+    def test_experimental_structured_memory_schemas_generate_operation_fields(self, monkeypatch):
+        monkeypatch.setattr(
+            "openviking_cli.utils.config.get_openviking_config",
+            lambda: type(
+                "Config",
+                (),
+                {
+                    "memory": type(
+                        "MemoryCfg",
+                        (),
+                        {
+                            "custom_templates_dir": "",
+                            "experimental_memory_switch": True,
+                            "link_enabled": False,
+                        },
+                    )(),
+                    "prompts": type("PromptCfg", (), {"templates_dir": ""})(),
+                },
+            )(),
+        )
+
+        registry = create_default_registry()
+        generator = SchemaModelGenerator(registry)
+        operations_model = generator.create_structured_operations_model(role_scope=None)
+        json_schema = operations_model.model_json_schema()
+
+        assert {"facts", "observations", "beliefs"}.issubset(
+            set(operations_model.model_fields)
+        )
+        assert "facts" in json_schema["properties"]
+        assert "observations" in json_schema["properties"]
+        assert "beliefs" in json_schema["properties"]
+        assert registry.get("facts").operation_mode == "add_only"
+        assert registry.get("observations").operation_mode == "upsert"
+        assert registry.get("beliefs").operation_mode == "upsert"
+
 
 class TestWikiLink:
     def test_invalid_link_type_keeps_freeform_short_label(self):

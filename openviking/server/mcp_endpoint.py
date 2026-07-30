@@ -342,7 +342,11 @@ async def recall(
     peer_scope: str = "all",
     other_peer_penalty: Optional[Union[float, Dict[str, float]]] = None,
 ) -> str:
-    """Type-quota memory recall. Searches events, entities, preferences, and experiences separately, then returns a bounded memory_group block."""
+    """Type-quota memory recall.
+
+    Searches events, facts, entities, observations, beliefs, preferences, and
+    experiences separately, then returns a bounded memory_group block.
+    """
     service = get_service()
     effective_peer_scope = "actor" if peer_scope == "actor" else "all"
     result = await search_type_quota_recall(

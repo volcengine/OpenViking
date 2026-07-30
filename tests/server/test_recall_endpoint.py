@@ -68,7 +68,15 @@ async def test_recall_endpoint_searches_by_type_quota_and_renders(
         "/api/v1/search/recall",
         json={
             "query": "what should I remember",
-            "quotas": {"events": 1, "entities": 1, "preferences": 0, "experiences": 0},
+            "quotas": {
+                "events": 1,
+                "facts": 0,
+                "entities": 1,
+                "observations": 0,
+                "beliefs": 0,
+                "preferences": 0,
+                "experiences": 0,
+            },
             "max_chars": 400,
             "min_score": 0.1,
             "render": True,
@@ -121,7 +129,15 @@ async def test_recall_endpoint_respects_max_chars_budget(
         "/api/v1/search/recall",
         json={
             "query": "budget",
-            "quotas": {"events": 2, "entities": 0, "preferences": 0},
+            "quotas": {
+                "events": 2,
+                "facts": 0,
+                "entities": 0,
+                "observations": 0,
+                "beliefs": 0,
+                "preferences": 0,
+                "experiences": 0,
+            },
             "max_chars": 120,
             "min_score": 0.1,
             "render": True,
@@ -141,7 +157,15 @@ async def test_recall_endpoint_respects_max_chars_budget(
         "/api/v1/search/recall",
         json={
             "query": "budget",
-            "quotas": {"events": 2, "entities": 0, "preferences": 0},
+            "quotas": {
+                "events": 2,
+                "facts": 0,
+                "entities": 0,
+                "observations": 0,
+                "beliefs": 0,
+                "preferences": 0,
+                "experiences": 0,
+            },
             "max_chars": 10,
             "min_score": 0.1,
             "render": True,
@@ -181,7 +205,18 @@ async def test_recall_endpoint_sanitizes_nonfinite_scores(
 
     resp = await client.post(
         "/api/v1/search/recall",
-        json={"query": "inf", "quotas": {"events": 1, "entities": 0, "preferences": 0}},
+        json={
+            "query": "inf",
+            "quotas": {
+                "events": 1,
+                "facts": 0,
+                "entities": 0,
+                "observations": 0,
+                "beliefs": 0,
+                "preferences": 0,
+                "experiences": 0,
+            },
+        },
     )
 
     assert resp.status_code == 200
@@ -220,9 +255,77 @@ async def test_recall_endpoint_filters_profile_and_duplicates(
 
     resp = await client.post(
         "/api/v1/search/recall",
-        json={"query": "hello", "quotas": {"events": 3, "entities": 0, "preferences": 0}},
+        json={
+            "query": "hello",
+            "quotas": {
+                "events": 3,
+                "facts": 0,
+                "entities": 0,
+                "observations": 0,
+                "beliefs": 0,
+                "preferences": 0,
+                "experiences": 0,
+            },
+        },
     )
 
     assert resp.status_code == 200
     entries = resp.json()["result"]["entries"]
     assert [entry["uri"] for entry in entries] == ["viking://user/test_user/memories/events/dup.md"]
+
+
+async def test_recall_endpoint_searches_structured_memory_groups(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    async def fake_find(**kwargs):
+        target_uri = kwargs["target_uri"]
+        if target_uri.endswith("/facts"):
+            return _FakeFindResult(
+                [_memory("viking://user/test_user/memories/facts/project/a.md", 0.93)]
+            )
+        if target_uri.endswith("/observations"):
+            return _FakeFindResult(
+                [_memory("viking://user/test_user/memories/observations/project/style.md", 0.87)]
+            )
+        if target_uri.endswith("/beliefs"):
+            return _FakeFindResult(
+                [_memory("viking://user/test_user/memories/beliefs/project/review.md", 0.81)]
+            )
+        return _FakeFindResult([])
+
+    async def fake_read(uri, **kwargs):
+        del kwargs
+        return f"structured content for {uri}"
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+    monkeypatch.setattr(service.fs, "read", fake_read)
+
+    resp = await client.post(
+        "/api/v1/search/recall",
+        json={
+            "query": "structured memory",
+            "quotas": {
+                "events": 0,
+                "facts": 1,
+                "entities": 0,
+                "observations": 1,
+                "beliefs": 1,
+                "preferences": 0,
+                "experiences": 0,
+            },
+            "max_chars": 2000,
+        },
+    )
+
+    assert resp.status_code == 200
+    result = resp.json()["result"]
+    assert [entry["type"] for entry in result["entries"]] == [
+        "facts",
+        "observations",
+        "beliefs",
+    ]
+    assert '<memory_group type="facts"' in result["rendered"]
+    assert '<memory_group type="observations"' in result["rendered"]
+    assert '<memory_group type="beliefs"' in result["rendered"]

@@ -43,7 +43,10 @@ async def test_independent_type_searches_start_concurrently():
             peer_scope="actor",
             quotas={
                 "events": 1,
+                "facts": 0,
                 "entities": 1,
+                "observations": 0,
+                "beliefs": 0,
                 "preferences": 0,
                 "experiences": 0,
             },
@@ -59,7 +62,10 @@ async def test_independent_type_searches_start_concurrently():
     }
     assert result.stats["searched"] == {
         "events": 0,
+        "facts": 0,
         "entities": 0,
+        "observations": 0,
+        "beliefs": 0,
         "preferences": 0,
         "experiences": 0,
     }
@@ -104,7 +110,10 @@ async def test_parallel_search_preserves_type_order():
         peer_scope="actor",
         quotas={
             "events": 1,
+            "facts": 0,
             "entities": 1,
+            "observations": 0,
+            "beliefs": 0,
             "preferences": 0,
             "experiences": 0,
         },
