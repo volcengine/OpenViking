@@ -80,6 +80,8 @@ catalog:
     params:
       repo_url: https://github.com/psf/requests
       branch: main
+
+assets: [openviking]   # 可选：省略 = 执行上面定义的全部资产
 ```
 
 Manifest 顶层字段：

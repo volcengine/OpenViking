@@ -86,6 +86,8 @@ catalog:
     params:
       repo_url: https://github.com/psf/requests
       branch: main
+
+assets: [openviking]   # optional; omit to apply every asset defined above
 ```
 
 Manifest top-level fields:
