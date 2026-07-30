@@ -4438,7 +4438,7 @@ class VikingFS:
                 user_id=ctx.user.user_id,
             )
         finally:
-            tracker.unregister_running_task(task_id)
+            await tracker.unregister_running_task(task_id)
 
     async def _run_vector_rebuild(
         self,

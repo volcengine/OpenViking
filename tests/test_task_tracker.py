@@ -3,6 +3,7 @@
 
 """Unit tests for TaskTracker."""
 
+import asyncio
 import json
 import time
 
@@ -19,6 +20,8 @@ from openviking.service.task_tracker import (
     get_task_tracker,
     set_task_tracker,
 )
+from openviking.service.task_work_index import TASK_WORK_ID_FIELD, TaskWorkIndex
+from openviking.storage.queuefs.named_queue import NamedQueue
 from openviking_cli.session.user_id import UserIdentifier
 
 pytestmark = pytest.mark.asyncio
@@ -111,6 +114,13 @@ class _FakeAgfsExistingDir(_FakeAgfs):
         return {"message": "created", "mode": mode}
 
 
+class _FailTerminalTaskStore(PersistentTaskStore):
+    async def update(self, task):
+        if task.status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}:
+            raise OSError("temporary task store failure")
+        await super().update(task)
+
+
 # ── Basic CRUD ──
 
 
@@ -195,6 +205,97 @@ async def test_fail_task(tracker: TaskTracker):
     assert retrieved.status == TaskStatus.FAILED
     assert retrieved.stage == "failed"
     assert "LLM timeout" in retrieved.error
+
+
+async def test_last_queue_work_persists_terminal_before_ack():
+    task_agfs = _FakeAgfs()
+    tracker = TaskTracker(store=PersistentTaskStore(task_agfs))
+    work_index = TaskWorkIndex()
+    tracker.attach_work_index(work_index)
+    task = await tracker.create("add_resource", **_owner_kwargs())
+    await tracker.start(task.task_id, **_owner_kwargs())
+    message = {
+        "id": "message-1",
+        "data": {
+            "task_id": task.task_id,
+            TASK_WORK_ID_FIELD: "work-1",
+            **_owner_kwargs(),
+        },
+    }
+    work_index.rebuild({"Tracked": [message]})
+    await tracker.complete(task.task_id, {"root_uri": "viking://resources/demo"})
+
+    class _AckAgfs(_FakeAgfs):
+        def write(self, path: str, data):
+            if path == "/queue/Tracked/ack":
+                task_path = f"/local/acme/_system/tasks/alice/{task.task_id}.json"
+                payload = json.loads(task_agfs.files[task_path])
+                assert payload["status"] == "completed"
+            return super().write(path, data)
+
+    queue_agfs = _AckAgfs()
+    queue = NamedQueue(
+        queue_agfs,
+        "/queue",
+        "Tracked",
+        task_work_index=work_index,
+    )
+    await asyncio.to_thread(lambda: asyncio.run(queue.ack("message-1", message)))
+
+    completed = await tracker.get(task.task_id, **_owner_kwargs())
+    assert completed is not None
+    assert completed.status == TaskStatus.COMPLETED
+    assert queue_agfs.files["/queue/Tracked/ack"] == b"message-1"
+
+
+async def test_terminal_write_failure_keeps_last_cancelled_work_recoverable():
+    tracker = TaskTracker(store=_FailTerminalTaskStore(_FakeAgfs()))
+    work_index = TaskWorkIndex()
+    tracker.attach_work_index(work_index)
+    task = await tracker.create("add_resource", **_owner_kwargs())
+    await tracker.start(task.task_id, **_owner_kwargs())
+    message = {
+        "id": "message-1",
+        "data": {
+            "task_id": task.task_id,
+            TASK_WORK_ID_FIELD: "work-1",
+            **_owner_kwargs(),
+        },
+    }
+    work_index.rebuild({"Tracked": [message]})
+    await tracker.cancel(task.task_id, **_owner_kwargs())
+    queue_agfs = _FakeAgfs()
+    queue = NamedQueue(
+        queue_agfs,
+        "/queue",
+        "Tracked",
+        task_work_index=work_index,
+    )
+
+    await queue.ack("message-1", message)
+
+    cancelling = await tracker.get(task.task_id, **_owner_kwargs())
+    assert cancelling is not None
+    assert cancelling.status == TaskStatus.CANCELLING
+    assert work_index.has_work(task.task_id)
+    assert "/queue/Tracked/ack" not in queue_agfs.files
+
+
+async def test_unregister_running_task_waits_for_terminal_persistence(tracker: TaskTracker):
+    task = await tracker.create("admin_reindex", **_owner_kwargs())
+    tracker.register_running_task(task.task_id)
+    await tracker.start(task.task_id, **_owner_kwargs())
+    await tracker.complete(task.task_id, {"status": "completed"})
+
+    running = await tracker.get(task.task_id, **_owner_kwargs())
+    assert running is not None
+    assert running.status == TaskStatus.RUNNING
+
+    await tracker.unregister_running_task(task.task_id)
+
+    completed = await tracker.get(task.task_id, **_owner_kwargs())
+    assert completed is not None
+    assert completed.status == TaskStatus.COMPLETED
 
 
 async def test_get_nonexistent_returns_none(tracker: TaskTracker):

@@ -240,8 +240,12 @@ async def test_semantic_dag_shares_node_scheduler_across_roots(monkeypatch):
 @pytest.mark.asyncio
 async def test_task_work_rejection_does_not_stop_shared_semantic_worker():
     work_index = TaskWorkIndex()
+
+    async def finalize_before_ack(_metadata):
+        return None
+
     work_index.set_callbacks(
-        on_idle=lambda _task_id: None,
+        finalize_before_ack=finalize_before_ack,
         is_cancellation_requested=lambda _task_id: True,
     )
     embedding_queue = NamedQueue(

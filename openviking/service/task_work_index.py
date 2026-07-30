@@ -15,7 +15,7 @@ import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterable, Iterator, Mapping, Optional
+from typing import Any, Awaitable, Callable, Dict, Iterable, Iterator, Mapping, Optional
 from uuid import uuid4
 
 TASK_WORK_ID_FIELD = "_task_work_id"
@@ -148,16 +148,16 @@ class TaskWorkIndex:
         self._work: Dict[str, set[tuple[str, str]]] = {}
         self._active: Dict[str, set[asyncio.Task[Any]]] = {}
         self._failures: Dict[str, str] = {}
-        self._on_idle: Optional[Callable[[str], None]] = None
+        self._finalize_before_ack: Optional[Callable[[QueueTaskMetadata], Awaitable[None]]] = None
         self._is_cancellation_requested: Optional[Callable[[str], bool]] = None
 
     def set_callbacks(
         self,
         *,
-        on_idle: Callable[[str], None],
+        finalize_before_ack: Callable[[QueueTaskMetadata], Awaitable[None]],
         is_cancellation_requested: Callable[[str], bool],
     ) -> None:
-        self._on_idle = on_idle
+        self._finalize_before_ack = finalize_before_ack
         self._is_cancellation_requested = is_cancellation_requested
 
     def rebuild(
@@ -190,23 +190,72 @@ class TaskWorkIndex:
             self._work.setdefault(metadata.task_id, set()).add((queue_name, metadata.work_id))
         return True
 
-    def settle(self, queue_name: str, message: Any) -> None:
+    def _remove_work(
+        self,
+        queue_name: str,
+        metadata: QueueTaskMetadata,
+    ) -> tuple[bool, bool]:
+        """Remove one work item and report whether it existed and made its task idle."""
+        removed = False
+        with self._lock:
+            entries = self._work.get(metadata.task_id)
+            if entries is not None:
+                entry = (queue_name, metadata.work_id)
+                removed = entry in entries
+                entries.discard(entry)
+                if not entries:
+                    self._work.pop(metadata.task_id, None)
+            became_idle = (
+                removed
+                and not self._work.get(metadata.task_id)
+                and not self._active.get(metadata.task_id)
+            )
+            return removed, became_idle
+
+    async def discard(self, queue_name: str, message: Any) -> None:
+        """Discard work that was never durably enqueued and finalize if it was last."""
         metadata = (
             message if isinstance(message, QueueTaskMetadata) else extract_task_metadata(message)
         )
         if metadata is None:
             return
-        became_idle = False
+        _removed, became_idle = self._remove_work(queue_name, metadata)
+        callback = self._finalize_before_ack
+        if became_idle and callback is not None:
+            await callback(metadata)
+
+    async def prepare_ack(
+        self,
+        queue_name: str,
+        message: Any,
+    ) -> Optional[QueueTaskMetadata]:
+        """Remove work provisionally and finalize its task before the last durable ACK."""
+        metadata = (
+            message if isinstance(message, QueueTaskMetadata) else extract_task_metadata(message)
+        )
+        if metadata is None:
+            return None
+
+        removed, became_idle = self._remove_work(queue_name, metadata)
+        if not removed:
+            return None
+        if not became_idle:
+            return metadata
+
+        callback = self._finalize_before_ack
+        if callback is None:
+            return metadata
+        try:
+            await callback(metadata)
+        except BaseException:
+            self.rollback_ack(queue_name, metadata)
+            raise
+        return metadata
+
+    def rollback_ack(self, queue_name: str, metadata: QueueTaskMetadata) -> None:
+        """Restore provisionally removed work when finalization or ACK fails."""
         with self._lock:
-            entries = self._work.get(metadata.task_id)
-            if entries is not None:
-                entries.discard((queue_name, metadata.work_id))
-                if not entries:
-                    self._work.pop(metadata.task_id, None)
-            if not self._work.get(metadata.task_id) and not self._active.get(metadata.task_id):
-                became_idle = True
-        if became_idle and self._on_idle:
-            self._on_idle(metadata.task_id)
+            self._work.setdefault(metadata.task_id, set()).add((queue_name, metadata.work_id))
 
     def has_work(self, task_id: str, exclude_work_id: Optional[str] = None) -> bool:
         with self._lock:
@@ -247,17 +296,12 @@ class TaskWorkIndex:
             active_task.get_loop().call_soon(active_task.cancel)
 
     def unregister_active(self, task_id: str, active_task: asyncio.Task[Any]) -> None:
-        became_idle = False
         with self._lock:
             entries = self._active.get(task_id)
             if entries is not None:
                 entries.discard(active_task)
                 if not entries:
                     self._active.pop(task_id, None)
-            if not self._work.get(task_id) and not self._active.get(task_id):
-                became_idle = True
-        if became_idle and self._on_idle:
-            self._on_idle(task_id)
 
     def cancel_active(self, task_id: str) -> None:
         with self._lock:

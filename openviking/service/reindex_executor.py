@@ -560,7 +560,7 @@ class ReindexExecutor:
                 user_id=ctx.user.user_id,
             )
         finally:
-            tracker.unregister_running_task(task_id)
+            await tracker.unregister_running_task(task_id)
 
     async def _prune_orphan_vectors(
         self,

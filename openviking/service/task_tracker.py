@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from openviking.service.task_store import TaskStore
-from openviking.service.task_work_index import TaskWorkIndex
+from openviking.service.task_work_index import QueueTaskMetadata, TaskWorkIndex
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -179,7 +179,7 @@ class TaskTracker:
 
     def _install_work_index_callbacks(self) -> None:
         self._work_index.set_callbacks(
-            on_idle=self._on_task_work_idle,
+            finalize_before_ack=self._finalize_before_ack,
             is_cancellation_requested=self.is_cancellation_requested,
         )
 
@@ -194,12 +194,27 @@ class TaskTracker:
         for task_id, (account_id, user_id) in owners.items():
             await self.get(task_id, account_id=account_id, user_id=user_id)
 
-    def _on_task_work_idle(self, task_id: str) -> None:
+    async def _finalize_before_ack(self, metadata: QueueTaskMetadata) -> None:
+        """Persist the terminal state before QueueFS removes the last recovery message."""
         loop = self._runtime_loop
         if loop is None or loop.is_closed():
+            raise RuntimeError("TaskTracker runtime loop is unavailable during QueueFS ACK")
+        if asyncio.get_running_loop() is loop:
+            await self._finalize_task(
+                metadata.task_id,
+                account_id=metadata.account_id or None,
+                user_id=metadata.user_id or None,
+            )
             return
-
-        asyncio.run_coroutine_threadsafe(self._finalize_task(task_id), loop)
+        future = asyncio.run_coroutine_threadsafe(
+            self._finalize_task(
+                metadata.task_id,
+                account_id=metadata.account_id or None,
+                user_id=metadata.user_id or None,
+            ),
+            loop,
+        )
+        await asyncio.wrap_future(future)
 
     def is_cancellation_requested(self, task_id: str) -> bool:
         """Fast thread-safe status check used by queue workers."""
@@ -515,25 +530,26 @@ class TaskTracker:
             if task and task.status in _ACTIVE_STATUSES:
                 if self._work_index.has_work(task_id):
                     return
-                if task.status != TaskStatus.CANCELLING:
+                updated = deepcopy(task)
+                if updated.status != TaskStatus.CANCELLING:
                     work_error = self._work_index.failure(task_id)
-                    if work_error and task.error is None:
-                        task.error = _sanitize_error(work_error)
-                if task.status == TaskStatus.CANCELLING:
-                    task.status = TaskStatus.CANCELLED
-                elif task.error is not None:
-                    task.status = TaskStatus.FAILED
-                elif task.result is not None:
-                    task.status = TaskStatus.COMPLETED
+                    if work_error and updated.error is None:
+                        updated.error = _sanitize_error(work_error)
+                if updated.status == TaskStatus.CANCELLING:
+                    updated.status = TaskStatus.CANCELLED
+                elif updated.error is not None:
+                    updated.status = TaskStatus.FAILED
+                elif updated.result is not None:
+                    updated.status = TaskStatus.COMPLETED
                 else:
                     return
-                task.stage = task.status.value
-                task.updated_at = time.time()
-                await self._store.update(task)
+                updated.stage = updated.status.value
+                updated.updated_at = time.time()
+                await self._store.update(updated)
                 with self._lock:
-                    self._tasks[task.task_id] = task
+                    self._tasks[updated.task_id] = updated
                 self._work_index.clear_failure(task_id)
-                logger.info("[TaskTracker] Task %s %s", task_id, task.status.value)
+                logger.info("[TaskTracker] Task %s %s", task_id, updated.status.value)
 
     async def wait(
         self,
@@ -567,10 +583,12 @@ class TaskTracker:
         if active_task is not None:
             self._work_index.register_active(task_id, active_task)
 
-    def unregister_running_task(self, task_id: str) -> None:
+    async def unregister_running_task(self, task_id: str) -> None:
+        """Release direct background work and persist its terminal outcome."""
         active_task = asyncio.current_task()
         if active_task is not None:
             self._work_index.unregister_active(task_id, active_task)
+        await self._finalize_task(task_id)
 
     async def get(
         self,

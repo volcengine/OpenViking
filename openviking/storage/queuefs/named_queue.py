@@ -252,7 +252,7 @@ class NamedQueue:
             msg_id = await self._async_agfs.write(enqueue_file, data.encode("utf-8"))
         except BaseException:
             if self._task_work_index is not None and task_metadata is not None:
-                self._task_work_index.settle(self.name, task_metadata)
+                await self._task_work_index.discard(self.name, task_metadata)
             raise
         return msg_id if isinstance(msg_id, str) else str(msg_id)
 
@@ -260,17 +260,26 @@ class NamedQueue:
         """Acknowledge successful processing of a message (deletes it from persistent storage).
 
         Must be called after the dequeue handler finishes processing a message.
+        Task-owned work is provisionally removed from the runtime index first so
+        the last message can persist its task's terminal state before deletion.
         If not called (e.g. process crashes), the message will be automatically
         re-queued on the next startup via RecoverStale.
         """
         if not msg_id:
             return
         ack_file = f"{self.path}/ack"
+        prepared = None
         try:
-            await self._async_agfs.write(ack_file, msg_id.encode("utf-8"))
             if self._task_work_index is not None and message is not None:
-                self._task_work_index.settle(self.name, message)
+                prepared = await self._task_work_index.prepare_ack(self.name, message)
+            await self._async_agfs.write(ack_file, msg_id.encode("utf-8"))
+        except asyncio.CancelledError:
+            if self._task_work_index is not None and prepared is not None:
+                self._task_work_index.rollback_ack(self.name, prepared)
+            raise
         except Exception as e:
+            if self._task_work_index is not None and prepared is not None:
+                self._task_work_index.rollback_ack(self.name, prepared)
             logger.warning(f"[NamedQueue] Ack failed for {self.name} msg_id={msg_id}: {e}")
 
     async def _read_queue_message(self) -> Optional[Dict[str, Any]]:
@@ -422,12 +431,23 @@ class NamedQueue:
         clear_file = f"{self.path}/clear"
 
         messages = await self.snapshot() if self._task_work_index is not None else []
+        prepared = []
         try:
-            await self._async_agfs.write(clear_file, b"")
             if self._task_work_index is not None:
                 for message in messages:
-                    self._task_work_index.settle(self.name, message)
+                    metadata = await self._task_work_index.prepare_ack(self.name, message)
+                    if metadata is not None:
+                        prepared.append(metadata)
+            await self._async_agfs.write(clear_file, b"")
             return True
+        except asyncio.CancelledError:
+            if self._task_work_index is not None:
+                for metadata in prepared:
+                    self._task_work_index.rollback_ack(self.name, metadata)
+            raise
         except Exception as e:
+            if self._task_work_index is not None:
+                for metadata in prepared:
+                    self._task_work_index.rollback_ack(self.name, metadata)
             logger.error(f"[NamedQueue] Clear failed for {self.name}: {e}")
             return False
