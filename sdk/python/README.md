@@ -98,6 +98,8 @@ print("session:", session)
 client.session("demo-session").add_message("user", "hello from sdk")
 context = client.session("demo-session").get_session_context(token_budget=4096)
 print("context:", context)
+
+client.close()
 ```
 
 ## Quick Start: Async Client
@@ -162,6 +164,19 @@ result = client.add_resource(
     wait=True,
 )
 print(result)
+```
+
+To ingest content without VLM semantic understanding, pass `processing_mode="vectors_only"`.
+This writes/syncs the resource tree and vectorizes current files, but does not generate
+or refresh `.abstract.md` / `.overview.md`.
+
+```python
+result = client.add_resource(
+    "/path/to/notes.md",
+    to="viking://resources/demo-notes",
+    processing_mode="vectors_only",
+    wait=True,
+)
 ```
 
 ### Filesystem Operations

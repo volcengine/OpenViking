@@ -102,6 +102,19 @@ def test_async_http_client_explicit_arguments_override_ovcli_config(tmp_path, mo
     assert client._upload_mode == "local"
 
 
+def test_async_http_client_explicit_default_timeout_overrides_lower_priority_sources(
+    tmp_path, monkeypatch
+):
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text(json.dumps({"url": "http://config-host:1933", "timeout": 12.5}))
+    monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(config_path))
+    monkeypatch.setenv("OPENVIKING_TIMEOUT", "20")
+
+    client = AsyncHTTPClient(timeout=60.0)
+
+    assert client._timeout == 60.0
+
+
 def test_async_http_client_reports_invalid_ovcli_config(tmp_path, monkeypatch):
     config_path = tmp_path / "ovcli.conf"
     config_path.write_text(json.dumps({"url": "http://localhost:1933", "timeout": "fast"}))

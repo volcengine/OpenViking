@@ -12,6 +12,7 @@ mod handlers;
 mod health_ui;
 mod help_ui;
 mod i18n;
+mod openviking_assets;
 mod output;
 mod status_ui;
 mod terminal_ui;
@@ -280,8 +281,63 @@ enum Commands {
     /// [Data] Add resources into OpenViking
     AddResource {
         /// Local path or URL to import
-        #[arg(value_name = "path-or-url")]
-        path: String,
+        #[arg(
+            value_name = "path-or-url",
+            required_unless_present = "manifest",
+            conflicts_with = "manifest"
+        )]
+        path: Option<String>,
+        /// Apply an OpenViking Assets manifest (openviking-assets/1): create or sync every selected asset
+        #[arg(
+            short = 'm',
+            long = "manifest",
+            value_name = "file",
+            help_heading = "Manifest mode",
+            conflicts_with_all = [
+                "add_type", "to", "parent", "parent_auto_create", "resource_args",
+                "strict_mode", "ignore_dirs", "include", "exclude",
+                "no_directly_upload_media", "tags", "tag_mode"
+            ]
+        )]
+        manifest: Option<String>,
+        /// Manifest mode: separate catalog file for manifests that select assets by name
+        /// (defaults to assets.yaml next to the manifest; not used when the manifest
+        /// defines assets under 'catalog')
+        #[arg(
+            long = "catalog",
+            value_name = "file",
+            requires = "manifest",
+            conflicts_with = "path",
+            help_heading = "Manifest mode"
+        )]
+        catalog: Option<String>,
+        /// Manifest mode: validate config and source access, then print the plan without submitting
+        #[arg(
+            long = "dry-run",
+            requires = "manifest",
+            help_heading = "Manifest mode"
+        )]
+        dry_run: bool,
+        /// Manifest mode: continue with remaining assets when one fails
+        #[arg(
+            long = "skip-failed",
+            requires = "manifest",
+            help_heading = "Manifest mode"
+        )]
+        skip_failed: bool,
+        /// Explicit Connector source type (e.g. "tos", "git"). Routes the import
+        /// through the Connector integration (must be enabled server-side); the
+        /// path is sent verbatim and never treated as a local file. Requires --to
+        /// and cannot be combined with Manifest mode, --parent, or
+        /// --parent-auto-create
+        #[arg(
+            long = "add-type",
+            value_name = "type",
+            requires = "to",
+            conflicts_with_all = ["manifest", "parent", "parent_auto_create"],
+            help_heading = "Common options"
+        )]
+        add_type: Option<String>,
         /// Exact target URI (must not exist yet) (cannot be used with --parent)
         #[arg(long, value_name = "uri", help_heading = "Common options")]
         to: Option<String>,
@@ -342,16 +398,30 @@ enum Commands {
         )]
         no_directly_upload_media: bool,
         /// Watch interval in minutes for automatic resource monitoring (0 = no monitoring)
+        #[arg(long, value_name = "minutes", help_heading = "Advanced options")]
+        watch_interval: Option<f64>,
+        /// Resource processing mode
         #[arg(
-            long,
-            default_value = "0",
-            value_name = "minutes",
+            long = "processing-mode",
+            default_value = "semantic_and_vectors",
+            value_parser = ["semantic_and_vectors", "vectors_only"],
             help_heading = "Advanced options"
         )]
-        watch_interval: f64,
+        processing_mode: String,
         /// Parser-specific import options, e.g. --args feishu_access_token:u-xxx
         #[arg(long = "args")]
         resource_args: Option<String>,
+        /// Explicit k=v retrieval tag to apply after import. Can be repeated.
+        #[arg(long = "tag", value_name = "k=v", help_heading = "Common options")]
+        tags: Vec<String>,
+        /// Tag update mode when --tag is provided
+        #[arg(
+            long = "tag-mode",
+            default_value = "replace",
+            value_parser = ["replace", "append"],
+            help_heading = "Common options"
+        )]
+        tag_mode: String,
         #[command(flatten)]
         upload_options: UploadCliOptions,
     },
@@ -939,6 +1009,32 @@ enum Commands {
         /// Disable command history
         #[arg(long, help_heading = "Advanced options")]
         no_history: bool,
+    },
+    /// [Interactive] Compile source materials with a VikingBot Skill
+    Compile {
+        /// Source directory; repeat the flag or separate directories with commas
+        #[arg(
+            long = "from",
+            required = true,
+            value_delimiter = ',',
+            value_name = "uri"
+        )]
+        from_uris: Vec<String>,
+        /// Target Wiki directory or skills namespace
+        #[arg(long, value_name = "uri")]
+        to: String,
+        /// Skill directory or SKILL.md Viking URI
+        #[arg(long, value_name = "uri")]
+        skill: String,
+        /// Description of this organization task
+        #[arg(long, value_name = "text")]
+        reason: Option<String>,
+        /// Wait for the Compile task to finish
+        #[arg(long)]
+        wait: bool,
+        /// Local wait timeout in seconds; does not cancel the task
+        #[arg(long, requires = "wait", value_name = "seconds")]
+        timeout: Option<f64>,
     },
 
     // --- Status & Observability ---
@@ -2753,6 +2849,11 @@ async fn main() {
     let result = match cli.command {
         Commands::AddResource {
             path,
+            add_type,
+            manifest,
+            catalog,
+            dry_run,
+            skip_failed,
             to,
             parent,
             parent_auto_create,
@@ -2766,30 +2867,58 @@ async fn main() {
             exclude,
             no_directly_upload_media,
             watch_interval,
+            processing_mode,
             resource_args,
+            tags,
+            tag_mode,
             upload_options,
         } => {
             let ctx =
                 ctx.with_upload_options(upload_options.merged_with_legacy(legacy_upload_options));
-            handlers::handle_add_resource(
-                path,
-                to,
-                parent,
-                parent_auto_create,
-                reason,
-                instruction,
-                wait,
-                timeout,
-                strict_mode,
-                ignore_dirs,
-                include,
-                exclude,
-                no_directly_upload_media,
-                watch_interval,
-                resource_args,
-                ctx,
-            )
-            .await
+            if let Some(manifest) = manifest {
+                openviking_assets::handle_manifest_apply(
+                    manifest,
+                    catalog,
+                    openviking_assets::ManifestRunOptions {
+                        dry_run,
+                        skip_failed,
+                        wait,
+                        watch_interval,
+                        processing_mode,
+                    },
+                    timeout,
+                    ctx,
+                )
+                .await
+            } else if let Some(path) = path {
+                handlers::handle_add_resource(
+                    path,
+                    add_type,
+                    to,
+                    parent,
+                    parent_auto_create,
+                    reason,
+                    instruction,
+                    wait,
+                    timeout,
+                    strict_mode,
+                    ignore_dirs,
+                    include,
+                    exclude,
+                    no_directly_upload_media,
+                    watch_interval.unwrap_or(0.0),
+                    processing_mode,
+                    resource_args,
+                    tags,
+                    tag_mode,
+                    ctx,
+                )
+                .await
+            } else {
+                Err(error::Error::Client(
+                    "a path/URL or --manifest is required".to_string(),
+                ))
+            }
         }
         Commands::AddSkill {
             data,
@@ -3108,6 +3237,28 @@ async fn main() {
                 no_history,
             };
             cmd.run().await
+        }
+        Commands::Compile {
+            from_uris,
+            to,
+            skill,
+            reason,
+            wait,
+            timeout,
+        } => {
+            let client = ctx.get_client();
+            commands::compile::run(
+                &client,
+                from_uris,
+                to,
+                skill,
+                reason,
+                wait,
+                timeout,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
         }
         Commands::Config { action } => handlers::handle_config(action, ctx).await,
         Commands::Language { .. } => unreachable!("language command is handled before config load"),
@@ -3463,6 +3614,70 @@ mod tests {
             }
             _ => panic!("expected chat command"),
         }
+    }
+
+    #[test]
+    fn cli_compile_requires_skill_and_expands_source_flags() {
+        let cli = Cli::try_parse_from([
+            "ov",
+            "compile",
+            "--from",
+            "viking://resources/a,viking://resources/b",
+            "--from",
+            "viking://resources/c",
+            "--to",
+            "viking://resources/wiki",
+            "--skill",
+            "viking://agent/skills/wiki",
+            "--wait",
+            "--timeout",
+            "10",
+        ])
+        .expect("compile flags should parse");
+        match cli.command {
+            Commands::Compile {
+                from_uris,
+                skill,
+                reason,
+                wait,
+                timeout,
+                ..
+            } => {
+                assert_eq!(from_uris.len(), 3);
+                assert_eq!(skill, "viking://agent/skills/wiki");
+                assert!(reason.is_none());
+                assert!(wait);
+                assert_eq!(timeout, Some(10.0));
+            }
+            _ => panic!("expected compile command"),
+        }
+
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "compile",
+                "--from",
+                "viking://resources/a",
+                "--to",
+                "viking://resources/wiki",
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "compile",
+                "--from",
+                "viking://resources/a",
+                "--to",
+                "viking://resources/wiki",
+                "--skill",
+                "viking://agent/skills/wiki",
+                "--timeout",
+                "10",
+            ])
+            .is_err()
+        );
     }
 
     #[test]
@@ -3831,6 +4046,17 @@ mod tests {
     }
 
     #[test]
+    fn cli_add_resource_help_shows_tag_flags() {
+        let err = Cli::command()
+            .try_get_matches_from(["ov", "add-resource", "--help"])
+            .expect_err("help should exit through clap error");
+        let help = err.to_string();
+
+        assert!(help.contains("--tag"));
+        assert!(help.contains("--tag-mode"));
+    }
+
+    #[test]
     fn cli_add_skill_help_shows_upload_flags() {
         let err = Cli::command()
             .try_get_matches_from(["ov", "add-skill", "--help"])
@@ -3886,6 +4112,85 @@ mod tests {
 
         assert!(Cli::try_parse_from(["ov", "skills", "add", "./skill", "--progress"]).is_err());
         assert!(Cli::try_parse_from(["ov", "skills", "update", "--progress"]).is_err());
+    }
+
+    #[test]
+    fn cli_add_resource_add_type_requires_exact_to() {
+        assert!(
+            Cli::try_parse_from(["ov", "add-resource", "space:home", "--add-type", "feishu"])
+                .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "add-resource",
+                "space:home",
+                "--add-type",
+                "feishu",
+                "--to",
+                "viking://resources/feishu",
+                "--parent",
+                "viking://resources/imports",
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "add-resource",
+                "space:home",
+                "--add-type",
+                "feishu",
+                "--to",
+                "viking://resources/feishu",
+                "--parent-auto-create",
+                "viking://resources/imports",
+            ])
+            .is_err()
+        );
+
+        let cli = Cli::try_parse_from([
+            "ov",
+            "add-resource",
+            "space:home",
+            "--add-type",
+            "feishu",
+            "--to",
+            "viking://resources/feishu",
+        ])
+        .expect("declared add type with an exact target should parse");
+
+        match cli.command {
+            Commands::AddResource { add_type, to, .. } => {
+                assert_eq!(add_type.as_deref(), Some("feishu"));
+                assert_eq!(to.as_deref(), Some("viking://resources/feishu"));
+            }
+            _ => panic!("expected add-resource command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_add_resource_tags() {
+        let cli = Cli::try_parse_from([
+            "ov",
+            "add-resource",
+            "./README.md",
+            "--tag",
+            "team=search",
+            "--tag",
+            "env=test",
+            "--tag-mode",
+            "append",
+        ])
+        .expect("add-resource tag flags should parse");
+
+        match cli.command {
+            Commands::AddResource { tags, tag_mode, .. } => {
+                assert_eq!(tags, vec!["team=search", "env=test"]);
+                assert_eq!(tag_mode, "append");
+            }
+            _ => panic!("expected add-resource command"),
+        }
     }
 
     #[test]
@@ -4592,6 +4897,34 @@ mod tests {
             result.is_err(),
             "removed import force flag should not parse"
         );
+    }
+
+    #[test]
+    fn cli_manifest_mode_accepts_explicit_catalog() {
+        let result = Cli::try_parse_from([
+            "ov",
+            "add-resource",
+            "--manifest",
+            "manifests/code-qa.yaml",
+            "--catalog",
+            "assets.yaml",
+            "--dry-run",
+        ]);
+
+        assert!(result.is_ok(), "manifest and catalog flags should parse");
+    }
+
+    #[test]
+    fn cli_catalog_requires_manifest_mode() {
+        let result = Cli::try_parse_from([
+            "ov",
+            "add-resource",
+            "https://github.com/org/repo",
+            "--catalog",
+            "assets.yaml",
+        ]);
+
+        assert!(result.is_err(), "--catalog without --manifest must fail");
     }
 
     #[test]

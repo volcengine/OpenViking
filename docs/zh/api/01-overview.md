@@ -431,6 +431,7 @@ JSON 输出 - 错误：
 | GET | `/api/v1/content/overview` | 读取概览（L1） |
 | GET | `/api/v1/content/download` | 下载原始文件字节 |
 | POST | `/api/v1/content/write` | 写入内容并刷新语义索引 |
+| POST | `/api/v1/content/batch-write` | 执行带前置条件的多文件写入 |
 | POST | `/api/v1/content/set_tags` | 设置检索标签 |
 | POST | `/api/v1/content/reindex` | 重建语义或向量索引 |
 
@@ -526,6 +527,7 @@ JSON 输出 - 错误：
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| GET | `/api/v1/admin/agent-evolution` | 获取实例级 Agent 进化开关的实时状态 |
 | POST | `/api/v1/admin/accounts` | 创建账号及首个管理员 |
 | GET | `/api/v1/admin/accounts` | 列出账号 |
 | POST | `/api/v1/admin/migrate` | 迁移旧版身份数据 |
@@ -543,10 +545,12 @@ JSON 输出 - 错误：
 | POST | `/api/v1/privacy-configs/{category}/{target_key}` | 写入并激活新版本 |
 | POST | `/api/v1/privacy-configs/{category}/{target_key}/activate` | 激活指定版本 |
 
-### [WebDAV](20-webdav.md) 与 [VikingBot API](24-vikingbot.md)
+### [OpenViking Assets](22-openviking-assets.md)、[WebDAV](20-webdav.md) 与 [VikingBot API](24-vikingbot.md)
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| POST | `/api/v1/openviking-assets/resolve` | 解析并校验 Catalog 与 Manifest，返回标准化资产计划 |
+| POST | `/api/v1/openviking-assets/preflight` | 只读校验 Git 仓库和 ref 的访问权限 |
 | OPTIONS | `/webdav/resources`、`/webdav/resources/{resource_path}` | 查询 WebDAV 能力 |
 | PROPFIND | `/webdav/resources`、`/webdav/resources/{resource_path}` | 查询资源属性 |
 | GET / HEAD | `/webdav/resources`、`/webdav/resources/{resource_path}` | 读取文件或目录 |
@@ -558,6 +562,8 @@ JSON 输出 - 错误：
 | POST | `/bot/v1/chat` | VikingBot 非流式对话 |
 | POST | `/bot/v1/chat/stream` | VikingBot 流式对话 |
 | POST | `/bot/v1/feedback` | 提交 VikingBot 回答反馈 |
+| POST | `/bot/v1/compile` | 启动 Skill 驱动的 Compile 任务 |
+| GET | `/bot/v1/compile/{task_id}` | 获取 Compile 任务状态 |
 
 ---
 
@@ -572,4 +578,4 @@ JSON 输出 - 错误：
 | 数据生命周期 | Watch、快照、OVPack |
 | 运维与观测 | 系统、任务、Observer、Metrics |
 | 身份与治理 | 管理员、隐私配置 |
-| 协议与扩展 | WebDAV、VikingBot API |
+| 协议与扩展 | OpenViking Assets、WebDAV、VikingBot API |

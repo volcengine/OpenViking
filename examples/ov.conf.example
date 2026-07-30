@@ -221,7 +221,17 @@
             "truncation_strategy": "head",
             "warn_on_truncation": true,
             "github_raw_domain": "raw.githubusercontent.com",
-            "code_hosting_domains": ["github.com", "gitlab.com"],
+            "code_hosting_domains": [
+                "github.com",
+                "gitlab.com",
+                "gitcode.com",
+                "gitee.com",
+                "bitbucket.org",
+                "codeberg.org",
+                "gitea.com",
+                "atomgit.com",
+                "git.sr.ht"
+            ],
             "github_domains": ["github.com", "www.github.com"],
             "gitlab_domains": ["gitlab.com", "www.gitlab.com"],
         },

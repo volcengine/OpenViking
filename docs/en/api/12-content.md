@@ -326,6 +326,111 @@ openviking write viking://resources/docs/api.md \
 
 ---
 
+### batch_write()
+
+Apply a preconditioned set of file writes below one Resource or Memory directory, then refresh the affected semantic and vector indexes as one request.
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `root_uri` | string | Yes | - | Existing Resource or Memory directory containing every target |
+| `operations` | array | Yes | - | File writes to validate and apply |
+| `wait` | boolean | No | `true` | Wait for semantic/vector refresh |
+| `timeout` | number | No | `null` | Refresh timeout in seconds when `wait=true` |
+| `telemetry` | boolean/object | No | `false` | Include operation telemetry |
+
+Each operation contains:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `uri` | string | Yes | Target file URI below `root_uri` |
+| `content` | string | Conditional | UTF-8 text; exactly one of `content` and `content_base64` is required |
+| `content_base64` | string | Conditional | Base64-encoded bytes; not supported for Memory targets |
+| `precondition.kind` | string | Yes | `create_if_absent` or `replace_if_hash` |
+| `precondition.base_hash` | string | Conditional | Required for `replace_if_hash`, formatted as `sha256:<lowercase-hex>` |
+
+**Notes**
+
+- A request supports at most 128 operations, 8 MiB per file, and 16 MiB total.
+- All targets must be files below `root_uri`, use the same context type, and have unique canonical URIs.
+- Resource targets may use any safe file extension; Memory targets retain the text extension allowlist and do not accept binary content.
+- Every non-idempotent precondition is checked under the target tree lock before the first new write. A mismatch returns `409 Conflict`.
+- If a target already contains the requested bytes, it is reported as `unchanged`; retrying the same request can therefore repeat a failed refresh without rewriting matching content.
+- The API prevents precondition conflicts from causing new writes, but an underlying I/O failure can still leave writes completed earlier in the batch visible.
+
+**Python SDK**
+
+```python
+result = client.batch_write(
+    root_uri="viking://resources/wiki",
+    operations=[
+        {
+            "uri": "viking://resources/wiki/new.md",
+            "content": "# New page\n",
+            "precondition": {"kind": "create_if_absent"},
+        },
+        {
+            "uri": "viking://resources/wiki/existing.md",
+            "content": "# Updated page\n",
+            "precondition": {
+                "kind": "replace_if_hash",
+                "base_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            },
+        },
+    ],
+    wait=True,
+)
+```
+
+**HTTP API**
+
+```
+POST /api/v1/content/batch-write
+```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/content/batch-write \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "root_uri": "viking://resources/wiki",
+    "operations": [
+      {
+        "uri": "viking://resources/wiki/new.md",
+        "content": "# New page\n",
+        "precondition": {"kind": "create_if_absent"}
+      }
+    ],
+    "wait": true
+  }'
+```
+
+**Response**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "root_uri": "viking://resources/wiki",
+    "created": ["viking://resources/wiki/new.md"],
+    "updated": [],
+    "unchanged": [],
+    "queue_status": {
+      "Semantic": {
+        "processed": 1,
+        "error_count": 0,
+        "errors": []
+      }
+    }
+  }
+}
+```
+
+The TypeScript and Go SDKs and the CLI do not currently expose batch write directly.
+
+---
+
 ### download()
 
 Download a file as raw bytes. This is intended for images, PDFs, and other non-text content. The response uses `application/octet-stream` and returns the filename through `Content-Disposition`.

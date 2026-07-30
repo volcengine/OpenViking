@@ -47,6 +47,10 @@ class _FakeVikingFS:
         self._file_uri = file_uri
         self._root_uri = root_uri
         self.content = {file_uri: "original"}
+        self._async_agfs = SimpleNamespace(
+            pathlock_acquire_exact=lambda lock_path: SimpleNamespace(id="lock-1"),
+            pathlock_release=lambda lease: None,
+        )
 
     async def stat(self, uri: str, ctx=None):
         del ctx
@@ -68,12 +72,12 @@ class _FakeVikingFS:
         del ctx
         return self.content[uri]
 
-    async def write_file(self, uri: str, content: str, ctx=None):
-        del ctx
+    async def write_file(self, uri: str, content: str, ctx=None, lease_ref=None):
+        del ctx, lease_ref
         self.content[uri] = content
 
-    async def rm(self, uri: str, ctx=None, lock_handle=None):
-        del ctx, lock_handle
+    async def rm(self, uri: str, ctx=None, lock_handle=None, lease_ref=None):
+        del ctx, lock_handle, lease_ref
         self.content.pop(uri, None)
 
 
@@ -263,16 +267,7 @@ async def test_content_write_wait_uses_request_tracker(monkeypatch):
     coordinator = ContentWriteCoordinator(
         viking_fs=_FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
     )
-    lock_manager = SimpleNamespace(
-        create_handle=lambda: SimpleNamespace(id="lock-1"),
-        acquire_exact_path=lambda handle, path: _return_true(handle, path),
-        release=lambda handle: _return_none(handle),
-    )
 
-    monkeypatch.setattr(
-        "openviking.storage.content_write.get_lock_manager",
-        lambda: lock_manager,
-    )
     monkeypatch.setattr(
         "openviking.storage.content_write.get_request_wait_tracker",
         lambda: tracker,
@@ -323,16 +318,7 @@ async def test_content_write_wait_uses_request_tracker_when_telemetry_disabled(m
     coordinator = ContentWriteCoordinator(
         viking_fs=_FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
     )
-    lock_manager = SimpleNamespace(
-        create_handle=lambda: SimpleNamespace(id="lock-1"),
-        acquire_exact_path=lambda handle, path: _return_true(handle, path),
-        release=lambda handle: _return_none(handle),
-    )
 
-    monkeypatch.setattr(
-        "openviking.storage.content_write.get_lock_manager",
-        lambda: lock_manager,
-    )
     monkeypatch.setattr(
         "openviking.storage.content_write.get_request_wait_tracker",
         lambda: tracker,

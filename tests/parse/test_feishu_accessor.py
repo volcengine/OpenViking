@@ -3,13 +3,18 @@
 """Tests for FeishuAccessor supported types, user token, and image handling."""
 
 import asyncio
+import json
 import sys
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
-from openviking.parse.accessors.feishu_accessor import FeishuAccessor, _title_as_filename
+from openviking.parse.accessors.feishu_accessor import (
+    _MAX_MEDIA_DOWNLOAD_CONTEXTS,
+    FeishuAccessor,
+    _title_as_filename,
+)
 
 
 class _SuccessResponse:
@@ -53,6 +58,8 @@ class _FakeBaseRequest:
 class _FakeBaseRequestBuilder:
     def __init__(self):
         self._request = SimpleNamespace(http_method=None, uri=None, token_types=None)
+        self._request.queries = {}
+        self._request.add_query = self._request.queries.__setitem__
 
     def http_method(self, method):
         self._request.http_method = method
@@ -78,8 +85,16 @@ class _FakeRawResponse:
 
 
 class _FakeMediaResponse:
-    def __init__(self, content=b"image-bytes", success=True, code=0, msg="", headers=None):
-        self.raw = _FakeRawResponse(content, headers=headers)
+    def __init__(
+        self,
+        content=b"image-bytes",
+        success=True,
+        code=0,
+        msg="",
+        headers=None,
+        status_code=200,
+    ):
+        self.raw = _FakeRawResponse(content, status_code=status_code, headers=headers)
         self.code = code
         self.msg = msg
         self._success = success
@@ -234,6 +249,100 @@ def test_resolve_image_refs_falls_back_to_byte_magic_extension(monkeypatch):
     assert images == {"images/img_token_webp.webp": webp_bytes}
 
 
+def test_resolve_image_refs_tries_distinct_permission_contexts(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    request_media = MagicMock(
+        side_effect=[
+            _FakeMediaResponse(success=False, code=400, status_code=400),
+            _FakeMediaResponse(b"\x89PNG\r\n"),
+        ]
+    )
+    accessor = FeishuAccessor()
+    accessor._config = SimpleNamespace(download_images=True)
+    accessor._client = SimpleNamespace(request=request_media)
+
+    updated, images = accessor._resolve_image_refs(
+        "![s](feishu://image/shared-token)",
+        media_download_extras={"shared-token": ["context-one", "context-two", None]},
+    )
+
+    assert updated == "![s](images/shared-token.png)"
+    assert images == {"images/shared-token.png": b"\x89PNG\r\n"}
+    requests = [call.args[0] for call in request_media.call_args_list]
+    assert [request.queries["extra"] for request in requests] == [
+        "context-one",
+        "context-two",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("feishu_access_token", "token_type"),
+    [(None, "tenant"), ("u-test", "user")],
+)
+def test_resolve_image_refs_falls_back_to_token_only(
+    monkeypatch,
+    feishu_access_token,
+    token_type,
+):
+    _install_fake_lark_modules(monkeypatch)
+    request_media = MagicMock(
+        side_effect=[
+            _FakeMediaResponse(success=False, code=400, status_code=400),
+            _FakeMediaResponse(b"\x89PNG\r\n"),
+        ]
+    )
+    accessor = FeishuAccessor()
+    accessor._config = SimpleNamespace(download_images=True)
+    accessor._client = SimpleNamespace(request=request_media)
+    accessor._user_token_client = SimpleNamespace(request=request_media)
+
+    updated, images = accessor._resolve_image_refs(
+        "![s](feishu://image/shared-token)",
+        feishu_access_token=feishu_access_token,
+        media_download_extras={"shared-token": ["permission-context"]},
+    )
+
+    assert updated == "![s](images/shared-token.png)"
+    assert images == {"images/shared-token.png": b"\x89PNG\r\n"}
+    requests = [call.args[0] for call in request_media.call_args_list]
+    assert [request.queries for request in requests] == [
+        {"extra": "permission-context"},
+        {},
+    ]
+    assert all(request.token_types == {token_type} for request in requests)
+    if feishu_access_token:
+        assert all(
+            call.args[1].user_access_token == feishu_access_token
+            for call in request_media.call_args_list
+        )
+    else:
+        assert all(len(call.args) == 1 for call in request_media.call_args_list)
+
+
+def test_resolve_image_refs_bounds_permission_context_attempts(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    request_media = MagicMock(
+        return_value=_FakeMediaResponse(success=False, code=400, status_code=400)
+    )
+    accessor = FeishuAccessor()
+    accessor._config = SimpleNamespace(download_images=True)
+    accessor._client = SimpleNamespace(request=request_media)
+    contexts = [f"context-{index}" for index in range(_MAX_MEDIA_DOWNLOAD_CONTEXTS + 2)]
+
+    updated, images = accessor._resolve_image_refs(
+        "![s](feishu://image/shared-token)",
+        media_download_extras={"shared-token": contexts},
+    )
+
+    assert updated == "![s](feishu://image/shared-token)"
+    assert images == {}
+    requests = [call.args[0] for call in request_media.call_args_list]
+    assert [request.queries.get("extra") for request in requests] == [
+        *contexts[:_MAX_MEDIA_DOWNLOAD_CONTEXTS],
+        None,
+    ]
+
+
 def test_download_image_uses_tenant_token_without_user_token(monkeypatch):
     _install_fake_lark_modules(monkeypatch)
     request_media = MagicMock(return_value=_FakeMediaResponse(b"\x89PNG\r\n"))
@@ -294,6 +403,7 @@ def test_access_offloads_synchronous_download_to_thread(monkeypatch):
             markdown_content="![s](feishu://image/img_token_123)",
             title="Test Doc",
             meta={},
+            media_download_extras={"img_token_123": ["permission-context"]},
         )
 
     monkeypatch.setattr(accessor, "_fetch_document", fake_fetch_document)
@@ -303,6 +413,7 @@ def test_access_offloads_synchronous_download_to_thread(monkeypatch):
 
     def fake_resolve(markdown, **_):
         ran_on["thread"] = threading.get_ident()
+        ran_on["extras"] = _["media_download_extras"]
         return (
             "![s](images/img_token_123.png)",
             {"images/img_token_123.png": b"\x89PNG\r\n"},
@@ -317,6 +428,8 @@ def test_access_offloads_synchronous_download_to_thread(monkeypatch):
             "_resolve_image_refs ran on the event-loop thread; "
             "it must be offloaded via asyncio.to_thread"
         )
+        assert ran_on["extras"] == {"img_token_123": ["permission-context"]}
+        assert "permission-context" not in str(resource.meta)
     finally:
         resource.cleanup()
 
@@ -395,7 +508,11 @@ def test_fetch_document_dispatches_all_supported_types(monkeypatch):
     )
     assert wiki.title == "Wiki Base"
     handlers["_parse_docx"].assert_called_once_with("doc_token", "u-test")
-    handlers["_parse_sheets"].assert_called_once_with("sht_token", None)
+    handlers["_parse_sheets"].assert_called_once_with(
+        "sht_token",
+        None,
+        media_download_extras=sheets.media_download_extras,
+    )
     assert handlers["_parse_bitable"].call_args_list[-1].args == ("wiki_app_token", None)
 
 
@@ -475,9 +592,9 @@ def test_parse_sheets_handles_grid_and_embedded_bitable(monkeypatch):
         return_value=_SuccessResponse(
             SimpleNamespace(
                 items=[
-                    SimpleNamespace(field_name="Topic"),
-                    SimpleNamespace(field_name="Cover"),
-                    SimpleNamespace(field_name="Brief"),
+                    SimpleNamespace(field_name="Topic", field_id="fld-topic"),
+                    SimpleNamespace(field_name="Cover", field_id="fld-cover"),
+                    SimpleNamespace(field_name="Brief", field_id="fld-brief"),
                 ],
                 has_more=False,
                 page_token=None,
@@ -489,6 +606,7 @@ def test_parse_sheets_handles_grid_and_embedded_bitable(monkeypatch):
             SimpleNamespace(
                 items=[
                     SimpleNamespace(
+                        record_id="rec-1",
                         fields={
                             "Topic": "Welcome",
                             "Cover": [
@@ -505,7 +623,7 @@ def test_parse_sheets_handles_grid_and_embedded_bitable(monkeypatch):
                                     "type": "application/pdf",
                                 }
                             ],
-                        }
+                        },
                     )
                 ],
                 has_more=False,
@@ -530,7 +648,12 @@ def test_parse_sheets_handles_grid_and_embedded_bitable(monkeypatch):
         ),
     )
 
-    markdown, title = accessor._parse_sheets("sht_token", "u-test")
+    media_download_extras = {}
+    markdown, title = accessor._parse_sheets(
+        "sht_token",
+        "u-test",
+        media_download_extras=media_download_extras,
+    )
 
     assert title == "Budget"
     assert "| name | amount |" in markdown
@@ -542,12 +665,26 @@ def test_parse_sheets_handles_grid_and_embedded_bitable(monkeypatch):
     assert "brief.pdf" in markdown
     assert "feishu://image/brief-token" not in markdown
     assert "Empty sheet" not in markdown
+    assert media_download_extras == {
+        "cover-token": [
+            json.dumps(
+                {
+                    "bitablePerm": {
+                        "tableId": "table-1",
+                        "attachments": {"fld-cover": {"rec-1": ["cover-token"]}},
+                    }
+                },
+                separators=(",", ":"),
+            )
+        ]
+    }
     assert list_tables.call_count == 0
     assert list_fields.call_args.args[0].table_id == "table-1"
 
     resolved, images = accessor._resolve_image_refs(
         markdown,
         feishu_access_token="u-test",
+        media_download_extras=media_download_extras,
     )
 
     assert "![cover.png](images/cover-token.png)" in resolved
@@ -555,8 +692,43 @@ def test_parse_sheets_handles_grid_and_embedded_bitable(monkeypatch):
     assert request.call_args_list[-1].args[0].uri == (
         "/open-apis/drive/v1/medias/cover-token/download"
     )
+    assert json.loads(request.call_args_list[-1].args[0].queries["extra"]) == {
+        "bitablePerm": {
+            "tableId": "table-1",
+            "attachments": {"fld-cover": {"rec-1": ["cover-token"]}},
+        }
+    }
     assert all(call.args[0].token_types == {"user"} for call in request.call_args_list)
     assert all(call.args[1].user_access_token == "u-test" for call in request.call_args_list)
+
+
+def test_bitable_media_context_falls_back_without_sdk_ids():
+    extras = {}
+
+    FeishuAccessor._collect_bitable_media_extras(
+        {"file_token": "cover-token", "name": "cover.png", "type": "image/png"},
+        table_id="table-1",
+        field_id=None,
+        record_id="rec-1",
+        media_download_extras=extras,
+    )
+
+    assert extras == {"cover-token": [None]}
+
+
+def test_bitable_media_context_collection_is_bounded():
+    extras = {}
+
+    for index in range(_MAX_MEDIA_DOWNLOAD_CONTEXTS + 2):
+        FeishuAccessor._collect_bitable_media_extras(
+            {"file_token": "cover-token", "name": "cover.png", "type": "image/png"},
+            table_id="table-1",
+            field_id="field-1",
+            record_id=f"record-{index}",
+            media_download_extras=extras,
+        )
+
+    assert len(extras["cover-token"]) == _MAX_MEDIA_DOWNLOAD_CONTEXTS
 
 
 def test_parse_bitable_uses_user_token_and_formats_records(monkeypatch):

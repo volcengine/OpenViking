@@ -119,10 +119,13 @@ export class OpenVikingClient {
       directly_upload_media: options.directlyUploadMedia ?? true,
       preserve_structure: options.preserveStructure,
       watch_interval: options.watchInterval ?? 0,
+      processing_mode: options.processingMode,
       args:
         options.args && Object.keys(options.args).length
           ? options.args
           : undefined,
+      tags: options.tags,
+      tag_mode: options.tags ? options.tagMode : undefined,
       telemetry: options.telemetry,
     });
     const local = await nodePathToBlob(source);

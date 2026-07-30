@@ -836,7 +836,7 @@ When ingesting a resource from a URL, OpenViking rejects loopback, link-local, p
 | `github_domains` | list[str] | Allowed GitHub hosts (add your GitHub Enterprise host here) | `["github.com", "www.github.com"]` |
 | `gitlab_domains` | list[str] | Allowed GitLab hosts (add your self-hosted GitLab host here) | `["gitlab.com", "www.gitlab.com"]` |
 | `azure_devops_domains` | list[str] | Allowed Azure DevOps hosts | `["dev.azure.com", "ssh.dev.azure.com", "vs-ssh.visualstudio.com"]` |
-| `code_hosting_domains` | list[str] | Additional generic code-hosting hosts | `["github.com", "gitlab.com"]` |
+| `code_hosting_domains` | list[str] | Allowed generic code-hosting hosts | `["github.com", "gitlab.com", "gitcode.com", "gitee.com", "bitbucket.org", "codeberg.org", "gitea.com", "atomgit.com", "git.sr.ht"]` |
 
 To ingest from private/internal network addresses (e.g. an internal mirror), set the top-level `allow_private_networks` to `true` (disabled by default, so only public addresses are allowed):
 
@@ -849,7 +849,9 @@ To ingest from private/internal network addresses (e.g. an internal mirror), set
 }
 ```
 
-The `PermissionDeniedError` message names the exact key to add for the blocked host.
+Use `github_domains`, `gitlab_domains`, or `azure_devops_domains` when the host
+needs those platform-specific URL semantics. Add other Git hosts to
+`code_hosting_domains`.
 
 ### rerank
 
@@ -1504,11 +1506,11 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 
 When `root_api_key` is configured in `api_key` mode, the server enables multi-tenant authentication. Use the Admin API to create accounts and user keys. In `trusted` mode, ordinary requests do not require user registration first; each request is resolved as `USER` from the injected identity headers. However, skipping `root_api_key` in `trusted` mode is allowed only on localhost. Development mode only applies when `auth_mode = "api_key"` and `root_api_key` is not set.
 
-`user_config_defaults` only provides per-user defaults for add targets. For add operations, explicit request targets still win: `add_resource.to` / `add_resource.parent` take precedence over user defaults, and `add_skill.target_uri` takes precedence over user defaults. `agent_evolution.enabled` is shared by the entire OpenViking instance and has no per-user override; restart the server after changing it.
+`user_config_defaults` only provides per-user defaults for add targets. For add operations, explicit request targets still win: `add_resource.to` / `add_resource.parent` take precedence over user defaults, and `add_skill.target_uri` takes precedence over user defaults. `agent_evolution.enabled` is shared by the entire OpenViking instance and has no per-user override. Running HTTP server workers read the current value from the resolved `ov.conf` when a session commits, so a valid file update applies without restarting the server.
 
 ### Usage Reporter
 
-The optional Usage Reporter extracts memory usage events from committed session tool parts. The built-in HTTP sink persists batches to a local outbox before delivering them to a collector:
+The optional Usage Reporter extracts memory usage events from committed session tool parts. The built-in file log sink writes each event as a `{"key": ..., "value": ...}` JSON envelope to a dedicated hourly rotating file:
 
 ```json
 {
@@ -1518,17 +1520,12 @@ The optional Usage Reporter extracts memory usage events from committed session 
       "extractors": ["memory_usage"],
       "sinks": [
         {
-          "type": "http",
+          "type": "file_log",
           "config": {
-            "endpoint": "https://collector.example.com/openviking/usage",
+            "path": "/var/log/openviking_usage/usage.log",
             "resource_id_env": "OV_RESOURCE_ID",
-            "outbox_dir": "/var/lib/openviking/.usage_outbox",
-            "request_timeout_seconds": 10,
-            "inflight_lease_seconds": 60,
-            "retry_base_seconds": 1,
-            "retry_max_seconds": 300,
-            "max_batch_bytes": 1048576,
-            "max_outbox_bytes": 268435456
+            "rotation_interval_hours": 1,
+            "backup_count": 168
           }
         }
       ]
@@ -1537,11 +1534,14 @@ The optional Usage Reporter extracts memory usage events from committed session 
 }
 ```
 
-Set the environment variable named by `resource_id_env` before starting the server. If `outbox_dir` is omitted, it defaults to `~/.openviking/data/.usage_outbox` for the operating-system user running OpenViking.
+The built-in `file_log` sink replaces the earlier `http` sink. Deployments
+using `"type": "http"` must migrate to `file_log` and collect the dedicated
+log files, or configure a `custom` sink that implements their delivery
+contract.
 
-HTTP delivery uses a durable local retry queue and may deliver the same event more than once. Collectors should deduplicate `CountRecord` entries by `uniqueId`. Every `2xx` response acknowledges a batch; transient failures are retried with exponential backoff. `400` and `422` responses move a batch to `dead_letter`, while `413` splits multi-event batches. The outbox is bounded by `max_outbox_bytes`; when the limit is reached, the oldest dead-letter batches are removed first, followed by the oldest pending batches. In-flight batches are not evicted. Because capacity pressure can discard pending data, reporting remains best-effort and does not provide an end-to-end at-least-once guarantee.
+Set the environment variable named by `resource_id_env` before starting the server. The sink creates the parent directory, appends events immediately, rotates the active file every UTC hour, and retains `backup_count` rotated files. It does not write to the default OpenViking stdout log.
 
-`inflight_lease_seconds` must be greater than `request_timeout_seconds`. The lease is refreshed whenever a worker claims a batch, preventing another worker from recovering an active delivery.
+Each line is a JSON envelope with `key` and `value` fields. `key` matches the original Kafka message key and has the form `resource_id|account_id|user_id|resource_uri`; it falls back to `session_id` when `resource_uri` is empty. `value` is the complete object used as the original Kafka message value, containing `count_name`, `op_type`, `amount`, `timestamp`, `unique_id`, `tags`, `extra`, and `prefix`. The JSON envelope preserves delimiters that appear inside the key. File collection and downstream delivery remain best-effort, so consumers should deduplicate by `value.unique_id`.
 
 Supported add target URIs:
 
@@ -1583,6 +1583,8 @@ Task record files are stored under the owning account's system directory:
 ```text
 /local/{account_id}/_system/tasks/{user_id}/{task_id}.json
 ```
+
+<a id="encryption"></a>
 
 ## encryption Section
 

@@ -80,6 +80,7 @@ class TestWatchTask:
         assert task.created_at is not None
         assert task.last_execution_time is None
         assert task.next_execution_time is None
+        assert task.processing_mode == "semantic_and_vectors"
 
     def test_create_task_with_all_fields(self):
         """Test creating a task with all fields specified."""
@@ -92,6 +93,7 @@ class TestWatchTask:
             reason="Test reason",
             instruction="Test instruction",
             watch_interval=30.0,
+            processing_mode="vectors_only",
             created_at=now,
             last_execution_time=now,
             next_execution_time=now + timedelta(minutes=30),
@@ -105,6 +107,7 @@ class TestWatchTask:
         assert task.reason == "Test reason"
         assert task.instruction == "Test instruction"
         assert task.watch_interval == 30.0
+        assert task.processing_mode == "vectors_only"
         assert task.is_active is False
         assert task.created_at == now
         assert task.last_execution_time == now
@@ -132,6 +135,7 @@ class TestWatchTask:
         assert data["to_uri"] == "viking://test"
         assert data["created_at"] == now.isoformat()
         assert data["is_active"] is True
+        assert data["processing_mode"] == "semantic_and_vectors"
         assert "auth_state" not in data
 
     def test_from_dict(self):
@@ -145,6 +149,7 @@ class TestWatchTask:
             "reason": "Test",
             "instruction": "Instruction",
             "watch_interval": 45.0,
+            "processing_mode": "vectors_only",
             "created_at": now.isoformat(),
             "last_execution_time": now.isoformat(),
             "next_execution_time": (now + timedelta(minutes=45)).isoformat(),
@@ -157,9 +162,15 @@ class TestWatchTask:
         assert task.path == "/test/path"
         assert task.to_uri == "viking://test"
         assert task.watch_interval == 45.0
+        assert task.processing_mode == "vectors_only"
         assert task.is_active is False
         assert task.created_at == now
         assert task.last_execution_time == now
+
+    def test_from_dict_defaults_legacy_processing_mode(self):
+        task = WatchTask.from_dict({"path": "/test/path"})
+
+        assert task.processing_mode == "semantic_and_vectors"
 
     def test_calculate_next_execution_time(self):
         """Test calculating next execution time."""

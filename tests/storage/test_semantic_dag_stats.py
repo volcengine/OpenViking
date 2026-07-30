@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -107,21 +106,6 @@ async def test_semantic_dag_stats_collects_nodes(monkeypatch):
         lambda: _DummyTracker(),
     )
 
-    # Mock lock layer: LockContext as no-op passthrough
-    mock_handle = MagicMock()
-    monkeypatch.setattr(
-        "openviking.storage.transaction.lock_context.LockContext.__aenter__",
-        AsyncMock(return_value=mock_handle),
-    )
-    monkeypatch.setattr(
-        "openviking.storage.transaction.lock_context.LockContext.__aexit__",
-        AsyncMock(return_value=False),
-    )
-    monkeypatch.setattr(
-        "openviking.storage.transaction.get_lock_manager",
-        lambda: MagicMock(),
-    )
-
     processor = _FakeProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
     executor = SemanticDagExecutor(
@@ -141,7 +125,11 @@ async def test_semantic_dag_stats_collects_nodes(monkeypatch):
     assert stats.in_progress_nodes == 0
     assert processor.vectorized_dirs == [f"{root_uri}/child", root_uri]
     assert sorted(processor.vectorized_files) == sorted(
-        [f"{root_uri}/a.txt", f"{root_uri}/b.txt", f"{root_uri}/child/c.txt"]
+        [
+            f"{root_uri}/a.txt",
+            f"{root_uri}/b.txt",
+            f"{root_uri}/child/c.txt",
+        ]
     )
 
 
@@ -241,20 +229,6 @@ async def test_semantic_dag_skip_vectorization_does_not_schedule_tasks(monkeypat
     monkeypatch.setattr(
         "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
         lambda: tracker,
-    )
-
-    mock_handle = MagicMock()
-    monkeypatch.setattr(
-        "openviking.storage.transaction.lock_context.LockContext.__aenter__",
-        AsyncMock(return_value=mock_handle),
-    )
-    monkeypatch.setattr(
-        "openviking.storage.transaction.lock_context.LockContext.__aexit__",
-        AsyncMock(return_value=False),
-    )
-    monkeypatch.setattr(
-        "openviking.storage.transaction.get_lock_manager",
-        lambda: MagicMock(),
     )
 
     processor = _FakeProcessor()

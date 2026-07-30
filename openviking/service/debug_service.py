@@ -8,17 +8,17 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from openviking.server.identity import RequestContext
-from openviking.storage import VikingDBManager
+from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.storage.observers import (
     FilesystemObserver,
-    LockObserver,
     ModelsObserver,
     QueueObserver,
     RetrievalObserver,
     VikingDBObserver,
 )
 from openviking.storage.queuefs import get_queue_manager
-from openviking.storage.transaction import get_lock_manager
+from openviking.storage.viking_fs import get_viking_fs
+from openviking_cli.utils import run_async
 from openviking_cli.utils.config import OpenVikingConfig
 from openviking_cli.utils.logger import get_logger
 
@@ -165,9 +165,10 @@ class ObserverService:
 
     @property
     def lock(self) -> ComponentStatus:
-        """Get lock system status."""
+        """Get lock system status via pathlock_observe snapshot."""
         try:
-            lock_manager = get_lock_manager()
+            viking_fs = get_viking_fs()
+            snapshot = run_async(viking_fs._async_agfs.pathlock_observe())
         except Exception:
             return ComponentStatus(
                 name="lock",
@@ -175,12 +176,22 @@ class ObserverService:
                 has_errors=True,
                 status="Not initialized",
             )
-        observer = LockObserver(lock_manager)
+        active = snapshot.get("active_locks", 0)
+        waiting = snapshot.get("waiting_locks", 0)
+        stale = snapshot.get("stale_locks_removed", 0)
+        conflicts = snapshot.get("conflicts", [])
+        has_errors = bool(conflicts) or stale > 0
+        lines = [
+            f"Active locks: {active}",
+            f"Waiting locks: {waiting}",
+            f"Stale locks removed: {stale}",
+            f"Conflicts: {len(conflicts)}",
+        ]
         return ComponentStatus(
             name="lock",
-            is_healthy=observer.is_healthy(),
-            has_errors=observer.has_errors(),
-            status=observer.get_status_table(),
+            is_healthy=not has_errors,
+            has_errors=has_errors,
+            status="\n".join(lines),
         )
 
     @property
@@ -222,10 +233,8 @@ class ObserverService:
 
             # Call get_stats on the RAGFS client
             import asyncio
-            stats = await asyncio.to_thread(
-                self._agfs_client.get_stats,
-                mount_path
-            )
+
+            stats = await asyncio.to_thread(self._agfs_client.get_stats, mount_path)
             return stats
         except Exception as e:
             logger.error(f"Error getting filesystem stats: {e}")

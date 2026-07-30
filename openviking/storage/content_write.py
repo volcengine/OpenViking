@@ -4,10 +4,21 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import os
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from collections import defaultdict
+from typing import Any, Dict, Optional
 
-from openviking.core.namespace import NamespaceShapeError, canonicalize_uri, context_type_for_uri
+from openviking.core.namespace import (
+    NamespaceShapeError,
+    canonicalize_uri,
+    classify_uri,
+    context_type_for_uri,
+    relative_uri_path,
+    uri_parts,
+)
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
 from openviking.session.memory.memory_updater import MemoryUpdater
@@ -16,33 +27,47 @@ from openviking.session.memory.utils.resource_refs import (
     RESOURCE_REF_SOURCE_CONTENT_WRITE,
     sync_memory_resource_refs,
 )
-from openviking.storage.errors import ResourceBusyError
+from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
-from openviking.storage.transaction import get_lock_manager
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import build_queue_status_payload
+from openviking.utils.path_safety import validate_safe_viking_uri_path
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import (
     AlreadyExistsError,
+    ConflictError,
     DeadlineExceededError,
     InvalidArgumentError,
     NotFoundError,
+    OpenVikingError,
+    ResourceExhaustedError,
 )
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-if TYPE_CHECKING:
-    from openviking.storage.transaction.lock_handle import LockHandle
-
 _DERIVED_FILENAMES = frozenset({".abstract.md", ".overview.md", ".relations.json"})
 _CREATE_ALLOWED_EXTENSIONS = frozenset(
-    {".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".py", ".js", ".ts"}
+    {
+        ".md",
+        ".txt",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".py",
+        ".js",
+        ".ts",
+    }
 )
+_BATCH_MAX_OPERATIONS = 128
+_BATCH_MAX_FILE_BYTES = 8 * 1024 * 1024
+_BATCH_MAX_TOTAL_BYTES = 16 * 1024 * 1024
+_SHA256_PREFIX = "sha256:"
 
 
 class ContentWriteCoordinator:
@@ -113,6 +138,430 @@ class ContentWriteCoordinator:
             written_bytes=written_bytes,
             telemetry_id=telemetry_id,
         )
+
+    async def batch_write(
+        self,
+        *,
+        root_uri: str,
+        operations: list[dict[str, Any]],
+        ctx: RequestContext,
+        wait: bool = True,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Write a preconditioned bundle under one directory, then refresh it as a batch.
+
+        Preconditions are checked for every non-idempotent operation while the target
+        tree lock is held and before the first new write.  Refresh runs only after that
+        lock is released so semantic processing can safely acquire descendant locks.
+        """
+        normalized_root = self._canonicalize(root_uri, ctx=ctx, field_name="root_uri")
+        await self._validate_batch_root(normalized_root, ctx=ctx)
+        normalized_operations = self._normalize_batch_operations(
+            normalized_root, operations, ctx=ctx
+        )
+
+        root_path = self._viking_fs._uri_to_path(normalized_root, ctx=ctx)
+        try:
+            lease = await self._viking_fs._async_agfs.pathlock_acquire_tree(root_path)
+        except LockAcquisitionError as exc:
+            raise ResourceBusyError(
+                f"resource is busy and cannot be written now: {normalized_root}",
+                uri=normalized_root,
+            ) from exc
+
+        created: list[str] = []
+        updated: list[str] = []
+        unchanged: list[str] = []
+        refresh_kinds: dict[str, str] = {}
+        pending: list[tuple[dict[str, Any], bool]] = []
+        conflict: ConflictError | None = None
+        write_error: Exception | None = None
+        lock_released = False
+        try:
+            for operation in normalized_operations:
+                uri = operation["uri"]
+                stat = await self._safe_stat(uri, ctx=ctx, allow_not_found=True)
+                exists = not stat.get("not_found")
+                if exists and stat.get("isDir"):
+                    raise InvalidArgumentError(f"batch-write target must be a file: {uri}")
+
+                current = await self._viking_fs.read_file_bytes(uri, ctx=ctx) if exists else None
+                desired_hash = self._content_hash(operation["content_bytes"])
+                if current is not None and self._content_hash(current) == desired_hash:
+                    unchanged.append(uri)
+                    refresh_kinds[uri] = (
+                        "added"
+                        if operation["precondition"]["kind"] == "create_if_absent"
+                        else "modified"
+                    )
+                    continue
+
+                precondition = operation["precondition"]
+                if precondition["kind"] == "create_if_absent":
+                    if exists and conflict is None:
+                        conflict = ConflictError(
+                            "Batch write create precondition failed; target already exists.",
+                            resource=uri,
+                        )
+                    pending.append((operation, exists))
+                    continue
+
+                if not exists:
+                    if conflict is None:
+                        conflict = ConflictError(
+                            "Batch write replace precondition failed; target does not exist.",
+                            resource=uri,
+                        )
+                    pending.append((operation, exists))
+                    continue
+                if self._content_hash(current or b"") != precondition["base_hash"]:
+                    if conflict is None:
+                        conflict = ConflictError(
+                            "Batch write replace precondition failed; content hash changed.",
+                            resource=uri,
+                        )
+                pending.append((operation, exists))
+
+            if conflict is None:
+                for operation, existed in pending:
+                    uri = operation["uri"]
+                    try:
+                        await self._viking_fs.write_file(
+                            uri,
+                            operation["content"],
+                            ctx=ctx,
+                            lease_ref=lease,
+                        )
+                    except Exception as exc:
+                        write_error = exc
+                        break
+                    if existed:
+                        updated.append(uri)
+                        refresh_kinds[uri] = "modified"
+                    else:
+                        created.append(uri)
+                        refresh_kinds[uri] = "added"
+        finally:
+            await self._viking_fs._async_agfs.pathlock_release(lease)
+            lock_released = True
+
+        assert lock_released
+        telemetry_id = get_current_telemetry().telemetry_id
+        request_registered = False
+        try:
+            if refresh_kinds:
+                if wait and telemetry_id:
+                    get_request_wait_tracker().register_request(telemetry_id)
+                    request_registered = True
+                try:
+                    queue_status = await self._refresh_batch(
+                        refresh_kinds=refresh_kinds,
+                        ctx=ctx,
+                        wait=wait,
+                        timeout=timeout,
+                        telemetry_id=telemetry_id,
+                    )
+                except Exception as exc:
+                    if conflict is not None or write_error is not None:
+                        logger.error(
+                            "Batch refresh failed while preserving an earlier write error",
+                            exc_info=True,
+                        )
+                        queue_status = None
+                    else:
+                        if isinstance(exc, DeadlineExceededError):
+                            raise
+                        cause = str(exc).strip() or type(exc).__name__
+                        raise OpenVikingError(
+                            "Content is already at the requested state, but semantic/index "
+                            f"refresh failed: {cause}. Re-run the same batch-write or ov compile "
+                            "command; matching files will remain unchanged and refresh will be "
+                            "retried.",
+                            code="REFRESH_FAILED",
+                            details={
+                                "root_uri": normalized_root,
+                                "created": created,
+                                "updated": updated,
+                                "unchanged": unchanged,
+                                "cause": cause,
+                            },
+                        ) from exc
+            else:
+                queue_status = None
+        finally:
+            if request_registered:
+                get_request_wait_tracker().cleanup(telemetry_id)
+
+        if conflict is not None:
+            raise conflict
+        if write_error is not None:
+            raise write_error
+        return {
+            "root_uri": normalized_root,
+            "created": created,
+            "updated": updated,
+            "unchanged": unchanged,
+            "queue_status": queue_status,
+        }
+
+    def _canonicalize(self, uri: str, *, ctx: RequestContext, field_name: str) -> str:
+        try:
+            return validate_safe_viking_uri_path(canonicalize_uri(uri, ctx))
+        except (NamespaceShapeError, ValueError) as exc:
+            raise InvalidArgumentError(f"invalid {field_name}: {exc}") from exc
+
+    async def _validate_batch_root(self, root_uri: str, *, ctx: RequestContext) -> None:
+        classification = classify_uri(root_uri)
+        parts = uri_parts(root_uri)
+        if classification.context_type not in {"resource", "memory"}:
+            raise InvalidArgumentError("batch-write root must be a resource or memory directory")
+        if classification.context_type == "memory":
+            if (
+                classification.content_index is None
+                or len(parts) <= classification.content_index + 1
+            ):
+                raise InvalidArgumentError("batch-write root must be inside a memory type directory")
+        elif parts == ["resources"] or (
+            classification.content_index is not None
+            and len(parts) <= classification.content_index + 1
+        ):
+            raise InvalidArgumentError("batch-write root must be inside a resource directory")
+        self._viking_fs._ensure_mutable_access(root_uri, ctx)
+        stat = await self._safe_stat(root_uri, ctx=ctx)
+        if not stat.get("isDir"):
+            raise InvalidArgumentError(f"batch-write root must be an existing directory: {root_uri}")
+
+    def _normalize_batch_operations(
+        self,
+        root_uri: str,
+        operations: list[dict[str, Any]],
+        *,
+        ctx: RequestContext,
+    ) -> list[dict[str, Any]]:
+        if not operations:
+            raise InvalidArgumentError("batch-write operations must not be empty")
+        if len(operations) > _BATCH_MAX_OPERATIONS:
+            raise ResourceExhaustedError(
+                f"batch-write supports at most {_BATCH_MAX_OPERATIONS} operations"
+            )
+
+        context_type = context_type_for_uri(root_uri)
+        normalized: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        total_bytes = 0
+        for raw in operations:
+            if not isinstance(raw, dict):
+                raise InvalidArgumentError("batch-write operation must be an object")
+            uri = self._canonicalize(raw.get("uri", ""), ctx=ctx, field_name="operation uri")
+            if uri in seen:
+                raise InvalidArgumentError(f"duplicate batch-write target: {uri}")
+            seen.add(uri)
+            if not relative_uri_path(root_uri, uri):
+                raise InvalidArgumentError(f"batch-write target is outside root_uri: {uri}")
+            if context_type_for_uri(uri) != context_type:
+                raise InvalidArgumentError(f"batch-write target has a different context type: {uri}")
+            self._validate_target_uri(uri)
+            self._viking_fs._ensure_mutable_access(uri, ctx)
+
+            has_content = "content" in raw
+            has_content_base64 = "content_base64" in raw
+            if has_content == has_content_base64:
+                raise InvalidArgumentError(
+                    f"batch-write requires exactly one of content or content_base64: {uri}"
+                )
+            if has_content:
+                content = raw.get("content")
+                if not isinstance(content, str):
+                    raise InvalidArgumentError(f"batch-write content must be a string: {uri}")
+                encoded_content = content.encode("utf-8")
+            else:
+                if context_type == "memory":
+                    raise InvalidArgumentError(
+                        f"batch-write binary content is not supported for memories: {uri}"
+                    )
+                content_base64 = raw.get("content_base64")
+                if not isinstance(content_base64, str):
+                    raise InvalidArgumentError(
+                        f"batch-write content_base64 must be a string: {uri}"
+                    )
+                try:
+                    encoded_content = base64.b64decode(content_base64, validate=True)
+                except (binascii.Error, ValueError) as exc:
+                    raise InvalidArgumentError(
+                        f"batch-write content_base64 is invalid: {uri}"
+                    ) from exc
+                content = encoded_content
+            content_size = len(encoded_content)
+            if content_size > _BATCH_MAX_FILE_BYTES:
+                raise ResourceExhaustedError(f"batch-write file exceeds size limit: {uri}")
+            total_bytes += content_size
+            if total_bytes > _BATCH_MAX_TOTAL_BYTES:
+                raise ResourceExhaustedError("batch-write total content exceeds size limit")
+
+            precondition = raw.get("precondition")
+            if not isinstance(precondition, dict):
+                raise InvalidArgumentError(f"batch-write precondition is required: {uri}")
+            kind = precondition.get("kind")
+            if kind == "create_if_absent":
+                if set(precondition) != {"kind"}:
+                    raise InvalidArgumentError(f"invalid create_if_absent precondition: {uri}")
+                if context_type == "memory":
+                    self._validate_create_extension(uri)
+                normalized_precondition = {"kind": kind}
+            elif kind == "replace_if_hash":
+                if set(precondition) != {"kind", "base_hash"}:
+                    raise InvalidArgumentError(f"invalid replace_if_hash precondition: {uri}")
+                base_hash = precondition.get("base_hash")
+                if not self._is_content_hash(base_hash):
+                    raise InvalidArgumentError(f"invalid replace_if_hash base_hash: {uri}")
+                normalized_precondition = {"kind": kind, "base_hash": base_hash}
+            else:
+                raise InvalidArgumentError(f"unsupported batch-write precondition: {kind}")
+            normalized.append(
+                {
+                    "uri": uri,
+                    "content": content,
+                    "content_bytes": encoded_content,
+                    "precondition": normalized_precondition,
+                }
+            )
+        return sorted(normalized, key=lambda operation: operation["uri"])
+
+    @staticmethod
+    def _content_hash(content: str | bytes) -> str:
+        if isinstance(content, str):
+            content = content.encode("utf-8")
+        return _SHA256_PREFIX + hashlib.sha256(content).hexdigest()
+
+    @staticmethod
+    def _is_content_hash(value: Any) -> bool:
+        if not isinstance(value, str) or not value.startswith(_SHA256_PREFIX):
+            return False
+        digest = value[len(_SHA256_PREFIX) :]
+        return len(digest) == 64 and all(char in "0123456789abcdef" for char in digest)
+
+    async def _refresh_batch(
+        self,
+        *,
+        refresh_kinds: dict[str, str],
+        ctx: RequestContext,
+        wait: bool,
+        timeout: Optional[float],
+        telemetry_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        resource_groups: dict[tuple[str, str], dict[str, list[str]]] = defaultdict(
+            lambda: {"added": [], "modified": []}
+        )
+        memory_groups: dict[str, list[str]] = defaultdict(list)
+        for uri, change_type in sorted(refresh_kinds.items()):
+            context_type = context_type_for_uri(uri)
+            if context_type == "memory":
+                parent = VikingURI(uri).parent
+                memory_groups[parent.uri if parent is not None else uri].append(uri)
+                continue
+            refresh_root = await self._resolve_root_uri(
+                uri, ctx=ctx, anchor_to_parent=True
+            )
+            resource_groups[(refresh_root, context_type)][change_type].append(uri)
+
+        for (refresh_root, context_type), changes in sorted(resource_groups.items()):
+            await self._enqueue_semantic_refresh_changes(
+                root_uri=refresh_root,
+                context_type=context_type,
+                changes=changes,
+                ctx=ctx,
+            )
+
+        embedding_requested = False
+        for directory_uri, uris in sorted(memory_groups.items()):
+            await MemoryUpdater.refresh_schema_overview(
+                viking_fs=self._viking_fs,
+                directory_uri=directory_uri,
+                ctx=ctx,
+                strict=True,
+            )
+            for uri in uris:
+                requested = await MemoryUpdater.refresh_file_embedding(
+                    viking_fs=self._viking_fs,
+                    vikingdb=self._vikingdb,
+                    uri=uri,
+                    memory_type=MemoryUpdater.memory_type_from_uri(uri),
+                    ctx=ctx,
+                    strict=True,
+                )
+                embedding_requested = embedding_requested or requested
+
+        if not wait or (not resource_groups and not embedding_requested):
+            return None
+        queue_status = await self._wait_for_request(
+            telemetry_id=telemetry_id,
+            timeout=timeout,
+        )
+        self._raise_refresh_errors(queue_status)
+        return queue_status
+
+    async def _enqueue_semantic_refresh_changes(
+        self,
+        *,
+        root_uri: str,
+        context_type: str,
+        changes: dict[str, list[str]],
+        ctx: RequestContext,
+        target_uri: str = "",
+        recursive: bool = False,
+    ) -> None:
+        queue_manager = get_queue_manager()
+        semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
+        telemetry = get_current_telemetry()
+        msg = SemanticMsg(
+            uri=root_uri,
+            target_uri=target_uri,
+            context_type=context_type,
+            recursive=recursive,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+            role=str(ctx.role),
+            skip_vectorization=False,
+            telemetry_id=telemetry.telemetry_id,
+            coalesce_key=(
+                build_semantic_coalesce_key(
+                    context_type=context_type,
+                    uri=root_uri,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                if context_type in {"resource", "skill"}
+                else ""
+            ),
+            changes={
+                change_type: sorted(changes.get(change_type, []))
+                for change_type in ("added", "modified")
+                if changes.get(change_type)
+            },
+        )
+        if msg.telemetry_id:
+            get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)
+        try:
+            await semantic_queue.enqueue(msg)
+        except Exception as exc:
+            if msg.telemetry_id:
+                get_request_wait_tracker().mark_semantic_failed(
+                    msg.telemetry_id, msg.id, str(exc)
+                )
+            raise
+
+    @staticmethod
+    def _raise_refresh_errors(queue_status: Dict[str, Any]) -> None:
+        for name in ("Semantic", "Embedding"):
+            status = queue_status.get(name, {}) if isinstance(queue_status, dict) else {}
+            if isinstance(status, dict) and (
+                int(status.get("error_count", 0) or 0) > 0 or bool(status.get("errors"))
+            ):
+                raise OpenVikingError(
+                    f"Batch write {name.lower()} refresh failed",
+                    code="INTERNAL",
+                    details={"queue_status": queue_status},
+                )
 
     async def set_tags(
         self,
@@ -244,16 +693,14 @@ class ContentWriteCoordinator:
         written_bytes: int,
         telemetry_id: str,
     ) -> Dict[str, Any]:
-        lock_manager = get_lock_manager()
-        handle = lock_manager.create_handle()
         lock_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
-        acquired = await lock_manager.acquire_exact_path(handle, lock_path)
-        if not acquired:
-            await lock_manager.release(handle)
+        try:
+            lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(lock_path)
+        except LockAcquisitionError as exc:
             raise ResourceBusyError(
                 f"resource is busy and cannot be written now: {uri}",
                 uri=uri,
-            )
+            ) from exc
 
         previous_content: Optional[str] = None
         content_written = False
@@ -264,13 +711,7 @@ class ContentWriteCoordinator:
                 previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
             if wait and telemetry_id:
                 get_request_wait_tracker().register_request(telemetry_id)
-            await self._write_in_place(
-                uri,
-                content,
-                mode=mode,
-                ctx=ctx,
-                lock_handle=handle,
-            )
+            await self._write_in_place(uri, content, mode=mode, ctx=ctx, lease_ref=lease)
             content_written = True
             await self._enqueue_semantic_refresh(
                 root_uri=root_uri,
@@ -280,7 +721,7 @@ class ContentWriteCoordinator:
                 change_type="added" if mode == "create" else "modified",
             )
             semantic_enqueued = True
-            await lock_manager.release(handle)
+            await self._viking_fs._async_agfs.pathlock_release(lease)
             lock_released = True
             queue_status = (
                 await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
@@ -303,10 +744,10 @@ class ContentWriteCoordinator:
                     previous_content=previous_content,
                     mode=mode,
                     ctx=ctx,
-                    lock_handle=handle,
+                    lease_ref=lease,
                 )
             if not lock_released:
-                await lock_manager.release(handle)
+                await self._viking_fs._async_agfs.pathlock_release(lease)
             raise
         finally:
             if wait and telemetry_id:
@@ -319,18 +760,18 @@ class ContentWriteCoordinator:
         previous_content: Optional[str],
         mode: str,
         ctx: RequestContext,
-        lock_handle: Any,
+        lease_ref: Optional[Dict[str, Any]] = None,
     ) -> None:
         try:
             if mode == "create":
-                await self._viking_fs.rm(uri, ctx=ctx, lock_handle=lock_handle)
+                await self._viking_fs.rm(uri, ctx=ctx, lease_ref=lease_ref)
                 return
             if previous_content is not None:
                 await self._viking_fs.write_file(
                     uri,
                     previous_content,
                     ctx=ctx,
-                    lock_handle=lock_handle,
+                    lease_ref=lease_ref,
                 )
         except Exception:
             logger.error("Failed to rollback direct content write for %s", uri, exc_info=True)
@@ -440,7 +881,7 @@ class ContentWriteCoordinator:
         *,
         mode: str,
         ctx: RequestContext,
-        lock_handle: Optional["LockHandle"] = None,
+        lease_ref: Optional[Dict[str, Any]] = None,
     ) -> None:
         if context_type_for_uri(uri) == "memory":
             if mode == "replace":
@@ -458,7 +899,7 @@ class ContentWriteCoordinator:
                 uri,
                 MemoryFileUtils.write(mf),
                 ctx=ctx,
-                lock_handle=lock_handle,
+                lease_ref=lease_ref,
             )
             return
 
@@ -467,14 +908,9 @@ class ContentWriteCoordinator:
             mf = MemoryFileUtils.read(existing_raw, uri=uri)
             mf.content = mf.content + content
             updated_raw = MemoryFileUtils.write(mf)
-            await self._viking_fs.write_file(
-                uri,
-                updated_raw,
-                ctx=ctx,
-                lock_handle=lock_handle,
-            )
+            await self._viking_fs.write_file(uri, updated_raw, ctx=ctx, lease_ref=lease_ref)
             return
-        await self._viking_fs.write_file(uri, content, ctx=ctx, lock_handle=lock_handle)
+        await self._viking_fs.write_file(uri, content, ctx=ctx, lease_ref=lease_ref)
 
     async def _enqueue_semantic_refresh(
         self,
@@ -487,39 +923,14 @@ class ContentWriteCoordinator:
         target_uri: str = "",
         recursive: bool = False,
     ) -> None:
-        queue_manager = get_queue_manager()
-        semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
-        telemetry = get_current_telemetry()
-        msg = SemanticMsg(
-            uri=root_uri,
-            target_uri=target_uri,
+        await self._enqueue_semantic_refresh_changes(
+            root_uri=root_uri,
             context_type=context_type,
-            recursive=recursive,
-            account_id=ctx.account_id,
-            user_id=ctx.user.user_id,
-            role=str(ctx.role),
-            skip_vectorization=False,
-            telemetry_id=telemetry.telemetry_id,
-            coalesce_key=(
-                build_semantic_coalesce_key(
-                    context_type=context_type,
-                    uri=root_uri,
-                    account_id=ctx.account_id,
-                    user_id=ctx.user.user_id,
-                )
-                if context_type in {"resource", "skill"}
-                else ""
-            ),
+            ctx=ctx,
             changes={change_type: [changed_uri]},
+            target_uri=target_uri,
+            recursive=recursive,
         )
-        if msg.telemetry_id:
-            get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)
-        try:
-            await semantic_queue.enqueue(msg)
-        except Exception as e:
-            if msg.telemetry_id:
-                get_request_wait_tracker().mark_semantic_failed(msg.telemetry_id, msg.id, str(e))
-            raise
 
     async def _wait_for_queues(self, *, timeout: Optional[float]) -> Dict[str, Any]:
         queue_manager = get_queue_manager()
@@ -557,28 +968,20 @@ class ContentWriteCoordinator:
         written_bytes: int,
         telemetry_id: str,
     ) -> Dict[str, Any]:
-        lock_manager = get_lock_manager()
-        handle = lock_manager.create_handle()
         lock_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
-        acquired = await lock_manager.acquire_exact_path(handle, lock_path)
-        if not acquired:
-            await lock_manager.release(handle)
+        try:
+            lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(lock_path)
+        except LockAcquisitionError as exc:
             raise ResourceBusyError(
                 f"resource is busy and cannot be written now: {uri}",
                 uri=uri,
-            )
+            ) from exc
 
         released = False
         request_registered = False
         try:
-            await self._write_in_place(
-                uri,
-                content,
-                mode=mode,
-                ctx=ctx,
-                lock_handle=handle,
-            )
-            await lock_manager.release(handle)
+            await self._write_in_place(uri, content, mode=mode, ctx=ctx, lease_ref=lease)
+            await self._viking_fs._async_agfs.pathlock_release(lease)
             released = True
             if wait and telemetry_id and self._vikingdb_has_queue():
                 get_request_wait_tracker().register_request(telemetry_id)
@@ -621,7 +1024,7 @@ class ContentWriteCoordinator:
             )
         except Exception:
             if not released:
-                await lock_manager.release(handle)
+                await self._viking_fs._async_agfs.pathlock_release(lease)
             raise
         finally:
             if request_registered:

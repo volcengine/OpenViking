@@ -1063,7 +1063,7 @@ impl FileSystem for CachedFileSystem {
         let key = self.file_key(&normalized);
         self.cache_delete(&key, &normalized).await;
         if offset == 0
-            && matches!(flags, WriteFlag::Create | WriteFlag::Truncate)
+            && matches!(flags, WriteFlag::Create | WriteFlag::CreateNew | WriteFlag::Truncate)
             && self.policy.cache_file(&normalized, data.len())
             && !self.is_runtime_bypassed(&normalized).await
         {

@@ -75,7 +75,7 @@ HTTPS 配置、部署模板和完整授权流程详见 [OAuth 2.1 指南](../gui
 
 ## 可用工具
 
-连接后，OpenViking 会提供检索、记忆、资源、watch、文件系统和代码导航工具。完整工具清单、参数、渐进式文件上传和高级配置见 [MCP 集成指南](../guides/06-mcp-integration.md#可用-mcp-工具)。
+连接后，OpenViking 会提供检索、记忆、资源、watch、文件系统和代码导航工具。完整工具清单、参数、渐进式文件上传和高级配置见 [MCP 集成指南](../guides/06-mcp-integration.md#可用的-mcp-工具)。
 
 ## 故障排查
 

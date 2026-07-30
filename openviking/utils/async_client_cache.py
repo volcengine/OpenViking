@@ -43,6 +43,18 @@ class LoopScopedAsyncClientCache:
         self._fallback_client: Any = None
         self._lock = threading.Lock()
 
+    def __copy__(self) -> LoopScopedAsyncClientCache:
+        """Return an empty cache instead of sharing live async clients."""
+
+        return type(self)()
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> LoopScopedAsyncClientCache:
+        """Return an empty cache instead of copying loop-bound clients."""
+
+        copied = type(self)()
+        memo[id(self)] = copied
+        return copied
+
     def get(self, factory: Callable[[], Any]) -> Any:
         """Return a client for the current loop, creating it with factory if needed."""
         try:
@@ -59,6 +71,12 @@ class LoopScopedAsyncClientCache:
                 client = factory()
                 self._clients_by_loop[loop] = client
             return client
+
+    def has_clients(self) -> bool:
+        """Return whether the cache currently retains any clients."""
+
+        with self._lock:
+            return bool(self._clients_by_loop) or self._fallback_client is not None
 
     def pop_all(self) -> list[Any]:
         """Remove and return all cached clients."""

@@ -86,7 +86,7 @@ Memory extraction is idempotent — re-extracting from the same archive produces
 
 | Problem | Solution |
 |---------|----------|
-| Delete file first, then index -> file gone but index remains -> search returns non-existent file | **Reverse order**: delete index first, then file. Index deletion failure -> both file and index intact |
+| Delete file first, then index -> file gone but index remains -> search returns non-existent file | **Reverse order**: delete index first, then file. Index deletion failure -> the source file remains and retry completes any partial index cleanup |
 
 **Locking strategy** (depends on target type):
 - Deleting a **directory**: `lock_mode="tree"`, locks the directory and its subtree
@@ -102,7 +102,10 @@ Operation flow:
 5. Release lock
 ```
 
-VectorDB deletion fails -> exception thrown, lock auto-released, file and index both intact. FS deletion fails -> VectorDB already deleted but file remains, retry is safe.
+Index URI collection or VectorDB deletion fails -> exception thrown, lock auto-released, and the
+source file remains. A backend may already have deleted part of a multi-record index operation, but
+retry is safe and completes cleanup. FS deletion fails -> VectorDB already deleted but file remains,
+retry is also safe.
 
 ### mv(old_uri, new_uri)
 

@@ -192,6 +192,17 @@ ov chat   # 在另一个终端运行
 
 不想自己运维？OpenViking Personal 由官方托管、开箱即用，借助 VikingDB 获得远超本地硬件的扩展能力，并提供至多 50 个文件的免费试用；开源版用户可以用迁移工具平滑迁移。→ [openviking.ai](https://www.openviking.ai)
 
+## 托管服务
+
+### 火山引擎（中国地区）
+在火山引擎上官方托管，中国地区可用。
+- 产品页面：[www.volcengine.com/product/openviking-service](https://www.volcengine.com/product/openviking-service)
+- 文档：[docs.volcengine.com/docs/84313/2374478](https://docs.volcengine.com/docs/84313/2374478)
+
+### 即将推出
+- 在 [BytePlus](https://www.byteplus.com) 上的全球托管服务（面向中国以外地区）
+- 私有化分布式企业版（通过激活码激活部署，支持 BYOC）
+
 ## 研究
 
 OpenViking 开源了 VikingMem 论文中描述的部分核心能力：
@@ -200,6 +211,18 @@ OpenViking 开源了 VikingMem 论文中描述的部分核心能力：
 > Jiajie Fu, Junwen Chen, Mengzhao Wang, Aoxiang He, Maojia Sheng, Xiangyu Ke, Yifan Zhu, and Yunjun Gao.
 > arXiv:2605.29640, 2026。已被 VLDB 2026 接收。
 > 📄 [在 arXiv 阅读论文](https://arxiv.org/abs/2605.29640)
+
+## 合作伙伴
+
+OpenViking 欢迎与其他开源项目合作建设上下文数据生态。目前已确认的合作项目包括：
+
+- [deer-flow](https://github.com/bytedance/deer-flow) - 开源的长周期 SuperAgent 框架
+- [NoKV](https://github.com/NoKV-Lab/NoKV) - AI 原生的分布式文件系统
+- [loopx](https://github.com/huangruiteng/loopx) - 轻量级循环工程状态内核
+- [Hermes Agent](https://github.com/NousResearch/hermes-agent) - 与用户共同成长的智能体
+- [heima](https://github.com/litentry/heima) - 基于 Substrate 的 EVM 兼容 L1 链
+
+有兴趣加入我们的合作伙伴列表？请在社区提交 issue 来申请加入。
 
 ## 社区与贡献
 

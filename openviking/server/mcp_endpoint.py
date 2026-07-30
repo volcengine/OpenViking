@@ -38,6 +38,7 @@ from openviking.parse.parsers.code.ast.code_tools import (
     outline_file,
     search_symbols,
 )
+from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.retrieve.type_quota_recall import (
     DEFAULT_MAX_CHARS,
     DEFAULT_MIN_SCORE,
@@ -287,7 +288,8 @@ async def search(
     service = get_service()
     ctx = _get_ctx()
     session = None
-    if session_id:
+    # Intent off: skip session.load — SearchService will not scan session either.
+    if session_id and service.search.is_intent_enabled():
         session = service.sessions.session(ctx, session_id)
         await session.load()
     result = await service.search.search(
@@ -547,10 +549,14 @@ async def _maybe_sitemap_hint(path: str) -> str:
 async def add_resource(
     path: str = "",
     temp_file_id: str = "",
+    add_type: str = "",
     description: str = "",
     watch_interval: float = 0,
+    processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
     to: str = "",
     parent: str = "",
+    tags: Optional[list[str]] = None,
+    tag_mode: str = "replace",
     args: Optional[dict[str, Any]] = None,
 ) -> str:
     """Add a resource to OpenViking. Asynchronous — processing happens in the background.
@@ -566,14 +572,25 @@ async def add_resource(
     Args:
         path: Remote URL or local filesystem path. Required unless ``temp_file_id`` is set.
         temp_file_id: Server-minted upload id from a prior signed local-file upload.
+        add_type: Explicit Connector source type (e.g. "tos", "git"). When set, the
+            request routes through the Connector integration (must be enabled
+            server-side) and ``path`` is sent verbatim — never treated as a local
+            file. Requires an exact ``to`` target and cannot be combined with
+            ``temp_file_id`` or ``parent``. Leave empty for the default path-probing
+            behavior.
         description: Optional human-readable reason for adding the resource.
         watch_interval: Auto-refresh cadence in minutes. 0 = no watch. Prefer >=1440 (24h)
             unless the source changes faster — every refresh re-embeds the whole resource.
             Only applies to remote-URL invocations.
+        processing_mode: "semantic_and_vectors" for normal semantic processing, or
+            "vectors_only" to skip semantic understanding and only build vector indexes.
         to: Target URI under viking://resources/ (e.g. "viking://resources/volcengine/OpenViking").
-            Leave empty to derive a URI from the source.
+            Required when ``add_type`` is set; otherwise leave empty to derive a URI
+            from the source.
         parent: Parent URI under viking://resources/ for remote imports. Mutually exclusive
-            with ``to``.
+            with ``to`` and not supported when ``add_type`` is set.
+        tags: Optional explicit k=v retrieval tags to apply after ingestion.
+        tag_mode: Tag update mode, "replace" or "append". Defaults to "replace".
         args: Parser-specific options, e.g. {"feishu_access_token": "..."} for Feishu imports,
             or {"site": true} for whole-site ingestion.
     """
@@ -588,6 +605,16 @@ async def add_resource(
             "use a positive number of minutes (>=1440 recommended) to subscribe to auto-refresh."
         )
 
+    add_type = add_type.strip()
+    if add_type and temp_file_id:
+        return "Error: add_type cannot be combined with temp_file_id."
+    if add_type and not path:
+        return "Error: add_type requires 'path'."
+    if add_type and parent:
+        return "Error: add_type cannot be combined with parent."
+    if add_type and not to:
+        return "Error: add_type requires an exact 'to' target."
+
     # Branch 1: ingest by temp_file_id. Kept for backward compat / REST-style use — the
     # signed upload now auto-ingests server-side, so agents no longer need this second leg.
     if temp_file_id:
@@ -597,7 +624,15 @@ async def add_resource(
         store = TempUploadStore.build(server_config)
         try:
             result = await ingest_temp_upload(
-                store, temp_file_id, ctx, to=to, reason=description, args=args
+                store,
+                temp_file_id,
+                ctx,
+                to=to,
+                reason=description,
+                args=args,
+                processing_mode=processing_mode,
+                tags=tags,
+                tag_mode=tag_mode,
             )
         except (PermissionDeniedError, InvalidArgumentError) as exc:
             return f"Error: {exc}"
@@ -630,20 +665,28 @@ async def add_resource(
             f'Pass it as the temp_file_id kwarg: add_resource(temp_file_id="{path}")'
         )
 
-    # Branch 3: remote URL — same flow as before
-    if is_remote_resource_source(path):
+    # Branch 3: remote URL, or an explicitly declared Connector source type
+    # (declared requests are delegated or rejected server-side, never resolved
+    # as local paths)
+    if add_type or is_remote_resource_source(path):
         try:
-            path = require_remote_resource_source(path)
+            path = require_remote_resource_source(
+                path, declared_connector_add_type=add_type or None
+            )
             result = await service.resources.add_resource(
                 path=path,
                 ctx=ctx,
+                add_type=add_type or None,
                 to=to or None,
                 parent=parent or None,
                 reason=description,
                 wait=False,
                 watch_interval=watch_interval,
+                processing_mode=processing_mode,
                 enforce_public_remote_targets=True,
                 args=args,
+                tags=tags,
+                tag_mode=tag_mode,
             )
         except Exception as exc:
             return f"Error adding resource: {exc}"
@@ -664,7 +707,8 @@ async def add_resource(
         # Detect-and-suggest: if this single page belongs to a site that exposes a
         # sitemap/RSS feed, hint at whole-site ingestion. Never auto-crawls; the
         # add above is already done, so a slow/failed probe has no functional impact.
-        hint = await _maybe_sitemap_hint(path)
+        # Declared Connector imports ingest the whole source already — no hint.
+        hint = None if add_type else await _maybe_sitemap_hint(path)
         if hint:
             message += "\n" + hint
         return message
@@ -684,6 +728,9 @@ async def add_resource(
         to=to,
         reason=description,
         actor_peer_id=ctx.actor_peer_id or "",
+        processing_mode=processing_mode,
+        tags=tags,
+        tag_mode=tag_mode,
     )
     base_url, url_source = _resolve_public_base_url()
     upload_url = f"{base_url}/api/v1/resources/temp_upload?token={quote(token, safe='')}"

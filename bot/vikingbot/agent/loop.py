@@ -924,6 +924,10 @@ class AgentLoop:
         on_plain_text: Any | None = None,
         channel_metadata: dict[str, Any] | None = None,
         captured_turns: list[dict[str, Any]] | None = None,
+        tool_registry: ToolRegistry | None = None,
+        openviking_tool_names: list[str] | set[str] | None = None,
+        allow_final_fallback: bool = True,
+        inject_write_experience: bool = True,
     ) -> tuple[str | None, str | None, list[dict], dict[str, int], int]:
         """
         Run the core agent loop: call LLM, execute tools, repeat until done.
@@ -932,6 +936,7 @@ class AgentLoop:
             messages: Initial message list
             session_key: Session key for tool execution context
             publish_events: Whether to publish ITERATION/REASONING/TOOL_CALL events to the bus
+            sender_id: Sender identity forwarded to the tool execution context
             actor_peer_id: Authenticated OpenViking peer identity for tools
             ov_tools_enable: Whether to enable OpenViking tools for this session
             memory_peer_ids: List of peer IDs for memory retrieval
@@ -950,11 +955,24 @@ class AgentLoop:
             captured_turns: Optional mutable list populated with each intermediate assistant
                 turn and the tool calls/results produced by that same model response. Reasoning
                 content is intentionally excluded.
+            tool_registry: Optional request-scoped registry used for tool definitions and
+                execution. Defaults to the agent's shared tool registry.
+            openviking_tool_names: Optional collection of tool names allowed to receive the
+                request-scoped OpenViking connection. None preserves the legacy behavior of
+                forwarding the connection to all tools; an empty collection forwards it to none.
+            allow_final_fallback: Whether to make a final tool-free LLM call after the
+                tool-use iteration limit is reached.
+            inject_write_experience: Whether to retrieve and inject relevant agent experience
+                before executing configured write tools.
 
         Returns:
             tuple of (final_content, final_reasoning_content, tools_used, token_usage, iteration)
         """
         iteration = 0
+        active_tools = tool_registry or self.tools
+        scoped_openviking_tools = (
+            set(openviking_tool_names) if openviking_tool_names is not None else None
+        )
         final_content = None
         final_reasoning_content = None
         tools_used: list[dict] = []
@@ -986,7 +1004,7 @@ class AgentLoop:
                     )
                 )
 
-            tool_definitions = self.tools.get_definitions(
+            tool_definitions = active_tools.get_definitions(
                 ov_tools_enable=ov_tools_enable,
                 disabled_tools=disabled_tools,
             )
@@ -1009,7 +1027,7 @@ class AgentLoop:
 
             if response.has_tool_calls:
                 # Inject experience memory before write-related tool calls (once per session)
-                if not write_exp_injected:
+                if inject_write_experience and not write_exp_injected:
                     _ov_cfg = self.config.ov_server
                     _write_tools = set(_ov_cfg.exp_write_tools)
                     if any(tc.name in _write_tools for tc in response.tool_calls):
@@ -1070,7 +1088,13 @@ class AgentLoop:
                 async def execute_single_tool(idx: int, tool_call):
                     """Execute a single tool and track execution time."""
                     tool_execute_start_time = time.time()
-                    result = await self.tools.execute(
+                    tool_connection = (
+                        openviking_connection
+                        if scoped_openviking_tools is None
+                        or tool_call.name in scoped_openviking_tools
+                        else None
+                    )
+                    result = await active_tools.execute(
                         tool_call.name,
                         tool_call.arguments,
                         session_key=session_key,
@@ -1079,7 +1103,7 @@ class AgentLoop:
                         actor_peer_id=actor_peer_id or sender_id,
                         memory_peer_ids=memory_peer_ids,
                         memory_owner_user_ids=memory_owner_user_ids,
-                        openviking_connection=openviking_connection,
+                        openviking_connection=tool_connection,
                         channel_metadata=channel_metadata,
                     )
                     tool_execute_duration = (time.time() - tool_execute_start_time) * 1000
@@ -1145,7 +1169,8 @@ class AgentLoop:
                     )
 
                 if any(
-                    tool_call.name in stop_tools for _idx, tool_call, _result, _duration in results
+                    tool_call.name in stop_tools and _is_tool_result_success(_result)
+                    for _idx, tool_call, _result, _duration in results
                 ):
                     final_content = ""
                     break
@@ -1165,7 +1190,7 @@ class AgentLoop:
                                 text=text,
                                 reasoning_content=response.reasoning_content,
                                 iteration=iteration,
-                                tools=self.tools,
+                                tools=active_tools,
                                 sandbox_manager=self.sandbox_manager,
                                 sender_id=sender_id,
                                 memory_peer_ids=memory_peer_ids,
@@ -1217,7 +1242,7 @@ class AgentLoop:
         elif final_content is None or (
             isinstance(final_content, str) and not final_content.strip()
         ):
-            if iteration >= self.max_iterations:
+            if iteration >= self.max_iterations and allow_final_fallback:
                 messages.append(
                     {
                         "role": "user",
@@ -1263,6 +1288,55 @@ class AgentLoop:
                 final_content = "I've completed processing but have no response to give."
 
         return final_content, final_reasoning_content, tools_used, token_usage, iteration
+
+    async def run_structured_task(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        session_key: SessionKey,
+        tool_registry: ToolRegistry,
+        openviking_tool_names: list[str] | set[str],
+        stop_tool_names: list[str],
+        openviking_connection: dict[str, Any] | None,
+    ) -> tuple[Any, list[dict], dict[str, int], int]:
+        """Run a tool-terminated structured task through the existing agent loop."""
+
+        async def require_submission(context: _PlainTextContext) -> _PlainTextDelivered:
+            messages = self.context.add_assistant_message(context.messages, context.text, [])
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Your response was not submitted. Continue the task and call "
+                        "submit_wiki_bundle with the complete final bundle."
+                    ),
+                }
+            )
+            return _PlainTextDelivered(messages=messages, tools_used=[])
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        _content, _reasoning, tools_used, token_usage, iteration = await self._run_agent_loop(
+            messages=messages,
+            session_key=session_key,
+            publish_events=False,
+            ov_tools_enable=True,
+            openviking_connection=openviking_connection,
+            stop_tool_names=stop_tool_names,
+            on_plain_text=require_submission,
+            tool_registry=tool_registry,
+            openviking_tool_names=openviking_tool_names,
+            allow_final_fallback=False,
+            inject_write_experience=False,
+        )
+        submit_tool = tool_registry.get("submit_wiki_bundle")
+        bundle = getattr(submit_tool, "bundle", None)
+        if bundle is None:
+            raise ValueError("AGENT_OUTPUT_INVALID: Agent did not submit a valid Wiki bundle")
+        return bundle, tools_used, token_usage, iteration
 
     @trace(
         name="process_message",

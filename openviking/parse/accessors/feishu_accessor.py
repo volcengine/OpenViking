@@ -15,7 +15,7 @@ import mimetypes
 import os
 import re
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, NoReturn, Optional, Tuple, Union
 from urllib.parse import parse_qs, urlparse
@@ -33,6 +33,9 @@ logger = get_logger(__name__)
 _FEISHU_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(feishu://image/([^)]+)\)")
 _FEISHU_DOCUMENT_FORBIDDEN = 1770032
 _FEISHU_BITABLE_PERMISSION_REQUIRED = 99991672
+_MAX_MEDIA_DOWNLOAD_CONTEXTS = 8
+
+_MediaDownloadExtras = Dict[str, List[Optional[str]]]
 
 
 def _title_as_filename(title: str) -> str:
@@ -107,6 +110,7 @@ class FeishuDocument:
     markdown_content: str
     title: str
     meta: Dict[str, Any]
+    media_download_extras: _MediaDownloadExtras = field(default_factory=dict)
 
 
 class FeishuAccessor(DataAccessor):
@@ -268,6 +272,7 @@ class FeishuAccessor(DataAccessor):
                 self._resolve_image_refs,
                 doc.markdown_content,
                 feishu_access_token=feishu_access_token,
+                media_download_extras=doc.media_download_extras,
             )
 
             # Build metadata
@@ -331,6 +336,7 @@ class FeishuAccessor(DataAccessor):
         view_id = (query.get("view") or [None])[0]
         title = None
         meta = {}
+        media_download_extras: _MediaDownloadExtras = {}
 
         if doc_type == "wiki":
             # Resolve wiki node to actual document type
@@ -354,7 +360,13 @@ class FeishuAccessor(DataAccessor):
 
         handler_kwargs = {}
         if doc_type == "base":
-            handler_kwargs = {"table_id": table_id, "view_id": view_id}
+            handler_kwargs = {
+                "table_id": table_id,
+                "view_id": view_id,
+                "media_download_extras": media_download_extras,
+            }
+        elif doc_type == "sheets":
+            handler_kwargs = {"media_download_extras": media_download_extras}
 
         # Feishu's SDK is synchronous; keep it off the event loop.
         markdown, doc_title = await asyncio.to_thread(
@@ -380,6 +392,7 @@ class FeishuAccessor(DataAccessor):
             markdown_content=markdown,
             title=doc_title,
             meta=meta,
+            media_download_extras=media_download_extras,
         )
 
     @staticmethod
@@ -770,6 +783,7 @@ class FeishuAccessor(DataAccessor):
         file_token: str,
         *,
         feishu_access_token: Optional[str] = None,
+        extra: Optional[str] = None,
     ) -> Optional[Tuple[bytes, Optional[str]]]:
         """Download an image from Feishu Drive API by file token.
 
@@ -792,6 +806,8 @@ class FeishuAccessor(DataAccessor):
             .token_types({token_type})
             .build()
         )
+        if extra:
+            raw_req.add_query("extra", extra)
         try:
             raw_resp = self._call_api(client.request, raw_req, feishu_access_token)
         except Exception as exc:
@@ -838,6 +854,7 @@ class FeishuAccessor(DataAccessor):
         markdown: str,
         *,
         feishu_access_token: Optional[str] = None,
+        media_download_extras: Optional[_MediaDownloadExtras] = None,
     ) -> Tuple[str, Dict[str, bytes]]:
         """Download Feishu image refs and rewrite them to local relative paths."""
         config = self._get_config()
@@ -855,10 +872,25 @@ class FeishuAccessor(DataAccessor):
             if file_token in token_to_rel_path:
                 continue
 
-            downloaded = self._download_image(
-                file_token,
-                feishu_access_token=feishu_access_token,
-            )
+            configured_extras = (media_download_extras or {}).get(file_token)
+            if configured_extras:
+                # Try protected contexts before the legacy token-only fallback.
+                extras: List[Optional[str]] = list(
+                    dict.fromkeys(extra for extra in configured_extras if extra)
+                )[:_MAX_MEDIA_DOWNLOAD_CONTEXTS]
+                extras.append(None)
+            else:
+                extras = [None]
+
+            downloaded = None
+            for extra in extras:
+                downloaded = self._download_image(
+                    file_token,
+                    feishu_access_token=feishu_access_token,
+                    extra=extra,
+                )
+                if downloaded is not None:
+                    break
             if downloaded is None:
                 continue
             image_bytes, content_type = downloaded
@@ -1073,6 +1105,8 @@ class FeishuAccessor(DataAccessor):
         self,
         token: str,
         feishu_access_token: Optional[str] = None,
+        *,
+        media_download_extras: Optional[_MediaDownloadExtras] = None,
     ) -> Tuple[str, str]:
         """Fetch a Feishu spreadsheet and convert it to Markdown."""
         import lark_oapi as lark
@@ -1125,6 +1159,7 @@ class FeishuAccessor(DataAccessor):
                             feishu_access_token,
                             table_id=tokens[1],
                             table_name=sheet_title,
+                            media_download_extras=media_download_extras,
                         )
                         parts.append(bitable or "*Empty bitable*")
                 markdown_parts.append("\n\n".join(parts))
@@ -1208,6 +1243,7 @@ class FeishuAccessor(DataAccessor):
         table_id: Optional[str] = None,
         table_name: Optional[str] = None,
         view_id: Optional[str] = None,
+        media_download_extras: Optional[_MediaDownloadExtras] = None,
     ) -> Tuple[str, str]:
         """Fetch a Feishu bitable app and convert it to Markdown."""
         if view_id and not table_id:
@@ -1291,6 +1327,11 @@ class FeishuAccessor(DataAccessor):
                         "without a page token"
                     )
             field_names = [field.field_name for field in fields]
+            field_ids = {
+                field.field_name: field.field_id
+                for field in fields
+                if getattr(field, "field_name", None) and getattr(field, "field_id", None)
+            }
 
             records = []
             page_token = None
@@ -1340,16 +1381,73 @@ class FeishuAccessor(DataAccessor):
             if field_names and records:
                 rows = [field_names]
                 for record in records:
-                    fields = record.fields or {}
-                    rows.append(
-                        [self._format_bitable_field(fields.get(name, "")) for name in field_names]
-                    )
+                    record_fields = record.fields or {}
+                    row = []
+                    for name in field_names:
+                        value = record_fields.get(name, "")
+                        row.append(self._format_bitable_field(value))
+                        if media_download_extras is not None:
+                            self._collect_bitable_media_extras(
+                                value,
+                                table_id=current_table_id,
+                                field_id=field_ids.get(name),
+                                record_id=getattr(record, "record_id", None),
+                                media_download_extras=media_download_extras,
+                            )
+                    rows.append(row)
                 parts.append(format_table_to_markdown(rows, has_header=True))
             if records_truncated:
                 parts.append(f"\n*... records truncated at {config.max_records_per_table} ...*")
             markdown_parts.append("\n\n".join(parts))
 
         return "\n\n".join(markdown_parts), title
+
+    @classmethod
+    def _collect_bitable_media_extras(
+        cls,
+        value: Any,
+        *,
+        table_id: str,
+        field_id: Optional[str],
+        record_id: Optional[str],
+        media_download_extras: _MediaDownloadExtras,
+    ) -> None:
+        """Collect transient permission contexts for image refs emitted from a cell."""
+        if isinstance(value, list):
+            for item in value:
+                cls._collect_bitable_media_extras(
+                    item,
+                    table_id=table_id,
+                    field_id=field_id,
+                    record_id=record_id,
+                    media_download_extras=media_download_extras,
+                )
+            return
+        if not isinstance(value, dict):
+            return
+
+        file_token = value.get("file_token")
+        name = str(value.get("name") or "image")
+        media_type = value.get("type") or mimetypes.guess_type(name)[0]
+        if not file_token or not str(media_type).lower().startswith("image/"):
+            return
+
+        contexts = media_download_extras.setdefault(str(file_token), [])
+        if field_id and record_id:
+            extra = json.dumps(
+                {
+                    "bitablePerm": {
+                        "tableId": table_id,
+                        "attachments": {field_id: {record_id: [str(file_token)]}},
+                    }
+                },
+                separators=(",", ":"),
+            )
+            context_count = sum(context is not None for context in contexts)
+            if extra not in contexts and context_count < _MAX_MEDIA_DOWNLOAD_CONTEXTS:
+                contexts.append(extra)
+        elif None not in contexts:
+            contexts.append(None)
 
     @classmethod
     def _format_bitable_field(cls, value: Any) -> str:

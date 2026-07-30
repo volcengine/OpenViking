@@ -5,7 +5,7 @@
 from typing import TYPE_CHECKING, Optional
 
 from openviking.session.session import Session, SessionCompression, SessionMeta, SessionStats
-from openviking.storage import VikingDBManager
+from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)

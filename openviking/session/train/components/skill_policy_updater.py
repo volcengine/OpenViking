@@ -101,7 +101,7 @@ class SkillPolicyUpdater:
                 continue
             try:
                 skill_root = _root_uri_from_skill_md(old_file.uri)
-                await viking_fs.rm(skill_root, ctx=ctx, lock_handle=transaction_handle)
+                await viking_fs.rm(skill_root, ctx=ctx, lease_ref=transaction_handle)
                 deleted_uris.append(old_file.uri)
             except Exception as exc:
                 delete_errors.append(f"{old_file.uri}: {exc}")
@@ -138,9 +138,7 @@ def _coerce_request_context(context: Any) -> RequestContext | None:
     return None
 
 
-def _apply_items_to_snapshot(
-    items: list[PolicyPlanItem], policy_set: PolicySet
-) -> PolicySet:
+def _apply_items_to_snapshot(items: list[PolicyPlanItem], policy_set: PolicySet) -> PolicySet:
     policies_by_uri = {policy.uri: policy for policy in policy_set.policies}
     result = list(policy_set.policies)
 
@@ -239,9 +237,7 @@ def _plan_to_resolved_operations(
 
         updated = _find_policy(updated_policy_set, uri=uri, name=item.target_name)
         if updated is None:
-            errors.append(
-                f"planned skill policy not found after simulation: {item.target_name}"
-            )
+            errors.append(f"planned skill policy not found after simulation: {item.target_name}")
             continue
 
         old_mf = _policy_to_memory_file(current) if current is not None else None

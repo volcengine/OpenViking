@@ -28,6 +28,14 @@ export function displayName(uri: string): { name: string; parent: string } {
   return { name, parent }
 }
 
+const MEMORY_TYPE_PATTERN = /\/memories\/([^/]+)(?:\/|$)/i
+
+export function memoryTypeFromUri(uri: string): string | undefined {
+  const match = MEMORY_TYPE_PATTERN.exec(uri)
+  const type = match?.[1]?.trim().replace(/\.(?:md|json|jsonl)$/i, '')
+  return type ? type.toUpperCase() : undefined
+}
+
 export function isDirectoryResult(item: FindResultItem): boolean {
   return item.uri.endsWith('/') || item.level < 2
 }

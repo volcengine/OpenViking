@@ -17,7 +17,7 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.routers.content import SetTagsRequest
 from openviking.server.routers.content import set_tags as content_set_tags
-from openviking.storage import VikingDBManagerProxy
+from openviking.storage.vikingdb_manager import VikingDBManagerProxy
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
 router = APIRouter(prefix="/api/v1/fs", tags=["filesystem"])

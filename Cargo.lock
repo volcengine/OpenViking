@@ -1850,6 +1850,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "filelocks"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54c1e4f9fd884a066beb8cc4677dea1188d2f2eaf70518f3a37e46551cfe3431"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3880,6 +3890,7 @@ dependencies = [
  "chrono",
  "criterion",
  "dashmap",
+ "filelocks",
  "flate2",
  "futures",
  "gix-actor",
@@ -3903,6 +3914,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha1",
  "sha2",
  "sqlx",
  "tempfile",

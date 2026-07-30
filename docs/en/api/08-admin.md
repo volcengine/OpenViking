@@ -57,6 +57,40 @@ Configure `root_api_key` in `~/.openviking/ovcli.conf`:
 
 ## API Reference
 
+### get_agent_evolution_status
+
+Return the live instance-wide Agent Evolution switch and the configured default
+account ID. The endpoint is ROOT-only.
+
+**HTTP API**
+
+```
+GET /api/v1/admin/agent-evolution
+```
+
+```bash
+curl http://localhost:1933/api/v1/admin/agent-evolution \
+  -H "X-API-Key: <root-key>"
+```
+
+**Response Example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "enabled": false,
+    "account_id": "default"
+  },
+  "time": 0.1
+}
+```
+
+`enabled` is read from the live `server.agent_evolution.enabled` value used by
+session commits. `account_id` is the deployment's configured default account.
+
+---
+
 ### create_account
 
 #### 1. API Implementation Overview

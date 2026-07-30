@@ -13,6 +13,7 @@ from typing import Any
 from loguru import logger
 
 from openviking.utils.model_retry import is_retryable_rate_limit_error, rate_limit_retry_delay
+from openviking.utils.multimodal import redact_image_data_urls
 from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.providers.base import (
     LLMProvider,
@@ -72,7 +73,7 @@ class VLMProviderAdapter(LLMProvider):
                         name="llm-chat",
                         as_type="generation",
                         model=effective_model,
-                        input=messages,
+                        input=redact_image_data_urls(messages),
                         metadata=metadata,
                     )
                     if response_id:

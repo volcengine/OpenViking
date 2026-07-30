@@ -15,6 +15,7 @@ use serde_json::{Map, Value};
 
 pub async fn handle_add_resource(
     mut path: String,
+    add_type: Option<String>,
     to: Option<String>,
     parent: Option<String>,
     parent_auto_create: Option<String>,
@@ -28,13 +29,18 @@ pub async fn handle_add_resource(
     exclude: Option<String>,
     no_directly_upload_media: bool,
     watch_interval: f64,
+    processing_mode: String,
     resource_args: Option<String>,
+    tags: Vec<String>,
+    tag_mode: String,
     ctx: CliContext,
 ) -> Result<()> {
     let is_url =
         path.starts_with("http://") || path.starts_with("https://") || path.starts_with("git@");
 
-    if !is_url {
+    // A declared Connector add_type sends the path verbatim to the server;
+    // it is never a local file, so skip local-path existence validation.
+    if add_type.is_none() && !is_url {
         use std::path::Path;
 
         // Unescape path: replace backslash followed by space with just space
@@ -95,6 +101,7 @@ pub async fn handle_add_resource(
     commands::resources::add_resource(
         &client,
         &path,
+        add_type,
         to,
         parent,
         parent_auto_create,
@@ -108,7 +115,10 @@ pub async fn handle_add_resource(
         effective_exclude,
         directly_upload_media,
         watch_interval,
+        processing_mode,
         add_resource_args,
+        tags,
+        tag_mode,
         ctx.output_format,
         ctx.compact,
         ctx.should_show_progress(),

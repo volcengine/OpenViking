@@ -16,6 +16,7 @@ from vikingbot.bus.events import OutboundEventType, OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.openapi import OpenAPIChannel, OpenAPIChannelConfig, PendingResponse
 from vikingbot.channels.openapi_models import ChatResponse
+from vikingbot.compile.models import CompileAccepted
 from vikingbot.config.schema import BotChannelConfig, SessionKey
 
 
@@ -50,6 +51,129 @@ class _AsyncBytesStream(httpx.AsyncByteStream):
 
 
 class TestOpenAPIAuth:
+    def test_compile_routes_use_existing_principal_resolver(
+        self, message_bus, temp_workspace
+    ):
+        class FakeCompileService:
+            def __init__(self):
+                self.scope = None
+
+            async def create_task(self, request, *, principal_scope):
+                self.scope = principal_scope
+                return CompileAccepted(task_id="cmp_test", to=request.to)
+
+            async def get_task(self, task_id, *, principal_scope):
+                if task_id != "cmp_test" or principal_scope != self.scope:
+                    return None
+                return {
+                    "task_id": task_id,
+                    "status": "running",
+                    "stage": "agent",
+                    "created_at": "2026-07-20T00:00:00Z",
+                    "updated_at": "2026-07-20T00:00:01Z",
+                }
+
+        service = FakeCompileService()
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+            compile_service=service,
+        )
+        client = _make_client(channel)
+        created = client.post(
+            "/bot/v1/compile",
+            json={
+                "from": ["viking://resources/source"],
+                "to": "viking://resources/wiki",
+                "skill": "viking://agent/skills/wiki",
+            },
+        )
+        assert created.status_code == 202
+        assert created.json()["task_id"] == "cmp_test"
+        assert client.get("/bot/v1/compile/cmp_test").status_code == 200
+        assert client.get("/bot/v1/compile/cmp_other").status_code == 404
+
+    def test_dev_compile_with_forwarded_connection_uses_same_principal_for_status(
+        self, message_bus, temp_workspace, monkeypatch
+    ):
+        class FakeCompileService:
+            def __init__(self):
+                self.scope = None
+                self.connection = "unset"
+
+            async def create_task(self, request, *, principal_scope):
+                self.scope = principal_scope
+                self.connection = request.openviking_connection
+                return CompileAccepted(task_id="cmp_dev", to=request.to)
+
+            async def get_task(self, task_id, *, principal_scope):
+                if task_id != "cmp_dev" or principal_scope != self.scope:
+                    return None
+                return {
+                    "task_id": task_id,
+                    "status": "running",
+                    "stage": "agent",
+                    "created_at": "2026-07-20T00:00:00Z",
+                    "updated_at": "2026-07-20T00:00:01Z",
+                }
+
+        config = SimpleNamespace(
+            gateway=SimpleNamespace(host="127.0.0.1", token="gateway-secret"),
+            ov_server=SimpleNamespace(
+                server_url="http://127.0.0.1:1933",
+                effective_auth_mode="dev",
+                api_key_type="user",
+            ),
+        )
+        service = FakeCompileService()
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+            global_config=config,
+            compile_service=service,
+        )
+        runtime_probes = []
+
+        async def fake_runtime_probe(headers=None):
+            runtime_probes.append(headers)
+            return {"status": "ok", "auth_mode": "dev"}
+
+        monkeypatch.setattr(channel, "_assert_runtime_upstream_auth_mode", fake_runtime_probe)
+        app = FastAPI()
+        app.include_router(channel.get_router(), prefix="/bot/v1")
+        client = TestClient(app, client=("127.0.0.1", 50000))
+        headers = {
+            "X-Gateway-Token": "gateway-secret",
+            "X-API-Key": "stale-dev-key",
+            "X-OpenViking-Account": "default",
+            "X-OpenViking-User": "default",
+        }
+
+        created = client.post(
+            "/bot/v1/compile",
+            headers=headers,
+            json={
+                "from": ["viking://resources/source"],
+                "to": "viking://resources/wiki",
+                "skill": "viking://agent/skills/wiki",
+                "openviking_connection": {
+                    "api_key": "stale-dev-key",
+                    "account_id": "default",
+                    "user_id": "default",
+                    "server_url": "http://127.0.0.1:1933",
+                },
+            },
+        )
+        status_response = client.get("/bot/v1/compile/cmp_dev", headers=headers)
+
+        assert created.status_code == 202
+        assert status_response.status_code == 200
+        assert service.scope == channel._principal_scope("dev")
+        assert service.connection is None
+        assert runtime_probes == [{}, {}]
+
     def test_health_remains_available_without_api_key(self, message_bus, temp_workspace):
         channel = OpenAPIChannel(
             OpenAPIChannelConfig(),
@@ -690,6 +814,81 @@ class TestOpenAPIAuth:
 
         assert response.status_code == 401
         assert response.json()["detail"] == "OpenViking API key header required"
+
+    def test_compile_status_accepts_trusted_identity_when_no_root_key_is_configured(
+        self, message_bus, temp_workspace, monkeypatch
+    ):
+        config = SimpleNamespace(
+            gateway=SimpleNamespace(host="127.0.0.1", token=""),
+            ov_server=SimpleNamespace(
+                server_url="http://ov.local",
+                effective_auth_mode="trusted",
+                api_key_type="root",
+                api_key="",
+                account_id="",
+                admin_user_id="",
+            ),
+        )
+        compile_service = SimpleNamespace()
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+            global_config=config,
+            compile_service=compile_service,
+        )
+
+        class FakeAsyncClient:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def get(self, url, headers=None):
+                assert "X-API-Key" not in headers
+                assert headers["X-OpenViking-Account"] == "acct"
+                assert headers["X-OpenViking-User"] == "alice"
+                return httpx.Response(
+                    200,
+                    json={
+                        "status": "ok",
+                        "auth_mode": "trusted",
+                        "role": "user",
+                        "account_id": "acct",
+                        "user_id": "alice",
+                    },
+                    headers={"content-type": "application/json"},
+                )
+
+        async def fake_get_task(task_id, principal_scope):
+            assert task_id == "cmp_1"
+            assert principal_scope == channel._principal_scope("openviking:acct:alice")
+            return {
+                "task_id": task_id,
+                "status": "running",
+                "stage": "agent",
+                "created_at": "2026-07-20T00:00:00Z",
+                "updated_at": "2026-07-20T00:00:01Z",
+            }
+
+        compile_service.get_task = fake_get_task
+        monkeypatch.setattr("vikingbot.channels.openapi.httpx.AsyncClient", FakeAsyncClient)
+        client = _make_client(channel)
+
+        response = client.get(
+            "/bot/v1/compile/cmp_1",
+            headers={
+                "X-OpenViking-Account": "acct",
+                "X-OpenViking-User": "alice",
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["task_id"] == "cmp_1"
 
     def test_public_gateway_requires_gateway_token_even_with_openviking_api_key(
         self, message_bus, temp_workspace, monkeypatch

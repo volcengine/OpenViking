@@ -17,6 +17,7 @@ from litellm import acompletion, completion
 
 from openviking.telemetry import tracer
 from openviking.utils.model_retry import retry_async, retry_sync
+from openviking.utils.multimodal import redact_image_data_urls
 from openviking_cli.utils import get_logger
 
 from ..base import ToolCall, VLMBase, VLMResponse
@@ -449,7 +450,9 @@ class LiteLLMVLMProvider(VLMBase):
         """Get text completion asynchronously."""
         kwargs = self._build_text_kwargs(prompt, thinking, tools, tool_choice, messages)
         # 用 tracer.info 打印请求
-        tracer.info(f"request: {json.dumps(kwargs, ensure_ascii=False, indent=2)}")
+        tracer.info(
+            f"request: {json.dumps(redact_image_data_urls(kwargs), ensure_ascii=False, indent=2)}"
+        )
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()

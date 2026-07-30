@@ -181,8 +181,7 @@ async def test_process_skill_preserves_hyphenated_allowed_tools_in_meta(monkeypa
 
     assert result["name"] == "dict-skill"
     written_content = viking_fs.write_context.await_args.kwargs["content"]
-    assert "allowed-tools:" in written_content
-    assert "- Read" in written_content
+    assert "allowed-tools: Read" in written_content
     assert "tags:" in written_content
     embedding_msg = vikingdb.enqueue_embedding_msg.await_args.args[0]
     assert embedding_msg.context_data["meta"]["allowed_tools"] == ["Read"]

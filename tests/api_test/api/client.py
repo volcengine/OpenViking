@@ -277,6 +277,7 @@ class OpenVikingAPIClient:
         parent: Optional[str] = None,
         instruction: Optional[str] = None,
         wait: bool = False,
+        processing_mode: Optional[str] = None,
     ) -> requests.Response:
         endpoint = "/api/v1/resources"
         url = self._build_url(self.server_url, endpoint)
@@ -299,6 +300,8 @@ class OpenVikingAPIClient:
             payload["instruction"] = instruction
         if wait:
             payload["wait"] = wait
+        if processing_mode:
+            payload["processing_mode"] = processing_mode
         try:
             return self._request_with_retry("POST", url, json=payload)
         finally:

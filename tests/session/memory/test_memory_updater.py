@@ -174,7 +174,6 @@ class TestMemoryUpdater:
 
     @pytest.mark.asyncio
     async def test_generate_overview_deletes_empty_overview_via_rm(self):
-        lock_handle = object()
         schema = MemoryTypeSchema(
             memory_type="entities",
             description="entity memory",
@@ -193,11 +192,11 @@ class TestMemoryUpdater:
             async def ls(self, uri, show_all_hidden=False, ctx=None):
                 return [{"name": ".overview.md", "isDir": False}]
 
-            async def rm(self, uri, recursive=False, ctx=None, lock_handle=None):
-                self.rm_calls.append((uri, recursive, lock_handle))
+            async def rm(self, uri, recursive=False, ctx=None):
+                self.rm_calls.append((uri, recursive))
 
         viking_fs = FakeVikingFS()
-        updater = MemoryUpdater(registry=registry, transaction_handle=lock_handle)
+        updater = MemoryUpdater(registry=registry)
         updater._get_viking_fs = MagicMock(return_value=viking_fs)
         ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
@@ -211,9 +210,8 @@ class TestMemoryUpdater:
             (
                 "viking://user/alice/memories/entities/动漫角色/.overview.md",
                 False,
-                lock_handle,
             ),
-            ("viking://user/alice/memories/entities/动漫角色", True, lock_handle),
+            ("viking://user/alice/memories/entities/动漫角色", True),
         ]
 
     @pytest.mark.asyncio
@@ -236,7 +234,7 @@ class TestMemoryUpdater:
             async def ls(self, uri, show_all_hidden=False, ctx=None):
                 raise NotFoundError(uri, "directory")
 
-            async def rm(self, uri, recursive=False, ctx=None, lock_handle=None):
+            async def rm(self, uri, recursive=False, ctx=None):
                 self.rm_calls.append((uri, recursive))
 
         viking_fs = FakeVikingFS()
@@ -308,7 +306,7 @@ class TestMemoryUpdater:
             async def read_file(self, uri, ctx=None):
                 return self.store[uri]
 
-            async def write_file(self, uri, content, ctx=None, lock_handle=None):
+            async def write_file(self, uri, content, ctx=None):
                 self.store[uri] = content
 
         viking_fs = FakeVikingFS()
@@ -353,7 +351,7 @@ class TestMemoryUpdater:
             async def read_file(self, uri, ctx=None):
                 return self.store[uri]
 
-            async def write_file(self, uri, content, ctx=None, lock_handle=None):
+            async def write_file(self, uri, content, ctx=None):
                 self.store[uri] = content
 
         viking_fs = FakeVikingFS()
@@ -467,8 +465,7 @@ class TestMemoryUpdater:
         assert error_target == "events(page_id=102)"
         assert str(error) == "Missing resolved URI"
         tracer_error.assert_called_once_with(
-            "Skipping unresolved memory operation: "
-            "events(page_id=102): Missing resolved URI"
+            "Skipping unresolved memory operation: events(page_id=102): Missing resolved URI"
         )
 
     @pytest.mark.asyncio
@@ -510,9 +507,7 @@ class TestMemoryUpdater:
                     page_id=102,
                 ),
             ],
-            delete_file_contents=[
-                MemoryFile(uri=old_uri, extra_fields={"memory_type": "events"})
-            ],
+            delete_file_contents=[MemoryFile(uri=old_uri, extra_fields={"memory_type": "events"})],
             errors=[],
         )
         ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
@@ -1084,18 +1079,14 @@ class TestApplyEditWithSearchReplacePatch:
 
     @pytest.mark.asyncio
     async def test_apply_upsert_persists_last_update_trace_id(self):
-        lock_handle = object()
         updater = self._make_updater_with_registry()
-        updater._transaction_handle = lock_handle
         mock_viking_fs = MagicMock()
         mock_viking_fs.read_file = AsyncMock(side_effect=FileNotFoundError("missing"))
         written_content = None
-        write_kwargs = None
 
         async def mock_write_file(uri, content, **kwargs):
-            nonlocal write_kwargs, written_content
+            nonlocal written_content
             written_content = content
-            write_kwargs = kwargs
 
         mock_viking_fs.write_file = mock_write_file
         updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
@@ -1109,7 +1100,6 @@ class TestApplyEditWithSearchReplacePatch:
         await updater._apply_upsert(op, MagicMock())
 
         assert written_content is not None
-        assert write_kwargs["lock_handle"] is lock_handle
         result = MemoryFileUtils.read(written_content)
         assert result.extra_fields["source_extraction_id"] == "extract_1"
         assert result.extra_fields["last_update_trace_id"] == "trace_1"
