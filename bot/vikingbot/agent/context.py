@@ -347,7 +347,7 @@ IMPORTANT:
         self,
         history: list[dict[str, Any]],
         current_message: str,
-        media: list[str] | None = None,
+        media: list[str | dict[str, Any]] | None = None,
         session_key: SessionKey | None = None,
         ov_tools_enable: bool = True,
         profile_user_list: list[str] | None = None,
@@ -442,13 +442,41 @@ IMPORTANT:
 
         return messages
 
-    def _build_user_content(self, text: str, media: list[str] | None) -> str | list[dict[str, Any]]:
-        """Build user message content with optional base64-encoded images."""
+    def _build_user_content(
+        self,
+        text: str,
+        media: list[str | dict[str, Any]] | None,
+    ) -> str | list[dict[str, Any]]:
+        """Build user content from trusted local paths or validated image URL parts."""
         if not media:
             return text
 
         images = []
-        for path in media:
+        for item in media:
+            if isinstance(item, dict):
+                image_url = item.get("image_url")
+                url = image_url.get("url") if isinstance(image_url, dict) else None
+                if item.get("type") == "image_url" and isinstance(url, str):
+                    images.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": url,
+                                **(
+                                    {"detail": image_url["detail"]}
+                                    if image_url.get("detail")
+                                    else {}
+                                ),
+                            },
+                        }
+                    )
+                continue
+
+            if item.startswith(("https://", "data:image/")):
+                images.append({"type": "image_url", "image_url": {"url": item}})
+                continue
+
+            path = item
             p = Path(path)
             mime, _ = mimetypes.guess_type(path)
             if not p.is_file() or not mime or not mime.startswith("image/"):

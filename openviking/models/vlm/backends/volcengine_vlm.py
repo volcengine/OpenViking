@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.telemetry import tracer
+from openviking.utils.multimodal import redact_image_data_urls
 from openviking_cli.utils import get_logger
 
 from ..base import ToolCall, VLMResponse
@@ -149,7 +150,7 @@ class VolcEngineVLM(OpenAIVLM):
             return result
         return self._clean_response(str(result))
 
-    @tracer("volcengine.vlm.call", ignore_result=True, ignore_args=False)
+    @tracer("volcengine.vlm.call", ignore_result=True, ignore_args=["messages"])
     async def get_completion_async(
         self,
         prompt: str = "",
@@ -175,7 +176,10 @@ class VolcEngineVLM(OpenAIVLM):
             kwargs["tool_choice"] = tool_choice or "auto"
 
         # 用 tracer.info 打印请求
-        tracer.info(f"request: {json.dumps(kwargs_messages, ensure_ascii=False, indent=2)}")
+        tracer.info(
+            "request: "
+            f"{json.dumps(redact_image_data_urls(kwargs_messages), ensure_ascii=False, indent=2)}"
+        )
         if tools:
             tracer.info(
                 f"tools: {json.dumps([t['function']['name'] for t in tools], ensure_ascii=False)}"

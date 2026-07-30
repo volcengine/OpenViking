@@ -9,6 +9,7 @@ import copy
 import inspect
 import json
 import logging
+import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Literal
 
@@ -75,6 +76,26 @@ class OpenVikingConnection:
     auto_initialize: bool = True
     async_client: Any = None
 
+    def __deepcopy__(self, memo: dict[int, Any]) -> OpenVikingConnection:
+        """Copy configuration while preserving caller-owned client identities."""
+
+        copied = type(self)(
+            client=self.client,
+            async_client=self.async_client,
+            url=self.url,
+            api_key=self.api_key,
+            account=self.account,
+            user=self.user,
+            user_id=self.user_id,
+            actor_peer_id=self.actor_peer_id,
+            path=self.path,
+            timeout=self.timeout,
+            extra_headers=copy.deepcopy(self.extra_headers, memo),
+            auto_initialize=self.auto_initialize,
+        )
+        memo[id(self)] = copied
+        return copied
+
 
 @dataclass(slots=True)
 class OpenVikingCommitPolicy:
@@ -90,6 +111,7 @@ class OpenVikingClientHandle:
     def __init__(self, connection: OpenVikingConnection):
         self._connection = connection
         self._client: Any = None
+        self._client_lock = threading.Lock()
 
     @property
     def _initialized(self) -> bool:
@@ -100,8 +122,20 @@ class OpenVikingClientHandle:
         self.reset()
 
     def reset(self) -> None:
-        client = self._client
-        self._client = None
+        with self._client_lock:
+            client = self._client
+            self._client = None
+        self._close_client(client)
+
+    def _reset_if_current(self, client: Any) -> None:
+        with self._client_lock:
+            if self._client is not client:
+                return
+            self._client = None
+        self._close_client(client)
+
+    @staticmethod
+    def _close_client(client: Any) -> None:
         if client is None:
             return
         close = getattr(client, "close", None)
@@ -113,28 +147,39 @@ class OpenVikingClientHandle:
             logger.debug("OpenViking client close during recovery failed", exc_info=True)
 
     def get(self) -> Any:
-        if self._client is None:
-            self._client = _create_client_from_connection(self._connection)
-        return self._client
+        with self._client_lock:
+            if self._client is None:
+                self._client = _create_client_from_connection(self._connection)
+            return self._client
 
     def _openviking_call(self, method_name: str, /, **kwargs: Any) -> Any:
         return self._call_with_recovery(method_name, **kwargs)
 
     def _call_with_recovery(self, method_name: str, /, *args: Any, **kwargs: Any) -> Any:
+        client = self.get()
         try:
-            return _call_client_method(self.get(), method_name, *args, **kwargs)
+            return _call_client_method(client, method_name, *args, **kwargs)
         except Exception as exc:
             if not _is_recoverable_client_error(exc):
                 raise
-            self.reset()
+            self._reset_if_current(client)
             if not _should_retry_method(method_name):
                 raise
+            retry_client = self.get()
             try:
-                return _call_client_method(self.get(), method_name, *args, **kwargs)
+                return _call_client_method(retry_client, method_name, *args, **kwargs)
             except Exception as retry_exc:
                 if _is_recoverable_client_error(retry_exc):
-                    self.reset()
+                    self._reset_if_current(retry_client)
                 raise
+
+    def __copy__(self) -> OpenVikingClientHandle:
+        return self
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> OpenVikingClientHandle:
+        copied = type(self)(copy.deepcopy(self._connection, memo))
+        memo[id(self)] = copied
+        return copied
 
     def __getattr__(self, name: str) -> Any:
         attr = getattr(self.get(), name)
@@ -362,12 +407,28 @@ async def ensure_async_client(
     return client
 
 
+def is_not_found_error(exc: BaseException) -> bool:
+    """True for OpenViking NOT_FOUND across cli/sdk exception classes."""
+
+    if isinstance(exc, FileNotFoundError):
+        return True
+    return str(getattr(exc, "code", "") or "").upper() == "NOT_FOUND"
+
+
 def apply_commit_policy(
     client: Any,
     session_id: str,
     policy: OpenVikingCommitPolicy | None,
+    *,
+    persisted_pending_tokens: Any = None,
 ) -> dict[str, Any] | None:
-    """Apply the configured session commit policy."""
+    """Apply the configured session commit policy after message persistence.
+
+    ``persisted_pending_tokens`` is the post-write value returned by
+    ``add_message`` or ``batch_add_messages``.  When an older client does not
+    return it, the pending-token policy falls back to the legacy session lookup.
+    Committing remains a separate operation from message persistence.
+    """
 
     if policy is None or policy.mode == "never":
         return None
@@ -380,15 +441,29 @@ def apply_commit_policy(
     if policy.mode != "pending_tokens":
         raise ValueError(f"Unsupported OpenViking commit policy: {policy.mode}")
 
-    try:
-        session = call_openviking(client, "get_session", session_id=session_id, auto_create=False)
-    except Exception:
-        logger.debug(
-            "Skipping OpenViking pending-token commit because session lookup failed",
-            exc_info=True,
-        )
-        return None
-    pending_tokens = int(item_value(session, "pending_tokens", 0) or 0)
+    pending_tokens: int | None = None
+    if persisted_pending_tokens is not None:
+        try:
+            pending_tokens = int(persisted_pending_tokens or 0)
+        except (TypeError, ValueError):
+            logger.debug(
+                "Ignoring invalid persisted pending-token value and falling back "
+                "to session lookup: %r",
+                persisted_pending_tokens,
+            )
+
+    if pending_tokens is None:
+        try:
+            session = call_openviking(
+                client, "get_session", session_id=session_id, auto_create=False
+            )
+        except Exception:
+            logger.debug(
+                "Skipping OpenViking pending-token commit because session lookup failed",
+                exc_info=True,
+            )
+            return None
+        pending_tokens = int(item_value(session, "pending_tokens", 0) or 0)
     if pending_tokens < policy.pending_token_threshold:
         return None
     return call_openviking(
@@ -402,6 +477,8 @@ async def aapply_commit_policy(
     client: Any,
     session_id: str,
     policy: OpenVikingCommitPolicy | None,
+    *,
+    persisted_pending_tokens: Any = None,
 ) -> dict[str, Any] | None:
     """Apply the configured session commit policy without blocking the event loop."""
 
@@ -416,20 +493,32 @@ async def aapply_commit_policy(
     if policy.mode != "pending_tokens":
         raise ValueError(f"Unsupported OpenViking commit policy: {policy.mode}")
 
-    try:
-        session = await acall_openviking(
-            client,
-            "get_session",
-            session_id=session_id,
-            auto_create=False,
-        )
-    except Exception:
-        logger.debug(
-            "Skipping OpenViking pending-token commit because session lookup failed",
-            exc_info=True,
-        )
-        return None
-    pending_tokens = int(item_value(session, "pending_tokens", 0) or 0)
+    pending_tokens: int | None = None
+    if persisted_pending_tokens is not None:
+        try:
+            pending_tokens = int(persisted_pending_tokens or 0)
+        except (TypeError, ValueError):
+            logger.debug(
+                "Ignoring invalid persisted pending-token value and falling back "
+                "to session lookup: %r",
+                persisted_pending_tokens,
+            )
+
+    if pending_tokens is None:
+        try:
+            session = await acall_openviking(
+                client,
+                "get_session",
+                session_id=session_id,
+                auto_create=False,
+            )
+        except Exception:
+            logger.debug(
+                "Skipping OpenViking pending-token commit because session lookup failed",
+                exc_info=True,
+            )
+            return None
+        pending_tokens = int(item_value(session, "pending_tokens", 0) or 0)
     if pending_tokens < policy.pending_token_threshold:
         return None
     return await acall_openviking(

@@ -1,0 +1,7 @@
+# OpenViking Assets build recipe for the "code Q&A" knowledge base.
+# Selects assets by name from the shared catalog. Pass the catalog explicitly
+# with `--catalog ../assets.yaml` when running this manifest from its directory.
+assets:
+  - openviking
+  - requests
+  - flask

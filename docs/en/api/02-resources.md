@@ -660,3 +660,4 @@ Possible shared response:
 - [Skills](04-skills.md) - Skill management APIs
 - [Retrieval](06-retrieval.md) - Search and context acquisition
 - [ovpack Guide](../guides/09-ovpack.md) - Detailed ovpack import/export documentation
+- [OpenViking Assets](../guides/18-openviking-assets.md) - Declarative resource-set protocol and usage guide

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from typing import Any, Literal
 
 from pydantic import ConfigDict, Field, PrivateAttr
@@ -29,6 +30,35 @@ from openviking.integrations.langchain.client import (
     stringify,
 )
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
+
+
+class _SharedSyncClientCache:
+    """Share one lazily created sync client across shallow retriever copies."""
+
+    def __init__(self) -> None:
+        self._client: Any = None
+        self._owned = False
+        self._lock = threading.Lock()
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> _SharedSyncClientCache:
+        copied = type(self)()
+        memo[id(self)] = copied
+        return copied
+
+    def get(self, factory: Any, *, owned: bool) -> Any:
+        with self._lock:
+            if self._client is None:
+                self._client = factory()
+                self._owned = owned
+            return self._client
+
+    def pop_owned(self) -> Any:
+        with self._lock:
+            client = self._client
+            owned = self._owned
+            self._client = None
+            self._owned = False
+        return client if owned else None
 
 
 class OpenVikingRetriever(BaseRetriever):
@@ -61,18 +91,39 @@ class OpenVikingRetriever(BaseRetriever):
     metadata_prefix: str = "openviking"
     tags: list[str] | None = Field(default=None, exclude=True)
 
-    _client_cache: Any = PrivateAttr(default=None)
+    _sync_client_cache: _SharedSyncClientCache = PrivateAttr(default_factory=_SharedSyncClientCache)
     _async_clients: LoopScopedAsyncClientCache = PrivateAttr(
         default_factory=LoopScopedAsyncClientCache
     )
-    _owns_client_cache: bool = PrivateAttr(default=False)
     _closed: bool = PrivateAttr(default=False)
+
+    def __deepcopy__(
+        self,
+        memo: dict[int, Any] | None = None,
+    ) -> OpenVikingRetriever:
+        """Copy configuration without cloning clients or cached runtime state."""
+
+        memo = {} if memo is None else memo
+        for client in (self.client, self.async_client):
+            if client is not None:
+                memo[id(client)] = client
+
+        sync_client_cache = getattr(self, "_client_cache", None)
+        if getattr(self, "_owns_client_cache", False) and sync_client_cache is not None:
+            memo[id(sync_client_cache)] = None
+
+        copied = super().__deepcopy__(memo)
+        private_attributes = getattr(type(copied), "__private_attributes__", {})
+        private_state = copied.__pydantic_private__
+        if private_state is not None and "_client_cache" in private_attributes:
+            private_state["_client_cache"] = None
+            private_state["_owns_client_cache"] = False
+        return copied
 
     def _get_client(self) -> Any:
         self._raise_if_closed()
-        if self._client_cache is None:
-            self._owns_client_cache = self.client is None
-            self._client_cache = ensure_client(
+        return self._sync_client_cache.get(
+            lambda: ensure_client(
                 OpenVikingConnection(
                     client=self.client,
                     url=self.url,
@@ -86,8 +137,9 @@ class OpenVikingRetriever(BaseRetriever):
                     extra_headers=self.extra_headers,
                     auto_initialize=self.auto_initialize,
                 )
-            )
-        return self._client_cache
+            ),
+            owned=self.client is None,
+        )
 
     async def get_async_client(self) -> Any:
         """Return the async client interface used by this retriever.
@@ -132,12 +184,11 @@ class OpenVikingRetriever(BaseRetriever):
         if self._closed:
             return
         self._closed = True
-        sync_client = self._client_cache
-        self._client_cache = None
+        sync_client = self._sync_client_cache.pop_owned()
         async_clients = await asyncio.to_thread(self._async_clients.pop_all)
 
         await aclose_openviking_clients(
-            sync_client if self._owns_client_cache else None,
+            sync_client,
             *async_clients,
         )
 

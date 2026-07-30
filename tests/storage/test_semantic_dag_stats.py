@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -11,17 +10,26 @@ from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecuto
 from openviking_cli.session.user_id import UserIdentifier
 
 
+class _FakeAgfs:
+    async def pathlock_acquire_exact_batch(self, _paths):
+        return {"lease_ref": "test"}
+
+    async def pathlock_release(self, _lease):
+        return None
+
+
 class _FakeVikingFS:
     def __init__(self, tree):
         self._tree = tree
         self.writes = []
+        self._async_agfs = _FakeAgfs()
 
     async def ls(self, uri, node_limit=None, ctx=None):
         del node_limit
         return self._tree.get(uri, [])
 
-    async def write_file(self, path, content, ctx=None, lock_handle=None):
-        del ctx, lock_handle
+    async def write_file(self, path, content, ctx=None, lease_ref=None):
+        del ctx, lease_ref
         self.writes.append((path, content))
 
     def _uri_to_path(self, uri, ctx=None):
@@ -43,7 +51,14 @@ class _FakeProcessor:
         return overview, "abstract"
 
     async def _vectorize_directory(
-        self, uri, context_type, abstract, overview, ctx=None, semantic_msg_id=None
+        self,
+        uri,
+        context_type,
+        abstract,
+        overview,
+        ctx=None,
+        semantic_msg_id=None,
+        ingest_options=None,
     ):
         self.vectorized_dirs.append(uri)
 
@@ -56,6 +71,7 @@ class _FakeProcessor:
         ctx=None,
         semantic_msg_id=None,
         use_summary=False,
+        ingest_options=None,
     ):
         self.vectorized_files.append(file_path)
 
@@ -135,6 +151,7 @@ class _FailingVectorizeProcessor(_FakeProcessor):
         ctx=None,
         semantic_msg_id=None,
         use_summary=False,
+        ingest_options=None,
     ):
         self.vectorized_files.append(file_path)
         try:
@@ -143,7 +160,14 @@ class _FailingVectorizeProcessor(_FakeProcessor):
             await self._tracker.decrement(semantic_msg_id)
 
     async def _vectorize_directory(
-        self, uri, context_type, abstract, overview, ctx=None, semantic_msg_id=None
+        self,
+        uri,
+        context_type,
+        abstract,
+        overview,
+        ctx=None,
+        semantic_msg_id=None,
+        ingest_options=None,
     ):
         self.vectorized_dirs.append(uri)
         await self._tracker.decrement(semantic_msg_id)
@@ -152,7 +176,14 @@ class _FailingVectorizeProcessor(_FakeProcessor):
 
 class _StalledEmbeddingProcessor(_FailingVectorizeProcessor):
     async def _vectorize_directory(
-        self, uri, context_type, abstract, overview, ctx=None, semantic_msg_id=None
+        self,
+        uri,
+        context_type,
+        abstract,
+        overview,
+        ctx=None,
+        semantic_msg_id=None,
+        ingest_options=None,
     ):
         self.vectorized_dirs.append(uri)
         # Both directory messages were accepted, but the embedding worker is
@@ -204,8 +235,6 @@ async def test_semantic_dag_aborts_stalled_embedding_attempt_after_dispatch_fail
     )
 
     processor = _StalledEmbeddingProcessor(tracker)
-    lock = MagicMock()
-    lock.close = AsyncMock()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
     executor = SemanticDagExecutor(
         processor=processor,
@@ -213,7 +242,6 @@ async def test_semantic_dag_aborts_stalled_embedding_attempt_after_dispatch_fail
         max_concurrent_llm=2,
         ctx=ctx,
         semantic_msg_id="semantic-root",
-        lock=lock,
     )
 
     with pytest.raises(RuntimeError, match="embedding enqueue unavailable"):
@@ -227,7 +255,6 @@ async def test_semantic_dag_aborts_stalled_embedding_attempt_after_dispatch_fail
     aborted_id = tracker.aborted_ids[0]
     assert aborted_id.startswith("semantic-root:")
     assert await tracker.decrement(aborted_id) is None
-    lock.close.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -250,21 +277,6 @@ async def test_semantic_dag_stats_collects_nodes(monkeypatch):
         lambda: _DummyTracker(),
     )
 
-    # Mock lock layer: LockContext as no-op passthrough
-    mock_handle = MagicMock()
-    monkeypatch.setattr(
-        "openviking.storage.transaction.lock_context.LockContext.__aenter__",
-        AsyncMock(return_value=mock_handle),
-    )
-    monkeypatch.setattr(
-        "openviking.storage.transaction.lock_context.LockContext.__aexit__",
-        AsyncMock(return_value=False),
-    )
-    monkeypatch.setattr(
-        "openviking.storage.transaction.get_lock_manager",
-        lambda: MagicMock(),
-    )
-
     processor = _FakeProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
     executor = SemanticDagExecutor(
@@ -284,7 +296,11 @@ async def test_semantic_dag_stats_collects_nodes(monkeypatch):
     assert stats.in_progress_nodes == 0
     assert processor.vectorized_dirs == [f"{root_uri}/child", root_uri]
     assert sorted(processor.vectorized_files) == sorted(
-        [f"{root_uri}/a.txt", f"{root_uri}/b.txt", f"{root_uri}/child/c.txt"]
+        [
+            f"{root_uri}/a.txt",
+            f"{root_uri}/b.txt",
+            f"{root_uri}/child/c.txt",
+        ]
     )
 
 
@@ -384,20 +400,6 @@ async def test_semantic_dag_skip_vectorization_does_not_schedule_tasks(monkeypat
     monkeypatch.setattr(
         "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
         lambda: tracker,
-    )
-
-    mock_handle = MagicMock()
-    monkeypatch.setattr(
-        "openviking.storage.transaction.lock_context.LockContext.__aenter__",
-        AsyncMock(return_value=mock_handle),
-    )
-    monkeypatch.setattr(
-        "openviking.storage.transaction.lock_context.LockContext.__aexit__",
-        AsyncMock(return_value=False),
-    )
-    monkeypatch.setattr(
-        "openviking.storage.transaction.get_lock_manager",
-        lambda: MagicMock(),
     )
 
     processor = _FakeProcessor()

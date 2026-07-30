@@ -47,6 +47,8 @@ class _TokenInfo:
     reason: str
     actor_peer_id: str
     processing_mode: ProcessingMode
+    tags: Optional[list[str]]
+    tag_mode: str
     expires_at: float
 
 
@@ -60,6 +62,8 @@ class ConsumedUploadToken:
     reason: str
     actor_peer_id: str
     processing_mode: ProcessingMode
+    tags: Optional[list[str]]
+    tag_mode: str
 
 
 class UploadTokenStore:
@@ -76,6 +80,8 @@ class UploadTokenStore:
         reason: str = "",
         actor_peer_id: str = "",
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
+        tags: Optional[list[str]] = None,
+        tag_mode: str = "replace",
     ) -> Tuple[str, float]:
         """Mint a fresh token bound to (account, user) plus ``to``/``reason``/``actor_peer_id``.
 
@@ -93,6 +99,8 @@ class UploadTokenStore:
             reason,
             actor_peer_id,
             processing_mode,
+            tags,
+            tag_mode,
             expires_at,
         )
         for _ in range(8):
@@ -118,6 +126,8 @@ class UploadTokenStore:
             info.reason,
             info.actor_peer_id,
             info.processing_mode,
+            info.tags,
+            info.tag_mode,
         )
 
     def peek(self, token: str) -> Optional[_TokenInfo]:

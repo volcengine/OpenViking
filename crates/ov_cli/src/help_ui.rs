@@ -142,6 +142,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 label: "ov add-resource https://example.com/sitemap.xml --watch-interval 1440",
                 description: "Import a whole site via sitemap/RSS and refresh it daily.",
             },
+            HelpItem {
+                label: "ov add-resource tos://bucket/docs/ --add-type tos --to viking://resources/docs",
+                description: "Declare the Connector source type explicitly (Connector integration must be enabled).",
+            },
         ],
         next_steps: &[
             HelpItem {

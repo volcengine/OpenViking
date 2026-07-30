@@ -36,6 +36,8 @@ type AddResourceOptions struct {
 	PreserveStructure   *bool
 	WatchInterval       float64
 	Args                map[string]any
+	Tags                []string
+	TagMode             string
 	Telemetry           any
 }
 

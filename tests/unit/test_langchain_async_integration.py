@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import sys
 import threading
 from typing import Any
 
@@ -14,6 +15,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from openviking.integrations.langchain import (
     InMemoryOpenVikingClient,
+    OpenVikingCancellationProgress,
     OpenVikingChatMessageHistory,
     OpenVikingCommitPolicy,
     OpenVikingContextMiddleware,
@@ -21,6 +23,7 @@ from openviking.integrations.langchain import (
     OpenVikingRetriever,
     OpenVikingSessionContextAssembler,
     OpenVikingSessionRecorder,
+    get_openviking_cancellation_progress,
 )
 from openviking.integrations.langchain.client import (
     OpenVikingAsyncClientHandle,
@@ -58,6 +61,94 @@ class AsyncInMemoryOpenVikingClient:
             return method(*args, **kwargs)
 
         return call
+
+
+def test_connection_handle_and_retriever_deepcopy_preserve_injected_clients():
+    class NonCopyableClient:
+        def __deepcopy__(self, _memo: dict[int, Any]) -> None:
+            raise AssertionError("live clients must not be deep-copied")
+
+    client = NonCopyableClient()
+    async_client = NonCopyableClient()
+    connection = OpenVikingConnection(
+        client=client,
+        async_client=async_client,
+        url="http://localhost:1933",
+        extra_headers={"X-Tenant": "tenant-a"},
+    )
+
+    copied_connection = copy.deepcopy(connection)
+
+    assert copied_connection is not connection
+    assert copied_connection.client is client
+    assert copied_connection.async_client is async_client
+    assert copied_connection.extra_headers == connection.extra_headers
+    assert copied_connection.extra_headers is not connection.extra_headers
+
+    async_handle = OpenVikingAsyncClientHandle(connection)
+    async_handle._client = async_client
+    copied_async_handle = copy.deepcopy(async_handle)
+
+    assert copied_async_handle is not async_handle
+    assert copied_async_handle._connection.async_client is async_client
+    assert copied_async_handle._client is None
+
+    retriever = OpenVikingRetriever(
+        client=client,
+        async_client=async_client,
+        extra_headers={"X-Tenant": "tenant-a"},
+        target_uri=["viking://resources"],
+        filter={"category": ["guide"]},
+        tags=["stable"],
+    )
+    copied_retriever = copy.deepcopy(retriever)
+
+    assert copied_retriever is not retriever
+    assert copied_retriever.client is client
+    assert copied_retriever.async_client is async_client
+    assert copied_retriever.extra_headers == retriever.extra_headers
+    assert copied_retriever.extra_headers is not retriever.extra_headers
+    assert copied_retriever.target_uri == retriever.target_uri
+    assert copied_retriever.target_uri is not retriever.target_uri
+    assert copied_retriever.filter == retriever.filter
+    assert copied_retriever.filter is not retriever.filter
+    assert copied_retriever.tags == retriever.tags
+    assert copied_retriever.tags is not retriever.tags
+
+
+def test_retriever_deepcopy_discards_owned_sync_client(monkeypatch):
+    instances: list[Any] = []
+
+    class NonCopyableSyncHTTPClient:
+        def __init__(self, **_kwargs: Any):
+            self.closed = False
+            instances.append(self)
+
+        def __deepcopy__(self, _memo: dict[int, Any]) -> None:
+            raise AssertionError("owned live clients must not be deep-copied")
+
+        def initialize(self) -> None:
+            return None
+
+        def close(self) -> None:
+            self.closed = True
+
+        def find(self, **_kwargs: Any) -> dict[str, Any]:
+            return {"memories": [], "resources": [], "skills": []}
+
+    import openviking.client as client_module
+
+    monkeypatch.setattr(client_module, "SyncHTTPClient", NonCopyableSyncHTTPClient)
+    retriever = OpenVikingRetriever(url="http://localhost:1933")
+
+    assert retriever.invoke("original") == []
+    copied = copy.deepcopy(retriever)
+    assert copied.invoke("copied") == []
+
+    assert len(instances) == 2
+    asyncio.run(copied.aclose())
+    asyncio.run(retriever.aclose())
+    assert all(client.closed for client in instances)
 
 
 @pytest.mark.asyncio
@@ -946,6 +1037,164 @@ async def test_async_recorder_reports_confirmed_prefix_for_partial_batch_retry()
 
 
 @pytest.mark.asyncio
+async def test_async_middleware_preserves_partial_progress_when_recording_is_cancelled():
+    class CancelSecondBatchClient(AsyncInMemoryOpenVikingClient):
+        def __init__(self):
+            super().__init__()
+            self.batch_calls = 0
+            self.cancellation = asyncio.CancelledError("cancel second batch")
+
+        async def batch_add_messages(
+            self,
+            session_id: str,
+            messages: list[dict[str, Any]],
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            self.batch_calls += 1
+            if self.batch_calls == 2:
+                raise self.cancellation
+            return self.backing.batch_add_messages(session_id, messages, **kwargs)
+
+    client = CancelSecondBatchClient()
+    middleware = OpenVikingContextMiddleware(
+        async_client=client,
+        session_id_resolver=lambda _state, _runtime: "async-cancelled-batch",
+    )
+    messages = [HumanMessage(content=f"Message {index}") for index in range(150)]
+    state = {"messages": messages}
+
+    recording = asyncio.create_task(middleware.aafter_agent(state, runtime=None))
+    with pytest.raises(asyncio.CancelledError) as captured:
+        await recording
+    await middleware.aafter_agent(state, runtime=None)
+
+    progress = get_openviking_cancellation_progress(captured.value)
+    assert recording.cancelled() is True
+    if sys.version_info >= (3, 11):
+        # Python 3.10 rebuilds CancelledError at task boundaries via
+        # Future._make_cancelled_error(), preserving the original in __context__.
+        assert captured.value is client.cancellation
+    assert not isinstance(captured.value, Exception)
+    assert isinstance(progress, OpenVikingCancellationProgress)
+    assert progress.messages_written == 100
+    assert progress.input_messages_consumed == 100
+    assert client.batch_calls == 3
+    assert len(client.backing.sessions["async-cancelled-batch"]) == 150
+
+
+@pytest.mark.asyncio
+async def test_async_middleware_retries_cancelled_commit_without_duplicate_writes():
+    class CancelFirstCommitClient(AsyncInMemoryOpenVikingClient):
+        def __init__(self):
+            super().__init__()
+            self.batch_calls = 0
+            self.commit_calls = 0
+            self.cancellation = asyncio.CancelledError("cancel first commit")
+
+        async def batch_add_messages(
+            self,
+            session_id: str,
+            messages: list[dict[str, Any]],
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            self.batch_calls += 1
+            return self.backing.batch_add_messages(session_id, messages, **kwargs)
+
+        async def commit_session(
+            self,
+            session_id: str,
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            self.commit_calls += 1
+            if self.commit_calls == 1:
+                raise self.cancellation
+            return self.backing.commit_session(session_id, **kwargs)
+
+    client = CancelFirstCommitClient()
+    middleware = OpenVikingContextMiddleware(
+        async_client=client,
+        session_id_resolver=lambda _state, _runtime: "async-cancelled-commit",
+        commit_policy=OpenVikingCommitPolicy(mode="always"),
+    )
+    state = {
+        "messages": [
+            HumanMessage(content="Persist once."),
+            AIMessage(content="Commit once."),
+        ]
+    }
+
+    with pytest.raises(asyncio.CancelledError) as captured:
+        await middleware.aafter_agent(state, runtime=None)
+    await middleware.aafter_agent(state, runtime=None)
+
+    progress = get_openviking_cancellation_progress(captured.value)
+    assert captured.value is client.cancellation
+    assert isinstance(progress, OpenVikingCancellationProgress)
+    assert progress.commit_pending is True
+    assert progress.input_messages_consumed == 2
+    assert client.batch_calls == 1
+    assert client.commit_calls == 2
+    assert len(client.backing.archives["async-cancelled-commit"][0]["messages"]) == 2
+
+
+@pytest.mark.parametrize(
+    "timeout_api",
+    [
+        "wait_for",
+        pytest.param(
+            "timeout",
+            marks=pytest.mark.skipif(
+                not hasattr(asyncio, "timeout"),
+                reason="asyncio.timeout requires Python 3.11+",
+            ),
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_async_recording_cancellation_preserves_timeout_contract_and_retry(
+    timeout_api: str,
+):
+    class BlockSecondBatchClient(AsyncInMemoryOpenVikingClient):
+        def __init__(self):
+            super().__init__()
+            self.batch_calls = 0
+
+        async def batch_add_messages(
+            self,
+            session_id: str,
+            messages: list[dict[str, Any]],
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            self.batch_calls += 1
+            if self.batch_calls == 2:
+                await asyncio.Event().wait()
+            return self.backing.batch_add_messages(session_id, messages, **kwargs)
+
+    client = BlockSecondBatchClient()
+    middleware = OpenVikingContextMiddleware(
+        async_client=client,
+        session_id_resolver=lambda _state, _runtime: f"async-{timeout_api}",
+    )
+    state = {"messages": [HumanMessage(content=f"Message {index}") for index in range(150)]}
+
+    with pytest.raises(asyncio.TimeoutError) as captured:
+        if timeout_api == "wait_for":
+            await asyncio.wait_for(middleware.aafter_agent(state, runtime=None), timeout=0.05)
+        else:
+            async with asyncio.timeout(0.05):
+                await middleware.aafter_agent(state, runtime=None)
+
+    progress = get_openviking_cancellation_progress(captured.value)
+    assert isinstance(progress, OpenVikingCancellationProgress)
+    assert progress.input_messages_consumed == 100
+
+    await middleware.aafter_agent(state, runtime=None)
+
+    assert client.batch_calls == 3
+    assert len(client.backing.sessions[f"async-{timeout_api}"]) == 150
+
+
+@pytest.mark.asyncio
 async def test_async_recorder_closes_only_internally_created_client(monkeypatch):
     instances: list[Any] = []
 
@@ -1044,6 +1293,62 @@ async def test_async_context_assembler_combines_session_and_recall():
     assert "Active async turn." in assembled.block
     assert "Async context is azure." in assembled.block
     assert assembled.context_parts[0]["uri"] == "viking://resources/runbooks/async.md"
+
+
+@pytest.mark.asyncio
+async def test_async_assemble_skips_create_for_existing_session():
+    """The async path must get the same per-turn call reduction as the sync one."""
+    backing = InMemoryOpenVikingClient()
+    backing.add_message("async-existing", "user", content="Existing async turn.")
+    client = AsyncInMemoryOpenVikingClient(backing)
+    assembler = OpenVikingSessionContextAssembler(
+        async_client=client,
+        target_uri="viking://resources",
+        include_recall=False,
+    )
+
+    await assembler.aassemble(session_id="async-existing")
+    await assembler.aassemble(session_id="async-existing")
+
+    assert client.calls == ["get_session_context", "get_session_context"]
+
+
+@pytest.mark.asyncio
+async def test_async_assemble_creates_session_only_on_not_found():
+    """A missing session is still materialized, without a second context read."""
+    backing = InMemoryOpenVikingClient()
+    client = AsyncInMemoryOpenVikingClient(backing)
+    assembler = OpenVikingSessionContextAssembler(
+        async_client=client,
+        target_uri="viking://resources",
+        include_recall=False,
+    )
+
+    await assembler.aassemble(session_id="async-missing")
+
+    assert client.calls == ["get_session_context", "create_session"]
+    assert "async-missing" in backing.sessions
+
+
+@pytest.mark.asyncio
+async def test_async_history_does_not_create_session_on_non_not_found_error():
+    """Only NOT_FOUND may trigger a create, matching the sync error semantics."""
+    backing = InMemoryOpenVikingClient()
+    backing.add_message("async-flaky", "user", content="Existing turn.")
+    client = AsyncInMemoryOpenVikingClient(backing)
+
+    async def failing_get_session_context(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        client.calls.append("get_session_context")
+        raise RuntimeError("upstream 503")
+
+    client.get_session_context = failing_get_session_context
+    history = OpenVikingChatMessageHistory(
+        session_id="async-flaky",
+        async_client=client,
+    )
+
+    assert await history.aget_messages() == []
+    assert "create_session" not in client.calls
 
 
 @pytest.mark.asyncio

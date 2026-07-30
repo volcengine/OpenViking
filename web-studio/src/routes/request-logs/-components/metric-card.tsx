@@ -10,8 +10,8 @@ type MetricCardProps = {
 
 export function MetricCard({ icon, label, value }: MetricCardProps) {
   return (
-    <Card className="bg-card/70">
-      <CardContent className="flex items-center justify-between gap-4 p-4">
+    <Card className="bg-card/70 py-0">
+      <CardContent className="flex min-h-20 items-center justify-between gap-4 px-5 py-3">
         <div>
           <p className="text-sm text-muted-foreground">{label}</p>
           <p className="mt-1 text-2xl font-semibold tabular-nums">{value}</p>

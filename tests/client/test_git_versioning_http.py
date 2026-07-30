@@ -24,18 +24,17 @@ import httpx
 import pytest
 import pytest_asyncio
 
-ragfs_python = pytest.importorskip("ragfs_python")
-
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.service.core import OpenVikingService
-from openviking.storage.transaction import reset_lock_manager
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig
 from openviking_cli.utils.config.vlm_config import VLMConfig
+
+pytest.importorskip("ragfs_python")
 
 
 pytestmark = pytest.mark.asyncio
@@ -86,7 +85,6 @@ def http_temp_dir():
 @pytest_asyncio.fixture(scope="function")
 async def http_service(http_temp_dir: Path, monkeypatch):
     """Stand up a real OpenVikingService backed by a temp data dir."""
-    reset_lock_manager()
     fake_embedder_cls = _install_fake_embedder(monkeypatch)
     _install_fake_vlm(monkeypatch)
 
@@ -107,7 +105,6 @@ async def http_service(http_temp_dir: Path, monkeypatch):
         yield svc
     finally:
         await svc.close()
-        reset_lock_manager()
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -195,6 +192,7 @@ async def test_http_log_filters_repeated_paths_end_to_end(http_app, http_service
         headers=_AUTH_HEADERS,
         timeout=30.0,
     ) as client:
+
         async def commit(uri: str, body: bytes, message: str) -> dict:
             await _write_blob(http_service, uri, body)
             response = await client.post(

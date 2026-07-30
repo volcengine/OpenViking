@@ -24,7 +24,6 @@ from openviking.server.config import ServerConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.service.core import OpenVikingService
 from openviking.storage.queuefs import QueueManager, SessionCommitMsg, get_queue_manager
-from openviking.storage.transaction import reset_lock_manager
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig
 from openviking_cli.utils.config.vlm_config import VLMConfig
@@ -168,7 +167,6 @@ def upload_temp_dir(temp_dir: Path, monkeypatch) -> Path:
 @pytest_asyncio.fixture(scope="function")
 async def service(temp_dir: Path, monkeypatch):
     """Create and initialize an OpenVikingService in embedded mode."""
-    reset_lock_manager()
     fake_embedder_cls = _install_fake_embedder(monkeypatch)
     _install_fake_vlm(monkeypatch)
     svc = OpenVikingService(
@@ -179,7 +177,6 @@ async def service(temp_dir: Path, monkeypatch):
     _install_session_commit_queue_fallback(svc, monkeypatch)
     yield svc
     await svc.close()
-    reset_lock_manager()
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -233,7 +230,6 @@ async def client_with_resource(client, service, sample_markdown_file):
 async def running_server(temp_dir: Path, monkeypatch):
     """Start a real uvicorn server in a background thread."""
     await AsyncOpenViking.reset()
-    reset_lock_manager()
     fake_embedder_cls = _install_fake_embedder(monkeypatch)
     _install_fake_vlm(monkeypatch)
 

@@ -642,11 +642,21 @@ class AsyncHTTPClient:
         args: Optional[Dict[str, Any]] = None,
         telemetry: Any = False,
         processing_mode: Optional[str] = None,
+        add_type: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
     ) -> Dict[str, Any]:
+        if add_type is not None:
+            add_type = add_type.strip() or None
+        if add_type and parent:
+            raise ValueError("'add_type' cannot be combined with 'parent'.")
+        if add_type and not to:
+            raise ValueError("'add_type' requires an exact 'to' target.")
         if to and parent:
             raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
 
         request_data = {
+            "add_type": add_type,
             "to": to,
             "parent": parent,
             "reason": reason,
@@ -664,11 +674,14 @@ class AsyncHTTPClient:
         }
         if processing_mode is not None:
             request_data["processing_mode"] = processing_mode
+        if tags is not None:
+            request_data["tags"] = tags
+            request_data["tag_mode"] = tag_mode
         if preserve_structure is not None:
             request_data["preserve_structure"] = preserve_structure
 
         path_obj = Path(path)
-        if path_obj.exists():
+        if not add_type and path_obj.exists():
             if path_obj.is_dir():
                 request_data["source_name"] = path_obj.name
                 zip_path = self._zip_directory(path)
@@ -1842,10 +1855,14 @@ class SyncHTTPClient:
         args: Optional[Dict[str, Any]] = None,
         telemetry: Any = False,
         processing_mode: Optional[str] = None,
+        add_type: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.add_resource(
                 path=path,
+                add_type=add_type,
                 to=to,
                 parent=parent,
                 reason=reason,
@@ -1861,6 +1878,8 @@ class SyncHTTPClient:
                 watch_interval=watch_interval,
                 processing_mode=processing_mode,
                 args=args,
+                tags=tags,
+                tag_mode=tag_mode,
                 telemetry=telemetry,
             )
         )

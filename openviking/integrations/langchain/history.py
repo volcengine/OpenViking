@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Sequence
 from typing import Any, Callable
@@ -20,6 +21,7 @@ from openviking.integrations.langchain.client import (
     OpenVikingCommitPolicy,
     acall_openviking,
     call_openviking,
+    is_not_found_error,
 )
 from openviking.integrations.langchain.messages import (
     langchain_message_to_openviking as langchain_message_to_openviking,
@@ -33,6 +35,7 @@ from openviking.integrations.langchain.messages import (
 from openviking.integrations.langchain.recording import (
     OpenVikingPartialWriteError,
     OpenVikingSessionRecorder,
+    get_openviking_cancellation_progress,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,6 +67,7 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
         context_parts_acknowledger: Callable[[str], None] | None = None,
         peer_id: str | None = None,
         peer_id_provider: Callable[[str], str | None] | None = None,
+        _recorder: OpenVikingSessionRecorder | None = None,
     ):
         self.session_id = session_id
         self.peer_id = peer_id
@@ -75,7 +79,8 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
         self.context_parts_provider = context_parts_provider
         self.context_parts_acknowledger = context_parts_acknowledger
         self._pending_context_parts: list[dict[str, Any]] = []
-        self._recorder = OpenVikingSessionRecorder(
+        self._owns_recorder = _recorder is None
+        self._recorder = _recorder or OpenVikingSessionRecorder(
             client=client,
             async_client=async_client,
             url=url,
@@ -111,9 +116,10 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
                 session_id=self.session_id,
                 token_budget=self.token_budget,
             )
-        except Exception:
+        except Exception as exc:
             logger.debug("OpenViking chat history context fetch failed", exc_info=True)
-            self._ensure_session(client)
+            if is_not_found_error(exc):
+                self._ensure_session(client)
             return []
 
         return restore_openviking_messages(context.get("messages") or [])
@@ -129,9 +135,10 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
                 session_id=self.session_id,
                 token_budget=self.token_budget,
             )
-        except Exception:
+        except Exception as exc:
             logger.debug("OpenViking chat history context fetch failed", exc_info=True)
-            await self._aensure_session(client)
+            if is_not_found_error(exc):
+                await self._aensure_session(client)
             return []
 
         return restore_openviking_messages(context.get("messages") or [])
@@ -169,6 +176,11 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
             if exc.context_attached:
                 self._acknowledge_context_parts()
             raise
+        except asyncio.CancelledError as exc:
+            progress = get_openviking_cancellation_progress(exc)
+            if progress is not None and progress.context_attached:
+                self._acknowledge_context_parts()
+            raise
         if result.context_attached:
             self._acknowledge_context_parts()
 
@@ -190,13 +202,15 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
         """Release resources owned by this history adapter."""
 
         self._acknowledge_context_parts()
-        self._recorder.close()
+        if self._owns_recorder:
+            self._recorder.close()
 
     async def aclose(self) -> None:
         """Asynchronously release resources owned by this history adapter."""
 
         self._acknowledge_context_parts()
-        await self._recorder.aclose()
+        if self._owns_recorder:
+            await self._recorder.aclose()
 
     def _get_client(self) -> Any:
         return self._recorder.client
@@ -226,6 +240,22 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
             return None
         text = str(value).strip()
         return text or None
+
+    def _prepare_invocation(
+        self,
+        *,
+        peer_id: str | None,
+        context_parts: Sequence[dict[str, Any]] = (),
+    ) -> None:
+        """Set invocation-local attribution and recalled context."""
+
+        self.peer_id = peer_id
+        self._pending_context_parts = list(context_parts)
+
+    def _discard_invocation_context(self) -> None:
+        """Discard recalled context owned by an interrupted invocation."""
+
+        self._pending_context_parts = []
 
     def _acknowledge_context_parts(self) -> None:
         had_pending_context = bool(self._pending_context_parts)

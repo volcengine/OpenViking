@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -33,8 +34,10 @@ from openviking.integrations.langchain.context import (
     OpenVikingSessionContextAssembler,
 )
 from openviking.integrations.langchain.recording import (
+    OpenVikingCancellationProgress,
     OpenVikingPartialWriteError,
     OpenVikingSessionRecorder,
+    get_openviking_cancellation_progress,
 )
 from openviking.integrations.langchain.retrievers import OpenVikingRetriever
 
@@ -294,6 +297,11 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         except OpenVikingPartialWriteError as exc:
             self._handle_partial_capture(plan, exc)
             raise
+        except asyncio.CancelledError as exc:
+            progress = get_openviking_cancellation_progress(exc)
+            if progress is not None:
+                self._handle_partial_capture(plan, progress)
+            raise
 
         self._complete_capture(plan, context_attached=result.context_attached)
         return None
@@ -336,7 +344,7 @@ class OpenVikingContextMiddleware(AgentMiddleware):
     def _handle_partial_capture(
         self,
         plan: _CapturePlan,
-        error: OpenVikingPartialWriteError,
+        error: OpenVikingPartialWriteError | OpenVikingCancellationProgress,
     ) -> None:
         if error.input_messages_consumed:
             consumed_end = plan.start + error.input_messages_consumed

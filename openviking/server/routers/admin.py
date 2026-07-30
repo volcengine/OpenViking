@@ -33,6 +33,7 @@ from openviking_cli.exceptions import (
     PermissionDeniedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -64,6 +65,24 @@ class RegenerateKeyRequest(BaseModel):
 
 class MigrateLegacyDataRequest(BaseModel):
     action: str = "migrate"
+
+
+@router.get("/agent-evolution")
+@require_auth_root
+async def get_agent_evolution_status(
+    request: Request,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Return the live instance-wide Agent Evolution switch."""
+    del request
+    del ctx
+    return Response(
+        status="ok",
+        result={
+            "enabled": get_service().sessions.get_agent_evolution_enabled(),
+            "account_id": get_openviking_config().default_account,
+        },
+    )
 
 
 def _get_api_key_manager(request: Request):

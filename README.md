@@ -183,6 +183,17 @@ For production, run OpenViking as a standalone HTTP service — see [Server depl
 
 Prefer not to operate it yourself? OpenViking Personal is officially hosted and ready to use, scales far beyond local hardware with VikingDB, and includes a free trial for up to 50 files; existing open-source users can move over with the migration tool. → [openviking.ai](https://www.openviking.ai)
 
+## Managed Services
+
+### Volcano Engine (China Region)
+Officially hosted on Volcano Engine, available in China.
+- Product page: [www.volcengine.com/product/openviking-service](https://www.volcengine.com/product/openviking-service)
+- Documentation: [docs.volcengine.com/docs/84313/2374478](https://docs.volcengine.com/docs/84313/2374478)
+
+### Coming Soon
+- Global hosting service on [BytePlus](https://www.byteplus.com) (for regions outside China)
+- Private distributed enterprise edition (deployed via activation code, supports BYOC)
+
 ## Research
 
 OpenViking open-sources a subset of the core capabilities described in the VikingMem paper:
@@ -191,6 +202,18 @@ OpenViking open-sources a subset of the core capabilities described in the Vikin
 > Jiajie Fu, Junwen Chen, Mengzhao Wang, Aoxiang He, Maojia Sheng, Xiangyu Ke, Yifan Zhu, and Yunjun Gao.
 > arXiv:2605.29640, 2026. Accepted by VLDB 2026.
 > 📄 [Read the paper on arXiv](https://arxiv.org/abs/2605.29640)
+
+## Partner Projects
+
+OpenViking welcomes collaboration with other open-source projects to build the context data ecosystem. Our confirmed partners include:
+
+- [deer-flow](https://github.com/bytedance/deer-flow) - Open-source long-horizon SuperAgent harness
+- [NoKV](https://github.com/NoKV-Lab/NoKV) - AI native distributed file system
+- [loopx](https://github.com/huangruiteng/loopx) - Lightweight loop engineering state kernel
+- [Hermes Agent](https://github.com/NousResearch/hermes-agent) - The agent that grows with you
+- [heima](https://github.com/litentry/heima) - Substrate-based EVM-compatible L1 chain
+
+Interested in joining our partner list? Please submit an issue to our community to apply.
 
 ## Community & contributing
 
