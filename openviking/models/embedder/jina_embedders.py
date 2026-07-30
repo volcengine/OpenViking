@@ -5,13 +5,14 @@
 from typing import Any, Dict, List, Optional
 
 import openai
+from openviking_cli.utils import get_logger
 
-from openviking.models.embedder.base import (
-    DenseEmbedderBase,
-    EmbedResult,
+from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+from openviking.models.network import (
+    create_optional_async_httpx_client,
+    create_optional_sync_httpx_client,
 )
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
-from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
@@ -118,10 +119,17 @@ class JinaDenseEmbedder(DenseEmbedderBase):
             raise ValueError("api_key is required")
 
         # Initialize OpenAI-compatible client with Jina base URL
-        self.client = openai.OpenAI(
+        sync_http_client = create_optional_sync_httpx_client(
+            self.api_base,
+            client_cls=openai.DefaultHttpxClient,
+        )
+        client_kwargs = dict(
             api_key=self.api_key,
             base_url=self.api_base,
         )
+        if sync_http_client is not None:
+            client_kwargs["http_client"] = sync_http_client
+        self.client = openai.OpenAI(**client_kwargs)
         self._async_client_cache = LoopScopedAsyncClientCache()
 
         # Determine dimension
@@ -159,12 +167,20 @@ class JinaDenseEmbedder(DenseEmbedderBase):
         return kwargs
 
     def _get_async_client(self):
-        return self._async_client_cache.get(
-            lambda: openai.AsyncOpenAI(
+        def _build():
+            http_client = create_optional_async_httpx_client(
+                self.api_base,
+                client_cls=openai.DefaultAsyncHttpxClient,
+            )
+            kwargs = dict(
                 api_key=self.api_key,
                 base_url=self.api_base,
             )
-        )
+            if http_client is not None:
+                kwargs["http_client"] = http_client
+            return openai.AsyncOpenAI(**kwargs)
+
+        return self._async_client_cache.get(_build)
 
     def _raise_task_error(self, error: openai.APIError) -> None:
         """Raise an actionable error if a 422 indicates an invalid task type."""

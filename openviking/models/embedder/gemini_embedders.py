@@ -15,12 +15,17 @@ try:
 except ImportError:
     _HTTP_RETRY_AVAILABLE = False
 
+from openviking_cli.utils import get_logger
+
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
     EmbedResult,
     truncate_and_normalize,
 )
-from openviking_cli.utils import get_logger
+from openviking.models.network import (
+    create_optional_async_httpx_client,
+    create_optional_sync_httpx_client,
+)
 
 logger = get_logger(__name__)
 
@@ -119,6 +124,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         self,
         model_name: str = "gemini-embedding-2-preview",
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
         dimension: Optional[int] = None,
         task_type: Optional[str] = None,
         query_param: Optional[str] = None,
@@ -127,6 +133,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
     ):
         super().__init__(model_name, config)
         self.provider = "gemini"
+        self.api_base = api_base
         if not api_key:
             raise ValueError("Gemini provider requires api_key")
         if task_type and task_type not in _VALID_TASK_TYPES:
@@ -137,16 +144,25 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         if dimension is not None and not (1 <= dimension <= 3072):
             raise ValueError(f"dimension must be between 1 and 3072, got {dimension}")
         if _HTTP_RETRY_AVAILABLE:
+            http_options_kwargs: Dict[str, Any] = {
+                "retry_options": HttpRetryOptions(
+                    attempts=max(self.max_retries + 1, 1),
+                    initial_delay=0.5,
+                    max_delay=8.0,
+                    exp_base=2.0,
+                )
+            }
+            if self.api_base:
+                http_options_kwargs["base_url"] = self.api_base
+            sync_http_client = create_optional_sync_httpx_client(self.api_base)
+            async_http_client = create_optional_async_httpx_client(self.api_base)
+            if sync_http_client is not None:
+                http_options_kwargs["httpx_client"] = sync_http_client
+            if async_http_client is not None:
+                http_options_kwargs["httpx_async_client"] = async_http_client
             self.client = genai.Client(
                 api_key=api_key,
-                http_options=HttpOptions(
-                    retry_options=HttpRetryOptions(
-                        attempts=max(self.max_retries + 1, 1),
-                        initial_delay=0.5,
-                        max_delay=8.0,
-                        exp_base=2.0,
-                    )
-                ),
+                http_options=HttpOptions(**http_options_kwargs),
             )
         else:
             self.client = genai.Client(api_key=api_key)

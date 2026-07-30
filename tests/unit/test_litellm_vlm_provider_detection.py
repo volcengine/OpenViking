@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for LiteLLM VLM provider detection and model prefix resolution."""
 
+import asyncio
 import os
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -73,3 +76,32 @@ class TestLiteLLMVLMProviderDetection:
     )
     def test_existing_provider_detection_still_matches(self, model, provider):
         assert detect_provider_by_model(model) == provider
+
+    def test_async_service_discovery_client_is_not_serialized_in_request_log(self):
+        vlm = LiteLLMVLMProvider(
+            {
+                "provider": "litellm",
+                "model": "openai/gpt-test",
+                "api_key": "fake",
+                "api_base": "http+sd://model.service/v1",
+            }
+        )
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))]
+        )
+
+        async def run():
+            with (
+                patch.object(vlm, "_get_async_sd_client", return_value=object()),
+                patch(
+                    "openviking.models.vlm.backends.litellm_vlm.acompletion",
+                    new=AsyncMock(return_value=response),
+                ) as completion,
+            ):
+                result = await vlm.get_completion_async(prompt="hello")
+            return result, completion
+
+        result, completion = asyncio.run(run())
+
+        assert result == "ok"
+        assert "client" in completion.await_args.kwargs

@@ -17,6 +17,10 @@ from openviking.models.embedder.base import (
     EmbedResult,
     truncate_and_normalize,
 )
+from openviking.models.network import (
+    create_optional_async_httpx_client,
+    create_optional_sync_httpx_client,
+)
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils.logger import default_logger as logger
@@ -84,19 +88,32 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
 
         self._dimension = dimension or get_dashscope_model_default_dimension(model_name)
 
-        # --- sync clients ---
-        # Text mode: OpenAI-compatible
-        self._openai_client = openai.OpenAI(
-            api_key=self.api_key,
-            base_url=f"{self.api_base}/compatible-mode/v1",
-        )
-        # Multimodal mode: httpx
-        self._httpx_client = httpx.Client(
-            headers={"Authorization": f"Bearer {self.api_key}"},
-            timeout=60.0,
-        )
+        compatible_base = f"{self.api_base}/compatible-mode/v1"
         self._multimodal_url = (
             f"{self.api_base}/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding"
+        )
+
+        # --- sync clients ---
+        # Text mode: OpenAI-compatible
+        openai_http_client = create_optional_sync_httpx_client(
+            compatible_base,
+            client_cls=openai.DefaultHttpxClient,
+        )
+        openai_kwargs = dict(
+            api_key=self.api_key,
+            base_url=compatible_base,
+        )
+        if openai_http_client is not None:
+            openai_kwargs["http_client"] = openai_http_client
+        self._openai_client = openai.OpenAI(**openai_kwargs)
+        # Multimodal mode: httpx
+        self._httpx_client = create_optional_sync_httpx_client(
+            self._multimodal_url,
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            timeout=60.0,
+        ) or httpx.Client(
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            timeout=60.0,
         )
 
         # --- async clients (lazy, event-loop scoped) ---
@@ -204,16 +221,30 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
     # ------------------------------------------------------------------
 
     def _get_async_openai_client(self) -> openai.AsyncOpenAI:
-        return self._async_openai_client_cache.get(
-            lambda: openai.AsyncOpenAI(
-                api_key=self.api_key,
-                base_url=f"{self.api_base}/compatible-mode/v1",
+        def _build():
+            base_url = f"{self.api_base}/compatible-mode/v1"
+            http_client = create_optional_async_httpx_client(
+                base_url,
+                client_cls=openai.DefaultAsyncHttpxClient,
             )
-        )
+            kwargs = dict(
+                api_key=self.api_key,
+                base_url=base_url,
+            )
+            if http_client is not None:
+                kwargs["http_client"] = http_client
+            return openai.AsyncOpenAI(**kwargs)
+
+        return self._async_openai_client_cache.get(_build)
 
     def _get_async_httpx_client(self) -> httpx.AsyncClient:
         return self._async_httpx_client_cache.get(
-            lambda: httpx.AsyncClient(
+            lambda: create_optional_async_httpx_client(
+                self._multimodal_url,
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                timeout=60.0,
+            )
+            or httpx.AsyncClient(
                 headers={"Authorization": f"Bearer {self.api_key}"},
                 timeout=60.0,
             )
