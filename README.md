@@ -192,6 +192,18 @@ OpenViking open-sources a subset of the core capabilities described in the Vikin
 > arXiv:2605.29640, 2026. Accepted by VLDB 2026.
 > 📄 [Read the paper on arXiv](https://arxiv.org/abs/2605.29640)
 
+## Partner Projects
+
+OpenViking welcomes collaboration with other open-source projects to build the context data ecosystem. Our confirmed partners include:
+
+- [deer-flow](https://github.com/bytedance/deer-flow) - Open-source long-horizon SuperAgent harness
+- [NoKV](https://github.com/NoKV-Lab/NoKV) - AI native distributed file system
+- [loopx](https://github.com/huangruiteng/loopx) - Lightweight loop engineering state kernel
+- [Hermes Agent](https://github.com/NousResearch/hermes-agent) - The agent that grows with you
+- [heima](https://github.com/litentry/heima) - Substrate-based EVM-compatible L1 chain
+
+Interested in joining our partner list? Please submit an issue to our community to apply.
+
 ## Community & contributing
 
 OpenViking is still in its early stages, and there is plenty left to build.
