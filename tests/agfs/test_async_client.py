@@ -8,14 +8,23 @@ from openviking.pyagfs import AsyncAGFSClient
 
 
 class _SyncAGFS:
+    """Minimal synchronous binding stub used by the async adapter tests."""
+
     def read(self, path, **kwargs):
+        """Return read call arguments."""
         return ("read", path, kwargs)
 
     def write(self, path, data, **kwargs):
+        """Return write call arguments."""
         return ("write", path, data, kwargs)
 
     def rm(self, path, **kwargs):
+        """Return remove call arguments."""
         return ("rm", path, kwargs)
+
+    def pathlock_is_locked(self, ctx, path, ignore_stale):
+        """Return pathlock query arguments."""
+        return ("pathlock_is_locked", ctx, path, ignore_stale)
 
 
 @pytest.mark.asyncio

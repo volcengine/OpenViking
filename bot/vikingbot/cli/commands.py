@@ -310,8 +310,6 @@ def _make_provider(config, langfuse_client: Any = None):
     Bot's own VLM configuration. Otherwise the complete root VLM configuration
     is inherited, including its ordered credentials and failover behavior.
     """
-    from vikingbot.providers.litellm_provider import LiteLLMProvider
-
     p = config.agents
     model = p.model if p else None
     temperature = p.temperature if p else 0.7
@@ -431,20 +429,10 @@ def _make_provider(config, langfuse_client: Any = None):
             langfuse_client=langfuse_client,
         )
 
-    # Fallback: legacy LiteLLMProvider (no explicit provider set)
-    if not api_key and not model.startswith("bedrock/"):
-        console.print("[yellow]Warning: No API key configured.[/yellow]")
-        console.print("You can configure providers later in the Console UI.")
-
-    return LiteLLMProvider(
-        api_key=api_key,
-        api_base=api_base,
-        default_model=model,
-        extra_headers=extra_headers,
-        provider_name=provider_name,
-        timeout=timeout,
-        thinking=thinking,
-        langfuse_client=langfuse_client,
+    raise RuntimeError(
+        "No VLM provider configured for VikingBot. Set bot.agents.provider, "
+        "configure bot.agents.credentials, or inherit the root vlm configuration. "
+        "Set provider to 'litellm' to use LiteLLM."
     )
 
 

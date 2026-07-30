@@ -124,6 +124,8 @@ export class OpenVikingClient {
         options.args && Object.keys(options.args).length
           ? options.args
           : undefined,
+      tags: options.tags,
+      tag_mode: options.tags ? options.tagMode : undefined,
       telemetry: options.telemetry,
     });
     const local = await nodePathToBlob(source);

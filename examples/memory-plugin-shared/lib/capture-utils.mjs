@@ -98,7 +98,6 @@ function toolName(block) {
     block?.toolName ||
     block?.function?.name ||
     block?.call?.name ||
-    block?.id ||
     "",
   );
 }
@@ -127,7 +126,6 @@ function toolPayload(block, kind) {
 
 function toolId(block) {
   return oneLine(
-    block?.id ||
     block?.call_id ||
     block?.callId ||
     block?.tool_call_id ||
@@ -136,6 +134,7 @@ function toolId(block) {
     block?.toolUseId ||
     block?.function_call_id ||
     block?.functionCallId ||
+    block?.id ||
     "",
   );
 }

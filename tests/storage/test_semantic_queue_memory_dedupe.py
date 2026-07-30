@@ -101,38 +101,24 @@ async def test_coalesced_semantic_messages_mark_old_version_stale():
         assert not is_semantic_msg_stale(second)
 
 
-class _FakeHandle:
-    def __init__(self):
-        self.id = "lock-1"
-        self.locks = []
+class _FakePathLock:
+    """Mock for _async_agfs pathlock operations."""
 
-
-class _FakeLockManager:
     def __init__(self):
         self.acquired_batches = []
         self.release_calls = []
 
-    def create_handle(self):
-        return _FakeHandle()
-
-    def get_handle(self, handle_id):
-        del handle_id
-        return None
-
-    async def acquire_exact_path_batch(self, handle, paths):
+    async def pathlock_acquire_exact_batch(self, paths):
         self.acquired_batches.append(paths)
-        handle.locks.extend(paths)
-        return True
+        return {"id": "lock-1"}
 
-    async def release(self, handle):
-        self.release_calls.append(handle.id)
-
-    async def release_selected(self, handle, lock_paths):
-        del handle, lock_paths
+    async def pathlock_release(self, lease):
+        self.release_calls.append(lease["id"])
 
 
 class _FakeVikingFS:
-    def __init__(self):
+    def __init__(self, pathlock=None):
+        self._async_agfs = pathlock or _FakePathLock()
         self.writes = []
 
     def _uri_to_path(self, uri, ctx=None):
@@ -155,8 +141,8 @@ class _FakeMemoryDirFS:
 
 @pytest.mark.asyncio
 async def test_stale_memory_semantic_write_is_skipped(monkeypatch):
-    lock_manager = _FakeLockManager()
-    viking_fs = _FakeVikingFS()
+    pathlock = _FakePathLock()
+    viking_fs = _FakeVikingFS(pathlock)
     processor = SemanticProcessor()
     coalesce_key = f"memory|acc|u|p|viking://user/default/memories/preferences/{uuid4().hex}"
 
@@ -174,8 +160,6 @@ async def test_stale_memory_semantic_write_is_skipped(monkeypatch):
         )
         await q.enqueue(first)
         await q.enqueue(latest)
-
-    monkeypatch.setattr("openviking.storage.transaction.get_lock_manager", lambda: lock_manager)
 
     wrote_first = await processor._write_memory_directory_semantics(
         msg=first,
@@ -196,7 +180,7 @@ async def test_stale_memory_semantic_write_is_skipped(monkeypatch):
 
     assert not wrote_first
     assert wrote_latest
-    assert lock_manager.acquired_batches == [
+    assert pathlock.acquired_batches == [
         [
             "/fake/viking/user/default/memories/preferences/.overview.md",
             "/fake/viking/user/default/memories/preferences/.abstract.md",

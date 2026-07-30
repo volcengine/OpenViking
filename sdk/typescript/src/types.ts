@@ -87,6 +87,8 @@ export interface AddResourceOptions extends WaitOptions {
   watchInterval?: number;
   processingMode?: ProcessingMode;
   args?: JsonObject;
+  tags?: string[];
+  tagMode?: "replace" | "append";
 }
 /** Semantic retrieval options. */
 export interface SearchOptions {

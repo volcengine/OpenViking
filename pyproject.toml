@@ -85,7 +85,7 @@ dependencies = [
     "cryptography>=48.0.1",
     "argon2-cffi>=23.0.0",
     "lark-oapi>=1.5.3",
-    "mcp>=1.27.0",
+    "mcp>=1.27,<2",
     "pathspec>=1.1.1",
 ]
 
@@ -160,7 +160,7 @@ bot = [
     "tavily-python>=0.5.0",
     "gradio>=6.6.0",
     "py-machineid>=1.0.0",
-    "mcp>=1.0.0",
+    "mcp>=1,<2",
     # All optional features included by default
     "langfuse>=3.0.0",
     "python-telegram-bot[socks]>=21.0",

@@ -80,21 +80,16 @@ def workspace():
 
 @pytest.fixture
 def vfs(workspace):
-    from openviking.storage.transaction import init_lock_manager, reset_lock_manager
-
     cfg, fs_root = _write_workspace(workspace)
     client = _build_client(cfg, fs_root)
-    init_lock_manager(client)
     try:
         yield VikingFS(agfs=client)
     finally:
-        reset_lock_manager()
+        pass
 
 
 @pytest.fixture
 def vfs_disabled(workspace):
-    from openviking.storage.transaction import init_lock_manager, reset_lock_manager
-
     cfg = workspace / "ragfs.toml"
     cfg.write_text(
         """
@@ -106,11 +101,10 @@ enabled = false
     fs_root.mkdir()
     client = ragfs_python.RAGFSBindingClient(git_config_path=str(cfg))
     client.mount("localfs", "/local", {"local_dir": str(fs_root)})
-    init_lock_manager(client)
     try:
         yield VikingFS(agfs=client)
     finally:
-        reset_lock_manager()
+        pass
 
 
 # =========================================================================
@@ -459,15 +453,12 @@ def encryptor(workspace):
 
 @pytest.fixture
 def vfs_encrypted(workspace, encryptor):
-    from openviking.storage.transaction import init_lock_manager, reset_lock_manager
-
     cfg, fs_root = _write_workspace(workspace)
     client = _build_client(cfg, fs_root)
-    init_lock_manager(client)
     try:
         yield VikingFS(agfs=client, encryptor=encryptor)
     finally:
-        reset_lock_manager()
+        pass
 
 
 @pytest.mark.asyncio

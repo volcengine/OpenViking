@@ -13,6 +13,7 @@ pub mod encryption_wrapper;
 pub mod errors;
 pub mod filesystem;
 pub mod glob;
+pub mod internal_names;
 pub mod mountable;
 pub mod multibackend_wrapper;
 pub mod plugin;
@@ -23,10 +24,10 @@ pub mod types;
 // Re-export commonly used types
 pub use crate::multibackend::{FsContextResolver, MetaStateStore};
 pub use builder::{
-    build_default_stack, register_builtin_plugins, EncryptionConfig as BuilderEncryptionConfig,
-    RagfsConfig, RagfsStack,
+    build_default_stack, build_stack_with_mountable, register_builtin_plugins,
+    EncryptionConfig as BuilderEncryptionConfig, RagfsConfig, RagfsStack,
 };
-pub use context::{FsContext, FsContextInner, FsContextView, FS_CTX};
+pub use context::{FsContext, FsContextInner, FsContextView, PathLockContext, FS_CTX};
 pub use encryption_wrapper::EncryptionWrappedFS;
 pub use errors::{Error, Result};
 pub use filesystem::FileSystem;

@@ -238,6 +238,9 @@ class SyncOpenViking:
         args: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
         processing_mode: str = "semantic_and_vectors",
+        add_type: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (resources scope only)
@@ -248,6 +251,9 @@ class SyncOpenViking:
         refreshed.
 
         Args:
+            add_type: Explicit Connector source type. Requires an exact ``to``
+                target and cannot be combined with ``parent``. The source
+                ``path`` is forwarded verbatim.
             to: Exact target URI. Existing targets keep the add_resource incremental-update behavior.
             parent: Target parent URI for automatic child naming.
             build_index: Whether to build vector index immediately (default: True).
@@ -255,11 +261,18 @@ class SyncOpenViking:
             **kwargs: Extra options forwarded to the parser chain, e.g.
                 ``strict``, ``ignore_dirs``, ``include``, ``exclude``.
         """
+        if add_type is not None:
+            add_type = add_type.strip() or None
+        if add_type and parent:
+            raise ValueError("'add_type' cannot be combined with 'parent'.")
+        if add_type and not to:
+            raise ValueError("'add_type' requires an exact 'to' target.")
         if to and parent:
             raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
         return run_async(
             self._async_client.add_resource(
                 path=path,
+                add_type=add_type,
                 to=to,
                 parent=parent,
                 reason=reason,
@@ -270,6 +283,8 @@ class SyncOpenViking:
                 summarize=summarize,
                 processing_mode=processing_mode,
                 args=args,
+                tags=tags,
+                tag_mode=tag_mode,
                 telemetry=telemetry,
                 **kwargs,
             )

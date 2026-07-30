@@ -7,7 +7,6 @@ import shutil
 from pathlib import Path
 
 import yaml
-from loguru import logger
 
 from vikingbot.utils.helpers import get_source_workspace_path
 
@@ -138,7 +137,7 @@ class SkillsLoader:
                 if missing:
                     lines.append(f"    <requires>{escape_xml(missing)}</requires>")
 
-            lines.append(f"  </skill>")
+            lines.append("  </skill>")
         lines.append("</skills>")
 
         return "\n".join(lines)
