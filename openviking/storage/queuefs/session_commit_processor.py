@@ -32,6 +32,19 @@ class SessionCommitProcessor(DequeueHandlerBase):
         self._session_service = session_service
         self._service_loop = service_loop
 
+    @staticmethod
+    def _parse_message(data: Dict[str, Any]) -> tuple[SessionCommitMsg, RequestContext]:
+        payload = data.get("data", data)
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        msg = SessionCommitMsg.from_dict(payload)
+        ctx = RequestContext(
+            user=UserIdentifier.from_dict(msg.user),
+            role=Role.USER,
+            actor_peer_id=msg.actor_peer_id,
+        )
+        return msg, ctx
+
     async def _process(self, msg: SessionCommitMsg, ctx: RequestContext) -> None:
         # Bind a root observability context so Phase-2 extraction VLM/embedding
         # token events are attributed to the committing account/user rather than
@@ -76,20 +89,43 @@ class SessionCommitProcessor(DequeueHandlerBase):
         finally:
             reset_root_observability_context(root_context_token)
 
+    async def _finalize_cancelled(self, msg: SessionCommitMsg, ctx: RequestContext) -> None:
+        session = self._session_service.session(
+            ctx,
+            msg.session_id,
+            session_uri=msg.session_uri,
+        )
+        if await session.exists():
+            await session.finalize_cancelled_commit(msg.archive_uri)
+
+    async def on_cancelled(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if not data:
+            return None
+
+        try:
+            msg, ctx = self._parse_message(data)
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            self.report_error(str(exc), data)
+            return None
+
+        future = asyncio.run_coroutine_threadsafe(
+            self._finalize_cancelled(msg, ctx),
+            self._service_loop,
+        )
+        try:
+            await asyncio.wrap_future(future)
+            self.report_success()
+        except asyncio.CancelledError:
+            future.cancel()
+            raise
+        return None
+
     async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         if not data:
             return None
 
         try:
-            payload = data.get("data", data)
-            if isinstance(payload, str):
-                payload = json.loads(payload)
-            msg = SessionCommitMsg.from_dict(payload)
-            ctx = RequestContext(
-                user=UserIdentifier.from_dict(msg.user),
-                role=Role.USER,
-                actor_peer_id=msg.actor_peer_id,
-            )
+            msg, ctx = self._parse_message(data)
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             self.report_error(str(exc), data)
             return None

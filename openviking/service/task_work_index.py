@@ -21,6 +21,10 @@ from uuid import uuid4
 TASK_WORK_ID_FIELD = "_task_work_id"
 
 
+class TaskWorkRejected(Exception):
+    """Task cancellation prevented descendant queue work from being created."""
+
+
 @dataclass(frozen=True)
 class TaskExecutionContext:
     task_id: str

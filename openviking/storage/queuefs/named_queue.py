@@ -12,6 +12,7 @@ from openviking.pyagfs import AGFSSyncClientProtocol, AsyncAGFSClient
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
 from openviking.service.task_work_index import (
     TaskWorkIndex,
+    TaskWorkRejected,
     bind_task_context,
     extract_task_metadata,
     prepare_task_payload,
@@ -236,7 +237,9 @@ class NamedQueue:
                 task_metadata.task_id,
                 self.name,
             )
-            raise asyncio.CancelledError
+            raise TaskWorkRejected(
+                f"Task {task_metadata.task_id} is cancelling; rejected work for {self.name}"
+            )
 
         try:
             if isinstance(data, dict):
