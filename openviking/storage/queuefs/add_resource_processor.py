@@ -96,6 +96,7 @@ class AddResourceProcessor(DequeueHandlerBase):
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
             task_id=msg.task_id,
+            meta={"source_path": msg.source_path},
         )
         if task.status in (
             TaskStatus.CANCELLING,

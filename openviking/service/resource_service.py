@@ -455,6 +455,7 @@ class ResourceService:
                 account_id=msg.account_id,
                 user_id=msg.user_id,
                 task_id=msg.task_id,
+                meta={"source_path": msg.source_path},
             )
             await tracker.update_stage(
                 task.task_id,
@@ -667,6 +668,7 @@ class ResourceService:
             msg = AddResourceMsg(
                 task_id=task_id,
                 path=path,
+                source_path=(source_name or "") if kwargs.get("temp_file_id") else path,
                 root_uri=root_uri,
                 telemetry_id=get_current_telemetry().telemetry_id or None,
                 account_id=ctx.account_id,
@@ -1248,6 +1250,7 @@ class ResourceService:
                         task_id=str(uuid4()),
                         telemetry_id=telemetry_id or None,
                         path=path,
+                        source_path=(source_name or "") if kwargs.get("temp_file_id") else path,
                         root_uri=root_uri,
                         account_id=ctx.account_id,
                         user_id=ctx.user.user_id,
@@ -1401,6 +1404,11 @@ class ResourceService:
                     task_id=str(uuid4()),
                     root_uri=root_uri,
                     prepared=prepared,
+                    source_path=str(
+                        (kwargs.get("source_name") or "")
+                        if kwargs.get("temp_file_id")
+                        else result.get("source_path") or ""
+                    ),
                     telemetry_id=telemetry_id or None,
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,

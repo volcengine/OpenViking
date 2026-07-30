@@ -65,6 +65,7 @@ class TaskRecord:
     resource_id: Optional[str] = None  # e.g. session_id
     account_id: Optional[str] = None
     user_id: Optional[str] = None
+    meta: Dict[str, Any] = field(default_factory=dict)
     stage: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
@@ -76,6 +77,7 @@ class TaskRecord:
         d["created_at_iso"] = datetime.fromtimestamp(self.created_at, tz=timezone.utc).isoformat()
         d["updated_at_iso"] = datetime.fromtimestamp(self.updated_at, tz=timezone.utc).isoformat()
         d["result"] = _sanitize_task_result(d.get("result"))
+        d["meta"] = _sanitize_task_result(d.get("meta"))
         d.pop("account_id", None)
         d.pop("user_id", None)
         return d
@@ -291,6 +293,7 @@ class TaskTracker:
         account_id: str,
         user_id: str,
         task_id: Optional[str] = None,
+        meta: Optional[Dict[str, Any]] = None,
     ) -> TaskRecord:
         """Register a new pending task. Returns a snapshot copy."""
         self._validate_owner(account_id, user_id)
@@ -300,6 +303,7 @@ class TaskTracker:
             resource_id=resource_id,
             account_id=account_id,
             user_id=user_id,
+            meta=dict(meta or {}),
         )
         async with self._async_lock:
             if task_id:
@@ -640,6 +644,7 @@ class TaskTracker:
     def _copy(task: TaskRecord) -> TaskRecord:
         """Return a defensive copy of a TaskRecord."""
         copied = deepcopy(task)
+        copied.meta = _sanitize_task_result(copied.meta)
         copied.result = _sanitize_task_result(copied.result)
         return copied
 
